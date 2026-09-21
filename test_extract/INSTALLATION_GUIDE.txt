@@ -1,0 +1,36 @@
+﻿# PUCK DYNASTY - INSTALLATION GUIDE
+
+## SIMPLE INSTALLATION:
+1. Extract all files from this ZIP to any folder (e.g., C:\Games\Puck Dynasty)
+2. Double-click "Puck Dynasty.exe" to play!
+3. No Python or additional software required!
+
+## SYSTEM REQUIREMENTS:
+- Windows 10 or newer (64-bit)
+- 4GB RAM minimum
+- 100MB free disk space
+
+## GETTING STARTED:
+- The game will create save files in the same folder
+- Your first time: Choose "New Game" and select your favorite team
+- Use the automated season flow to skip through boring parts
+- Watch games with the built-in game viewer!
+
+## FEATURES:
+* Complete NHL team management
+* Advanced game simulation with visual viewer  
+* Automated season progression (5 modes)
+* Fantasy draft system
+* Player development and scouting
+* Professional save/load system
+
+## NEED HELP?
+- All controls are accessible through the menu bar
+- Use Tools > Fantasy Draft for draft simulation
+- The season flow panel helps automate gameplay
+- Save often using File > Save Game
+
+## FEEDBACK:
+This is a beta version - your feedback helps improve the game!
+
+Enjoy managing your hockey dynasty!

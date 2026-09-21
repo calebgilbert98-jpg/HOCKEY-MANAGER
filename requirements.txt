@@ -1,0 +1,14 @@
+# Required Python packages for Puck Dynasty
+# Install with: pip install -r requirements.txt
+
+# Core GUI framework
+tkinter>=8.6  # Usually included with Python
+
+# Image processing for icons and graphics
+Pillow>=9.0.0
+
+# Data handling (if needed for advanced features)
+# pandas>=1.3.0  # Uncomment if data analysis features are used
+
+# Performance monitoring (optional)
+# psutil>=5.8.0  # Uncomment if performance monitoring is enabled

@@ -1,0 +1,32 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Test Stage 5",
+			"type": "shell",
+			"command": "python simple_stage5_test.py",
+			"group": "test"
+		},
+		{
+			"label": "Test Stage 6",
+			"type": "shell",
+			"command": "python test_stage6.py",
+			"group": "test"
+		},
+		{
+			"label": "Test Stage 7",
+			"type": "shell",
+			"command": "python test_stage7.py"
+		},
+		{
+			"label": "Test Stage 8",
+			"type": "shell",
+			"command": "python test_stage8.py"
+		},
+		{
+			"label": "Test Stage 9",
+			"type": "shell",
+			"command": "python test_stage9.py"
+		}
+	]
+}

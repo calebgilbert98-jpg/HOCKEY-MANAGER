@@ -1,0 +1,18 @@
+PUCK DYNASTY END USER LICENSE AGREEMENT
+
+This software is provided "as is" without warranty of any kind, either express or implied, including but not limited to the implied warranties of merchantability, fitness for a particular purpose, or non-infringement.
+
+GRANT OF LICENSE:
+You are granted a non-exclusive license to use Puck Dynasty for personal, non-commercial purposes.
+
+RESTRICTIONS:
+- You may not redistribute, sell, or commercially exploit this software
+- You may not reverse engineer, decompile, or disassemble the software
+- You may not remove or alter any copyright notices
+
+DISCLAIMER:
+This is beta software provided for testing and feedback purposes. The software may contain bugs, incomplete features, or other issues.
+
+By installing this software, you agree to the terms of this license.
+
+© 2025 Hockey Manager Studios. All rights reserved.
