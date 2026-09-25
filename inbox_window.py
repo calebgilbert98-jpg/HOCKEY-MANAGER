@@ -73,7 +73,7 @@ class InboxWindow(tk.Toplevel):
         title_frame = ttk.Frame(header_frame, style='TitleBar.TFrame')
         title_frame.pack(fill='x', padx=10, pady=5)
         
-        ttk.Label(title_frame, text="📧 Inbox", style='Header.TLabel', 
+        ttk.Label(title_frame, text="Inbox", style='Header.TLabel', 
                  font=(self.parent.FONT_FAMILY, 16, 'bold')).pack(side='left')
         
         self.stats_label = ttk.Label(title_frame, text="", style='Header.TLabel', 
@@ -96,10 +96,13 @@ class InboxWindow(tk.Toplevel):
             ("League", "League")
         ]
         
+        self._filter_buttons = {}
         for text, filter_type in filters:
-            btn = ttk.Button(filter_frame, text=text, style='Menu.TButton',
+            btn = ttk.Button(filter_frame, text=text, style='Secondary.TButton',
                            command=lambda f=filter_type: self._apply_filter(f))
             btn.pack(side='left', padx=2)
+            self._filter_buttons[filter_type] = btn
+        self._filter_buttons["all"].configure(style='TButton')
             
     def _create_email_list(self, parent):
         """Create the email list with filters."""
@@ -272,17 +275,25 @@ class InboxWindow(tk.Toplevel):
             
         # Update stats
         self._update_stats()
+        self._select_first_message()
+        
+    def _select_first_message(self):
+        """Select the first message so the preview is never empty."""
+        children = self.email_tree.get_children()
+        if children:
+            self.email_tree.selection_set(children[0])
+            self.email_tree.focus(children[0])
         
     def _add_message_to_tree(self, message: EmailMessage):
         """Add a single message to the tree."""
         # Priority indicator
         priority_icon = ""
         if message.is_urgent or message.priority >= 4:
-            priority_icon = "🔴"
+            priority_icon = "!!"
         elif message.is_important or message.priority >= 3:
-            priority_icon = "🟡" 
+            priority_icon = "!"
         elif message.requires_response:
-            priority_icon = "📤"
+            priority_icon = ">"
         
         # Status
         status = "New" if not message.is_read else "Read"
@@ -321,6 +332,8 @@ class InboxWindow(tk.Toplevel):
             
     def _apply_filter(self, filter_type: str):
         """Apply filter to email list."""
+        for ftype, btn in getattr(self, '_filter_buttons', {}).items():
+            btn.configure(style='TButton' if ftype == filter_type else 'Secondary.TButton')
         # Clear current view
         for item in self.email_tree.get_children():
             self.email_tree.delete(item)
@@ -341,7 +354,8 @@ class InboxWindow(tk.Toplevel):
         # Populate with filtered messages
         for message in filtered_messages:
             self._add_message_to_tree(message)
-            
+        self._select_first_message()
+        
     def _on_email_select(self, event):
         """Handle email selection."""
         selection = self.email_tree.selection()
