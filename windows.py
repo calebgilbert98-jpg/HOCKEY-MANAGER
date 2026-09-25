@@ -5005,7 +5005,7 @@ class FinancesWindow(tk.Toplevel):
     def update_contracts_view(self):
         """Update the contracts view with filtering."""
         self.contracts_tree.delete(*self.contracts_tree.get_children())
-        self.parent.tree_maps['contracts'].clear()
+        self.parent.tree_maps.setdefault('contracts', {}).clear()
         
         # Get all players based on roster filter
         roster_filter = self.roster_filter.get()
@@ -5070,7 +5070,7 @@ class FinancesWindow(tk.Toplevel):
             )
             
             item = self.contracts_tree.insert('', 'end', values=values)
-            self.parent.tree_maps['contracts'][item] = player
+            self.parent.tree_maps.setdefault('contracts', {})[item] = player
 
     def determine_contract_status(self, player, years_remaining):
         """Determine the contract status of a player."""
@@ -5494,15 +5494,15 @@ VALUE ANALYSIS
     def view_contract_player_profile(self):
         """View the selected player's profile."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps['contracts']:
-            player = self.parent.tree_maps['contracts'][selection[0]]
+        if selection and selection[0] in self.parent.tree_maps.setdefault('contracts', {}):
+            player = self.parent.tree_maps.setdefault('contracts', {})[selection[0]]
             self.parent.open_player_profile(player)
 
     def negotiate_extension(self):
         """Open contract negotiation for selected player."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps['contracts']:
-            player = self.parent.tree_maps['contracts'][selection[0]]
+        if selection and selection[0] in self.parent.tree_maps.setdefault('contracts', {}):
+            player = self.parent.tree_maps.setdefault('contracts', {})[selection[0]]
             # Open contract negotiation window
             if 'contract_negotiation' not in self.parent.open_windows or not self.parent.open_windows['contract_negotiation'].winfo_exists():
                 self.parent.open_windows['contract_negotiation'] = ContractNegotiationWindow(self.parent, player, is_extension=True)
@@ -5511,8 +5511,8 @@ VALUE ANALYSIS
     def trade_player(self):
         """Open trade window for selected player."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps['contracts']:
-            player = self.parent.tree_maps['contracts'][selection[0]]
+        if selection and selection[0] in self.parent.tree_maps.setdefault('contracts', {}):
+            player = self.parent.tree_maps.setdefault('contracts', {})[selection[0]]
             # Open trade window with this player pre-selected
             self.parent.open_trade_window()
 
@@ -5667,130 +5667,6 @@ ROSTER BREAKDOWN
                               f"Cap hit: ${salary:,}")
         else:
             messagebox.showinfo("Contract Details", f"No contract information available for {player.full_name}")
-
-class ContractExtensionsWindow(tk.Toplevel):
-    """Window for managing contract extensions and negotiations."""
-    
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title(f"{parent.user_team.team_name} - Contract Extensions")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("1000x700")
-        
-        self.create_interface()
-        self.update_views()
-        
-        # Track window
-        self.parent.open_windows['contract_extensions'] = self
-
-    def create_interface(self):
-        """Create the contract extensions interface."""
-        main_frame = ttk.Frame(self, style='Panel.TFrame')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
-        # Header
-        header_label = ttk.Label(main_frame, text="CONTRACT EXTENSIONS", 
-                                style='Title.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
-        header_label.pack(pady=(0, 20))
-        
-        # Eligible players frame
-        eligible_frame = ttk.LabelFrame(main_frame, text="Extension Eligible Players", )
-        eligible_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # Create treeview for eligible players
-        columns = {
-            'name': ('Player', 180),
-            'position': ('Pos', 50),
-            'age': ('Age', 50),
-            'ovr': ('OVR', 50),
-            'current_salary': ('Current Salary', 120),
-            'years_left': ('Years Left', 80),
-            'status': ('Status', 100),
-            'actions': ('Actions', 120)
-        }
-        
-        self.eligible_tree = self.parent._create_treeview(eligible_frame, columns, 15)
-        self.eligible_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Store player mapping
-        self.parent.tree_maps['extensions'] = {}
-        
-        # Buttons frame
-        buttons_frame = ttk.Frame(main_frame, style='Panel.TFrame')
-        buttons_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Button(buttons_frame, text="Negotiate Extension", 
-                  command=self.negotiate_selected_extension).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(buttons_frame, text="Refresh", 
-                  command=self.update_views).pack(side=tk.LEFT, padx=5)
-
-    def update_views(self):
-        """Update the extensions view."""
-        self.eligible_tree.delete(*self.eligible_tree.get_children())
-        self.parent.tree_maps['extensions'].clear()
-        
-        # Find players eligible for extensions (within 2 years of expiry)
-        eligible_players = []
-        
-        for player in self.parent.user_team.roster:
-            years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
-            if years_left <= 2:  # Eligible if 2 years or less remaining
-                eligible_players.append(player)
-        
-        # Sort by years remaining (most urgent first)
-        eligible_players.sort(key=lambda p: getattr(p.contract, 'years_remaining', 1) if hasattr(p, 'contract') else 1)
-        
-        for player in eligible_players:
-            salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
-            years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
-            age = getattr(player, 'age', 22)
-            
-            # Determine status
-            if years_left <= 1:
-                if age < 25:
-                    status = "RFA - Expiring"
-                else:
-                    status = "UFA - Expiring"
-            else:
-                status = "Extension Eligible"
-            
-            # Format position
-            position = getattr(player.primary_position, 'name', 'F') if hasattr(player, 'primary_position') else 'F'
-            if position in ['LEFT_WING', 'RIGHT_WING', 'CENTER']:
-                position = position[0] if position == 'CENTER' else position[:2]
-            elif position in ['LEFT_DEFENSE', 'RIGHT_DEFENSE', 'DEFENSE']:
-                position = 'D'
-            elif position == 'GOALIE':
-                position = 'G'
-            
-            values = (
-                player.full_name,
-                position,
-                str(age),
-                str(player.overall_rating()),
-                f"${salary:,}",
-                str(years_left),
-                status,
-                "Available"
-            )
-            
-            item = self.eligible_tree.insert('', 'end', values=values)
-            self.parent.tree_maps['extensions'][item] = player
-
-    def negotiate_selected_extension(self):
-        """Negotiate extension with selected player."""
-        selection = self.eligible_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps['extensions']:
-            player = self.parent.tree_maps['extensions'][selection[0]]
-            
-            # Open contract negotiation window
-            if 'contract_negotiation' not in self.parent.open_windows or not self.parent.open_windows['contract_negotiation'].winfo_exists():
-                self.parent.open_windows['contract_negotiation'] = ContractNegotiationWindow(self.parent, player, is_extension=True)
-            self.parent.open_windows['contract_negotiation'].focus_set()
-        else:
-            messagebox.showwarning("No Selection", "Please select a player to negotiate with.")
 
 class NewsWindow(tk.Toplevel):
     def __init__(self, parent):
