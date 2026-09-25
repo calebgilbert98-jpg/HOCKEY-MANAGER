@@ -9,7 +9,7 @@ from game_classes import League, Player, PlayerPosition, Staff, StaffRole, Scout
 from game_classes import debug_print
 from windows import (RosterWindow, FreeAgencyWindow, TradeWindow, ScoutingWindow, 
                      DraftWindow, ScheduleWindow, FinancesWindow, NewsWindow, 
-                     GMOptionsWindow, EditLinesWindow, ContractNegotiationWindow, 
+                     GMOptionsWindow, ContractNegotiationWindow, 
                      TradeBlockWindow, WaiversWindow, SetCaptainsWindow)
 from ui_components import PlayerProfileWindow
 from ui_widgets import PillButton
@@ -274,15 +274,6 @@ class GameManager:
             
         print(f"Season configured for {self.games_per_season} games")
     
-    def set_user_team(self, team_name):
-        """Set the user's selected team"""
-        if team_name and team_name != "Select your team...":
-            for team in self.league.teams:
-                if team.team_name == team_name:
-                    self.user_team = team
-                    print(f"User team set to: {team_name}")
-                    return
-            print(f"Warning: Could not find team '{team_name}'")
     
     def conduct_fantasy_draft(self):
         """Conduct a serpentine fantasy draft to redistribute all NHL players among teams"""
@@ -2136,124 +2127,10 @@ class AdvancedGameSim:
         # Don't advance time here - it's managed in _simulate_shift
         self._record_state()
 
-    def _resolve_pass_event(self, shooter, shooters, puck_team_name, opp_team_name, fatigue_factor):
-        """Handle pass events with cached player skills for better performance"""
-        if len(shooters) <= 1:
-            return
-            
-        receiver = random.choice([p for p in shooters if p != shooter])
-        
-        # Use cached skills instead of multiple getattr() calls
-        shooter_cache = self.cache.get_player_cache(shooter)
-        pass_skill = shooter_cache.passing_skill * fatigue_factor
-        
-        # Defensive pressure using cached skills
-        defenders = [p for p in self.on_ice[opp_team_name]['Defense'] if p]
-        if defenders:
-            defender = random.choice(defenders)
-            defender_cache = self.cache.get_player_cache(defender)
-            defense_skill = defender_cache.defensive_skill
-        else:
-            defense_skill = 10.0
-        
-        pass_success = pass_skill > defense_skill or random.random() < 0.75
-        
-        self.event_log.append({
-            'timestamp': self.time,
-            'duration': random.uniform(0.7, 1.2),
-            'type': 'PASS',
-            'details': {
-                'passer_id': shooter.id,
-                'passer_name': shooter.full_name,
-                'receiver_id': receiver.id,
-                'receiver_name': receiver.full_name,
-                'success': pass_success,
-                'team': puck_team_name
-            }
-        })
-        
-        if pass_success:
-            self.puck_x, self.puck_y = receiver.x, receiver.y
-        else:
-            if defender:
-                self.puck_x, self.puck_y = defender.x, defender.y
 
-    def _resolve_deke_event(self, shooter, puck_team_name, fatigue_factor):
-        """Handle deke/stickhandling events with cached skills"""
-        # Use cached skills for better performance
-        shooter_cache = self.cache.get_player_cache(shooter)
-        deke_skill = shooter_cache.deking_skill * fatigue_factor
-        
-        success = deke_skill > 12 and random.random() < 0.6
-        
-        self.event_log.append({
-            'timestamp': self.time,
-            'duration': random.uniform(1.0, 2.0),
-            'type': 'DEKE',
-            'details': {
-                'player_id': shooter.id,
-                'player_name': shooter.full_name,
-                'success': success,
-                'team': puck_team_name
-            }
-        })
 
-    def _resolve_puck_battle(self, shooters, puck_team_name, fatigue_factor):
-        """Handle puck battle events"""
-        if len(shooters) < 2:
-            return
-            
-        battlers = random.sample(shooters, 2)
-        winner = random.choice(battlers)
-        
-        self.event_log.append({
-            'timestamp': self.time,
-            'duration': random.uniform(2.0, 4.0),
-            'type': 'PUCK_BATTLE',
-            'details': {
-                'winner_id': winner.id,
-                'winner_name': winner.full_name,
-                'team': puck_team_name
-            }
-        })
 
-    def _resolve_screen_event(self, shooter, shooters, puck_team_name):
-        """Handle screening events in front of net"""
-        screener = random.choice([p for p in shooters if p != shooter]) if len(shooters) > 1 else shooter
-        
-        self.event_log.append({
-            'timestamp': self.time,
-            'duration': random.uniform(1.5, 3.0),
-            'type': 'SCREEN',
-            'details': {
-                'screener_id': screener.id,
-                'screener_name': screener.full_name,
-                'team': puck_team_name
-            }
-        })
 
-    def _resolve_deflection_event(self, shooter, shooters, goalie, puck_team_name, opp_team_name):
-        """Handle puck deflection events"""
-        deflector = random.choice([p for p in shooters if p != shooter]) if len(shooters) > 1 else shooter
-        
-        deflection_skill = getattr(deflector, 'deflections', 10)
-        success = deflection_skill > 12 and random.random() < 0.3
-        
-        if success and random.random() < 0.2:  # 20% chance deflection becomes goal
-            self.score[puck_team_name] += 1
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': deflector, 'event': 'Deflection Goal'})
-        
-        self.event_log.append({
-            'timestamp': self.time,
-            'duration': random.uniform(0.8, 1.5),
-            'type': 'DEFLECTION',
-            'details': {
-                'deflector_id': deflector.id,
-                'deflector_name': deflector.full_name,
-                'success': success,
-                'team': puck_team_name
-            }
-        })
 
     def _calculate_fatigue_factor(self, player, team_name):
         """Calculate comprehensive fatigue factor"""

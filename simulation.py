@@ -1742,11 +1742,6 @@ class GameSim:
                               if self._get_player_team_name(p) == team_name) / 23
             self.team_stats[team_name]['ml_learning_rate'] = max(0.01, min(0.2, 0.1 + team_variance * 0.05))
 
-    def _get_player_team(self, player):
-        """Helper method to get team object for a player."""
-        if player in self.home_team.roster:
-            return self.home_team
-        return self.away_team
     
     def _get_player_team_name(self, player):
         """Helper method to get team name for a player."""
@@ -2039,42 +2034,6 @@ class GameSim:
         else:  # CHIP_IN
             return self._attempt_chip_in(puck_carrier, attacking_team, defending_team)
 
-    def _resolve_offensive_zone_play(self, attacking_team, defending_team):
-        """Handle play in the offensive zone - shots, cycles, turnovers."""
-        attacking_skaters = [p for p in self._get_on_ice(attacking_team) if p.primary_position != PlayerPosition.GOALIE]
-        defending_skaters = [p for p in self._get_on_ice(defending_team) if p.primary_position != PlayerPosition.GOALIE]
-        
-        if not attacking_skaters:
-            return self._zone_clear(defending_team)
-
-        # Grinder wear-down: heavy cycling lines drain defending skaters
-        try:
-            if any(get_archetype(p) == "Grinder" for p in attacking_skaters):
-                for d in defending_skaters:
-                    fid = getattr(d, "id", None)
-                    if fid in self.player_fatigue:
-                        self.player_fatigue[fid] = max(
-                            0.0, self.player_fatigue[fid] - 0.6)
-        except Exception:
-            pass
-
-        # Update zone time stats
-        self._update_zone_time_stats(attacking_team, defending_team)
-        
-        # Random events in offensive zone
-        event_roll = random.random()
-        
-        if event_roll < 0.3:  # 30% chance of shot attempt
-            # Archetype tendency: snipers get the puck in shooting spots far
-            # more often than playmakers or grinders.
-            shooter = self._weighted_skater_choice(attacking_skaters, "shoot")
-            self._resolve_scoring_chance(shooter, attacking_team, defending_team)
-        elif event_roll < 0.5:  # 20% chance of turnover/zone clear
-            return self._attempt_zone_clear(defending_team, attacking_team)
-        elif event_roll < 0.7:  # 20% chance of cycling/possession battle
-            return self._resolve_offensive_cycle(attacking_team, defending_team)
-        else:  # 30% chance of maintain possession
-            return self._maintain_offensive_possession(attacking_team)
 
     def _resolve_defensive_zone_play(self, attacking_team, defending_team):
         """Handle play in the defensive zone - breakouts, clears."""
@@ -3394,35 +3353,6 @@ class GameSim:
         
         return base_skill + location_modifier + type_modifier
 
-    def _update_shot_stats(self, shooter, attacking_team, defending_team, quality, distance, shot_type):
-        """Update all relevant statistics for a shot on goal."""
-        # Player stats
-        self.game_stats[shooter.id]['shots_on_goal'] += 1
-        self.game_stats[shooter.id]['shot_attempts'] += 1
-        self.game_stats[shooter.id]['shot_distance_total'] += distance
-        
-        # Quality tracking
-        quality_key = f"{quality}_danger_shots"
-        self.game_stats[shooter.id][quality_key] += 1
-        
-        # Team stats
-        att_team_name = attacking_team.team_name
-        def_team_name = defending_team.team_name
-        
-        self.team_stats[att_team_name]['shots_on_goal'] += 1
-        self.team_stats[att_team_name]['shot_attempts'] += 1
-        
-        if quality == "high":
-            self.team_stats[att_team_name]['high_danger_chances'] += 1
-        
-        # Corsi tracking
-        self.game_stats[shooter.id]['corsi_for'] += 1
-        for player in self._get_on_ice(defending_team):
-            if player.id in self.game_stats:
-                self.game_stats[player.id]['corsi_against'] += 1
-        
-        self.team_stats[att_team_name]['corsi_for'] += 1
-        self.team_stats[def_team_name]['corsi_against'] += 1
 
     def _check_rebound_created(self, goalie, shot_type):
         """Check if the save creates a rebound opportunity (legacy compatibility method)."""
@@ -3484,37 +3414,6 @@ class GameSim:
                        defending_team=getattr(goalie, "team_name", None),
                        shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type))
 
-    def _handle_goal(self, scoring_team, shooter, assists, shot_type=None, location=None):
-        """Updates score, stats, and log after a goal."""
-        shooter.stats.goals += 1
-        self.game_stats[shooter.id]['g'] += 1
-        
-        assist_str = []
-        for assist_player in assists:
-            assist_player.stats.assists += 1
-            self.game_stats[assist_player.id]['a'] += 1
-            assist_str.append(assist_player.last_name)
-        
-        if scoring_team == self.home_team:
-            self.home_score += 1
-        else:
-            self.away_score += 1
-
-        # Positional: puck in the net
-        self._ppos_ensure()
-        self.puck_pos = [189.0 if scoring_team == self.home_team else 11.0, 42.5]
-        self._emit_skate()
-
-        log_msg = f"GOAL for {scoring_team.team_name}! Scored by {shooter.full_name}"
-        if shot_type:
-            log_msg += f" ({shot_type.value.replace('_', ' ').title()})"
-        if assist_str:
-            log_msg += f" (Assists: {', '.join(assist_str)})"
-        log_msg += f". Score: {self.home_score}-{self.away_score}"
-        self._log_event(log_msg, "GOAL")
-        
-        self._select_starting_lines()
-        self._resolve_faceoff()
 
     def _resolve_faceoff(self):
         """
@@ -5696,48 +5595,6 @@ class GameSim:
         
         return pressure
     
-    def _determine_situational_context(self):
-        """
-        Stage 9: Determine current situational context for AI decision making.
-        """
-        # Check special situations first (highest priority)
-        if hasattr(self, 'current_situation') and self.current_situation == SpecialSituation.POWER_PLAY:
-            self.situational_context = SituationalContext.POWER_PLAY_OPPORTUNITY
-        elif hasattr(self, 'current_situation') and self.current_situation == SpecialSituation.PENALTY_KILL:
-            self.situational_context = SituationalContext.PENALTY_KILL_SITUATION
-        # Check overtime
-        elif self.period > 3:
-            self.situational_context = SituationalContext.OVERTIME_SITUATION
-        # Check time-based contexts
-        elif self.period >= 3 and (1200 - self.clock) / 60 > 18.0:  # Convert to minutes elapsed
-            # Check if trailing or leading in final minutes
-            score_diff = self.home_team.goals - self.away_team.goals
-            if score_diff < -1:  # Home team trailing by 2+
-                self.situational_context = SituationalContext.TRAILING_LATE
-            elif score_diff > 1:  # Home team leading by 2+
-                self.situational_context = SituationalContext.LEADING_LATE
-            else:
-                self.situational_context = SituationalContext.DESPERATION_TIME
-        elif (1200 - self.clock) / 60 > 19.0:
-            self.situational_context = SituationalContext.PERIOD_END
-        elif (1200 - self.clock) / 60 > 15.0 and self.pressure_level in [PressureLevel.HIGH, PressureLevel.INTENSE]:
-            if list(GameMomentum).index(self.momentum) > 3:
-                self.situational_context = SituationalContext.MOMENTUM_SHIFT
-            else:
-                self.situational_context = SituationalContext.CLOSE_GAME_LATE
-        else:
-            # Check score-based contexts
-            score_diff = abs(self.home_team.goals - self.away_team.goals)
-            if score_diff >= 3:
-                self.situational_context = SituationalContext.DOMINANT_PERFORMANCE
-            elif self.period >= 3 and score_diff <= 1:
-                self.situational_context = SituationalContext.CLOSE_GAME_LATE
-            elif (1200 - self.clock) < 60:  # Less than 1 minute left
-                self.situational_context = SituationalContext.PERIOD_START
-            else:
-                self.situational_context = SituationalContext.GAME_OPENING
-        
-        return self.situational_context
     
     def _get_situational_multiplier(self, action_type, player):
         """
