@@ -2429,12 +2429,23 @@ class AdvancedGameSim:
         # Overtime: sudden death - first goal wins
         if self.score[self.home_team.team_name] == self.score[self.away_team.team_name]:
             ot_start = self.time
+            ot_home_start = self.score[self.home_team.team_name]
+            ot_away_start = self.score[self.away_team.team_name]
             self.period = 4
             while (self.time < ot_start + overtime_limit and 
                    self.score[self.home_team.team_name] == self.score[self.away_team.team_name]):
                 self._simulate_shift()
                 # Sudden death: stop immediately on goal
                 # (The loop condition checks the tie each iteration)
+            
+            # Enforce true sudden death: max 1 goal per team in OT
+            # (A shift might generate multiple goals before the loop checks)
+            home_ot_goals = self.score[self.home_team.team_name] - ot_home_start
+            away_ot_goals = self.score[self.away_team.team_name] - ot_away_start
+            if home_ot_goals > 1:
+                self.score[self.home_team.team_name] = ot_home_start + 1
+            if away_ot_goals > 1:
+                self.score[self.away_team.team_name] = ot_away_start + 1
         # If still tied after OT, do shootout
 
         # Defensive: get home/away goalies safely
