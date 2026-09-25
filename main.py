@@ -85,7 +85,21 @@ class GameManager:
         # Initialize records system lazily to avoid blocking startup
         self._record_manager = None
         
+        # Initialize AI team manager (for CPU team decisions)
+        self._ai_manager = None
+        
         # Don't setup game immediately - wait for startup settings
+        
+    @property
+    def ai_manager(self):
+        """Lazy initialization of AI team manager"""
+        if self._ai_manager is None:
+            from ai_team_management import AITeamManager
+            self._ai_manager = AITeamManager()
+            # Initialize strategies for all teams (excluding user team)
+            if hasattr(self, 'league') and self.league.teams:
+                self._ai_manager.initialize_team_strategies(self.league.teams)
+        return self._ai_manager
         
     @property
     def record_manager(self):
@@ -6057,6 +6071,24 @@ class HockeyManagerGUI(tk.Tk):
             
             # Process injury recovery (daily)
             self._process_injury_recovery()
+            
+            # Process AI team decisions (trades, signings, etc.)
+            # Only every 7 days (handled internally by ai_manager)
+            try:
+                if hasattr(self.league, 'free_agents'):
+                    free_agents = self.league.free_agents
+                else:
+                    free_agents = []
+                decisions = self.ai_manager.process_daily_decisions(
+                    self.league.teams, free_agents, self.current_date
+                )
+                # Log significant decisions
+                for d in decisions[:5]:  # Limit spam
+                    if hasattr(d, 'description'):
+                        print(f"🤖 AI: {d.description}")
+            except Exception as e:
+                # Don't crash the game if AI fails
+                print(f"AI manager error (non-fatal): {e}")
             
             # ALWAYS advance date and update UI (whether games existed or not)
             self.current_date += timedelta(days=1)
