@@ -7144,9 +7144,9 @@ class HockeyManagerGUI(tk.Tk):
     def _simulate_game_full_batch(self, home_team, away_team):
         """Full event-by-event sim for batch games in 'full'-detail leagues.
 
-        Uses simulation.GameSim (the hooked engine). Player season stats are
-        updated by the engine itself. Returns
-        (winner, loser, scores, went_to_ot, sim).
+        Uses simulation.GameSim (the hooked engine). Player season stats —
+        goals, assists, and games played — are updated by the engine itself.
+        Returns (winner, loser, scores, went_to_ot, sim).
         """
         from simulation import GameSim
         sim = GameSim(home_team, away_team)

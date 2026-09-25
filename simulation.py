@@ -1852,6 +1852,32 @@ class GameSim:
         
         self._check_for_notable_performances()
 
+        # Games played: every roster player gets credit for dressing.
+        # (The sim doesn't track healthy scratches; this matches the app's
+        # existing convention.) The engine owns this so all GameSim paths —
+        # watched games, playoff sims, and full-detail batch sims — stay
+        # consistent; app-level callers must not add GP on top.
+        for team in (self.home_team, self.away_team):
+            for player in team.roster:
+                try:
+                    player.stats.games_played += 1
+                except Exception:
+                    pass
+
+        # Flush per-game goalie stats into season stats so saves / shots
+        # against / goals against accumulate on every GameSim path.
+        for stats in self.game_stats.values():
+            player = stats.get('player')
+            if player is None:
+                continue
+            try:
+                if getattr(getattr(player, 'primary_position', None), 'value', '') != 'G':
+                    continue
+                player.stats.saves += stats.get('saves', 0)
+                player.stats.shots_against += stats.get('shots_against', 0)
+            except Exception:
+                pass
+
         winner = self.home_team if self.home_score > self.away_score else self.away_team
         loser = self.away_team if self.home_score > self.away_score else self.home_team
         
