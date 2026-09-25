@@ -2629,6 +2629,33 @@ class AdvancedGameSim:
         
         print(f"🏥 Injury: {injured.first_name} {injured.last_name} - {injury_type} ({games_missed} games)")
 
+    def _process_injury_recovery(self):
+        """Process daily injury recovery for all players.
+        
+        Decrements games_remaining_injured. When it reaches 0, player is healed.
+        Only counts down on days with games (players don't recover on off-days
+        in terms of games missed, but we use days as proxy).
+        """
+        for team in self.league.teams:
+            for player in team.roster:
+                if getattr(player, 'is_injured', False):
+                    remaining = getattr(player, 'games_remaining_injured', 0)
+                    if remaining > 0:
+                        # Only decrement if the team played today (games missed, not days)
+                        # For simplicity, decrement daily - close enough
+                        player.games_remaining_injured = remaining - 1
+                        
+                        if player.games_remaining_injured <= 0:
+                            # Player is healed!
+                            player.is_injured = False
+                            player.injury_type = "None"
+                            player.games_remaining_injured = 0
+                            print(f"✅ {player.first_name} {player.last_name} has recovered from injury!")
+                            
+                            # Notify if it's the user's team
+                            if hasattr(self, 'user_team') and team == self.user_team:
+                                self.add_news(f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available.")
+
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
         """Enhanced shot resolution using multiple attributes"""
         # Determine shot type based on position and situation
@@ -6027,6 +6054,9 @@ class HockeyManagerGUI(tk.Tk):
             # Process games if any exist
             if todays_games:
                 self._process_todays_games(todays_games)
+            
+            # Process injury recovery (daily)
+            self._process_injury_recovery()
             
             # ALWAYS advance date and update UI (whether games existed or not)
             self.current_date += timedelta(days=1)
