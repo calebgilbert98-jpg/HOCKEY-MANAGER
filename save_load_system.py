@@ -133,6 +133,8 @@ class GameSaveManager:
                 'division': getattr(team, 'division', ''),
                 'conference': getattr(team, 'conference', ''),
                 'standings_position': getattr(team, 'standings_position', 0),
+                'board_expectation': getattr(team, 'board_expectation', None),
+                'buyout_cap_hits': dict(getattr(team, 'buyout_cap_hits', {}) or {}),
             }
             
             return team_data
@@ -628,6 +630,8 @@ class GameSaveManager:
             team.salary_cap_info = team_data.get('salary_cap_info', {})
             team.draft_picks = team_data.get('draft_picks', {})
             team.trade_block = team_data.get('trade_block', [])
+            team.board_expectation = team_data.get('board_expectation')
+            team.buyout_cap_hits = dict(team_data.get('buyout_cap_hits', {}) or {})
             
             # Restore team stats
             if 'stats' in team_data:
