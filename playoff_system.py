@@ -135,8 +135,11 @@ class PlayoffBracket:
             series = PlayoffSeries("Wild Card Round", team1, team2)
             self.playoff_series['wild_card'].append(series)
     
+    # Bracket flow: Round 1 -> Round 2 -> Conference Finals -> Stanley Cup Final.
+    # ('division_finals' holds the two conference-final series; 'conference_finals'
+    # is kept as a legacy key.)
     ROUND_ORDER = ['wild_card', 'division_semifinals', 'division_finals',
-                   'conference_finals', 'stanley_cup_final']
+                   'stanley_cup_final']
 
     def advance_to_next_round(self, round_name: str):
         """Advance winners to the next playoff round"""
@@ -148,9 +151,8 @@ class PlayoffBracket:
         elif round_name == 'division_semifinals':
             self._create_division_finals(winners)
         elif round_name == 'division_finals':
+            # Conference champions advance to the Stanley Cup Final
             self._create_conference_finals(winners)
-        elif round_name == 'conference_finals':
-            self._create_stanley_cup_final(winners)
         elif round_name == 'stanley_cup_final':
             if winners:
                 self.stanley_cup_champion = winners[0]
@@ -201,19 +203,12 @@ class PlayoffBracket:
             self.playoff_series['division_finals'].append(series)
     
     def _create_conference_finals(self, winners: List[Team]):
-        """Create Conference Finals"""
-        eastern_winner = None
-        western_winner = None
-        
-        for team in winners:
-            if self._is_eastern_team(team):
-                eastern_winner = team
-            else:
-                western_winner = team
-        
-        if eastern_winner and western_winner:
-            series = PlayoffSeries("Conference Finals", eastern_winner, western_winner)
-            self.playoff_series['conference_finals'].append(series)
+        """Create the Stanley Cup Final from the two conference champions."""
+        eastern_winners = [t for t in winners if self._is_eastern_team(t)]
+        western_winners = [t for t in winners if not self._is_eastern_team(t)]
+
+        if eastern_winners and western_winners:
+            self._create_stanley_cup_final([eastern_winners[0], western_winners[0]])
     
     def _create_stanley_cup_final(self, winners: List[Team]):
         """Create Stanley Cup Final"""
@@ -377,16 +372,9 @@ class PlayoffWindow(tk.Toplevel):
             while not series.is_complete:
                 home_score, away_score = self.playoff_bracket.simulate_playoff_game(series)
                 
-        # Advance to next round
+        # Advance to next round (bracket updates its own current_round)
         self.playoff_bracket.advance_to_next_round(self.playoff_bracket.current_round)
-        
-        # Update current round
-        round_order = ['wild_card', 'division_semifinals', 'division_finals', 
-                      'conference_finals', 'stanley_cup_final']
-        current_index = round_order.index(self.playoff_bracket.current_round)
-        if current_index < len(round_order) - 1:
-            self.playoff_bracket.current_round = round_order[current_index + 1]
-        
+
         self._update_status_display()
         self._display_bracket()
         
@@ -402,8 +390,7 @@ class PlayoffWindow(tk.Toplevel):
             messagebox.showwarning("Warning", "Please generate playoff bracket first")
             return
         
-        round_order = ['wild_card', 'division_semifinals', 'division_finals', 
-                      'conference_finals', 'stanley_cup_final']
+        round_order = PlayoffBracket.ROUND_ORDER
         
         for round_name in round_order:
             self.playoff_bracket.current_round = round_name
@@ -452,8 +439,7 @@ class PlayoffWindow(tk.Toplevel):
         row = 0
         
         # Display each round
-        round_order = ['wild_card', 'division_semifinals', 'division_finals', 
-                      'conference_finals', 'stanley_cup_final']
+        round_order = PlayoffBracket.ROUND_ORDER
         
         for round_name in round_order:
             series_list = self.playoff_bracket.playoff_series[round_name]
