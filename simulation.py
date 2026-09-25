@@ -1963,15 +1963,16 @@ class GameSim:
         
         # Check for physical play in neutral zone (Stage 4)
         # Enforcer deterrence: carriers skate freer with a tough guy on the ice
-        hit_chance = 0.15
+        # (physical_intensity scales the chance; base 1.0 always allows hits)
+        hit_chance = 0.15 * self.physical_intensity
         try:
             mates = [p for p in self._get_on_ice(attacking_team)
                      if p.primary_position != PlayerPosition.GOALIE]
             if any(get_archetype(p) == "Enforcer" for p in mates):
-                hit_chance = 0.08
+                hit_chance = 0.08 * self.physical_intensity
         except Exception:
             pass
-        if self.physical_intensity > 1.0 and random.random() < hit_chance:
+        if random.random() < hit_chance:
             # Archetype tendency: the hitter is usually a power forward,
             # enforcer, grinder or physical defenseman - not a sniper.
             potential_hitter = self._weighted_skater_choice(defending_skaters, "hit")
@@ -2583,14 +2584,17 @@ class GameSim:
         # Apply defensive pressure modifier (Stage 4)
         base_block_chance *= self.defensive_pressure
         
-        # Find best defender to attempt block
-        best_blocker = max(defending_skaters, key=lambda p: p.defensive_awareness + p.checking + p.positioning)
+        # Choose the blocker by weighted draw: attributes x archetype block
+        # tendency, so defensive D/grinders block most but not exclusively.
+        best_blocker = self._weighted_skater_choice(defending_skaters, "block")
+        if best_blocker is None:
+            return {'blocked': False, 'blocker': None}
         
         # Calculate block probability with Stage 4 enhancements
         blocker_skill = (best_blocker.defensive_awareness + best_blocker.checking + best_blocker.anticipation + best_blocker.positioning) / 4
         shooter_skill = (shooter.shooting_accuracy + shooter.shooting_power) / 2
         
-        block_chance = base_block_chance * (blocker_skill / max(shooter_skill, 1)) * 0.01
+        block_chance = base_block_chance * (blocker_skill / max(shooter_skill, 1))
         # Archetype tendency: defensive defensemen and grinders sell out to
         # block; snipers and offensive defensemen rarely do.
         try:
@@ -2806,8 +2810,12 @@ class GameSim:
         # Handle passing play possibility
         passer = None
         # Archetype tendency: snipers shoot first, playmakers look pass first.
+        # shoot_pass_tendency is SHOOT tendency (high = shooter), so the pass
+        # branch scales with (100 - tendency) and inversely with shoot_bias.
         shoot_bias = get_tendency(shooter, "shoot_bias")
-        if random.random() * 100 < shooter.shoot_pass_tendency * shoot_bias \
+        pass_bias = 1.0 / shoot_bias if shoot_bias else 1.0
+        pass_chance = min(100.0, (100 - shooter.shoot_pass_tendency) * pass_bias)
+        if random.random() * 100 < pass_chance \
                 and shot_type not in [ShotType.REBOUND, ShotType.TIP_IN]:
             teammates = [p for p in self._get_on_ice(attacking_team) if p != shooter and p.primary_position != PlayerPosition.GOALIE]
             if teammates and random.random() < 0.3:  # 30% chance of pass play

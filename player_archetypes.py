@@ -335,7 +335,8 @@ def matchup_multiplier(attacking_archetypes: List[str],
 # Multipliers around 1.0 applied to event-selection in the sim:
 #   shoot      - likelihood of being picked as the shooter on a shot chance
 #   hit        - likelihood of being picked to throw a hit
-#   shoot_bias - shoot-vs-pass decision bias (scales shoot_pass_tendency)
+#   shoot_bias - shoot-vs-pass decision bias (>1 = shoots more; the pass
+#                branch scales with (100 - shoot_pass_tendency) / shoot_bias)
 #   block      - shot-blocking involvement
 #   carry      - controlled zone-entry (rush) tendency
 #
