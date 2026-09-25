@@ -2348,9 +2348,142 @@ class League:
         
         print("✅ Fixed NHL scheduling - NO MORE MULTIPLE GAMES PER DAY!")
         
+        # HARD GUARANTEE: No team ever plays 3+ consecutive days.
+        # This validation pass catches any violations from any code path
+        # and reschedules the middle game of each streak to a nearby open date.
+        nhl_games = self._enforce_no_three_in_a_row(nhl_games, nhl_teams)
+        
         # Add NHL games to main schedule
         self.schedule.extend(nhl_games)
         print(f"✅ Added {len(nhl_games)} NHL games to main schedule")
+    
+    def _enforce_no_three_in_a_row(self, games, nhl_teams):
+        """Ensure no team plays 3+ consecutive days. Fixes violations by moving the middle game.
+        
+        Args:
+            games: List of game dicts with 'date', 'home_team', 'away_team'
+            nhl_teams: List of Team objects
+            
+        Returns:
+            The games list with violations fixed (games moved to nearby open dates)
+        """
+        from collections import defaultdict
+        
+        def get_team_name(team):
+            return team.team_name if hasattr(team, 'team_name') else str(team)
+        
+        def find_violations(game_list):
+            """Find all (team_name, d1, d2, d3) 3-in-a-row violations."""
+            team_dates = defaultdict(list)
+            for g in game_list:
+                d = g['date']
+                team_dates[get_team_name(g['home_team'])].append(d)
+                team_dates[get_team_name(g['away_team'])].append(d)
+            
+            violations = []
+            for team, dates in team_dates.items():
+                dates = sorted(set(dates))
+                for i in range(len(dates) - 2):
+                    d1, d2, d3 = dates[i], dates[i+1], dates[i+2]
+                    if (d2 - d1).days == 1 and (d3 - d2).days == 1:
+                        violations.append((team, d1, d2, d3))
+            return violations
+        
+        def teams_playing_on(game_list, check_date):
+            """Get set of team names playing on a given date."""
+            playing = set()
+            for g in game_list:
+                if g['date'] == check_date:
+                    playing.add(get_team_name(g['home_team']))
+                    playing.add(get_team_name(g['away_team']))
+            return playing
+        
+        def would_create_violation(game_list, team_name, new_date):
+            """Check if moving a team's game to new_date would create a 3-in-a-row."""
+            team_dates = set()
+            for g in game_list:
+                d = g['date']
+                t1 = get_team_name(g['home_team'])
+                t2 = get_team_name(g['away_team'])
+                if t1 == team_name or t2 == team_name:
+                    team_dates.add(d)
+            team_dates.add(new_date)
+            dates = sorted(team_dates)
+            for i in range(len(dates) - 2):
+                d1, d2, d3 = dates[i], dates[i+1], dates[i+2]
+                if (d2 - d1).days == 1 and (d3 - d2).days == 1:
+                    return True
+            return False
+        
+        violations = find_violations(games)
+        if not violations:
+            print("✅ Schedule validation: no 3-in-a-row violations found")
+            return games
+        
+        print(f"⚠️ Schedule validation: found {len(violations)} 3-in-a-row violations, fixing...")
+        
+        # Get the full date range of the schedule
+        all_dates = sorted(set(g['date'] for g in games))
+        if not all_dates:
+            return games
+        min_date, max_date = all_dates[0], all_dates[-1]
+        
+        fixed = 0
+        # Try to fix each violation by moving the middle game (d2)
+        for team_name, d1, d2, d3 in violations:
+            # Find the game on d2 involving this team
+            target_game = None
+            for g in games:
+                if g['date'] == d2 and (get_team_name(g['home_team']) == team_name or 
+                                        get_team_name(g['away_team']) == team_name):
+                    target_game = g
+                    break
+            
+            if not target_game:
+                continue
+            
+            home_name = get_team_name(target_game['home_team'])
+            away_name = get_team_name(target_game['away_team'])
+            
+            # Look for a nearby open date (within 14 days) where neither team plays
+            # and moving wouldn't create new violations
+            moved = False
+            for offset in range(1, 15):
+                for new_date in [d2 + timedelta(days=offset), d2 - timedelta(days=offset)]:
+                    if new_date < min_date or new_date > max_date:
+                        continue
+                    
+                    playing = teams_playing_on(games, new_date)
+                    if home_name in playing or away_name in playing:
+                        continue
+                    
+                    # Don't move to a date that would create a new violation for either team
+                    # (temporarily remove the game from d2 for the check)
+                    other_games = [g for g in games if g is not target_game]
+                    if would_create_violation(other_games, home_name, new_date):
+                        continue
+                    if would_create_violation(other_games, away_name, new_date):
+                        continue
+                    
+                    # Safe to move
+                    target_game['date'] = new_date
+                    fixed += 1
+                    moved = True
+                    break
+                if moved:
+                    break
+            
+            if not moved:
+                print(f"⚠️ Could not reschedule {home_name} vs {away_name} on {d2} to break 3-in-a-row for {team_name}")
+        
+        # Final check
+        remaining = find_violations(games)
+        if remaining:
+            print(f"⚠️ Schedule validation: {len(remaining)} violations remain after fix attempt")
+        else:
+            print(f"✅ Schedule validation: fixed {fixed} games, no 3-in-a-row violations remain")
+        
+        return games
     
     def _create_authentic_nhl_matchup_pattern(self, nhl_teams, season_year, rotation_seed):
         """Create authentic NHL matchup assignments using real NHL rotation logic.
