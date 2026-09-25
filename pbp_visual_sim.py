@@ -315,45 +315,50 @@ class PBPVisualSim(tk.Toplevel):
         return pts
 
     def _draw_rink(self):
-        """Clip-art NHL rink (matches reference): light-blue ice, bold blue
-        board frame, red/blue lines, red faceoff circles with inner hash
-        marks, blue creases, simple nets."""
+        """Clip-art NHL rink matching the reference image: near-white ice
+        with soft blue edge tint, bold blue board frame, thin red goal
+        lines, thick blue lines, red faceoff circles (dot + inner hash
+        ticks), blue creases, small nets on the goal lines."""
         c = self.canvas
         W, H = self.rink_w, self.rink_h
         rr = 28 * self.scale
 
-        # --- ice (light blue, rounded corners) ---
-        ice = self._rr_points(8, 8, W - 8, H - 8, rr)
-        c.create_polygon(ice, fill=ICE, outline="")
+        # --- ice: soft vignette, near-white center -> light blue edges ---
+        c.create_polygon(self._rr_points(8, 8, W - 8, H - 8, rr),
+                         fill="#CFE4F6", outline="")
+        c.create_polygon(self._rr_points(28, 28, W - 28, H - 28, rr - 20),
+                         fill="#DDEBF9", outline="")
+        c.create_polygon(self._rr_points(60, 60, W - 60, H - 60, rr - 52),
+                         fill="#EFF6FD", outline="")
 
-        # --- lines: center red, blue lines 64 ft from goal lines, goal lines ---
-        c.create_line(self.X(100), 10, self.X(100), H - 10, fill=LINE_RED, width=4)
+        # --- lines ---
+        c.create_line(self.X(100), 12, self.X(100), H - 12, fill=LINE_RED, width=3)
         for bx in (75, 125):
-            c.create_line(self.X(bx), 10, self.X(bx), H - 10, fill=LINE_BLUE, width=10)
+            c.create_line(self.X(bx), 12, self.X(bx), H - 12, fill=LINE_BLUE, width=9)
         for gx in (HOME_NET_X, AWAY_NET_X):
-            c.create_line(self.X(gx), 10, self.X(gx), H - 10, fill=LINE_RED, width=2)
+            c.create_line(self.X(gx), 12, self.X(gx), H - 12, fill=LINE_RED, width=2)
 
         # --- center: blue circle + dot ---
         cx, cy = self.X(100), self.Y(42.5)
-        c.create_oval(cx - 70, cy - 70, cx + 70, cy + 70,
+        c.create_oval(cx - 66, cy - 66, cx + 66, cy + 66,
                       outline=LINE_BLUE, width=3)
         c.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill=LINE_BLUE)
 
-        # --- end-zone faceoff circles: 20 ft out, 22 ft off center ---
+        # --- end-zone faceoff circles (20 ft out, 22 ft off center) ---
         for gx in (HOME_NET_X, AWAY_NET_X):
             sgn = 1 if gx == HOME_NET_X else -1
             for dy in (20.5, 64.5):
                 ex, ey = self.X(gx + 20 * sgn), self.Y(dy)
-                c.create_oval(ex - 62, ey - 62, ex + 62, ey + 62,
+                c.create_oval(ex - 66, ey - 66, ex + 66, ey + 66,
                               outline=FACEOFF_RED, width=3)
-                # dot: red with white center stripe (clip-art spot detail)
-                c.create_oval(ex - 9, ey - 9, ex + 9, ey + 9, fill=FACEOFF_RED,
-                              outline="")
+                # dot with white stripe
+                c.create_oval(ex - 9, ey - 9, ex + 9, ey + 9,
+                              fill=FACEOFF_RED, outline="")
                 c.create_line(ex - 9, ey, ex + 9, ey, fill="white", width=3)
-                # hash marks: short ticks inside the circle, flanking the dot
+                # inner hash ticks flanking the dot
                 for sx in (-1, 1):
-                    hx = ex + sx * 26
-                    c.create_line(hx - 10, ey, hx + 10, ey,
+                    hx = ex + sx * 22
+                    c.create_line(hx - 9, ey, hx + 9, ey,
                                   fill=FACEOFF_RED, width=3)
 
         # --- neutral-zone dots ---
@@ -368,16 +373,16 @@ class PBPVisualSim(tk.Toplevel):
                          start=270 if flip > 0 else 90, extent=180,
                          fill=CREASE_BLUE, outline=LINE_RED, width=2)
 
-        # --- nets: small red-frame goals on the goal line ---
+        # --- nets: small, sitting on the goal line ---
         self.goal_items = {}
         for nx, side in ((HOME_NET_X, "home"), (AWAY_NET_X, "away")):
-            d = 12 if side == "away" else -12
-            x0, x1 = self.X(nx), self.X(nx) + d
+            d = 10 if side == "away" else -10
+            x0, x1 = self.X(nx) - 5, self.X(nx) + d
             y0, y1 = self.Y(42.5) - 14, self.Y(42.5) + 14
             items = [c.create_rectangle(min(x0, x1), y0, max(x0, x1), y1,
                                         fill="white", outline=LINE_RED, width=3)]
-            for i in range(1, 4):
-                yy = y0 + i * (y1 - y0) / 4
+            for i in range(1, 3):
+                yy = y0 + i * (y1 - y0) / 3
                 items.append(c.create_line(min(x0, x1), yy, max(x0, x1), yy,
                                            fill="#9AA8BC", width=1))
             self.goal_items[side] = items
@@ -393,13 +398,7 @@ class PBPVisualSim(tk.Toplevel):
 
         # --- boards: bold blue frame ---
         boards = self._rr_points(8, 8, W - 8, H - 8, rr)
-        c.create_polygon(boards, outline=BOARD_BLUE, fill="", width=16)
-
-        # --- team labels on the ice ---
-        c.create_text(self.X(15), H - 24, text=self.home_team.team_name.upper(),
-                      fill=INK, font=(FONT, 8, "bold"), anchor="w")
-        c.create_text(self.X(185), H - 24, text=self.away_team.team_name.upper(),
-                      fill=INK, font=(FONT, 8, "bold"), anchor="e")
+        c.create_polygon(boards, outline=BOARD_BLUE, fill="", width=18)
 
     def _bump_stat(self, side, key, amount=1):
         """Increment a team stat ('home'/'away', 'Shots'/'Hits'/'FO'/'PIM')."""
