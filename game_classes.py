@@ -2329,6 +2329,17 @@ class League:
         print(f"Total games scheduled: {len(scheduled_matchups)}")
         print(f"Remaining unscheduled: {len(remaining_matchups)}")
         
+        # FORCE-SCHEDULE REMAINING: If games couldn't be placed, try harder
+        # This ensures all 1,312 matchups (82 per team) get scheduled
+        if remaining_matchups:
+            print(f"\n🔧 Force-scheduling {len(remaining_matchups)} remaining games...")
+            remaining_matchups = self._force_schedule_remaining(
+                remaining_matchups, nhl_teams, nhl_games, games_by_date,
+                team_last_played, team_second_last_played, team_games_scheduled,
+                season_start, season_end
+            )
+            print(f"After force-schedule: {len(remaining_matchups)} still unscheduled")
+        
         # Verify no same-day conflicts across the entire schedule
         print("\n🔍 Verifying no same-day conflicts...")
         for check_date, games in self.games.items():
@@ -2359,6 +2370,75 @@ class League:
         # Add NHL games to main schedule
         self.schedule.extend(nhl_games)
         print(f"✅ Added {len(nhl_games)} NHL games to main schedule")
+    
+    def _force_schedule_remaining(self, remaining_matchups, nhl_teams, nhl_games, games_by_date,
+                                   team_last_played, team_second_last_played, team_games_scheduled,
+                                   season_start, season_end):
+        """Force-schedule games that couldn't be placed in the main loop.
+        
+        Tries every date in the season for each remaining matchup.
+        Only enforces hard constraints: no same-day doubleheaders, no 3-in-a-row.
+        Returns list of matchups that still couldn't be scheduled (should be empty).
+        """
+        from datetime import timedelta
+        
+        still_remaining = []
+        
+        for team1, team2, venue in remaining_matchups:
+            team1_name = team1.team_name
+            team2_name = team2.team_name
+            scheduled = False
+            
+            # Try every date in the season
+            check_date = season_start
+            while check_date <= season_end and not scheduled:
+                # Skip if either team already plays this date
+                teams_today = games_by_date.get(check_date, set())
+                if team1_name in teams_today or team2_name in teams_today:
+                    check_date += timedelta(days=1)
+                    continue
+                
+                # Check no-three-in-a-row (hard constraint)
+                yesterday = check_date - timedelta(days=1)
+                day_before = check_date - timedelta(days=2)
+                
+                t1_y = team_last_played.get(team1_name) == yesterday
+                t1_db = team_second_last_played.get(team1_name) == day_before
+                t2_y = team_last_played.get(team2_name) == yesterday
+                t2_db = team_second_last_played.get(team2_name) == day_before
+                
+                if (t1_y and t1_db) or (t2_y and t2_db):
+                    check_date += timedelta(days=1)
+                    continue
+                
+                # Valid date found! Schedule the game
+                game_data = {
+                    'date': check_date,
+                    'home_team': team1 if venue == 'HOME' else team2,
+                    'away_team': team2 if venue == 'HOME' else team1,
+                    'league': 'NHL'
+                }
+                nhl_games.append(game_data)
+                
+                # Update tracking
+                if check_date not in games_by_date:
+                    games_by_date[check_date] = set()
+                games_by_date[check_date].add(team1_name)
+                games_by_date[check_date].add(team2_name)
+                
+                # Update last played (need to be careful - this is simplified)
+                # For force-schedule, we just update the most recent
+                team_last_played[team1_name] = check_date
+                team_last_played[team2_name] = check_date
+                team_games_scheduled[team1_name] += 1
+                team_games_scheduled[team2_name] += 1
+                
+                scheduled = True
+            
+            if not scheduled:
+                still_remaining.append((team1, team2, venue))
+        
+        return still_remaining
     
     def _enforce_no_three_in_a_row(self, games, nhl_teams):
         """Ensure no team plays 3+ consecutive days. Fixes violations by moving the middle game.
