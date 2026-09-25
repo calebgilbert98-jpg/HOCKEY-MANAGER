@@ -306,7 +306,17 @@ class AutomatedSeasonFlow:
     def _get_todays_games(self):
         """Get all games scheduled for today"""
         current_date = self.game_manager.current_date
-        return [game for game in self.game_manager.league.schedule if game[0] == current_date]
+        todays = []
+        for game in self.game_manager.league.schedule:
+            if isinstance(game, dict):
+                game_date = game.get('date')
+            elif isinstance(game, (tuple, list)) and len(game) >= 1:
+                game_date = game[0]
+            else:
+                continue
+            if game_date == current_date:
+                todays.append(game)
+        return todays
         
     def _get_upcoming_user_games(self, days_ahead=14):
         """Get upcoming user team games within X days"""
@@ -315,8 +325,15 @@ class AutomatedSeasonFlow:
         
         user_games = []
         for game in self.game_manager.league.schedule:
-            game_date, home_team, away_team = game
-            if current_date < game_date <= future_date:
+            if isinstance(game, dict):
+                game_date = game.get('date')
+                home_team = game.get('home_team')
+                away_team = game.get('away_team')
+            elif isinstance(game, (tuple, list)) and len(game) >= 3:
+                game_date, home_team, away_team = game[0], game[1], game[2]
+            else:
+                continue
+            if game_date is not None and current_date < game_date <= future_date:
                 if self._is_user_team_game(game):
                     user_games.append(game)
                     
@@ -324,15 +341,22 @@ class AutomatedSeasonFlow:
         
     def _is_user_team_game(self, game):
         """Check if a game involves the user team"""
-        _, home_team, away_team = game
+        if isinstance(game, dict):
+            home_team, away_team = game.get('home_team'), game.get('away_team')
+        else:
+            _, home_team, away_team = game
         user_team = getattr(self.game_manager, 'user_team', None)
         
         if not user_team:
             return False
-            
-        return (home_team == user_team or away_team == user_team or
-                home_team.team_name == user_team.team_name or
-                away_team.team_name == user_team.team_name)
+
+        user_name = getattr(user_team, 'team_name', user_team)
+        for team in (home_team, away_team):
+            if team == user_team:
+                return True
+            if getattr(team, 'team_name', team) == user_name:
+                return True
+        return False
         
     def _check_milestone_triggers(self):
         """Check if any milestones should be triggered today"""

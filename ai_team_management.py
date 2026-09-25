@@ -84,9 +84,9 @@ class AITeamManager:
     def initialize_team_strategies(self, teams: List[Team]):
         """Initialize AI strategies for all CPU teams"""
         for team in teams:
-            if team.team_name == "User Team":  # Skip user team
+            if getattr(team, 'is_user_team', False):  # Skip user team
                 continue
-                
+
             strategy = self._generate_team_strategy(team)
             self.team_strategies[team.team_name] = strategy
             
@@ -237,9 +237,9 @@ class AITeamManager:
             return decisions
         
         for team in teams:
-            if team.team_name == "User Team":
+            if getattr(team, 'is_user_team', False):
                 continue
-                
+
             strategy = self.team_strategies.get(team.team_name)
             if not strategy:
                 continue

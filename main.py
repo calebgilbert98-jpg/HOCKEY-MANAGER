@@ -5376,7 +5376,16 @@ class HockeyManagerGUI(tk.Tk):
             
             # Show past games (last 5) and future games (next 5)
             user_games = []
-            for game_date, home, away in self.league.schedule:
+            for item in self.league.schedule:
+                # Normalize schedule entry (dict or legacy tuple)
+                if isinstance(item, dict):
+                    game_date, home, away = item.get('date'), item.get('home_team'), item.get('away_team')
+                elif isinstance(item, (tuple, list)) and len(item) >= 3:
+                    game_date, home, away = item[0], item[1], item[2]
+                else:
+                    continue
+                if game_date is None or home == 'NHL_EVENT':
+                    continue
                 if self.user_team in (home, away):
                     user_games.append((game_date, home, away))
             
@@ -5808,7 +5817,7 @@ class HockeyManagerGUI(tk.Tk):
                 self._process_todays_games(todays_games)
             
             # Process injury recovery (daily)
-            self._process_injury_recovery()
+            self.game_manager._process_injury_recovery()
             
             # Process AI team decisions (trades, signings, etc.)
             # Only every 7 days (handled internally by ai_manager)
@@ -5817,7 +5826,7 @@ class HockeyManagerGUI(tk.Tk):
                     free_agents = self.league.free_agents
                 else:
                     free_agents = []
-                decisions = self.ai_manager.process_daily_decisions(
+                decisions = self.game_manager.ai_manager.process_daily_decisions(
                     self.league.teams, free_agents, self.current_date
                 )
                 # Log significant decisions
@@ -5839,7 +5848,7 @@ class HockeyManagerGUI(tk.Tk):
                     self._strength_cache.clear()
                 # Monthly player development (ratings change -> strength recomputed)
                 try:
-                    self._process_monthly_development()
+                    self.game_manager._process_monthly_development()
                 except Exception as e:
                     print(f"Player development error (non-fatal): {e}")
             

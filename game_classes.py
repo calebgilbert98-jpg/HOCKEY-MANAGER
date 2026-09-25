@@ -3318,9 +3318,13 @@ class League:
                 if game_item[1] == 'NHL_EVENT':
                     special_events.append(game_item)
                 else:
-                    # Assume it's an NHL game if it has team objects
+                    # Legacy tuple format: only count if both teams are NHL teams
+                    # (other leagues like the AHL also use tuples in old saves)
                     if hasattr(game_item[1], 'team_name') and hasattr(game_item[2], 'team_name'):
-                        nhl_games.append(game_item)
+                        home_lg = getattr(game_item[1], 'league_name', 'National Hockey League')
+                        away_lg = getattr(game_item[2], 'league_name', 'National Hockey League')
+                        if home_lg == 'National Hockey League' and away_lg == 'National Hockey League':
+                            nhl_games.append(game_item)
         
         # Verify NHL teams get exactly 82 games each
         nhl_team_counts = {}
@@ -3608,7 +3612,14 @@ class League:
         """Generate schedule for non-NHL leagues with proper same-day conflict prevention."""
         if len(league_teams) < 2:
             return
-            
+
+        # Short league code for schedule entries (matches NHL dict format)
+        league_codes = {
+            "National Hockey League": "NHL",
+            "American Hockey League": "AHL",
+        }
+        league_code = league_codes.get(league_name, league_name)
+
         print(f"🏒 Generating schedule for {league_name} ({len(league_teams)} teams)")
         
         # Create all matchups (each team plays each other team twice - home and away)
@@ -3648,8 +3659,15 @@ class League:
                 if (game_date not in team_schedules[home_team.team_name] and 
                     game_date not in team_schedules[away_team.team_name]):
                     
-                    # Schedule the game
-                    self.schedule.append((game_date, home_team, away_team))
+                    # Schedule the game (dict format matches NHL entries)
+                    from datetime import time as dt_time
+                    self.schedule.append({
+                        'date': game_date,
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'time': dt_time(19, 0),
+                        'league': league_code,
+                    })
                     
                     # Mark both teams as busy on this date
                     team_schedules[home_team.team_name].append(game_date)

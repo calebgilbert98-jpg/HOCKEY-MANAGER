@@ -209,13 +209,32 @@ class GameSaveManager:
             
             schedule_data = []
             for game in self.game_manager.league.schedule:
-                if len(game) >= 3:
-                    game_date, home_team, away_team = game[:3]
+                try:
+                    if isinstance(game, dict):
+                        game_date = game.get('date')
+                        home_team = game.get('home_team')
+                        away_team = game.get('away_team')
+                        league = game.get('league', '')
+                        # Skip special events here (handled separately)
+                        if home_team == 'NHL_EVENT' or away_team == 'NHL_EVENT':
+                            continue
+                    elif isinstance(game, (tuple, list)) and len(game) >= 3:
+                        game_date, home_team, away_team = game[0], game[1], game[2]
+                        if home_team == 'NHL_EVENT':
+                            continue
+                        league = getattr(home_team, 'league_name', '')
+                        league = {'National Hockey League': 'NHL',
+                                  'American Hockey League': 'AHL'}.get(league, league)
+                    else:
+                        continue
                     schedule_data.append({
                         'date': game_date.isoformat() if hasattr(game_date, 'isoformat') else str(game_date),
                         'home_team': home_team.team_name if hasattr(home_team, 'team_name') else str(home_team),
                         'away_team': away_team.team_name if hasattr(away_team, 'team_name') else str(away_team),
+                        'league': league,
                     })
+                except (AttributeError, TypeError, IndexError):
+                    continue
             
             return schedule_data
             
@@ -743,7 +762,14 @@ class GameSaveManager:
                             away_team = team
                     
                     if home_team and away_team:
-                        schedule.append((game_date, home_team, away_team))
+                        from datetime import time as dt_time
+                        schedule.append({
+                            'date': game_date,
+                            'home_team': home_team,
+                            'away_team': away_team,
+                            'time': dt_time(19, 0),
+                            'league': game_data.get('league', ''),
+                        })
                 except:
                     continue
             
