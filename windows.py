@@ -4229,7 +4229,7 @@ class ScheduleWindow(tk.Toplevel):
             if not game_data['has_been_played']:
                 # Simulate the game for viewing
                 sim = GameSim(home_team, away_team)
-                sim.simulate()
+                sim.run()
                 
                 # Store the result
                 game_result = {
@@ -4262,13 +4262,13 @@ class ScheduleWindow(tk.Toplevel):
                         sim.home_score = result['home_score']
                         sim.away_score = result['away_score']
                         # Generate some sample events for viewing
-                        sim.simulate()
+                        sim.run()
                         break
                 
                 if not sim:
                     # Create new simulation as fallback
                     sim = GameSim(home_team, away_team)
-                    sim.simulate()
+                    sim.run()
             
             # Launch the game viewer with simulation data
             event_log = getattr(sim, 'event_log', [])
@@ -4296,7 +4296,7 @@ class ScheduleWindow(tk.Toplevel):
             
             # Create and run simulation
             sim = GameSim(home_team, away_team)
-            sim.simulate()
+            sim.run()
             
             # Store the result
             game_result = {

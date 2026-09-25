@@ -368,9 +368,10 @@ class GameSim:
     Stage 4: Physical play mechanics, defensive systems, and turnover tracking.
     Stage 5: Advanced goaltending mechanics, save types, and positioning systems.
     """
-    def __init__(self, home_team: Team, away_team: Team):
+    def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False):
         self.home_team = home_team
         self.away_team = away_team
+        self.is_playoff = is_playoff
         self.home_score = 0
         self.away_score = 0
         self.period = 1
@@ -1852,6 +1853,23 @@ class GameSim:
         loser = self.away_team if self.home_score > self.away_score else self.home_team
         
         return winner, loser, (self.home_score, self.away_score), self.game_log, self.notable_events
+    
+    def simulate_game(self):
+        """Compatibility wrapper for playoff_system.py.
+        
+        Calls run() and returns a dict with home_score/away_score,
+        matching the interface playoff_system expects.
+        """
+        winner, loser, scores, game_log, notable_events = self.run()
+        home_score, away_score = scores
+        return {
+            'home_score': home_score,
+            'away_score': away_score,
+            'winner': winner,
+            'loser': loser,
+            'game_log': game_log,
+            'notable_events': notable_events,
+        }
 
     def _simulate_period(self):
         """
