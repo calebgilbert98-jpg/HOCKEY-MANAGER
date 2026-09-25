@@ -14,10 +14,11 @@ from sleeper_ui import (
 class SleeperDashboard:
     """Modern, Sleeper-inspired dashboard."""
     
-    def __init__(self, parent, game_manager, user_team):
+    def __init__(self, parent, game_manager, user_team, on_continue=None):
         self.parent = parent
         self.game_manager = game_manager
         self.user_team = user_team
+        self.on_continue = on_continue
         self.widgets = {}
     
     def create_dashboard(self, container):
@@ -312,9 +313,19 @@ class SleeperDashboard:
     
     def _on_continue(self):
         """Handle continue button."""
-        # This will be connected to the actual continue logic
-        print("Continue clicked")
+        if self.on_continue:
+            self.on_continue()
+        else:
+            print("Continue clicked (no handler)")
     
-    def update_data(self):
-        """Refresh dashboard data."""
+    def update_data(self, current_date=None, team_record=None, 
+                   next_game=None, roster_highlights=None, recent_news=None):
+        """Refresh dashboard data.
+        
+        Accepts the same kwargs as AtmosphericDashboard for compatibility.
+        Currently the dashboard reads live from game_manager/user_team,
+        so this is a no-op placeholder for future refresh logic.
+        """
+        # TODO: Implement live refresh without full rebuild
+        # For now, data is read at creation time from game_manager/user_team
         pass

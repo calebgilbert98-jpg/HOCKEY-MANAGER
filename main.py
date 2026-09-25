@@ -3526,7 +3526,8 @@ class HockeyManagerGUI(tk.Tk):
                 self.dashboard = SleeperDashboard(
                     parent=self,
                     game_manager=self.game_manager,
-                    user_team=self.user_team
+                    user_team=self.user_team,
+                    on_continue=self.simulate_day
                 )
                 
                 # Create the dashboard UI in its own frame
