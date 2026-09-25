@@ -797,8 +797,12 @@ class GameSaveManager:
                 if player:
                     free_agents.append(player)
             
-            self.game_manager.free_agents = free_agents
-            
+            gm = self.game_manager
+            if hasattr(gm, 'database_manager') and gm.database_manager is not None:
+                gm.database_manager.free_agents = free_agents
+            else:
+                gm.league.free_agents = free_agents
+
         except Exception as e:
             print(f"Error restoring free agents: {e}")
     

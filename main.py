@@ -9607,18 +9607,18 @@ class CleanEditLinesWindow(tk.Toplevel):
         notification = tk.Toplevel(self)
         notification.title(title)
         notification.geometry("350x150")
-        notification.configure(bg='white')
+        notification.configure(bg='#1a2030')
         notification.resizable(False, False)
         
         # Center the notification
         notification.transient(self)
         notification.grab_set()
         
-        # Color scheme based on type
+        # Color scheme based on type (dark theme)
         colors = {
-            "success": {"bg": "#d4edda", "border": "#28a745", "icon": "✅"},
-            "error": {"bg": "#f8d7da", "border": "#dc3545", "icon": "❌"},
-            "info": {"bg": "#d1ecf1", "border": "#17a2b8", "icon": "ℹ️"}
+            "success": {"bg": "#1d2b22", "border": "#28a745", "icon": "✅"},
+            "error": {"bg": "#2b1d1f", "border": "#dc3545", "icon": "❌"},
+            "info": {"bg": "#1b2630", "border": "#17a2b8", "icon": "ℹ️"}
         }
         
         color_scheme = colors.get(notification_type, colors["info"])
@@ -9639,7 +9639,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         content_frame = tk.Frame(notification, bg=color_scheme["bg"])
         content_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        tk.Label(content_frame, text=message, bg=color_scheme["bg"], fg='#212529',
+        tk.Label(content_frame, text=message, bg=color_scheme["bg"], fg='#e8ecf4',
                 font=(self.parent.FONT_FAMILY, 10), wraplength=300).pack()
         
         # OK button
