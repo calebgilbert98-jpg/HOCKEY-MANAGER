@@ -13002,8 +13002,8 @@ class GMOptionsWindow(tk.Toplevel):
     
     def open_season_goals(self):
         """Open season goals and objectives"""
-        messagebox.showinfo("Season Goals", 
-                           "Season Goals coming soon!\n\nWill include:\n• Playoff Expectations\n• Development Targets\n• Budget Objectives\n• Achievement Tracking")
+        from windows import SeasonGoalsWindow
+        SeasonGoalsWindow(self.parent)
     
     def auto_negotiate_extensions(self):
         """Auto-negotiate contract extensions with expiring players"""

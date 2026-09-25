@@ -11821,3 +11821,171 @@ class GMDashboardWindow(tk.Toplevel):
         st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
         w, l, otl, pts = st.get("W", 0), st.get("L", 0), st.get("OTL", 0), st.get("Points", 0)
         self._fill_cards(team, league, st, w, l, otl, pts, w + l + otl)
+
+
+class SeasonGoalsWindow(tk.Toplevel):
+    """Season Goals: board expectation, live progress, milestones, youth watch."""
+
+    EXPECTATIONS = [
+        ("cup", "Stanley Cup"),
+        ("contender", "Conf. Final"),
+        ("playoffs", "Playoffs"),
+        ("competitive", "Winning Record"),
+        ("rebuild", "Rebuild"),
+    ]
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Season Goals")
+        self.configure(background=parent.BG_COLOR)
+        self.geometry("640x600")
+        self._exp_var = tk.StringVar(
+            master=self,
+            value=getattr(parent.user_team, 'board_expectation', 'playoffs'))
+        self._build()
+
+    def _card(self, title):
+        card = ttk.Frame(self, style='Card.TFrame', padding=12)
+        card.pack(fill=tk.X, padx=12, pady=6)
+        ttk.Label(card, text=title, style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+        ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
+        return card
+
+    def _line(self, card, text, secondary=False):
+        ttk.Label(card, text=text,
+                  style='Secondary.TLabel' if secondary else 'TLabel',
+                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+
+    def _set_expectation(self, key):
+        self._exp_var.set(key)
+        self.parent.user_team.board_expectation = key
+        self._paint_pills()
+        self._refresh_progress()
+
+    def _paint_pills(self):
+        for key, btn in self._pill_btns:
+            btn.set_selected(self._exp_var.get() == key)
+
+    def _build(self):
+        team = self.parent.user_team
+        header = ttk.Frame(self, style='Panel.TFrame', padding=12)
+        header.pack(fill=tk.X, padx=12, pady=(12, 4))
+        ttk.Label(header, text="Season Goals",
+                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  style='TLabel').pack(side=tk.LEFT)
+        PillButton(header, text="Refresh", bg='#111826',
+                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   padx=12, pady=5, command=self._refresh_progress).pack(side=tk.RIGHT)
+
+        # Board expectation pills
+        card = self._card("Board Expectation")
+        self._line(card, "Set what the board expects this season. Saved automatically.",
+                   secondary=True)
+        row = ttk.Frame(card, style='Card.TFrame')
+        row.pack(fill=tk.X, pady=(6, 2))
+        self._pill_btns = []
+        for key, label in self.EXPECTATIONS:
+            b = PillButton(row, text=label, bg='#1a2233',
+                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                           padx=11, pady=5,
+                           command=lambda k=key: self._set_expectation(k))
+            b.pack(side=tk.LEFT, padx=3, pady=2)
+            self._pill_btns.append((key, b))
+        self._paint_pills()
+
+        # Live progress
+        self.progress_card = self._card("Progress")
+        self.progress_lines = ttk.Frame(self.progress_card, style='Card.TFrame')
+        self.progress_lines.pack(fill=tk.X)
+
+        # Milestones
+        self.mile_card = self._card("Milestones")
+        self.mile_lines = ttk.Frame(self.mile_card, style='Card.TFrame')
+        self.mile_lines.pack(fill=tk.X)
+
+        # Youth watch
+        youth_card = self._card("Development Watch (U23)")
+        youth = [p for p in team.roster if p.age <= 23]
+        youth.sort(key=lambda p: p.potential_grade or 'Z')
+        if youth:
+            for p in youth[:4]:
+                self._line(youth_card,
+                           f"{p.full_name} ({p.primary_position.value}, {p.age}) — "
+                           f"potential {p.potential_grade}, {p.stats.games_played} GP")
+        else:
+            self._line(youth_card, "No players aged 23 or under on the roster.",
+                       secondary=True)
+
+        self._refresh_progress()
+
+    def _refresh_progress(self):
+        for child in self.progress_lines.winfo_children():
+            child.destroy()
+        for child in self.mile_lines.winfo_children():
+            child.destroy()
+        team = self.parent.user_team
+        league = self.parent.league
+        st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
+        w, l, otl, pts = st["W"], st["L"], st["OTL"], st["Points"]
+        gp = w + l + otl
+
+        # Conference rank and playoff cut
+        conf = getattr(team, 'conference', None)
+        conf_teams = [t for t in league.teams
+                      if getattr(t, 'conference', None) == conf] if conf else list(league.teams)
+        conf_order = sorted(conf_teams,
+                            key=lambda t: league.standings.get(t.team_name, {}).get("Points", 0),
+                            reverse=True)
+        rank = next((i + 1 for i, t in enumerate(conf_order)
+                     if t.team_name == team.team_name), None)
+        pace = (pts / gp * 82) if gp else 0
+
+        def _mkline(master, text, secondary=False):
+            ttk.Label(master, text=text,
+                      style='Secondary.TLabel' if secondary else 'TLabel',
+                      font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+
+        exp = self._exp_var.get()
+        exp_label = dict(self.EXPECTATIONS)[exp]
+        _mkline(self.progress_lines, f"Board expects: {exp_label}")
+        if rank:
+            _mkline(self.progress_lines,
+                    f"Conference rank: {rank} of {len(conf_order)} — "
+                    f"{w}-{l}-{otl}, {pts} pts ({pace:.1f} pace)")
+        in_playoffs = rank is not None and rank <= 8
+        verdicts = {
+            "cup": "Decided in the playoffs — keep the team healthy.",
+            "contender": "Decided in the playoffs — aim for home ice.",
+            "playoffs": ("On track — currently in a playoff spot."
+                         if in_playoffs else
+                         "Off track — outside the playoff cut. Points needed."),
+            "competitive": ("On track — winning record."
+                            if w > l else
+                            "Off track — need more wins than losses."),
+            "rebuild": None,
+        }
+        if exp == "rebuild":
+            kids = [p for p in team.roster if p.age <= 23 and p.stats.games_played >= 10]
+            _mkline(self.progress_lines,
+                    f"{len(kids)} youngster(s) playing regular minutes "
+                    f"(10+ GP): " + (", ".join(p.full_name for p in kids[:4])
+                                     if kids else "none yet"))
+        elif verdicts[exp]:
+            _mkline(self.progress_lines, verdicts[exp],
+                    secondary=True)
+
+        # Milestones (auto-evaluated)
+        miles = [
+            ("Winning record", w > l and gp > 0),
+            ("Playoff position", bool(in_playoffs)),
+            ("100-point pace", pace >= 100 and gp > 0),
+            ("Top scorer at 70+ pt pace",
+             any((p.stats.points / max(1, p.stats.games_played) * 82) >= 70
+                 for p in team.roster
+                 if p.primary_position.value != 'G' and p.stats.games_played >= 10)),
+        ]
+        for label, done in miles:
+            mark = "✓" if done else "○"
+            _mkline(self.mile_lines, f"{mark}  {label}")
