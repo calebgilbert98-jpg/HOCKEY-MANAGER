@@ -3163,7 +3163,7 @@ class GameSim:
         """
         Stage 5: Enhanced shot resolution with advanced goaltending excellence.
         """
-        goalie = defending_team.get_starting_goalie()
+        goalie = self._selected_goalie(defending_team)
         
         # Handle passing play possibility
         passer = None
@@ -3444,7 +3444,7 @@ class GameSim:
                 self._handle_goal(attacking_team, best_attacker, [], ShotType.REBOUND, ShotLocation.CREASE)
                 return True
             else:
-                goalie = defending_team.get_starting_goalie()
+                goalie = self._selected_goalie(defending_team)
                 self._log_event(f"Rebound chance by {best_attacker.full_name}, saved by {goalie.full_name}!", "SAVE")
         
         return False
@@ -4104,32 +4104,78 @@ class GameSim:
         )
 
     def _handle_shootout(self):
-        """Simulates a 3-round shootout if the game is still tied."""
+        """Simulates a 3-round shootout if the game is still tied.
+
+        Shooters cycle through every skater (no repeats until the whole
+        bench has gone). Sudden death is hard-capped: a marathon shootout
+        still tied after 15 extra rounds is decided by a coin flip, so this
+        method always terminates.
+        """
         self._log_event("Overtime ends, still tied. Heading to a shootout!", "SHOOTOUT_START")
         self._emit_pbp("shootout_start")
-        home_shooters = random.sample([p for p in self.home_team.roster if p.primary_position != PlayerPosition.GOALIE], 3)
-        away_shooters = random.sample([p for p in self.away_team.roster if p.primary_position != PlayerPosition.GOALIE], 3)
 
-        for i in range(3):
-            if self._resolve_shootout_attempt(away_shooters[i], self.home_team.get_starting_goalie()):
+        def make_pool(team):
+            pool = [p for p in team.roster if p.primary_position != PlayerPosition.GOALIE]
+            random.shuffle(pool)
+            return pool
+
+        home_pool = make_pool(self.home_team)
+        away_pool = make_pool(self.away_team)
+
+        def next_shooter(pool, used):
+            # No shooter goes twice until everyone has gone once.
+            if len(used) >= len(pool):
+                used.clear()
+                random.shuffle(pool)
+            for p in pool:
+                if p not in used:
+                    used.append(p)
+                    return p
+            used.append(pool[0])
+            return pool[0]
+
+        home_goalie = self._selected_goalie(self.home_team)
+        away_goalie = self._selected_goalie(self.away_team)
+        home_used, away_used = [], []
+
+        for _ in range(3):
+            if self._resolve_shootout_attempt(next_shooter(away_pool, away_used), home_goalie):
                 self.away_score += 1
-            if self._resolve_shootout_attempt(home_shooters[i], self.away_team.get_starting_goalie()):
+            if self._resolve_shootout_attempt(next_shooter(home_pool, home_used), away_goalie):
                 self.home_score += 1
-        
-        while self.home_score == self.away_score:
-            home_shooter = random.choice([p for p in self.home_team.roster if p not in home_shooters and p.primary_position != PlayerPosition.GOALIE])
-            away_shooter = random.choice([p for p in self.away_team.roster if p not in away_shooters and p.primary_position != PlayerPosition.GOALIE])
-            if self._resolve_shootout_attempt(away_shooter, self.home_team.get_starting_goalie()): self.away_score += 1
-            if self._resolve_shootout_attempt(home_shooter, self.away_team.get_starting_goalie()): self.home_score += 1
+
+        extra_rounds = 0
+        while self.home_score == self.away_score and extra_rounds < 15:
+            extra_rounds += 1
+            if self._resolve_shootout_attempt(next_shooter(away_pool, away_used), home_goalie):
+                self.away_score += 1
+            if self._resolve_shootout_attempt(next_shooter(home_pool, home_used), away_goalie):
+                self.home_score += 1
+
+        if self.home_score == self.away_score:
+            # 18 rounds without a winner: coin flip. Logged, deterministic end.
+            if random.random() < 0.5:
+                self.home_score += 1
+                winner_name = self.home_team.team_name
+            else:
+                self.away_score += 1
+                winner_name = self.away_team.team_name
+            self._log_event(
+                f"Marathon shootout ({3 + extra_rounds} rounds) still tied — "
+                f"{winner_name} wins the coin flip!", "SHOOTOUT_END")
 
         self._emit_pbp("shootout_end",
                        winner=self.home_team.team_name if self.home_score > self.away_score else self.away_team.team_name,
                        home_score=self.home_score, away_score=self.away_score)
 
     def _resolve_shootout_attempt(self, shooter, goalie):
-        """Resolves a single shootout attempt."""
-        shot_roll = shooter.shooting + shooter.deking + random.randint(1, 20)
-        save_roll = goalie.goaltending * 2.5 + random.randint(1, 20)
+        """Resolves a single shootout attempt.
+
+        League-average conversion is ~35-40% (NHL-like); elite shooters
+        convert more, elite goalies stop more. Never 0% or 100%.
+        """
+        shot_roll = (shooter.shooting + shooter.deking) / 4 + random.randint(1, 20)
+        save_roll = goalie.goaltending * 0.45 + random.randint(1, 20)
         is_goal = shot_roll > save_roll
         result = "scores" if is_goal else "is stopped"
         self._log_event(f"Shootout: {shooter.full_name} {result} against {goalie.full_name}!", "SHOOTOUT_ATTEMPT")
@@ -4145,11 +4191,16 @@ class GameSim:
                 self.notable_events.append({'player': stats['player'], 'event': 'records a hat-trick'})
         
         if self.home_score == 0:
-            goalie = self.away_team.get_starting_goalie()
+            goalie = self._selected_goalie(self.away_team)
             self.notable_events.append({'player': goalie, 'event': 'earns a shutout'})
         if self.away_score == 0:
-            goalie = self.home_team.get_starting_goalie()
+            goalie = self._selected_goalie(self.home_team)
             self.notable_events.append({'player': goalie, 'event': 'earns a shutout'})
+
+    def _selected_goalie(self, team):
+        """The goalie selected in the lineup (G1), falling back to the best
+        goalie on the roster. Single authority for who is in net."""
+        return self._lineup_player(team, 'G1') or team.get_starting_goalie()
 
     def _lineup_player(self, team, flat_key):
         """Read one lineup slot, flat F1_LW-style key first, nested fallback.
@@ -4220,6 +4271,10 @@ class GameSim:
         if special_unit:
             unit = (getattr(team, 'lineup', None) or {}).get(special_unit) or {}
             for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
+                # Clamp to exact manpower: never dress more skaters than the
+                # penalty situation allows (5v4 -> 4, 5v3 -> 3).
+                if len(on_ice) >= num_skaters:
+                    break
                 if p and p not in penalized_players and p not in on_ice:
                     on_ice.append(p)
 
@@ -4260,7 +4315,7 @@ class GameSim:
             on_ice.extend(best_available[:num_skaters - len(on_ice)])
 
         # Selected starter (G1) first; fall back to best goalie on the roster.
-        goalie = self._lineup_player(team, 'G1') or team.get_starting_goalie()
+        goalie = self._selected_goalie(team)
         on_ice.append(goalie)
         return on_ice
 
