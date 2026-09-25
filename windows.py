@@ -5931,16 +5931,16 @@ VALUE ANALYSIS
         self.parent.open_windows['contract_extensions'].focus_set()
 
     def open_trade_evaluator(self):
-        """Open trade evaluator tool."""
-        messagebox.showinfo("Coming Soon", "Trade Evaluator tool is coming in a future update!")
+        """Open trade evaluator tool (the Trade Center)."""
+        self.parent.open_trade_window()
 
     def show_salary_analytics(self):
         """Show advanced salary analytics."""
-        messagebox.showinfo("Coming Soon", "Advanced Salary Analytics is coming in a future update!")
+        SalaryAnalyticsWindow(self.parent)
 
     def open_buyout_calculator(self):
         """Open buyout calculator."""
-        messagebox.showinfo("Coming Soon", "Buyout Calculator is coming in a future update!")
+        BuyoutCalculatorWindow(self.parent)
 
     def check_cap_compliance(self):
         """Check salary cap compliance."""
@@ -12118,3 +12118,280 @@ class TeamAnalyticsWindow(tk.Toplevel):
 
     def _refresh(self):
         self._fill(self.parent.user_team)
+
+
+class SalaryAnalyticsWindow(tk.Toplevel):
+    """Salary Analytics: payroll mix by position, top cap hits, expiring money."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Salary Analytics")
+        self.configure(background=parent.BG_COLOR)
+        self.geometry("720x600")
+        self._build()
+
+    def _card(self, title):
+        card = ttk.Frame(self, style='Card.TFrame', padding=12)
+        card.pack(fill=tk.X, padx=12, pady=6)
+        ttk.Label(card, text=title, style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+        ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
+        return card
+
+    def _line(self, card, text, secondary=False):
+        ttk.Label(card, text=text,
+                  style='Secondary.TLabel' if secondary else 'TLabel',
+                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+
+    def _build(self):
+        team = self.parent.user_team
+        header = ttk.Frame(self, style='Panel.TFrame', padding=12)
+        header.pack(fill=tk.X, padx=12, pady=(12, 4))
+        ttk.Label(header, text="Salary Analytics",
+                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  style='TLabel').pack(side=tk.LEFT)
+        PillButton(header, text="Refresh", bg='#111826',
+                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
+        self.body = ttk.Frame(self, style='Panel.TFrame')
+        self.body.pack(fill=tk.BOTH, expand=True)
+        self._fill()
+
+    def _fill(self):
+        for child in self.body.winfo_children():
+            child.destroy()
+        team = self.parent.user_team
+        payroll = team.payroll
+        cap = team.salary_cap
+
+        # Overview
+        card = self._card("Overview")
+        self._line(card, f"Payroll: ${payroll:,}  •  Cap: ${cap:,}  •  "
+                         f"Space: ${team.cap_space:,}")
+        self._line(card, f"{payroll / cap * 100:.1f}% of cap committed"
+                   if cap else "No cap set", secondary=True)
+
+        # By position
+        card = self._card("Payroll by Position")
+        groups = {"Forwards": ("C", "LW", "RW"),
+                  "Defense": ("LD", "RD"),
+                  "Goalies": ("G",)}
+        for label, poses in groups.items():
+            members = [p for p in team.roster if p.primary_position.value in poses]
+            spent = sum(p.contract.salary for p in members)
+            share = spent / payroll * 100 if payroll else 0
+            bar = "■" * max(1, int(share / 5)) if spent else "—"
+            self._line(card, f"{label:9s} ${spent / 1e6:5.2f}M ({share:4.1f}%)  "
+                             f"{bar}  [{len(members)} players]")
+
+        # Top cap hits
+        card = self._card("Top Cap Hits")
+        top = sorted(team.roster, key=lambda p: p.contract.salary, reverse=True)[:8]
+        for i, p in enumerate(top, 1):
+            self._line(card, f"{i}. {p.full_name} ({p.primary_position.value}) — "
+                             f"${p.contract.salary:,} × {p.contract.years_remaining} yr")
+
+        # Expiring money
+        card = self._card("Expiring Contracts")
+        expiring = [p for p in team.roster if p.contract.years_remaining <= 1]
+        freed = sum(p.contract.salary for p in expiring)
+        self._line(card, f"{len(expiring)} contracts expire — "
+                         f"${freed:,} comes off the books")
+        for p in sorted(expiring, key=lambda p: p.contract.salary, reverse=True)[:5]:
+            self._line(card, f"{p.full_name}: ${p.contract.salary:,}", secondary=True)
+
+        # Dead cap from buyouts
+        hits = getattr(team, 'buyout_cap_hits', {}) or {}
+        if hits:
+            card = self._card("Buyout Dead Cap")
+            for yr in sorted(hits):
+                self._line(card, f"{yr}: ${hits[yr]:,} dead cap")
+
+    def _refresh(self):
+        self._fill()
+
+
+def buyout_schedule(player):
+    """NHL buyout math. Returns (total_cost, annual_hit, buyout_years, rows).
+
+    rows: list of (season_offset, cap_hit, savings) for each buyout year.
+    """
+    salary = player.contract.salary
+    years = player.contract.years_remaining
+    if years <= 0 or salary <= 0:
+        return 0, 0, 0, []
+    fraction = 1 / 3 if player.age < 26 else 2 / 3
+    total_cost = salary * years * fraction
+    buyout_years = 2 * years
+    annual = total_cost / buyout_years
+    rows = []
+    for i in range(1, buyout_years + 1):
+        if i <= years:
+            savings = salary - annual
+        else:
+            savings = -annual
+        rows.append((i, annual, savings))
+    return total_cost, annual, buyout_years, rows
+
+
+class BuyoutCalculatorWindow(tk.Toplevel):
+    """Buyout Calculator: real NHL buyout math with execute."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Buyout Calculator")
+        self.configure(background=parent.BG_COLOR)
+        self.geometry("680x620")
+        self._selected = None
+        self._build()
+
+    def _build(self):
+        header = ttk.Frame(self, style='Panel.TFrame', padding=12)
+        header.pack(fill=tk.X, padx=12, pady=(12, 4))
+        ttk.Label(header, text="Buyout Calculator",
+                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  style='TLabel').pack(side=tk.LEFT)
+        ttk.Label(header, text="NHL rules: 2/3 of remaining salary (1/3 if under 26), "
+                               "spread over 2× remaining term",
+                  style='Secondary.TLabel', wraplength=340,
+                  justify='right').pack(side=tk.RIGHT)
+
+        cols = ttk.Frame(self, style='Panel.TFrame')
+        cols.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        cols.columnconfigure(0, weight=1)
+        cols.columnconfigure(1, weight=1)
+
+        left = ttk.Frame(cols, style='Card.TFrame', padding=10)
+        left.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
+        ttk.Label(left, text="Roster", style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+        self.lb = tk.Listbox(left, height=22, activestyle='none',
+                             bg='#232a3a', fg='#e8ecf4',
+                             selectbackground='#335577', relief='flat',
+                             font=(self.parent.FONT_FAMILY, 10))
+        self.lb.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+        self.lb.bind('<<ListboxSelect>>', self._on_select)
+        self._players = sorted(self.parent.user_team.roster,
+                               key=lambda p: p.contract.salary, reverse=True)
+        for p in self._players:
+            self.lb.insert(tk.END,
+                           f"{p.full_name} ({p.primary_position.value}) — "
+                           f"${p.contract.salary / 1e6:.2f}M × {p.contract.years_remaining}")
+
+        right = ttk.Frame(cols, style='Card.TFrame', padding=10)
+        right.grid(row=0, column=1, sticky='nsew', padx=(6, 0))
+        self.detail = ttk.Frame(right, style='Card.TFrame')
+        self.detail.pack(fill=tk.BOTH, expand=True)
+        self._show_placeholder()
+        self.active_box = ttk.Frame(right, style='Card.TFrame', padding=4)
+        self.active_box.pack(fill=tk.X, pady=(8, 0))
+        self._render_active_buyouts()
+
+    def _line(self, master, text, secondary=False, bold=False):
+        ttk.Label(master, text=text,
+                  style='Secondary.TLabel' if secondary else 'TLabel',
+                  font=(self.parent.FONT_FAMILY, 10,
+                        'bold' if bold else 'normal')).pack(anchor='w', pady=1)
+
+    def _show_placeholder(self):
+        for child in self.detail.winfo_children():
+            child.destroy()
+        self._line(self.detail, "Select a player to see", secondary=True)
+        self._line(self.detail, "their buyout breakdown.", secondary=True)
+
+    def _on_select(self, event=None):
+        sel = self.lb.curselection()
+        if not sel:
+            return
+        self._selected = self._players[sel[0]]
+        self._render_detail()
+
+    def _render_detail(self):
+        for child in self.detail.winfo_children():
+            child.destroy()
+        p = self._selected
+        self._line(self.detail, p.full_name, bold=True)
+        self._line(self.detail,
+                   f"Age {p.age} • {p.primary_position.value} • "
+                   f"${p.contract.salary:,}/yr × {p.contract.years_remaining} yr",
+                   secondary=True)
+        total, annual, byears, rows = buyout_schedule(p)
+        if not rows:
+            self._line(self.detail, "No remaining term — nothing to buy out.",
+                       secondary=True)
+            return
+        self._line(self.detail, f"Buyout cost: ${total:,.0f}", bold=True)
+        self._line(self.detail,
+                   f"Cap hit: ${annual:,.0f}/yr for {byears} years",
+                   secondary=True)
+        ttk.Separator(self.detail, orient='horizontal').pack(fill='x', pady=6)
+        for i, hit, savings in rows:
+            yr_label = f"Year {i}"
+            if savings >= 0:
+                txt = f"{yr_label}: cap hit ${hit:,.0f} — saves ${savings:,.0f}"
+            else:
+                txt = f"{yr_label}: cap hit ${hit:,.0f} — dead money"
+            self._line(self.detail, txt, secondary=True)
+        ttk.Separator(self.detail, orient='horizontal').pack(fill='x', pady=6)
+        PillButton(self.detail, text="Execute Buyout", bg='#111826',
+                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                   padx=16, pady=7,
+                   command=self._execute_buyout).pack(anchor='w', pady=(4, 0))
+
+    def _render_active_buyouts(self):
+        for child in self.active_box.winfo_children():
+            child.destroy()
+        team = self.parent.user_team
+        hits = getattr(team, 'buyout_cap_hits', {}) or {}
+        if hits:
+            self._line(self.active_box, "Active buyout cap hits:", bold=True)
+            for yr in sorted(hits):
+                self._line(self.active_box, f"{yr}: ${hits[yr]:,.0f}", secondary=True)
+        else:
+            self._line(self.active_box, "No active buyouts.", secondary=True)
+
+    def _execute_buyout(self):
+        from tkinter import messagebox
+        p = self._selected
+        if not p:
+            return
+        total, annual, byears, rows = buyout_schedule(p)
+        if not rows:
+            return
+        if not messagebox.askyesno(
+                "Confirm Buyout",
+                f"Buy out {p.full_name}?\n\n"
+                f"Cost: ${total:,.0f} spread as ${annual:,.0f}/yr "
+                f"over {byears} years.\n"
+                f"{p.full_name} will become a free agent."):
+            return
+        team = self.parent.user_team
+        league = self.parent.league
+        season = getattr(league, 'season_year', 2026)
+        hits = getattr(team, 'buyout_cap_hits', None)
+        if hits is None:
+            hits = {}
+            team.buyout_cap_hits = hits
+        for i, hit, _s in rows:
+            yr = season + i - 1
+            hits[yr] = hits.get(yr, 0) + hit
+        if p in team.roster:
+            team.roster.remove(p)
+        p.team_name = "Free Agent"
+        messagebox.showinfo("Buyout Complete",
+                            f"{p.full_name} has been bought out and is now "
+                            f"a free agent.\nDead cap: ${annual:,.0f}/yr for "
+                            f"{byears} years.")
+        self._selected = None
+        self._show_placeholder()
+        # rebuild listbox + active buyouts
+        self.lb.delete(0, tk.END)
+        self._players = sorted(team.roster,
+                               key=lambda pl: pl.contract.salary, reverse=True)
+        for pl in self._players:
+            self.lb.insert(tk.END,
+                           f"{pl.full_name} ({pl.primary_position.value}) — "
+                           f"${pl.contract.salary / 1e6:.2f}M × {pl.contract.years_remaining}")
+        self._render_active_buyouts()
