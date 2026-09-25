@@ -2895,8 +2895,9 @@ class HockeyManagerGUI(tk.Tk):
 
         # Square window corners: disable Windows 11 rounded-corner chrome so
         # the dashboard page itself never looks like its corners are cut out.
-        # Silent no-op on other platforms.
-        self._disable_rounded_window_corners()
+        # Silent no-op on other platforms. Deferred until the window is mapped
+        # because winfo_id() isn't a valid HWND during __init__.
+        self.bind('<Map>', lambda e: self._disable_rounded_window_corners(), add='+')
 
         # Dark form controls app-wide: no more white text boxes.
         try:
