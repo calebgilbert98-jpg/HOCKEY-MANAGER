@@ -359,19 +359,22 @@ class PBPVisualSim(tk.Toplevel):
                       outline=LINE_BLUE, width=3)
         c.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill=LINE_BLUE)
 
-        # --- faceoff dots/circles: end zones (31/169, 22 ft off center)
-        # and neutral-zone dots (80/120). 15 ft circles, 44 ft apart: no overlap.
-        for dx, dy in ((169, 20.5), (169, 64.5), (31, 20.5), (31, 64.5)):
-            ex, ey = self.X(dx), self.Y(dy)
-            c.create_oval(ex - 62, ey - 62, ex + 62, ey + 62,
-                          outline=FACEOFF_RED, width=3)
-            # hash marks: paired ticks just outside the circle's left/right edge
-            for sx in (-1, 1):
-                hx = ex + sx * 74
-                for oy in (-13, 13):
-                    c.create_line(hx - 8, ey + oy, hx + 8, ey + oy,
-                                  fill=FACEOFF_RED, width=3)
-            c.create_oval(ex - 4, ey - 4, ex + 4, ey + 4, fill=FACEOFF_RED)
+        # --- faceoff dots/circles: end zones (20 ft out, 22 ft off center).
+        # 15 ft radius circles, 44 ft apart: no overlap. Official hash marks:
+        # paired 2 ft ticks at 18.5/21.5 ft from the goal line, each side.
+        for gx, sgn in ((HOME_NET_X, 1), (AWAY_NET_X, -1)):
+            for dy in (20.5, 64.5):
+                ex, ey = self.X(gx + 20 * sgn), self.Y(dy)
+                c.create_oval(ex - 62, ey - 62, ex + 62, ey + 62,
+                              outline=FACEOFF_RED, width=3)
+                for hx_ft in (18.5, 21.5):
+                    hx = self.X(gx + hx_ft * sgn)
+                    for sy in (-1, 1):
+                        hy = self.Y(dy + sy * 16)
+                        c.create_line(hx, hy - 5, hx, hy + 5,
+                                      fill=FACEOFF_RED, width=3)
+                c.create_oval(ex - 4, ey - 4, ex + 4, ey + 4, fill=FACEOFF_RED)
+        # neutral-zone dots (5 ft inside each blue line)
         for dx, dy in ((80, 20.5), (80, 64.5), (120, 20.5), (120, 64.5)):
             ex, ey = self.X(dx), self.Y(dy)
             c.create_oval(ex - 4, ey - 4, ex + 4, ey + 4, fill=FACEOFF_RED)
@@ -383,10 +386,10 @@ class PBPVisualSim(tk.Toplevel):
                          start=270 if flip > 0 else 90, extent=180,
                          fill=CREASE_BLUE, outline=LINE_RED, width=2)
 
-        # --- trapezoids behind nets ---
+        # --- trapezoids behind nets (18 ft at goal line, 28 ft at boards) ---
         for nx, sgn in ((HOME_NET_X, -1), (AWAY_NET_X, 1)):
-            x0, x1 = self.X(nx), self.X(nx + 9 * sgn)
-            for yy0, yy1 in ((31.5, 26.0), (53.5, 59.0)):
+            x0, x1 = self.X(nx), self.X(nx + 10 * sgn)
+            for yy0, yy1 in ((33.5, 28.5), (51.5, 56.5)):
                 c.create_line(x0, self.Y(yy0), x1, self.Y(yy1),
                               fill=LINE_RED, width=3)
 
