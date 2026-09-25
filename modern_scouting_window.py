@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 import datetime
 import random
 from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
+from scouting_profiles import displayed_overall, displayed_attribute
 
 
 class ModernScoutingWindow(tk.Toplevel):
@@ -495,6 +496,14 @@ class ModernScoutingWindow(tk.Toplevel):
             print(f"Error populating scouting data: {e}")
             self.status_label.config(text=f"Error: {e}")
     
+    def _user_team(self):
+        """The user's team, for fog-of-war display decisions."""
+        try:
+            gm = getattr(self.parent, 'game_manager', None)
+            return getattr(gm, 'user_team', None) if gm else None
+        except Exception:
+            return None
+
     def _is_player_scouted(self, player):
         """Check if the user team has a scouting report for a player."""
         try:
@@ -599,7 +608,8 @@ class ModernScoutingWindow(tk.Toplevel):
                     player.primary_position.value if hasattr(player.primary_position, 'value') else str(player.primary_position),
                     player.age,
                     getattr(player, 'team_name', 'Free Agent'),
-                    to_100_scale(player.overall_rating()),
+                    # Fog of war: unscouted players show a noisy estimate
+                    displayed_overall(player, self._user_team()),
                     scouted
                 )
                 if profile_active:
@@ -815,13 +825,13 @@ Name: {player.full_name}
 Position: {player.primary_position.value if hasattr(player.primary_position, 'value') else str(player.primary_position)}
 Age: {player.age}
 Team: {getattr(player, 'team_name', 'Free Agent')}
-Overall: {to_100_scale(player.overall_rating())}
+Overall: {displayed_overall(player, self._user_team()):.0f}
 
 Attributes:
-Skating: {to_100_scale(getattr(player, 'skating', 25))}
-Shooting: {to_100_scale(getattr(player, 'shooting', 25))}
-Passing: {to_100_scale(getattr(player, 'passing', 25))}
-Checking: {to_100_scale(getattr(player, 'checking', 25))}
+Skating: {to_100_scale(displayed_attribute(player, 'skating', self._user_team())):.0f}
+Shooting: {to_100_scale(displayed_attribute(player, 'shooting', self._user_team())):.0f}
+Passing: {to_100_scale(displayed_attribute(player, 'passing', self._user_team())):.0f}
+Checking: {to_100_scale(displayed_attribute(player, 'checking', self._user_team())):.0f}
             """
             messagebox.showinfo("Player Profile", info.strip())
     

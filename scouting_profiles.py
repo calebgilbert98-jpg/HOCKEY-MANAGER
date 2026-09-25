@@ -105,6 +105,47 @@ def fogged_value(player, key: str, scouted: bool) -> float:
     return val * rng.uniform(0.88, 1.12)
 
 
+def is_scouted(player, user_team) -> bool:
+    """True when the user's organization fully knows this player.
+
+    Own-team players (roster/prospects) and anyone with a scouting report
+    are fully known. When fog of war is disabled in the setup wizard,
+    everyone counts as scouted.
+    """
+    if FOG_OF_WAR_OVERRIDE is False:
+        return True
+    if user_team is None or player is None:
+        return False
+    pid = getattr(player, 'id', None)
+    for attr in ('roster', 'ahl_roster', 'prospects'):
+        try:
+            roster = getattr(user_team, attr, None) or []
+            if any(getattr(p, 'id', None) == pid for p in roster):
+                return True
+        except Exception:
+            pass
+    try:
+        reports = getattr(user_team, 'scouting_reports', None) or {}
+        return pid in reports
+    except Exception:
+        return False
+
+
+def displayed_attribute(player, key: str, user_team=None) -> float:
+    """Attribute value for display: true when scouted, fogged otherwise."""
+    return fogged_value(player, key, is_scouted(player, user_team))
+
+
+def displayed_overall(player, user_team=None) -> float:
+    """Overall rating on the 1-100 display scale, fogged when unscouted."""
+    from game_classes import to_100_scale
+    true_ovr = to_100_scale(player.overall_rating())
+    if is_scouted(player, user_team):
+        return true_ovr
+    rng = random.Random(f"fog-ovr-{getattr(player, 'id', '')}")
+    return max(1.0, min(100.0, true_ovr * rng.uniform(0.94, 1.06)))
+
+
 # ---------------------------------------------------------------------------
 # Profile model
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ from tkinter import ttk, messagebox
 from typing import List, Optional
 from game_classes import Player, PlayerPosition, to_100_scale
 from game_classes import debug_print
+from scouting_profiles import displayed_overall
 
 class PlayerBrowserWindow(tk.Toplevel):
     """Standalone player browser with guaranteed player display"""
@@ -162,7 +163,8 @@ class PlayerBrowserWindow(tk.Toplevel):
                 item_id = self.tree.insert('', 'end', values=(
                     player.full_name,
                     player.primary_position.value,
-                    to_100_scale(player.overall_rating()),
+                    # Fog of war: unscouted players show a noisy estimate
+                    f"{displayed_overall(player, self._user_team()):.0f}",
                     player.age,
                     former_team
                 ))
@@ -244,6 +246,17 @@ class PlayerBrowserWindow(tk.Toplevel):
                 self.draft_btn.configure(state='disabled')
                 self.info_label.configure(text="Error selecting player")
         
+    def _user_team(self):
+        """User's team for fog-of-war display (via parent GUI)."""
+        try:
+            gm = getattr(self.parent, 'game_manager', None)
+            if gm is None:
+                gm = getattr(self.parent, 'parent', None)
+                gm = getattr(gm, 'game_manager', None) if gm else None
+            return getattr(gm, 'user_team', None) if gm else None
+        except Exception:
+            return None
+
     def on_player_draft(self, event):
         """Handle double-click to draft"""
         self.draft_player()
