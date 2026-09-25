@@ -212,8 +212,8 @@ class ModernUITheme:
         style.configure('TNotebook.Tab',
             background=self.colors.tertiary_bg,
             foreground=self.colors.secondary_text,
-            font=self.fonts['subheading'],
-            padding=[12, 8],
+            font=self.fonts['body'],
+            padding=[20, 10],
             borderwidth=0
         )
         style.map('TNotebook.Tab',
@@ -225,6 +225,47 @@ class ModernUITheme:
                 ('selected', 'white'),
                 ('active', self.colors.primary_text)
             ]
+        )
+
+        # LabelFrame styling (dark cards with subtle borders)
+        style.configure('TLabelframe',
+            background=self.colors.secondary_bg,
+            foreground=self.colors.primary_text,
+            bordercolor=self.colors.border_light,
+            borderwidth=1,
+            relief='flat',
+            font=self.fonts['subheading']
+        )
+        style.configure('TLabelframe.Label',
+            background=self.colors.secondary_bg,
+            foreground=self.colors.primary_text,
+            font=self.fonts['subheading']
+        )
+        style.configure('Panel.TLabelframe',
+            background=self.colors.secondary_bg,
+            foreground=self.colors.primary_text,
+            bordercolor=self.colors.border_light,
+            borderwidth=1,
+            relief='flat',
+            font=self.fonts['subheading']
+        )
+        style.configure('Panel.TLabelframe.Label',
+            background=self.colors.secondary_bg,
+            foreground=self.colors.secondary_text,
+            font=self.fonts['body']
+        )
+        style.configure('Card.TLabelframe',
+            background=self.colors.tertiary_bg,
+            foreground=self.colors.primary_text,
+            bordercolor=self.colors.border_light,
+            borderwidth=1,
+            relief='flat',
+            font=self.fonts['subheading']
+        )
+        style.configure('Card.TLabelframe.Label',
+            background=self.colors.tertiary_bg,
+            foreground=self.colors.secondary_text,
+            font=self.fonts['body']
         )
         
         # Entry/Input styling
@@ -245,9 +286,20 @@ class ModernUITheme:
         # Combobox styling
         style.configure('TCombobox',
             background=self.colors.tertiary_bg,
+            fieldbackground=self.colors.tertiary_bg,
             foreground=self.colors.primary_text,
             borderwidth=1,
-            relief='flat'
+            relief='flat',
+            arrowcolor=self.colors.secondary_text
+        )
+        style.map('TCombobox',
+            fieldbackground=[
+                ('readonly', self.colors.tertiary_bg),
+                ('focus', self.colors.tertiary_bg)
+            ],
+            foreground=[
+                ('readonly', self.colors.primary_text)
+            ]
         )
         
     def get_stat_color(self, value: float, max_value: float = 20.0) -> str:

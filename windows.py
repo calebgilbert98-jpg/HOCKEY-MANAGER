@@ -7292,14 +7292,6 @@ class EditLinesWindow(tk.Toplevel):
         # self._build_goalie_editor()
         # self._build_strategy_editor()
 
-        # Add buttons
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill="x", pady=8)
-        ttk.Button(btn_frame, text="Save Lines", command=self.save_lines).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Set Best Lines", command=self.set_best_lines).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Reset", command=self.reset_lines).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Check Chemistry", command=self.check_chemistry).pack(side="left", padx=5)
-
     def _initialize_lineup_structure(self):
         """Initialize enhanced lineup structure with all required components"""
         required_keys = {
@@ -8557,136 +8549,108 @@ class EditLinesWindow(tk.Toplevel):
             pass
 
     def _build_strategy_editor(self):
-        """Build the strategy/team tactics editor - streamlined and intelligent"""
+        """Build the team tactics editor: clean sections, aligned controls."""
         main_frame = ttk.Frame(self.strat_frame, style='Panel.TFrame')
-        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Header with optimization
+        main_frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+        # Header
         header_frame = ttk.Frame(main_frame, style='Panel.TFrame')
-        header_frame.pack(fill="x", pady=(0, 20))
-        
-        ttk.Label(header_frame, text="🎯 Team Strategy & Tactics", style='Title.TLabel',
-                 font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(side="left")
-        
-        ttk.Button(header_frame, text="⚡ Smart Setup", 
+        header_frame.pack(fill="x", pady=(0, 16))
+
+        ttk.Label(header_frame, text="Team Tactics", style='Title.TLabel',
+                 font=(self.parent.FONT_FAMILY, 16, 'bold')).pack(side="left")
+        ttk.Label(header_frame, text="Your game plan shapes how the team plays in every situation.",
+                 style='Muted.TLabel').pack(side="left", padx=(12, 0))
+
+        ttk.Button(header_frame, text="Smart Setup",
                   command=self._optimize_strategies,
-                  style='TButton').pack(side="right", padx=5)
-        
-        # Create scrollable content
+                  style='Secondary.TButton').pack(side="right")
+
+        # Scrollable content
         canvas = tk.Canvas(main_frame, background=self.parent.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
+
         scrollable_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        
+
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Game situation strategies
-        situations_frame = ttk.LabelFrame(scrollable_frame, text="🏒 Game Situations", style='Panel.TLabelframe')
-        situations_frame.pack(fill="x", pady=5, padx=5)
-        
-        # Even Strength Strategy
-        es_frame = ttk.Frame(situations_frame, style='Panel.TFrame')
-        es_frame.pack(fill="x", padx=10, pady=8)
-        
-        ttk.Label(es_frame, text="⚖️ Even Strength:", style='TLabel',
-                 font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(side="left", padx=(5, 15))
-        
-        es_strategies = ["Very Defensive", "Defensive", "Balanced", "Offensive", "Very Offensive"]
-        es_combo = ttk.Combobox(es_frame, values=es_strategies, width=20, state="readonly")
-        es_combo.set(getattr(self.parent.user_team, 'tactic_even_strength', 'Balanced'))
-        es_combo.pack(side="left", padx=5)
-        es_combo.bind("<<ComboboxSelected>>",
-                      lambda e: self._on_tactic_changed('tactic_even_strength', es_combo.get()))
-        
-        ttk.Label(es_frame, text="(5v5 play style)", style='TLabel',
-                 font=(self.parent.FONT_FAMILY, 9), foreground='#888888').pack(side="left", padx=(10, 0))
-        
-        # Power Play Strategy
-        pp_frame = ttk.Frame(situations_frame, style='Panel.TFrame')
-        pp_frame.pack(fill="x", padx=10, pady=8)
-        
-        ttk.Label(pp_frame, text="⚡ Power Play:", style='TLabel',
-                 font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(side="left", padx=(5, 15))
-        
-        pp_strategies = ["Conservative", "Balanced", "Offensive", "Very Offensive"]
-        pp_combo = ttk.Combobox(pp_frame, values=pp_strategies, width=20, state="readonly")
-        pp_combo.set(getattr(self.parent.user_team, 'tactic_power_play', 'Offensive'))
-        pp_combo.pack(side="left", padx=5)
-        pp_combo.bind("<<ComboboxSelected>>",
-                      lambda e: self._on_tactic_changed('tactic_power_play', pp_combo.get()))
-        
-        ttk.Label(pp_frame, text="(Man advantage approach)", style='TLabel',
-                 font=(self.parent.FONT_FAMILY, 9), foreground='#888888').pack(side="left", padx=(10, 0))
-        
-        # Penalty Kill Strategy
-        pk_frame = ttk.Frame(situations_frame, style='Panel.TFrame')
-        pk_frame.pack(fill="x", padx=10, pady=8)
-        
-        ttk.Label(pk_frame, text="🛡️ Penalty Kill:", style='TLabel',
-                 font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(side="left", padx=(5, 15))
-        
-        pk_strategies = ["Very Defensive", "Defensive", "Balanced", "Aggressive"]
-        pk_combo = ttk.Combobox(pk_frame, values=pk_strategies, width=20, state="readonly")
-        pk_combo.set(getattr(self.parent.user_team, 'tactic_penalty_kill', 'Defensive'))
-        pk_combo.pack(side="left", padx=5)
-        pk_combo.bind("<<ComboboxSelected>>",
-                      lambda e: self._on_tactic_changed('tactic_penalty_kill', pk_combo.get()))
-        
-        ttk.Label(pk_frame, text="(Short-handed defense)", style='TLabel',
-                 font=(self.parent.FONT_FAMILY, 9), foreground='#888888').pack(side="left", padx=(10, 0))
-        
-        # Advanced tactics
-        tactics_frame = ttk.LabelFrame(scrollable_frame, text="🎪 Advanced Tactics", style='Panel.TLabelframe')
-        tactics_frame.pack(fill="x", pady=5, padx=5)
-        
-        # Line matching
-        matching_frame = ttk.Frame(tactics_frame, style='Panel.TFrame')
-        matching_frame.pack(fill="x", padx=10, pady=8)
-        
-        ttk.Label(matching_frame, text="🔄 Line Matching:", style='TLabel',
-                 font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(side="left", padx=(5, 15))
-        
-        matching_combo = ttk.Combobox(matching_frame, values=["Aggressive", "Standard", "Conservative"], 
-                                    width=20, state="readonly")
-        matching_combo.set("Standard")
-        matching_combo.pack(side="left", padx=5)
-        matching_combo.bind("<<ComboboxSelected>>", lambda e: self._update_strategy_analysis())
-        
-        ttk.Label(matching_frame, text="(Line change strategy)", style='TLabel',
-                 font=(self.parent.FONT_FAMILY, 9), foreground='#888888').pack(side="left", padx=(10, 0))
-        
-        # Strategy analysis display
-        analysis_frame = ttk.LabelFrame(scrollable_frame, text="📊 Strategy Analysis", style='Panel.TLabelframe')
-        analysis_frame.pack(fill="both", expand=True, pady=(10, 0), padx=5)
-        
-        self.strategy_analysis_text = tk.Text(analysis_frame, height=6, wrap=tk.WORD,
-                                            background=self.parent.CONTENT_BG,
+
+        def section_card(title):
+            card = ttk.LabelFrame(scrollable_frame, text=title, style='Card.TLabelframe')
+            card.pack(fill="x", pady=(0, 12), padx=2)
+            return card
+
+        card_bg = self.parent.modern_theme.colors.tertiary_bg
+
+        def tactic_row(parent_frame, label, values, current, attr, hint):
+            row = ttk.Frame(parent_frame, style='Card.TFrame')
+            row.pack(fill="x", padx=14, pady=7)
+            ttk.Label(row, text=label, style='TLabel', width=16, anchor="w",
+                     font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                     background=card_bg).pack(side="left")
+            combo = ttk.Combobox(row, values=values, width=18, state="readonly")
+            combo.set(current)
+            combo.pack(side="left", padx=(16, 0))
+            combo.bind("<<ComboboxSelected>>",
+                       lambda e, a=attr, c=combo: self._on_tactic_changed(a, c.get()))
+            ttk.Label(row, text=hint, style='Muted.TLabel',
+                     background=card_bg).pack(side="left", padx=(12, 0))
+            return combo
+
+        # Game situations
+        situations = section_card("Game Situations")
+        es_combo = tactic_row(
+            situations, "Even Strength",
+            ["Very Defensive", "Defensive", "Balanced", "Offensive", "Very Offensive"],
+            getattr(self.parent.user_team, 'tactic_even_strength', 'Balanced'),
+            'tactic_even_strength', "5v5 play style")
+        pp_combo = tactic_row(
+            situations, "Power Play",
+            ["Conservative", "Balanced", "Offensive", "Very Offensive"],
+            getattr(self.parent.user_team, 'tactic_power_play', 'Offensive'),
+            'tactic_power_play', "Man-advantage approach")
+        pk_combo = tactic_row(
+            situations, "Penalty Kill",
+            ["Very Defensive", "Defensive", "Balanced", "Aggressive"],
+            getattr(self.parent.user_team, 'tactic_penalty_kill', 'Defensive'),
+            'tactic_penalty_kill', "Short-handed defense")
+
+        # Advanced
+        tactics = section_card("Advanced")
+        matching_combo = tactic_row(
+            tactics, "Line Matching",
+            ["Aggressive", "Standard", "Conservative"],
+            getattr(self.parent.user_team, 'tactic_line_matching', 'Standard'),
+            'tactic_line_matching', "How strictly lines are matched to opponents")
+
+        # Analysis
+        analysis = section_card("Strategy Analysis")
+        self.strategy_analysis_text = tk.Text(analysis, height=6, wrap=tk.WORD,
+                                            background=card_bg,
                                             foreground=self.parent.TEXT_COLOR,
-                                            font=(self.parent.FONT_FAMILY, 9))
-        analysis_scrollbar = ttk.Scrollbar(analysis_frame, orient="vertical", command=self.strategy_analysis_text.yview)
+                                            font=(self.parent.FONT_FAMILY, 10),
+                                            relief="flat", padx=10, pady=8)
+        analysis_scrollbar = ttk.Scrollbar(analysis, orient="vertical",
+                                          command=self.strategy_analysis_text.yview)
         self.strategy_analysis_text.configure(yscrollcommand=analysis_scrollbar.set)
-        
-        self.strategy_analysis_text.pack(side="left", fill="both", expand=True, padx=5, pady=5)
-        analysis_scrollbar.pack(side="right", fill="y")
-        
-        # Pack scrollable content
+
+        self.strategy_analysis_text.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+        analysis_scrollbar.pack(side="right", fill="y", padx=(0, 8), pady=8)
+
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
-        # Store combo references for optimization
+
         self.strategy_combos = {
             'even_strength': es_combo,
             'power_play': pp_combo,
             'penalty_kill': pk_combo,
             'line_matching': matching_combo
         }
-        
-        # Initialize analysis
+
         self._update_strategy_analysis()
     
     def _optimize_strategies(self):
@@ -8848,13 +8812,13 @@ class EditLinesWindow(tk.Toplevel):
         self.strat_frame = self._create_enhanced_tab_frame(self.notebook, "Strategies")
         self.analytics_frame = self._create_enhanced_tab_frame(self.notebook, "📊 Analytics")
         
-        # Add frames to notebook with enhanced styling
-        self.notebook.add(self.even_frame, text="⚡ Even Strength")
-        self.notebook.add(self.pp_frame, text="🔥 Power Play")
-        self.notebook.add(self.pk_frame, text="🛡️ Penalty Kill")
-        self.notebook.add(self.g_frame, text="🥅 Goalies")
-        self.notebook.add(self.strat_frame, text="🎯 Strategies")
-        self.notebook.add(self.analytics_frame, text="📊 Analytics")
+        # Add frames to notebook with clean labels
+        self.notebook.add(self.even_frame, text="Even Strength")
+        self.notebook.add(self.pp_frame, text="Power Play")
+        self.notebook.add(self.pk_frame, text="Penalty Kill")
+        self.notebook.add(self.g_frame, text="Goalies")
+        self.notebook.add(self.strat_frame, text="Tactics")
+        self.notebook.add(self.analytics_frame, text="Analytics")
         
         # Create the right panel content
         self._create_analytics_panel(right_frame)
@@ -8895,80 +8859,69 @@ class EditLinesWindow(tk.Toplevel):
         #     self._start_real_time_updates()
 
     def _create_advanced_toolbar(self, parent):
-        """Create advanced toolbar with Stage 3 features"""
+        """Create streamlined toolbar: primary actions stand out, the rest stay quiet."""
         toolbar = ttk.Frame(parent, style='Panel.TFrame')
         toolbar.pack(fill="x", pady=(0, 10))
-        
-        # Left side: Quick actions
-        left_toolbar = ttk.Frame(toolbar)
+
+        # Left side: history + primary actions
+        left_toolbar = ttk.Frame(toolbar, style='Panel.TFrame')
         left_toolbar.pack(side="left", fill="x", expand=True)
-        
-        # Undo/Redo buttons
-        ttk.Button(left_toolbar, text="↶ Undo", command=self.undo_action, 
-                  style='TButton').pack(side="left", padx=(0, 5))
+
+        ttk.Button(left_toolbar, text="↶ Undo", command=self.undo_action,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
         ttk.Button(left_toolbar, text="↷ Redo", command=self.redo_action,
-                  style='TButton').pack(side="left", padx=(0, 10))
-        
-        # Quick optimization
-        ttk.Button(left_toolbar, text="⚡ Auto-Optimize", command=self.auto_optimize_lines,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        ttk.Button(left_toolbar, text="🔄 Shuffle Lines", command=self.shuffle_lines,
-                  style='TButton').pack(side="left", padx=(0, 10))
-        
-        # Stage 3: Advanced selection modes
-        mode_frame = ttk.Frame(left_toolbar)
-        mode_frame.pack(side="left", padx=(0, 10))
+                  style='Secondary.TButton').pack(side="left", padx=(0, 16))
+
+        ttk.Button(left_toolbar, text="Auto-Optimize", command=self.auto_optimize_lines,
+                  style='TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(left_toolbar, text="AI Optimize", command=self.ai_optimize_lineup,
+                  style='TButton').pack(side="left", padx=(0, 16))
+
+        # Secondary tools
+        ttk.Button(left_toolbar, text="Shuffle", command=self.shuffle_lines,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(left_toolbar, text="Predict", command=self.show_performance_prediction,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(left_toolbar, text="Matchup", command=self.optimize_for_matchup,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 16))
+
+        # Selection mode
+        mode_frame = ttk.Frame(left_toolbar, style='Panel.TFrame')
+        mode_frame.pack(side="left", padx=(0, 16))
         ttk.Label(mode_frame, text="Mode:", style='TLabel').pack(side="left")
-        
+
         self.selection_mode_var = tk.StringVar(master=self, value=self.player_selection_mode)
         mode_combo = ttk.Combobox(mode_frame, textvariable=self.selection_mode_var,
                                  values=['single', 'multi', 'swap'], width=8, state="readonly")
-        mode_combo.pack(side="left", padx=(5, 0))
+        mode_combo.pack(side="left", padx=(6, 0))
         mode_combo.bind('<<ComboboxSelected>>', self._on_selection_mode_change)
-        
-        # Stage 3: Visual effects toggles
-        effects_frame = ttk.Frame(left_toolbar)
-        effects_frame.pack(side="left", padx=(0, 10))
-        
-        self.animations_var = tk.BooleanVar(master=self, value=self.visual_effects['animations'])
-        ttk.Checkbutton(effects_frame, text="🎬 Animations", variable=self.animations_var,
-                       command=self._toggle_animations).pack(side="left", padx=(0, 5))
-        
-        self.chemistry_viz_var = tk.BooleanVar(master=self, value=self.chemistry_visualization)
-        ttk.Checkbutton(effects_frame, text="🧪 Chemistry", variable=self.chemistry_viz_var,
-                       command=self._toggle_chemistry_viz).pack(side="left", padx=(0, 5))
-        
-        # Stage 4: AI and predictive features
-        ai_frame = ttk.Frame(left_toolbar)
-        ai_frame.pack(side="left", padx=(0, 10))
-        
-        ttk.Button(ai_frame, text="🤖 AI Optimize", command=self.ai_optimize_lineup,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        ttk.Button(ai_frame, text="🔮 Predict", command=self.show_performance_prediction,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        ttk.Button(ai_frame, text="🎯 Matchup", command=self.optimize_for_matchup,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        
-        # Import/Export
-        ttk.Button(left_toolbar, text="📥 Import", command=self.import_lines,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        ttk.Button(left_toolbar, text="📤 Export", command=self.export_lines,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        
-        # Right side: Status and settings
-        right_toolbar = ttk.Frame(toolbar)
+
+        # Import/Export (quiet)
+        ttk.Button(left_toolbar, text="Import", command=self.import_lines,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(left_toolbar, text="Export", command=self.export_lines,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+
+        # Right side: display toggles + status
+        right_toolbar = ttk.Frame(toolbar, style='Panel.TFrame')
         right_toolbar.pack(side="right")
-        
-        # Auto-save toggle
+
+        self.animations_var = tk.BooleanVar(master=self, value=self.visual_effects['animations'])
+        ttk.Checkbutton(right_toolbar, text="Animations", variable=self.animations_var,
+                       command=self._toggle_animations).pack(side="left", padx=(0, 8))
+
+        self.chemistry_viz_var = tk.BooleanVar(master=self, value=self.chemistry_visualization)
+        ttk.Checkbutton(right_toolbar, text="Chemistry", variable=self.chemistry_viz_var,
+                       command=self._toggle_chemistry_viz).pack(side="left", padx=(0, 16))
+
         self.auto_save_var = tk.BooleanVar(master=self, value=self.auto_save_enabled)
-        auto_save_check = ttk.Checkbutton(right_toolbar, text="Auto-save", 
+        auto_save_check = ttk.Checkbutton(right_toolbar, text="Auto-save",
                                          variable=self.auto_save_var,
                                          command=self.toggle_auto_save)
-        auto_save_check.pack(side="right", padx=(10, 0))
-        
-        # Changes indicator
+        auto_save_check.pack(side="left", padx=(0, 8))
+
         self.changes_label = ttk.Label(right_toolbar, text="", foreground="orange")
-        self.changes_label.pack(side="right", padx=(10, 5))
+        self.changes_label.pack(side="left")
 
     def _create_enhanced_tab_frame(self, parent, tab_name):
         """Create enhanced tab frame with Stage 2 improvements"""
@@ -8983,9 +8936,9 @@ class EditLinesWindow(tk.Toplevel):
 
     def _create_analytics_panel(self, parent):
         """Create real-time analytics panel"""
-        analytics_label = ttk.Label(parent, text="📊 Real-Time Analytics", 
-                                   style='Title.TLabel')
-        analytics_label.pack(pady=(0, 10))
+        analytics_label = ttk.Label(parent, text="Real-Time Analytics",
+                                   style='Heading.TLabel')
+        analytics_label.pack(pady=(0, 10), anchor="w", padx=4)
         
         # Analytics scrollable frame
         analytics_canvas = tk.Canvas(parent, height=200, bg=self.parent.CONTENT_BG)
@@ -9004,9 +8957,9 @@ class EditLinesWindow(tk.Toplevel):
 
     def _create_suggestions_panel(self, parent):
         """Create AI suggestions panel"""
-        suggestions_label = ttk.Label(parent, text="🎯 Smart Suggestions", 
-                                     style='Title.TLabel')
-        suggestions_label.pack(pady=(20, 10))
+        suggestions_label = ttk.Label(parent, text="Smart Suggestions",
+                                     style='Heading.TLabel')
+        suggestions_label.pack(pady=(16, 8), anchor="w", padx=4)
         
         # Suggestions frame
         self.suggestions_frame = ttk.Frame(parent, style='Panel.TFrame')
@@ -9017,8 +8970,8 @@ class EditLinesWindow(tk.Toplevel):
 
     def _create_player_browser_panel(self, parent):
         """Create advanced player browser panel for Stage 3"""
-        browser_label = ttk.Label(parent, text="👥 Player Browser", style='Title.TLabel')
-        browser_label.pack(pady=(20, 10))
+        browser_label = ttk.Label(parent, text="Player Browser", style='Heading.TLabel')
+        browser_label.pack(pady=(16, 8), anchor="w", padx=4)
         
         # Filter controls
         filter_frame = ttk.Frame(parent, style='Panel.TFrame')
@@ -9066,22 +9019,22 @@ class EditLinesWindow(tk.Toplevel):
 
     def _create_ai_optimization_panel(self, parent):
         """Create AI-powered optimization panel for Stage 4"""
-        ai_label = ttk.Label(parent, text="🤖 AI Coach Assistant", style='Title.TLabel')
-        ai_label.pack(pady=(20, 10))
-        
+        ai_label = ttk.Label(parent, text="AI Coach Assistant", style='Heading.TLabel')
+        ai_label.pack(pady=(16, 8), anchor="w", padx=4)
+
         # AI optimization options
         ai_frame = ttk.Frame(parent, style='Panel.TFrame')
         ai_frame.pack(fill="x", pady=(0, 10))
-        
+
         # Quick AI actions
-        ttk.Button(ai_frame, text="⚡ Quick Optimize", command=self.ai_quick_optimize,
-                  width=15).pack(fill="x", pady=2)
-        ttk.Button(ai_frame, text="🧪 Chemistry Focus", command=self.ai_chemistry_optimize,
-                  width=15).pack(fill="x", pady=2)
-        ttk.Button(ai_frame, text="⚖️ Balance Lines", command=self.ai_balance_optimize,
-                  width=15).pack(fill="x", pady=2)
-        ttk.Button(ai_frame, text="🎯 Matchup Mode", command=self.ai_matchup_optimize,
-                  width=15).pack(fill="x", pady=2)
+        ttk.Button(ai_frame, text="Quick Optimize", command=self.ai_quick_optimize,
+                  style='Secondary.TButton', width=15).pack(fill="x", pady=2)
+        ttk.Button(ai_frame, text="Chemistry Focus", command=self.ai_chemistry_optimize,
+                  style='Secondary.TButton', width=15).pack(fill="x", pady=2)
+        ttk.Button(ai_frame, text="Balance Lines", command=self.ai_balance_optimize,
+                  style='Secondary.TButton', width=15).pack(fill="x", pady=2)
+        ttk.Button(ai_frame, text="Matchup Mode", command=self.ai_matchup_optimize,
+                  style='Secondary.TButton', width=15).pack(fill="x", pady=2)
         
         # AI insights
         insights_frame = ttk.LabelFrame(parent, text="AI Insights", style='Panel.TLabelframe')
@@ -9103,41 +9056,37 @@ class EditLinesWindow(tk.Toplevel):
         self._update_ai_insights()
 
     def _create_enhanced_button_panel(self, parent):
-        """Create enhanced button panel with Stage 4 features"""
+        """Create button panel: one primary action, everything else quiet."""
         btn_frame = ttk.Frame(parent, style='Panel.TFrame')
         btn_frame.pack(fill="x", pady=(10, 0))
-        
+
         # Primary actions
-        primary_frame = ttk.Frame(btn_frame)
+        primary_frame = ttk.Frame(btn_frame, style='Panel.TFrame')
         primary_frame.pack(side="left", fill="x", expand=True)
-        
-        ttk.Button(primary_frame, text="💾 Save Lines", command=self.save_lines,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        ttk.Button(primary_frame, text="⚡ Optimize", command=self.auto_optimize_lines,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        ttk.Button(primary_frame, text="🔄 Reset", command=self.reset_lines,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        
-        # Stage 3: Advanced actions
-        ttk.Button(primary_frame, text="🔀 Swap Players", command=self.enter_swap_mode,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        ttk.Button(primary_frame, text="📋 Compare", command=self.enter_comparison_mode,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        
-        # Stage 4: AI-powered actions
-        ttk.Button(primary_frame, text="🎯 Smart Build", command=self.ai_smart_build,
-                  style='TButton').pack(side="left", padx=(0, 5))
-        
+
+        ttk.Button(primary_frame, text="Save Lines", command=self.save_lines,
+                  style='TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(primary_frame, text="Optimize", command=self.auto_optimize_lines,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(primary_frame, text="Reset", command=self.reset_lines,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(primary_frame, text="Swap Players", command=self.enter_swap_mode,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(primary_frame, text="Compare", command=self.enter_comparison_mode,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+        ttk.Button(primary_frame, text="Smart Build", command=self.ai_smart_build,
+                  style='Secondary.TButton').pack(side="left", padx=(0, 6))
+
         # Secondary actions
-        secondary_frame = ttk.Frame(btn_frame)
+        secondary_frame = ttk.Frame(btn_frame, style='Panel.TFrame')
         secondary_frame.pack(side="right")
-        
-        ttk.Button(secondary_frame, text="🧪 Check Chemistry", command=self.check_chemistry,
-                  style='TButton').pack(side="left", padx=(5, 0))
-        ttk.Button(secondary_frame, text="📊 Full Analysis", command=self.show_full_analysis,
-                  style='TButton').pack(side="left", padx=(5, 0))
-        ttk.Button(secondary_frame, text="🔮 Simulate", command=self.simulate_lineup_performance,
-                  style='TButton').pack(side="left", padx=(5, 0))
+
+        ttk.Button(secondary_frame, text="Check Chemistry", command=self.check_chemistry,
+                  style='Secondary.TButton').pack(side="left", padx=(6, 0))
+        ttk.Button(secondary_frame, text="Full Analysis", command=self.show_full_analysis,
+                  style='Secondary.TButton').pack(side="left", padx=(6, 0))
+        ttk.Button(secondary_frame, text="Simulate", command=self.simulate_lineup_performance,
+                  style='Secondary.TButton').pack(side="left", padx=(6, 0))
 
     def _load_current_lineup(self):
         """Load current lineup data into the interface"""
@@ -10677,8 +10626,9 @@ CHEMISTRY: {chemistry:.1f}%
         
         row = 0
         for suggestion in suggestions[:5]:  # Show top 5 suggestions
-            suggestion_btn = ttk.Button(self.suggestions_frame, 
+            suggestion_btn = ttk.Button(self.suggestions_frame,
                                        text=suggestion['text'],
+                                       style='Secondary.TButton',
                                        command=lambda s=suggestion: self._apply_suggestion(s))
             suggestion_btn.grid(row=row, column=0, sticky="ew", padx=5, pady=2)
             row += 1
@@ -10689,19 +10639,19 @@ CHEMISTRY: {chemistry:.1f}%
         
         # Example suggestions (would be more sophisticated in full implementation)
         suggestions.append({
-            'text': "⚡ Move best scorer to top line",
+            'text': "Move best scorer to top line",
             'action': 'optimize_top_line'
         })
         suggestions.append({
-            'text': "🛡️ Balance defensive pairs",
+            'text': "Balance defensive pairs",
             'action': 'balance_defense'
         })
         suggestions.append({
-            'text': "🔥 Optimize power play chemistry",
+            'text': "Optimize power play chemistry",
             'action': 'optimize_powerplay'
         })
         suggestions.append({
-            'text': "⚖️ Balance ice time distribution",
+            'text': "Balance ice time distribution",
             'action': 'balance_ice_time'
         })
         
