@@ -438,7 +438,7 @@ class PressConferenceDialog(tk.Toplevel):
         self.j_label.config(text=f"— {q['journalist']}")
         self.q_label.config(text=f"Q{self.q_index + 1}: {q['question']}")
         for ans in q["answers"]:
-            ttk.Button(self.btn_frame, text=ans["label"], wraplength=500,
+            ttk.Button(self.btn_frame, text=ans["label"],
                        command=lambda a=ans: self._answer(a)).pack(fill="x", pady=5)
 
     def _answer(self, ans):
