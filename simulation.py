@@ -4162,6 +4162,9 @@ class GameSim:
         player = lineup.get(flat_key)
         if player:
             return player
+        if flat_key == 'G1':
+            goalies = lineup.get('Goalies') or []
+            return goalies[0] if goalies else None
         try:
             parts = flat_key.split('_')
             if len(parts) != 2:
@@ -4179,11 +4182,15 @@ class GameSim:
 
     def _get_on_ice(self, team):
         """Returns the list of players currently on the ice for a team, based on lines."""
+        penalized_players = [p['player'] for p in (self.home_penalties if team == self.home_team else self.away_penalties)]
+        # Penalties genuinely reduce manpower: 5v5 -> 5v4 -> 5v3 (never below 3).
+        penalized_skaters = [p for p in penalized_players
+                             if getattr(p, 'primary_position', None) != PlayerPosition.GOALIE]
         num_skaters = 5
         if self.period == 4: # 3-on-3 OT
             num_skaters = 3
-        
-        penalized_players = [p['player'] for p in (self.home_penalties if team == self.home_team else self.away_penalties)]
+        else:
+            num_skaters = max(3, 5 - len(penalized_skaters))
         
         # Simple line rotation logic
         current_line = (self.clock // 45) % 4 + 1 # Change lines every 45 seconds
@@ -4199,9 +4206,28 @@ class GameSim:
                 current_line = 3 if rotation == 0 else 4  # protect the lead: bottom six
 
         on_ice = []
-        
-        # Get forwards from the current line
+
+        # Special teams: dress the PP/PK units when manpower differs (not in 3v3 OT)
+        special_unit = None
+        if self.period != 4:
+            opp_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+            opp_penalized_skaters = [p['player'] for p in opp_penalties
+                                    if getattr(p.get('player'), 'primary_position', None) != PlayerPosition.GOALIE]
+            if len(penalized_skaters) < len(opp_penalized_skaters):
+                special_unit = f"PP{(self.clock // 45) % 2 + 1}"
+            elif len(penalized_skaters) > len(opp_penalized_skaters):
+                special_unit = f"PK{(self.clock // 45) % 2 + 1}"
+        if special_unit:
+            unit = (getattr(team, 'lineup', None) or {}).get(special_unit) or {}
+            for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
+                if p and p not in penalized_players and p not in on_ice:
+                    on_ice.append(p)
+
+        # Get forwards from the current line (only tops up when the special
+        # unit left gaps, or for even strength / 3v3 OT)
         for pos in ['LW', 'C', 'RW']:
+            if len(on_ice) >= num_skaters:
+                break
             pos_enum = None
             if pos == 'LW':
                 pos_enum = PlayerPosition.LEFT_WING
@@ -4209,21 +4235,23 @@ class GameSim:
                 pos_enum = PlayerPosition.CENTER
             elif pos == 'RW':
                 pos_enum = PlayerPosition.RIGHT_WING
-                
+
             player = self._lineup_player(team, f"F{current_line}_{pos}")
-            if player and player not in penalized_players:
+            if player and player not in penalized_players and player not in on_ice:
                 on_ice.append(player)
 
         # Get defensemen from the current pairing
         for pos in ['L', 'R']:
+            if len(on_ice) >= num_skaters:
+                break
             pos_enum = None
             if pos == 'L':
                 pos_enum = PlayerPosition.LEFT_DEFENSE
             elif pos == 'R':
                 pos_enum = PlayerPosition.RIGHT_DEFENSE
-                
+
             player = self._lineup_player(team, f"D{current_d_pair}_{pos}")
-            if player and player not in penalized_players:
+            if player and player not in penalized_players and player not in on_ice:
                 on_ice.append(player)
         
         # If lineup is incomplete, fill with best available players
@@ -4231,7 +4259,9 @@ class GameSim:
             best_available = sorted([p for p in team.roster if p not in on_ice and p not in penalized_players], key=lambda p: p.overall_rating(), reverse=True)
             on_ice.extend(best_available[:num_skaters - len(on_ice)])
 
-        on_ice.append(team.get_starting_goalie())
+        # Selected starter (G1) first; fall back to best goalie on the roster.
+        goalie = self._lineup_player(team, 'G1') or team.get_starting_goalie()
+        on_ice.append(goalie)
         return on_ice
 
     def _select_starting_lines(self):

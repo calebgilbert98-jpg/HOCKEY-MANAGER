@@ -1384,6 +1384,13 @@ def flatten_lineup(lineup):
     """
     if not isinstance(lineup, dict):
         return lineup
+    # Clear stale flat keys first: if a slot was emptied or replaced, an old
+    # assignment must not linger and dress the wrong player.
+    import re as _re
+    _flat_pat = _re.compile(r'^[FD]\d+_[LRCW]+$|^G\d+$')
+    for key in list(lineup.keys()):
+        if _flat_pat.match(key):
+            del lineup[key]
     forwards = lineup.get('Forwards') or []
     for i, line in enumerate(forwards[:4]):
         if not line:
