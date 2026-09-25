@@ -4949,13 +4949,46 @@ class ScheduleWindow(tk.Toplevel):
         home_team.goal_differential = home_team.goals_for - home_team.goals_against
         away_team.goal_differential = away_team.goals_for - away_team.goals_against
         
+    def _find_game_result(self, game_data):
+        """Find the stored result matching the selected game."""
+        for gr in self.parent.game_results:
+            gd, grdate = game_data['date'], gr.get('date')
+            same_day = (gd == grdate or
+                        (hasattr(gd, 'date') and hasattr(grdate, 'date') and
+                         gd.date() == grdate.date()))
+            if (same_day and
+                    gr.get('home_team') is game_data['home_team'] and
+                    gr.get('away_team') is game_data['away_team']):
+                return gr
+        return None
+
     def view_game_stats(self):
         """View detailed stats for the selected game."""
-        tk.messagebox.showinfo("Game Stats", "Detailed game statistics coming soon!")
-        
+        game_data = self.get_selected_game_data()
+        if not game_data:
+            tk.messagebox.showwarning("No Game Selected",
+                                      "Please select a game first.")
+            return
+        result = self._find_game_result(game_data)
+        if not result:
+            tk.messagebox.showinfo("No Data",
+                                   "This game hasn't been played yet — no stats available.")
+            return
+        GameDetailWindow(self.parent, result, initial_tab="stats")
+
     def view_game_recap(self):
         """View game recap and highlights."""
-        tk.messagebox.showinfo("Game Recap", "Game recap feature coming soon!")
+        game_data = self.get_selected_game_data()
+        if not game_data:
+            tk.messagebox.showwarning("No Game Selected",
+                                      "Please select a game first.")
+            return
+        result = self._find_game_result(game_data)
+        if not result:
+            tk.messagebox.showinfo("No Data",
+                                   "This game hasn't been played yet — no recap available.")
+            return
+        GameDetailWindow(self.parent, result, initial_tab="recap")
 
     def update_views(self):
         self.my_schedule_tree.delete(*self.my_schedule_tree.get_children())
@@ -12501,3 +12534,168 @@ class BuyoutCalculatorWindow(tk.Toplevel):
                            f"{pl.full_name} ({pl.primary_position.value}) — "
                            f"${pl.contract.salary / 1e6:.2f}M × {pl.contract.years_remaining}")
         self._render_active_buyouts()
+
+
+class GameDetailWindow(tk.Toplevel):
+    """Game Recap / Game Stats: scoring summary, team stats, three stars."""
+
+    def __init__(self, parent, game_result, initial_tab="recap"):
+        super().__init__(parent)
+        self.parent = parent
+        self.result = game_result
+        self.title("Game Details")
+        self.configure(background=parent.BG_COLOR)
+        self.geometry("640x560")
+        self._build(initial_tab)
+
+    def _line(self, master, text, secondary=False, bold=False, size=10):
+        ttk.Label(master, text=text,
+                  style='Secondary.TLabel' if secondary else 'TLabel',
+                  font=(self.parent.FONT_FAMILY, size,
+                        'bold' if bold else 'normal')).pack(anchor='w', pady=1)
+
+    def _build(self, initial_tab):
+        r = self.result
+        home, away = r['home_team'], r['away_team']
+        hs, aws = r['home_score'], r['away_score']
+        date = r['date']
+        date_str = date.strftime("%b %d, %Y") if hasattr(date, 'strftime') else str(date)
+
+        header = ttk.Frame(self, style='Panel.TFrame', padding=14)
+        header.pack(fill=tk.X, padx=12, pady=(12, 6))
+        ttk.Label(header, text=f"{away.team_name}  {aws}  @  {hs}  {home.team_name}",
+                  style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 15, 'bold')).pack(anchor='center')
+        sub = date_str
+        if r.get('shootout'):
+            sub += "  •  Shootout"
+        elif r.get('overtime'):
+            sub += "  •  Overtime"
+        ttk.Label(header, text=sub, style='Secondary.TLabel',
+                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='center')
+
+        tabs = ttk.Frame(self, style='Panel.TFrame')
+        tabs.pack(fill=tk.X, padx=12, pady=(0, 6))
+        self.body = ttk.Frame(self, style='Card.TFrame', padding=12)
+        self.body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        self._tab_var = tk.StringVar(value=initial_tab)
+        for key, label in (("recap", "Game Recap"), ("stats", "Game Stats")):
+            PillButton(tabs, text=label, bg='#111826',
+                       font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                       padx=14, pady=6,
+                       command=lambda k=key: self._show_tab(k)).pack(side=tk.LEFT, padx=(0, 6))
+        self._show_tab(initial_tab)
+
+    def _show_tab(self, tab):
+        for child in self.body.winfo_children():
+            child.destroy()
+        if tab == "recap":
+            self._fill_recap()
+        else:
+            self._fill_stats()
+
+    def _roster_lookup(self):
+        r = self.result
+        by_id = {}
+        for team in (r['home_team'], r['away_team']):
+            for p in team.roster:
+                by_id[p.id] = (p, team)
+        return by_id
+
+    def _fill_recap(self):
+        r = self.result
+        self._line(self.body, "Scoring Summary", bold=True, size=12)
+        events = r.get('event_log') or []
+        by_id = self._roster_lookup()
+        goals = [e for e in events if e.get('type') == 'GOAL_ADVANCED']
+        if not goals:
+            self._line(self.body,
+                       "Detailed scoring data is unavailable for this game.",
+                       secondary=True)
+        home_running = away_running = 0
+        for i, e in enumerate(goals, 1):
+            d = e.get('details', {})
+            info = by_id.get(d.get('scorer_id'))
+            if info:
+                p, team = info
+                name = p.full_name
+                abbr = team.team_name
+            else:
+                name, abbr = "Unknown", "?"
+            if abbr == r['home_team'].team_name:
+                home_running += 1
+            elif abbr == r['away_team'].team_name:
+                away_running += 1
+            gtype = d.get('goal_type', '').replace('_', ' ').title()
+            xg = d.get('expected_goal')
+            extra = f"  •  {gtype}" if gtype else ""
+            extra += f"  •  xG {xg}" if xg is not None else ""
+            self._line(self.body,
+                       f"{i}. {name} ({abbr}){extra}   [{away_running}-{home_running}]",
+                       secondary=True)
+        notable = [n for n in (r.get('notable_events') or [])
+                   if n.get('event') not in ('overtime',)]
+        if notable:
+            ttk.Separator(self.body, orient='horizontal').pack(fill='x', pady=8)
+            self._line(self.body, "Notable", bold=True, size=12)
+            for n in notable:
+                who = ""
+                pl = n.get('player')
+                if pl is not None:
+                    who = getattr(pl, 'full_name', str(pl)) + " — "
+                self._line(self.body, f"{who}{n.get('event', '')}",
+                           secondary=True)
+
+    def _fill_stats(self):
+        r = self.result
+        self._line(self.body, "Team Stats", bold=True, size=12)
+        events = r.get('event_log') or []
+        by_id = self._roster_lookup()
+        goals_h = goals_a = saves_h = saves_a = 0
+        for e in events:
+            d = e.get('details', {})
+            if e.get('type') == 'GOAL_ADVANCED':
+                info = by_id.get(d.get('scorer_id'))
+                if info and info[1].team_name == r['home_team'].team_name:
+                    goals_h += 1
+                else:
+                    goals_a += 1
+            elif e.get('type') == 'SAVE_ADVANCED':
+                info = by_id.get(d.get('goaltender_id'))
+                if info and info[1].team_name == r['home_team'].team_name:
+                    saves_h += 1
+                else:
+                    saves_a += 1
+        shots_h = goals_h + saves_a   # home shots = home goals + away goalie saves
+        shots_a = goals_a + saves_h
+        rows = [
+            ("Goals", goals_a, goals_h),
+            ("Shots on Goal", shots_a, shots_h),
+            ("Saves", saves_a, saves_h),
+        ]
+        a_name, h_name = r['away_team'].team_name, r['home_team'].team_name
+        self._line(self.body, f"{'':22s}{a_name[:18]:>18s}  {h_name[:18]:>18s}",
+                   secondary=True, bold=True)
+        for label, av, hv in rows:
+            self._line(self.body, f"{label:22s}{av:>18d}  {hv:>18d}",
+                       secondary=True)
+        if not events:
+            self._line(self.body, "Detailed stats unavailable for this game.",
+                       secondary=True)
+
+        ratings = r.get('player_ratings') or {}
+        stars = []
+        for team_name, pmap in ratings.items():
+            for pid, rating in pmap.items():
+                info = by_id.get(pid)
+                name = info[0].full_name if info else "Unknown"
+                stars.append((rating, name, team_name))
+        stars.sort(reverse=True)
+        if stars:
+            ttk.Separator(self.body, orient='horizontal').pack(fill='x', pady=8)
+            self._line(self.body, "Three Stars", bold=True, size=12)
+            medals = ["★", "★★", "★★★"]
+            for i, (rating, name, tname) in enumerate(stars[:3]):
+                self._line(self.body,
+                           f"{medals[i]}  {name} ({tname}) — {rating}/10",
+                           secondary=True)
