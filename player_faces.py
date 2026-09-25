@@ -91,10 +91,10 @@ def _overlay(img, draw_fn):
 
 
 def generate_face_image(player, size=128):
-    """Return a PIL Image of the player's stylized hockey portrait.
+    """NHL 2010/2014-style realistic portrait.
 
-    All semi-transparent shading goes through _overlay() so it blends with
-    the face, not the background (PIL fills don't alpha-blend).
+    Realistic proportions, subtle shading (no cartoon outlines), skin texture,
+    natural eyes. All alpha blending via _overlay().
     """
     if not _PIL_OK:
         return None
@@ -102,7 +102,6 @@ def generate_face_image(player, size=128):
     rng = random.Random(_seed_for(player))
     age = getattr(player, "age", 25)
 
-    # --- Randomize appearance ---
     skin_base, skin_shadow, skin_hi = rng.choice(SKIN_TONES)
     helmet_c = rng.choice(HELMET_COLORS)
     jersey_c = rng.choice(JERSEY_COLORS)
@@ -119,258 +118,395 @@ def generate_face_image(player, size=128):
         beard_style = rng.choice(["stubble", "beard"])
     mouth_style = rng.choice(["neutral", "smile", "smirk"])
 
-    # Work at 2x for anti-aliasing
-    S = size * 2
-    k = S / 256.0
-    W = lambda v: int(v * k)
+    # Higher res for realism detail
+    S = size * 3
+    k = S / 384.0
+    W = lambda v: max(1, int(v * k))
 
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img, "RGBA")
     cx = S / 2
 
-    # Face shape dimensions
+    from PIL import ImageFilter as _IF
+
+    # Realistic face proportions (longer, narrower than cartoon)
     if face_shape == "oval":
-        fw, fh_top, fh_bot, jaw_w = W(68), W(44), W(188), W(52)
+        fw, fh_top, fh_bot, jaw_w = W(88), W(58), W(258), W(68)
     elif face_shape == "round":
-        fw, fh_top, fh_bot, jaw_w = W(72), W(48), W(184), W(60)
+        fw, fh_top, fh_bot, jaw_w = W(94), W(62), W(250), W(78)
     elif face_shape == "square":
-        fw, fh_top, fh_bot, jaw_w = W(66), W(46), W(186), W(62)
+        fw, fh_top, fh_bot, jaw_w = W(86), W(60), W(254), W(80)
     else:  # oblong
-        fw, fh_top, fh_bot, jaw_w = W(62), W(42), W(192), W(48)
+        fw, fh_top, fh_bot, jaw_w = W(80), W(56), W(264), W(62)
     face_top, face_bot = fh_top, fh_bot
 
-    eye_y = W(108)
-    eye_spacing = fw * 0.48
-    eye_w, eye_h = W(14), W(9)
-    mouth_y = W(168)
+    # Feature positions (realistic ratios)
+    eye_y = W(148)          # eyes at vertical midpoint
+    eye_spacing = fw * 0.52
+    nose_bot = W(200)
+    mouth_y = W(228)
 
     # ================= JERSEY =================
-    shoulder_top = W(190)
+    shoulder_top = W(262)
     d.polygon([
-        (cx - W(105), S), (cx + W(105), S),
-        (cx + W(68), shoulder_top), (cx - W(68), shoulder_top)
+        (cx - W(140), S), (cx + W(140), S),
+        (cx + W(90), shoulder_top), (cx - W(90), shoulder_top)
     ], fill=jersey_c)
 
-    def _shoulder_shade(ld):
-        for i in range(3):
-            inset = W(8 + i * 10)
-            alpha = 40 - i * 12
+    def _jersey_shade(ld):
+        # Soft gradient shading on shoulders
+        for i in range(5):
+            inset = W(10 + i * 14)
+            alpha = 35 - i * 6
             ld.polygon([
-                (cx - W(105) + inset, S), (cx - W(68) + inset * 0.6, shoulder_top),
-                (cx - W(68) + inset * 0.6 + W(4), shoulder_top), (cx - W(105) + inset + W(4), S)
+                (cx - W(140) + inset, S), (cx - W(90) + inset * 0.6, shoulder_top),
+                (cx - W(90) + inset * 0.6 + W(6), shoulder_top), (cx - W(140) + inset + W(6), S)
             ], fill=(0, 0, 0, alpha))
             ld.polygon([
-                (cx + W(105) - inset, S), (cx + W(68) - inset * 0.6, shoulder_top),
-                (cx + W(68) - inset * 0.6 - W(4), shoulder_top), (cx + W(105) - inset - W(4), S)
+                (cx + W(140) - inset, S), (cx + W(90) - inset * 0.6, shoulder_top),
+                (cx + W(90) - inset * 0.6 - W(6), shoulder_top), (cx + W(140) - inset - W(6), S)
             ], fill=(0, 0, 0, alpha))
-    d = _overlay(img, _shoulder_shade)
+        # Center highlight
+        ld.polygon([
+            (cx - W(30), S), (cx + W(30), S),
+            (cx + W(20), shoulder_top), (cx - W(20), shoulder_top)
+        ], fill=(255, 255, 255, 18))
+    _js = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    _jsd = ImageDraw.Draw(_js, "RGBA")
+    _jersey_shade(_jsd)
+    _js = _js.filter(_IF.GaussianBlur(W(8)))
+    img.alpha_composite(_js)
+    d = ImageDraw.Draw(img, "RGBA")
 
     stripe_c = (235, 235, 235) if sum(jersey_c) < 400 else (30, 30, 35)
     d.polygon([
-        (cx - W(92), W(236)), (cx + W(92), W(236)),
-        (cx + W(84), W(216)), (cx - W(84), W(216))
+        (cx - W(122), W(322)), (cx + W(122), W(322)),
+        (cx + W(112), W(300)), (cx - W(112), W(300))
     ], fill=stripe_c)
+    # Collar
     d.polygon([
-        (cx - W(28), shoulder_top), (cx + W(28), shoulder_top), (cx, W(212))
-    ], fill=_shade(jersey_c, -30))
+        (cx - W(36), shoulder_top), (cx + W(36), shoulder_top), (cx, W(290))
+    ], fill=_shade(jersey_c, -35))
     d.polygon([
-        (cx - W(22), shoulder_top + W(2)), (cx + W(22), shoulder_top + W(2)), (cx, W(206))
+        (cx - W(28), shoulder_top + W(2)), (cx + W(28), shoulder_top + W(2)), (cx, W(282))
     ], fill=stripe_c)
-    d.line([(cx - W(105), S), (cx - W(68), shoulder_top)],
-           fill=(20, 18, 16, 255), width=W(4))
-    d.line([(cx + W(105), S), (cx - W(68), shoulder_top)],
-           fill=(20, 18, 16, 255), width=W(4))
 
     # ================= NECK =================
-    neck_w = W(24)
-    d.rectangle([cx - neck_w, W(158), cx + neck_w, shoulder_top + W(4)], fill=skin_shadow)
-    d.rectangle([cx - neck_w // 2, W(158), cx + neck_w // 2, shoulder_top + W(4)],
-                fill=_shade(skin_base, 10))
+    neck_w = W(32)
+    d.rectangle([cx - neck_w, W(215), cx + neck_w, shoulder_top + W(4)], fill=skin_shadow)
+    # Neck muscle shading
+    def _neck_shade(ld):
+        ld.rectangle([cx - neck_w, W(215), cx - neck_w + W(10), shoulder_top],
+                     fill=(0, 0, 0, 30))
+        ld.rectangle([cx + neck_w - W(10), W(215), cx + neck_w, shoulder_top],
+                     fill=(0, 0, 0, 30))
+        ld.rectangle([cx - W(10), W(215), cx + W(10), shoulder_top],
+                     fill=(255, 255, 255, 15))
+    d = _overlay(img, _neck_shade)
 
     # ================= FACE BASE =================
+    # Draw face with subtle vertical gradient (forehead lighter)
     d.ellipse([cx - fw, face_top, cx + fw, face_bot], fill=skin_base)
     if face_shape == "square":
-        d.rectangle([cx - jaw_w, W(130), cx - fw + W(8), W(175)], fill=skin_base)
-        d.rectangle([cx + fw - W(8), W(130), cx + jaw_w, W(175)], fill=skin_base)
+        d.rectangle([cx - jaw_w, W(175), cx - fw + W(10), W(235)], fill=skin_base)
+        d.rectangle([cx + fw - W(10), W(175), cx + jaw_w, W(235)], fill=skin_base)
 
-    def _face_shade(ld):
+    # Skin texture (subtle noise for pores)
+    def _skin_tex(ld):
+        for _ in range(400):
+            bx = rng.uniform(cx - fw + W(8), cx + fw - W(8))
+            by = rng.uniform(face_top + W(15), face_bot - W(10))
+            # Within face ellipse
+            if ((bx - cx) / fw) ** 2 + ((by - W(158)) / W(100)) ** 2 < 0.92:
+                v = rng.randint(-12, 12)
+                ld.point((int(bx), int(by)), fill=(v, v, v, 18))
+    d = _overlay(img, _skin_tex)
+
+    # Facial structure shading (the key to realism)
+    def _face_structure(ld):
+        # Forehead - light from above
+        ld.ellipse([cx - fw * 0.65, face_top + W(6), cx + fw * 0.65, W(105)],
+                   fill=(255, 255, 255, 28))
+        # Brow ridge shadow
+        ld.ellipse([cx - fw * 0.7, W(125), cx + fw * 0.7, W(142)],
+                   fill=(0, 0, 0, 22))
+        # Cheekbones - highlight on top, shadow below
         for side in (-1, 1):
-            cheek_x = cx + side * fw * 0.55
-            ld.ellipse([cheek_x - W(18), W(108), cheek_x + W(18), W(138)],
-                       fill=(0, 0, 0, 18))
-        ld.ellipse([cx - jaw_w, face_bot - W(20), cx + jaw_w, face_bot + W(6)],
-                   fill=(0, 0, 0, 25))
+            chx = cx + side * fw * 0.52
+            ld.ellipse([chx - W(22), W(160), chx + W(22), W(182)],
+                       fill=(255, 255, 255, 20))
+            ld.ellipse([chx - W(20), W(184), chx + W(20), W(205)],
+                       fill=(0, 0, 0, 28))
+        # Nasolabial folds (smile lines)
         for side in (-1, 1):
-            tx = cx + side * fw * 0.85
-            ld.ellipse([tx - W(10), W(60), tx + W(10), W(95)], fill=(0, 0, 0, 15))
-        ld.ellipse([cx - fw * 0.6, face_top + W(4), cx + fw * 0.6, W(78)],
-                   fill=(255, 255, 255, 22))
-        ld.polygon([(cx - W(5), W(95)), (cx + W(5), W(95)),
-                    (cx + W(7), W(125)), (cx - W(7), W(125))],
-                   fill=(255, 255, 255, 18))
-    # Blur the shade layer for softness
-    from PIL import ImageFilter as _IF
-    _sl = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    _sld = ImageDraw.Draw(_sl, "RGBA")
-    _face_shade(_sld)
-    _sl = _sl.filter(_IF.GaussianBlur(W(6)))
-    img.alpha_composite(_sl)
+            ld.arc([cx + side * W(28) - W(14), W(185),
+                    cx + side * W(28) + W(14), W(220)],
+                   300 if side < 0 else 240, 60 if side < 0 else 120,
+                   fill=(0, 0, 0, 35), width=W(3))
+        # Jawline definition
+        ld.arc([cx - jaw_w - W(6), W(180), cx + jaw_w + W(6), face_bot + W(12)],
+               25, 155, fill=(0, 0, 0, 40), width=W(5))
+        # Chin shadow
+        ld.ellipse([cx - W(30), face_bot - W(18), cx + W(30), face_bot + W(4)],
+                   fill=(0, 0, 0, 30))
+        # Temple shading
+        for side in (-1, 1):
+            tx = cx + side * fw * 0.88
+            ld.ellipse([tx - W(12), W(80), tx + W(12), W(125)], fill=(0, 0, 0, 20))
+    _fs = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    _fsd = ImageDraw.Draw(_fs, "RGBA")
+    _face_structure(_fsd)
+    _fs = _fs.filter(_IF.GaussianBlur(W(10)))
+    img.alpha_composite(_fs)
     d = ImageDraw.Draw(img, "RGBA")
 
-    d.ellipse([cx - fw, face_top, cx + fw, face_bot],
-              outline=(45, 32, 24, 255), width=W(2))
-
-    # ================= EARS =================
+    # ================= EARS (subtle) =================
     for side in (-1, 1):
-        ex = cx + side * (fw - W(1))
-        d.ellipse([ex - W(8), W(108), ex + W(8), W(132)], fill=skin_base)
-    def _ear_shade(ld):
+        ex = cx + side * (fw - W(2))
+        d.ellipse([ex - W(10), W(148), ex + W(10), W(180)], fill=_shade(skin_base, -5))
+    def _ear_detail(ld):
         for side in (-1, 1):
-            ex = cx + side * (fw - W(1))
-            ld.ellipse([ex - W(4), W(114), ex + W(4), W(126)], fill=(0, 0, 0, 40))
-    d = _overlay(img, _ear_shade)
+            ex = cx + side * (fw - W(2))
+            ld.ellipse([ex - W(5), W(156), ex + W(5), W(172)], fill=(0, 0, 0, 45))
+    d = _overlay(img, _ear_detail)
 
-    # ================= EYES =================
+    # ================= EYES (realistic, smaller) =================
+    # NHL 2010 eyes are much smaller and more natural than cartoon
+    eye_w, eye_h = W(17), W(10)
+
     for side in (-1, 1):
         ex = cx + side * eye_spacing
-        # Sclera
-        d.ellipse([ex - eye_w, eye_y - eye_h, ex + eye_w, eye_y + eye_h],
-                  fill=(238, 232, 222))
-        # Iris
-        iris_r = W(7)
-        d.ellipse([ex - iris_r, eye_y - iris_r, ex + iris_r, eye_y + iris_r], fill=iris_c)
-        d.ellipse([ex - iris_r, eye_y - iris_r, ex + iris_r, eye_y + iris_r],
-                  outline=_shade(iris_c, -40), width=W(2))
-        # Pupil
-        pup_r = W(3)
-        d.ellipse([ex - pup_r, eye_y - pup_r, ex + pup_r, eye_y + pup_r], fill=(15, 12, 12))
-        # Upper lid
-        d.arc([ex - eye_w - W(2), eye_y - eye_h - W(4), ex + eye_w + W(2), eye_y + eye_h],
-              start=195, end=345, fill=(35, 25, 20, 255), width=W(3))
 
-    def _eye_shade(ld):
+        # Eye white (almond shape via polygon)
+        d.polygon([
+            (ex - eye_w, eye_y),
+            (ex - eye_w * 0.6, eye_y - eye_h),
+            (ex + eye_w * 0.6, eye_y - eye_h),
+            (ex + eye_w, eye_y),
+            (ex + eye_w * 0.6, eye_y + eye_h * 0.7),
+            (ex - eye_w * 0.6, eye_y + eye_h * 0.7),
+        ], fill=(232, 226, 214))
+
+        # Iris (realistic size - fills most of eye opening)
+        iris_r = W(8)
+        d.ellipse([ex - iris_r, eye_y - iris_r, ex + iris_r, eye_y + iris_r], fill=iris_c)
+        # Iris radial detail
+        def _iris_detail(ld, _ex=ex, _ey=eye_y, _r=iris_r):
+            for a in range(0, 360, 30):
+                import math
+                x1 = _ex + math.cos(math.radians(a)) * _r * 0.3
+                y1 = _ey + math.sin(math.radians(a)) * _r * 0.3
+                x2 = _ex + math.cos(math.radians(a)) * _r * 0.85
+                y2 = _ey + math.sin(math.radians(a)) * _r * 0.85
+                ld.line([(x1, y1), (x2, y2)], fill=(0, 0, 0, 50), width=W(2))
+            # Limbal ring (dark outer ring)
+            ld.ellipse([_ex - _r, _ey - _r, _ex + _r, _ey + _r],
+                       outline=(20, 15, 12, 200), width=W(2))
+        d = _overlay(img, _iris_detail)
+
+        # Pupil
+        pup_r = W(4)
+        d.ellipse([ex - pup_r, eye_y - pup_r, ex + pup_r, eye_y + pup_r], fill=(12, 10, 10))
+
+        # Catchlight (small, realistic)
+        d.ellipse([ex - W(4), eye_y - W(5), ex - W(1), eye_y - W(2)],
+                  fill=(255, 255, 255, 255))
+
+    def _eye_final(ld):
         for side in (-1, 1):
             ex = cx + side * eye_spacing
-            # Socket shadow
-            ld.ellipse([ex - eye_w - W(3), eye_y - eye_h - W(5),
-                        ex + eye_w + W(3), eye_y + W(2)], fill=(0, 0, 0, 30))
-            # Catchlight
-            ld.ellipse([ex - W(5), eye_y - W(6), ex - W(2), eye_y - W(3)],
-                       fill=(255, 255, 255, 230))
-            # Lower lid
-            ld.arc([ex - eye_w, eye_y - eye_h, ex + eye_w, eye_y + eye_h + W(3)],
-                   start=15, end=165, fill=(35, 25, 20, 120), width=W(2))
-    d = _overlay(img, _eye_shade)
+            # Upper eyelid (thick, defines eye)
+            ld.arc([ex - eye_w - W(3), eye_y - eye_h - W(6),
+                    ex + eye_w + W(3), eye_y + eye_h],
+                   200, 340, fill=(30, 22, 18, 255), width=W(4))
+            # Lower lid (thin)
+            ld.arc([ex - eye_w, eye_y - eye_h, ex + eye_w, eye_y + eye_h + W(4)],
+                   20, 160, fill=(30, 22, 18, 140), width=W(2))
+            # Inner corner shadow
+            ld.ellipse([ex - side * eye_w - W(4), eye_y - W(4),
+                        ex - side * eye_w + W(4), eye_y + W(4)],
+                       fill=(0, 0, 0, 50))
+    d = _overlay(img, _eye_final)
 
-    # Eyebrows
-    brow_y = eye_y - eye_h - W(10)
-    brow_c = _shade(_blend(hair_c, (55, 48, 44), 0.62), -18)
+    # Eyebrows (realistic - follow brow bone)
+    brow_c = _shade(_blend(hair_c, (50, 44, 40), 0.65), -15)
     for side in (-1, 1):
         ex = cx + side * eye_spacing
+        by = eye_y - W(28)
+        # Brow shape: thick inner, tapering outer, slight arch
         d.polygon([
-            (ex - W(13), brow_y + W(4)), (ex - W(8), brow_y - W(1)),
-            (ex + W(6), brow_y), (ex + W(13), brow_y + W(3)),
-            (ex + W(11), brow_y + W(6)), (ex - W(6), brow_y + W(5)),
-            (ex - W(11), brow_y + W(6)),
+            (ex - W(20), by + W(6)),
+            (ex - W(14), by - W(2)),
+            (ex + W(2), by - W(4)),
+            (ex + W(16), by),
+            (ex + W(20), by + W(5)),
+            (ex + W(14), by + W(8)),
+            (ex - W(2), by + W(6)),
+            (ex - W(16), by + W(8)),
         ], fill=brow_c)
 
-    # ================= NOSE =================
-    nose_bot = W(148)
-    d.ellipse([cx - W(11), nose_bot - W(14), cx + W(11), nose_bot + W(2)],
-              fill=_shade(skin_base, -8))
-    def _nose_detail(ld):
-        # Bridge shadow
-        ld.polygon([(cx - W(4), W(118)), (cx - W(2), nose_bot - W(8)),
-                    (cx - W(9), nose_bot - W(4)), (cx - W(10), W(128))],
-                   fill=(0, 0, 0, 35))
-        # Nostrils
+    # ================= NOSE (realistic) =================
+    # Bridge
+    def _nose_bridge(ld):
+        ld.polygon([
+            (cx - W(7), W(150)), (cx + W(7), W(150)),
+            (cx + W(10), nose_bot - W(12)), (cx - W(10), nose_bot - W(12))
+        ], fill=(255, 255, 255, 25))
+        ld.polygon([
+            (cx - W(10), W(155)), (cx - W(7), W(150)),
+            (cx - W(10), nose_bot - W(12)), (cx - W(13), nose_bot - W(8))
+        ], fill=(0, 0, 0, 30))
+    d = _overlay(img, _nose_bridge)
+
+    # Tip and nostrils (more defined)
+    d.ellipse([cx - W(14), nose_bot - W(16), cx + W(14), nose_bot + W(4)],
+              fill=_shade(skin_base, -6))
+    def _nostrils(ld):
         for side in (-1, 1):
-            nx = cx + side * W(7)
-            ld.ellipse([nx - W(4), nose_bot - W(6), nx + W(4), nose_bot],
-                       fill=(50, 35, 28, 220))
-        # Highlight
-        ld.line([(cx + W(2), W(124)), (cx + W(3), nose_bot - W(10))],
-                fill=(255, 255, 255, 70), width=W(3))
-    d = _overlay(img, _nose_detail)
+            nx = cx + side * W(9)
+            # Nostril (almond shaped, angled)
+            ld.ellipse([nx - W(5), nose_bot - W(8), nx + W(5), nose_bot - W(1)],
+                       fill=(45, 30, 25, 255))
+            # Nose wing shadow
+            ld.ellipse([nx + side * W(4) - W(4), nose_bot - W(12),
+                        nx + side * W(4) + W(4), nose_bot - W(2)],
+                       fill=(0, 0, 0, 40))
+    d = _overlay(img, _nostrils)
+
+    # ================= MOUTH (realistic lips) =================
+    # Upper lip (thinner, darker)
+    d.polygon([
+        (cx - W(20), mouth_y),
+        (cx - W(10), mouth_y - W(7)),
+        (cx, mouth_y - W(4)),
+        (cx + W(10), mouth_y - W(7)),
+        (cx + W(20), mouth_y),
+        (cx + W(10), mouth_y + W(2)),
+        (cx, mouth_y + W(3)),
+        (cx - W(10), mouth_y + W(2)),
+    ], fill=_shade(_blend(skin_base, (150, 90, 85), 0.35), -18))
+
+    # Lower lip (fuller, lighter)
+    d.ellipse([cx - W(16), mouth_y - W(1), cx + W(16), mouth_y + W(10)],
+              fill=_shade(_blend(skin_base, (150, 90, 85), 0.35), -8))
+
+    # Mouth line
+    if mouth_style == "smile":
+        d.arc([cx - W(18), mouth_y - W(8), cx + W(18), mouth_y + W(10)],
+              25, 155, fill=(60, 35, 30, 255), width=W(3))
+    elif mouth_style == "smirk":
+        d.arc([cx - W(18), mouth_y - W(6), cx + W(18), mouth_y + W(8)],
+              30, 150, fill=(60, 35, 30, 255), width=W(3))
+    else:
+        d.line([cx - W(14), mouth_y + W(1), cx + W(14), mouth_y + W(1)],
+               fill=(60, 35, 30, 255), width=W(3))
+
+    # Lower lip highlight
+    def _lip_hi(ld):
+        ld.ellipse([cx - W(10), mouth_y + W(3), cx + W(10), mouth_y + W(7)],
+                   fill=(255, 255, 255, 45))
+    d = _overlay(img, _lip_hi)
 
     # ================= FACIAL HAIR =================
-    beard_c = _shade(_blend(hair_c, (70, 60, 55), 0.35), -12)
+    beard_c = _shade(_blend(hair_c, (65, 58, 52), 0.4), -10)
     if beard_style == "beard":
-        bw = jaw_w - W(6)
-        d.pieslice([cx - bw, W(140), cx + bw, face_bot + W(6)], 18, 162, fill=beard_c)
+        bw = jaw_w - W(8)
+        d.pieslice([cx - bw, W(190), cx + bw, face_bot + W(8)], 18, 162, fill=beard_c)
         def _beard_tex(ld):
-            for _ in range(50):
-                bx = rng.uniform(cx - bw + W(4), cx + bw - W(4))
-                by = rng.uniform(W(148), face_bot - W(2))
-                if ((bx - cx) / bw) ** 2 + ((by - W(162)) / W(26)) ** 2 < 1:
-                    if abs(bx - cx) < W(14) and abs(by - mouth_y) < W(8):
+            for _ in range(80):
+                bx = rng.uniform(cx - bw + W(6), cx + bw - W(6))
+                by = rng.uniform(W(200), face_bot - W(4))
+                if ((bx - cx) / bw) ** 2 + ((by - W(218)) / W(32)) ** 2 < 1:
+                    if abs(bx - cx) < W(18) and abs(by - mouth_y) < W(10):
                         continue
+                    v = rng.randint(-30, 20)
                     ld.point((int(bx), int(by)),
-                             fill=(*_shade(beard_c, rng.randint(-25, 15)), 140))
+                             fill=(v, v, v, 60))
         d = _overlay(img, _beard_tex)
     elif beard_style == "goatee":
-        d.ellipse([cx - W(18), W(152), cx + W(18), W(184)], fill=beard_c)
-        d.ellipse([cx - W(14), mouth_y - W(9), cx + W(14), mouth_y - W(2)], fill=beard_c)
+        # Chin patch (below lower lip, on chin - not a circle)
+        d.polygon([
+            (cx - W(16), mouth_y + W(12)),
+            (cx + W(16), mouth_y + W(12)),
+            (cx + W(12), mouth_y + W(32)),
+            (cx - W(12), mouth_y + W(32)),
+        ], fill=beard_c)
+        # Mustache (thin, above lip)
+        d.polygon([
+            (cx - W(18), mouth_y - W(8)),
+            (cx - W(8), mouth_y - W(11)),
+            (cx, mouth_y - W(9)),
+            (cx + W(8), mouth_y - W(11)),
+            (cx + W(18), mouth_y - W(8)),
+            (cx + W(14), mouth_y - W(4)),
+            (cx, mouth_y - W(5)),
+            (cx - W(14), mouth_y - W(4)),
+        ], fill=beard_c)
     elif beard_style == "stubble":
         def _stubble(ld):
-            stubble_c = _blend(hair_c, (90, 80, 75), 0.55)
-            ld.pieslice([cx - jaw_w + W(6), W(138), cx + jaw_w - W(6), face_bot - W(2)],
-                        15, 165, fill=(*stubble_c, 50))
-            ld.ellipse([cx - W(20), mouth_y - W(14), cx + W(20), mouth_y - W(6)],
-                       fill=(*stubble_c, 35))
+            stubble_c = _blend(hair_c, (85, 78, 72), 0.6)
+            ld.pieslice([cx - jaw_w + W(8), W(188), cx + jaw_w - W(8), face_bot - W(4)],
+                        15, 165, fill=(*stubble_c, 45))
         _stubl = Image.new("RGBA", (S, S), (0, 0, 0, 0))
         _stld = ImageDraw.Draw(_stubl, "RGBA")
         _stubble(_stld)
-        _stubl = _stubl.filter(_IF.GaussianBlur(W(4)))
+        _stubl = _stubl.filter(_IF.GaussianBlur(W(5)))
         img.alpha_composite(_stubl)
         d = ImageDraw.Draw(img, "RGBA")
 
-    # ================= MOUTH =================
-    mouth_w = W(14)
-    lip_c = _blend(skin_base, (160, 100, 95), 0.22)
-    d.ellipse([cx - mouth_w, mouth_y - W(5), cx + mouth_w, mouth_y + W(5)],
-              fill=_shade(lip_c, -10))
-    if mouth_style == "smile":
-        d.arc([cx - mouth_w, mouth_y - W(10), cx + mouth_w, mouth_y + W(8)],
-              20, 160, fill=(70, 40, 35, 255), width=W(3))
-    elif mouth_style == "smirk":
-        d.arc([cx - mouth_w, mouth_y - W(8), cx + mouth_w, mouth_y + W(6)],
-              25, 155, fill=(70, 40, 35, 255), width=W(3))
-    else:
-        d.line([cx - mouth_w + W(3), mouth_y, cx + mouth_w - W(3), mouth_y],
-               fill=(70, 40, 35, 255), width=W(3))
-    def _chin_hi(ld):
-        ld.ellipse([cx - W(14), mouth_y + W(10), cx + W(14), mouth_y + W(18)],
-                   fill=(255, 255, 255, 30))
-    d = _overlay(img, _chin_hi)
-
     # ================= HAIR =================
     if hair_style == "flow":
+        # Hair tucked behind jaw, visible below helmet at back
         for side in (-1, 1):
-            hx = cx + side * (fw - W(2))
-            x0 = hx - W(14) if side < 0 else hx - W(2)
-            x1 = hx + W(2) if side < 0 else hx + W(14)
-            d.ellipse([x0, W(100), x1, W(165)], fill=hair_c)
+            # Draw behind the face (already drawn, so draw then cover center)
+            hx = cx + side * (fw + W(6))
+            d.polygon([
+                (hx - W(10), W(140)),
+                (hx + W(10), W(140)),
+                (hx + W(14), W(215)),
+                (hx - W(14), W(215)),
+            ], fill=hair_c)
+        def _flow_shade(ld):
+            for side in (-1, 1):
+                hx = cx + side * (fw + W(6))
+                for i in range(3):
+                    lx = hx - W(6) + i * W(6)
+                    ld.line([(lx, W(150)), (lx, W(205))],
+                            fill=(0, 0, 0, 45), width=W(3))
+        d = _overlay(img, _flow_shade)
     elif hair_style == "curly":
-        for i in range(8):
+        for i in range(10):
             side = -1 if i % 2 == 0 else 1
-            hx = cx + side * (fw * 0.9)
-            hy = W(88) + (i // 2) * W(12)
-            d.ellipse([hx - W(8), hy - W(8), hx + W(8), hy + W(8)], fill=hair_c)
+            hx = cx + side * (fw * 0.92)
+            hy = W(115) + (i // 2) * W(16)
+            d.ellipse([hx - W(10), hy - W(10), hx + W(10), hy + W(10)], fill=hair_c)
 
-    # ================= HELMET =================
-    helm_top, helm_bot = W(8), W(78)
-    helm_w = fw + W(14)
+    # ================= HELMET (realistic) =================
+    helm_top, helm_bot = W(12), W(105)
+    helm_w = fw + W(18)
+
+    # Helmet shell (more realistic dome shape)
     d.pieslice([cx - helm_w, helm_top, cx + helm_w, helm_bot * 2 - helm_top],
                180, 360, fill=helmet_c)
 
+    # Realistic helmet shading (multiple light sources)
     _hs = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     _hsd = ImageDraw.Draw(_hs, "RGBA")
+    # Main highlight (top-left, large soft)
+    _hsd.ellipse([cx - helm_w + W(15), helm_top + W(8),
+                  cx - W(20), helm_top + W(55)],
+                 fill=(255, 255, 255, 85))
+    # Secondary highlight (top-right, smaller)
+    _hsd.ellipse([cx + W(10), helm_top + W(12),
+                  cx + helm_w - W(30), helm_top + W(40)],
+                 fill=(255, 255, 255, 40))
+    # Shadow (bottom-right)
     _hsd.pieslice([cx - helm_w, helm_top, cx + helm_w, helm_bot * 2 - helm_top],
-                  270, 360, fill=(0, 0, 0, 55))
-    _hsd.ellipse([cx - helm_w + W(10), helm_top + W(4), cx - W(10), helm_top + W(36)],
-                 fill=(255, 255, 255, 70))
-    _hs = _hs.filter(_IF.GaussianBlur(W(8)))
+                  260, 360, fill=(0, 0, 0, 65))
+    # Front edge shadow
+    _hsd.rectangle([cx - helm_w, helm_bot - W(12), cx + helm_w, helm_bot],
+                   fill=(0, 0, 0, 50))
+    _hs = _hs.filter(_IF.GaussianBlur(W(12)))
     _hm = Image.new("L", (S, S), 0)
     _hmd = ImageDraw.Draw(_hm)
     _hmd.pieslice([cx - helm_w, helm_top, cx + helm_w, helm_bot * 2 - helm_top],
@@ -379,69 +515,95 @@ def generate_face_image(player, size=128):
     img.alpha_composite(_hs)
     d = ImageDraw.Draw(img, "RGBA")
 
+    # Helmet edge (thin, realistic)
     d.arc([cx - helm_w, helm_top, cx + helm_w, helm_bot * 2 - helm_top],
-          180, 360, fill=(20, 18, 16, 255), width=W(3))
-    d.line([(cx - helm_w + W(4), helm_bot), (cx + helm_w - W(4), helm_bot)],
-           fill=(20, 18, 16, 255), width=W(3))
-    # Vents
+          180, 360, fill=(15, 14, 13, 255), width=W(3))
+
+    # Vents (realistic - recessed)
     def _vents(ld):
         for side in (-1, 1):
-            vx = cx + side * helm_w * 0.55
-            for i in range(3):
-                vy = W(28) + i * W(10)
-                ld.ellipse([vx - W(4), vy - W(3), vx + W(4), vy + W(3)],
-                           fill=(0, 0, 0, 100))
+            vx = cx + side * helm_w * 0.52
+            for i in range(4):
+                vy = W(38) + i * W(13)
+                ld.ellipse([vx - W(5), vy - W(4), vx + W(5), vy + W(4)],
+                           fill=(0, 0, 0, 120))
+                ld.ellipse([vx - W(5), vy - W(4), vx + W(2), vy],
+                           fill=(255, 255, 255, 30))
     d = _overlay(img, _vents)
+
     # Center stripe
     if sum(helmet_c) > 100:
-        d.rectangle([cx - W(4), helm_top + W(2), cx + W(4), W(50)],
-                    fill=(255, 255, 255, 255))
-    # Ear loops
+        d.polygon([
+            (cx - W(6), helm_top + W(4)), (cx + W(6), helm_top + W(4)),
+            (cx + W(5), W(68)), (cx - W(5), W(68))
+        ], fill=(240, 240, 240, 255))
+
+    # Ear loops (J-clips)
     for side in (-1, 1):
-        lx = cx + side * (helm_w - W(2))
-        d.rectangle([lx - W(5), W(62), lx + W(5), W(86)], fill=_shade(helmet_c, -40))
-    # Chin strap (short, to jaw edge)
-    for side in (-1, 1):
-        sx = cx + side * (helm_w - W(8))
-        d.line([(sx, W(82)), (cx + side * (jaw_w - W(2)), W(150))],
-               fill=(225, 225, 225, 255), width=W(3))
+        lx = cx + side * (helm_w - W(4))
+        d.rounded_rectangle([lx - W(7), W(82), lx + W(7), W(112)],
+                            radius=W(4), fill=_shade(helmet_c, -45))
 
     # ================= VISOR =================
     if visor:
-        visor_top, visor_bot = W(96), W(132)
-        visor_w = fw * 0.88
+        visor_top, visor_bot = W(128), W(172)
+        visor_w = fw * 0.92
         def _visor(ld):
+            # Clear visor - very transparent
             ld.rounded_rectangle(
                 [cx - visor_w, visor_top, cx + visor_w, visor_bot],
-                radius=W(10), fill=(140, 165, 190, 45))
+                radius=W(14), fill=(150, 175, 200, 35))
+            # Edge reflection (top)
+            ld.rounded_rectangle(
+                [cx - visor_w + W(6), visor_top + W(3),
+                 cx + visor_w - W(6), visor_top + W(10)],
+                radius=W(5), fill=(200, 220, 240, 70))
+            # Diagonal shine
             ld.polygon([
-                (cx - visor_w + W(12), visor_top + W(4)),
-                (cx - visor_w + W(34), visor_top + W(4)),
-                (cx - visor_w + W(18), visor_bot - W(4)),
-                (cx - visor_w - W(4), visor_bot - W(4)),
-            ], fill=(180, 205, 230, 60))
+                (cx - visor_w + W(18), visor_top + W(6)),
+                (cx - visor_w + W(44), visor_top + W(6)),
+                (cx - visor_w + W(24), visor_bot - W(6)),
+                (cx - visor_w - W(2), visor_bot - W(6)),
+            ], fill=(190, 210, 235, 45))
         d = _overlay(img, _visor)
-        d.line([(cx - visor_w, visor_top), (cx + visor_w, visor_top)],
-               fill=(20, 18, 16, 255), width=W(3))
+        # Visor mounts (small, at sides)
+        for side in (-1, 1):
+            mx = cx + side * visor_w
+            d.ellipse([mx - W(6), visor_top - W(4), mx + W(6), visor_top + W(8)],
+                      fill=(25, 25, 28, 255))
 
     # ================= AGE =================
     if age >= 28:
         def _age(ld):
+            # Crow's feet
             for side in (-1, 1):
                 ex = cx + side * eye_spacing
-                n_lines = 2 if age >= 32 else 1
-                for i in range(n_lines):
-                    ld.line([(ex + side * (eye_w + W(2)), eye_y - W(2) + i * W(5)),
-                             (ex + side * (eye_w + W(7)), eye_y + i * W(5))],
-                            fill=(0, 0, 0, 45), width=W(2))
+                n = 2 if age >= 32 else 1
+                for i in range(n):
+                    ld.line([(ex + side * (eye_w + W(3)), eye_y - W(3) + i * W(7)),
+                             (ex + side * (eye_w + W(10)), eye_y - W(1) + i * W(7))],
+                            fill=(0, 0, 0, 50), width=W(2))
+            # Forehead lines
             if age >= 32:
                 for i in range(2):
-                    ly = W(58) + i * W(10)
-                    ld.arc([cx - W(40), ly - W(6), cx + W(40), ly + W(6)],
-                           200, 340, fill=(0, 0, 0, 35), width=W(2))
-        d = _overlay(img, _age)
+                    ly = W(78) + i * W(14)
+                    ld.arc([cx - W(55), ly - W(8), cx + W(55), ly + W(8)],
+                           205, 335, fill=(0, 0, 0, 40), width=W(3))
+            # Nasolabial deeper with age
+            if age >= 35:
+                for side in (-1, 1):
+                    ld.arc([cx + side * W(32) - W(14), W(190),
+                            cx + side * W(32) + W(14), W(228)],
+                           300 if side < 0 else 240, 60 if side < 0 else 120,
+                           fill=(0, 0, 0, 50), width=W(3))
+        _ag = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        _agd = ImageDraw.Draw(_ag, "RGBA")
+        _age(_agd)
+        _ag = _ag.filter(_IF.GaussianBlur(W(3)))
+        img.alpha_composite(_ag)
+        d = ImageDraw.Draw(img, "RGBA")
 
-    # Downscale for anti-aliasing
+    # Downscale
     img = img.resize((size, size), Image.LANCZOS)
     return img
 
