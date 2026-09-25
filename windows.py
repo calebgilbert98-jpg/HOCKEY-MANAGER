@@ -3528,573 +3528,598 @@ class ScoutingWindow(tk.Toplevel):
 
 
 class DraftWindow(tk.Toplevel):
+    """Draft night war room: live board, ticker, shortlist, draft-day trades, grades."""
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
-        self.title("Entry Draft")
-        self.geometry("1200x800")
+        self.title("NHL Entry Draft")
+        self.geometry("1280x800")
         self.configure(background=parent.BG_COLOR)
+        import draft_night as dn
+        import scouting as scmod
+        import trade_engine as te
+        self.dn = dn
+        self.scmod = scmod
+        self.te = te
 
-        # Initialize variables
         self.current_round = 1
         self.total_rounds = 7
+        self.current_pick = 0
+        self.draft_order = []          # [round, team, draft_pick]
+        self.picks_made = []           # (team_name, overall, player)
         self.selected_prospect = None
+        self.strategy_var = tk.StringVar(master=self, value="BPA")
+        self.pos_filter_var = tk.StringVar(master=self, value="All Positions")
+        self._ai_after_id = None
 
-        # Draft header
-        header_frame = ttk.Frame(self, style='Panel.TFrame', padding=10)
-        header_frame.pack(fill='x', padx=10, pady=10)
-        
-        self.draft_status_label = ttk.Label(header_frame, text="Draft Day - Round 1", 
-                                         font=(parent.FONT_FAMILY, 16, 'bold'), style='Title.TLabel')
-        self.draft_status_label.pack(side='left', padx=10)
-        
-        # Pick info
-        self.pick_info_label = ttk.Label(header_frame, text="", font=(parent.FONT_FAMILY, 12))
-        self.pick_info_label.pack(side='right', padx=10)
-        
-        # Main content area (split into two panes)
+        # ---- Header ----
+        header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
+        header.pack(fill='x', padx=10, pady=(10, 0))
+        title_box = ttk.Frame(header, style='Panel.TFrame')
+        title_box.pack(side='left')
+        ttk.Label(title_box, text="NHL Entry Draft",
+                  font=(parent.FONT_FAMILY, 18, 'bold'),
+                  style='Heading.TLabel').pack(anchor='w')
+        self.draft_status_label = ttk.Label(title_box, text="Draft Night",
+                                            style='Secondary.TLabel')
+        self.draft_status_label.pack(anchor='w')
+        # On-the-clock spotlight
+        self.clock_frame = ttk.Frame(header, style='Card.TFrame', padding=(16, 6))
+        self.clock_frame.pack(side='right', padx=10)
+        ttk.Label(self.clock_frame, text="ON THE CLOCK",
+                  style='Card.TLabel', font=(parent.FONT_FAMILY, 9, 'bold')).pack()
+        self.clock_label = ttk.Label(self.clock_frame, text="—",
+                                     style='Card.TLabel',
+                                     font=(parent.FONT_FAMILY, 15, 'bold'))
+        self.clock_label.pack()
+        self.pick_info_label = ttk.Label(self.clock_frame, text="",
+                                         style='Card.TLabel')
+        self.pick_info_label.pack()
+
+        # ---- 3 columns ----
         main_pane = ttk.PanedWindow(self, orient='horizontal')
-        main_pane.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        # Left side - Draft board
-        left_frame = ttk.Frame(main_pane, style='Panel.TFrame')
-        main_pane.add(left_frame, weight=2)
-        
-        draft_board_frame = self.parent._create_packed_panel(left_frame, "Draft Board")
-        
-        columns = {
-            'pick': ('Pick', 50), 
-            'team': ('Team', 150), 
-            'player': ('Player', 180), 
-            'pos': ('Pos', 60), 
-            'nation': ('Nation', 80),
-            'ovr': ('OVR', 50), 
-            'pot': ('Pot', 50)
-        }
-        self.draft_results_tree = parent._create_treeview(draft_board_frame, columns, 30)
-        self.draft_results_tree.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Right side - Prospect pool and controls
-        right_frame = ttk.Frame(main_pane, style='Panel.TFrame')
-        main_pane.add(right_frame, weight=1)
-        
-        # Filter controls for prospects
-        filter_frame = ttk.Frame(right_frame, padding=5)
-        filter_frame.pack(fill='x', pady=5)
-        
-        ttk.Label(filter_frame, text="Filter:").pack(side='left', padx=(0, 5))
-        self.filter_var = tk.StringVar(master=self, value="All Prospects")
-        filter_options = ["All Prospects", "Forwards", "Defensemen", "Goalies", "Top Ranked"]
-        filter_menu = ttk.Combobox(filter_frame, textvariable=self.filter_var, 
-                                 values=filter_options, width=15, state="readonly")
-        filter_menu.pack(side='left', padx=5)
-        filter_menu.bind("<<ComboboxSelected>>", self.apply_filter)
-        
-        search_frame = ttk.Frame(filter_frame)
-        search_frame.pack(side='right', padx=5)
-        self.search_var = tk.StringVar(master=self)
-        ttk.Label(search_frame, text="Search:").pack(side='left', padx=(0, 5))
-        ttk.Entry(search_frame, textvariable=self.search_var, width=15).pack(side='left')
-        ttk.Button(search_frame, text="Go", command=self.apply_filter).pack(side='left', padx=5)
-        
-        # Prospects pool
-        prospects_frame = self.parent._create_packed_panel(right_frame, "Available Prospects")
-        
-        prospect_columns = {
-            'rank': ('Rank', 40),
-            'name': ('Name', 150), 
-            'pos': ('Pos', 50), 
-            'nation': ('Nation', 60),
-            'pot': ('Pot', 50)
-        }
-        self.prospects_tree = parent._create_treeview(prospects_frame, prospect_columns, 25)
-        self.prospects_tree.pack(fill='both', expand=True, padx=5, pady=5)
-        self.prospects_tree.bind('<<TreeviewSelect>>', self.on_prospect_selected)
-        self.prospects_tree.bind('<Double-1>', lambda e: self.view_prospect_profile())
-        add_player_context_menu(self.prospects_tree, self)
-        
-        # Draft control buttons
-        control_frame = ttk.Frame(right_frame, style='Panel.TFrame', padding=10)
-        control_frame.pack(fill='x', pady=10)
-        
-        self.draft_button = ttk.Button(control_frame, text="Draft Selected Player", 
-                                    command=self.make_user_pick, state='disabled')
-        self.draft_button.pack(side='left', padx=5)
-        
-        ttk.Button(control_frame, text="View Profile", 
-                  command=self.view_prospect_profile).pack(side='left', padx=5)
-        
-        ttk.Button(control_frame, text="Auto Pick", 
-                  command=self.auto_pick).pack(side='right', padx=5)
-        
-        # Info panel
-        info_frame = self.parent._create_packed_panel(right_frame, "Draft Information")
-        
-        self.info_text = tk.Text(info_frame, wrap='word', height=8, 
-                              bg=parent.CONTENT_BG, fg=parent.TEXT_COLOR,
-                              font=(parent.FONT_FAMILY, 11))
-        self.info_text.pack(fill='both', expand=True, padx=5, pady=5)
-        self.info_text.insert('1.0', (
-            "Welcome to the NHL Entry Draft!\n\n"
-            "This is your opportunity to select the future stars of your franchise. "
-            "Each team will make selections over 7 rounds. When it's your turn, "
-            "you can either select a player manually or let the AI make an automatic pick "
-            "based on the best available player.\n\n"
-            "Pro tip: Use the scouting reports to make informed decisions!"
-        ))
-        self.info_text.config(state='disabled')
-        
-        # Start the draft
+        main_pane.pack(fill='both', expand=True, padx=10, pady=8)
+
+        # LEFT: draft board
+        left = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
+        main_pane.add(left, weight=2)
+        ttk.Label(left, text="DRAFT BOARD", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.draft_results_tree = parent._create_treeview(
+            left, {'pick': ('#', 40), 'team': ('Team', 130),
+                   'player': ('Player', 150), 'pos': ('Pos', 40),
+                   'pot': ('Pot', 60)}, height=30)
+        self.draft_results_tree.pack(fill='both', expand=True)
+
+        # CENTER: war room
+        center = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
+        main_pane.add(center, weight=1)
+
+        ttk.Label(center, text="WAR ROOM", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.next_pick_label = ttk.Label(center, text="", style='TLabel',
+                                         font=(parent.FONT_FAMILY, 11, 'bold'))
+        self.next_pick_label.pack(anchor='w', pady=(0, 4))
+
+        strat_row = ttk.Frame(center, style='Panel.TFrame')
+        strat_row.pack(fill='x', pady=(0, 4))
+        ttk.Label(strat_row, text="Strategy:", style='Secondary.TLabel').pack(side='left')
+        ttk.Radiobutton(strat_row, text="Best Available", variable=self.strategy_var,
+                        value="BPA").pack(side='left', padx=4)
+        ttk.Radiobutton(strat_row, text="Positional Need", variable=self.strategy_var,
+                        value="Need").pack(side='left', padx=4)
+
+        filt_row = ttk.Frame(center, style='Panel.TFrame')
+        filt_row.pack(fill='x', pady=(0, 4))
+        ttk.Label(filt_row, text="Show:", style='Secondary.TLabel').pack(side='left')
+        pos_combo = ttk.Combobox(filt_row, textvariable=self.pos_filter_var,
+                                 values=["All Positions", "Forwards", "Defensemen", "Goalies"],
+                                 state='readonly', width=14)
+        pos_combo.pack(side='left', padx=4)
+        pos_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_shortlist())
+
+        ttk.Label(center, text="SHORTLIST", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(4, 2))
+        self.shortlist = tk.Listbox(center, height=14, activestyle='none',
+                                    bg='#232a3a', fg='#e8ecf4',
+                                    selectbackground='#335577', relief='flat',
+                                    highlightthickness=1,
+                                    highlightbackground='#3a4a63')
+        self.shortlist.pack(fill='x', pady=(0, 4))
+        self.shortlist.bind('<<ListboxSelect>>', self._on_shortlist_select)
+
+        self.selected_label = ttk.Label(center, text="No prospect selected",
+                                        style='Secondary.TLabel', wraplength=300)
+        self.selected_label.pack(anchor='w', pady=(0, 6))
+
+        btn_col = ttk.Frame(center, style='Panel.TFrame')
+        btn_col.pack(fill='x')
+        self.draft_button = ttk.Button(btn_col, text="Draft Selected",
+                                       command=self.make_user_pick, style='TButton')
+        self.draft_button.pack(fill='x', pady=2)
+        self.auto_button = ttk.Button(btn_col, text="Auto Pick (My Board)",
+                                      command=self.auto_pick,
+                                      style='Secondary.TButton')
+        self.auto_button.pack(fill='x', pady=2)
+        self.trade_pick_button = ttk.Button(btn_col, text="Trade This Pick",
+                                            command=self.trade_current_pick,
+                                            style='Secondary.TButton')
+        self.trade_pick_button.pack(fill='x', pady=2)
+
+        # RIGHT: ticker
+        right = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
+        main_pane.add(right, weight=1)
+        ttk.Label(right, text="DRAFT TICKER", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.ticker = tk.Listbox(right, activestyle='none', bg='#141a26',
+                                 fg='#c8d2e3', relief='flat', height=30,
+                                 highlightthickness=1,
+                                 highlightbackground='#3a4a63')
+        self.ticker.pack(fill='both', expand=True)
+        self.grades_button = ttk.Button(right, text="Draft Grades",
+                                        command=self.show_grades,
+                                        style='Secondary.TButton',
+                                        state='disabled')
+        self.grades_button.pack(fill='x', pady=(6, 0))
+
         self.start_draft()
 
+    # ------------------------------------------------------------------
     def start_draft(self):
-        # Get draft order from league's draft pick system
+        # Make sure every team owns its picks (idempotent if already done)
+        try:
+            self.parent.league.initialize_all_draft_picks()
+        except Exception:
+            pass
         current_year = self.parent.league.season_year
         self.draft_order = []
-        
-        # Generate draft order using the league's draft pick system
-        draft_picks_order = self.parent.league.get_draft_order(current_year)
-        
-        # Convert to the format expected by the draft window
-        for overall_pick, team, draft_pick in draft_picks_order:
-            self.draft_order.append((draft_pick.round, team))
-        
-        # If no draft picks exist, fall back to standings-based order
+        try:
+            order = self.parent.league.get_draft_order(current_year)
+        except Exception:
+            order = []
+        for overall_pick, team, draft_pick in order:
+            try:
+                draft_pick.overall_pick = overall_pick
+            except Exception:
+                pass
+            self.draft_order.append([draft_pick.round, team, draft_pick])
         if not self.draft_order:
-            print("No draft picks found, generating standings-based order...")
+            sorted_teams = sorted(self.parent.league.teams,
+                                  key=lambda t: self.parent.league.standings[t.team_name]['Points'])
             for round_num in range(1, self.total_rounds + 1):
-                # Sort teams by points (worst to best)
-                sorted_teams = sorted(self.parent.league.teams, 
-                                    key=lambda t: self.parent.league.standings[t.team_name]['Points'])
-                
-                # Add each team to the draft order for this round
                 for team in sorted_teams:
-                    self.draft_order.append((round_num, team))
-        
+                    self.draft_order.append([round_num, team, None])
         self.current_pick = 0
+        self.picks_made = []
         self.draft_results_tree.delete(*self.draft_results_tree.get_children())
-        
-        # Populate the prospects list
-        self.populate_prospects()
-        
-        # Start the draft process
+        self.ticker.delete(0, tk.END)
+        self._ticker("Welcome to draft night. The floor is buzzing.")
+        self._refresh_shortlist()
         self.process_draft_pick()
 
-    def populate_prospects(self):
-        """Populate the prospects tree with the available draft prospects."""
-        self.prospects_tree.delete(*self.prospects_tree.get_children())
-        
-        # Get all prospects and sort by draft ranking
-        prospects = sorted(self.parent.league.draft_prospects, 
-                        key=lambda p: getattr(p, 'draft_ranking', p.overall_rating()), 
-                        reverse=True)
-        
-        # Apply any filters if needed
-        filter_type = self.filter_var.get()
-        search_text = self.search_var.get().lower()
-        
-        filtered_prospects = []
-        
-        for prospect in prospects:
-            # Position filter
-            if filter_type == "Forwards" and prospect.primary_position not in [
-                PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING
-            ]:
-                continue
-            elif filter_type == "Defensemen" and prospect.primary_position not in [
-                PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE
-            ]:
-                continue
-            elif filter_type == "Goalies" and prospect.primary_position != PlayerPosition.GOALIE:
-                continue
-            elif filter_type == "Top Ranked" and prospects.index(prospect) >= 30:
-                continue
-                
-            # Search filter
-            if search_text and search_text not in prospect.full_name.lower():
-                continue
-                
-            filtered_prospects.append(prospect)
-        
-        # Populate the tree
-        for i, prospect in enumerate(filtered_prospects):
-            # Check if there's a scouting report
-            report = self.parent.user_team.scouting_reports.get(prospect.id)
-            potential = prospect.potential_grade if report else "?"
-            
-            rank = i + 1
-            nationality = getattr(prospect, 'nationality', 'Unknown')
-            
-            values = (
-                rank,
-                prospect.full_name,
-                prospect.primary_position.name,
-                nationality,
-                potential
-            )
-            
-            item_id = self.prospects_tree.insert('', 'end', values=values)
-            self.parent.tree_maps.setdefault(self.prospects_tree, {})[item_id] = prospect
+    # ------------------------------------------------------------------
+    def _ticker(self, line):
+        self.ticker.insert(0, line)
+        if self.ticker.size() > 120:
+            self.ticker.delete(120, tk.END)
 
-    def apply_filter(self, event=None):
-        """Apply filters to the prospects list."""
-        self.populate_prospects()
+    def _available_prospects(self):
+        return sorted(self.parent.league.draft_prospects,
+                      key=lambda p: getattr(p, 'draft_ranking', 0), reverse=True)
 
-    def on_prospect_selected(self, event=None):
-        """Handle selection of a prospect in the tree."""
-        selection = self.prospects_tree.selection()
-        if selection:
-            self.selected_prospect = self.parent.tree_maps.get(self.prospects_tree, {}).get(selection[0])
-            
-            # Update info panel with prospect details
-            if self.selected_prospect:
-                # Check if player has been scouted
-                report = self.parent.user_team.scouting_reports.get(self.selected_prospect.id)
-                
-                # Update the info text
-                self.info_text.config(state='normal')
-                self.info_text.delete('1.0', 'end')
-                
-                # Basic player info
-                self.info_text.insert('end', f"{self.selected_prospect.full_name}\n", 'heading')
-                self.info_text.insert('end', f"Position: {self.selected_prospect.primary_position.name}\n")
-                
-                nationality = getattr(self.selected_prospect, 'nationality', 'Unknown')
-                birthplace = getattr(self.selected_prospect, 'birthplace', 'Unknown')
-                
-                self.info_text.insert('end', f"Nationality: {nationality}\n")
-                self.info_text.insert('end', f"Birthplace: {birthplace}\n\n")
-                
-                # Scouting info if available
-                if report:
-                    self.info_text.insert('end', f"Scouting Report (Accuracy: {report.accuracy})\n", 'subheading')
-                    self.info_text.insert('end', f"Potential Grade: {report.scouted_potential}\n")
-                    self.info_text.insert('end', f"{report.notes}\n\n")
-                    
-                    # Key attributes if scouted
-                    if report.scouted_attributes:
-                        self.info_text.insert('end', "Key Attributes:\n", 'subheading')
-                        
-                        # Show different attributes based on position
-                        if self.selected_prospect.primary_position == PlayerPosition.GOALIE:
-                            key_attrs = ['goaltending', 'reflexes', 'positioning', 'determination']
-                        elif self.selected_prospect.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]:
-                            key_attrs = ['defensive_awareness', 'checking', 'skating', 'passing']
-                        else:  # Forwards
-                            key_attrs = ['shooting', 'passing', 'skating', 'offensive_awareness']
-                        
-                        for attr in key_attrs:
-                            if attr in report.scouted_attributes:
-                                attr_name = attr.replace('_', ' ').title()
-                                self.info_text.insert('end', f"{attr_name}: {report.scouted_attributes[attr]}\n")
-                else:
-                    self.info_text.insert('end', "No scouting report available.\n", 'warning')
-                    self.info_text.insert('end', "Consider scouting this player to learn more about their potential.\n")
-                
-                # Configure tags
-                self.info_text.tag_configure('heading', font=(self.parent.FONT_FAMILY, 12, 'bold'))
-                self.info_text.tag_configure('subheading', font=(self.parent.FONT_FAMILY, 11, 'bold'))
-                self.info_text.tag_configure('warning', foreground='#dc3545')
-                
-                self.info_text.config(state='disabled')
+    def _board_sorted_available(self):
+        """Available prospects ordered by the user's draft board, then consensus."""
+        avail = self._available_prospects()
+        rank = self.scmod.board_rank_map(self.parent.user_team)
+        if not rank:
+            return avail
+        return sorted(avail, key=lambda p: rank.get(p.id, 10_000 + getattr(p, 'draft_ranking', 0) * -1))
 
+    def _refresh_shortlist(self):
+        self.shortlist.delete(0, tk.END)
+        self._shortlist_players = []
+        filt = self.pos_filter_var.get()
+        from game_classes import PlayerPosition
+        reports = self.parent.user_team.scouting_reports
+        count = 0
+        for p in self._board_sorted_available():
+            if filt == "Forwards" and p.primary_position not in (
+                    PlayerPosition.CENTER, PlayerPosition.LEFT_WING,
+                    PlayerPosition.RIGHT_WING):
+                continue
+            if filt == "Defensemen" and p.primary_position not in (
+                    PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE,
+                    PlayerPosition.DEFENSE):
+                continue
+            if filt == "Goalies" and p.primary_position != PlayerPosition.GOALIE:
+                continue
+            report = reports.get(p.id)
+            pot = (self.scmod.report_potential_display(report, p) if report
+                   else self.scmod.consensus_range(p))
+            try:
+                pos = p.primary_position.value
+            except Exception:
+                pos = "?"
+            self.shortlist.insert(tk.END, f"{p.full_name}  ({pos})  {pot}")
+            self._shortlist_players.append(p)
+            count += 1
+            if count >= 30:
+                break
+
+    def _on_shortlist_select(self, event=None):
+        sel = self.shortlist.curselection()
+        if not sel:
+            return
+        p = self._shortlist_players[sel[0]]
+        self.selected_prospect = p
+        reports = self.parent.user_team.scouting_reports
+        report = reports.get(p.id)
+        pot = (self.scmod.report_potential_display(report, p) if report
+               else self.scmod.consensus_range(p) + " (consensus)")
+        try:
+            pos = p.primary_position.value
+        except Exception:
+            pos = "?"
+        self.selected_label.config(
+            text=f"Selected: {p.full_name} ({pos}, {p.age}) — Potential {pot}")
+
+    # ------------------------------------------------------------------
     def process_draft_pick(self):
-        """Process the current draft pick."""
         if self.current_pick >= len(self.draft_order):
             self.end_draft()
             return
-
-        round_num, team_on_clock = self.draft_order[self.current_pick]
-        
-        # Update the round if needed
+        round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
         if round_num != self.current_round:
             self.current_round = round_num
-            self.draft_status_label.config(text=f"Draft Day - Round {self.current_round}")
-        
-        # Calculate the pick number within the round
-        pick_in_round = self.current_pick % len(self.parent.league.teams) + 1
-        overall_pick = self.current_pick + 1
-        
-        # Update pick info
-        self.pick_info_label.config(text=(
-            f"Round {round_num}, Pick {pick_in_round} "
-            f"(#{overall_pick} Overall)"
-        ))
+        overall = self.current_pick + 1
+        pick_in_round = (self.current_pick %
+                         max(1, len(self.parent.league.teams))) + 1
 
-        # Enable or disable the draft button based on whose pick it is
-        if team_on_clock == self.parent.user_team:
-            self.draft_button.config(state='normal')
-            
-            # Update info text to indicate it's user's turn
-            self.info_text.config(state='normal')
-            self.info_text.delete('1.0', 'end')
-            self.info_text.insert('1.0', (
-                f"It's your turn to pick!\n\n"
-                f"You have pick #{overall_pick} (Round {round_num}, Pick {pick_in_round}).\n\n"
-                f"Select a player from the available prospects list and click 'Draft Selected Player', "
-                f"or click 'Auto Pick' to let the AI select the best available player."
-            ))
-            self.info_text.config(state='disabled')
+        self.draft_status_label.config(
+            text=f"Round {round_num} of {self.total_rounds}")
+        self.clock_label.config(text=team_on_clock.team_name)
+        self.pick_info_label.config(
+            text=f"Pick #{overall}  (Round {round_num}, #{pick_in_round} in round)")
+
+        is_user = team_on_clock == self.parent.user_team
+        state = 'normal' if is_user else 'disabled'
+        self.draft_button.config(state=state)
+        self.auto_button.config(state=state)
+        self.trade_pick_button.config(state=state)
+
+        # Your next pick info
+        nxt = next((i for i in range(self.current_pick, len(self.draft_order))
+                    if self.draft_order[i][1] == self.parent.user_team), None)
+        if nxt is not None:
+            r = self.draft_order[nxt][0]
+            self.next_pick_label.config(
+                text=f"Your next pick: #{nxt + 1} (Round {r})")
         else:
-            self.draft_button.config(state='disabled')
-            
-            # Update info text to indicate it's AI's turn
-            self.info_text.config(state='normal')
-            self.info_text.delete('1.0', 'end')
-            self.info_text.insert('1.0', (
-                f"{team_on_clock.team_name} are on the clock.\n\n"
-                f"Pick #{overall_pick} (Round {round_num}, Pick {pick_in_round}).\n\n"
-                f"The AI is making its selection..."
-            ))
-            self.info_text.config(state='disabled')
-            
-            # AI makes pick after a short delay
-            self.after(1000, self.ai_make_pick)
+            self.next_pick_label.config(text="No picks remaining")
+
+        if not is_user:
+            if self._ai_after_id:
+                try:
+                    self.after_cancel(self._ai_after_id)
+                except Exception:
+                    pass
+            self._ai_after_id = self.after(650, self.ai_make_pick)
 
     def ai_make_pick(self):
-        """Have the AI make a draft pick."""
-        round_num, team_on_clock = self.draft_order[self.current_pick]
-        
-        # AI draft strategy
-        # 1. Get the team's needs based on position
-        # 2. Get the best available players
-        # 3. Select the best player that fits a need, with a slight randomness factor
-        
-        # Simplistic needs analysis
-        team_roster = team_on_clock.roster
-        position_counts = {}
-        for pos in PlayerPosition:
-            position_counts[pos] = sum(1 for p in team_roster if p.primary_position == pos)
-        
-        # Determine position needs (lower count = higher need)
-        position_needs = {}
-        for pos, count in position_counts.items():
-            if pos == PlayerPosition.GOALIE:
-                # Goalies are special - only need 2-3
-                position_needs[pos] = 3 if count < 2 else 1
-            elif pos in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]:
-                # Need 3-4 of each defenseman
-                position_needs[pos] = 4 if count < 3 else 2
-            else:
-                # Need 4-5 of each forward position
-                position_needs[pos] = 4 if count < 4 else 2
-        
-        # Get available prospects sorted by draft ranking
-        available_prospects = sorted(self.parent.league.draft_prospects, 
-                                   key=lambda p: getattr(p, 'draft_ranking', p.overall_rating()),
-                                   reverse=True)
-        
-        # Add some randomness - AI doesn't always pick the best player
-        if random.random() < 0.2:
-            # 20% chance to pick a player slightly lower in the rankings
-            cutoff = min(10, len(available_prospects) // 3)
-            if cutoff > 1:
-                top_prospects = available_prospects[:cutoff]
-                selected_prospect = random.choice(top_prospects)
-        else:
-            # Find the best player that fits a position need
-            selected_prospect = None
-            need_bonus = 10  # Bonus rating points for filling a need
-            
-            for prospect in available_prospects[:15]:  # Only consider top 15 prospects
-                base_rating = getattr(prospect, 'draft_ranking', prospect.overall_rating())
-                need_multiplier = position_needs.get(prospect.primary_position, 1)
-                
-                # Apply need bonus
-                adjusted_rating = base_rating * (1 + (need_multiplier * 0.1))
-                
-                if selected_prospect is None or adjusted_rating > getattr(selected_prospect, 'best_rating', 0):
-                    selected_prospect = prospect
-                    selected_prospect.best_rating = adjusted_rating
-            
-            # If no player fits the needs, just take the best available
-            if not selected_prospect:
-                selected_prospect = available_prospects[0]
-        
-        # Execute the pick
-        self.execute_pick(team_on_clock, selected_prospect)
+        self._ai_after_id = None
+        if self.current_pick >= len(self.draft_order):
+            return
+        _r, team_on_clock, _dp = self.draft_order[self.current_pick]
+        available = self._available_prospects()
+        if not available:
+            self.end_draft()
+            return
+        needs = self.te.team_needs(team_on_clock)
+        # Consider top 12, weigh positional need + randomness
+        candidates = available[:12]
+        round_num = self.draft_order[self.current_pick][0]
+        scored = []
+        for p in candidates:
+            try:
+                pos = p.primary_position.value
+            except Exception:
+                pos = "?"
+            base = getattr(p, 'draft_ranking', 0)
+            if pos in needs[:2]:
+                base *= 1.08
+            if pos == 'G' and round_num <= 1:
+                base *= 0.80  # goalies rarely go top-10
+            base *= random.uniform(0.94, 1.06)
+            scored.append((base, p))
+        scored.sort(key=lambda s: s[0], reverse=True)
+        selected = scored[0][1]
+        # Reach / steal detection for the ticker
+        idx = available.index(selected)
+        self.execute_pick(team_on_clock, selected,
+                          reach=idx >= 8, steal=idx == 0 and self.current_pick >= 4)
 
     def make_user_pick(self):
-        """Handle the user making a draft pick."""
         if not self.selected_prospect:
-            messagebox.showwarning("No Player Selected", 
-                                 "Please select a player to draft.")
+            messagebox.showwarning("No Prospect", "Select a prospect from the shortlist.")
             return
-            
-        # Confirm the pick
-        _, team_on_clock = self.draft_order[self.current_pick]
-        
-        # Get scouting info if available
-        report = self.parent.user_team.scouting_reports.get(self.selected_prospect.id)
-        potential = report.scouted_potential if report else "Unknown"
-        
-        confirm = messagebox.askyesno("Confirm Pick", 
-                                    f"Do you want to draft {self.selected_prospect.full_name}?\n"
-                                    f"Position: {self.selected_prospect.primary_position.name}\n"
-                                    f"Potential: {potential}")
-        
-        if confirm:
-            self.execute_pick(team_on_clock, self.selected_prospect)
+        _r, team_on_clock, _dp = self.draft_order[self.current_pick]
+        if team_on_clock != self.parent.user_team:
+            return
+        p = self.selected_prospect
+        if p not in self.parent.league.draft_prospects:
+            messagebox.showwarning("Unavailable", "That prospect was already drafted.")
+            self._refresh_shortlist()
+            return
+        if not messagebox.askyesno("Confirm Pick",
+                                   f"Draft {p.full_name}?\nThis cannot be undone."):
+            return
+        self.execute_pick(team_on_clock, p)
 
     def auto_pick(self):
-        """Make an automatic pick for the user team."""
-        _, team_on_clock = self.draft_order[self.current_pick]
-        
+        _r, team_on_clock, _dp = self.draft_order[self.current_pick]
         if team_on_clock != self.parent.user_team:
-            messagebox.showinfo("Not Your Turn", 
-                              "It's not your turn to make a selection.")
             return
-            
-        # Get the best available player based on scouting reports
-        available_prospects = sorted(self.parent.league.draft_prospects, 
-                                   key=lambda p: getattr(p, 'draft_ranking', p.overall_rating()),
-                                   reverse=True)
-        
-        # Prefer players that have been scouted
-        scouted_prospects = [p for p in available_prospects 
-                           if p.id in self.parent.user_team.scouting_reports]
-        
-        if scouted_prospects:
-            # Sort scouted prospects by potential
-            best_prospect = max(scouted_prospects, 
-                              key=lambda p: self.get_potential_value(
-                                  self.parent.user_team.scouting_reports[p.id].scouted_potential))
+        available = self._board_sorted_available()
+        if not available:
+            return
+        if self.strategy_var.get() == "Need":
+            needs = self.te.team_needs(self.parent.user_team)
+            pick = None
+            for p in available[:8]:
+                try:
+                    pos = p.primary_position.value
+                except Exception:
+                    pos = "?"
+                if pos in needs[:3]:
+                    pick = p
+                    break
+            selected = pick or available[0]
         else:
-            # If no scouted prospects, take the highest ranked player
-            best_prospect = available_prospects[0]
-        
-        # Execute the pick
-        self.execute_pick(team_on_clock, best_prospect)
+            selected = available[0]
+        self.execute_pick(team_on_clock, selected)
 
-    def get_potential_value(self, potential_grade):
-        """Convert potential grade to numeric value for comparison."""
-        potential_values = {
-            "A+": 100, "A": 95, "A-": 90,
-            "B+": 85, "B": 80, "B-": 75,
-            "C+": 70, "C": 65, "C-": 60,
-            "D": 50, "F": 40
-        }
-        return potential_values.get(potential_grade, 0)
-
-    def execute_pick(self, team, player):
-        """Execute a draft pick for the specified team and player."""
-        round_num, _ = self.draft_order[self.current_pick]
-        pick_in_round = self.current_pick % len(self.parent.league.teams) + 1
-        overall_pick = self.current_pick + 1
-        
-        # Add the player to the team's prospects
+    def execute_pick(self, team, player, reach=False, steal=False):
+        round_num, _t, _dp = self.draft_order[self.current_pick]
+        overall = self.current_pick + 1
         team.add_player(player, "prospects")
-        
-        # Remove the player from the draft pool
-        self.parent.league.draft_prospects.remove(player)
-        
-        # Add to the draft results treeview
-        values = (
-            f"{overall_pick}",
-            team.team_name,
-            player.full_name,
-            player.primary_position.name,
-            getattr(player, 'nationality', 'Unknown'),
-            player.overall_rating(),
-            player.potential_grade
-        )
-        self.draft_results_tree.insert('', 'end', values=values)
-        
-        # Add a news item
-        news_item = {
-            'date': self.parent.current_date,
-            'type': 'draft',
-            'story': f"With pick #{overall_pick} in the {self.parent.league.season_year} NHL Entry Draft, "
-                    f"the {team.team_name} select {player.full_name} "
-                    f"({player.primary_position.name}, {getattr(player, 'nationality', 'Unknown')})."
-        }
-        self.parent.news_log.append(news_item)
-        
-        # Update the UI for the next pick
+        try:
+            self.parent.league.draft_prospects.remove(player)
+        except ValueError:
+            pass
+        try:
+            pos = player.primary_position.value
+        except Exception:
+            pos = "?"
+        self.draft_results_tree.insert('', 0, values=(
+            overall, team.team_name, player.full_name, pos,
+            getattr(player, 'potential_grade', '?')))
+        self._ticker(self.dn.ticker_line(overall, team.team_name, player,
+                                         round_num, reach=reach, steal=steal))
+        self.picks_made.append((team.team_name, overall, player))
+        try:
+            self.parent.news_log.append({
+                'date': self.parent.current_date, 'type': 'draft',
+                'story': f"With pick #{overall}, the {team.team_name} select "
+                         f"{player.full_name} ({pos})."})
+        except Exception:
+            pass
         self.current_pick += 1
-        self.populate_prospects()  # Refresh the prospects list
-        self.process_draft_pick()  # Process the next pick
-        
-        # If we've run out of prospects, end the draft
-        if not self.parent.league.draft_prospects:
-            self.end_draft()
+        self.selected_prospect = None
+        self.selected_label.config(text="No prospect selected")
+        self._refresh_shortlist()
+        # Keep the board scrolled to the newest pick
+        kids = self.draft_results_tree.get_children()
+        if kids:
+            self.draft_results_tree.see(kids[0])
+        self.process_draft_pick()
 
-    def view_prospect_profile(self):
-        """View the full profile for the selected prospect."""
-        if not self.selected_prospect:
-            messagebox.showwarning("No Player Selected", 
-                                 "Please select a player to view.")
+    # ------------------------------------------------------------------
+    def trade_current_pick(self):
+        """Draft-day trade: swap your current pick with a partner's pick."""
+        if self.current_pick >= len(self.draft_order):
             return
-            
-        # Get scouting report if available
-        report = self.parent.user_team.scouting_reports.get(self.selected_prospect.id)
-        is_scouted = report is not None
-        
-        # Open the profile window
-        self.parent.show_player_profile(self.selected_prospect)
+        _r, team_on_clock, user_pick = self.draft_order[self.current_pick]
+        if team_on_clock != self.parent.user_team:
+            messagebox.showinfo("Not Your Pick", "You can only trade your own pick.")
+            return
+        dlg = tk.Toplevel(self)
+        dlg.title("Trade this pick")
+        dlg.geometry("480x420")
+        dlg.configure(background=self.parent.BG_COLOR)
+        dlg.transient(self)
+        overall = self.current_pick + 1
+        ttk.Label(dlg, text=f"Your pick: #{overall} (Round {_r})",
+                  font=(self.parent.FONT_FAMILY, 12, 'bold'),
+                  style='TLabel').pack(pady=(12, 4))
+        ttk.Label(dlg, text="Select a partner and one of their upcoming picks:",
+                  style='Secondary.TLabel').pack(pady=(0, 8))
+
+        teams = sorted(t.team_name for t in self.parent.league.teams
+                       if t != self.parent.user_team)
+        pvar = tk.StringVar(master=dlg)
+        combo = ttk.Combobox(dlg, textvariable=pvar, values=teams,
+                             state='readonly', width=30)
+        combo.pack(pady=4)
+
+        lb = tk.Listbox(dlg, height=10, bg='#232a3a', fg='#e8ecf4',
+                        selectbackground='#335577', relief='flat')
+        lb.pack(fill='both', expand=True, padx=14, pady=6)
+
+        def _partner_picks(name):
+            team = next((t for t in self.parent.league.teams
+                         if t.team_name == name), None)
+            out = []
+            for i in range(self.current_pick + 1, len(self.draft_order)):
+                r, t, dp = self.draft_order[i]
+                if t == team and dp is not None:
+                    out.append((i, dp, r))
+            return team, out
+
+        def _refresh_lb(event=None):
+            lb.delete(0, tk.END)
+            _t, picks = _partner_picks(pvar.get())
+            for i, dp, r in picks:
+                val = self.te.pick_trade_value(dp)
+                lb.insert(tk.END, f"#{i + 1} (Round {r}) — value {val}")
+            _store(event)
+
+        def _store(event=None):
+            dlg._picks = _partner_picks(pvar.get())[1]
+
+        dlg._picks = []
+        combo.bind("<<ComboboxSelected>>", _refresh_lb)
+
+        info = ttk.Label(dlg, text="", style='TLabel', wraplength=440,
+                         justify='center')
+        info.pack(pady=4)
+
+        def _update_info(event=None):
+            sel = lb.curselection()
+            if not sel or not dlg._picks:
+                info.config(text="")
+                return
+            i, dp, r = dlg._picks[sel[0]]
+            uv = self.dn.pick_slot_value(overall)
+            tv = self.dn.pick_slot_value(i + 1)
+            if uv > tv:
+                info.config(text=f"You give #{overall} (slot value {uv}), "
+                                 f"get #{i + 1} (slot value {tv}). They may want more.")
+            elif tv > uv:
+                info.config(text=f"You give #{overall} (slot value {uv}), "
+                                 f"get #{i + 1} (slot value {tv}). Good value for you.")
+            else:
+                info.config(text="Even swap on paper.")
+
+        lb.bind('<<ListboxSelect>>', _update_info)
+
+        def _propose():
+            sel = lb.curselection()
+            if not sel or not dlg._picks:
+                return
+            j, partner_pick, _r2 = dlg._picks[sel[0]]
+            partner = next(t for t in self.parent.league.teams
+                           if t.team_name == pvar.get())
+            resp = self.te.ai_consider_trade(
+                partner, [user_pick], [partner_pick],
+                user_team=self.parent.user_team)
+            if resp.decision == 'reject':
+                messagebox.showerror("Rejected", resp.message)
+                return
+            if resp.decision == 'counter':
+                extra = resp.want_added + resp.will_add
+                detail = "; ".join(self.te.asset_label(a) for a in extra)
+                if not messagebox.askyesno("Counter-offer",
+                                           f"{resp.message}\n\nAccept?"):
+                    return
+                self._execute_pick_swap(j, user_pick, partner_pick,
+                                        resp.want_added, resp.will_add)
+            else:
+                self._execute_pick_swap(j, user_pick, partner_pick, [], [])
+            dlg.destroy()
+            messagebox.showinfo("Trade Complete", "Pick swap completed.")
+            self.process_draft_pick()
+
+        ttk.Button(dlg, text="Propose Swap", command=_propose,
+                   style='TButton').pack(pady=10)
+
+    def _swap_pick_owner(self, draft_pick, new_team):
+        """Point a draft pick (and its draft-order slot) at a new owner."""
+        try:
+            draft_pick.current_team = new_team.team_name
+        except Exception:
+            pass
+        for entry in self.draft_order:
+            if entry[2] is draft_pick:
+                entry[1] = new_team
+
+    def _execute_pick_swap(self, partner_idx, user_pick, partner_pick,
+                           want_added, will_add):
+        user_team = self.parent.user_team
+        partner_team = self.draft_order[partner_idx][1]
+        # Swap the picks
+        self._swap_pick_owner(user_pick, partner_team)
+        self._swap_pick_owner(partner_pick, user_team)
+        # Move any extra assets
+        for a in want_added:  # user gives more
+            if self.te._is_pick(a):
+                self._swap_pick_owner(a, partner_team)
+            else:
+                try:
+                    user_team.remove_player(a)
+                    partner_team.add_player(a)
+                except Exception:
+                    pass
+        for a in will_add:  # partner sweetens
+            if self.te._is_pick(a):
+                self._swap_pick_owner(a, user_team)
+            else:
+                try:
+                    partner_team.remove_player(a)
+                    user_team.add_player(a)
+                except Exception:
+                    pass
+        # History + news
+        gm = getattr(self.parent, 'game_manager', None)
+        summary = (f"{user_team.team_name} acquires pick "
+                   f"#{partner_idx + 1} from {partner_team.team_name}.")
+        if gm is not None:
+            if not hasattr(gm, 'trade_history'):
+                gm.trade_history = []
+            gm.trade_history.append(self.te.CompletedTrade(
+                str(getattr(gm, 'current_date', '')), user_team.team_name,
+                partner_team.team_name,
+                [self.te.asset_label(user_pick)],
+                [self.te.asset_label(partner_pick)], summary))
+        try:
+            self.parent.add_news_story(f"DRAFT TRADE: {summary}")
+        except Exception:
+            pass
+        self._ticker(f"TRADE: {summary}")
+
+    # ------------------------------------------------------------------
+    def show_grades(self):
+        grades = self.dn.draft_grades(self.picks_made)
+        dlg = tk.Toplevel(self)
+        dlg.title("Draft Grades")
+        dlg.geometry("420x520")
+        dlg.configure(background=self.parent.BG_COLOR)
+        dlg.transient(self)
+        ttk.Label(dlg, text="Draft Grades",
+                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  style='Heading.TLabel').pack(pady=12)
+        lb = tk.Listbox(dlg, bg='#232a3a', fg='#e8ecf4', relief='flat',
+                        font=(self.parent.FONT_FAMILY, 11))
+        lb.pack(fill='both', expand=True, padx=14, pady=6)
+        user_grade = None
+        for team, grade, ratio in grades:
+            lb.insert(tk.END, f"  {grade}   {team}")
+            lb.itemconfig(tk.END, foreground=self.dn.grade_color(grade))
+            if team == self.parent.user_team.team_name:
+                user_grade = grade
+        if user_grade:
+            ttk.Label(dlg, text=f"Your draft grade: {user_grade}",
+                      font=(self.parent.FONT_FAMILY, 13, 'bold'),
+                      style='TLabel',
+                      foreground=self.dn.grade_color(user_grade)).pack(pady=10)
 
     def end_draft(self):
-        """Handle the end of the draft."""
-        messagebox.showinfo("Draft Concluded", 
-                          "The entry draft is complete! All selected players "
-                          "have been added to their team's prospect pool.")
-        
-        # Disable the draft buttons
-        self.draft_button.config(state='disabled')
-        
-        # Update draft status
+        if self._ai_after_id:
+            try:
+                self.after_cancel(self._ai_after_id)
+            except Exception:
+                pass
+        self._ai_after_id = None
         self.draft_status_label.config(text="Draft Complete")
-        
-        # Update info text
-        self.info_text.config(state='normal')
-        self.info_text.delete('1.0', 'end')
-        self.info_text.insert('1.0', (
-            "The draft has concluded!\n\n"
-            "All selected players have been added to their respective teams' prospect pools. "
-            "You can view your new prospects in the Roster window under the Prospects tab.\n\n"
-            "Close this window to continue with your season."
-        ))
-        self.info_text.config(state='disabled')
-    
-    def _show_draft_context_menu(self, event):
-        """Show context menu for draft-specific options"""
-        if hasattr(self, 'prospects_tree'):
-            selection = self.prospects_tree.selection()
-            if selection:
-                player = self.parent.tree_maps.get(self.prospects_tree, {}).get(selection[0])
-                if player:
-                    # Create context menu with draft options
-                    context_menu = PlayerContextMenu(self)
-                    context_menu.add_separator()
-                    context_menu.add_command("Draft This Player", lambda p=player: self._quick_draft(p))
-                    context_menu.add_command("View Draft Profile", lambda p=player: self._view_draft_profile(p))
-                    context_menu.add_command("Compare to Team Needs", lambda p=player: self._compare_to_needs(p))
-                    context_menu.show_context_menu(event, player)
-    
-    def _quick_draft(self, player):
-        """Quick draft the selected player"""
-        self.selected_prospect = player
-        self.make_user_pick()
-    
-    def _view_draft_profile(self, player):
-        """View comprehensive draft profile"""
-        report = self.parent.user_team.scouting_reports.get(player.id)
-        potential = report.scouted_potential if report else "Unknown"
-        
-        messagebox.showinfo("Draft Profile", 
-                          f"Player: {player.full_name}\n"
-                          f"Position: {player.primary_position.name}\n"
-                          f"Age: {getattr(player, 'age', 'Unknown')}\n"
-                          f"Potential: {potential}\n"
-                          f"Overall Rating: {player.overall_rating()}")
-    
-    def _compare_to_needs(self, player):
-        """Compare player to team needs"""
-        position = player.primary_position.name
-        messagebox.showinfo("Team Needs", 
-                          f"{player.full_name} plays {position}\n"
-                          f"Team need at {position}: Medium\n"
-                          f"Recommended pick: Yes")
+        self.clock_label.config(text="—")
+        self.pick_info_label.config(text="All 7 rounds complete")
+        self.draft_button.config(state='disabled')
+        self.auto_button.config(state='disabled')
+        self.trade_pick_button.config(state='disabled')
+        self.grades_button.config(state='normal')
+        self._ticker("That's a wrap on draft night.")
+        self.show_grades()
+
 
 class ScheduleWindow(tk.Toplevel):
     def __init__(self, parent):
