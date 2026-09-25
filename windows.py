@@ -3,7 +3,7 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
-from game_classes import StaffRole, PlayerPosition, ScoutingReport
+from game_classes import StaffRole, PlayerPosition, ScoutingReport, to_100_scale
 from datetime import timedelta
 import random
 import os
@@ -2407,7 +2407,7 @@ class FreeAgencyWindow(tk.Toplevel):
         
         ttk.Label(info_frame, text=f"Age: {player.age}").pack(anchor='w', padx=10, pady=2)
         ttk.Label(info_frame, text=f"Position: {player.primary_position}").pack(anchor='w', padx=10, pady=2)
-        ttk.Label(info_frame, text=f"Overall Rating: {player.overall_rating()}").pack(anchor='w', padx=10, pady=2)
+        ttk.Label(info_frame, text=f"Overall Rating: {to_100_scale(player.overall_rating())}").pack(anchor='w', padx=10, pady=2)
         
         # Market value calculation
         value_frame = ttk.LabelFrame(parent, text="Estimated Market Value")
@@ -5740,7 +5740,7 @@ class ContractNegotiationWindow(tk.Toplevel):
         ttk.Label(player_frame, text=f"Name: {player.full_name}", style='TLabel').pack(anchor='w', padx=10, pady=5)
         ttk.Label(player_frame, text=f"Position: {player.primary_position.value}", style='TLabel').pack(anchor='w', padx=10, pady=2)
         ttk.Label(player_frame, text=f"Age: {player.age}", style='TLabel').pack(anchor='w', padx=10, pady=2)
-        ttk.Label(player_frame, text=f"Overall Rating: {player.overall_rating()}/20", style='TLabel').pack(anchor='w', padx=10, pady=2)
+        ttk.Label(player_frame, text=f"Overall Rating: {to_100_scale(player.overall_rating())}", style='TLabel').pack(anchor='w', padx=10, pady=2)
         ttk.Label(player_frame, text=f"Potential: {player.potential_grade}", style='TLabel').pack(anchor='w', padx=10, pady=(2, 10))
         
         # Current contract info (if extension)
@@ -6787,7 +6787,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         left_col.pack(side='left', fill='x', expand=True)
         
         ttk.Label(left_col, text=f"Age: {player.age}", style='Info.TLabel').pack(anchor='w', pady=2)
-        ttk.Label(left_col, text=f"Overall Rating: {player.overall_rating()}", style='Info.TLabel').pack(anchor='w', pady=2)
+        ttk.Label(left_col, text=f"Overall Rating: {to_100_scale(player.overall_rating())}", style='Info.TLabel').pack(anchor='w', pady=2)
         ttk.Label(left_col, text=f"Potential: {player.potential_grade}", style='Info.TLabel').pack(anchor='w', pady=2)
         
         # Right column

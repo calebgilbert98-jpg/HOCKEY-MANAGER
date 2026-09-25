@@ -9,7 +9,7 @@ from tkinter import ttk, messagebox
 import random
 from typing import List, Dict, Optional
 from dataclasses import dataclass
-from game_classes import Player, Team, PlayerPosition
+from game_classes import Player, Team, PlayerPosition, to_100_scale
 
 @dataclass
 class DraftPick:
@@ -1996,7 +1996,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                               style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         name_label.pack()
         
-        position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • Overall: {player.overall_rating()}", 
+        position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • Overall: {to_100_scale(player.overall_rating())}", 
                                   style='Info.TLabel', font=('Segoe UI', 12))
         position_label.pack(pady=(2, 0))
         
@@ -2261,7 +2261,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                               style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         name_label.pack()
         
-        position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • Overall: {player.overall_rating()}", 
+        position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • Overall: {to_100_scale(player.overall_rating())}", 
                                   style='Info.TLabel', font=('Segoe UI', 12))
         position_label.pack(pady=(2, 0))
         
@@ -3900,7 +3900,7 @@ NHL League Office""",
         pos_label.pack(side=tk.LEFT)
         
         ovr_label = ttk.Label(badges_frame, 
-                             text=f"OVR: {player.overall_rating()}", 
+                             text=f"OVR: {to_100_scale(player.overall_rating())}", 
                              style='Rating.TLabel',
                              font=('Segoe UI', 12, 'bold'))
         ovr_label.pack(side=tk.LEFT, padx=(10, 0))
@@ -4197,9 +4197,9 @@ NHL League Office""",
             elif pos in ['LD', 'RD']:  # Defense  
                 return f"Checking: {player.checking}, Passing: {player.passing}"
             else:
-                return f"Overall: {player.overall_rating()}"
+                return f"Overall: {to_100_scale(player.overall_rating())}"
         except Exception as e:
-            return f"OVR: {player.overall_rating()}"
+            return f"OVR: {to_100_scale(player.overall_rating())}"
     
     def show_roster_player_details(self, event):
         """Show detailed player information when double-clicking roster entry"""
@@ -4420,7 +4420,7 @@ NHL League Office""",
                              style='Info.TLabel', font=('Segoe UI', 11, 'bold'))
         pos_label.pack(side=tk.LEFT)
         
-        overall_label = ttk.Label(pos_overall_frame, text=f"Overall: {player.overall_rating()}", 
+        overall_label = ttk.Label(pos_overall_frame, text=f"Overall: {to_100_scale(player.overall_rating())}", 
                                  style='Info.TLabel', font=('Segoe UI', 11, 'bold'),
                                  foreground=self.parent.ACCENT_COLOR)
         overall_label.pack(side=tk.RIGHT)

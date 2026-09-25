@@ -9,7 +9,7 @@ from tkinter import ttk, messagebox
 from typing import Dict, List, Optional, Any
 import datetime
 import random
-from game_classes import Player, PlayerPosition, Staff, StaffRole
+from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
 
 
 class ProfessionalScoutingWindow(tk.Toplevel):
@@ -704,7 +704,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
                 try:
                     if hasattr(player, 'overall_rating') and callable(player.overall_rating):
                         overall = player.overall_rating()
-                        overall_str = f"{overall:.0f}" if isinstance(overall, (int, float)) else str(overall)
+                        overall_str = f"{to_100_scale(overall):.0f}" if isinstance(overall, (int, float)) else str(overall)
                     else:
                         overall_str = 'N/A'
                 except:
@@ -874,7 +874,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
             # Only filter if minimum overall is above 1 (to show all players by default)
             if min_overall > 1:
                 filtered_players = [p for p in filtered_players 
-                                  if self._get_safe_overall_rating(p) >= min_overall]
+                                  if to_100_scale(self._get_safe_overall_rating(p)) >= min_overall]
         except (ValueError, TypeError):
             pass
         
@@ -1154,7 +1154,7 @@ Age: {player.age}
 Team: {getattr(player, 'team_name', 'Free Agent')}
 
 Performance Ratings:
-Overall: {player.overall_rating()}
+Overall: {to_100_scale(player.overall_rating())}
 Potential: {getattr(player, 'potential', 'Unknown')}
 
 Key Attributes:

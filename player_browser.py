@@ -6,7 +6,7 @@ Simple, reliable player display system that guarantees player visibility
 import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import List, Optional
-from game_classes import Player, PlayerPosition
+from game_classes import Player, PlayerPosition, to_100_scale
 
 class PlayerBrowserWindow(tk.Toplevel):
     """Standalone player browser with guaranteed player display"""
@@ -161,7 +161,7 @@ class PlayerBrowserWindow(tk.Toplevel):
                 item_id = self.tree.insert('', 'end', values=(
                     player.full_name,
                     player.primary_position.value,
-                    player.overall_rating(),
+                    to_100_scale(player.overall_rating()),
                     player.age,
                     former_team
                 ))
@@ -199,7 +199,7 @@ class PlayerBrowserWindow(tk.Toplevel):
                     continue
                     
                 # Rating filter
-                if player.overall_rating() < min_rating:
+                if to_100_scale(player.overall_rating()) < min_rating:
                     continue
                     
                 self.filtered_players.append(player)

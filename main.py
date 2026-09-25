@@ -5,7 +5,7 @@ import random
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from datetime import date, timedelta
-from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport
+from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from windows import (RosterWindow, FreeAgencyWindow, TradeWindow, ScoutingWindow, 
                      DraftWindow, ScheduleWindow, FinancesWindow, NewsWindow, 
                      GMOptionsWindow, EditLinesWindow, ContractNegotiationWindow, 
@@ -10162,7 +10162,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                              font=(self.parent.FONT_FAMILY, 9, 'bold'))
         name_label.pack()
         
-        rating_label = tk.Label(info_frame, text=f"⭐ {player.overall_rating()}", bg='#6c757d', fg='white',
+        rating_label = tk.Label(info_frame, text=f"⭐ {to_100_scale(player.overall_rating())}", bg='#6c757d', fg='white',
                                font=(self.parent.FONT_FAMILY, 8))
         rating_label.pack()
         
@@ -12119,7 +12119,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         
         rating_label = ttk.Label(
             rating_value,
-            text=f"{player.overall_rating()}", 
+            text=f"{to_100_scale(player.overall_rating())}", 
             font=(parent.FONT_FAMILY, 12, 'bold'),
             foreground="#FFFFFF",
             background=ovr_bg_color

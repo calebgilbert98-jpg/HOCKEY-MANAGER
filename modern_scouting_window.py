@@ -9,7 +9,7 @@ from tkinter import ttk, messagebox
 from typing import Dict, List, Optional, Any
 import datetime
 import random
-from game_classes import Player, PlayerPosition, Staff, StaffRole
+from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
 
 
 class ModernScoutingWindow(tk.Toplevel):
@@ -191,7 +191,8 @@ class ModernScoutingWindow(tk.Toplevel):
         # Filter frame at top
         filter_frame = tk.LabelFrame(tab_frame, text="Player Filters", 
                                    bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 10, "bold"))
+                                   font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                   relief="solid", bd=1)
         filter_frame.pack(fill='x', padx=10, pady=5)
         
         filter_row = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
@@ -257,7 +258,8 @@ class ModernScoutingWindow(tk.Toplevel):
         # Players list
         list_frame = tk.LabelFrame(tab_frame, text="Available Players", 
                                  bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 10, "bold"))
+                                 font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                   relief="solid", bd=1)
         list_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
         # Create treeview
@@ -306,7 +308,8 @@ class ModernScoutingWindow(tk.Toplevel):
         # Scouts list
         list_frame = tk.LabelFrame(tab_frame, text="Scouting Staff", 
                                  bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 10, "bold"))
+                                 font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                   relief="solid", bd=1)
         list_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Create treeview
@@ -379,7 +382,8 @@ class ModernScoutingWindow(tk.Toplevel):
         # Active assignments
         active_frame = tk.LabelFrame(tab_frame, text="Active Assignments", 
                                    bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 10, "bold"))
+                                   font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                   relief="solid", bd=1)
         active_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
         # Create treeview
@@ -426,7 +430,8 @@ class ModernScoutingWindow(tk.Toplevel):
         # Left side - Reports list
         left_frame = tk.LabelFrame(main_paned, text="Scouting Reports", 
                                  bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 10, "bold"))
+                                 font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                   relief="solid", bd=1)
         main_paned.add(left_frame)
         
         # Create treeview
@@ -453,7 +458,8 @@ class ModernScoutingWindow(tk.Toplevel):
         # Right side - Report details
         right_frame = tk.LabelFrame(main_paned, text="Report Details", 
                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                  font=(self.parent.FONT_FAMILY, 10, "bold"))
+                                  font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                   relief="solid", bd=1)
         main_paned.add(right_frame)
         
         # Text area for report content
@@ -588,7 +594,7 @@ class ModernScoutingWindow(tk.Toplevel):
                     player.primary_position.value if hasattr(player.primary_position, 'value') else str(player.primary_position),
                     player.age,
                     getattr(player, 'team_name', 'Free Agent'),
-                    player.overall_rating(),
+                    to_100_scale(player.overall_rating()),
                     scouted
                 )
                 if profile_active:
@@ -796,13 +802,13 @@ Name: {player.full_name}
 Position: {player.primary_position.value if hasattr(player.primary_position, 'value') else str(player.primary_position)}
 Age: {player.age}
 Team: {getattr(player, 'team_name', 'Free Agent')}
-Overall: {player.overall_rating()}
+Overall: {to_100_scale(player.overall_rating())}
 
 Attributes:
-Skating: {getattr(player, 'skating', 'N/A')}
-Shooting: {getattr(player, 'shooting', 'N/A')}
-Passing: {getattr(player, 'passing', 'N/A')}
-Checking: {getattr(player, 'checking', 'N/A')}
+Skating: {to_100_scale(getattr(player, 'skating', 25))}
+Shooting: {to_100_scale(getattr(player, 'shooting', 25))}
+Passing: {to_100_scale(getattr(player, 'passing', 25))}
+Checking: {to_100_scale(getattr(player, 'checking', 25))}
             """
             messagebox.showinfo("Player Profile", info.strip())
     

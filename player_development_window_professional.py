@@ -8,7 +8,7 @@ from tkinter import ttk, messagebox
 import math
 from datetime import datetime, timedelta
 from player_development_system import PlayerDevelopmentEngine, initialize_player_potential
-from game_classes import Player, PlayerPosition
+from game_classes import Player, PlayerPosition, to_100_scale
 
 class PlayerDevelopmentWindowProfessional(tk.Toplevel):
     def __init__(self, parent):
@@ -531,7 +531,7 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
             current_pot_frame.pack(fill='x', pady=(0, 10))
             
             current_label = ttk.Label(current_pot_frame,
-                                    text=f"Current Rating: {player.overall_rating()}",
+                                    text=f"Current Rating: {to_100_scale(player.overall_rating())}",
                                     font=('Segoe UI', 11, 'bold'))
             current_label.pack(side='left')
             

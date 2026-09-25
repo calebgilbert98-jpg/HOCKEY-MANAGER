@@ -3,7 +3,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-from game_classes import PlayerPosition
+from game_classes import PlayerPosition, to_100_scale
 
 def _to_20_scale(value, default=10):
     """Convert a 50-point-scale attribute to the 1-20 display scale."""
@@ -11,6 +11,11 @@ def _to_20_scale(value, default=10):
         return max(1, min(20, round(float(value) * 0.4)))
     except Exception:
         return default
+
+
+def _to_100_scale(value):
+    """Display-scale alias for the canonical 1-100 converter."""
+    return to_100_scale(value)
 
 
 class PlayerProfileWindow(tk.Toplevel):
@@ -76,18 +81,39 @@ class PlayerProfileWindow(tk.Toplevel):
 
     def _get_attribute_style_and_text(self, value):
         """Returns a style name and descriptive text based on the attribute value."""
+        disp = _to_100_scale(value)
         if value >= 45:
-            return "Excellent.TLabel", f"{value} (Excellent)"
+            return "Excellent.TLabel", f"{disp} (Excellent)"
         elif value >= 40:
-            return "VeryGood.TLabel", f"{value} (Very Good)"
+            return "VeryGood.TLabel", f"{disp} (Very Good)"
         elif value >= 35:
-            return "Good.TLabel", f"{value} (Good)"
+            return "Good.TLabel", f"{disp} (Good)"
         elif value >= 30:
-            return "Average.TLabel", f"{value} (Average)"
+            return "Average.TLabel", f"{disp} (Average)"
         elif value >= 25:
-            return "BelowAverage.TLabel", f"{value} (Below Avg)"
+            return "BelowAverage.TLabel", f"{disp} (Below Avg)"
         else:
-            return "Poor.TLabel", f"{value} (Poor)"
+            return "Poor.TLabel", f"{disp} (Poor)"
+
+    def _get_morale_style_and_text(self, value):
+        """Morale runs 1-10 internally; display it on the 1-100 scale."""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            v = 5.0
+        disp = max(1, min(100, int(round(v * 10))))
+        if v >= 8.5:
+            return "Excellent.TLabel", f"{disp} (Excellent)"
+        elif v >= 7:
+            return "VeryGood.TLabel", f"{disp} (Very Good)"
+        elif v >= 5.5:
+            return "Good.TLabel", f"{disp} (Good)"
+        elif v >= 4:
+            return "Average.TLabel", f"{disp} (Average)"
+        elif v >= 2.5:
+            return "BelowAverage.TLabel", f"{disp} (Below Avg)"
+        else:
+            return "Poor.TLabel", f"{disp} (Poor)"
 
     def _create_overview_tab(self):
         """Creates the main overview tab with comprehensive player information."""
@@ -268,16 +294,17 @@ class PlayerProfileWindow(tk.Toplevel):
         # Draw rating bar background
         rating_canvas.create_rectangle(25, 15, 65, 115, fill=self.parent.CONTENT_BG, outline=self.parent.TEXT_COLOR, width=2)
         
-        # Draw rating bar fill
-        bar_height = int((overall / 20) * 100)
+        # Draw rating bar fill (1-100 display scale)
+        overall_100 = _to_100_scale(overall)
+        bar_height = int(overall_100)  # bar is 100px tall
         bar_color = self._get_rating_color(overall)
         if bar_height > 0:
             rating_canvas.create_rectangle(27, 115-bar_height, 63, 113, fill=bar_color, outline="")
         
         # Draw scale markings and text
-        rating_canvas.create_text(45, 10, text="20", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
+        rating_canvas.create_text(45, 10, text="100", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
         rating_canvas.create_text(45, 120, text="0", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
-        rating_canvas.create_text(45, 125, text=str(overall), fill=self.parent.HEADER_COLOR, font=(self.parent.FONT_FAMILY, 14, 'bold'))
+        rating_canvas.create_text(45, 125, text=str(overall_100), fill=self.parent.HEADER_COLOR, font=(self.parent.FONT_FAMILY, 14, 'bold'))
         
         # Contract status indicator
         contract_frame = ttk.Frame(header_frame, style='PlayerTab.TFrame')
@@ -341,7 +368,7 @@ class PlayerProfileWindow(tk.Toplevel):
         # Position, team, and key stats in one line
         overall = self.player.overall_rating()
         role = self.player.get_role()
-        info_line = f"{self.player.primary_position.value} • {self.player.team_name} • Age {self.player.age} • Overall {overall}/20 • {role.value.replace('_', ' ').title()}"
+        info_line = f"{self.player.primary_position.value} • {self.player.team_name} • Age {self.player.age} • Overall {_to_100_scale(overall)} • {role.value.replace('_', ' ').title()}"
         ttk.Label(info_frame, text=info_line, style='PlayerSubheader.TLabel').pack(anchor='w', pady=(2, 0))
 
     def _create_basic_info_compact(self, parent, row=0):
@@ -674,7 +701,11 @@ class PlayerProfileWindow(tk.Toplevel):
             
             # Attribute value with color coding
             value = getattr(self.player, attr_key, 10)
-            style, text = self._get_attribute_style_and_text(value)
+            if attr_key == 'morale':
+                # Morale runs 1-10 internally; show it on the 1-100 display scale
+                style, text = self._get_morale_style_and_text(value)
+            else:
+                style, text = self._get_attribute_style_and_text(value)
             ttk.Label(attr_grid, text=text, style=style, anchor='center', width=12).grid(
                 row=row, column=col_base+1, padx=(1, 8), pady=1
             )
@@ -1053,13 +1084,13 @@ class PlayerProfileWindow(tk.Toplevel):
         # Sample performance indicators
         performance_notes = [
             ("Form", "Good"),
-            ("Consistency", f"{_to_20_scale(self.player.consistency)}/20"),
-            ("Big Game Player", f"{_to_20_scale(self.player.important_matches)}/20"),
+            ("Consistency", f"{_to_100_scale(self.player.consistency)}"),
+            ("Big Game Player", f"{_to_100_scale(self.player.important_matches)}"),
             ("Injury History", "Clean" if self.player.injury_proneness < 10 else "Concerning"),
             ("Morale", f"{self.player.morale}/20"),
             ("Development", "Improving" if self.player.age < 25 else "Stable"),
-            ("Work Rate", f"{_to_20_scale(self.player.work_rate)}/20"),
-            ("Leadership", f"{_to_20_scale(self.player.leadership)}/20")
+            ("Work Rate", f"{_to_100_scale(self.player.work_rate)}"),
+            ("Leadership", f"{_to_100_scale(self.player.leadership)}")
         ]
         
         for i, (label, value) in enumerate(performance_notes):
@@ -1452,9 +1483,9 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Current Age", f"{self.player.age} years old"),
             ("Development Phase", dev_phase),
             ("Potential Grade", self.player.potential_grade),
-            ("Current Overall", f"{current_overall}/20"),
-            ("Estimated Peak", f"{max_potential}/20"),
-            ("Potential Remaining", f"{potential_remaining} points"),
+            ("Current Overall", f"{_to_100_scale(current_overall)}"),
+            ("Estimated Peak", f"{max(1, min(100, max_potential * 5))}"),
+            ("Potential Remaining", f"{max(0, max_potential * 5 - _to_100_scale(current_overall))} points"),
             ("Development Rate", "Normal"),
             ("Years to Peak", f"{max(0, 25 - self.player.age)} years" if self.player.age < 25 else "At Peak")
         ]
@@ -1571,7 +1602,7 @@ class PlayerProfileWindow(tk.Toplevel):
             history_tree.insert('', 'end', values=(
                 f"{season_year}-{season_year+1}",
                 str(age),
-                f"{past_overall}/20",
+                f"{_to_100_scale(past_overall)}",
                 improvement,
                 notes
             ))
@@ -1735,7 +1766,7 @@ class PlayerProfileWindow(tk.Toplevel):
             bar_canvas.create_rectangle(5, 3, 5+bar_width, 13, fill=bar_color, outline=bar_color)
             bar_canvas.create_rectangle(3, 1, 117, 15, outline=self.parent.TEXT_COLOR, width=1)
             
-            ttk.Label(phys_grid, text=str(value), style='PlayerInfo.TLabel', anchor='center', width=8).grid(
+            ttk.Label(phys_grid, text=str(_to_100_scale(value)), style='PlayerInfo.TLabel', anchor='center', width=8).grid(
                 row=i, column=2, padx=(5, 0), pady=3
             )
 
@@ -1788,7 +1819,7 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Professional Debut:", f"{getattr(self.player, 'pro_debut', 'This Season')}"),
             ("Teams Played For:", f"{getattr(self.player, 'teams_count', 1)} teams"),
             ("Current Team Since:", f"{getattr(self.player, 'team_tenure', 'This season')}"),
-            ("Career Peak Rating:", f"{getattr(self.player, 'peak_rating', self.player.overall_rating())}/20"),
+            ("Career Peak Rating:", f"{getattr(self.player, 'peak_rating', 15)}/20"),
             ("Development Status:", self._get_development_status()),
             ("Potential Rating:", f"{getattr(self.player, 'potential', 'Unknown')}/20"),
         ]
@@ -1858,7 +1889,7 @@ class PlayerProfileWindow(tk.Toplevel):
             
             # Add value text
             style, text = self._get_attribute_style_and_text(value)
-            ttk.Label(attr_grid, text=str(value), style='PlayerInfo.TLabel', anchor='center', width=8).grid(
+            ttk.Label(attr_grid, text=str(_to_100_scale(value)), style='PlayerInfo.TLabel', anchor='center', width=8).grid(
                 row=i, column=2, padx=(5, 0), pady=3
             )
 
@@ -1918,8 +1949,8 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Age Group:", self._get_age_group()),
             ("Development Phase:", self._get_development_status()),
             ("Training Focus:", self._get_training_focus()),
-            ("Coachability:", f"{_to_20_scale(getattr(self.player, 'coachability', 25))}/20"),
-            ("Work Ethic:", f"{_to_20_scale(getattr(self.player, 'work_ethic', 25))}/20"),
+            ("Coachability:", f"{_to_100_scale(getattr(self.player, 'coachability', 25))}"),
+            ("Work Ethic:", f"{_to_100_scale(getattr(self.player, 'work_ethic', 25))}"),
             ("Learning Rate:", self._get_learning_rate()),
         ]
         
@@ -1945,11 +1976,11 @@ class PlayerProfileWindow(tk.Toplevel):
         
         chemistry_info = [
             ("Team Chemistry:", f"{getattr(self.player, 'team_chemistry', 15)}/20"),
-            ("Leadership:", f"{getattr(self.player, 'leadership', 10)}/20"),
+            ("Leadership:", f"{_to_100_scale(getattr(self.player, 'leadership', 10))}"),
             ("Locker Room Presence:", self._get_locker_room_presence()),
             ("Mentorship Value:", self._get_mentorship_value()),
             ("Line Chemistry:", f"{getattr(self.player, 'line_chemistry', 15)}/20"),
-            ("Adaptability:", f"{getattr(self.player, 'adaptability', 12)}/20"),
+            ("Adaptability:", f"{_to_100_scale(getattr(self.player, 'adaptability', 25))}"),
         ]
         
         for i, (label, value) in enumerate(chemistry_info):
@@ -2359,10 +2390,10 @@ class PlayerProfileWindow(tk.Toplevel):
             
             # Player value with color coding
             player_color = self._get_comparison_color(player_val, league_avg)
-            player_label = ttk.Label(comp_grid, text=str(player_val), style='PlayerInfo.TLabel')
+            player_label = ttk.Label(comp_grid, text=str(_to_100_scale(player_val)), style='PlayerInfo.TLabel')
             player_label.grid(row=i, column=1, pady=2)
             
-            ttk.Label(comp_grid, text=str(league_avg), style='PlayerInfo.TLabel').grid(
+            ttk.Label(comp_grid, text=str(_to_100_scale(league_avg)), style='PlayerInfo.TLabel').grid(
                 row=i, column=2, pady=2
             )
         

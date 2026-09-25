@@ -175,7 +175,8 @@ class PlayerGenerator:
             'focus', 'confidence', 'acceleration', 'balance', 'endurance',
             'agility', 'speed', 'stamina', 'durability', 'off_the_puck',
             'wristshot', 'slapshot', 'pokecheck', 'bodycheck', 'one_timer',
-            'backhand', 'screen_shots', 'loose_puck', 'creativity', 'pressure_player'
+            'backhand', 'screen_shots', 'loose_puck', 'creativity', 'pressure_player',
+            'deking', 'offensive_awareness', 'defensive_awareness'
         ]
         
         # Position-specific attributes

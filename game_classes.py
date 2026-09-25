@@ -24,6 +24,19 @@ class GameBalance:
 
     MAX_SCOUTING_VIEWINGS = 15
 
+
+def to_100_scale(value):
+    """Convert an internal ~50-scale rating to the 1-100 display scale.
+
+    The sim engine, AI and development all run on the internal scale;
+    everything the user sees (overall, attributes) goes through this.
+    """
+    try:
+        return max(1, min(100, int(round(float(value) * 2))))
+    except (TypeError, ValueError):
+        return 50
+
+
 # --- Enumerations for Clarity ---
 class PlayerPosition(Enum):
     CENTER = "C"

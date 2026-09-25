@@ -88,7 +88,8 @@ class AdvancedContractNegotiationWindow(tk.Toplevel):
         left_col.pack(side='left', fill='x', expand=True)
         
         ttk.Label(left_col, text=f"Age: {self.player.age}", style='Info.TLabel').pack(anchor='w', pady=2)
-        ttk.Label(left_col, text=f"Overall Rating: {self.player.overall_rating()}", style='Info.TLabel').pack(anchor='w', pady=2)
+        from game_classes import to_100_scale
+        ttk.Label(left_col, text=f"Overall Rating: {to_100_scale(self.player.overall_rating())}", style='Info.TLabel').pack(anchor='w', pady=2)
         ttk.Label(left_col, text=f"Potential: {self.player.potential_grade}", style='Info.TLabel').pack(anchor='w', pady=2)
         
         # Right column - Contract info
