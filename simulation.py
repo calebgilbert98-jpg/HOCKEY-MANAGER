@@ -10,6 +10,10 @@ import random
 import math
 from enum import Enum
 from game_classes import Team, Player, PlayerPosition
+from player_archetypes import (
+    get_archetype, complementarity, matchup_multiplier,
+    ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
+)
 
 class ShotType(Enum):
     WRIST_SHOT = "wrist_shot"
@@ -1002,6 +1006,14 @@ class GameSim:
                     # Position synergy bonuses
                     chemistry += self._get_position_synergy_bonus(player1, player2)
                     
+                    # Archetype complementarity: playmakers feed snipers,
+                    # shutdown pairings balance offensive defensemen, etc.
+                    try:
+                        chemistry += complementarity(
+                            get_archetype(player1), get_archetype(player2))
+                    except Exception:
+                        pass
+
                     total_chemistry += max(0, min(100, chemistry))
                     comparisons += 1
         
@@ -1079,40 +1091,26 @@ class GameSim:
 
     def _determine_player_role(self, player):
         """
-        Stage 6: Determine the optimal role for a player based on attributes.
+        Determine the optimal role for a player from their archetype.
+        Archetypes are classified from true attributes (player_archetypes),
+        replacing the old hard-coded thresholds.
         """
+        try:
+            arch = get_archetype(player)
+            role_name = ARCHETYPE_TO_ROLE_NAME.get(arch)
+            if role_name and hasattr(LineRole, role_name):
+                return getattr(LineRole, role_name)
+        except Exception:
+            pass
+        # Fallbacks by position group
         pos = player.primary_position
-        
-        if pos in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
-            # Forward role determination
-            if player.offensive_awareness >= 16 and player.shooting_accuracy >= 15:
-                return LineRole.PRIMARY_SCORER
-            elif player.passing >= 16 and player.vision >= 15:
-                return LineRole.PLAYMAKER
-            elif player.checking >= 15 and player.defensive_awareness >= 14:
-                return LineRole.DEFENSIVE_FORWARD
-            elif player.strength >= 16 and player.checking >= 14:
-                return LineRole.POWER_FORWARD
-            elif player.aggressiveness >= 17 and player.strength >= 16:
-                return LineRole.ENFORCER
-            elif player.defensive_awareness >= 15:
-                return LineRole.PENALTY_KILLER
-            elif player.offensive_awareness >= 15:
-                return LineRole.POWER_PLAY_SPECIALIST
-            else:
-                return LineRole.GRINDER
-                
-        elif pos in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE, PlayerPosition.DEFENSE]:
-            # Defenseman role determination
-            if player.offensive_awareness >= 15 and player.passing >= 15:
-                return LineRole.OFFENSIVE_DEFENDER
-            elif player.defensive_awareness >= 16 and player.checking >= 15:
-                return LineRole.SHUTDOWN_DEFENDER
-            else:
-                return LineRole.TWO_WAY_DEFENDER
-                
-        else:  # Goalie
-            return LineRole.POWER_PLAY_SPECIALIST  # Default for goalies
+        if pos in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING,
+                   PlayerPosition.RIGHT_WING]:
+            return LineRole.GRINDER
+        elif pos in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE,
+                     PlayerPosition.DEFENSE]:
+            return LineRole.TWO_WAY_DEFENDER
+        return LineRole.GRINDER
 
     def _calculate_role_effectiveness(self, player, role):
         """
@@ -1120,42 +1118,30 @@ class GameSim:
         """
         base_effectiveness = 50.0
         
-        role_attributes = {
-            LineRole.PRIMARY_SCORER: ['shooting_accuracy', 'shooting_power', 'offensive_awareness', 'composure'],
-            LineRole.PLAYMAKER: ['passing', 'vision', 'hockey_iq', 'offensive_awareness'],
-            LineRole.GRINDER: ['determination', 'work_rate', 'stamina', 'checking'],
-            LineRole.DEFENSIVE_FORWARD: ['defensive_awareness', 'checking', 'anticipation', 'positioning'],
-            LineRole.POWER_FORWARD: ['strength', 'checking', 'shooting_power', 'screens'],
-            LineRole.SHUTDOWN_DEFENDER: ['defensive_awareness', 'checking', 'strength', 'positioning'],
-            LineRole.OFFENSIVE_DEFENDER: ['offensive_awareness', 'passing', 'shooting_accuracy', 'vision'],
-            LineRole.TWO_WAY_DEFENDER: ['defensive_awareness', 'offensive_awareness', 'passing', 'skating'],
-            LineRole.ENFORCER: ['aggression', 'strength', 'determination', 'intimidation'],
-            LineRole.PENALTY_KILLER: ['penalty_killing', 'defensive_awareness', 'anticipation', 'work_rate'],
-            LineRole.POWER_PLAY_SPECIALIST: ['power_play', 'offensive_awareness', 'shooting_accuracy', 'passing']
-        }
-        
-        if role in role_attributes:
-            relevant_attributes = role_attributes[role]
-            total_rating = 0
-            count = 0
-            
-            for attr_name in relevant_attributes:
-                if hasattr(player, attr_name):
-                    total_rating += getattr(player, attr_name)
-                    count += 1
-            
-            if count > 0:
-                avg_rating = total_rating / count
-                base_effectiveness = (avg_rating / 20.0) * 100  # Convert to percentage
-        
-        # Add personality modifiers
+        # Effectiveness comes from the player's archetype fit: average the
+        # archetype's key attributes (50-point scale) into a 0-100 rating.
+        # Map: 25 -> 0, 37.5 -> 50, 50 -> 100.
+        try:
+            arch = get_archetype(player)
+            fit = ARCHETYPE_FIT.get(arch)
+            if fit and fit.get("attributes"):
+                vals = [_arch_attr(player, k)
+                        for k in fit["attributes"]]
+                vals = [v for v in vals if v > 0]
+                if vals:
+                    avg = sum(vals) / len(vals)
+                    base_effectiveness = max(0.0, min(100.0, (avg - 25.0) * 4.0))
+        except Exception:
+            pass
+
+        # Add personality modifiers (50-point scale aware)
         if role == LineRole.ENFORCER:
-            base_effectiveness += player.aggressiveness * 2
+            base_effectiveness += (player.aggressiveness - 35) * 0.5
         elif role == LineRole.DEFENSIVE_FORWARD:
-            base_effectiveness += player.work_rate
+            base_effectiveness += (player.work_rate - 35) * 0.3
         elif role == LineRole.PLAYMAKER:
-            base_effectiveness += player.hockey_iq
-        
+            base_effectiveness += (player.hockey_iq - 35) * 0.3
+
         return max(0, min(100, base_effectiveness))
 
     def _initialize_line_tracking(self):
@@ -1964,7 +1950,16 @@ class GameSim:
                     return self._resolve_turnover(puck_carrier, defender, TurnoverType.INTERCEPTION)
         
         # Check for physical play in neutral zone (Stage 4)
-        if self.physical_intensity > 1.0 and random.random() < 0.15:  # 15% chance when physical
+        # Enforcer deterrence: carriers skate freer with a tough guy on the ice
+        hit_chance = 0.15
+        try:
+            mates = [p for p in self._get_on_ice(attacking_team)
+                     if p.primary_position != PlayerPosition.GOALIE]
+            if any(get_archetype(p) == "Enforcer" for p in mates):
+                hit_chance = 0.08
+        except Exception:
+            pass
+        if self.physical_intensity > 1.0 and random.random() < hit_chance:
             potential_hitter = random.choice(defending_skaters)
             hit_result = self._attempt_hit(potential_hitter, puck_carrier, HitType.BODY_CHECK)
             if hit_result == HitResult.TURNOVER_CAUSED:
@@ -1994,7 +1989,18 @@ class GameSim:
         
         if not attacking_skaters:
             return self._zone_clear(defending_team)
-        
+
+        # Grinder wear-down: heavy cycling lines drain defending skaters
+        try:
+            if any(get_archetype(p) == "Grinder" for p in attacking_skaters):
+                for d in defending_skaters:
+                    fid = getattr(d, "id", None)
+                    if fid in self.player_fatigue:
+                        self.player_fatigue[fid] = max(
+                            0.0, self.player_fatigue[fid] - 0.6)
+        except Exception:
+            pass
+
         # Update zone time stats
         self._update_zone_time_stats(attacking_team, defending_team)
         
@@ -2716,6 +2722,27 @@ class GameSim:
         
         self._log_event(f"Shot by {shooter.full_name} misses the net!", "MISSED_SHOT")
 
+    def _apply_archetype_matchup(self, quality, attacking_team, defending_team):
+        """
+        Archetype matchup effects on shot quality.
+
+        Compares the on-ice attacking skaters' archetypes against the
+        defending skaters' archetypes (e.g. Defensive Defenseman vs Sniper)
+        and returns an adjusted quality value.
+        """
+        try:
+            att = [p for p in self._get_on_ice(attacking_team)
+                   if p.primary_position != PlayerPosition.GOALIE]
+            dfn = [p for p in self._get_on_ice(defending_team)
+                   if p.primary_position != PlayerPosition.GOALIE]
+            if not att or not dfn:
+                return quality
+            mult = matchup_multiplier([get_archetype(p) for p in att],
+                                      [get_archetype(p) for p in dfn])
+            return quality * mult
+        except Exception:
+            return quality
+
     def _resolve_shot_on_goal(self, shooter, attacking_team, defending_team, shot_type, location, quality, distance):
         """
         Stage 5: Enhanced shot resolution with advanced goaltending excellence.
@@ -2732,6 +2759,10 @@ class GameSim:
                 self._log_event(f"Pass from {passer.full_name} to {shooter.full_name}...", "PASS")
         
         # Calculate expected goal value (xG)
+        # Archetype matchup effects: shutdown defenders smother snipers,
+        # power forwards feast on soft defensive pairs, etc.
+        quality = self._apply_archetype_matchup(
+            quality, attacking_team, defending_team)
         expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance)
         
         # Update expected goals tracking

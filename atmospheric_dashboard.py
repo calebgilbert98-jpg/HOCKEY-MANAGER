@@ -11,6 +11,7 @@ from visual_identity_system import (
     AnimationManager, ContextualElementsManager, 
     StorytellingDataPresentation
 )
+from modern_widgets import RoundedButton
 
 class AtmosphericDashboard:
     """Immersive dashboard that makes you feel like a real GM"""
@@ -265,16 +266,14 @@ class AtmosphericDashboard:
         ]
 
         for action_text, action_command in quick_actions:
-            action_btn = tk.Button(action_frame, text=action_text,
-                                  font=self.theme.fonts['body'],
-                                  bg=self.theme.colors.secondary,
-                                  fg=self.theme.colors.text_light,
-                                  relief='flat', bd=0, highlightthickness=0,
-                                  padx=16, pady=8,
-                                  cursor='hand2',
-                                  command=action_command)
-            action_btn.pack(fill='x', pady=3)
-            self._add_button_hover_effects(action_btn, subtle=True)
+            action_btn = RoundedButton(action_frame, text=action_text,
+                                       command=action_command,
+                                       font=self.theme.fonts['body'],
+                                       bg=self.theme.colors.secondary,
+                                       fg=self.theme.colors.text_light,
+                                       radius=9, padx=16, pady=8,
+                                       width=170)
+            action_btn.pack(pady=3)
         
         self.widgets['action_panel'] = action_frame
         self.widgets['continue_btn'] = continue_btn
@@ -824,14 +823,12 @@ class AtmosphericDashboard:
             msg_label.pack(anchor='w', padx=8, pady=4)
         
         # View all button
-        view_all_btn = tk.Button(parent, text="📨 View All Messages",
-                                font=self.theme.fonts['caption'],
-                                bg=self.theme.colors.primary,
-                                fg=self.theme.colors.text_light,
-                                relief='flat', bd=0,
-                                padx=12, pady=6,
-                                cursor='hand2',
-                                command=self._view_all_inbox_action)
+        view_all_btn = RoundedButton(parent, text="📨 View All Messages",
+                                     font=self.theme.fonts['caption'],
+                                     bg=self.theme.colors.primary,
+                                     fg=self.theme.colors.text_light,
+                                     radius=9, padx=12, pady=7,
+                                     command=self._view_all_inbox_action)
         view_all_btn.pack(pady=(8, 0))
     
     # Action methods

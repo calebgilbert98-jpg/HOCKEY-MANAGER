@@ -224,10 +224,33 @@ class ModernScoutingWindow(tk.Toplevel):
         search_entry.bind('<KeyRelease>', self._filter_players)
         
         # Clear button
-        clear_btn = tk.Button(filter_row, text="Clear", 
-                             bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
-                             command=self._clear_player_filters)
+        from modern_widgets import RoundedButton
+        clear_btn = RoundedButton(filter_row, text="Clear",
+                                  bg=self.parent.ACCENT_COLOR,
+                                  fg=self.parent.HEADER_COLOR,
+                                  font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                  radius=9, padx=14, pady=7,
+                                  command=self._clear_player_filters)
         clear_btn.pack(side='left', padx=5)
+
+        # Scouting profile filter
+        tk.Label(filter_row, text="Profile:", bg=self.parent.CONTENT_BG,
+                fg=self.parent.TEXT_COLOR).pack(side='left', padx=(15, 0))
+
+        self.profile_filter = tk.StringVar(value="All")
+        self.profile_combo = ttk.Combobox(filter_row, textvariable=self.profile_filter,
+                                          width=22, state='readonly')
+        self.profile_combo.pack(side='left', padx=(5, 5))
+        self.profile_combo.bind('<<ComboboxSelected>>', self._filter_players)
+
+        profiles_btn = RoundedButton(filter_row, text="⚙ Profiles",
+                                     bg=self.parent.CONTENT_BG,
+                                     fg=self.parent.TEXT_COLOR,
+                                     font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                     radius=9, padx=14, pady=7,
+                                     command=self._open_profile_manager)
+        profiles_btn.pack(side='left', padx=5)
+        self._refresh_profile_combo()
         
         # Players list
         list_frame = tk.LabelFrame(tab_frame, text="Available Players", 
@@ -428,53 +451,123 @@ class ModernScoutingWindow(tk.Toplevel):
             print(f"Error populating scouting data: {e}")
             self.status_label.config(text=f"Error: {e}")
     
+    def _is_player_scouted(self, player):
+        """Check if the user team has a scouting report for a player."""
+        try:
+            gm = getattr(self.parent, 'game_manager', None)
+            team = getattr(gm, 'user_team', None) if gm else None
+            reports = getattr(team, 'scouting_reports', None)
+            if reports is not None:
+                return getattr(player, 'id', str(player)) in reports
+        except Exception:
+            pass
+        return False
+
+    def _refresh_profile_combo(self, select=None):
+        """Fill the profile filter dropdown with built-in + custom profiles."""
+        try:
+            from scouting_profiles import list_profiles
+            names = ["All"] + [p.name for p in list_profiles()]
+        except Exception:
+            names = ["All"]
+        if hasattr(self, 'profile_combo'):
+            self.profile_combo['values'] = names
+            current = select or self.profile_filter.get()
+            self.profile_filter.set(current if current in names else "All")
+
+    def _open_profile_manager(self):
+        """Open the scouting profile manager dialog."""
+        try:
+            from scouting_profile_dialog import ScoutingProfileDialog
+
+            def _on_apply(name):
+                self._refresh_profile_combo(select=name)
+                self._populate_players()
+
+            ScoutingProfileDialog(self, on_apply=_on_apply)
+            # Refresh list in case customs were added/removed
+            self._refresh_profile_combo()
+            self._populate_players()
+        except Exception as e:
+            messagebox.showerror("Profiles", f"Could not open profile manager:\n{e}")
+
+    def _active_profile(self):
+        """Return the selected ScoutingProfile, or None if 'All'."""
+        try:
+            name = self.profile_filter.get() if hasattr(self, 'profile_filter') else "All"
+            if not name or name == "All":
+                return None
+            from scouting_profiles import get_profile
+            return get_profile(name)
+        except Exception:
+            return None
+
+    def _configure_player_columns(self, with_match):
+        """Rebuild treeview columns; adds a Match column when profiling."""
+        cols = ['Name', 'Position', 'Age', 'Team', 'Overall', 'Scouted']
+        widths = [200, 80, 60, 150, 80, 80]
+        if with_match:
+            cols.append('Match')
+            widths.append(70)
+        self.players_tree['columns'] = cols
+        self.players_tree['show'] = 'headings'
+        for col, width in zip(cols, widths):
+            self.players_tree.heading(col, text=col)
+            self.players_tree.column(col, width=width, minwidth=50,
+                                     anchor='center' if col == 'Match' else 'w')
+
     def _populate_players(self):
         """Populate the players tree"""
         # Clear existing items
         for item in self.players_tree.get_children():
             self.players_tree.delete(item)
-        
+
         # Initialize tree maps
         if 'players_tree' not in self.parent.tree_maps:
             self.parent.tree_maps['players_tree'] = {}
-        
+
         # Get team names for filter
         teams = set()
         for player in self.all_players:
             team_name = getattr(player, 'team_name', 'Free Agent')
             teams.add(team_name)
-        
+
         # Update team filter combobox if it exists
         if hasattr(self, 'team_combo') and teams:
             current_teams = ["All"] + sorted(list(teams))
             self.team_combo['values'] = current_teams
-        
+
         # Apply current filters
         filtered_players = self._apply_player_filters()
-        
+        profile_active = bool(getattr(self, '_profile_scores', None))
+
+        # Configure columns (Match column appears when a profile is applied)
+        self._configure_player_columns(profile_active)
+
         # Add players to tree
         for player in filtered_players:
             try:
                 # Check if player has been scouted
-                scouted = "No"
-                if hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'user_team'):
-                    if hasattr(self.parent.game_manager.user_team, 'scouting_reports'):
-                        player_id = getattr(player, 'id', str(player))
-                        if player_id in self.parent.game_manager.user_team.scouting_reports:
-                            scouted = "Yes"
-                
-                item = self.players_tree.insert('', 'end', values=(
+                scouted = "Yes" if self._is_player_scouted(player) else "No"
+
+                values = (
                     player.full_name,
                     player.primary_position.value if hasattr(player.primary_position, 'value') else str(player.primary_position),
                     player.age,
                     getattr(player, 'team_name', 'Free Agent'),
                     player.overall_rating(),
                     scouted
-                ))
-                
+                )
+                if profile_active:
+                    pid = getattr(player, 'id', str(player))
+                    score = self._profile_scores.get(pid, 0)
+                    values = values + (f"{score:.0f}%",)
+
+                item = self.players_tree.insert('', 'end', values=values)
+
                 # Store player reference
                 self.parent.tree_maps['players_tree'][item] = player
-                
+
             except Exception as e:
                 print(f"Error adding player {getattr(player, 'full_name', 'Unknown')}: {e}")
                 continue
@@ -568,15 +661,34 @@ class ModernScoutingWindow(tk.Toplevel):
             search = self.name_search.get().lower()
             if search:
                 filtered = [p for p in filtered if search in p.full_name.lower()]
-        
+
+        # Scouting profile filter (sorted by match score, best first)
+        self._profile_scores = {}
+        profile = self._active_profile()
+        if profile is not None:
+            try:
+                from scouting_profiles import filter_by_profile
+                matches = filter_by_profile(filtered, profile, self._is_player_scouted)
+                self._profile_scores = {
+                    getattr(p, 'id', str(p)): score for p, score in matches
+                }
+                filtered = [p for p, _ in matches]
+            except Exception as e:
+                print(f"Error applying scouting profile: {e}")
+
         return filtered
-    
+
     def _update_status(self):
         """Update the status bar"""
         try:
             player_count = len(self.all_players)
             scout_count = len(self.all_scouts)
-            self.status_label.config(text=f"Players: {player_count} | Scouts: {scout_count}")
+            text = f"Players: {player_count} | Scouts: {scout_count}"
+            profile = self._active_profile()
+            if profile is not None:
+                n = len(getattr(self, '_profile_scores', {}) or {})
+                text += f" | Profile: {profile.name} ({n} matches)"
+            self.status_label.config(text=text)
         except Exception as e:
             self.status_label.config(text=f"Error: {e}")
 
@@ -591,6 +703,8 @@ class ModernScoutingWindow(tk.Toplevel):
         self.position_filter.set("All")
         self.team_filter.set("All")
         self.name_search.set("")
+        if hasattr(self, 'profile_filter'):
+            self.profile_filter.set("All")
         self._populate_players()
     
     def _scout_player(self, event=None):

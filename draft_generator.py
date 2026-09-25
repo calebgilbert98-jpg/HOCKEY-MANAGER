@@ -131,6 +131,17 @@ ARCHETYPES = {
                 "vision": (11, 16)
             },
             "tendency": {"shooting_tendency": (40, 70), "hitting_tendency": (10, 30)}
+        },
+        "Enforcer": {
+            "description": "The toughest player on the ice. Protects teammates, punishes opponents",
+            "attributes": {
+                "strength": (14, 19), \
+                "aggressiveness": (13, 18), \
+                "checking": (12, 17),
+                "durability": (12, 17), \
+                "discipline": (5, 10)
+            },
+            "tendency": {"shooting_tendency": (20, 40), "hitting_tendency": (80, 100)}
         }
     },
     "DEFENSEMEN": {

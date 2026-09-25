@@ -173,13 +173,26 @@ class PlayerProfileWindow(tk.Toplevel):
         header_frame.grid_columnconfigure(2, weight=0)
         header_frame.grid_columnconfigure(3, weight=0)
         
-        # Photo section - larger and more prominent
+        # Photo section - generated cartoon face
         photo_frame = ttk.Frame(header_frame, style='PlayerPanel.TFrame', padding=5)
         photo_frame.grid(row=0, column=0, rowspan=3, sticky='nw', padx=(0, 15))
-        
-        photo_canvas = tk.Canvas(photo_frame, width=120, height=150, bg=self.parent.TITLE_BAR_COLOR, highlightthickness=2, highlightcolor=self.parent.ACCENT_COLOR)
-        photo_canvas.pack()
-        photo_canvas.create_text(60, 75, text="PLAYER\nPHOTO", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 14, 'bold'), justify='center')
+
+        try:
+            from player_faces import get_face_photo
+            face_img = get_face_photo(self.player, size=120)
+        except Exception:
+            face_img = None
+        if face_img is not None:
+            self._face_img = face_img  # keep a reference
+            photo_label = tk.Label(photo_frame, image=face_img,
+                                   bg=self.parent.CONTENT_BG,
+                                   highlightthickness=2,
+                                   highlightbackground=self.parent.ACCENT_COLOR)
+            photo_label.pack()
+        else:
+            photo_canvas = tk.Canvas(photo_frame, width=120, height=150, bg=self.parent.TITLE_BAR_COLOR, highlightthickness=2, highlightcolor=self.parent.ACCENT_COLOR)
+            photo_canvas.pack()
+            photo_canvas.create_text(60, 75, text="PLAYER\nPHOTO", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 14, 'bold'), justify='center')
         
         # Main player information
         info_frame = ttk.Frame(header_frame, style='PlayerTab.TFrame')
@@ -199,6 +212,17 @@ class PlayerProfileWindow(tk.Toplevel):
         
         position_label = ttk.Label(name_frame, text=position_text, style='PlayerSubheader.TLabel')
         position_label.pack(side='right', padx=(10, 0))
+
+        # Archetype pill badge
+        try:
+            from player_archetypes import get_archetype
+            from modern_widgets import Pill
+            arch = get_archetype(self.player)
+            if arch and not str(arch).startswith("Depth") and "Backup" not in str(arch):
+                Pill(name_frame, text=str(arch),
+                     bg=self.parent.ACCENT_COLOR).pack(side='right', padx=(10, 0))
+        except Exception:
+            pass
         
         # Enhanced player details in two rows
         details_frame = ttk.Frame(info_frame, style='PlayerTab.TFrame')

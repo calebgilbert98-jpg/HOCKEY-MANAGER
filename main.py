@@ -1133,6 +1133,22 @@ NHL League Office""",
                     changes = self._dev_engine.process_monthly_development(player)
                     if not changes:
                         continue
+                    # Refresh archetype as attributes develop (e.g. prospect
+                    # grows into a Power Forward)
+                    try:
+                        from player_archetypes import refresh_archetype
+                        old_arch = getattr(player, 'archetype', None)
+                        new_arch = refresh_archetype(player)
+                        if (team == self.user_team and old_arch and
+                                new_arch != old_arch and
+                                not str(new_arch).startswith('Depth') and
+                                'Backup' not in str(new_arch)):
+                            notable.append(
+                                f"🏒 {player.first_name} {player.last_name} "
+                                f"has developed into a {new_arch}"
+                            )
+                    except Exception:
+                        pass
                     # Track meaningful growth for user's team
                     if team == self.user_team:
                         ups = {a: c for a, c in changes.items() if c >= 2}
@@ -3642,17 +3658,19 @@ class HockeyManagerGUI(tk.Tk):
         season_controls_frame.pack(side="right", padx=(20, 0))
         
         # Automated Season Flow button
-        self.season_flow_btn = ttk.Button(season_controls_frame, text="⚡ Season Flow", 
-                                         command=self.toggle_season_flow_panel, 
-                                         style='Menu.TButton',
-                                         width=12)
+        from modern_widgets import RoundedButton
+        self.season_flow_btn = RoundedButton(season_controls_frame, text="⚡ Season Flow",
+                                            command=self.toggle_season_flow_panel,
+                                            bg="#2E7BD6", radius=10,
+                                            font=(self.FONT_FAMILY, 11, "bold"))
         self.season_flow_btn.pack(pady=(2, 5))
-        
+
         # Continue button with better styling
-        self.continue_btn = ttk.Button(season_controls_frame, text="Continue ▶", 
-                                     command=self.simulate_day, 
-                                     style='TButton',
-                                     width=12)
+        self.continue_btn = RoundedButton(season_controls_frame, text="Continue ▶",
+                                          command=self.simulate_day,
+                                          bg=self.ACCENT_COLOR, radius=10,
+                                          font=(self.FONT_FAMILY, 12, "bold"),
+                                          padx=26, pady=12)
         self.continue_btn.pack(pady=(0, 5))
         
     def _create_enhanced_menu_bar(self, parent):

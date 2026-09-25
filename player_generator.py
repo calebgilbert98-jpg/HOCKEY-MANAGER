@@ -347,11 +347,18 @@ class PlayerGenerator:
         
         # Get and apply archetype
         archetype_name, archetype_data = get_archetype_for_position(position)
-        player.archetype = archetype_name
         self.apply_archetype_modifiers(player, archetype_name, archetype_data)
-        
+
         # Apply potential modifiers
         self.apply_potential_modifiers(player, potential_grade)
+
+        # Classify the true archetype from final attributes: a player IS what
+        # his attributes say, so scouting/chemistry/sim all see the real thing
+        try:
+            from player_archetypes import classify_player
+            player.archetype = classify_player(player)
+        except Exception:
+            player.archetype = archetype_name
         
         # Set contract info if not free agent
         if team_name != "Free Agent":
