@@ -1400,6 +1400,18 @@ class FreeAgencyWindow(tk.Toplevel):
         )
         cap_label.pack(side=tk.RIGHT)
     
+    def _fa_set_filter(self, var, value):
+        """Set a free-agency pill filter and refresh instantly."""
+        var.set(value)
+        self._fa_paint_pills()
+        self.populate_filtered_players()
+
+    def _fa_paint_pills(self):
+        for var, btns in getattr(self, '_fa_pill_groups', []):
+            current = var.get()
+            for value, btn in btns.items():
+                btn.set_selected(value == current)
+
     def create_enhanced_player_tab(self):
         """Create the enhanced player free agency tab with advanced features."""
         player_tab = ttk.Frame(self.notebook, style='Panel.TFrame')
@@ -1408,77 +1420,60 @@ class FreeAgencyWindow(tk.Toplevel):
         # Filter section
         filter_frame = ttk.LabelFrame(player_tab, text="Player Filters & Search", padding=15)
         filter_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # First row of filters
-        filter_row1 = ttk.Frame(filter_frame, style='Panel.TFrame')
-        filter_row1.pack(fill=tk.X, pady=(0, 10))
-        
-        # Name search
-        ttk.Label(filter_row1, text="Name:", style='Content.TLabel').grid(row=0, column=0, padx=(0, 5), pady=2, sticky='w')
-        self.player_name_search = ttk.Entry(filter_row1, width=15, font=(self.parent.FONT_FAMILY, 10))
-        self.player_name_search.grid(row=0, column=1, padx=(0, 15), pady=2)
+
+        # Name search (text search keeps a text box; everything else is pills)
+        search_row = ttk.Frame(filter_frame, style='Panel.TFrame')
+        search_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(search_row, text="Name:", style='Content.TLabel').pack(side=tk.LEFT, padx=(0, 5))
+        self.player_name_search = ttk.Entry(search_row, width=22, font=(self.parent.FONT_FAMILY, 10))
+        self.player_name_search.pack(side=tk.LEFT, padx=(0, 15))
         self.player_name_search.bind('<KeyRelease>', self.filter_players)
-        
-        # Position filter
-        ttk.Label(filter_row1, text="Position:", style='Content.TLabel').grid(row=0, column=2, padx=(0, 5), pady=2, sticky='w')
-        positions = ['All', 'C', 'LW', 'RW', 'LD', 'RD', 'D', 'G']
-        self.player_position_filter = ttk.Combobox(filter_row1, values=positions, state='readonly', width=8)
-        self.player_position_filter.set('All')
-        self.player_position_filter.grid(row=0, column=3, padx=(0, 15), pady=2)
-        self.player_position_filter.bind('<<ComboboxSelected>>', self.filter_players)
-        
-        # Age range
-        ttk.Label(filter_row1, text="Age:", style='Content.TLabel').grid(row=0, column=4, padx=(0, 5), pady=2, sticky='w')
-        age_ranges = ['All', '18-22', '23-26', '27-30', '31-35', '36+']
-        self.player_age_filter = ttk.Combobox(filter_row1, values=age_ranges, state='readonly', width=10)
-        self.player_age_filter.set('All')
-        self.player_age_filter.grid(row=0, column=5, padx=(0, 15), pady=2)
-        self.player_age_filter.bind('<<ComboboxSelected>>', self.filter_players)
-        
-        # Overall rating
-        ttk.Label(filter_row1, text="Rating:", style='Content.TLabel').grid(row=0, column=6, padx=(0, 5), pady=2, sticky='w')
-        rating_ranges = ['All', '47+', '44-46', '40-43', '37-39', '34-36', '<34']
-        self.player_rating_filter = ttk.Combobox(filter_row1, values=rating_ranges, state='readonly', width=10)
-        self.player_rating_filter.set('All')
-        self.player_rating_filter.grid(row=0, column=7, padx=(0, 15), pady=2)
-        self.player_rating_filter.bind('<<ComboboxSelected>>', self.filter_players)
-        
-        # Second row of filters
-        filter_row2 = ttk.Frame(filter_frame, style='Panel.TFrame')
-        filter_row2.pack(fill=tk.X, pady=(0, 10))
-        
-        # Salary range
-        ttk.Label(filter_row2, text="Salary:", style='Content.TLabel').grid(row=0, column=0, padx=(0, 5), pady=2, sticky='w')
-        salary_ranges = ['All', 'Under $1M', '$1M-$3M', '$3M-$5M', '$5M-$8M', 'Over $8M']
-        self.player_salary_filter = ttk.Combobox(filter_row2, values=salary_ranges, state='readonly', width=12)
-        self.player_salary_filter.set('All')
-        self.player_salary_filter.grid(row=0, column=1, padx=(0, 15), pady=2)
-        self.player_salary_filter.bind('<<ComboboxSelected>>', self.filter_players)
-        
-        # Contract length
-        ttk.Label(filter_row2, text="Contract:", style='Content.TLabel').grid(row=0, column=2, padx=(0, 5), pady=2, sticky='w')
-        contract_lengths = ['All', '1 Year', '2 Years', '3-4 Years', '5+ Years']
-        self.player_contract_filter = ttk.Combobox(filter_row2, values=contract_lengths, state='readonly', width=10)
-        self.player_contract_filter.set('All')
-        self.player_contract_filter.grid(row=0, column=3, padx=(0, 15), pady=2)
-        self.player_contract_filter.bind('<<ComboboxSelected>>', self.filter_players)
-        
-        # Sort options
-        ttk.Label(filter_row2, text="Sort by:", style='Content.TLabel').grid(row=0, column=4, padx=(0, 5), pady=2, sticky='w')
-        sort_options = ['Overall Rating', 'Age', 'Name', 'Position', 'Salary', 'Potential']
-        self.player_sort_filter = ttk.Combobox(filter_row2, values=sort_options, state='readonly', width=12)
-        self.player_sort_filter.set('Overall Rating')
-        self.player_sort_filter.grid(row=0, column=5, padx=(0, 15), pady=2)
-        self.player_sort_filter.bind('<<ComboboxSelected>>', self.filter_players)
-        
-        # Clear filters button
-        ttk.Button(
-            filter_row2,
-            text="Clear Filters",
-            style='Secondary.TButton',
-            command=self.clear_player_filters
-        ).grid(row=0, column=6, padx=(15, 0), pady=2)
-        
+        ttk.Button(search_row, text="Clear Filters", style='Secondary.TButton',
+                   command=self.clear_player_filters).pack(side=tk.RIGHT)
+
+        # Pill filter rows (instant-apply, no dropdowns)
+        self._fa_filter_vars = {}
+        self._fa_pill_groups = []
+
+        def _pill_row(label, attr, default, options):
+            var = tk.StringVar(master=self, value=default)
+            setattr(self, attr, var)
+            self._fa_filter_vars[attr] = (var, default)
+            row = ttk.Frame(filter_frame, style='Panel.TFrame')
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=label, style='Content.TLabel', width=9).pack(side=tk.LEFT)
+            btns = {}
+            try:
+                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+            except Exception:
+                canvas_bg = '#111826'
+            for value, text in options:
+                b = PillButton(row, text=text, bg=canvas_bg,
+                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                               padx=11, pady=4,
+                               command=lambda v=value, vv=var: self._fa_set_filter(vv, v))
+                b.pack(side=tk.LEFT, padx=2)
+                btns[value] = b
+            self._fa_pill_groups.append((var, btns))
+            self._fa_paint_pills()
+
+        _pill_row("Position:", 'player_position_filter', 'All',
+                  [(v, v) for v in ('All', 'C', 'LW', 'RW', 'LD', 'RD', 'G')])
+        _pill_row("Age:", 'player_age_filter', 'All',
+                  [(v, v) for v in ('All', '18-22', '23-26', '27-30', '31-35', '36+')])
+        _pill_row("Rating:", 'player_rating_filter', 'All',
+                  [('All', 'All'), ('90+', '90+'), ('85-89', '85-89'),
+                   ('80-84', '80-84'), ('75-79', '75-79'), ('70-74', '70-74'),
+                   ('<70', '<70')])
+        _pill_row("Salary:", 'player_salary_filter', 'All',
+                  [(v, v) for v in ('All', 'Under $1M', '$1M-$3M', '$3M-$5M',
+                                    '$5M-$8M', 'Over $8M')])
+        _pill_row("Contract:", 'player_contract_filter', 'All',
+                  [(v, v) for v in ('All', '1 Year', '2 Years', '3-4 Years', '5+ Years')])
+        _pill_row("Sort by:", 'player_sort_filter', 'Overall',
+                  [(v, v) for v in ('Overall', 'Age', 'Name', 'Position',
+                                    'Salary', 'Potential')])
+
         # Results and selection info
         info_frame = ttk.Frame(player_tab, style='Panel.TFrame')
         info_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
@@ -2029,26 +2024,52 @@ class FreeAgencyWindow(tk.Toplevel):
                 elif age_filter == '36+' and age < 36:
                     continue
             
-            # Rating filter
+            # Rating filter (1-100 display scale, matching the OVR column)
             if rating_filter != 'All':
-                rating = player.overall_rating()
-                if rating_filter == '47+' and rating < 47:
+                rating = to_100_scale(player.overall_rating())
+                if rating_filter == '90+' and rating < 90:
                     continue
-                elif rating_filter == '44-46' and not (44 <= rating <= 46):
+                elif rating_filter == '85-89' and not (85 <= rating <= 89):
                     continue
-                elif rating_filter == '40-43' and not (40 <= rating <= 43):
+                elif rating_filter == '80-84' and not (80 <= rating <= 84):
                     continue
-                elif rating_filter == '37-39' and not (37 <= rating <= 39):
+                elif rating_filter == '75-79' and not (75 <= rating <= 79):
                     continue
-                elif rating_filter == '34-36' and not (34 <= rating <= 36):
+                elif rating_filter == '70-74' and not (70 <= rating <= 74):
                     continue
-                elif rating_filter == '<34' and rating >= 34:
+                elif rating_filter == '<70' and rating >= 70:
                     continue
-            
+
+            # Salary filter (was read but never applied)
+            if salary_filter != 'All':
+                salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
+                if salary_filter == 'Under $1M' and salary >= 1_000_000:
+                    continue
+                elif salary_filter == '$1M-$3M' and not (1_000_000 <= salary <= 3_000_000):
+                    continue
+                elif salary_filter == '$3M-$5M' and not (3_000_000 < salary <= 5_000_000):
+                    continue
+                elif salary_filter == '$5M-$8M' and not (5_000_000 < salary <= 8_000_000):
+                    continue
+                elif salary_filter == 'Over $8M' and salary <= 8_000_000:
+                    continue
+
+            # Contract filter (was read but never applied)
+            if contract_filter != 'All':
+                years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
+                if contract_filter == '1 Year' and years != 1:
+                    continue
+                elif contract_filter == '2 Years' and years != 2:
+                    continue
+                elif contract_filter == '3-4 Years' and not (3 <= years <= 4):
+                    continue
+                elif contract_filter == '5+ Years' and years < 5:
+                    continue
+
             filtered_players.append(player)
-        
+
         # Sort players
-        if sort_by == 'Overall Rating':
+        if sort_by == 'Overall':
             filtered_players.sort(key=lambda p: p.overall_rating(), reverse=True)
         elif sort_by == 'Age':
             filtered_players.sort(key=lambda p: p.age)
@@ -2056,6 +2077,12 @@ class FreeAgencyWindow(tk.Toplevel):
             filtered_players.sort(key=lambda p: p.full_name)
         elif sort_by == 'Position':
             filtered_players.sort(key=lambda p: p.primary_position.value)
+        elif sort_by == 'Salary':
+            filtered_players.sort(
+                key=lambda p: getattr(p, "salary", getattr(p.contract, "salary", 750000)),
+                reverse=True)
+        elif sort_by == 'Potential':
+            filtered_players.sort(key=lambda p: p.potential_grade or '')
         
         # Populate tree
         for player in filtered_players:
@@ -2066,7 +2093,7 @@ class FreeAgencyWindow(tk.Toplevel):
                 player.full_name,
                 player.primary_position.value,
                 player.age,
-                player.overall_rating(),
+                to_100_scale(player.overall_rating()),
                 player.potential_grade,
                 f"${salary:,}",
                 f"{contract_years}y",
@@ -2166,7 +2193,8 @@ class FreeAgencyWindow(tk.Toplevel):
         self.player_rating_filter.set('All')
         self.player_salary_filter.set('All')
         self.player_contract_filter.set('All')
-        self.player_sort_filter.set('Overall Rating')
+        self.player_sort_filter.set('Overall')
+        self._fa_paint_pills()
         self.populate_filtered_players()
     
     def clear_staff_filters(self):
