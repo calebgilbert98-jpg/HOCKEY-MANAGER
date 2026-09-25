@@ -12997,8 +12997,8 @@ class GMOptionsWindow(tk.Toplevel):
     
     def open_team_analytics(self):
         """Open advanced team analytics"""
-        messagebox.showinfo("Team Analytics", 
-                           "Team Analytics coming soon!\n\nWill include:\n• Player Performance Trends\n• Line Combination Analysis\n• Opponent Scouting Reports\n• Statistical Breakdowns")
+        from windows import TeamAnalyticsWindow
+        TeamAnalyticsWindow(self.parent)
     
     def open_season_goals(self):
         """Open season goals and objectives"""

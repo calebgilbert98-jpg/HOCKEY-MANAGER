@@ -11989,3 +11989,132 @@ class SeasonGoalsWindow(tk.Toplevel):
         for label, done in miles:
             mark = "✓" if done else "○"
             _mkline(self.mile_lines, f"{mark}  {label}")
+
+
+class TeamAnalyticsWindow(tk.Toplevel):
+    """Team Analytics: offense, defense, goalies, scoring mix, discipline."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Team Analytics")
+        self.configure(background=parent.BG_COLOR)
+        self.geometry("880x640")
+        self._build()
+
+    def _card(self, title, r, c):
+        card = ttk.Frame(self.grid_host, style='Card.TFrame', padding=12)
+        card.grid(row=r, column=c, sticky='nsew', padx=6, pady=6)
+        ttk.Label(card, text=title, style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+        ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
+        return card
+
+    def _line(self, card, text, secondary=False):
+        ttk.Label(card, text=text,
+                  style='Secondary.TLabel' if secondary else 'TLabel',
+                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+
+    def _big(self, card, text):
+        ttk.Label(card, text=text, style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
+
+    def _build(self):
+        team = self.parent.user_team
+        header = ttk.Frame(self, style='Panel.TFrame', padding=12)
+        header.pack(fill=tk.X, padx=12, pady=(12, 4))
+        ttk.Label(header, text="Team Analytics",
+                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  style='TLabel').pack(side=tk.LEFT)
+        PillButton(header, text="Refresh", bg='#111826',
+                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
+
+        self.grid_host = ttk.Frame(self, style='Panel.TFrame')
+        self.grid_host.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+        for i in range(2):
+            self.grid_host.columnconfigure(i, weight=1)
+        for i in range(3):
+            self.grid_host.rowconfigure(i, weight=1)
+        self._fill(team)
+
+    def _fill(self, team):
+        for child in self.grid_host.winfo_children():
+            child.destroy()
+        skaters = [p for p in team.roster if p.primary_position.value != 'G']
+        goalies = [p for p in team.roster if p.primary_position.value == 'G']
+        tgp = max(1, max([p.stats.games_played for p in team.roster] or [0]))
+
+        gf = sum(p.stats.goals for p in skaters)
+        shots = sum(p.stats.shots for p in skaters)
+        ga = sum((p.stats.shots_against - p.stats.saves) for p in goalies)
+        sa = sum(p.stats.shots_against for p in goalies)
+        sv = sum(p.stats.saves for p in goalies)
+        pim = sum(p.stats.penalties_in_minutes for p in team.roster)
+
+        # Offense
+        card = self._card("Offense", 0, 0)
+        self._big(card, f"{gf / tgp:.2f}")
+        self._line(card, "goals per game", secondary=True)
+        self._line(card, f"{gf} goals in {tgp} team games")
+        if shots:
+            self._line(card, f"{shots / tgp:.1f} shots/game — "
+                             f"{gf / shots * 100:.1f}% shooting")
+
+        # Defense
+        card = self._card("Defense", 0, 1)
+        self._big(card, f"{ga / tgp:.2f}")
+        self._line(card, "goals against per game", secondary=True)
+        self._line(card, f"{ga} allowed in {tgp} team games")
+        if sa:
+            self._line(card, f"{sa / tgp:.1f} shots against/game — "
+                             f"{sv / sa * 100:.1f}% team save%")
+
+        # Goalies
+        card = self._card("Goaltenders", 1, 0)
+        if goalies:
+            goalies.sort(key=lambda p: p.stats.games_played, reverse=True)
+            for g in goalies[:4]:
+                gp = g.stats.games_played
+                gsa, gsv = g.stats.shots_against, g.stats.saves
+                gga = gsa - gsv
+                svp = f"{gsv / gsa * 100:.1f}%" if gsa else "—"
+                ga_g = f"{gga / gp:.2f}" if gp else "—"
+                self._line(card, f"{g.full_name}: {gp} GP, {svp} SV%, {ga_g} GA/G")
+        else:
+            self._line(card, "No goaltenders on roster", secondary=True)
+
+        # Scoring by position
+        card = self._card("Scoring Mix", 1, 1)
+        pos_goals = {}
+        for p in skaters:
+            pos_goals[p.primary_position.value] = \
+                pos_goals.get(p.primary_position.value, 0) + p.stats.goals
+        total = max(1, sum(pos_goals.values()))
+        for pos in ("C", "LW", "RW", "LD", "RD"):
+            gls = pos_goals.get(pos, 0)
+            bar = "■" * max(1, int(gls / total * 20)) if gls else "—"
+            self._line(card, f"{pos:3s} {gls:3d} goals  {bar}")
+
+        # Discipline
+        card = self._card("Discipline", 2, 0)
+        self._big(card, f"{pim / tgp:.1f}")
+        self._line(card, "PIM per game", secondary=True)
+        offenders = sorted(team.roster,
+                           key=lambda p: p.stats.penalties_in_minutes,
+                           reverse=True)[:3]
+        for p in offenders:
+            if p.stats.penalties_in_minutes:
+                self._line(card, f"{p.full_name}: {p.stats.penalties_in_minutes} PIM")
+
+        # Top scorers
+        card = self._card("Top Scorers", 2, 1)
+        skaters.sort(key=lambda p: p.stats.points, reverse=True)
+        for p in skaters[:5]:
+            s = p.stats
+            ppg = s.points / max(1, s.games_played)
+            self._line(card, f"{p.full_name}: {s.goals}G {s.assists}A "
+                             f"({ppg:.2f} P/GP)")
+
+    def _refresh(self):
+        self._fill(self.parent.user_team)
