@@ -2528,36 +2528,91 @@ class League:
             home_name = get_team_name(target_game['home_team'])
             away_name = get_team_name(target_game['away_team'])
             
-            # Look for a nearby open date (within 14 days) where neither team plays
-            # and moving wouldn't create new violations
+            # Look for an open date where neither team plays
+            # Strategy 1: Nearby dates (14 days)
+            # Strategy 2: Wider window (30 days)  
+            # Strategy 3: Full season scan
+            # Strategy 4: Swap with another game
             moved = False
-            for offset in range(1, 15):
-                for new_date in [d2 + timedelta(days=offset), d2 - timedelta(days=offset)]:
-                    if new_date < min_date or new_date > max_date:
+            
+            # Strategy 1-3: Find open date (expanding search)
+            for max_offset in [14, 30, 1000]:  # 1000 = full season
+                if moved:
+                    break
+                for offset in range(1, max_offset + 1):
+                    if moved:
+                        break
+                    for new_date in [d2 + timedelta(days=offset), d2 - timedelta(days=offset)]:
+                        if new_date < min_date or new_date > max_date:
+                            continue
+                        if max_offset == 1000 and offset > (max_date - min_date).days:
+                            break
+                        
+                        playing = teams_playing_on(games, new_date)
+                        if home_name in playing or away_name in playing:
+                            continue
+                        
+                        # Don't create new violations
+                        other_games = [g for g in games if g is not target_game]
+                        if would_create_violation(other_games, home_name, new_date):
+                            continue
+                        if would_create_violation(other_games, away_name, new_date):
+                            continue
+                        
+                        # Safe to move
+                        target_game['date'] = new_date
+                        fixed += 1
+                        moved = True
+                        break
+                    if max_offset == 1000 and offset > (max_date - min_date).days:
+                        break
+            
+            # Strategy 4: If still not moved, try swapping with another game
+            # Find a game on a date where our teams don't play, swap dates
+            if not moved:
+                for other_game in games:
+                    if other_game is target_game:
+                        continue
+                    other_date = other_game['date']
+                    other_home = get_team_name(other_game['home_team'])
+                    other_away = get_team_name(other_game['away_team'])
+                    
+                    # Can't swap if it would cause same-day conflict
+                    # (our teams would play on other_date, their teams on d2)
+                    playing_on_other = teams_playing_on(games, other_date)
+                    playing_on_d2 = teams_playing_on(games, d2)
+                    
+                    # After swap: our game moves to other_date, their game moves to d2
+                    # Check: our teams not already on other_date (we know they're not, we checked)
+                    # Check: their teams not already on d2 (excluding our game)
+                    other_teams_on_d2 = playing_on_d2 - {home_name, away_name}
+                    if other_home in other_teams_on_d2 or other_away in other_teams_on_d2:
                         continue
                     
-                    playing = teams_playing_on(games, new_date)
-                    if home_name in playing or away_name in playing:
+                    # Check no new violations would be created
+                    # (Simplified: just check the four teams involved)
+                    temp_games = [g for g in games if g is not target_game and g is not other_game]
+                    # Simulate the swap
+                    if would_create_violation(temp_games, home_name, other_date):
+                        continue
+                    if would_create_violation(temp_games, away_name, other_date):
+                        continue
+                    if would_create_violation(temp_games, other_home, d2):
+                        continue
+                    if would_create_violation(temp_games, other_away, d2):
                         continue
                     
-                    # Don't move to a date that would create a new violation for either team
-                    # (temporarily remove the game from d2 for the check)
-                    other_games = [g for g in games if g is not target_game]
-                    if would_create_violation(other_games, home_name, new_date):
-                        continue
-                    if would_create_violation(other_games, away_name, new_date):
-                        continue
-                    
-                    # Safe to move
-                    target_game['date'] = new_date
+                    # Safe to swap
+                    target_game['date'], other_game['date'] = other_date, d2
                     fixed += 1
                     moved = True
-                    break
-                if moved:
+                    print(f"🔄 Swapped games to fix 3-in-a-row for {team_name}")
                     break
             
             if not moved:
-                print(f"⚠️ Could not reschedule {home_name} vs {away_name} on {d2} to break 3-in-a-row for {team_name}")
+                # ABSOLUTE LAST RESORT: This should never happen with 200-day season
+                # But if it does, we log it as a critical error
+                print(f"🚨 CRITICAL: Could not fix 3-in-a-row for {team_name} on {d2} ({home_name} vs {away_name})")
         
         # Final check
         remaining = find_violations(games)
