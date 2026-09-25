@@ -421,7 +421,6 @@ class PlayerGenerator:
         rookies.sort(key=lambda p: p.overall_rating(), reverse=True)
         
         print(f"Generated {len(rookies)} rookies")
-        print(f"Position distribution: {position_counts}")
         
         return rookies
     
@@ -477,7 +476,6 @@ class PlayerGenerator:
             position_counts[player.primary_position] += 1
         
         print(f"Generated {len(nhl_players)} NHL players")
-        print(f"Position distribution: {position_counts}")
         
         return nhl_players
     

@@ -578,7 +578,6 @@ def generate_draft_class(num_prospects: int = 224) -> list[Player]:
     prospects.sort(key=lambda p: p.draft_ranking, reverse=True)
     
     print(f"Generated a new draft class with {len(prospects)} prospects.")
-    print(f"Position distribution: {position_counts}")
     print(f"Potential distribution: {potential_counts}")
     
     return prospects

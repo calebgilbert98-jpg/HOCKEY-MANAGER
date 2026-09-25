@@ -2394,7 +2394,6 @@ class League:
                 if current_date.strftime('%Y-%m-%d') not in self.games:
                     self.games[current_date.strftime('%Y-%m-%d')] = []
                 self.games[current_date.strftime('%Y-%m-%d')].extend(daily_games)
-                print(f"{current_date}: Scheduled {len(daily_games)} games ({len(teams_playing_today)} teams)")
                 
                 # Verify no team plays twice today
                 team_count_today = {}

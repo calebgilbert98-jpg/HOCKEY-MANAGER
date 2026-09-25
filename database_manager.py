@@ -298,13 +298,9 @@ class DatabaseManager:
         print("Offseason movement simulation complete")
     
     def _print_roster_summary(self, teams: List[Team]) -> None:
-        """Print a summary of team rosters."""
-        print("\nRoster Summary:")
-        for team in teams:
-            nhl_count = len(team.roster)
-            ahl_count = len(team.ahl_roster)
-            prospect_count = len(team.prospects)
-            print(f"{team.team_name}: {nhl_count} NHL, {ahl_count} AHL, {prospect_count} prospects")
+        """Log a one-line summary of team rosters."""
+        total = sum(len(t.roster) + len(t.ahl_roster) for t in teams)
+        print(f"Rosters populated: {len(teams)} teams, {total} players")
     
     def get_database_statistics(self) -> Dict[str, any]:
         """Get comprehensive database statistics."""

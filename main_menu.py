@@ -17,6 +17,34 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+class _MenuItemShim:
+    """Lets existing code enable/disable canvas menu rows like a button."""
+    def __init__(self, menu, item_id):
+        self._menu = menu
+        self._item_id = item_id
+
+    def configure(self, **kw):
+        if 'state' in kw:
+            self._menu._set_item_enabled(self._item_id, kw['state'] == 'normal')
+
+    config = configure
+
+
+class _TextShim:
+    """Lets existing code set text on a canvas text item like a label."""
+    def __init__(self, canvas, text_id):
+        self._canvas = canvas
+        self._text_id = text_id
+
+    def configure(self, **kw):
+        if 'text' in kw:
+            try:
+                self._canvas.itemconfig(self._text_id, text=kw['text'])
+            except Exception:
+                pass
+
+    config = configure
+
 class MainMenu(tk.Tk):
     """Modern main menu interface for Hockey Manager"""
     
@@ -741,59 +769,8 @@ def launch_hockey_manager():
         traceback.print_exc()
         messagebox.showerror("Launch Error", f"Failed to start Hockey Manager:\n{str(e)}")
 
-    def _cleanup_resources(self):
-        """Clean up image resources to prevent memory leaks"""
-        try:
-            if hasattr(self, 'background_photo') and self.background_photo:
-                del self.background_photo
-                self.background_photo = None
-            if hasattr(self, 'background_image') and self.background_image:
-                self.background_image.close()
-                del self.background_image
-                self.background_image = None
-        except Exception as e:
-            print(f"Error cleaning up main menu resources: {e}")
-    
-    def _on_closing(self):
-        """Handle window closing properly"""
-        self._cleanup_resources()
-        self.destroy()
-    
-    def destroy(self):
-        """Override destroy to ensure proper cleanup"""
-        self._cleanup_resources()
-        super().destroy()
-
 
 if __name__ == "__main__":
     launch_hockey_manager()
 
-
-class _MenuItemShim:
-    """Lets existing code enable/disable canvas menu rows like a button."""
-    def __init__(self, menu, item_id):
-        self._menu = menu
-        self._item_id = item_id
-
-    def configure(self, **kw):
-        if 'state' in kw:
-            self._menu._set_item_enabled(self._item_id, kw['state'] == 'normal')
-
-    config = configure
-
-
-class _TextShim:
-    """Lets existing code set text on a canvas text item like a label."""
-    def __init__(self, canvas, text_id):
-        self._canvas = canvas
-        self._text_id = text_id
-
-    def configure(self, **kw):
-        if 'text' in kw:
-            try:
-                self._canvas.itemconfig(self._text_id, text=kw['text'])
-            except Exception:
-                pass
-
-    config = configure
 
