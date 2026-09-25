@@ -3739,17 +3739,38 @@ class League:
         
         # Track which teams are playing on which dates to prevent conflicts
         team_schedules = {team.team_name: [] for team in league_teams}
+        team_date_sets = {team.team_name: set() for team in league_teams}
         scheduled_games = 0
-        
+
+        def _would_be_three_in_a_row(team_name, game_date):
+            """True if scheduling game_date gives the team 3+ consecutive game days."""
+            ds = team_date_sets[team_name]
+            prev = game_date - timedelta(days=1)
+            prev2 = game_date - timedelta(days=2)
+            nxt = game_date + timedelta(days=1)
+            nxt2 = game_date + timedelta(days=2)
+            # game_date + previous two days
+            if prev in ds and prev2 in ds:
+                return True
+            # game_date between two existing game days
+            if prev in ds and nxt in ds:
+                return True
+            # game_date + next two days
+            if nxt in ds and nxt2 in ds:
+                return True
+            return False
+
         # Schedule games with same-day conflict prevention
         for home_team, away_team in matchups:
             game_scheduled = False
-            
+
             # Try to find a date where both teams are available
             for game_date in available_dates:
                 # Check if either team already has a game on this date
-                if (game_date not in team_schedules[home_team.team_name] and 
-                    game_date not in team_schedules[away_team.team_name]):
+                if (game_date not in team_date_sets[home_team.team_name] and
+                    game_date not in team_date_sets[away_team.team_name] and
+                    not _would_be_three_in_a_row(home_team.team_name, game_date) and
+                    not _would_be_three_in_a_row(away_team.team_name, game_date)):
                     
                     # Schedule the game (dict format matches NHL entries)
                     from datetime import time as dt_time
@@ -3764,6 +3785,8 @@ class League:
                     # Mark both teams as busy on this date
                     team_schedules[home_team.team_name].append(game_date)
                     team_schedules[away_team.team_name].append(game_date)
+                    team_date_sets[home_team.team_name].add(game_date)
+                    team_date_sets[away_team.team_name].add(game_date)
                     
                     scheduled_games += 1
                     game_scheduled = True
