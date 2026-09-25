@@ -13044,104 +13044,82 @@ def main():
             pass
 
 def _direct_launch():
-    """Direct launch fallback method"""
+    """Direct launch fallback method.
+
+    Routes through the new-game setup wizard so the fallback offers the
+    same Quick Start / Custom Setup experience as the primary paths,
+    instead of hardcoded default settings.
+    """
+    print("Starting Hockey Manager directly (setup wizard)...")
+    _launch_with_wizard()
+    
+def _launch_with_wizard():
+    """Launch a new game through the setup wizard (Quick Start / Custom Setup).
+
+    Shared by the ``direct`` CLI path and the _direct_launch() fallback so
+    every wizard-less entry point offers the same setup experience.
+    Returns True if a game was launched, False if the user cancelled.
+    """
+    import tkinter as tk
+    from tkinter import messagebox
+    from new_game_setup import open_setup_wizard, build_database_config
+
+    holder = {}
+    root = tk.Tk()
+    root.withdraw()
+
+    wiz = open_setup_wizard(root, lambda cfg: holder.setdefault('config', cfg))
+    root.wait_window(wiz)
+    config = holder.get('config')
+    root.destroy()
+
+    if not config:
+        print("User cancelled setup - game not launched")
+        return False
+
     try:
-        print("🚀 Starting Hockey Manager directly...")
-        
-        # Create game manager with default settings
-        print("🎮 Initializing game manager...")
-        gm = GameManager()
-        print("✅ Game manager created successfully")
-        
-        # Apply default startup settings to generate rosters
-        print("🏒 Applying default startup settings...")
-        default_settings = {
-            'database_size': 'Medium',
+        print("Starting Puck Dynasty with setup wizard settings...")
+        settings = {
+            'database_size': config['database_size'].capitalize(),
+            'database_config': build_database_config(config),
             'fantasy_draft': False,
-            'user_team': 'Carolina Hurricanes'
+            'user_team': config['user_team'],
+            'user_league': config['user_league'],
+            'gm_name': config['gm_name'],
+            'fog_of_war': config['fog_of_war'],
+            'sim_detail': config['sim_detail'],
         }
-        gm.apply_startup_settings(default_settings)
-        print("✅ Startup settings applied, rosters generated")
-        
-        # Create and start the main game application
-        print("🖥️ Creating main application window...")
+        gm = GameManager()
+        gm.apply_startup_settings(settings)
+        gm.set_user_team(config['user_team'])
+
         app = HockeyManagerGUI(gm)
-        print("✅ GUI created successfully")
-        
-        # Ensure window is visible and focused
-        print("👁️ Making window visible...")
-        app.lift()
-        app.focus_force()
-        app.attributes('-topmost', True)
-        app.after(100, lambda: app.attributes('-topmost', False))
-        
-        print("🎯 Starting main loop...")
+        app.startup_settings = settings
+        app._update_game_viewer_button_state()
         app.mainloop()
-        print("✅ Application closed normally")
-        
+        return True
+
     except Exception as e:
         import traceback
-        print("❌ Direct launch error:", e)
+        print("Error launching Hockey Manager:", e)
         traceback.print_exc()
         try:
-            from tkinter import messagebox
             messagebox.showerror("Launch Error", f"Failed to start Hockey Manager:\n{str(e)}")
         except:
             pass
-    
+        return False
+
+
 # --- Main execution
 if __name__ == "__main__":
     import sys
-    
+
     # Check for test argument
     if len(sys.argv) > 1 and sys.argv[1] == "test_enhanced_sim":
         test_enhanced_simulation()
     elif len(sys.argv) > 1 and sys.argv[1] == "direct":
         # Direct launch — new-game setup wizard (Quick Start / Custom Setup)
-        import tkinter as tk
-        from new_game_setup import open_setup_wizard, build_database_config
-
-        holder = {}
-        root = tk.Tk()
-        root.withdraw()
-
-        wiz = open_setup_wizard(root, lambda cfg: holder.setdefault('config', cfg))
-        root.wait_window(wiz)
-        config = holder.get('config')
-        root.destroy()
-
-        if config:
-            try:
-                print("Starting Puck Dynasty with setup wizard settings...")
-                settings = {
-                    'database_size': config['database_size'].capitalize(),
-                    'database_config': build_database_config(config),
-                    'fantasy_draft': False,
-                    'user_team': config['user_team'],
-                    'user_league': config['user_league'],
-                    'gm_name': config['gm_name'],
-                    'fog_of_war': config['fog_of_war'],
-                    'sim_detail': config['sim_detail'],
-                }
-                gm = GameManager()
-                gm.apply_startup_settings(settings)
-                gm.set_user_team(config['user_team'])
-
-                app = HockeyManagerGUI(gm)
-                app.startup_settings = settings
-                app._update_game_viewer_button_state()
-                app.mainloop()
-
-            except Exception as e:
-                import traceback
-                print("Error launching Hockey Manager:", e)
-                traceback.print_exc()
-                try:
-                    messagebox.showerror("Launch Error", f"Failed to start Hockey Manager:\n{str(e)}")
-                except:
-                    pass
-        else:
-            print("User cancelled setup - game not launched")
+        _launch_with_wizard()
     else:
         # Use the main function for direct launch
         main()

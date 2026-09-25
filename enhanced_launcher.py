@@ -74,6 +74,9 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.selected_team = None
         self.background_image = None
         self.team_cards = {}
+        # Setup-wizard config (set when the user completes the wizard; takes
+        # precedence over the tab's own options in _start_main_game)
+        self.wizard_config = None
         
         # Initialize default GM profile values
         self._initialize_random_gm_defaults()
@@ -681,6 +684,18 @@ This profile will influence player relationships, media interactions, and trade 
         # Game Options Section
         self._create_game_options(scrollable_frame)
         
+        # Setup wizard shortcut (Quick Start / Custom Setup with league
+        # selection, fog of war, per-league sim detail)
+        wiz_frame = tk.Frame(scrollable_frame, bg='#1A1A1A')
+        wiz_frame.pack(fill='x', pady=(0, 10))
+        tk.Button(wiz_frame,
+                  text="🧙 Open Setup Wizard",
+                  font=('Segoe UI', 12, 'bold'),
+                  bg='#1F6FEB', fg='#FFFFFF',
+                  relief='flat', bd=0, pady=10, padx=40,
+                  cursor='hand2',
+                  command=self._open_setup_wizard).pack()
+
         # Ready to Start Check
         ready_frame = tk.Frame(scrollable_frame, bg='#1A1A1A')
         ready_frame.pack(fill='x', pady=20)
@@ -1551,6 +1566,33 @@ This profile will influence player relationships, media interactions, and trade 
             self._select_team(team_name, city)
             
     # Game Setup Methods
+    def _open_setup_wizard(self):
+        """Open the new-game setup wizard (Quick Start / Custom Setup).
+
+        On completion the wizard config takes precedence over this tab's own
+        options when the game starts.
+        """
+        from new_game_setup import open_setup_wizard
+
+        holder = {}
+
+        def _on_done(cfg):
+            holder['config'] = cfg
+            self.wizard_config = cfg
+            # Reflect the wizard's team choice in the launcher UI
+            team_name = cfg.get('user_team')
+            if team_name:
+                self.selected_team = {'name': team_name, 'city': ''}
+            self._check_game_readiness()
+            try:
+                self.status_label.config(
+                    text=f"Wizard: {team_name} • {cfg.get('database_size', '').capitalize()} database")
+            except Exception:
+                pass
+
+        wiz = open_setup_wizard(self, _on_done)
+        self.wait_window(wiz)
+
     def _start_new_game(self):
         """Start new game with current settings"""
         print("🎯 START GAME button clicked!")
@@ -1651,6 +1693,24 @@ This profile will influence player relationships, media interactions, and trade 
                 'selected_team': self.selected_team['name'] if self.selected_team else None
             })
             
+            # Setup wizard takes precedence when the user completed it: it
+            # carries league selection, fog of war, and per-league sim detail
+            # that this tab does not offer.
+            if self.wizard_config:
+                from new_game_setup import build_database_config
+                cfg = self.wizard_config
+                startup_settings.update({
+                    'database_size': cfg['database_size'].capitalize(),
+                    'database_config': build_database_config(cfg),
+                    'user_team': cfg['user_team'],
+                    'selected_team': cfg['user_team'],
+                    'user_league': cfg.get('user_league', 'NHL'),
+                    'gm_name': cfg.get('gm_name', 'General Manager'),
+                    'fog_of_war': cfg.get('fog_of_war', True),
+                    'sim_detail': cfg.get('sim_detail', {}) or {},
+                })
+                print(f"✅ Setup wizard config applied: {cfg['user_team']}")
+
             # Store settings in game manager
             gm.startup_settings = startup_settings
             
