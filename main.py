@@ -6999,7 +6999,11 @@ class HockeyManagerGUI(tk.Tk):
                     # Check for hat trick (3+ goals in THIS game)
                     if game_goals[player.id] == 3:
                         print(f"🎩 HAT TRICK! {player.first_name} {player.last_name} scores 3 goals!")
-                        self.events.append({
+                        # GUI has no per-game event feed; stash on a best-effort list
+                        notable = getattr(self, 'notable_events', None)
+                        if notable is None:
+                            notable = self.notable_events = []
+                        notable.append({
                             'time': 3600, 'period': 3, 'team': team.team_name,
                             'player': player, 'event': 'Hat Trick'
                         })
