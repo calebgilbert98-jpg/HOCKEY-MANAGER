@@ -4,7 +4,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-from sleeper_ui import (
+from modern_ui import (
     AppColors, AppFonts, AppCard, PillBadge, AppButton
 )
 

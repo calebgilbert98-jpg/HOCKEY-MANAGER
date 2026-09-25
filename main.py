@@ -58,6 +58,12 @@ from media_center_window import MediaCenterWindow
 # Import Football Manager-style career systems
 import manager_career
 
+# Player archetypes + canonical chemistry (used by the lines editor)
+from player_archetypes import (
+    get_archetype, line_chemistry_report, line_chemistry_score,
+    ARCHETYPE_STRENGTHS,
+)
+
 # Import position-specific attributes if available
 try:
     from position_specific_attributes import PlayerV2, convert_to_v2
@@ -1249,7 +1255,7 @@ def best_lines(team):
 
     # Sort by overall rating
     forwards = sorted(forwards, key=lambda p: p.overall_rating(), reverse=True)[:13]  # Changed to 13 to ensure line 4 gets players
-    defensemen = sorted(defensemen, key=lambda p: p.overall_rating(), reverse=True)[:8]  # Changed to 8 for 4 pairs
+    defensemen = sorted(defensemen, key=lambda p: p.overall_rating(), reverse=True)[:6]  # 6 for 3 pairs (matches sim rotation + editor)
     goalies = sorted(goalies, key=lambda p: p.overall_rating(), reverse=True)[:2]
 
     # Build forward lines
@@ -1304,8 +1310,9 @@ def best_lines(team):
     def_pairs = []
     assigned_defense = []
     
-    # For each pair, try to get a natural LD and RD - changed to 4 pairs
-    for _ in range(4):
+    # For each pair, try to get a natural LD and RD - 3 pairs to match
+    # the sim's rotation ((clock // 60) % 3) and the lines editor
+    for _ in range(3):
         ld = next((p for p in defensemen if (p.primary_position == PlayerPosition.LEFT_DEFENSE or p.primary_position == PlayerPosition.DEFENSE) and p not in assigned_defense), None)
         rd = next((p for p in defensemen if (p.primary_position == PlayerPosition.RIGHT_DEFENSE or p.primary_position == PlayerPosition.DEFENSE) and p != ld and p not in assigned_defense), None)
         
@@ -3714,7 +3721,7 @@ class HockeyManagerGUI(tk.Tk):
         # Schedule & Calendar dropdown
         self._create_dropdown_menu(left_menu_frame, "Schedule", {
             "Schedule": self.open_schedule_window,
-            "🗓️ Calendar": self.open_calendar_window
+            "Calendar": self.open_calendar_window
         })
         
         # Separator
@@ -3723,32 +3730,32 @@ class HockeyManagerGUI(tk.Tk):
         
         # Team Management dropdown
         self._create_dropdown_menu(left_menu_frame, "Team", {
-            "📋 Edit Lines": self.open_edit_lines_window,
-            "🎯 Tactics": self.open_tactics_window,
-            "👥 Staff Management": self.open_staff_management_window,
-            "� Player Development": self.open_development_window,
+            "Edit Lines": self.open_edit_lines_window,
+            "Tactics": self.open_tactics_window,
+            "Staff Management": self.open_staff_management_window,
+            "Player Development": self.open_development_window,
             "Scouting": self.open_scouting_management_window,
-            "📊 Performance": self.open_performance_monitor,
-            "🏒 Practice Center": self.open_practice_center,
-            "🎩 Manager Hub": self.open_manager_hub
+            "Performance": self.open_performance_monitor,
+            "Practice Center": self.open_practice_center,
+            "Manager Hub": self.open_manager_hub
         })
         
         # Finances dropdown
         self._create_dropdown_menu(left_menu_frame, "Finances", {
-            "💰 Team Finances": self.open_finances_window,
-            "📝 Negotiate Extensions": self.open_contract_extensions_window
+            "Team Finances": self.open_finances_window,
+            "Negotiate Extensions": self.open_contract_extensions_window
         })
         
         # Transactions dropdown  
         self._create_dropdown_menu(left_menu_frame, "Transactions", {
-            "� Fantasy Draft": self.open_fantasy_draft_window,
-            "�🆓 Free Agents": self.open_free_agency_window,
-            "💥 Free Agent Frenzy": self.open_free_agency_frenzy,  # Only visible on July 1
-            "🔄 Trade Center": self.open_trade_window,
-            "� Trade Deadline": self.open_trade_deadline_center,  # Only visible on deadline day
-            "🏒 Draft Day Central": self.open_draft_day_central,  # Only visible on draft days
-            "�📋 Trade Block": self.open_trade_block_window,
-            "⚖️ Waivers": self.open_waivers_window
+            "Fantasy Draft": self.open_fantasy_draft_window,
+            "Free Agents": self.open_free_agency_window,
+            "Free Agent Frenzy": self.open_free_agency_frenzy,  # Only visible on July 1
+            "Trade Center": self.open_trade_window,
+            "Trade Deadline": self.open_trade_deadline_center,  # Only visible on deadline day
+            "Draft Day Central": self.open_draft_day_central,  # Only visible on draft days
+            "Trade Block": self.open_trade_block_window,
+            "Waivers": self.open_waivers_window
         })
         
         # Right side - Settings and utilities
@@ -3757,9 +3764,9 @@ class HockeyManagerGUI(tk.Tk):
 
         # Save/Load dropdown
         self._create_dropdown_menu(right_menu_frame, "Save/Load", {
-            "💾 Save Game": self.open_save_window,
-            "📁 Load Game": self.open_load_window,
-            "🏆 Playoffs": self.open_playoffs_window
+            "Save Game": self.open_save_window,
+            "Load Game": self.open_load_window,
+            "Playoffs": self.open_playoffs_window
         })
 
         # Right menu buttons - temporarily back to text
@@ -3808,8 +3815,9 @@ class HockeyManagerGUI(tk.Tk):
         """Create a dropdown menu button with organized menu items."""
         import tkinter as tk
         
-        # Create the main dropdown button as a nav pill
-        dropdown_btn = self._create_nav_pill(parent, button_text, None)
+        # Create the main dropdown button as a nav pill.
+        # The chevron marks it as a menu, distinct from plain nav pills.
+        dropdown_btn = self._create_nav_pill(parent, button_text + " ▾", None)
         
         # Create dropdown menu
         dropdown_menu = tk.Menu(self.master, tearoff=0, font=(self.FONT_FAMILY, 9))
@@ -9849,14 +9857,22 @@ class CleanEditLinesWindow(tk.Toplevel):
                                   font=(self.parent.FONT_FAMILY, 8, 'bold'), padx=4, pady=1)
         condition_label.pack()
         
-        # Bottom row - Stats if available
+        # Bottom row - Archetype and stats
+        bottom_row = tk.Frame(info_frame, bg='#6c757d')
+        bottom_row.pack(fill=tk.X, pady=(2, 0))
+
+        try:
+            arch = get_archetype(player)
+        except Exception:
+            arch = "—"
+        arch_label = tk.Label(bottom_row, text=f"Archetype: {arch}", bg='#6c757d', fg='#ffd166',
+                              font=(self.parent.FONT_FAMILY, 8, 'bold'))
+        arch_label.pack(side=tk.LEFT)
+
         if hasattr(player, 'stats'):
-            bottom_row = tk.Frame(info_frame, bg='#6c757d')
-            bottom_row.pack(fill=tk.X, pady=(2, 0))
-            
             goals = getattr(player.stats, 'goals', 0)
             assists = getattr(player.stats, 'assists', 0)
-            stats_label = tk.Label(bottom_row, text=f"⚽ {goals}G  🎯 {assists}A", bg='#6c757d', fg='#f8f9fa',
+            stats_label = tk.Label(bottom_row, text=f"  {goals}G  {assists}A", bg='#6c757d', fg='#f8f9fa',
                                   font=(self.parent.FONT_FAMILY, 8))
             stats_label.pack(side=tk.LEFT)
         
@@ -9869,8 +9885,14 @@ class CleanEditLinesWindow(tk.Toplevel):
         }
         
         # Bind drag events to all child widgets
-        for widget in [info_frame, top_row, middle_row, name_label, rating_frame, rating_label, 
-                      pos_label, condition_frame, condition_label]:
+        drag_widgets = [info_frame, top_row, middle_row, name_label, rating_frame, rating_label,
+                        pos_label, condition_frame, condition_label,
+                        bottom_row, arch_label]
+        try:
+            drag_widgets.append(stats_label)
+        except NameError:
+            pass
+        for widget in drag_widgets:
             widget.bind('<Button-1>', lambda e: self.start_drag(e, player, player_frame))
             widget.bind('<B1-Motion>', self.on_drag)
             widget.bind('<ButtonRelease-1>', self.end_drag)
@@ -10352,38 +10374,17 @@ class CleanEditLinesWindow(tk.Toplevel):
             rating_label.config(text="Line Rating: --")
     
     def calculate_chemistry_bonus(self, players):
-        """Calculate chemistry bonus based on player compatibility"""
-        if len(players) < 2:
+        """Canonical chemistry bonus: archetype complementarity between linemates.
+
+        Delegates to player_archetypes.line_chemistry_score, the same model
+        the sim uses. Positive = complementary styles, negative = duplicate
+        or clashing roles. See show_chemistry_breakdown for the per-pair
+        explanation.
+        """
+        try:
+            return float(line_chemistry_score(players))
+        except Exception:
             return 0.0
-        
-        # Simple chemistry calculation based on age and attributes
-        total_bonus = 0.0
-        
-        # Age chemistry - players within 3 years of each other get bonus
-        ages = [p.age for p in players]
-        age_range = max(ages) - min(ages)
-        if age_range <= 3:
-            total_bonus += 2.0
-        elif age_range <= 5:
-            total_bonus += 1.0
-        
-        # Nationality bonus - same country players get bonus
-        if hasattr(players[0], 'nationality'):
-            nationalities = [getattr(p, 'nationality', 'Unknown') for p in players]
-            if len(set(nationalities)) == 1:
-                total_bonus += 1.5
-        
-        # Attribute synergy - balanced lines get bonus
-        if len(players) >= 3:
-            # Check for good mix of skills
-            avg_shooting = sum(getattr(p, 'shooting', 10) for p in players) / len(players)
-            avg_passing = sum(getattr(p, 'passing', 10) for p in players) / len(players)
-            avg_checking = sum(getattr(p, 'checking', 10) for p in players) / len(players)
-            
-            if min(avg_shooting, avg_passing, avg_checking) > 12:  # Well-rounded line
-                total_bonus += 2.5
-        
-        return min(total_bonus, 5.0)  # Cap at +5 rating points
     
     def create_drop_zone(self, parent, zone_id):
         """Create a drop zone for players"""
@@ -10560,9 +10561,17 @@ class CleanEditLinesWindow(tk.Toplevel):
         rating_label = tk.Label(info_frame, text=f"⭐ {to_100_scale(player.overall_rating())}", bg='#6c757d', fg='white',
                                font=(self.parent.FONT_FAMILY, 8))
         rating_label.pack()
+
+        try:
+            arch = get_archetype(player)
+        except Exception:
+            arch = "—"
+        arch_label = tk.Label(info_frame, text=arch, bg='#6c757d', fg='#ffd166',
+                              font=(self.parent.FONT_FAMILY, 7, 'bold'))
+        arch_label.pack()
         
         # Bind click to clear with subtle feedback
-        for widget in [player_display, card_frame, info_frame, name_label, rating_label]:
+        for widget in [player_display, card_frame, info_frame, name_label, rating_label, arch_label]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, drop_zone.zone_id))
             widget.bind('<Enter>', lambda e: card_frame.config(bg='#dc3545'))  # Red on hover
             widget.bind('<Leave>', lambda e: card_frame.config(bg='#6c757d'))  # Back to gray
@@ -10632,9 +10641,17 @@ class CleanEditLinesWindow(tk.Toplevel):
         if players:
             avg = sum(p.overall_rating() for p in players) / len(players)
             chem = self.calculate_chemistry_bonus(players)
-            label.config(text=f"Line Rating: {avg:.1f} (+{chem:.1f} chem)")
+            sign = "+" if chem >= 0 else ""
+            label.config(text=f"Line Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
+            # Store for the breakdown popup; (re)bind click
+            label._chem_players = list(players)
+            label._chem_title = f"Line {line_index + 1} Chemistry"
+            label.bind("<Button-1>", lambda e, l=label: self.show_chemistry_breakdown(l))
+            label.config(cursor="hand2")
         else:
             label.config(text="Line Rating: --")
+            label.unbind("<Button-1>")
+            label.config(cursor="")
 
     def update_pair_rating_for_drop_zones(self, pair_index):
         """Update pair rating for drop zone based defense pairs."""
@@ -10648,9 +10665,74 @@ class CleanEditLinesWindow(tk.Toplevel):
         if players:
             avg = sum(p.overall_rating() for p in players) / len(players)
             chem = self.calculate_chemistry_bonus(players)
-            label.config(text=f"Pair Rating: {avg:.1f} (+{chem:.1f} chem)")
+            sign = "+" if chem >= 0 else ""
+            label.config(text=f"Pair Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
+            label._chem_players = list(players)
+            label._chem_title = f"Defense Pair {pair_index + 1} Chemistry"
+            label.bind("<Button-1>", lambda e, l=label: self.show_chemistry_breakdown(l))
+            label.config(cursor="hand2")
         else:
             label.config(text="Pair Rating: --")
+            label.unbind("<Button-1>")
+            label.config(cursor="")
+
+    def show_chemistry_breakdown(self, label):
+        """Popup explaining exactly what drives a line/pair's chemistry."""
+        players = getattr(label, "_chem_players", [])
+        title = getattr(label, "_chem_title", "Chemistry")
+        total, drivers = line_chemistry_report(players)
+
+        popup = tk.Toplevel(self)
+        popup.title(title)
+        popup.geometry("460x380")
+        popup.configure(bg="#1a2030")
+        popup.transient(self)
+
+        header = tk.Frame(popup, bg="#1a2030")
+        header.pack(fill="x", padx=16, pady=(16, 8))
+        tk.Label(header, text=title, bg="#1a2030", fg="white",
+                 font=(self.parent.FONT_FAMILY, 13, "bold")).pack(anchor="w")
+        sign = "+" if total >= 0 else ""
+        color = "#28a745" if total >= 0 else "#dc3545"
+        tk.Label(header, text=f"Total chemistry: {sign}{total:g}", bg="#1a2030",
+                 fg=color, font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w", pady=(4, 0))
+        tk.Label(header, text="Archetype pairings drive chemistry. "
+                 "Complementary styles boost it; duplicate roles clash.",
+                 bg="#1a2030", fg="#adb5bd",
+                 font=(self.parent.FONT_FAMILY, 9), wraplength=420,
+                 justify="left").pack(anchor="w", pady=(4, 0))
+
+        body = tk.Frame(popup, bg="#1a2030")
+        body.pack(fill="both", expand=True, padx=16, pady=8)
+        if not drivers:
+            tk.Label(body, text="No strong archetype relationships on this unit.\n"
+                     "Chemistry is neutral.",
+                     bg="#1a2030", fg="#adb5bd",
+                     font=(self.parent.FONT_FAMILY, 10)).pack(anchor="w")
+        for text, value in drivers:
+            row = tk.Frame(body, bg="#1a2030")
+            row.pack(fill="x", pady=3)
+            dot_color = "#28a745" if value > 0 else "#dc3545"
+            dot = tk.Canvas(row, width=10, height=10, bg="#1a2030",
+                            highlightthickness=0)
+            dot.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
+            dot.pack(side="left", padx=(0, 8))
+            tk.Label(row, text=text, bg="#1a2030", fg="white",
+                     font=(self.parent.FONT_FAMILY, 9), wraplength=400,
+                     justify="left", anchor="w").pack(side="left", fill="x", expand=True)
+
+        # Archetype legend for the unit's players
+        legend = tk.Frame(popup, bg="#1a2030")
+        legend.pack(fill="x", padx=16, pady=(8, 16))
+        tk.Label(legend, text="Archetypes on this unit:", bg="#1a2030",
+                 fg="#adb5bd", font=(self.parent.FONT_FAMILY, 9, "bold")).pack(anchor="w")
+        for p in players:
+            arch = get_archetype(p)
+            strength = ARCHETYPE_STRENGTHS.get(arch, "")
+            tk.Label(legend, text=f"• {p.full_name}: {arch}" + (f" — {strength}" if strength else ""),
+                     bg="#1a2030", fg="white",
+                     font=(self.parent.FONT_FAMILY, 9), wraplength=420,
+                     justify="left", anchor="w").pack(anchor="w")
 
     def _refresh_ratings_for_zone(self, zone_id):
         """Refresh line/pair rating labels affected by a drop-zone change."""

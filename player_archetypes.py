@@ -397,3 +397,64 @@ ARCHETYPE_STRENGTHS = {
     "Physical Defenseman": "Big hits, intimidation, punishing along the walls.",
     "Puck-Moving Defenseman": "First pass, zone exits, transition speed.",
 }
+
+
+# ---------------------------------------------------------------------------
+# Reusable chemistry report for UI (lines editor, roster screens, etc.)
+# ---------------------------------------------------------------------------
+
+def _player_display_name(player) -> str:
+    try:
+        name = player.full_name
+        if name:
+            return str(name)
+    except Exception:
+        pass
+    fn = getattr(player, "first_name", "")
+    ln = getattr(player, "last_name", "")
+    name = f"{fn} {ln}".strip()
+    return name or "Player"
+
+
+def line_chemistry_report(players):
+    """Explain exactly what drives a line/pair's chemistry.
+
+    Uses the canonical COMPLEMENTARITY table (archetype pairs). Returns
+    ``(total, drivers)`` where ``total`` is the summed chemistry delta and
+    ``drivers`` is a list of ``(text, value)`` tuples, one per archetype
+    pair, ordered by absolute impact. ``text`` names both players and
+    their archetypes so the UI can show precisely what affects chemistry.
+
+    Never raises; unknown archetypes contribute 0 with no driver entry.
+    """
+    players = [p for p in players if p is not None]
+    drivers = []
+    total = 0.0
+    for i in range(len(players)):
+        for j in range(i + 1, len(players)):
+            p1, p2 = players[i], players[j]
+            try:
+                a1, a2 = get_archetype(p1), get_archetype(p2)
+            except Exception:
+                continue
+            value = complementarity(a1, a2)
+            if value == 0:
+                continue
+            total += value
+            n1, n2 = _player_display_name(p1), _player_display_name(p2)
+            sign = "+" if value > 0 else ""
+            if value > 0:
+                reason = "complement each other"
+            else:
+                reason = "duplicate roles" if a1 == a2 else "clash stylistically"
+            drivers.append(
+                (f"{n1} ({a1}) + {n2} ({a2}): {sign}{value:g} — {reason}",
+                 value))
+    drivers.sort(key=lambda d: abs(d[1]), reverse=True)
+    return total, drivers
+
+
+def line_chemistry_score(players) -> float:
+    """Total chemistry delta for a line/pair (convenience wrapper)."""
+    total, _ = line_chemistry_report(players)
+    return total

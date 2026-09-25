@@ -31,7 +31,7 @@ def create_test_league():
     gen = PlayerGenerator()
     print(f"  League has {len(league.teams)} built-in teams")
 
-    for team in league.teams:
+    for team in list(league.teams):  # copy: we must not mutate while iterating
         team.league_name = "National Hockey League"
         # Generate a roster: 14F, 8D, 3G (23 players)
         for _ in range(14):
@@ -63,8 +63,6 @@ def create_test_league():
             team.lineup[f'D{pair}_{side}'] = p
         for i, p in enumerate(goalies):
             team.lineup[f'G{i+1}'] = p
-
-        league.teams.append(team)
 
     return league
 
