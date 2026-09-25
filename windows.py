@@ -4183,7 +4183,7 @@ class ScheduleWindow(tk.Toplevel):
         # Simulate Game button
         self.simulate_game_btn = ttk.Button(
             button_frame,
-            text="⚡ Simulate Game", 
+            text="Simulate Game", 
             command=self.simulate_selected_game,
             style='TButton'
         )
@@ -4762,7 +4762,7 @@ class FinancesWindow(tk.Toplevel):
         ttk.Button(actions_grid, text="🔄 Trade Evaluator", 
                   command=self.open_trade_evaluator).grid(row=0, column=1, padx=5, pady=5, sticky='ew')
         
-        ttk.Button(actions_grid, text="📊 Salary Analytics", 
+        ttk.Button(actions_grid, text="Salary Analytics", 
                   command=self.show_salary_analytics).grid(row=0, column=2, padx=5, pady=5, sticky='ew')
         
         ttk.Button(actions_grid, text="💸 Buyout Calculator", 
@@ -4791,7 +4791,7 @@ class FinancesWindow(tk.Toplevel):
     def create_reports_tab(self):
         """Create financial reports tab."""
         reports_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(reports_frame, text="📊 Reports")
+        self.notebook.add(reports_frame, text="Reports")
         
         # Report selection
         selection_frame = ttk.LabelFrame(reports_frame, text="Select Report", )
@@ -7695,7 +7695,7 @@ class EditLinesWindow(tk.Toplevel):
             line_rating_label.pack(side="left", padx=10)
             
             # Quick optimize button for this line
-            ttk.Button(line_header, text="⚡ Optimize", 
+            ttk.Button(line_header, text="Auto-Set", 
                       command=lambda idx=i: self._optimize_single_line(idx, 'Forwards'),
                       style='TButton').pack(side="right", padx=5)
             
@@ -7760,7 +7760,7 @@ class EditLinesWindow(tk.Toplevel):
             pair_label.pack(side="left", padx=3)  # Reduced padding from 5 to 3
             
             # Quick optimize button for this pair
-            ttk.Button(pair_header, text="⚡", 
+            ttk.Button(pair_header, text="Auto", 
                       command=lambda idx=i: self._optimize_single_line(idx, 'Defense'),
                       style='TButton', width=3).pack(side="right", padx=2)  # Compact button
             
@@ -7812,7 +7812,7 @@ class EditLinesWindow(tk.Toplevel):
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
         # PP1 unit
-        pp1_frame = ttk.LabelFrame(main_frame, text="⚡ Power Play Unit 1", style='Panel.TLabelframe')
+        pp1_frame = ttk.LabelFrame(main_frame, text="Power Play Unit 1", style='Panel.TLabelframe')
         pp1_frame.pack(fill="x", padx=5, pady=(0, 10))
         
         # PP1 header with optimization
@@ -7822,7 +7822,7 @@ class EditLinesWindow(tk.Toplevel):
         ttk.Label(pp1_header, text="PP1 - Top Unit", style='Title.TLabel',
                  font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side="left")
         
-        ttk.Button(pp1_header, text="⚡ Optimize PP1", 
+        ttk.Button(pp1_header, text="Auto-Set PP1", 
                   command=lambda: self._optimize_power_play_unit(1),
                   style='TButton').pack(side="right", padx=5)
         
@@ -7881,7 +7881,7 @@ class EditLinesWindow(tk.Toplevel):
                 self.pp1_df_vars[i].set(f"{player.full_name} ({player.primary_position.value}) - {player.overall_rating()}")
         
         # PP2 unit
-        pp2_frame = ttk.LabelFrame(main_frame, text="⚡ Power Play Unit 2", style='Panel.TLabelframe')
+        pp2_frame = ttk.LabelFrame(main_frame, text="Power Play Unit 2", style='Panel.TLabelframe')
         pp2_frame.pack(fill="x", padx=5, pady=(0, 10))
         
         # PP2 header with optimization
@@ -7891,7 +7891,7 @@ class EditLinesWindow(tk.Toplevel):
         ttk.Label(pp2_header, text="PP2 - Second Unit", style='Title.TLabel',
                  font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side="left")
         
-        ttk.Button(pp2_header, text="⚡ Optimize PP2", 
+        ttk.Button(pp2_header, text="Auto-Set PP2", 
                   command=lambda: self._optimize_power_play_unit(2),
                   style='TButton').pack(side="right", padx=5)
         
@@ -7961,7 +7961,7 @@ class EditLinesWindow(tk.Toplevel):
         ttk.Label(pk1_header, text="PK1 - Top Defensive Unit", style='Title.TLabel',
                  font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side="left")
         
-        ttk.Button(pk1_header, text="🛡️ Optimize PK1", 
+        ttk.Button(pk1_header, text="Auto-Set PK1", 
                   command=lambda: self._optimize_penalty_kill_unit(1),
                   style='TButton').pack(side="right", padx=5)
         
@@ -8031,7 +8031,7 @@ class EditLinesWindow(tk.Toplevel):
         ttk.Label(pk2_header, text="PK2 - Second Defensive Unit", style='Title.TLabel',
                  font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side="left")
         
-        ttk.Button(pk2_header, text="🛡️ Optimize PK2", 
+        ttk.Button(pk2_header, text="Auto-Set PK2", 
                   command=lambda: self._optimize_penalty_kill_unit(2),
                   style='TButton').pack(side="right", padx=5)
         
@@ -8634,7 +8634,7 @@ class EditLinesWindow(tk.Toplevel):
         ttk.Label(header_frame, text="🥅 Goalie Depth Chart", style='Title.TLabel',
                  font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(side="left")
         
-        ttk.Button(header_frame, text="⚡ Auto-Set Best", 
+        ttk.Button(header_frame, text="Auto-Set Best", 
                   command=self._optimize_goalies,
                   style='TButton').pack(side="right", padx=5)
         
@@ -8672,7 +8672,7 @@ class EditLinesWindow(tk.Toplevel):
         backup_combo.bind("<<ComboboxSelected>>", lambda e: self._update_analytics_display())
         
         # Goalie stats display
-        stats_frame = ttk.LabelFrame(main_frame, text="📊 Goalie Comparison", style='Panel.TLabelframe')
+        stats_frame = ttk.LabelFrame(main_frame, text="Goalie Comparison", style='Panel.TLabelframe')
         stats_frame.pack(fill="both", expand=True, pady=(10, 0))
         
         self.goalie_stats_text = tk.Text(stats_frame, height=8, wrap=tk.WORD,
@@ -9079,7 +9079,7 @@ class EditLinesWindow(tk.Toplevel):
         ttk.Button(left_toolbar, text="Auto-Optimize", command=self.auto_optimize_lines,
                   style='TButton').pack(side="left", padx=(0, 6))
         ttk.Button(left_toolbar, text="AI Optimize", command=self.ai_optimize_lineup,
-                  style='TButton').pack(side="left", padx=(0, 16))
+                  style='Secondary.TButton').pack(side="left", padx=(0, 16))
 
         # Secondary tools
         ttk.Button(left_toolbar, text="Shuffle", command=self.shuffle_lines,
@@ -10088,7 +10088,7 @@ class EditLinesWindow(tk.Toplevel):
         main_frame = ttk.Frame(matchup_window, style='Panel.TFrame')
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
         
-        ttk.Label(main_frame, text="🎯 Optimize for Matchup", 
+        ttk.Label(main_frame, text="Optimize for Matchup", 
                  style='Title.TLabel').pack(pady=(0, 20))
         
         # Matchup options

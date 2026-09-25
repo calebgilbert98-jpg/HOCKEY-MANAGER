@@ -36,7 +36,7 @@ class PlayerProfileWindow(tk.Toplevel):
     def _setup_local_styles(self):
         """Adds styles specific to this window."""
         self.style.configure('PlayerTab.TFrame', background=self.parent.CONTENT_BG)
-        self.style.configure('PlayerPanel.TFrame', background=self.parent.TITLE_BAR_COLOR, relief='groove', borderwidth=1)
+        self.style.configure('PlayerPanel.TFrame', background=self.parent.CONTENT_BG, borderwidth=0)
         
         self.style.configure('PlayerHeader.TLabel', 
                            background=self.parent.CONTENT_BG, 
@@ -45,8 +45,8 @@ class PlayerProfileWindow(tk.Toplevel):
         
         self.style.configure('PlayerSubheader.TLabel', 
                            background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.ACCENT_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 18, 'bold'))  # Increased from 12 to 18
+                           foreground=self.parent.HEADER_COLOR, 
+                           font=(self.parent.FONT_FAMILY, 13, 'bold'))
         
         self.style.configure('PlayerInfo.TLabel', 
                            background=self.parent.CONTENT_BG, 
@@ -68,15 +68,15 @@ class PlayerProfileWindow(tk.Toplevel):
 
     def _get_attribute_style_and_text(self, value):
         """Returns a style name and descriptive text based on the attribute value."""
-        if value >= 18:
+        if value >= 45:
             return "Excellent.TLabel", f"{value} (Excellent)"
-        elif value >= 16:
+        elif value >= 40:
             return "VeryGood.TLabel", f"{value} (Very Good)"
-        elif value >= 14:
+        elif value >= 35:
             return "Good.TLabel", f"{value} (Good)"
-        elif value >= 11:
+        elif value >= 30:
             return "Average.TLabel", f"{value} (Average)"
-        elif value >= 8:
+        elif value >= 25:
             return "BelowAverage.TLabel", f"{value} (Below Avg)"
         else:
             return "Poor.TLabel", f"{value} (Poor)"
@@ -281,16 +281,16 @@ class PlayerProfileWindow(tk.Toplevel):
             ttk.Label(contract_frame, text="No Contract", style='PlayerInfo.TLabel').pack(pady=(5, 0))
     
     def _get_rating_color(self, rating):
-        """Returns a color based on the rating value."""
-        if rating >= 18:
+        """Returns a color based on the rating value (50-scale)."""
+        if rating >= 45:
             return "#4CAF50"  # Green for excellent
-        elif rating >= 16:
+        elif rating >= 40:
             return "#8BC34A"  # Light green for very good
-        elif rating >= 14:
-            return "#CDDC39"  # Yellow-green for good
-        elif rating >= 11:
+        elif rating >= 35:
+            return "#A3D65C"  # Yellow-green for good
+        elif rating >= 30:
             return "#FFC107"  # Yellow for average
-        elif rating >= 8:
+        elif rating >= 25:
             return "#FF9800"  # Orange for below average
         else:
             return "#F44336"  # Red for poor
@@ -1698,7 +1698,7 @@ class PlayerProfileWindow(tk.Toplevel):
             bar_canvas.pack(fill='x')
             
             # Draw attribute bar
-            bar_width = int((value / 20) * 110)
+            bar_width = int((min(value, 50) / 50) * 110)
             bar_color = self._get_rating_color(value)
             bar_canvas.create_rectangle(5, 3, 5+bar_width, 13, fill=bar_color, outline=bar_color)
             bar_canvas.create_rectangle(3, 1, 117, 15, outline=self.parent.TEXT_COLOR, width=1)
@@ -1819,7 +1819,7 @@ class PlayerProfileWindow(tk.Toplevel):
             bar_canvas.pack(fill='x')
             
             # Draw enhanced attribute bar with gradient effect
-            bar_width = int((value / 20) * 110)
+            bar_width = int((min(value, 50) / 50) * 110)
             bar_color = self._get_rating_color(value)
             bar_canvas.create_rectangle(5, 4, 5+bar_width, 16, fill=bar_color, outline=bar_color)
             bar_canvas.create_rectangle(3, 2, 117, 18, outline=self.parent.TEXT_COLOR, width=1)
