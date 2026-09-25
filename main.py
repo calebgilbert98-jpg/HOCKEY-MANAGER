@@ -1372,7 +1372,47 @@ def best_lines(team):
             'Aggression': 50
         }
     }
-    return lines
+    return flatten_lineup(lines)
+
+def flatten_lineup(lineup):
+    """Add flat F1_LW..F4_RW / D1_L..D3_R keys the sim reads, from nested lines.
+
+    Editors and best_lines() write nested {'Forwards': [[LW,C,RW]x4],
+    'Defense': [[L,R]xN], 'Goalies': [...]}. GameSim._get_on_ice reads flat
+    keys, so without this the sim silently ignores user lines and dresses
+    best-available-by-overall instead. Idempotent: safe to call repeatedly.
+    """
+    if not isinstance(lineup, dict):
+        return lineup
+    forwards = lineup.get('Forwards') or []
+    for i, line in enumerate(forwards[:4]):
+        if not line:
+            continue
+        for j, key in enumerate(('LW', 'C', 'RW')):
+            try:
+                player = line[j] if isinstance(line, (list, tuple)) else None
+            except (IndexError, TypeError):
+                player = None
+            if player:
+                lineup[f"F{i + 1}_{key}"] = player
+    defense = lineup.get('Defense') or []
+    for i, pair in enumerate(defense[:4]):
+        if not pair:
+            continue
+        try:
+            ld = pair[0] if isinstance(pair, (list, tuple)) else None
+            rd = pair[1] if isinstance(pair, (list, tuple)) and len(pair) > 1 else None
+        except (IndexError, TypeError):
+            ld = rd = None
+        if ld:
+            lineup[f"D{i + 1}_L"] = ld
+        if rd:
+            lineup[f"D{i + 1}_R"] = rd
+    goalies = lineup.get('Goalies') or []
+    for i, goalie in enumerate(goalies[:2]):
+        if goalie:
+            lineup[f"G{i + 1}"] = goalie
+    return lineup
 
 def launch_game_viewer_with_sim(home_team, away_team):
     """
@@ -3737,6 +3777,7 @@ class HockeyManagerGUI(tk.Tk):
         # Team Management dropdown
         self._create_dropdown_menu(left_menu_frame, "Team", {
             "📋 Edit Lines": self.open_edit_lines_window,
+            "🎯 Tactics": self.open_tactics_window,
             "👥 Staff Management": self.open_staff_management_window,
             "� Player Development": self.open_development_window,
             "Scouting": self.open_scouting_management_window,
@@ -6156,10 +6197,49 @@ class HockeyManagerGUI(tk.Tk):
         # Process player development weekly (during off days or end of week)
         if self.current_date.weekday() == 6:  # Sunday - weekly development processing
             self._process_player_development()
+            self._process_training_programs()
 
         # FM-style career systems: board, happiness, youth, press (cheap daily)
         self._process_career_daily()
     
+    def _process_training_programs(self):
+        """Run one weekly session for each active Development-Center program."""
+        try:
+            from enhanced_practice_system import (
+                PracticeEngine, PracticeType, ACTIVE_TRAINING_PROGRAMS,
+                FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM)
+            from datetime import date
+        except Exception:
+            return
+        if not getattr(self, 'user_team', None):
+            return
+        engine = PracticeEngine()
+        players = {}
+        for roster_list in (self.user_team.roster, self.user_team.ahl_roster,
+                            self.user_team.prospects):
+            for pl in roster_list:
+                players[pl.id] = pl
+        expired = []
+        for pid, prog in list(ACTIVE_TRAINING_PROGRAMS.items()):
+            if (date.today() - prog.get('assigned', date.today())).days >= 30:
+                expired.append(pid)
+                continue
+            player = players.get(pid)
+            if not player:
+                continue
+            ptype = FOCUS_TO_PRACTICE_TYPE.get(prog.get('focus'), PracticeType.SKATING)
+            intensity = INTENSITY_LABEL_TO_ENUM.get(prog.get('intensity'))
+            if intensity is None:
+                continue
+            try:
+                can, _ = engine.can_practice(player, ptype, intensity)
+                if can:
+                    engine.execute_practice(player, ptype, intensity, 60, 12)
+            except Exception:
+                continue
+        for pid in expired:
+            ACTIVE_TRAINING_PROGRAMS.pop(pid, None)
+
     def _process_player_development(self):
         """Process weekly player development for all teams"""
         if not hasattr(self, 'development_engine') or self.development_engine is None:
@@ -6211,15 +6291,21 @@ class HockeyManagerGUI(tk.Tk):
                                 for attr in developable_attrs:
                                     if hasattr(player, attr):
                                         current_val = getattr(player, attr)
-                                        max_val = getattr(player.potential_info, f'{attr}_ceiling', 20) if hasattr(player.potential_info, f'{attr}_ceiling') else 20
-                                        
+                                        # Potential is stored on the legacy 1-20 scale;
+                                        # attributes run on the internal ~50 scale.
+                                        try:
+                                            ceiling_raw = player.potential_info.get_potential_for_attribute(attr)
+                                        except Exception:
+                                            ceiling_raw = 15
+                                        max_val = ceiling_raw * 2.5
+
                                         # Check if there's room to grow
-                                        if current_val < max_val and current_val < 20:
+                                        if current_val < max_val and current_val < 50:
                                             # Small chance of improvement each week
                                             improvement_chance = weekly_rate * 0.15
-                                            
+
                                             if random.random() < improvement_chance:
-                                                new_val = min(current_val + 1, max_val, 20)
+                                                new_val = min(current_val + 1, max_val, 50)
                                                 setattr(player, attr, new_val)
                                                 
                                                 # Track significant improvements
@@ -9132,6 +9218,12 @@ class HockeyManagerGUI(tk.Tk):
             # Use the clean, simple EditLinesWindow from main.py instead of the complex one
             self.open_windows['edit_lines'] = CleanEditLinesWindow(self)
         self.open_windows['edit_lines'].focus_set()
+
+    def open_tactics_window(self):
+        """Open the team tactics editor (even strength / PP / PK / matching)."""
+        if 'tactics' not in self.open_windows or not self.open_windows['tactics'].winfo_exists():
+            self.open_windows['tactics'] = TacticsWindow(self)
+        self.open_windows['tactics'].focus_set()
         
     def open_development_window(self):
         """Open the Player Development window."""
@@ -9453,11 +9545,11 @@ class HockeyManagerGUI(tk.Tk):
     def set_best_lines(self):
         """Sets the user's team lineup to the best lines for all positions and refreshes the UI."""
         best = best_lines(self.user_team)
-        self.user_team.lineup = {
+        self.user_team.lineup = flatten_lineup({
             'Forwards': best['Forwards'],
             'Defense': best['Defense'],
             'Goalies': best['Goalies']
-        }
+        })
         self.update_all_views()
         messagebox.showinfo("Lines Updated", "Your team's best lines have been set!")
 
@@ -9923,7 +10015,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         try:
             # Extract and save lineup
             self.save_lineup_from_interface()
-            self.parent.user_team.lineup = self.lineup
+            self.parent.user_team.lineup = flatten_lineup(self.lineup)
             
             # Show success notification
             self.show_modern_notification("💾 Lines Saved", "Your lineup has been saved successfully!", "success")
@@ -11024,6 +11116,135 @@ class CleanEditLinesWindow(tk.Toplevel):
             team_text_widget.pack(fill='both', expand=True)
             team_text_widget.insert('1.0', team_stats)
             team_text_widget.config(state='disabled')
+
+
+class TacticsWindow(tk.Toplevel):
+    """Team tactics editor with pill selectors.
+
+    Even-strength style, power-play approach, penalty-kill approach and line
+    matching all write straight to the team object and feed the sim engine
+    (GameSim._team_tactics_xg_factor + line matching in _get_on_ice).
+    """
+
+    TACTIC_GROUPS = [
+        ("Even Strength", "tactic_even_strength", "Balanced",
+         ["Very Defensive", "Defensive", "Balanced", "Offensive", "Very Offensive"],
+         "5v5 play style"),
+        ("Power Play", "tactic_power_play", "Offensive",
+         ["Conservative", "Balanced", "Offensive", "Very Offensive"],
+         "Man-advantage approach"),
+        ("Penalty Kill", "tactic_penalty_kill", "Defensive",
+         ["Very Defensive", "Defensive", "Balanced", "Aggressive"],
+         "Short-handed defense"),
+        ("Line Matching", "tactic_line_matching", "Standard",
+         ["Conservative", "Standard", "Aggressive"],
+         "Home-ice line deployment vs score state"),
+    ]
+
+    # Mirrors GameSim._team_tactics_xg_factor tables so the readout is honest
+    _ES_ATTACK = {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
+                  'Offensive': 1.04, 'Very Offensive': 1.08}
+    _ES_DEFENSE = {'Very Defensive': 0.92, 'Defensive': 0.96, 'Balanced': 1.0,
+                   'Offensive': 1.03, 'Very Offensive': 1.06}
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.team = parent.user_team
+        self.title(f"Team Tactics — {self.team.team_name}")
+        self.geometry("660x640")
+        bg = getattr(parent, 'CONTENT_BG', '#111826')
+        self.configure(bg=bg)
+
+        font = getattr(parent, 'FONT_FAMILY', 'Helvetica')
+        fg = getattr(parent, 'TEXT_COLOR', '#e8ecf4')
+        muted = getattr(parent, 'MUTED_COLOR', '#8a94a6')
+        accent = '#E63946'
+
+        header = tk.Frame(self, bg=bg)
+        header.pack(fill='x', padx=20, pady=(16, 4))
+        tk.Label(header, text="Team Tactics", bg=bg, fg=fg,
+                 font=(font, 16, 'bold')).pack(side='left')
+        tk.Label(header, text="Your game plan shapes sim results in every situation.",
+                 bg=bg, fg=muted, font=(font, 10)).pack(side='left', padx=(12, 0))
+
+        body = tk.Frame(self, bg=bg)
+        body.pack(fill='both', expand=True, padx=20, pady=8)
+
+        self.pill_buttons = {}  # attr -> {value: button}
+        for title, attr, default, values, hint in self.TACTIC_GROUPS:
+            current = getattr(self.team, attr, default)
+            setattr(self.team, attr, current)
+
+            tk.Label(body, text=title, bg=bg, fg=fg,
+                     font=(font, 12, 'bold')).pack(anchor='w', pady=(10, 2))
+            tk.Label(body, text=hint, bg=bg, fg=muted,
+                     font=(font, 9)).pack(anchor='w')
+
+            row = tk.Frame(body, bg=bg)
+            row.pack(anchor='w', pady=(4, 0))
+            self.pill_buttons[attr] = {}
+            for value in values:
+                btn = tk.Button(
+                    row, text=value, relief='flat', bd=0, cursor='hand2',
+                    font=(font, 10, 'bold'), padx=14, pady=7,
+                    command=lambda a=attr, v=value: self._select(a, v))
+                btn.pack(side='left', padx=(0, 8))
+                self.pill_buttons[attr][value] = btn
+            self._paint_pills(attr, current)
+
+        # Impact readout
+        tk.Label(body, text="Expected Impact", bg=bg, fg=fg,
+                 font=(font, 12, 'bold')).pack(anchor='w', pady=(14, 2))
+        self.impact_label = tk.Label(body, text="", bg=bg, fg=muted,
+                                     font=(font, 10), justify='left')
+        self.impact_label.pack(anchor='w')
+        self._update_impact()
+
+        footer = tk.Frame(self, bg=bg)
+        footer.pack(fill='x', padx=20, pady=(8, 16))
+        tk.Button(footer, text="Done", relief='flat', bd=0, cursor='hand2',
+                  bg=accent, fg='white', activebackground='#c1121f',
+                  activeforeground='white', font=(font, 11, 'bold'),
+                  padx=28, pady=8, command=self.destroy).pack(side='right')
+
+    def _select(self, attr, value):
+        setattr(self.team, attr, value)
+        self._paint_pills(attr, value)
+        self._update_impact()
+
+    def _paint_pills(self, attr, current):
+        for value, btn in self.pill_buttons[attr].items():
+            if value == current:
+                btn.configure(bg='#E63946', fg='white',
+                              activebackground='#c1121f', activeforeground='white')
+            else:
+                btn.configure(bg='#1c2436', fg='#c8d0e0',
+                              activebackground='#2a3550', activeforeground='white')
+
+    def _update_impact(self):
+        es = getattr(self.team, 'tactic_even_strength', 'Balanced')
+        pp = getattr(self.team, 'tactic_power_play', 'Offensive')
+        pk = getattr(self.team, 'tactic_penalty_kill', 'Defensive')
+        lm = getattr(self.team, 'tactic_line_matching', 'Standard')
+        atk = (self._ES_ATTACK.get(es, 1.0) - 1.0) * 100
+        dfn = (1.0 - self._ES_DEFENSE.get(es, 1.0)) * 100
+        pp_f = {'Conservative': -4, 'Balanced': 0, 'Offensive': 5,
+                'Very Offensive': 10}.get(pp, 5)
+        pk_f = {'Very Defensive': 10, 'Defensive': 5, 'Balanced': 0,
+                'Aggressive': -4}.get(pk, 5)
+        lines = [
+            f"Even strength: {atk:+.0f}% your shot quality, "
+            f"{dfn:+.0f}% opponent chances suppressed",
+            f"Power play ({pp}): {pp_f:+.0f}% conversion   "
+            f"Penalty kill ({pk}): {pk_f:+.0f}% kill rate",
+            f"Line matching ({lm}): " + (
+                "top lines sheltered when leading, leaned on when trailing"
+                if lm == "Aggressive" else
+                "standard rotation" if lm == "Standard" else
+                "even ice time regardless of score"),
+        ]
+        self.impact_label.configure(text="\n".join(lines))
 
 
 class EditLinesWindow(tk.Toplevel):

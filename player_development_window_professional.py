@@ -940,67 +940,140 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
         """Handle training player selection"""
         self._update_progress_display()
         
+    def _find_training_player(self, player_name):
+        """Resolve a combobox player name to the actual Player object."""
+        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+            return None
+        for roster_list in (self.parent.user_team.roster,
+                            self.parent.user_team.ahl_roster,
+                            self.parent.user_team.prospects):
+            for p in roster_list:
+                if p.full_name == player_name:
+                    return p
+        return None
+
     def _assign_training(self):
-        """Assign training program to selected player"""
+        """Assign a training program: records it and runs a real first session."""
         if not self.training_player_var.get():
-            messagebox.showwarning("No Player Selected", 
+            messagebox.showwarning("No Player Selected",
                                  "Please select a player for training assignment.")
             return
-            
+
         if not self.focus_var.get():
             messagebox.showwarning("No Focus Selected",
                                  "Please select a training focus area.")
             return
-            
+
         # Extract player name from combobox selection
         selection = self.training_player_var.get()
         player_name = selection.split(" (")[0]
-        
-        # Show confirmation
+        player = self._find_training_player(player_name)
+        if not player:
+            messagebox.showwarning("Player Not Found",
+                                 f"Could not find {player_name} on your rosters.")
+            return
+
+        from enhanced_practice_system import (
+            PracticeEngine, PracticeType, PracticeIntensity,
+            ACTIVE_TRAINING_PROGRAMS, FOCUS_TO_PRACTICE_TYPE,
+            INTENSITY_LABEL_TO_ENUM)
+        from datetime import date
+
+        focus = self.focus_var.get()
+        intensity_label = self.intensity_var.get()
+        practice_type = FOCUS_TO_PRACTICE_TYPE.get(focus, PracticeType.SKATING)
+        intensity = INTENSITY_LABEL_TO_ENUM.get(intensity_label, PracticeIntensity.MODERATE)
+
+        engine = PracticeEngine()
+        can, reason = engine.can_practice(player, practice_type, intensity)
+        if not can:
+            messagebox.showwarning("Cannot Train Right Now", reason)
+            return
+
         message = (f"Training Assignment:\n\n"
                   f"Player: {player_name}\n"
-                  f"Focus: {self.focus_var.get()}\n"
-                  f"Intensity: {self.intensity_var.get()}\n\n"
-                  f"This training program will be active for the next 30 days.")
-        
-        result = messagebox.askyesno("Confirm Training Assignment", message)
-        if result:
-            messagebox.showinfo("Training Assigned", 
-                              f"{player_name} has been assigned to {self.focus_var.get()} training.")
-            self._update_progress_display()
+                  f"Focus: {focus}\n"
+                  f"Intensity: {intensity_label}\n\n"
+                  f"This training program will be active for the next 30 days.\n"
+                  f"A first session runs immediately.")
+        if not messagebox.askyesno("Confirm Training Assignment", message):
+            return
+
+        # Record the program (shared registry; survives window close)
+        ACTIVE_TRAINING_PROGRAMS[player.id] = {
+            'focus': focus,
+            'intensity': intensity_label,
+            'assigned': date.today(),
+            'player_name': player.full_name,
+        }
+        # Run the first session for real through the practice engine
+        session = engine.execute_practice(player, practice_type, intensity, 60, 12)
+        messagebox.showinfo(
+            "Training Assigned",
+            f"{player_name} assigned to {focus} training.\n\n"
+            f"First session complete: +{session.skill_gain:.2f} skill, "
+            f"+{session.fatigue_cost}% fatigue.")
+        self._update_progress_display()
     
     def _update_progress_display(self):
-        """Update the progress display area"""
+        """Update the progress display area with the real program + history."""
         # Clear existing content
         for widget in self.progress_display.winfo_children():
             widget.destroy()
-            
+
         if not self.training_player_var.get():
             ttk.Label(self.progress_display,
                      text="Select a player to view training progress",
                      font=('Segoe UI', 11),
                      foreground=self.colors['secondary']).pack(pady=50)
             return
-            
-        # Mock training progress display
+
+        from enhanced_practice_system import (
+            PracticeEngine, ACTIVE_TRAINING_PROGRAMS)
+
+        player_name = self.training_player_var.get().split(" (")[0]
+        player = self._find_training_player(player_name)
+
         ttk.Label(self.progress_display,
                  text="Current Training Status",
                  font=('Segoe UI', 12, 'bold')).pack(anchor='w', pady=(0, 10))
-                 
-        status_text = "No active training program"
+
+        prog = ACTIVE_TRAINING_PROGRAMS.get(player.id) if player else None
+        if prog:
+            days_left = 30 - (datetime.now().date() - prog['assigned']).days
+            status_text = (f"{prog['focus']} — {prog['intensity']} intensity\n"
+                          f"Assigned {prog['assigned'].isoformat()} "
+                          f"({max(days_left, 0)} days remaining)")
+        else:
+            status_text = "No active training program"
         ttk.Label(self.progress_display,
                  text=status_text,
                  font=('Segoe UI', 10)).pack(anchor='w')
-                 
-        # Training history section
+
+        # Training history section (real session records)
         ttk.Label(self.progress_display,
                  text="Training History",
                  font=('Segoe UI', 12, 'bold')).pack(anchor='w', pady=(20, 10))
-                 
-        history_text = "No previous training records available"
-        ttk.Label(self.progress_display,
-                 text=history_text,
-                 font=('Segoe UI', 10)).pack(anchor='w')
+
+        history = PracticeEngine().get_player_history(player.id) if player else None
+        sessions = history.recent_sessions[-5:] if history else []
+        if sessions:
+            for s in reversed(sessions):
+                ptype = s.practice_type.value.replace('_', ' ').title() \
+                    if hasattr(s.practice_type, 'value') else str(s.practice_type)
+                ttk.Label(
+                    self.progress_display,
+                    text=f"{s.date_completed.isoformat()}: {ptype} "
+                         f"(+{s.skill_gain:.2f} skill, +{s.fatigue_cost}% fatigue)",
+                    font=('Segoe UI', 10)).pack(anchor='w')
+            ttk.Label(
+                self.progress_display,
+                text=f"Total sessions: {history.total_sessions}",
+                font=('Segoe UI', 10, 'italic')).pack(anchor='w', pady=(6, 0))
+        else:
+            ttk.Label(self.progress_display,
+                     text="No previous training records available",
+                     font=('Segoe UI', 10)).pack(anchor='w')
     
     def _create_team_overview_analytics(self):
         """Create team overview analytics section"""

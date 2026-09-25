@@ -4151,6 +4151,32 @@ class GameSim:
             goalie = self.home_team.get_starting_goalie()
             self.notable_events.append({'player': goalie, 'event': 'earns a shutout'})
 
+    def _lineup_player(self, team, flat_key):
+        """Read one lineup slot, flat F1_LW-style key first, nested fallback.
+
+        Editors historically wrote nested {'Forwards': [[LW,C,RW]x4],
+        'Defense': [[L,R]xN]} while the sim reads flat keys; this keeps both
+        working so user lines always reach the ice.
+        """
+        lineup = getattr(team, 'lineup', None) or {}
+        player = lineup.get(flat_key)
+        if player:
+            return player
+        try:
+            parts = flat_key.split('_')
+            if len(parts) != 2:
+                return None
+            slot, pos = parts
+            if slot.startswith('F'):
+                line = (lineup.get('Forwards') or [])[int(slot[1:]) - 1]
+                return line[{'LW': 0, 'C': 1, 'RW': 2}[pos]] if line else None
+            if slot.startswith('D'):
+                pair = (lineup.get('Defense') or [])[int(slot[1:]) - 1]
+                return pair[{'L': 0, 'R': 1}[pos]] if pair else None
+        except (IndexError, KeyError, ValueError, TypeError):
+            return None
+        return None
+
     def _get_on_ice(self, team):
         """Returns the list of players currently on the ice for a team, based on lines."""
         num_skaters = 5
@@ -4162,6 +4188,15 @@ class GameSim:
         # Simple line rotation logic
         current_line = (self.clock // 45) % 4 + 1 # Change lines every 45 seconds
         current_d_pair = (self.clock // 60) % 3 + 1
+
+        # Line matching: aggressive home-ice deployment reacts to score state
+        if team == self.home_team and getattr(team, 'tactic_line_matching', 'Standard') == 'Aggressive':
+            goal_diff = self.home_score - self.away_score
+            rotation = (self.clock // 45) % 2
+            if goal_diff <= -2:
+                current_line = 1 if rotation == 0 else 2  # chase the game: top six
+            elif goal_diff >= 2:
+                current_line = 3 if rotation == 0 else 4  # protect the lead: bottom six
 
         on_ice = []
         
@@ -4175,7 +4210,7 @@ class GameSim:
             elif pos == 'RW':
                 pos_enum = PlayerPosition.RIGHT_WING
                 
-            player = team.lineup.get(f"F{current_line}_{pos}")
+            player = self._lineup_player(team, f"F{current_line}_{pos}")
             if player and player not in penalized_players:
                 on_ice.append(player)
 
@@ -4187,7 +4222,7 @@ class GameSim:
             elif pos == 'R':
                 pos_enum = PlayerPosition.RIGHT_DEFENSE
                 
-            player = team.lineup.get(f"D{current_d_pair}_{pos}")
+            player = self._lineup_player(team, f"D{current_d_pair}_{pos}")
             if player and player not in penalized_players:
                 on_ice.append(player)
         

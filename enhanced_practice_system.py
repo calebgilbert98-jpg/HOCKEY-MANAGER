@@ -35,6 +35,34 @@ class PracticeIntensity(Enum):
     EXTREME = "extreme"
 
 
+# Module-level shared state so every window/engine instance sees the same
+# players' histories and assigned programs.
+_SHARED_PLAYER_HISTORIES: Dict[str, "PlayerPracticeHistory"] = {}
+
+# Active training programs assigned via the Development Center:
+# player_id -> {'focus': str, 'intensity': str, 'assigned': date, 'player_name': str}
+ACTIVE_TRAINING_PROGRAMS: Dict[str, dict] = {}
+
+# Development-Center focus label -> PracticeType
+FOCUS_TO_PRACTICE_TYPE = {
+    "Skating & Speed": PracticeType.SKATING,
+    "Shooting Accuracy": PracticeType.SHOOTING,
+    "Passing & Vision": PracticeType.PASSING,
+    "Defensive Positioning": PracticeType.DEFENSE,
+    "Physical Conditioning": PracticeType.CONDITIONING,
+    "Mental Toughness": PracticeType.TEAMWORK,
+    "Position-Specific Skills": PracticeType.CHECKING,
+    "Hockey IQ Development": PracticeType.HOCKEY_IQ,
+}
+
+# Development-Center intensity label -> PracticeIntensity
+INTENSITY_LABEL_TO_ENUM = {
+    "Light": PracticeIntensity.LIGHT,
+    "Standard": PracticeIntensity.MODERATE,
+    "Intensive": PracticeIntensity.INTENSE,
+}
+
+
 @dataclass
 @dataclass
 class PracticeSession:
@@ -84,7 +112,9 @@ class PracticeEngine:
     """Enhanced practice-based development engine"""
     
     def __init__(self):
-        self.player_histories: Dict[str, PlayerPracticeHistory] = {}
+        # Histories are module-level so the Practice Center and the
+        # Development Center (and any future caller) share one record.
+        self.player_histories: Dict[str, PlayerPracticeHistory] = _SHARED_PLAYER_HISTORIES
         self.practice_effectiveness = self._initialize_effectiveness_map()
         self.fatigue_recovery_rate = 2  # Points per day
         
@@ -183,7 +213,7 @@ class PracticeEngine:
                 )
                 
                 if improvement > 0:
-                    new_value = min(20, current_value + improvement)
+                    new_value = min(50, current_value + improvement)  # internal ~50 scale (100 display)
                     setattr(player, attribute, new_value)
                     skill_gains[attribute] = improvement
         
@@ -234,7 +264,7 @@ class PracticeEngine:
         # Player work ethic (if available)
         work_ethic_mult = 1.0
         if hasattr(player, 'work_rate'):
-            work_ethic_mult = 0.7 + (player.work_rate / 20) * 0.6
+            work_ethic_mult = 0.7 + (player.work_rate / 50) * 0.6
         
         # Random factor for realism
         random_mult = random.uniform(0.8, 1.2)
@@ -248,11 +278,11 @@ class PracticeEngine:
         """Calculate actual skill point improvement with diminishing returns"""
         
         # Diminishing returns - harder to improve high attributes
-        if current_value >= 18:
+        if current_value >= 45:
             effectiveness *= 0.2
-        elif current_value >= 15:
+        elif current_value >= 38:
             effectiveness *= 0.5
-        elif current_value >= 12:
+        elif current_value >= 30:
             effectiveness *= 0.8
         
         # Age factor for skill retention
@@ -932,9 +962,9 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             # Calculate potential (simplified)
             potential = "Low"
             if player.age <= 23:
-                if player.overall_rating() >= 15:
+                if player.overall_rating() >= 38:
                     potential = "Elite"
-                elif player.overall_rating() >= 13:
+                elif player.overall_rating() >= 33:
                     potential = "High"
                 else:
                     potential = "Medium"
@@ -1110,7 +1140,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         ]
         
         for skill_name, skill_value in tech_skills:
-            color = 'green' if skill_value >= 15 else 'orange' if skill_value >= 12 else 'red'
+            color = 'green' if skill_value >= 38 else 'orange' if skill_value >= 30 else 'red'
             skill_text = f"{skill_name}: {skill_value}"
             ttk.Label(tech_frame, text=skill_text, style='Content.TLabel',
                      foreground=color).pack(anchor='w')
@@ -1132,7 +1162,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         ]
         
         for skill_name, skill_value in mental_skills:
-            color = 'green' if skill_value >= 15 else 'orange' if skill_value >= 12 else 'red'
+            color = 'green' if skill_value >= 38 else 'orange' if skill_value >= 30 else 'red'
             skill_text = f"{skill_name}: {skill_value}"
             ttk.Label(mental_frame, text=skill_text, style='Content.TLabel',
                      foreground=color).pack(anchor='w')
@@ -1155,9 +1185,9 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         
         for skill_name, skill_value in physical_skills:
             if skill_name == "Injury Prone":
-                color = 'red' if skill_value >= 15 else 'orange' if skill_value >= 12 else 'green'
+                color = 'red' if skill_value >= 38 else 'orange' if skill_value >= 30 else 'green'
             else:
-                color = 'green' if skill_value >= 15 else 'orange' if skill_value >= 12 else 'red'
+                color = 'green' if skill_value >= 38 else 'orange' if skill_value >= 30 else 'red'
             skill_text = f"{skill_name}: {skill_value}"
             ttk.Label(physical_frame, text=skill_text, style='Content.TLabel',
                      foreground=color).pack(anchor='w')
