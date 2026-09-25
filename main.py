@@ -3511,19 +3511,19 @@ class HockeyManagerGUI(tk.Tk):
         # Create enhanced menu bar at the top
         self._create_enhanced_menu_bar(main_container)
         
-        # Use Sleeper-inspired dashboard (modern, clean)
-        # Set use_sleeper_dashboard=False to revert to AtmosphericDashboard
-        use_sleeper_dashboard = True
+        # Use modern dashboard (clean, card-based)
+        # Set use_modern_dashboard=False to revert to AtmosphericDashboard
+        use_modern_dashboard = True
         
-        if use_sleeper_dashboard:
+        if use_modern_dashboard:
             try:
-                from sleeper_dashboard import SleeperDashboard
-                from sleeper_ui import apply_sleeper_theme, SleeperColors
+                from dashboard_home import HomeDashboard
+                from modern_ui import apply_app_theme, AppColors
                 
-                # Apply Sleeper theme
-                apply_sleeper_theme(self)
+                # Apply modern theme
+                apply_app_theme(self)
                 
-                self.dashboard = SleeperDashboard(
+                self.dashboard = HomeDashboard(
                     parent=self,
                     game_manager=self.game_manager,
                     user_team=self.user_team,
@@ -3531,17 +3531,17 @@ class HockeyManagerGUI(tk.Tk):
                 )
                 
                 # Create the dashboard UI in its own frame
-                dashboard_frame = tk.Frame(main_container, bg=SleeperColors.BG)
+                dashboard_frame = tk.Frame(main_container, bg=AppColors.BG)
                 dashboard_frame.grid(row=1, column=0, sticky="nsew")
                 self.dashboard.create_dashboard(dashboard_frame)
                 
             except Exception as e:
-                print(f"Sleeper dashboard failed, falling back: {e}")
+                print(f"Modern dashboard failed, falling back: {e}")
                 import traceback
                 traceback.print_exc()
-                use_sleeper_dashboard = False
+                use_modern_dashboard = False
         
-        if not use_sleeper_dashboard:
+        if not use_modern_dashboard:
             # Create atmospheric dashboard instance for immersive GM experience
             self.dashboard = AtmosphericDashboard(
                 parent=self,

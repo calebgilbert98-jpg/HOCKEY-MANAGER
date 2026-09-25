@@ -1,13 +1,13 @@
 # sleeper_ui.py
-# Sleeper-inspired modern UI design system for Puck Dynasty.
+# modern modern UI design system for Puck Dynasty.
 # 
-# Design principles borrowed from Sleeper (fantasy sports app):
+# Design principles borrowed from modern sports apps:
 # - Deep dark backgrounds (not pure black, warm charcoal)
 # - Rounded cards (14px radius) with subtle borders
 # - Generous whitespace and breathing room
 # - Clear visual hierarchy: big bold numbers, small muted labels
 # - Avatar-centric design (circular)
-# - Teal accent color (#00ceb8 - Sleeper's brand)
+# - Teal accent color (#00ceb8 - teal accent)
 # - Minimalist, no clutter
 # - Subtle status indicators (dots, pills)
 
@@ -16,8 +16,8 @@ from tkinter import ttk
 from typing import Optional, Callable, Dict, Any
 
 
-class SleeperColors:
-    """Sleeper-inspired color palette."""
+class AppColors:
+    """modern color palette."""
     
     # Backgrounds
     BG = "#0e0e11"              # Deep warm charcoal (main background)
@@ -34,7 +34,7 @@ class SleeperColors:
     TEXT_SECONDARY = "#a1a1aa"  # Muted text (zinc-400)
     TEXT_TERTIARY = "#71717a"   # Very muted (zinc-500)
     
-    # Accent (Sleeper teal)
+    # Accent (teal)
     ACCENT = "#00ceb8"          # Primary accent
     ACCENT_DIM = "#00a894"      # Darker accent for hover
     ACCENT_BG = "#0d2b28"       # Accent background (subtle)
@@ -49,7 +49,7 @@ class SleeperColors:
     TEAM_DEFAULT = "#00ceb8"
 
 
-class SleeperFonts:
+class AppFonts:
     """Typography scale."""
     
     # Headings
@@ -74,8 +74,8 @@ class SleeperFonts:
     STAT_SMALL = ("Segoe UI", 18, "bold")  # Small stats
 
 
-class SleeperCard(tk.Frame):
-    """Sleeper-style rounded card with subtle border.
+class AppCard(tk.Frame):
+    """modern rounded card with subtle border.
     
     A clean container with:
     - 14px rounded corners (via canvas background)
@@ -87,10 +87,10 @@ class SleeperCard(tk.Frame):
     def __init__(self, parent, padding=16, radius=14, bg=None, **kwargs):
         self.radius = radius
         self.padding = padding
-        self.card_bg = bg or SleeperColors.BG_ELEVATED
+        self.card_bg = bg or AppColors.BG_ELEVATED
         
         # Use a canvas for rounded background
-        super().__init__(parent, bg=parent.cget("bg") if hasattr(parent, 'cget') else SleeperColors.BG, **kwargs)
+        super().__init__(parent, bg=parent.cget("bg") if hasattr(parent, 'cget') else AppColors.BG, **kwargs)
         
         # Inner frame for content with padding
         self.content = tk.Frame(self, bg=self.card_bg)
@@ -105,8 +105,8 @@ class SleeperCard(tk.Frame):
         return self.inner
 
 
-class SleeperStatCard(SleeperCard):
-    """Stat card with big number and label (Sleeper-style).
+class StatCard(AppCard):
+    """Stat card with big number and label (modern).
     
     Example:
         ┌─────────────┐
@@ -123,15 +123,15 @@ class SleeperStatCard(SleeperCard):
         
         # Optional accent bar at top
         if accent_top:
-            accent = tk.Frame(frame, bg=SleeperColors.ACCENT, height=3)
+            accent = tk.Frame(frame, bg=AppColors.ACCENT, height=3)
             accent.pack(fill="x", pady=(0, 12))
         
         # Big number
         value_label = tk.Label(
             frame,
             text=value,
-            font=SleeperFonts.STAT_MEDIUM,
-            fg=value_color or SleeperColors.TEXT_PRIMARY,
+            font=AppFonts.STAT_MEDIUM,
+            fg=value_color or AppColors.TEXT_PRIMARY,
             bg=self.card_bg
         )
         value_label.pack(anchor="w")
@@ -141,8 +141,8 @@ class SleeperStatCard(SleeperCard):
             label_widget = tk.Label(
                 frame,
                 text=label.upper(),
-                font=SleeperFonts.LABEL,
-                fg=SleeperColors.TEXT_SECONDARY,
+                font=AppFonts.LABEL,
+                fg=AppColors.TEXT_SECONDARY,
                 bg=self.card_bg
             )
             label_widget.pack(anchor="w", pady=(4, 0))
@@ -152,8 +152,8 @@ class SleeperStatCard(SleeperCard):
             caption_widget = tk.Label(
                 frame,
                 text=caption,
-                font=SleeperFonts.CAPTION,
-                fg=SleeperColors.TEXT_TERTIARY,
+                font=AppFonts.CAPTION,
+                fg=AppColors.TEXT_TERTIARY,
                 bg=self.card_bg
             )
             caption_widget.pack(anchor="w", pady=(2, 0))
@@ -161,8 +161,8 @@ class SleeperStatCard(SleeperCard):
         self.value_label = value_label
 
 
-class SleeperPlayerRow(tk.Frame):
-    """Player list row (Sleeper-style).
+class PlayerRow(tk.Frame):
+    """Player list row (modern).
     
     ┌─────────────────────────────────────┐
     │ (O)  Connor McDavid        12 PTS   │
@@ -173,7 +173,7 @@ class SleeperPlayerRow(tk.Frame):
     def __init__(self, parent, name="", position="", team="", 
                  stat_value="", stat_label="", avatar_color=None,
                  on_click=None, **kwargs):
-        bg = kwargs.pop('bg', SleeperColors.BG_ELEVATED)
+        bg = kwargs.pop('bg', AppColors.BG_ELEVATED)
         super().__init__(parent, bg=bg, **kwargs)
         
         self.on_click = on_click
@@ -190,7 +190,7 @@ class SleeperPlayerRow(tk.Frame):
         avatar_canvas.pack(side="left", padx=(12, 12), pady=10)
         
         # Draw circle
-        color = avatar_color or SleeperColors.ACCENT
+        color = avatar_color or AppColors.ACCENT
         avatar_canvas.create_oval(
             2, 2, avatar_size-2, avatar_size-2,
             fill=color, outline=""
@@ -209,8 +209,8 @@ class SleeperPlayerRow(tk.Frame):
         
         name_label = tk.Label(
             info_frame, text=name,
-            font=SleeperFonts.BODY_BOLD,
-            fg=SleeperColors.TEXT_PRIMARY, bg=bg,
+            font=AppFonts.BODY_BOLD,
+            fg=AppColors.TEXT_PRIMARY, bg=bg,
             anchor="w"
         )
         name_label.pack(anchor="w", pady=(10, 0))
@@ -220,8 +220,8 @@ class SleeperPlayerRow(tk.Frame):
             detail_text += f" • {team}"
         detail_label = tk.Label(
             info_frame, text=detail_text,
-            font=SleeperFonts.SMALL,
-            fg=SleeperColors.TEXT_SECONDARY, bg=bg,
+            font=AppFonts.SMALL,
+            fg=AppColors.TEXT_SECONDARY, bg=bg,
             anchor="w"
         )
         detail_label.pack(anchor="w")
@@ -233,8 +233,8 @@ class SleeperPlayerRow(tk.Frame):
             
             stat_val = tk.Label(
                 stat_frame, text=stat_value,
-                font=SleeperFonts.BODY_BOLD,
-                fg=SleeperColors.TEXT_PRIMARY, bg=bg,
+                font=AppFonts.BODY_BOLD,
+                fg=AppColors.TEXT_PRIMARY, bg=bg,
                 anchor="e"
             )
             stat_val.pack(anchor="e", pady=(10, 0))
@@ -242,8 +242,8 @@ class SleeperPlayerRow(tk.Frame):
             if stat_label:
                 stat_lbl = tk.Label(
                     stat_frame, text=stat_label,
-                    font=SleeperFonts.CAPTION,
-                    fg=SleeperColors.TEXT_TERTIARY, bg=bg,
+                    font=AppFonts.CAPTION,
+                    fg=AppColors.TEXT_TERTIARY, bg=bg,
                     anchor="e"
                 )
                 stat_lbl.pack(anchor="e")
@@ -258,30 +258,30 @@ class SleeperPlayerRow(tk.Frame):
                     pass
 
 
-class SleeperPill(tk.Frame):
-    """Small pill badge (Sleeper-style).
+class PillBadge(tk.Frame):
+    """Small pill badge (modern).
     
     Used for status indicators, positions, etc.
     """
     
     def __init__(self, parent, text="", bg=None, fg=None, 
                  font=None, padx=12, pady=4, **kwargs):
-        bg = bg or SleeperColors.ACCENT_BG
-        fg = fg or SleeperColors.ACCENT
+        bg = bg or AppColors.ACCENT_BG
+        fg = fg or AppColors.ACCENT
         
         super().__init__(parent, bg=bg, **kwargs)
         
         label = tk.Label(
             self, text=text,
-            font=font or SleeperFonts.SMALL_BOLD,
+            font=font or AppFonts.SMALL_BOLD,
             fg=fg, bg=bg,
             padx=padx, pady=pady
         )
         label.pack()
 
 
-class SleeperButton(tk.Canvas):
-    """Sleeper-style button (rounded, modern).
+class AppButton(tk.Canvas):
+    """modern button (rounded, modern).
     
     Primary: Teal background, white text
     Secondary: Dark background, subtle border
@@ -293,7 +293,7 @@ class SleeperButton(tk.Canvas):
         super().__init__(
             parent, width=width, height=height,
             highlightthickness=0, bd=0,
-            bg=parent.cget("bg") if hasattr(parent, 'cget') else SleeperColors.BG,
+            bg=parent.cget("bg") if hasattr(parent, 'cget') else AppColors.BG,
             **kwargs
         )
         
@@ -304,15 +304,15 @@ class SleeperButton(tk.Canvas):
         
         # Colors
         if style == "primary":
-            self.bg_color = SleeperColors.ACCENT
-            self.hover_color = SleeperColors.ACCENT_DIM
+            self.bg_color = AppColors.ACCENT
+            self.hover_color = AppColors.ACCENT_DIM
             self.text_color = "#ffffff"
         else:  # secondary
-            self.bg_color = SleeperColors.BG_ELEVATED
-            self.hover_color = SleeperColors.BG_HOVER
-            self.text_color = SleeperColors.TEXT_PRIMARY
+            self.bg_color = AppColors.BG_ELEVATED
+            self.hover_color = AppColors.BG_HOVER
+            self.text_color = AppColors.TEXT_PRIMARY
         
-        self.font = font or SleeperFonts.BODY_BOLD
+        self.font = font or AppFonts.BODY_BOLD
         self.text = text
         
         self._draw(self.bg_color)
@@ -346,16 +346,16 @@ class SleeperButton(tk.Canvas):
         return self.create_polygon(points, smooth=True, **kwargs)
 
 
-class SleeperNavBar(tk.Frame):
-    """Bottom navigation bar (Sleeper-style).
+class NavBar(tk.Frame):
+    """Bottom navigation bar (modern).
     
     Clean icon + label navigation with active indicator.
     """
     
     def __init__(self, parent, items=None, on_select=None, **kwargs):
         super().__init__(
-            parent, bg=SleeperColors.BG_ELEVATED,
-            highlightbackground=SleeperColors.BORDER,
+            parent, bg=AppColors.BG_ELEVATED,
+            highlightbackground=AppColors.BORDER,
             highlightthickness=1,
             **kwargs
         )
@@ -371,27 +371,27 @@ class SleeperNavBar(tk.Frame):
             self.buttons.append(btn)
     
     def _create_nav_button(self, label, icon, index):
-        btn = tk.Frame(self, bg=SleeperColors.BG_ELEVATED, cursor="hand2")
+        btn = tk.Frame(self, bg=AppColors.BG_ELEVATED, cursor="hand2")
         
         # Active indicator (top bar)
-        indicator = tk.Frame(btn, bg=SleeperColors.ACCENT if index == 0 else SleeperColors.BG_ELEVATED, height=3)
+        indicator = tk.Frame(btn, bg=AppColors.ACCENT if index == 0 else AppColors.BG_ELEVATED, height=3)
         indicator.pack(fill="x")
         
         # Icon (using text as placeholder)
         icon_label = tk.Label(
             btn, text=icon,
             font=("Segoe UI", 20),
-            fg=SleeperColors.ACCENT if index == 0 else SleeperColors.TEXT_TERTIARY,
-            bg=SleeperColors.BG_ELEVATED
+            fg=AppColors.ACCENT if index == 0 else AppColors.TEXT_TERTIARY,
+            bg=AppColors.BG_ELEVATED
         )
         icon_label.pack(pady=(8, 0))
         
         # Label
         text_label = tk.Label(
             btn, text=label,
-            font=SleeperFonts.CAPTION,
-            fg=SleeperColors.ACCENT if index == 0 else SleeperColors.TEXT_TERTIARY,
-            bg=SleeperColors.BG_ELEVATED
+            font=AppFonts.CAPTION,
+            fg=AppColors.ACCENT if index == 0 else AppColors.TEXT_TERTIARY,
+            bg=AppColors.BG_ELEVATED
         )
         text_label.pack(pady=(0, 8))
         
@@ -410,8 +410,8 @@ class SleeperNavBar(tk.Frame):
         self.active_index = index
         for i, btn in enumerate(self.buttons):
             is_active = (i == index)
-            color = SleeperColors.ACCENT if is_active else SleeperColors.BG_ELEVATED
-            text_color = SleeperColors.ACCENT if is_active else SleeperColors.TEXT_TERTIARY
+            color = AppColors.ACCENT if is_active else AppColors.BG_ELEVATED
+            text_color = AppColors.ACCENT if is_active else AppColors.TEXT_TERTIARY
             
             btn.indicator.configure(bg=color)
             btn.icon_label.configure(fg=text_color)
@@ -421,9 +421,9 @@ class SleeperNavBar(tk.Frame):
             self.on_select(index)
 
 
-def apply_sleeper_theme(root):
-    """Apply Sleeper-inspired theme to a Tkinter root window."""
-    root.configure(bg=SleeperColors.BG)
+def apply_app_theme(root):
+    """Apply modern theme to a Tkinter root window."""
+    root.configure(bg=AppColors.BG)
     
     # Configure ttk styles
     style = ttk.Style(root)
@@ -435,23 +435,23 @@ def apply_sleeper_theme(root):
         pass
     
     # Frame styles
-    style.configure('Sleeper.TFrame', background=SleeperColors.BG)
-    style.configure('SleeperCard.TFrame', background=SleeperColors.BG_ELEVATED)
+    style.configure('App.TFrame', background=AppColors.BG)
+    style.configure('AppCard.TFrame', background=AppColors.BG_ELEVATED)
     
     # Label styles
-    style.configure('Sleeper.TLabel',
-                   background=SleeperColors.BG,
-                   foreground=SleeperColors.TEXT_PRIMARY,
-                   font=SleeperFonts.BODY)
+    style.configure('App.TLabel',
+                   background=AppColors.BG,
+                   foreground=AppColors.TEXT_PRIMARY,
+                   font=AppFonts.BODY)
     
-    style.configure('SleeperMuted.TLabel',
-                   background=SleeperColors.BG,
-                   foreground=SleeperColors.TEXT_SECONDARY,
-                   font=SleeperFonts.SMALL)
+    style.configure('AppMuted.TLabel',
+                   background=AppColors.BG,
+                   foreground=AppColors.TEXT_SECONDARY,
+                   font=AppFonts.SMALL)
     
-    style.configure('SleeperCard.TLabel',
-                   background=SleeperColors.BG_ELEVATED,
-                   foreground=SleeperColors.TEXT_PRIMARY,
-                   font=SleeperFonts.BODY)
+    style.configure('AppCard.TLabel',
+                   background=AppColors.BG_ELEVATED,
+                   foreground=AppColors.TEXT_PRIMARY,
+                   font=AppFonts.BODY)
     
     return style

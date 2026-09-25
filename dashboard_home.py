@@ -1,18 +1,18 @@
 # sleeper_dashboard.py
-# Sleeper-inspired dashboard for Puck Dynasty.
+# modern dashboard for Puck Dynasty.
 # Clean, modern, card-based UI with generous whitespace.
 
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
 from sleeper_ui import (
-    SleeperColors, SleeperFonts, SleeperCard, SleeperStatCard,
-    SleeperPlayerRow, SleeperPill, SleeperButton, apply_sleeper_theme
+    AppColors, AppFonts, AppCard, StatCard,
+    PlayerRow, PillBadge, AppButton, apply_app_theme
 )
 
 
-class SleeperDashboard:
-    """Modern, Sleeper-inspired dashboard."""
+class HomeDashboard:
+    """Modern, modern dashboard."""
     
     def __init__(self, parent, game_manager, user_team, on_continue=None):
         self.parent = parent
@@ -22,19 +22,19 @@ class SleeperDashboard:
         self.widgets = {}
     
     def create_dashboard(self, container):
-        """Create the Sleeper-style dashboard."""
+        """Create the modern dashboard."""
         # Clear container
         for widget in container.winfo_children():
             widget.destroy()
         
         # Main background
-        main = tk.Frame(container, bg=SleeperColors.BG)
+        main = tk.Frame(container, bg=AppColors.BG)
         main.pack(fill="both", expand=True)
         
         # Scrollable content
-        canvas = tk.Canvas(main, bg=SleeperColors.BG, highlightthickness=0)
+        canvas = tk.Canvas(main, bg=AppColors.BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(main, orient="vertical", command=canvas.yview)
-        scrollable = tk.Frame(canvas, bg=SleeperColors.BG)
+        scrollable = tk.Frame(canvas, bg=AppColors.BG)
         
         scrollable.bind(
             "<Configure>",
@@ -47,8 +47,8 @@ class SleeperDashboard:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Content with max width (centered, like Sleeper)
-        content = tk.Frame(scrollable, bg=SleeperColors.BG)
+        # Content with max width (centered with max width)
+        content = tk.Frame(scrollable, bg=AppColors.BG)
         content.pack(fill="both", expand=True, padx=24, pady=24)
         
         # Build sections
@@ -60,19 +60,19 @@ class SleeperDashboard:
     
     def _create_header(self, parent):
         """Team header with avatar and record."""
-        header = tk.Frame(parent, bg=SleeperColors.BG)
+        header = tk.Frame(parent, bg=AppColors.BG)
         header.pack(fill="x", pady=(0, 24))
         
         # Team avatar (large circle)
         avatar_size = 72
         avatar = tk.Canvas(header, width=avatar_size, height=avatar_size,
-                          bg=SleeperColors.BG, highlightthickness=0)
+                          bg=AppColors.BG, highlightthickness=0)
         avatar.pack(side="left")
         
         # Team color (use accent or team color)
-        team_color = getattr(self.user_team, 'primary_color', SleeperColors.ACCENT)
+        team_color = getattr(self.user_team, 'primary_color', AppColors.ACCENT)
         if team_color in ['#FFFFFF', '#ffffff', 'white']:
-            team_color = SleeperColors.ACCENT
+            team_color = AppColors.ACCENT
         
         avatar.create_oval(2, 2, avatar_size-2, avatar_size-2,
                           fill=team_color, outline="")
@@ -84,17 +84,17 @@ class SleeperDashboard:
                           font=("Segoe UI", 20, "bold"), fill="white")
         
         # Team info
-        info = tk.Frame(header, bg=SleeperColors.BG)
+        info = tk.Frame(header, bg=AppColors.BG)
         info.pack(side="left", padx=16)
         
         name_label = tk.Label(info, text=name,
-                             font=SleeperFonts.H1,
-                             fg=SleeperColors.TEXT_PRIMARY,
-                             bg=SleeperColors.BG)
+                             font=AppFonts.H1,
+                             fg=AppColors.TEXT_PRIMARY,
+                             bg=AppColors.BG)
         name_label.pack(anchor="w")
         
         # Record with pill
-        record_frame = tk.Frame(info, bg=SleeperColors.BG)
+        record_frame = tk.Frame(info, bg=AppColors.BG)
         record_frame.pack(anchor="w", pady=(8, 0))
         
         # Get record
@@ -106,13 +106,13 @@ class SleeperDashboard:
         except:
             record_text = "0-0-0"
         
-        record_pill = SleeperPill(record_frame, text=record_text,
-                                 bg=SleeperColors.BG_ELEVATED,
-                                 fg=SleeperColors.TEXT_PRIMARY)
+        record_pill = PillBadge(record_frame, text=record_text,
+                                 bg=AppColors.BG_ELEVATED,
+                                 fg=AppColors.TEXT_PRIMARY)
         record_pill.pack(side="left")
         
         # Date (right side)
-        date_frame = tk.Frame(header, bg=SleeperColors.BG)
+        date_frame = tk.Frame(header, bg=AppColors.BG)
         date_frame.pack(side="right")
         
         try:
@@ -124,19 +124,19 @@ class SleeperDashboard:
             day_str = datetime.now().strftime("%A")
         
         date_label = tk.Label(date_frame, text=date_str,
-                             font=SleeperFonts.BODY_BOLD,
-                             fg=SleeperColors.TEXT_PRIMARY,
-                             bg=SleeperColors.BG)
+                             font=AppFonts.BODY_BOLD,
+                             fg=AppColors.TEXT_PRIMARY,
+                             bg=AppColors.BG)
         date_label.pack(anchor="e")
         
         day_label = tk.Label(date_frame, text=day_str,
-                            font=SleeperFonts.SMALL,
-                            fg=SleeperColors.ACCENT,
-                            bg=SleeperColors.BG)
+                            font=AppFonts.SMALL,
+                            fg=AppColors.ACCENT,
+                            bg=AppColors.BG)
         day_label.pack(anchor="e")
         
         # Continue button
-        continue_btn = SleeperButton(
+        continue_btn = AppButton(
             date_frame, text="Continue",
             command=self._on_continue,
             style="primary", width=140, height=40
@@ -144,8 +144,8 @@ class SleeperDashboard:
         continue_btn.pack(pady=(12, 0))
     
     def _create_stat_cards(self, parent):
-        """Row of stat cards (Sleeper-style)."""
-        cards_frame = tk.Frame(parent, bg=SleeperColors.BG)
+        """Row of stat cards (modern)."""
+        cards_frame = tk.Frame(parent, bg=AppColors.BG)
         cards_frame.pack(fill="x", pady=(0, 24))
         
         # Get stats
@@ -159,13 +159,13 @@ class SleeperDashboard:
             wins, points, gpg = 0, 0, 0.0
         
         stats = [
-            ("Wins", str(wins), "Season", SleeperColors.TEXT_PRIMARY),
-            ("Points", str(points), "Standings", SleeperColors.ACCENT),
-            ("Goals/Game", f"{gpg:.1f}", "Offense", SleeperColors.TEXT_PRIMARY),
+            ("Wins", str(wins), "Season", AppColors.TEXT_PRIMARY),
+            ("Points", str(points), "Standings", AppColors.ACCENT),
+            ("Goals/Game", f"{gpg:.1f}", "Offense", AppColors.TEXT_PRIMARY),
         ]
         
         for i, (label, value, caption, color) in enumerate(stats):
-            card = SleeperStatCard(
+            card = StatCard(
                 cards_frame,
                 value=value,
                 label=label,
@@ -178,15 +178,15 @@ class SleeperDashboard:
     
     def _create_main_grid(self, parent):
         """Two-column grid: main content + sidebar."""
-        grid = tk.Frame(parent, bg=SleeperColors.BG)
+        grid = tk.Frame(parent, bg=AppColors.BG)
         grid.pack(fill="both", expand=True)
         
         # Left column (2/3 width)
-        left = tk.Frame(grid, bg=SleeperColors.BG)
+        left = tk.Frame(grid, bg=AppColors.BG)
         left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         
         # Right column (1/3 width)
-        right = tk.Frame(grid, bg=SleeperColors.BG)
+        right = tk.Frame(grid, bg=AppColors.BG)
         right.pack(side="right", fill="both", expand=True, padx=(12, 0))
         
         self._create_team_section(left)
@@ -195,14 +195,14 @@ class SleeperDashboard:
     
     def _create_team_section(self, parent):
         """Top players section."""
-        card = SleeperCard(parent)
+        card = AppCard(parent)
         card.pack(fill="x", pady=(0, 16))
         content = card.get_content_frame()
         
         # Title
         title = tk.Label(content, text="Top Performers",
-                        font=SleeperFonts.H2,
-                        fg=SleeperColors.TEXT_PRIMARY,
+                        font=AppFonts.H2,
+                        fg=AppColors.TEXT_PRIMARY,
                         bg=card.card_bg)
         title.pack(anchor="w", pady=(0, 12))
         
@@ -229,7 +229,7 @@ class SleeperDashboard:
             players = [("No players", "", "", "")]
         
         for name, pos, stat_val, stat_label in players[:5]:
-            row = SleeperPlayerRow(
+            row = PlayerRow(
                 content,
                 name=name,
                 position=pos,
@@ -241,32 +241,32 @@ class SleeperDashboard:
     
     def _create_next_game_card(self, parent):
         """Next game card."""
-        card = SleeperCard(parent)
+        card = AppCard(parent)
         card.pack(fill="x", pady=(0, 16))
         content = card.get_content_frame()
         
         title = tk.Label(content, text="Next Game",
-                        font=SleeperFonts.H2,
-                        fg=SleeperColors.TEXT_PRIMARY,
+                        font=AppFonts.H2,
+                        fg=AppColors.TEXT_PRIMARY,
                         bg=card.card_bg)
         title.pack(anchor="w", pady=(0, 12))
         
         # Opponent info (simplified)
         opp_label = tk.Label(content, text="vs. Opponent",
-                            font=SleeperFonts.BODY_BOLD,
-                            fg=SleeperColors.ACCENT,
+                            font=AppFonts.BODY_BOLD,
+                            fg=AppColors.ACCENT,
                             bg=card.card_bg)
         opp_label.pack(anchor="w")
         
         date_label = tk.Label(content, text="Upcoming",
-                             font=SleeperFonts.SMALL,
-                             fg=SleeperColors.TEXT_SECONDARY,
+                             font=AppFonts.SMALL,
+                             fg=AppColors.TEXT_SECONDARY,
                              bg=card.card_bg)
         date_label.pack(anchor="w", pady=(4, 0))
     
     def _create_inbox_card(self, parent):
         """Inbox preview card."""
-        card = SleeperCard(parent)
+        card = AppCard(parent)
         card.pack(fill="x")
         content = card.get_content_frame()
         
@@ -275,8 +275,8 @@ class SleeperDashboard:
         header.pack(fill="x", pady=(0, 12))
         
         title = tk.Label(header, text="Inbox",
-                        font=SleeperFonts.H2,
-                        fg=SleeperColors.TEXT_PRIMARY,
+                        font=AppFonts.H2,
+                        fg=AppColors.TEXT_PRIMARY,
                         bg=card.card_bg)
         title.pack(side="left")
         
@@ -287,8 +287,8 @@ class SleeperDashboard:
             unread = 0
         
         if unread > 0:
-            pill = SleeperPill(header, text=f"{unread} new",
-                              bg=SleeperColors.DANGER,
+            pill = PillBadge(header, text=f"{unread} new",
+                              bg=AppColors.DANGER,
                               fg="#ffffff")
             pill.pack(side="right")
         
@@ -299,15 +299,15 @@ class SleeperDashboard:
         ]
         
         for msg in messages:
-            msg_frame = tk.Frame(content, bg=SleeperColors.BG,
-                                highlightbackground=SleeperColors.BORDER,
+            msg_frame = tk.Frame(content, bg=AppColors.BG,
+                                highlightbackground=AppColors.BORDER,
                                 highlightthickness=1)
             msg_frame.pack(fill="x", pady=4)
             
             msg_label = tk.Label(msg_frame, text=msg,
-                                font=SleeperFonts.SMALL,
-                                fg=SleeperColors.TEXT_PRIMARY,
-                                bg=SleeperColors.BG,
+                                font=AppFonts.SMALL,
+                                fg=AppColors.TEXT_PRIMARY,
+                                bg=AppColors.BG,
                                 padx=12, pady=8)
             msg_label.pack(anchor="w")
     

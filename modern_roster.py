@@ -1,24 +1,24 @@
 # sleeper_roster.py
-# Sleeper-inspired card-based roster view.
+# modern card-based roster view.
 # Replaces Excel-like tables with modern player cards.
 
 import tkinter as tk
 from tkinter import ttk
 from sleeper_ui import (
-    SleeperColors, SleeperFonts, SleeperCard, SleeperPlayerRow,
-    SleeperPill, SleeperButton
+    AppColors, AppFonts, AppCard, PlayerRow,
+    PillBadge, AppButton
 )
 
 
-class SleeperRosterView(tk.Frame):
-    """Card-based roster view (Sleeper-style).
+class RosterView(tk.Frame):
+    """Card-based roster view (modern).
     
     Instead of a dense table, players are shown as clean cards
     with avatars, names, positions, and key stats.
     """
     
     def __init__(self, parent, players=None, on_player_click=None, **kwargs):
-        super().__init__(parent, bg=SleeperColors.BG, **kwargs)
+        super().__init__(parent, bg=AppColors.BG, **kwargs)
         
         self.players = players or []
         self.on_player_click = on_player_click
@@ -30,37 +30,37 @@ class SleeperRosterView(tk.Frame):
     def _create_ui(self):
         """Create the roster UI."""
         # Header with position filter pills
-        header = tk.Frame(self, bg=SleeperColors.BG)
+        header = tk.Frame(self, bg=AppColors.BG)
         header.pack(fill="x", padx=16, pady=(16, 12))
         
         title = tk.Label(header, text="Roster",
-                        font=SleeperFonts.H1,
-                        fg=SleeperColors.TEXT_PRIMARY,
-                        bg=SleeperColors.BG)
+                        font=AppFonts.H1,
+                        fg=AppColors.TEXT_PRIMARY,
+                        bg=AppColors.BG)
         title.pack(side="left")
         
         # Count badge
         self.count_label = tk.Label(header, text="",
-                                   font=SleeperFonts.SMALL,
-                                   fg=SleeperColors.TEXT_SECONDARY,
-                                   bg=SleeperColors.BG)
+                                   font=AppFonts.SMALL,
+                                   fg=AppColors.TEXT_SECONDARY,
+                                   bg=AppColors.BG)
         self.count_label.pack(side="left", padx=(12, 0))
         
         # Position filter pills
-        filter_frame = tk.Frame(header, bg=SleeperColors.BG)
+        filter_frame = tk.Frame(header, bg=AppColors.BG)
         filter_frame.pack(side="right")
         
         positions = ["All", "F", "D", "G"]
         self.filter_pills = {}
         for pos in positions:
-            pill = tk.Frame(filter_frame, bg=SleeperColors.BG_ELEVATED,
+            pill = tk.Frame(filter_frame, bg=AppColors.BG_ELEVATED,
                            cursor="hand2", padx=12, pady=6)
             pill.pack(side="left", padx=4)
             
             label = tk.Label(pill, text=pos,
-                           font=SleeperFonts.SMALL_BOLD,
-                           fg=SleeperColors.TEXT_SECONDARY,
-                           bg=SleeperColors.BG_ELEVATED)
+                           font=AppFonts.SMALL_BOLD,
+                           fg=AppColors.TEXT_SECONDARY,
+                           bg=AppColors.BG_ELEVATED)
             label.pack()
             
             # Bind clicks
@@ -72,9 +72,9 @@ class SleeperRosterView(tk.Frame):
         self._update_filter_ui()
         
         # Scrollable player list
-        canvas = tk.Canvas(self, bg=SleeperColors.BG, highlightthickness=0)
+        canvas = tk.Canvas(self, bg=AppColors.BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
-        self.list_frame = tk.Frame(canvas, bg=SleeperColors.BG)
+        self.list_frame = tk.Frame(canvas, bg=AppColors.BG)
         
         self.list_frame.bind(
             "<Configure>",
@@ -100,8 +100,8 @@ class SleeperRosterView(tk.Frame):
         """Update filter pill appearance."""
         for pos, (pill, label) in self.filter_pills.items():
             is_active = (pos == self.position_filter)
-            bg = SleeperColors.ACCENT if is_active else SleeperColors.BG_ELEVATED
-            fg = "#ffffff" if is_active else SleeperColors.TEXT_SECONDARY
+            bg = AppColors.ACCENT if is_active else AppColors.BG_ELEVATED
+            fg = "#ffffff" if is_active else AppColors.TEXT_SECONDARY
             
             pill.configure(bg=bg)
             label.configure(bg=bg, fg=fg)
@@ -137,9 +137,9 @@ class SleeperRosterView(tk.Frame):
             # Group header
             header = tk.Label(self.list_frame,
                             text=group_name.upper(),
-                            font=SleeperFonts.LABEL,
-                            fg=SleeperColors.TEXT_SECONDARY,
-                            bg=SleeperColors.BG)
+                            font=AppFonts.LABEL,
+                            fg=AppColors.TEXT_SECONDARY,
+                            bg=AppColors.BG)
             header.pack(anchor="w", pady=(16, 8), padx=4)
             
             # Player cards
@@ -175,26 +175,26 @@ class SleeperRosterView(tk.Frame):
             return "Forwards"
     
     def _create_player_card(self, player):
-        """Create a Sleeper-style player card."""
-        card = tk.Frame(self.list_frame, bg=SleeperColors.BG_ELEVATED,
-                       highlightbackground=SleeperColors.BORDER,
+        """Create a modern player card."""
+        card = tk.Frame(self.list_frame, bg=AppColors.BG_ELEVATED,
+                       highlightbackground=AppColors.BORDER,
                        highlightthickness=1,
                        cursor="hand2" if self.on_player_click else "")
         
         # Avatar
         avatar_size = 48
         avatar = tk.Canvas(card, width=avatar_size, height=avatar_size,
-                          bg=SleeperColors.BG_ELEVATED, highlightthickness=0)
+                          bg=AppColors.BG_ELEVATED, highlightthickness=0)
         avatar.pack(side="left", padx=12, pady=10)
         
         # Avatar color based on position
         pos = str(getattr(player, 'primary_position', '')).upper()
         if 'GOALIE' in pos:
-            color = SleeperColors.INFO
+            color = AppColors.INFO
         elif 'DEFENSE' in pos:
-            color = SleeperColors.WARNING
+            color = AppColors.WARNING
         else:
-            color = SleeperColors.ACCENT
+            color = AppColors.ACCENT
         
         avatar.create_oval(2, 2, avatar_size-2, avatar_size-2,
                           fill=color, outline="")
@@ -211,7 +211,7 @@ class SleeperRosterView(tk.Frame):
                           font=("Segoe UI", 14, "bold"), fill="white")
         
         # Info
-        info = tk.Frame(card, bg=SleeperColors.BG_ELEVATED)
+        info = tk.Frame(card, bg=AppColors.BG_ELEVATED)
         info.pack(side="left", fill="y", expand=True)
         
         # Name
@@ -223,9 +223,9 @@ class SleeperRosterView(tk.Frame):
             name = "Unknown Player"
         
         name_label = tk.Label(info, text=name,
-                             font=SleeperFonts.BODY_BOLD,
-                             fg=SleeperColors.TEXT_PRIMARY,
-                             bg=SleeperColors.BG_ELEVATED,
+                             font=AppFonts.BODY_BOLD,
+                             fg=AppColors.TEXT_PRIMARY,
+                             bg=AppColors.BG_ELEVATED,
                              anchor="w")
         name_label.pack(anchor="w", pady=(10, 0))
         
@@ -244,14 +244,14 @@ class SleeperRosterView(tk.Frame):
             detail_text = ""
         
         detail_label = tk.Label(info, text=detail_text,
-                               font=SleeperFonts.SMALL,
-                               fg=SleeperColors.TEXT_SECONDARY,
-                               bg=SleeperColors.BG_ELEVATED,
+                               font=AppFonts.SMALL,
+                               fg=AppColors.TEXT_SECONDARY,
+                               bg=AppColors.BG_ELEVATED,
                                anchor="w")
         detail_label.pack(anchor="w")
         
         # Stats (right side)
-        stats_frame = tk.Frame(card, bg=SleeperColors.BG_ELEVATED)
+        stats_frame = tk.Frame(card, bg=AppColors.BG_ELEVATED)
         stats_frame.pack(side="right", padx=12)
         
         try:
@@ -272,28 +272,28 @@ class SleeperRosterView(tk.Frame):
             stat2_val, stat2_lbl = "-", "G"
         
         # Stat 1
-        s1_frame = tk.Frame(stats_frame, bg=SleeperColors.BG_ELEVATED)
+        s1_frame = tk.Frame(stats_frame, bg=AppColors.BG_ELEVATED)
         s1_frame.pack(side="left", padx=8)
         tk.Label(s1_frame, text=stat1_val,
-                font=SleeperFonts.BODY_BOLD,
-                fg=SleeperColors.TEXT_PRIMARY,
-                bg=SleeperColors.BG_ELEVATED).pack(anchor="e")
+                font=AppFonts.BODY_BOLD,
+                fg=AppColors.TEXT_PRIMARY,
+                bg=AppColors.BG_ELEVATED).pack(anchor="e")
         tk.Label(s1_frame, text=stat1_lbl,
-                font=SleeperFonts.CAPTION,
-                fg=SleeperColors.TEXT_TERTIARY,
-                bg=SleeperColors.BG_ELEVATED).pack(anchor="e")
+                font=AppFonts.CAPTION,
+                fg=AppColors.TEXT_TERTIARY,
+                bg=AppColors.BG_ELEVATED).pack(anchor="e")
         
         # Stat 2
-        s2_frame = tk.Frame(stats_frame, bg=SleeperColors.BG_ELEVATED)
+        s2_frame = tk.Frame(stats_frame, bg=AppColors.BG_ELEVATED)
         s2_frame.pack(side="left", padx=8)
         tk.Label(s2_frame, text=stat2_val,
-                font=SleeperFonts.BODY_BOLD,
-                fg=SleeperColors.TEXT_PRIMARY,
-                bg=SleeperColors.BG_ELEVATED).pack(anchor="e")
+                font=AppFonts.BODY_BOLD,
+                fg=AppColors.TEXT_PRIMARY,
+                bg=AppColors.BG_ELEVATED).pack(anchor="e")
         tk.Label(s2_frame, text=stat2_lbl,
-                font=SleeperFonts.CAPTION,
-                fg=SleeperColors.TEXT_TERTIARY,
-                bg=SleeperColors.BG_ELEVATED).pack(anchor="e")
+                font=AppFonts.CAPTION,
+                fg=AppColors.TEXT_TERTIARY,
+                bg=AppColors.BG_ELEVATED).pack(anchor="e")
         
         # Click handler
         if self.on_player_click:

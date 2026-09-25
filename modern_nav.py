@@ -1,13 +1,13 @@
 # sleeper_nav.py
-# Sleeper-inspired navigation bar.
+# modern navigation bar.
 # Clean, minimal, with clear active states.
 
 import tkinter as tk
-from sleeper_ui import SleeperColors, SleeperFonts
+from sleeper_ui import AppColors, AppFonts
 
 
-class SleeperNavBar(tk.Frame):
-    """Modern navigation bar (Sleeper-style).
+class NavBar(tk.Frame):
+    """Modern navigation bar (modern).
     
     Features:
     - Clean horizontal layout with generous spacing
@@ -24,7 +24,7 @@ class SleeperNavBar(tk.Frame):
             items: List of (label, command) or (label, submenu_dict)
             on_select: Callback when item selected (index)
         """
-        super().__init__(parent, bg=SleeperColors.BG, **kwargs)
+        super().__init__(parent, bg=AppColors.BG, **kwargs)
         
         self.items = items or []
         self.on_select = on_select
@@ -32,11 +32,11 @@ class SleeperNavBar(tk.Frame):
         self.active_index = -1
         
         # Bottom border
-        self.border = tk.Frame(self, bg=SleeperColors.BORDER, height=1)
+        self.border = tk.Frame(self, bg=AppColors.BORDER, height=1)
         self.border.pack(side="bottom", fill="x")
         
         # Container for buttons
-        self.btn_container = tk.Frame(self, bg=SleeperColors.BG)
+        self.btn_container = tk.Frame(self, bg=AppColors.BG)
         self.btn_container.pack(fill="x", padx=16, pady=8)
         
         self._create_buttons()
@@ -61,27 +61,27 @@ class SleeperNavBar(tk.Frame):
     def _create_button(self, label, command, index):
         """Create a simple nav button."""
         # Container for button + indicator
-        container = tk.Frame(self.btn_container, bg=SleeperColors.BG)
+        container = tk.Frame(self.btn_container, bg=AppColors.BG)
         
         # Button
         btn = tk.Label(
             container,
             text=label,
-            font=SleeperFonts.BODY,
-            fg=SleeperColors.TEXT_SECONDARY,
-            bg=SleeperColors.BG,
+            font=AppFonts.BODY,
+            fg=AppColors.TEXT_SECONDARY,
+            bg=AppColors.BG,
             padx=16, pady=8,
             cursor="hand2"
         )
         btn.pack()
         
         # Active indicator (hidden by default)
-        indicator = tk.Frame(container, bg=SleeperColors.BG, height=2)
+        indicator = tk.Frame(container, bg=AppColors.BG, height=2)
         indicator.pack(fill="x", pady=(4, 0))
         
         # Bind
         for w in [container, btn]:
-            w.bind("<Enter>", lambda e, b=btn: b.configure(fg=SleeperColors.TEXT_PRIMARY))
+            w.bind("<Enter>", lambda e, b=btn: b.configure(fg=AppColors.TEXT_PRIMARY))
             w.bind("<Leave>", lambda e, b=btn, idx=index: self._on_leave(b, idx))
             w.bind("<Button-1>", lambda e, idx=index, cmd=command: self._on_click(idx, cmd))
         
@@ -93,30 +93,30 @@ class SleeperNavBar(tk.Frame):
     
     def _create_dropdown(self, label, menu_items, index):
         """Create a dropdown nav button."""
-        container = tk.Frame(self.btn_container, bg=SleeperColors.BG)
+        container = tk.Frame(self.btn_container, bg=AppColors.BG)
         
         # Button with arrow
         btn = tk.Label(
             container,
             text=f"{label}  ▾",
-            font=SleeperFonts.BODY,
-            fg=SleeperColors.TEXT_SECONDARY,
-            bg=SleeperColors.BG,
+            font=AppFonts.BODY,
+            fg=AppColors.TEXT_SECONDARY,
+            bg=AppColors.BG,
             padx=16, pady=8,
             cursor="hand2"
         )
         btn.pack()
         
         # Active indicator
-        indicator = tk.Frame(container, bg=SleeperColors.BG, height=2)
+        indicator = tk.Frame(container, bg=AppColors.BG, height=2)
         indicator.pack(fill="x", pady=(4, 0))
         
         # Create menu
         menu = tk.Menu(container, tearoff=0,
-                      bg=SleeperColors.BG_ELEVATED,
-                      fg=SleeperColors.TEXT_PRIMARY,
-                      activebackground=SleeperColors.BG_HOVER,
-                      activeforeground=SleeperColors.TEXT_PRIMARY,
+                      bg=AppColors.BG_ELEVATED,
+                      fg=AppColors.TEXT_PRIMARY,
+                      activebackground=AppColors.BG_HOVER,
+                      activeforeground=AppColors.TEXT_PRIMARY,
                       relief="flat", bd=0)
         
         for item_label, item_cmd in menu_items.items():
@@ -127,7 +127,7 @@ class SleeperNavBar(tk.Frame):
             menu.tk_popup(event.x_root, event.y_root)
         
         for w in [container, btn]:
-            w.bind("<Enter>", lambda e, b=btn: b.configure(fg=SleeperColors.TEXT_PRIMARY))
+            w.bind("<Enter>", lambda e, b=btn: b.configure(fg=AppColors.TEXT_PRIMARY))
             w.bind("<Leave>", lambda e, b=btn, idx=index: self._on_leave(b, idx))
             w.bind("<Button-1>", show_menu)
         
@@ -140,7 +140,7 @@ class SleeperNavBar(tk.Frame):
     def _on_leave(self, btn, index):
         """Handle mouse leave."""
         if index != self.active_index:
-            btn.configure(fg=SleeperColors.TEXT_SECONDARY)
+            btn.configure(fg=AppColors.TEXT_SECONDARY)
     
     def _on_click(self, index, command):
         """Handle button click."""
@@ -156,23 +156,23 @@ class SleeperNavBar(tk.Frame):
         for i, btn in enumerate(self.buttons):
             is_active = (i == index)
             if is_active:
-                btn.label.configure(fg=SleeperColors.TEXT_PRIMARY,
-                                   font=SleeperFonts.BODY_BOLD)
-                btn.indicator.configure(bg=SleeperColors.ACCENT)
+                btn.label.configure(fg=AppColors.TEXT_PRIMARY,
+                                   font=AppFonts.BODY_BOLD)
+                btn.indicator.configure(bg=AppColors.ACCENT)
             else:
-                btn.label.configure(fg=SleeperColors.TEXT_SECONDARY,
-                                   font=SleeperFonts.BODY)
-                btn.indicator.configure(bg=SleeperColors.BG)
+                btn.label.configure(fg=AppColors.TEXT_SECONDARY,
+                                   font=AppFonts.BODY)
+                btn.indicator.configure(bg=AppColors.BG)
 
 
-class SleeperTabBar(tk.Frame):
-    """Tab bar for content sections (Sleeper-style).
+class TabBar(tk.Frame):
+    """Tab bar for content sections (modern).
     
     Cleaner than ttk.Notebook - uses pill-style tabs.
     """
     
     def __init__(self, parent, tabs=None, on_select=None, **kwargs):
-        super().__init__(parent, bg=SleeperColors.BG, **kwargs)
+        super().__init__(parent, bg=AppColors.BG, **kwargs)
         
         self.tabs = tabs or []
         self.on_select = on_select
@@ -189,13 +189,13 @@ class SleeperTabBar(tk.Frame):
     def _create_tab(self, label, index):
         """Create a tab button."""
         # Pill background
-        pill = tk.Frame(self, bg=SleeperColors.BG_ELEVATED,
+        pill = tk.Frame(self, bg=AppColors.BG_ELEVATED,
                        padx=16, pady=8, cursor="hand2")
         
         lbl = tk.Label(pill, text=label,
-                      font=SleeperFonts.SMALL_BOLD,
-                      fg=SleeperColors.TEXT_SECONDARY,
-                      bg=SleeperColors.BG_ELEVATED)
+                      font=AppFonts.SMALL_BOLD,
+                      fg=AppColors.TEXT_SECONDARY,
+                      bg=AppColors.BG_ELEVATED)
         lbl.pack()
         
         for w in [pill, lbl]:
@@ -215,8 +215,8 @@ class SleeperTabBar(tk.Frame):
         """Update tab appearance."""
         for i, btn in enumerate(self.buttons):
             is_active = (i == self.active_index)
-            bg = SleeperColors.ACCENT if is_active else SleeperColors.BG_ELEVATED
-            fg = "#ffffff" if is_active else SleeperColors.TEXT_SECONDARY
+            bg = AppColors.ACCENT if is_active else AppColors.BG_ELEVATED
+            fg = "#ffffff" if is_active else AppColors.TEXT_SECONDARY
             
             btn.configure(bg=bg)
             btn.label.configure(bg=bg, fg=fg)
