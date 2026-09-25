@@ -3682,11 +3682,28 @@ class HockeyManagerGUI(tk.Tk):
         
     def _create_enhanced_menu_bar(self, parent):
         """Create a streamlined menu bar with dropdown organization."""
-        menu_bar = ttk.Frame(parent, style='Panel.TFrame', padding=4)
-        menu_bar.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        try:
+            from modern_ui import AppColors
+            menu_bg = AppColors.BG
+            border_color = AppColors.BORDER
+        except:
+            menu_bg = '#0e0e11'
+            border_color = '#26262e'
+        
+        # Container for menu bar + border
+        nav_container = tk.Frame(parent, bg=menu_bg)
+        nav_container.grid(row=0, column=0, sticky="ew")
+        
+        # Use tk.Frame with modern background instead of ttk for consistent theming
+        menu_bar = tk.Frame(nav_container, bg=menu_bg, padx=4, pady=4)
+        menu_bar.pack(fill="x")
+        
+        # Subtle bottom border
+        border = tk.Frame(nav_container, bg=border_color, height=1)
+        border.pack(fill="x")
         
         # Left side - Main action buttons (most frequently used)
-        left_menu_frame = ttk.Frame(menu_bar, style='Panel.TFrame')
+        left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
         left_menu_frame.pack(side="left", fill="x", expand=True)
         
         # Primary action buttons (always visible) - temporarily disable icons
@@ -3735,7 +3752,7 @@ class HockeyManagerGUI(tk.Tk):
         })
         
         # Right side - Settings and utilities
-        right_menu_frame = ttk.Frame(menu_bar, style='Panel.TFrame')
+        right_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
         right_menu_frame.pack(side="right")
 
         # Save/Load dropdown
@@ -3767,19 +3784,23 @@ class HockeyManagerGUI(tk.Tk):
     
     def _create_nav_pill(self, parent, text, command, side="left"):
         """Create a pill-style navigation button for the top menu bar."""
-        # Get the menu bar background for seamless pill blending
+        # Use modern color scheme
         try:
-            bg = parent.cget('bg')
-        except Exception:
-            try:
-                from tkinter import ttk as _ttk
-                bg = _ttk.Style().lookup('Panel.TFrame', 'background') or '#0d1420'
-            except Exception:
-                bg = '#0d1420'
+            from modern_ui import AppColors
+            bg = AppColors.BG
+            fg = AppColors.TEXT_SECONDARY
+            hover_bg = AppColors.BG_HOVER
+            accent = AppColors.ACCENT
+        except:
+            bg = '#0e0e11'
+            fg = '#a1a1aa'
+            hover_bg = '#1e1e24'
+            accent = '#00ceb8'
+        
         pill = PillButton(parent, text=text, command=command,
                          font=(self.FONT_FAMILY, 10, 'bold'),
                          padx=14, pady=6, bg=bg,
-                         fg='#c8d0e0', hover_bg='#2a3550')
+                         fg=fg, hover_bg=hover_bg)
         pill.pack(side=side, padx=4)
         return pill
 
@@ -9454,10 +9475,22 @@ class HockeyManagerGUI(tk.Tk):
         Args:
             player: The player object to display
         """
+        # Use modern profile by default (clean, card-based)
+        # Set use_modern_profile=False to revert to the classic detailed view
+        use_modern_profile = True
+        
+        if use_modern_profile:
+            try:
+                from modern_profile import PlayerProfile
+                PlayerProfile(self, player)
+                return
+            except Exception as e:
+                print(f"Modern profile failed, falling back: {e}")
+        
         report = self.user_team.scouting_reports.get(player.id)
         is_scouted = report is not None
         
-        # Use the standard player profile window
+        # Fallback to the standard player profile window
         PlayerProfileWindow(self, player, is_scouted, report)
         
     def send_to_ahl(self, player):
