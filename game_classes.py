@@ -1726,9 +1726,10 @@ class Team:
         """Calculates team chemistry based on player morale and leadership."""
         if not self.roster:
             return 50
-        avg_morale = sum(p.morale for p in self.roster) / len(self.roster)
-        avg_leadership = sum(p.leadership for p in self.roster) / len(self.roster)
-        return int((avg_morale * 6) + (avg_leadership * 4))
+        # morale is 1-10 -> 10-100; leadership is internal ~50 scale -> 1-100
+        avg_morale = sum(p.morale for p in self.roster) / len(self.roster) * 10
+        avg_leadership = sum(to_100_scale(p.leadership) for p in self.roster) / len(self.roster)
+        return max(1, min(100, int(avg_morale * 0.6 + avg_leadership * 0.4)))
     
     @property
     def points(self) -> int:

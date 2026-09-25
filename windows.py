@@ -11664,3 +11664,160 @@ CHEMISTRY: {chemistry:.1f}%
         if not silent:
             tk.messagebox.showinfo("Success", "Lines have been saved!")
             self.destroy()
+
+
+class GMDashboardWindow(tk.Toplevel):
+    """GM Dashboard: record, cap, contracts, top performers, vitals, staff."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("GM Dashboard")
+        self.configure(background=parent.BG_COLOR)
+        self.geometry("860x640")
+        self._build()
+
+    # ---------- helpers ----------
+    def _card(self, master, title, r, c):
+        card = ttk.Frame(master, style='Card.TFrame', padding=12)
+        card.grid(row=r, column=c, sticky='nsew', padx=6, pady=6)
+        ttk.Label(card, text=title, style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+        ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
+        return card
+
+    def _line(self, card, text, secondary=False):
+        ttk.Label(card, text=text,
+                  style='Secondary.TLabel' if secondary else 'TLabel',
+                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+
+    def _big(self, card, text):
+        ttk.Label(card, text=text, style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
+
+    # ---------- build ----------
+    def _build(self):
+        team = self.parent.user_team
+        league = self.parent.league
+        st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
+        w, l, otl, pts = st.get("W", 0), st.get("L", 0), st.get("OTL", 0), st.get("Points", 0)
+        gp = w + l + otl
+
+        header = ttk.Frame(self, style='Panel.TFrame', padding=12)
+        header.pack(fill=tk.X, padx=12, pady=(12, 4))
+        ttk.Label(header, text=f"{team.city} {team.team_name}",
+                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  style='TLabel').pack(side=tk.LEFT)
+        season = getattr(league, 'season_year', '')
+        ttk.Label(header, text=f"  Season {season}" if season else "",
+                  style='Secondary.TLabel').pack(side=tk.LEFT)
+        PillButton(header, text="Refresh", bg='#111826',
+                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
+
+        self.grid_host = ttk.Frame(self, style='Panel.TFrame')
+        self.grid_host.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+        for i in range(2):
+            self.grid_host.columnconfigure(i, weight=1)
+        for i in range(3):
+            self.grid_host.rowconfigure(i, weight=1)
+        self._fill_cards(team, league, st, w, l, otl, pts, gp)
+
+    def _fill_cards(self, team, league, st, w, l, otl, pts, gp):
+        for child in self.grid_host.winfo_children():
+            child.destroy()
+
+        # --- Record ---
+        card = self._card(self.grid_host, "Record", 0, 0)
+        self._big(card, f"{w} - {l} - {otl}")
+        self._line(card, f"{pts} points in {gp} games", secondary=True)
+        ordered = sorted(league.standings.items(),
+                         key=lambda kv: kv[1].get("Points", 0), reverse=True)
+        rank = next((i + 1 for i, (name, _s) in enumerate(ordered)
+                     if name == team.team_name), None)
+        if rank:
+            self._line(card, f"League rank: {rank} of {len(ordered)}")
+        if gp > 0:
+            pace = pts / gp * 82
+            self._line(card, f"82-game pace: {pace:.1f} pts", secondary=True)
+
+        # --- Salary cap ---
+        card = self._card(self.grid_host, "Salary Cap", 0, 1)
+        payroll = team.payroll
+        cap = team.salary_cap
+        space = team.cap_space
+        self._big(card, f"${space / 1e6:.2f}M")
+        self._line(card, "cap space available", secondary=True)
+        self._line(card, f"Payroll: ${payroll / 1e6:.2f}M / ${cap / 1e6:.1f}M")
+        bar = ttk.Frame(card, style='Panel.TFrame')
+        bar.pack(fill=tk.X, pady=(6, 2))
+        frac = min(1.0, payroll / cap) if cap else 0
+        fill = tk.Canvas(bar, height=10, bg='#232a3a', highlightthickness=0)
+        fill.pack(fill=tk.X)
+        fill.update_idletasks()
+        bw = max(1, fill.winfo_width())
+        color = '#e63946' if frac >= 0.95 else ('#e0a030' if frac >= 0.85 else '#2a9d8f')
+        fill.create_rectangle(0, 0, bw * frac, 10, fill=color, outline='')
+        self._line(card, f"{frac * 100:.0f}% of cap used", secondary=True)
+
+        # --- Contracts ---
+        card = self._card(self.grid_host, "Contracts", 1, 0)
+        expiring = [p for p in team.roster
+                    if getattr(p.contract, 'years_remaining', 99) <= 1]
+        expiring.sort(key=lambda p: p.contract.salary, reverse=True)
+        self._big(card, f"{len(expiring)}")
+        self._line(card, "contracts expiring this season", secondary=True)
+        for p in expiring[:4]:
+            self._line(card, f"{p.full_name} — ${p.contract.salary / 1e6:.2f}M")
+
+        # --- Top performers ---
+        card = self._card(self.grid_host, "Top Scorers", 1, 1)
+        skaters = [p for p in team.roster
+                   if p.primary_position.value != 'G']
+        skaters.sort(key=lambda p: p.stats.points, reverse=True)
+        if skaters:
+            lead = skaters[0]
+            self._big(card, f"{lead.full_name}")
+            self._line(card, f"{lead.stats.goals}G - {lead.stats.assists}A - "
+                             f"{lead.stats.points}P in {lead.stats.games_played} GP",
+                       secondary=True)
+            for p in skaters[1:4]:
+                self._line(card, f"{p.full_name}: {p.stats.points} pts "
+                                 f"({p.stats.goals}G, {p.stats.assists}A)")
+        else:
+            self._line(card, "No skaters on roster", secondary=True)
+
+        # --- Team vitals ---
+        card = self._card(self.grid_host, "Team Vitals", 2, 0)
+        try:
+            chem = team.team_chemistry
+        except Exception:
+            chem = None
+        if chem is not None:
+            self._line(card, f"Chemistry: {chem}/100")
+        if team.roster:
+            avg_morale = sum(p.morale for p in team.roster) / len(team.roster)
+            avg_age = sum(p.age for p in team.roster) / len(team.roster)
+            self._line(card, f"Avg morale: {avg_morale:.1f}/10")
+            self._line(card, f"Avg age: {avg_age:.1f} years")
+            self._line(card, f"Roster size: {len(team.roster)} players")
+
+        # --- Staff ---
+        card = self._card(self.grid_host, "Staff", 2, 1)
+        from game_classes import StaffRole
+        staff = getattr(team, 'staff', [])
+        gm = next((s for s in staff if s.role == StaffRole.GENERAL_MANAGER), None)
+        hc = next((s for s in staff if s.role == StaffRole.HEAD_COACH), None)
+        self._big(card, f"{len(staff)}")
+        self._line(card, "staff employed", secondary=True)
+        if gm:
+            self._line(card, f"GM: {gm.full_name}")
+        if hc:
+            self._line(card, f"Head Coach: {hc.full_name}")
+
+    def _refresh(self):
+        team = self.parent.user_team
+        league = self.parent.league
+        st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
+        w, l, otl, pts = st.get("W", 0), st.get("L", 0), st.get("OTL", 0), st.get("Points", 0)
+        self._fill_cards(team, league, st, w, l, otl, pts, w + l + otl)

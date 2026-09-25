@@ -12992,8 +12992,8 @@ class GMOptionsWindow(tk.Toplevel):
     
     def open_gm_dashboard(self):
         """Open GM dashboard with key team metrics"""
-        messagebox.showinfo("GM Dashboard", 
-                           "GM Dashboard coming soon!\n\nWill include:\n• Team Performance Overview\n• Budget Management\n• Contract Status\n• Season Progress")
+        from windows import GMDashboardWindow
+        GMDashboardWindow(self.parent)
     
     def open_team_analytics(self):
         """Open advanced team analytics"""
