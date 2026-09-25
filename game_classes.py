@@ -541,6 +541,77 @@ class Player:
                 cap -= 2
         return cap
 
+    # Ordered grade ladder for dynamic potential movement
+    POTENTIAL_LADDER = ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
+
+    def update_potential_from_season(self):
+        """Dynamically adjust potential_grade based on just-completed season.
+
+        Breakout years raise the ceiling (a C prospect who scores like a
+        star becomes a B); highly-touted prospects who underperform see
+        their ceiling drop. This runs at season end, BEFORE stats reset.
+
+        Only applies to players in development years (age < 27) who played
+        meaningful games. Movement is one grade step, probabilistic.
+        """
+        if self.age >= 27:
+            return
+
+        is_goalie = getattr(getattr(self, 'primary_position', None), 'value', '') == 'G'
+        gp = getattr(self.stats, 'games_played', 0)
+
+        # Meaningful sample size
+        min_gp = 15 if is_goalie else 20
+        if gp < min_gp:
+            return
+
+        current = (self.potential_grade or 'C').strip().upper()
+        # Normalize to ladder (handle bare 'A'/'B'/etc.)
+        if current not in self.POTENTIAL_LADDER:
+            # Map bare grades to ladder equivalents
+            bare_map = {'A': 'A', 'B': 'B', 'C': 'C', 'D': 'D', 'F': 'F'}
+            current = bare_map.get(current[:1], 'C')
+        try:
+            idx = self.POTENTIAL_LADDER.index(current)
+        except ValueError:
+            return
+
+        breakout = False
+        bust = False
+
+        if is_goalie:
+            sv = getattr(self.stats, 'save_percentage', 0)
+            # Breakout: .915+ SV% over meaningful games at young age
+            if sv >= 0.915 and self.age <= 25:
+                breakout = True
+            # Bust: below .890 despite high expectations
+            elif sv < 0.890 and sv > 0 and idx >= self.POTENTIAL_LADDER.index("B-"):
+                bust = True
+        else:
+            points = getattr(self.stats, 'points', 0)
+            ppg = points / gp if gp > 0 else 0
+            # Age-adjusted expectations: younger players get more credit
+            # for the same production (breakout trajectory)
+            if self.age <= 20:
+                breakout_ppg, bust_ppg = 0.65, 0.25
+            elif self.age <= 23:
+                breakout_ppg, bust_ppg = 0.85, 0.35
+            else:  # 24-26
+                breakout_ppg, bust_ppg = 1.00, 0.45
+
+            if ppg >= breakout_ppg:
+                breakout = True
+            elif ppg < bust_ppg and idx >= self.POTENTIAL_LADDER.index("B-"):
+                bust = True
+
+        # Apply movement (probabilistic, one step)
+        if breakout and idx < len(self.POTENTIAL_LADDER) - 1:
+            if random.random() < 0.65:  # 65% chance breakout sticks
+                self.potential_grade = self.POTENTIAL_LADDER[idx + 1]
+        elif bust and idx > 0:
+            if random.random() < 0.45:  # 45% chance bust drops potential
+                self.potential_grade = self.POTENTIAL_LADDER[idx - 1]
+
     def age_one_year(self):
         """Handles player aging, development, and decline."""
         self.age += 1
@@ -4216,6 +4287,12 @@ class League:
         """Handles all end-of-season logic like aging players and resetting stats."""
         all_players = self.get_all_players()
         for player in all_players:
+            # Dynamic potential: breakout/bust seasons adjust the ceiling
+            # BEFORE stats are wiped and aging is applied.
+            try:
+                player.update_potential_from_season()
+            except Exception:
+                pass
             player.age_one_year()
             player.stats = PlayerStats()
         
