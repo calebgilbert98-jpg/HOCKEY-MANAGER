@@ -1560,70 +1560,62 @@ class FreeAgencyWindow(tk.Toplevel):
         # Filter section for staff
         filter_frame = ttk.LabelFrame(staff_tab, text="Staff Filters & Search", padding=15)
         filter_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # First row of staff filters
-        filter_row1 = ttk.Frame(filter_frame, style='Panel.TFrame')
-        filter_row1.pack(fill=tk.X, pady=(0, 10))
-        
-        # Name search
-        ttk.Label(filter_row1, text="Name:", style='Content.TLabel').grid(row=0, column=0, padx=(0, 5), pady=2, sticky='w')
-        self.staff_name_search = ttk.Entry(filter_row1, width=15, font=(self.parent.FONT_FAMILY, 10))
-        self.staff_name_search.grid(row=0, column=1, padx=(0, 15), pady=2)
+
+        # Name search + role dropdown (23 roles is too many for pills) + clear
+        top_row = ttk.Frame(filter_frame, style='Panel.TFrame')
+        top_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(top_row, text="Name:", style='Content.TLabel').pack(side=tk.LEFT, padx=(0, 5))
+        self.staff_name_search = ttk.Entry(top_row, width=22, font=(self.parent.FONT_FAMILY, 10))
+        self.staff_name_search.pack(side=tk.LEFT, padx=(0, 15))
         self.staff_name_search.bind('<KeyRelease>', self.filter_staff)
-        
-        # Role filter
-        ttk.Label(filter_row1, text="Role:", style='Content.TLabel').grid(row=0, column=2, padx=(0, 5), pady=2, sticky='w')
+        ttk.Label(top_row, text="Role:", style='Content.TLabel').pack(side=tk.LEFT, padx=(0, 5))
         from game_classes import StaffRole
         roles = ['All'] + [role.value for role in StaffRole]
-        self.staff_role_filter = ttk.Combobox(filter_row1, values=roles, state='readonly', width=20)
-        self.staff_role_filter.set('All')
-        self.staff_role_filter.grid(row=0, column=3, padx=(0, 15), pady=2)
+        self.staff_role_var = tk.StringVar(master=self, value='All')
+        self.staff_role_filter = ttk.Combobox(top_row, textvariable=self.staff_role_var,
+                                              values=roles, state='readonly', width=22)
+        self.staff_role_filter.pack(side=tk.LEFT, padx=(0, 15))
         self.staff_role_filter.bind('<<ComboboxSelected>>', self.filter_staff)
-        
-        # Department filter
-        ttk.Label(filter_row1, text="Department:", style='Content.TLabel').grid(row=0, column=4, padx=(0, 5), pady=2, sticky='w')
-        departments = ['All', 'Management', 'Coaching', 'Development', 'Scouting', 'Medical', 'Analytics']
-        self.staff_department_filter = ttk.Combobox(filter_row1, values=departments, state='readonly', width=12)
-        self.staff_department_filter.set('All')
-        self.staff_department_filter.grid(row=0, column=5, padx=(0, 15), pady=2)
-        self.staff_department_filter.bind('<<ComboboxSelected>>', self.filter_staff)
-        
-        # Second row of staff filters
-        filter_row2 = ttk.Frame(filter_frame, style='Panel.TFrame')
-        filter_row2.pack(fill=tk.X)
-        
-        # Experience filter
-        ttk.Label(filter_row2, text="Experience:", style='Content.TLabel').grid(row=0, column=0, padx=(0, 5), pady=2, sticky='w')
-        experience_ranges = ['All', '0-2 Years', '3-5 Years', '6-10 Years', '11-15 Years', '16+ Years']
-        self.staff_experience_filter = ttk.Combobox(filter_row2, values=experience_ranges, state='readonly', width=12)
-        self.staff_experience_filter.set('All')
-        self.staff_experience_filter.grid(row=0, column=1, padx=(0, 15), pady=2)
-        self.staff_experience_filter.bind('<<ComboboxSelected>>', self.filter_staff)
-        
-        # Salary filter
-        ttk.Label(filter_row2, text="Salary:", style='Content.TLabel').grid(row=0, column=2, padx=(0, 5), pady=2, sticky='w')
-        staff_salary_ranges = ['All', 'Under $100k', '$100k-$250k', '$250k-$500k', '$500k-$1M', 'Over $1M']
-        self.staff_salary_filter = ttk.Combobox(filter_row2, values=staff_salary_ranges, state='readonly', width=12)
-        self.staff_salary_filter.set('All')
-        self.staff_salary_filter.grid(row=0, column=3, padx=(0, 15), pady=2)
-        self.staff_salary_filter.bind('<<ComboboxSelected>>', self.filter_staff)
-        
-        # Sort options for staff
-        ttk.Label(filter_row2, text="Sort by:", style='Content.TLabel').grid(row=0, column=4, padx=(0, 5), pady=2, sticky='w')
-        staff_sort_options = ['Overall Rating', 'Name', 'Role', 'Experience', 'Salary', 'Age']
-        self.staff_sort_filter = ttk.Combobox(filter_row2, values=staff_sort_options, state='readonly', width=12)
-        self.staff_sort_filter.set('Overall Rating')
-        self.staff_sort_filter.grid(row=0, column=5, padx=(0, 15), pady=2)
-        self.staff_sort_filter.bind('<<ComboboxSelected>>', self.filter_staff)
-        
-        # Clear filters button
-        ttk.Button(
-            filter_row2,
-            text="Clear Filters",
-            style='Secondary.TButton',
-            command=self.clear_staff_filters
-        ).grid(row=0, column=6, padx=(15, 0), pady=2)
-        
+        ttk.Button(top_row, text="Clear Filters", style='Secondary.TButton',
+                   command=self.clear_staff_filters).pack(side=tk.RIGHT)
+
+        # Pill filter rows (instant-apply)
+        self._staff_pill_groups = []
+
+        def _spill_row(label, attr, default, options):
+            var = tk.StringVar(master=self, value=default)
+            setattr(self, attr, var)
+            row = ttk.Frame(filter_frame, style='Panel.TFrame')
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=label, style='Content.TLabel', width=11).pack(side=tk.LEFT)
+            btns = {}
+            try:
+                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+            except Exception:
+                canvas_bg = '#111826'
+            for value, text in options:
+                b = PillButton(row, text=text, bg=canvas_bg,
+                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                               padx=11, pady=4,
+                               command=lambda v=value, vv=var: self._staff_set_filter(vv, v))
+                b.pack(side=tk.LEFT, padx=2)
+                btns[value] = b
+            self._staff_pill_groups.append((var, btns))
+            self._staff_paint_pills()
+
+        _spill_row("Department:", 'staff_department_filter', 'All',
+                   [(v, v) for v in ('All', 'Management', 'Coaching', 'Development',
+                                     'Scouting', 'Medical', 'Analytics')])
+        _spill_row("Experience:", 'staff_experience_filter', 'All',
+                   [(v, v) for v in ('All', '0-2 Years', '3-5 Years', '6-10 Years',
+                                     '11-15 Years', '16+ Years')])
+        _spill_row("Salary:", 'staff_salary_filter', 'All',
+                   [(v, v) for v in ('All', 'Under $100k', '$100k-$250k',
+                                     '$250k-$500k', '$500k-$1M', 'Over $1M')])
+        _spill_row("Sort by:", 'staff_sort_filter', 'Overall',
+                   [(v, v) for v in ('Overall', 'Name', 'Role', 'Experience',
+                                    'Salary', 'Age')])
+
         # Results and selection info for staff
         info_frame = ttk.Frame(staff_tab, style='Panel.TFrame')
         info_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
@@ -2113,6 +2105,18 @@ class FreeAgencyWindow(tk.Toplevel):
         # Update results label
         self.player_results_label.config(text=f"Showing {len(filtered_players)} players")
     
+    def _staff_set_filter(self, var, value):
+        """Set a staff pill filter and refresh instantly."""
+        var.set(value)
+        self._staff_paint_pills()
+        self.populate_filtered_staff()
+
+    def _staff_paint_pills(self):
+        for var, btns in getattr(self, '_staff_pill_groups', []):
+            current = var.get()
+            for value, btn in btns.items():
+                btn.set_selected(value == current)
+
     def populate_filtered_staff(self):
         """Populate the staff tree with filtered results."""
         # Clear existing items
@@ -2144,16 +2148,48 @@ class FreeAgencyWindow(tk.Toplevel):
                 staff_dept = StaffClass.get_role_department(staff.role)
                 if staff_dept != department_filter:
                     continue
-            
+
+            # Experience filter (was read but never applied)
+            if experience_filter != 'All':
+                exp = max(0, staff.age - 25)
+                if experience_filter == '0-2 Years' and not (0 <= exp <= 2):
+                    continue
+                elif experience_filter == '3-5 Years' and not (3 <= exp <= 5):
+                    continue
+                elif experience_filter == '6-10 Years' and not (6 <= exp <= 10):
+                    continue
+                elif experience_filter == '11-15 Years' and not (11 <= exp <= 15):
+                    continue
+                elif experience_filter == '16+ Years' and exp < 16:
+                    continue
+
+            # Salary filter (was read but never applied)
+            if salary_filter != 'All':
+                sal = staff.salary
+                if salary_filter == 'Under $100k' and sal >= 100_000:
+                    continue
+                elif salary_filter == '$100k-$250k' and not (100_000 <= sal <= 250_000):
+                    continue
+                elif salary_filter == '$250k-$500k' and not (250_000 < sal <= 500_000):
+                    continue
+                elif salary_filter == '$500k-$1M' and not (500_000 < sal <= 1_000_000):
+                    continue
+                elif salary_filter == 'Over $1M' and sal <= 1_000_000:
+                    continue
+
             filtered_staff.append(staff)
-        
+
         # Sort staff
-        if sort_by == 'Overall Rating':
+        if sort_by == 'Overall':
             filtered_staff.sort(key=lambda s: s.overall_rating, reverse=True)
         elif sort_by == 'Name':
             filtered_staff.sort(key=lambda s: s.full_name)
         elif sort_by == 'Role':
             filtered_staff.sort(key=lambda s: s.role.value)
+        elif sort_by == 'Experience':
+            filtered_staff.sort(key=lambda s: max(0, s.age - 25), reverse=True)
+        elif sort_by == 'Salary':
+            filtered_staff.sort(key=lambda s: s.salary, reverse=True)
         elif sort_by == 'Age':
             filtered_staff.sort(key=lambda s: s.age)
         
@@ -2200,11 +2236,12 @@ class FreeAgencyWindow(tk.Toplevel):
     def clear_staff_filters(self):
         """Clear all staff filters."""
         self.staff_name_search.delete(0, tk.END)
-        self.staff_role_filter.set('All')
+        self.staff_role_var.set('All')
         self.staff_department_filter.set('All')
         self.staff_experience_filter.set('All')
         self.staff_salary_filter.set('All')
-        self.staff_sort_filter.set('Overall Rating')
+        self.staff_sort_filter.set('Overall')
+        self._staff_paint_pills()
         self.populate_filtered_staff()
     
     def on_player_selection_changed(self, event=None):
