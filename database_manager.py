@@ -125,19 +125,55 @@ class DatabaseManager:
         # Generate contracts now that players are on NHL teams
         contract_gen = PlayerGenerator()
         for team in teams:
-            for player in list(team.roster) + list(team.ahl_roster):
+            for player in list(team.roster):
+                # Everyone on an NHL roster gets an NHL deal, even depth players
                 ovr = player.overall_rating()
                 if ovr >= 49:
                     tier = "NHL_ELITE"
                 elif ovr >= 44:
                     tier = "NHL_STARTER"
-                elif ovr >= 38:
-                    tier = "NHL_DEPTH"
                 else:
-                    tier = "AHL_VETERAN"
+                    tier = "NHL_DEPTH"
                 salary, years = contract_gen.determine_contract_info(player, tier)
                 player.contract.salary = salary
                 player.contract.years_remaining = years
+            for player in list(team.ahl_roster):
+                salary, years = contract_gen.determine_contract_info(player, "AHL_VETERAN")
+                player.contract.salary = salary
+                player.contract.years_remaining = years
+
+        # Cap compliance: no team starts over the salary cap. Trim the
+        # richest deals just enough to fit (mimics real cap management).
+        salary_cap = 83_500_000
+        for team in teams:
+            roster = list(team.roster)
+            payroll = sum(p.contract.salary for p in roster)
+            if payroll > salary_cap:
+                # Spread the cut proportionally so no single deal is gutted;
+                # no player loses more than 20% of their salary.
+                over = payroll - salary_cap
+                roster.sort(key=lambda p: p.contract.salary, reverse=True)
+                while over > 0:
+                    progressed = False
+                    for player in roster:
+                        if over <= 0:
+                            break
+                        max_cut = int(player.contract.salary * 0.20)
+                        already_cut = getattr(player, '_cap_trim', 0)
+                        room = max_cut - already_cut
+                        if room <= 0:
+                            continue
+                        cut = int(min(over, room, player.contract.salary - 750_000))
+                        if cut > 0:
+                            player.contract.salary -= cut
+                            player._cap_trim = already_cut + cut
+                            over -= cut
+                            progressed = True
+                    if not progressed:
+                        break
+                for player in roster:
+                    if hasattr(player, '_cap_trim'):
+                        delattr(player, '_cap_trim')
 
         print("NHL teams populated successfully")
         self._print_roster_summary(teams)
