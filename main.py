@@ -93,6 +93,16 @@ class GameManager:
         self.sim_detail = {}
         self.user_league = 'NHL'
         self.gm_name = 'General Manager'
+
+        # Active training programs (player_id -> dict with focus, intensity,
+        # assigned game-date, player_name). Owned here so they persist in
+        # saves; mirrored into enhanced_practice_system.ACTIVE_TRAINING_PROGRAMS
+        # for the Development Center window.
+        self.training_programs = {}
+
+        # Game calendar date. The GUI syncs its own current_date here on
+        # startup; default keeps headless/engine paths working.
+        self.current_date = START_DATE
         
         # Initialize records system lazily to avoid blocking startup
         self._record_manager = None
@@ -6210,7 +6220,13 @@ class HockeyManagerGUI(tk.Tk):
         self._process_career_daily()
     
     def _process_training_programs(self):
-        """Run one weekly session for each active Development-Center program."""
+        """Run one weekly session for each active Development-Center program.
+
+        Programs live on game_manager.training_programs (persisted in saves)
+        and are keyed to the GAME date, not the wall clock. The module-level
+        ACTIVE_TRAINING_PROGRAMS registry is kept as a mirror for the
+        Development Center window.
+        """
         try:
             from enhanced_practice_system import (
                 PracticeEngine, PracticeType, ACTIVE_TRAINING_PROGRAMS,
@@ -6218,17 +6234,37 @@ class HockeyManagerGUI(tk.Tk):
             from datetime import date
         except Exception:
             return
-        if not getattr(self, 'user_team', None):
+        gm = getattr(self, 'game_manager', None)
+        user_team = getattr(self, 'user_team', None) or (getattr(gm, 'user_team', None) if gm else None)
+        if gm is None or not user_team:
             return
+        if not hasattr(gm, 'training_programs') or gm.training_programs is None:
+            gm.training_programs = {}
+        game_today = getattr(self, 'current_date', None) or date.today()
+
+        # One-time adoption: programs assigned through the window registry
+        # get stamped with the current game date so they run their full term.
+        for pid, prog in list(ACTIVE_TRAINING_PROGRAMS.items()):
+            if pid not in gm.training_programs:
+                adopted = dict(prog)
+                adopted['assigned'] = game_today
+                gm.training_programs[pid] = adopted
+
         engine = PracticeEngine()
         players = {}
-        for roster_list in (self.user_team.roster, self.user_team.ahl_roster,
-                            self.user_team.prospects):
+        for roster_list in (user_team.roster, user_team.ahl_roster,
+                            user_team.prospects):
             for pl in roster_list:
                 players[pl.id] = pl
         expired = []
-        for pid, prog in list(ACTIVE_TRAINING_PROGRAMS.items()):
-            if (date.today() - prog.get('assigned', date.today())).days >= 30:
+        for pid, prog in list(gm.training_programs.items()):
+            assigned = prog.get('assigned')
+            if isinstance(assigned, str):
+                try:
+                    assigned = date.fromisoformat(assigned)
+                except Exception:
+                    assigned = None
+            if assigned is None or (game_today - assigned).days >= 30:
                 expired.append(pid)
                 continue
             player = players.get(pid)
@@ -6245,7 +6281,11 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 continue
         for pid in expired:
+            gm.training_programs.pop(pid, None)
             ACTIVE_TRAINING_PROGRAMS.pop(pid, None)
+        # Keep the window registry in sync for display purposes
+        for pid, prog in gm.training_programs.items():
+            ACTIVE_TRAINING_PROGRAMS[pid] = prog
 
     def _process_player_development(self):
         """Process weekly player development for all teams"""
@@ -6256,7 +6296,9 @@ class HockeyManagerGUI(tk.Tk):
             development_events = []
             
             for team in self.league.teams:
-                for roster_list in (team.roster, team.ahl_roster, team.prospects):
+                for roster_type, roster_list in (('roster', team.roster),
+                                                   ('ahl', team.ahl_roster),
+                                                   ('prospects', team.prospects)):
                     for player in roster_list:
                         try:
                             # Skip if player has no potential info

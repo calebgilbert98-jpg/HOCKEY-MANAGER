@@ -62,6 +62,9 @@ class GameSaveManager:
                 # Free agency and waivers
                 'free_agents': self._serialize_free_agents(),
                 'waiver_claims': getattr(self.game_manager, 'waiver_claims', []),
+
+                # Active training programs (Development Center)
+                'training_programs': getattr(self.game_manager, 'training_programs', {}),
                 
                 # Trade and contract data
                 'trade_history': getattr(self.game_manager, 'trade_history', []),
@@ -527,9 +530,20 @@ class GameSaveManager:
             # Restore other game data
             for key in ['player_stats_history', 'team_stats_history', 'draft_classes', 
                        'scouting_reports', 'waiver_claims', 'trade_history', 
-                       'contract_negotiations', 'inbox_messages', 'news_stories']:
+                       'contract_negotiations', 'inbox_messages', 'news_stories',
+                       'training_programs']:
                 if key in save_data:
                     setattr(self.game_manager, key, save_data[key])
+
+            # Re-mirror restored training programs into the Development
+            # Center's module registry so the window shows them.
+            if getattr(self.game_manager, 'training_programs', None):
+                try:
+                    from enhanced_practice_system import ACTIVE_TRAINING_PROGRAMS
+                    for pid, prog in self.game_manager.training_programs.items():
+                        ACTIVE_TRAINING_PROGRAMS[pid] = prog
+                except Exception:
+                    pass
 
             # Restore FM-style career state
             if save_data.get('career_data'):

@@ -999,13 +999,22 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
         if not messagebox.askyesno("Confirm Training Assignment", message):
             return
 
-        # Record the program (shared registry; survives window close)
-        ACTIVE_TRAINING_PROGRAMS[player.id] = {
+        # Record the program (shared registry; survives window close).
+        # Assignment is stamped with the GAME date and mirrored into the
+        # persistent game-manager dict so it survives saves/restarts.
+        game_date = getattr(self.parent, 'current_date', None) or date.today()
+        prog = {
             'focus': focus,
             'intensity': intensity_label,
-            'assigned': date.today(),
+            'assigned': game_date,
             'player_name': player.full_name,
         }
+        ACTIVE_TRAINING_PROGRAMS[player.id] = prog
+        gm = getattr(self.parent, 'game_manager', None)
+        if gm is not None:
+            if not getattr(gm, 'training_programs', None):
+                gm.training_programs = {}
+            gm.training_programs[player.id] = prog
         # Run the first session for real through the practice engine
         session = engine.execute_practice(player, practice_type, intensity, 60, 12)
         messagebox.showinfo(
@@ -1038,11 +1047,25 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
                  text="Current Training Status",
                  font=('Segoe UI', 12, 'bold')).pack(anchor='w', pady=(0, 10))
 
-        prog = ACTIVE_TRAINING_PROGRAMS.get(player.id) if player else None
+        prog = None
+        gm = getattr(self.parent, 'game_manager', None)
+        if gm is not None and getattr(gm, 'training_programs', None):
+            prog = gm.training_programs.get(player.id) if player else None
+        if prog is None:
+            prog = ACTIVE_TRAINING_PROGRAMS.get(player.id) if player else None
         if prog:
-            days_left = 30 - (datetime.now().date() - prog['assigned']).days
+            from datetime import date as _date
+            game_today = getattr(self.parent, 'current_date', None) or _date.today()
+            assigned = prog.get('assigned')
+            if isinstance(assigned, str):
+                try:
+                    assigned = _date.fromisoformat(assigned)
+                except Exception:
+                    assigned = None
+            days_left = 30 - (game_today - assigned).days if assigned else 0
+            assigned_txt = assigned.isoformat() if assigned else "unknown date"
             status_text = (f"{prog['focus']} — {prog['intensity']} intensity\n"
-                          f"Assigned {prog['assigned'].isoformat()} "
+                          f"Assigned {assigned_txt} "
                           f"({max(days_left, 0)} days remaining)")
         else:
             status_text = "No active training program"
