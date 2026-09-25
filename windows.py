@@ -739,7 +739,7 @@ class RosterWindow(tk.Toplevel):
                 tags.append('star')
             
             if tags:
-                tree.set(item_id, tags=tags)
+                tree.item(item_id, tags=tags)
     
     def calculate_performance_rating(self, player):
         """Calculate performance rating for NHL players."""
