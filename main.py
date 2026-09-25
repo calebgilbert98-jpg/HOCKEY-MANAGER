@@ -5338,6 +5338,95 @@ class HockeyManagerGUI(tk.Tk):
             f"Starting Goaltender:\n  {g_str}"
         )
 
+    # ------------------------------------------------------------------
+    # User-game presentation mode: 'quick' | 'watch' | 'ask'
+    # ------------------------------------------------------------------
+    GAME_MODE_LABELS = (("Quick Sim", "quick"),
+                        ("Ask Each Game", "ask"),
+                        ("Watch Live", "watch"))
+
+    def _get_user_game_mode(self):
+        """How the user's own games are presented. Migrates legacy bool."""
+        try:
+            sim = self.get_settings().get('simulation', {})
+            mode = sim.get('user_game_mode')
+            if mode in ('quick', 'watch', 'ask'):
+                return mode
+            if sim.get('use_game_viewer', False):
+                return 'watch'
+        except Exception:
+            pass
+        return 'ask'
+
+    def _set_user_game_mode(self, mode):
+        if mode not in ('quick', 'watch', 'ask'):
+            return
+        settings = self.get_settings()
+        settings.setdefault('simulation', {})['user_game_mode'] = mode
+        settings['simulation']['use_game_viewer'] = (mode == 'watch')
+        import json, os
+        settings_file = os.path.join(os.path.dirname(__file__), 'settings.json')
+        try:
+            with open(settings_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+        except Exception as e:
+            print(f"Error saving game mode setting: {e}")
+
+    def _ask_game_mode_dialog(self, home_team, away_team):
+        """Pre-game modal: Quick Sim or Watch Live? Returns 'quick'/'watch'."""
+        choice = {'mode': 'quick'}
+        dlg = tk.Toplevel(self)
+        dlg.title("Game Day")
+        dlg.configure(bg="#0B0F16")
+        dlg.resizable(False, False)
+        try:
+            dlg.transient(self)
+            dlg.grab_set()
+        except Exception:
+            pass
+        w, h = 420, 260
+        try:
+            x = self.winfo_x() + (self.winfo_width() - w) // 2
+            y = self.winfo_y() + (self.winfo_height() - h) // 2
+            dlg.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            dlg.geometry(f"{w}x{h}")
+
+        tk.Label(dlg, text="GAME DAY", bg="#0B0F16", fg="#E63946",
+                 font=("Segoe UI", 11, "bold")).pack(pady=(18, 4))
+        matchup = f"{getattr(home_team, 'team_name', home_team)}  vs  " \
+                  f"{getattr(away_team, 'team_name', away_team)}"
+        tk.Label(dlg, text=matchup, bg="#0B0F16", fg="#E8ECF1",
+                 font=("Segoe UI", 14, "bold"), wraplength=380,
+                 justify="center").pack(pady=4)
+        tk.Label(dlg, text="How do you want to play this one?",
+                 bg="#0B0F16", fg="#8B93A5",
+                 font=("Segoe UI", 10)).pack(pady=(0, 16))
+
+        btns = tk.Frame(dlg, bg="#0B0F16")
+        btns.pack(pady=6)
+
+        def _pick(m):
+            choice['mode'] = m
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            dlg.destroy()
+
+        for label, m, bgc in (("Quick Sim", "quick", "#1B2A41"),
+                              ("Watch Live", "watch", "#E63946")):
+            b = tk.Button(btns, text=label, font=("Segoe UI", 12, "bold"),
+                          bg=bgc, fg="white", activebackground=bgc,
+                          activeforeground="white", relief="flat",
+                          padx=28, pady=12, cursor="hand2",
+                          command=lambda m=m: _pick(m))
+            b.pack(side="left", padx=10)
+        dlg.bind("<Escape>", lambda e: _pick('quick'))
+        dlg.protocol("WM_DELETE_WINDOW", lambda: _pick('quick'))
+        dlg.wait_window()
+        return choice['mode']
+
     def toggle_game_viewer(self):
         """Toggle the game viewer setting and update the button display"""
         # Get current settings
@@ -6257,9 +6346,18 @@ class HockeyManagerGUI(tk.Tk):
             except (IndexError, KeyError, ValueError):
                 continue  # Skip errors silently
             
-            # Check if game viewer is enabled in settings (simplified)
+            # How should this user game be presented? Quick sim, watch live,
+            # or ask the GM each game day. Never ask during bulk sims.
             settings = self.get_settings()
-            use_game_viewer = settings.get('simulation', {}).get('use_game_viewer', False)
+            mode = self._get_user_game_mode()
+            if getattr(self, '_bulk_simming', False):
+                use_game_viewer = False
+            elif mode == 'watch':
+                use_game_viewer = True
+            elif mode == 'ask':
+                use_game_viewer = self._ask_game_mode_dialog(home_team, away_team) == 'watch'
+            else:
+                use_game_viewer = False
             
             if use_game_viewer:
                 # Modern visual play-by-play (rink + live player bubbles).
@@ -12787,31 +12885,47 @@ class GMOptionsWindow(tk.Toplevel):
         ttk.Button(quick_section, text="📧 Check Inbox", 
                   command=parent.open_inbox_window).pack(fill="x", pady=3)
 
-        # Game Presentation section — visual PBP viewer toggle lives here
-        # (moved off the crowded menu bar)
+        # Game Presentation section — how the user's games are presented:
+        # Quick Sim / Ask Each Game / Watch Live (moved off the crowded menu bar)
         pres_section = ttk.LabelFrame(content_frame, text="Game Presentation", padding=15)
         pres_section.pack(fill="x", pady=(0, 15))
-        self._viewer_btn = ttk.Button(pres_section, text="",
-                                      command=self._toggle_viewer)
-        self._viewer_btn.pack(fill="x", pady=3)
-        self._refresh_viewer_btn()
+        ttk.Label(pres_section,
+                  text="Your games:").pack(anchor="w", pady=(0, 4))
+        try:
+            from modern_widgets import SegmentedControl
+        except Exception:
+            SegmentedControl = None
+        _labels = [lbl for lbl, _ in self.parent.GAME_MODE_LABELS]
+        _keys = [key for _, key in self.parent.GAME_MODE_LABELS]
+        _current = self.parent._get_user_game_mode()
+        if SegmentedControl is not None:
+            _initial_label = next(lbl for lbl, k in self.parent.GAME_MODE_LABELS
+                                  if k == _current)
+            self._mode_seg = SegmentedControl(
+                pres_section, options=_labels,
+                initial=_labels.index(_initial_label),
+                command=self._on_mode_pick)
+            self._mode_seg.pack(fill="x", pady=3)
+        else:  # fallback: plain buttons
+            self._mode_seg = None
+            for lbl, key in self.parent.GAME_MODE_LABELS:
+                ttk.Button(pres_section, text=lbl,
+                           command=lambda k=key: self._on_mode_pick(
+                               next(l for l, kk in self.parent.GAME_MODE_LABELS
+                                    if kk == k))).pack(fill="x", pady=2)
+        ttk.Label(pres_section,
+                  text="Quick Sim resolves instantly. Watch Live opens the "
+                       "real-time rink. Ask Each Game lets you choose on game day.",
+                  wraplength=380, justify="left",
+                  font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
 
         # Close button
         ttk.Button(content_frame, text="Close", command=self.destroy).pack(fill="x", pady=(10, 0))
 
-    def _viewer_enabled(self):
-        try:
-            return bool(self.parent.get_settings().get('simulation', {}).get('use_game_viewer', False))
-        except Exception:
-            return False
-
-    def _refresh_viewer_btn(self):
-        state = "ON" if self._viewer_enabled() else "OFF"
-        self._viewer_btn.config(text=f"Watch Games Live: {state}")
-
-    def _toggle_viewer(self):
-        self.parent.toggle_game_viewer()
-        self._refresh_viewer_btn()
+    def _on_mode_pick(self, label):
+        key = next((k for lbl, k in self.parent.GAME_MODE_LABELS if lbl == label),
+                   'ask')
+        self.parent._set_user_game_mode(key)
 
     def open_shortlist_window(self):
         """Open the player shortlist management window"""

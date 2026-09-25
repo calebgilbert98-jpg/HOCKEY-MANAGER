@@ -30,11 +30,18 @@ TEXT = "#E8ECF1"
 MUTED = "#8B93A5"
 ACCENT = "#E63946"          # home
 AWAY_COLOR = "#6CB4EE"      # away (ice blue)
-PUCK_COLOR = "#F5F7FA"
-ICE = "#141D2B"
-LINE_RED = "#8A3038"
-LINE_BLUE = "#2E5378"
-MARK = "#3B4E68"
+PUCK_COLOR = "#111418"
+# Broadcast-rink palette (real NHL look: bright ice, crisp markings)
+ICE = "#F2F8FE"
+ICE_SCRATCH = "#DCE7F1"
+LINE_RED = "#D31145"
+LINE_BLUE = "#005EB8"
+FACEOFF_RED = "#D31145"
+BOARD_WHITE = "#F7FAFD"
+KICKPLATE = "#F2C230"
+CREASE_BLUE = "#BFD9F2"
+RINK_SURROUND = "#0B0F16"
+INK = "#1B2A41"             # dark text on ice
 FONT = "Segoe UI"
 
 try:
@@ -233,7 +240,7 @@ class PBPVisualSim(tk.Toplevel):
         rink_frame = tk.Frame(main, bg=BG)
         rink_frame.pack(side="left", fill="both", expand=True)
         self.canvas = tk.Canvas(rink_frame, width=self.rink_w, height=self.rink_h,
-                                bg=ICE, highlightthickness=0, bd=0)
+                                bg=RINK_SURROUND, highlightthickness=0, bd=0)
         self.canvas.pack(padx=4, pady=4)
 
         # Live team-stats strip under the rink (Shots / Hits / Faceoffs / PIM)
@@ -298,62 +305,140 @@ class PBPVisualSim(tk.Toplevel):
     def Y(self, y):
         return y * self.scale
 
+    def _rr_points(self, x0, y0, x1, y1, r, steps=10):
+        """Point list for a rounded rectangle (for boards / ice outline)."""
+        pts = []
+        corners = [(x1 - r, y0 + r, 270, 360), (x1 - r, y1 - r, 0, 90),
+                   (x0 + r, y1 - r, 90, 180), (x0 + r, y0 + r, 180, 270)]
+        for cx, cy, a0, a1 in corners:
+            for i in range(steps + 1):
+                a = math.radians(a0 + (a1 - a0) * i / steps)
+                pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        return pts
+
     def _draw_rink(self):
+        """Broadcast-style NHL rink: bright ice, boards with ads, kickplate,
+        proper red/blue lines, faceoff markings, trapezoids, creases, nets."""
         c = self.canvas
         W, H = self.rink_w, self.rink_h
-        # boards
-        c.create_rectangle(3, 3, W - 3, H - 3, outline="#2A3A52", width=6)
-        # lines
-        c.create_line(self.X(100), 6, self.X(100), H - 6, fill=LINE_RED, width=4)
-        for bx in (67, 133):
-            c.create_line(self.X(bx), 6, self.X(bx), H - 6, fill=LINE_BLUE, width=9)
+        rnd = random.Random(20260925)  # stable skate marks
+
+        # --- ice surface (rounded corners, 28 ft radius) ---
+        rr = 28 * self.scale
+        ice = self._rr_points(2, 2, W - 2, H - 2, rr)
+        c.create_polygon(ice, fill=ICE, outline="")
+
+        # --- skate-mark texture (subtle) ---
+        for _ in range(130):
+            x = rnd.uniform(30, W - 30)
+            y = rnd.uniform(30, H - 30)
+            ang = rnd.uniform(0, math.pi)
+            ln = rnd.uniform(8, 30)
+            dx, dy = math.cos(ang) * ln / 2, math.sin(ang) * ln / 2
+            c.create_line(x - dx, y - dy, x + dx, y + dy,
+                          fill=ICE_SCRATCH, width=1)
+
+        # --- lines (NHL: goal lines 11 ft out, blue lines 75/125, center 100) ---
+        c.create_line(self.X(100), 8, self.X(100), H - 8, fill=LINE_RED, width=5)
+        for bx in (75, 125):
+            c.create_line(self.X(bx), 8, self.X(bx), H - 8, fill=LINE_BLUE, width=12)
         for gx in (HOME_NET_X, AWAY_NET_X):
-            c.create_line(self.X(gx), 6, self.X(gx), H - 6, fill=LINE_RED, width=2)
-        # center circle + faceoff circles
-        c.create_oval(self.X(100) - 70, self.Y(42.5) - 70,
-                      self.X(100) + 70, self.Y(42.5) + 70,
-                      outline=LINE_BLUE, width=2)
-        c.create_oval(self.X(100) - 4, self.Y(42.5) - 4,
-                      self.X(100) + 4, self.Y(42.5) + 4, fill=LINE_BLUE)
-        for dx, dy in ((169, 30), (169, 55), (31, 30), (31, 55),
-                       (82, 30), (82, 55), (118, 30), (118, 55)):
-            c.create_oval(self.X(dx) - 62, self.Y(dy) - 62,
-                          self.X(dx) + 62, self.Y(dy) + 62,
-                          outline=MARK, width=2)
-            c.create_oval(self.X(dx) - 4, self.Y(dy) - 4,
-                          self.X(dx) + 4, self.Y(dy) + 4, fill=MARK)
-        # creases
+            c.create_line(self.X(gx), 8, self.X(gx), H - 8, fill=LINE_RED, width=3)
+
+        # --- center-ice logo (roundel) ---
+        cx, cy = self.X(100), self.Y(42.5)
+        c.create_oval(cx - 46, cy - 46, cx + 46, cy + 46,
+                      outline=LINE_RED, width=3)
+        c.create_oval(cx - 38, cy - 38, cx + 38, cy + 38,
+                      fill="#1B2A41", outline="")
+        c.create_text(cx, cy, text="PD", fill="white",
+                      font=(FONT, 22, "bold"))
+
+        # --- center faceoff circle + dot ---
+        c.create_oval(cx - 70, cy - 70, cx + 70, cy + 70,
+                      outline=LINE_BLUE, width=3)
+        c.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill=LINE_BLUE)
+
+        # --- faceoff dots/circles: end zones (31/169) + neutral (80/120) ---
+        for dx, dy in ((169, 30), (169, 55), (31, 30), (31, 55)):
+            ex, ey = self.X(dx), self.Y(dy)
+            c.create_oval(ex - 62, ey - 62, ex + 62, ey + 62,
+                          outline=FACEOFF_RED, width=3)
+            # hash marks
+            for hx in (-78, 78):
+                c.create_line(ex + hx, ey - 66, ex + hx, ey - 50,
+                              fill=FACEOFF_RED, width=2)
+                c.create_line(ex + hx, ey + 50, ex + hx, ey + 66,
+                              fill=FACEOFF_RED, width=2)
+            c.create_oval(ex - 4, ey - 4, ex + 4, ey + 4, fill=FACEOFF_RED)
+        for dx, dy in ((80, 30), (80, 55), (120, 30), (120, 55)):
+            ex, ey = self.X(dx), self.Y(dy)
+            c.create_oval(ex - 4, ey - 4, ex + 4, ey + 4, fill=FACEOFF_RED)
+
+        # --- goal creases (light blue) ---
         for nx, flip in ((HOME_NET_X, 1), (AWAY_NET_X, -1)):
             c.create_arc(self.X(nx) - 28 * flip, self.Y(42.5) - 28,
                          self.X(nx) + 28 * flip, self.Y(42.5) + 28,
                          start=270 if flip > 0 else 90, extent=180,
-                         fill="#1E3A5C", outline=LINE_RED, width=2)
-        # goals (red frame + mesh)
+                         fill=CREASE_BLUE, outline=LINE_RED, width=2)
+
+        # --- trapezoids behind nets ---
+        for nx, sgn in ((HOME_NET_X, -1), (AWAY_NET_X, 1)):
+            x0, x1 = self.X(nx), self.X(nx + 9 * sgn)
+            for yy0, yy1 in ((31.5, 26.0), (53.5, 59.0)):
+                c.create_line(x0, self.Y(yy0), x1, self.Y(yy1),
+                              fill=LINE_RED, width=3)
+
+        # --- boards: white band + yellow kickplate (rounded) ---
+        boards = self._rr_points(2, 2, W - 2, H - 2, rr)
+        c.create_polygon(boards, outline=BOARD_WHITE, fill="", width=14)
+        kick = self._rr_points(10, 10, W - 10, H - 10, rr - 8)
+        c.create_polygon(kick, outline=KICKPLATE, fill="", width=4)
+
+        # --- ads on the boards (top & bottom runs) ---
+        ads = [("PUCK DYNASTY", "#1B2A41"), ("HOCKEY NIGHT", "#C8102E"),
+               ("SLAPSHOT", "#003DA5"), ("POWER PLAY", "#1B2A41"),
+               ("ICE COLD", "#0E7C6B"), ("EASTSIDE", "#C8102E")]
+        ad_w = (W - 60) / len(ads)
+        for i, (txt, bgc) in enumerate(ads):
+            for yy in (2, H - 16):
+                x0 = 30 + i * ad_w
+                c.create_rectangle(x0, yy, x0 + ad_w - 6, yy + 14,
+                                   fill=bgc, outline="")
+                c.create_text(x0 + (ad_w - 6) / 2, yy + 7, text=txt,
+                              fill="white", font=(FONT, 6, "bold"))
+
+        # --- goals: red posts + white mesh ---
         self.goal_items = {}
         for nx, side in ((HOME_NET_X, "home"), (AWAY_NET_X, "away")):
-            d = 10 if side == "away" else -10
+            d = 12 if side == "away" else -12
             x0, x1 = self.X(nx), self.X(nx) + d
-            items = []
-            items.append(c.create_rectangle(min(x0, x1), self.Y(42.5) - 14,
-                                            max(x0, x1), self.Y(42.5) + 14,
-                                            outline=ACCENT, width=3))
-            for i in range(1, 4):
-                yy = self.Y(42.5) - 14 + i * 7
+            y0, y1 = self.Y(42.5) - 14, self.Y(42.5) + 14
+            items = [c.create_rectangle(min(x0, x1), y0, max(x0, x1), y1,
+                                        fill="white", outline=LINE_RED, width=3)]
+            for i in range(1, 5):  # mesh crosshatch
+                yy = y0 + i * (y1 - y0) / 5
                 items.append(c.create_line(min(x0, x1), yy, max(x0, x1), yy,
-                                           fill="#5A6B85", width=1))
+                                           fill="#9AA8BC", width=1))
+                xx = min(x0, x1) + i * abs(x1 - x0) / 5
+                items.append(c.create_line(xx, y0, xx, y1,
+                                           fill="#9AA8BC", width=1))
             self.goal_items[side] = items
-        # goal lights (hidden)
+
+        # --- goal lights (hidden until a goal) ---
         self.lights = {}
         for nx, side in ((HOME_NET_X, "home"), (AWAY_NET_X, "away")):
-            lx = self.X(nx) - 22 if side == "home" else self.X(nx) + 22
-            it = c.create_oval(lx - 9, self.Y(30) - 9, lx + 9, self.Y(30) + 9,
-                               fill=ACCENT, outline="", state="hidden")
+            lx = self.X(nx) - 26 if side == "home" else self.X(nx) + 26
+            it = c.create_oval(lx - 10, self.Y(30) - 10, lx + 10, self.Y(30) + 10,
+                               fill="#FF2E3E", outline="white", width=2,
+                               state="hidden")
             self.lights[side] = it
-        # team labels under nets (full name, small font — no truncation)
-        c.create_text(self.X(11), H - 14, text=self.home_team.team_name.upper(),
-                      fill=ACCENT, font=(FONT, 8, "bold"), anchor="w")
-        c.create_text(self.X(189), H - 14, text=self.away_team.team_name.upper(),
-                      fill=AWAY_COLOR, font=(FONT, 8, "bold"), anchor="e")
+
+        # --- team labels on the ice under each net ---
+        c.create_text(self.X(11), H - 26, text=self.home_team.team_name.upper(),
+                      fill=INK, font=(FONT, 8, "bold"), anchor="w")
+        c.create_text(self.X(189), H - 26, text=self.away_team.team_name.upper(),
+                      fill=INK, font=(FONT, 8, "bold"), anchor="e")
 
     def _bump_stat(self, side, key, amount=1):
         """Increment a team stat ('home'/'away', 'Shots'/'Hits'/'FO'/'PIM')."""
@@ -386,7 +471,7 @@ class PBPVisualSim(tk.Toplevel):
         # puck
         px, py = self.X(self.puck["x"]), self.Y(self.puck["y"])
         self.puck_item = c.create_oval(px - 5, py - 5, px + 5, py + 5,
-                                       fill="#0B0F16", outline=PUCK_COLOR, width=2)
+                                       fill="#111418", outline="white", width=1)
 
     def _make_dot(self, dot_id, player, is_home, role, color, r=13):
         c = self.canvas
@@ -395,7 +480,7 @@ class PBPVisualSim(tk.Toplevel):
         x, y = (100.0, 42.5)
         oval = c.create_oval(self.X(x) - r, self.Y(y) - r,
                              self.X(x) + r, self.Y(y) + r,
-                             fill=color, outline="#0B0F16", width=2)
+                             fill=color, outline="white", width=2)
         fg = "white" if is_home else "#0B0F16"
         txt = c.create_text(self.X(x), self.Y(y), text=str(num),
                             fill=fg, font=(FONT, 9, "bold"))

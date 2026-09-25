@@ -24,8 +24,9 @@
     "simulation_speed": "Fast (Current)",
     "auto_continue_non_game_days": false,
     "always_show_daily_results": true,
-    "use_game_viewer": true,
-    "game_viewer_mode": "Full Game"
+    "use_game_viewer": false,
+    "game_viewer_mode": "Full Game",
+    "user_game_mode": "ask"
   },
   "notifications": {
     "email_notifications": {
