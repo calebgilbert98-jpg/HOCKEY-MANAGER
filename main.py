@@ -1083,20 +1083,24 @@ NHL League Office""",
             for team in self.league.teams:
                 print(f"  - {team.team_name}")
 
-    def _process_injury_recovery(self):
-        """Process daily injury recovery for all players.
+    def _process_injury_recovery(self, teams_played=None):
+        """Process injury recovery for all players.
         
-        Decrements games_remaining_injured. When it reaches 0, player is healed.
-        Only counts down on days with games (players don't recover on off-days
-        in terms of games missed, but we use days as proxy).
+        Decrements games_remaining_injured once per GAME PLAYED (not per day):
+        only players whose team played today count down, and players hurt in
+        today's game start counting down with their next missed game.
         """
         for team in self.league.teams:
+            if teams_played is not None and team.team_name not in teams_played:
+                continue
             for player in team.roster:
                 if getattr(player, 'is_injured', False):
+                    # Hurt today? Countdown starts with the next game they miss.
+                    if getattr(player, 'injured_today', False):
+                        player.injured_today = False
+                        continue
                     remaining = getattr(player, 'games_remaining_injured', 0)
                     if remaining > 0:
-                        # Only decrement if the team played today (games missed, not days)
-                        # For simplicity, decrement daily - close enough
                         player.games_remaining_injured = remaining - 1
                         
                         if player.games_remaining_injured <= 0:
@@ -1143,12 +1147,57 @@ NHL League Office""",
         if notable:
             print(f"📈 Monthly development: {len(notable)} notable improvements")
 
+def roll_game_injury(team):
+    """Roll a single in-game injury for a team (shared by detailed + batch sims).
+
+    Weighted by injury_proneness and age; skips goalies and already-injured
+    players. Returns the injured Player, or None if nobody was hurt.
+    """
+    import random
+    candidates = []
+    weights = []
+    for p in getattr(team, 'roster', []):
+        if getattr(p, 'is_injured', False):
+            continue
+        pos = getattr(p, 'primary_position', None)
+        if pos and pos.name == 'GOALIE':
+            continue
+        proneness = getattr(p, 'injury_proneness', 10) or 10
+        age = getattr(p, 'age', 25) or 25
+        age_factor = max(0.5, min(2.0, (age - 20) / 10))
+        candidates.append(p)
+        weights.append(proneness * age_factor)
+    if not candidates:
+        return None
+    injured = random.choices(candidates, weights=weights, k=1)[0]
+    # Severity: Minor 1-3 games (60%), Moderate 4-10 (30%), Severe 11-25 (10%)
+    severity_roll = random.random()
+    if severity_roll < 0.6:
+        games_missed = random.randint(1, 3)
+        injury_type = random.choice(['Bruised ribs', 'Minor sprain', 'Sore shoulder', 'Tweaked knee'])
+    elif severity_roll < 0.9:
+        games_missed = random.randint(4, 10)
+        injury_type = random.choice(['Sprained ankle', 'Pulled groin', 'Shoulder strain', 'Knee sprain'])
+    else:
+        games_missed = random.randint(11, 25)
+        injury_type = random.choice(['Broken collarbone', 'Torn MCL', 'Concussion', 'Broken wrist'])
+    injured.is_injured = True
+    injured.injury_type = injury_type
+    injured.games_remaining_injured = games_missed
+    injured.last_injury = injury_type
+    injured.injured_today = True  # recovery countdown starts with the NEXT game
+    return injured
+
 def best_lines(team):
     """Builds the best possible lineup for the given team based on player ratings and positions."""
+    # Injured players can't dress: filter them out (fall back to full group if empty)
+    def _healthy(players):
+        healthy = [p for p in players if not getattr(p, 'is_injured', False)]
+        return healthy if healthy else players
     # Select top 13 forwards, 8 defensemen, 2 goalies by position and rating
-    forwards = [p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_WING, PlayerPosition.CENTER, PlayerPosition.RIGHT_WING]]
-    defensemen = [p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE, PlayerPosition.DEFENSE]]
-    goalies = [p for p in team.roster if p.primary_position == PlayerPosition.GOALIE]
+    forwards = _healthy([p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_WING, PlayerPosition.CENTER, PlayerPosition.RIGHT_WING]])
+    defensemen = _healthy([p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE, PlayerPosition.DEFENSE]])
+    goalies = _healthy([p for p in team.roster if p.primary_position == PlayerPosition.GOALIE])
 
     # Sort by overall rating
     forwards = sorted(forwards, key=lambda p: p.overall_rating(), reverse=True)[:13]  # Changed to 13 to ensure line 4 gets players
@@ -2334,67 +2383,28 @@ class AdvancedGameSim:
         """
         import random
         
-        # 25% chance of at least one injury per game
-        if random.random() > 0.25:
-            return
-        
-        # Pick 1 player (rarely 2) from both teams
-        all_skaters = []
+        # ~13% chance per team per game -> ~25% chance of at least one injury per game
+        # Pick an injury victim from either team's healthy skaters
+        victims = []
         for team in [self.home_team, self.away_team]:
-            for p in team.roster:
-                # Skip goalies (lower injury rate) and already-injured
-                if getattr(p, 'is_injured', False):
-                    continue
-                pos = getattr(p, 'primary_position', None)
-                if pos and pos.name == 'GOALIE':
-                    continue
-                all_skaters.append(p)
-        
-        if not all_skaters:
-            return
-        
-        # Weight by injury proneness (1-20 scale, higher = more likely)
-        weights = []
-        for p in all_skaters:
-            proneness = getattr(p, 'injury_proneness', 10)
-            # Also factor in age (older = more fragile) and physical play
-            age = getattr(p, 'age', 25)
-            age_factor = max(0.5, min(2.0, (age - 20) / 10))
-            weights.append(proneness * age_factor)
-        
-        # Select injured player
-        injured = random.choices(all_skaters, weights=weights, k=1)[0]
-        
-        # Determine injury severity (games missed)
-        # Minor: 1-3 games (60%), Moderate: 4-10 games (30%), Severe: 11+ games (10%)
-        severity_roll = random.random()
-        if severity_roll < 0.6:
-            games_missed = random.randint(1, 3)
-            injury_type = random.choice(['Bruised ribs', 'Minor sprain', 'Sore shoulder', 'Tweaked knee'])
-        elif severity_roll < 0.9:
-            games_missed = random.randint(4, 10)
-            injury_type = random.choice(['Sprained ankle', 'Pulled groin', 'Shoulder strain', 'Knee sprain'])
-        else:
-            games_missed = random.randint(11, 25)
-            injury_type = random.choice(['Broken collarbone', 'Torn MCL', 'Concussion', 'Broken wrist'])
-        
-        # Apply injury
-        injured.is_injured = True
-        injured.injury_type = injury_type
-        injured.games_remaining_injured = games_missed
-        injured.last_injury = injury_type
-        
-        # Log the injury event
-        self.events.append({
-            'time': self.time,
-            'period': self.period,
-            'team': self.home_team.team_name if injured in self.home_team.roster else self.away_team.team_name,
-            'player': injured,
-            'event': 'Injury',
-            'details': f'{injury_type} ({games_missed} games)'
-        })
-        
-        print(f"🏥 Injury: {injured.first_name} {injured.last_name} - {injury_type} ({games_missed} games)")
+            if random.random() > 0.13:
+                continue
+            v = roll_game_injury(team)
+            if v is not None:
+                victims.append((team, v))
+
+        for team, injured in victims:
+            # Log the injury event
+            self.events.append({
+                'time': self.time,
+                'period': self.period,
+                'team': team.team_name,
+                'player': injured,
+                'event': 'Injury',
+                'details': f'{injured.injury_type} ({injured.games_remaining_injured} games)'
+            })
+
+            print(f"🏥 Injury: {injured.first_name} {injured.last_name} - {injured.injury_type} ({injured.games_remaining_injured} games)")
 
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
         """Enhanced shot resolution using multiple attributes"""
@@ -5852,8 +5862,22 @@ class HockeyManagerGUI(tk.Tk):
                     self._strength_cache.clear()
                 self._process_todays_games(todays_games)
             
-            # Process injury recovery (daily)
-            self.game_manager._process_injury_recovery()
+            # Process injury recovery: countdown runs in GAMES MISSED, so only
+            # teams that played today tick down (and today's new injuries
+            # start counting with the next game).
+            teams_played = set()
+            for game in todays_games:
+                try:
+                    if isinstance(game, dict):
+                        teams_played.add(game.get('home_team'))
+                        teams_played.add(game.get('away_team'))
+                    else:
+                        teams_played.add(game[1])
+                        teams_played.add(game[2])
+                except Exception:
+                    pass
+            teams_played.discard(None)
+            self.game_manager._process_injury_recovery(teams_played or None)
             
             # Process AI team decisions (trades, signings, etc.)
             # Only every 7 days (handled internally by ai_manager)
@@ -6884,6 +6908,20 @@ class HockeyManagerGUI(tk.Tk):
         
         # Generate realistic individual player stats
         self._generate_player_stats(home_team, away_team, home_goals, away_goals)
+
+        # Gameplay injuries (same ~13%/team rate as the detailed sim)
+        for team in (home_team, away_team):
+            if random.random() < 0.13:
+                hurt = roll_game_injury(team)
+                if hurt is not None and hasattr(self, 'notable_events'):
+                    try:
+                        self.notable_events.append({
+                            'time': 3600, 'period': 3, 'team': team.team_name,
+                            'player': hurt, 'event': 'Injury',
+                            'details': f'{hurt.injury_type} ({hurt.games_remaining_injured} games)'
+                        })
+                    except Exception:
+                        pass
         
         return winner, loser, (home_goals, away_goals), went_to_ot
     
@@ -6900,9 +6938,15 @@ class HockeyManagerGUI(tk.Tk):
         # Enhanced strength calculation based on key players
         total_strength = 0
         player_count = 0
-        
+
+        # Injured players don't dress: use healthy skaters (fall back to full
+        # roster if the team is decimated)
+        skaters = [p for p in team.roster if not getattr(p, 'is_injured', False)]
+        if len(skaters) < 14:
+            skaters = list(team.roster)
+
         # Sample top players for speed, but weight by position importance
-        sorted_roster = sorted(team.roster, key=lambda p: p.overall_rating(), reverse=True)
+        sorted_roster = sorted(skaters, key=lambda p: p.overall_rating(), reverse=True)
         top_forwards = [p for p in sorted_roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:9]
         top_defense = [p for p in sorted_roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]  
         top_goalies = [p for p in sorted_roster if p.primary_position.name == 'GOALIE'][:2]
@@ -7013,9 +7057,11 @@ class HockeyManagerGUI(tk.Tk):
         
         for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
             # Dressed lineup: 12 forwards, 6 defensemen, 1 goalie (NHL standard: 18 skaters)
-            forwards = [p for p in team.roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
-            defensemen = [p for p in team.roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
-            goalies = [p for p in team.roster if p.primary_position.name == 'GOALIE'][:1]
+            # Injured players don't dress
+            healthy = [p for p in team.roster if not getattr(p, 'is_injured', False)]
+            forwards = [p for p in healthy if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
+            defensemen = [p for p in healthy if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
+            goalies = [p for p in healthy if p.primary_position.name == 'GOALIE'][:1]
             
             dressed_skaters = forwards + defensemen  # 18 skaters
             
