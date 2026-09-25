@@ -273,21 +273,21 @@ class Player:
     waiver_days: int = 0
     nhl_games_played: int = field(default_factory=lambda: random.randint(0, 500))
 
-    skating: int = field(default_factory=lambda: random.randint(8, 18))
-    strength: int = field(default_factory=lambda: random.randint(8, 18))
+    skating: int = field(default_factory=lambda: random.randint(25, 45))
+    strength: int = field(default_factory=lambda: random.randint(25, 45))
     injury_proneness: int = field(default_factory=lambda: random.randint(1, 20))
 
-    shooting: int = field(default_factory=lambda: random.randint(8, 18))
-    passing: int = field(default_factory=lambda: random.randint(8, 18))
-    deking: int = field(default_factory=lambda: random.randint(8, 18))
+    shooting: int = field(default_factory=lambda: random.randint(25, 45))
+    passing: int = field(default_factory=lambda: random.randint(25, 45))
+    deking: int = field(default_factory=lambda: random.randint(25, 45))
 
-    offensive_awareness: int = field(default_factory=lambda: random.randint(8, 18))
-    defensive_awareness: int = field(default_factory=lambda: random.randint(8, 18))
+    offensive_awareness: int = field(default_factory=lambda: random.randint(25, 45))
+    defensive_awareness: int = field(default_factory=lambda: random.randint(25, 45))
     
-    checking: int = field(default_factory=lambda: random.randint(8, 18))
-    faceoffs: int = field(default_factory=lambda: random.randint(1, 10))
+    checking: int = field(default_factory=lambda: random.randint(25, 45))
+    faceoffs: int = field(default_factory=lambda: random.randint(25, 45))
     
-    goaltending: int = field(default_factory=lambda: random.randint(1, 5))
+    goaltending: int = field(default_factory=lambda: random.randint(25, 45))
     
     shoot_pass_tendency: int = field(default_factory=lambda: random.randint(0, 100))
     hitting_tendency: int = field(default_factory=lambda: random.randint(0, 100))

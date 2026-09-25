@@ -86,6 +86,12 @@ class GameManager:
         self.league.set_game_manager(self)  # Set reference for database access
         self.user_team = None
         self.startup_settings = None
+
+        # New-game setup options (filled by apply_startup_settings)
+        self.fog_of_war = True
+        self.sim_detail = {}
+        self.user_league = 'NHL'
+        self.gm_name = 'General Manager'
         
         # Initialize records system lazily to avoid blocking startup
         self._record_manager = None
@@ -149,11 +155,29 @@ class GameManager:
                 
                 config = DATABASE_CONFIGURATIONS[database_size]
                 print(f"DEBUG: Using config: {config.name}")
-                generator = DatabaseGenerator(config)
+                # New-game setup wizard can supply a custom DatabaseConfig
+                # (league selection); otherwise use the size preset.
+                db_config = settings.get('database_config')
+                if db_config is not None:
+                    print(f"DEBUG: Using wizard database config: {db_config.name}")
+                    generator = DatabaseGenerator(db_config)
+                else:
+                    generator = DatabaseGenerator(config)
                 print("DEBUG: DatabaseGenerator created, starting generation...")
                 self.league = generator.generate_comprehensive_database(progress_callback)
                 print("DEBUG: Database generation completed")
                 self.league.set_game_manager(self)
+
+                # New-game wizard options (stored for the session)
+                self.fog_of_war = settings.get('fog_of_war', True)
+                self.sim_detail = settings.get('sim_detail', {}) or {}
+                self.user_league = settings.get('user_league', 'NHL')
+                self.gm_name = settings.get('gm_name', 'General Manager')
+                try:
+                    import scouting_profiles
+                    scouting_profiles.FOG_OF_WAR_OVERRIDE = self.fog_of_war
+                except Exception:
+                    pass
                 
                 # Initialize draft picks for all teams
                 print("Initializing draft picks for all teams...")
@@ -6242,8 +6266,9 @@ class HockeyManagerGUI(tk.Tk):
             use_game_viewer = settings.get('simulation', {}).get('use_game_viewer', False)
             
             if use_game_viewer:
-                # Use game viewer for user team games - returns 6 values
-                result = self._simulate_game_with_viewer(home_team, away_team)
+                # Modern visual play-by-play (rink + live player bubbles).
+                # Modal: returns the standard 6-tuple once watched to the end.
+                result = self._simulate_game_with_pbp_visual(home_team, away_team)
                 winner, loser, scores, events, notable_events, sim_engine = result
             else:
                 # FM-style pre-match team talk (interactive, skipped in bulk sim)
@@ -6802,11 +6827,21 @@ class HockeyManagerGUI(tk.Tk):
                 else:
                     continue
                 
-                # LIGHTWEIGHT simulation - just calculate winner and score
-                result = self._simulate_game_lightweight(home_team, away_team)
-                winner, loser, scores, went_to_ot = result
-                
-                batch_results.append((game_date, home_team, away_team, winner, loser, scores, went_to_ot))
+                # Per-league sim detail (new-game setup): 'full' leagues get the
+                # event-by-event engine with player stats; everything else
+                # uses the ultra-fast lightweight path.
+                league_key = game.get('league') if isinstance(game, dict) else None
+                full_sim = None
+                if self._league_sim_detail(league_key) == 'full':
+                    winner, loser, scores, went_to_ot, full_sim = \
+                        self._simulate_game_full_batch(home_team, away_team)
+                else:
+                    # LIGHTWEIGHT simulation - just calculate winner and score
+                    result = self._simulate_game_lightweight(home_team, away_team)
+                    winner, loser, scores, went_to_ot = result
+
+                batch_results.append((game_date, home_team, away_team, winner,
+                                      loser, scores, went_to_ot, full_sim))
                 
                 # Update standings immediately (no batch delay)
                 self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot)
@@ -6816,9 +6851,9 @@ class HockeyManagerGUI(tk.Tk):
                 continue
         
         # Store minimal game results for performance
-        for game_date, home_team, away_team, winner, loser, scores, went_to_ot in batch_results:
+        for game_date, home_team, away_team, winner, loser, scores, went_to_ot, full_sim in batch_results:
             home_score, away_score = scores
-            
+
             # Store minimal game result
             game_result = {
                 'date': game_date,
@@ -6834,6 +6869,11 @@ class HockeyManagerGUI(tk.Tk):
                 'overtime': went_to_ot,  # Track OT for OTL points
                 'shootout': False
             }
+            if full_sim is not None:
+                # Full-detail league: keep the event stream for reports/viewer
+                game_result['event_log'] = getattr(full_sim, 'event_log', []) or []
+                game_result['notable_events'] = getattr(full_sim, 'notable_events', []) or []
+                game_result['events'] = getattr(full_sim, 'game_log', []) or []
             
             # Add to game results
             self.game_results.append(game_result)
@@ -6878,6 +6918,43 @@ class HockeyManagerGUI(tk.Tk):
                     if hasattr(player, '_game_added'):
                         delattr(player, '_game_added')
     
+    def _league_sim_detail(self, league_key):
+        """Return the configured sim detail for a league ('full' | 'quick' | 'scores').
+
+        Set by the new-game setup wizard (gm.sim_detail). Defaults: the user's
+        league runs full, everything else runs quick.
+        """
+        detail = getattr(self, 'sim_detail', None) or {}
+        if league_key in detail:
+            return detail[league_key]
+        user_league = getattr(self, 'user_league', None)
+        if league_key and user_league and league_key == user_league:
+            return 'full'
+        return 'quick'
+
+    def _simulate_game_full_batch(self, home_team, away_team):
+        """Full event-by-event sim for batch games in 'full'-detail leagues.
+
+        Uses simulation.GameSim (the hooked engine). Player season stats are
+        updated by the engine itself. Returns
+        (winner, loser, scores, went_to_ot, sim).
+        """
+        from simulation import GameSim
+        sim = GameSim(home_team, away_team)
+        periods = set()
+        had_shootout = {'v': False}
+
+        def _sniff(ev):
+            if isinstance(ev, dict):
+                periods.add(ev.get('period', 1))
+                if ev.get('type') == 'shootout_end':
+                    had_shootout['v'] = True
+
+        sim.pbp_listeners.append(_sniff)
+        winner, loser, scores, _game_log, _notable = sim.run()
+        went_to_ot = any(p > 3 for p in periods)
+        return winner, loser, scores, went_to_ot, sim
+
     def _simulate_game_lightweight(self, home_team, away_team):
         """Ultra-fast game simulation with individual player effects and realistic scoring distribution"""
         import random
@@ -7525,6 +7602,74 @@ class HockeyManagerGUI(tk.Tk):
         
         # Return the simulation results INCLUDING the sim_engine
         return winner, loser, scores, events, notable_events, sim_engine
+
+    def _simulate_game_with_pbp_visual(self, home_team, away_team):
+        """Run the modern visual play-by-play window modally for a user game.
+
+        Opens the live PBP viewer (rink + player bubbles driven by real sim
+        events) and blocks the daily-sim loop until the game is watched to
+        the final whistle and the window is closed. Returns the standard
+        6-tuple (winner, loser, scores, events, notable_events, sim_engine)
+        so the result processes exactly like any other sim.
+        """
+        from pbp_visual_sim import open_pbp_window
+
+        holder = {}
+        win_ref = {}
+
+        def _on_done(sim):
+            holder['sim'] = sim
+            # Capture the played event stream (carries period info for OT detection)
+            try:
+                holder['pbp_events'] = list(win_ref['win'].events)
+            except Exception:
+                holder['pbp_events'] = []
+            # Only allow closing once the final whistle has played
+            try:
+                win_ref['win'].protocol("WM_DELETE_WINDOW", win_ref['win'].destroy)
+            except Exception:
+                pass
+
+        win = open_pbp_window(self, home_team, away_team, on_complete=_on_done)
+        win_ref['win'] = win
+        # Prevent closing before the sim finishes: the result is needed below.
+        # (Re-enabled by _on_done when game_end plays.)
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+        # Failsafe: if the sim thread dies without emitting game_end, don't
+        # trap the user forever — allow close after 3 minutes.
+        win.after(180000, lambda: win.protocol("WM_DELETE_WINDOW", win.destroy))
+
+        self.wait_window(win)
+
+        sim = holder.get('sim', getattr(win, 'sim', None))
+        if sim is None:
+            raise RuntimeError("PBP visual sim did not produce a result")
+
+        home_score = getattr(sim, 'home_score', 0)
+        away_score = getattr(sim, 'away_score', 0)
+        scores = (home_score, away_score)
+        if home_score > away_score:
+            winner, loser = home_team, away_team
+        elif away_score > home_score:
+            winner, loser = away_team, home_team
+        else:
+            # Should not happen (OT/shootout always resolves), pick home
+            winner, loser = home_team, away_team
+
+        events = getattr(sim, 'game_log', []) or []
+        notable_events = list(getattr(sim, 'notable_events', []) or [])
+
+        # GameSim notable events lack period info; derive OT/shootout from the
+        # played PBP stream so standings award the OTL point correctly.
+        pbp_events = holder.get('pbp_events', [])
+        periods = {e.get('period', 0) for e in pbp_events if isinstance(e, dict)}
+        went_to_ot = any(p > 3 for p in periods)
+        had_shootout = any(isinstance(e, dict) and e.get('type') == 'shootout_end'
+                           for e in pbp_events)
+        if went_to_ot:
+            notable_events.append({'period': 5 if had_shootout else 4,
+                                   'event': 'overtime'})
+        return winner, loser, scores, events, notable_events, sim
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
@@ -12909,24 +13054,41 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "test_enhanced_sim":
         test_enhanced_simulation()
     elif len(sys.argv) > 1 and sys.argv[1] == "direct":
-        # Direct launch (legacy mode)
-        # Show startup window for team selection
-        from startup_window import StartupWindow
-        startup = StartupWindow()
-        startup.mainloop()
-        
-        if startup.game_settings:
+        # Direct launch — new-game setup wizard (Quick Start / Custom Setup)
+        import tkinter as tk
+        from new_game_setup import open_setup_wizard, build_database_config
+
+        holder = {}
+        root = tk.Tk()
+        root.withdraw()
+
+        wiz = open_setup_wizard(root, lambda cfg: holder.setdefault('config', cfg))
+        root.wait_window(wiz)
+        config = holder.get('config')
+        root.destroy()
+
+        if config:
             try:
-                print("Starting Hockey Manager with custom settings...")
+                print("Starting Puck Dynasty with setup wizard settings...")
+                settings = {
+                    'database_size': config['database_size'].capitalize(),
+                    'database_config': build_database_config(config),
+                    'fantasy_draft': False,
+                    'user_team': config['user_team'],
+                    'user_league': config['user_league'],
+                    'gm_name': config['gm_name'],
+                    'fog_of_war': config['fog_of_war'],
+                    'sim_detail': config['sim_detail'],
+                }
                 gm = GameManager()
-                gm.apply_startup_settings(startup.game_settings)
-                gm.set_user_team(startup.selected_team)
-                
+                gm.apply_startup_settings(settings)
+                gm.set_user_team(config['user_team'])
+
                 app = HockeyManagerGUI(gm)
-                app.startup_settings = startup.game_settings
+                app.startup_settings = settings
                 app._update_game_viewer_button_state()
                 app.mainloop()
-                
+
             except Exception as e:
                 import traceback
                 print("Error launching Hockey Manager:", e)
@@ -12936,7 +13098,7 @@ if __name__ == "__main__":
                 except:
                     pass
         else:
-            print("User cancelled startup - game not launched")
+            print("User cancelled setup - game not launched")
     else:
         # Use the main function for direct launch
         main()

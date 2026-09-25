@@ -30,6 +30,7 @@ class ModernScoutingWindow(tk.Toplevel):
         self.all_scouts = list(self.game_data.get('scouts', []))
         self.filter_vars = {}
         self.ui_components = {}
+        self.current_assignments = {}
         
         # Initialize UI management
         self._ensure_tree_maps()
@@ -198,15 +199,19 @@ class ModernScoutingWindow(tk.Toplevel):
         filter_row = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
         filter_row.pack(fill='x', padx=10, pady=5)
         
-        # Position filter
-        tk.Label(filter_row, text="Position:", bg=self.parent.CONTENT_BG, 
+        # Position filter — segmented pills instead of dropdown
+        tk.Label(filter_row, text="Position:", bg=self.parent.CONTENT_BG,
                 fg=self.parent.TEXT_COLOR).pack(side='left')
-        
+
         self.position_filter = tk.StringVar(value="All")
-        position_combo = ttk.Combobox(filter_row, textvariable=self.position_filter, width=10,
-                                     values=["All", "C", "LW", "RW", "LD", "RD", "G"])
-        position_combo.pack(side='left', padx=(5, 15))
-        position_combo.bind('<<ComboboxSelected>>', self._filter_players)
+        from modern_widgets import SegmentedControl
+        self.position_segmented = SegmentedControl(
+            filter_row, ["All", "F", "D", "G"], initial=0,
+            command=lambda v: (self.position_filter.set(v), self._filter_players()),
+            accent=self.parent.ACCENT_COLOR, bg=self.parent.CONTENT_BG,
+            fg=self.parent.TEXT_COLOR,
+            font=(self.parent.FONT_FAMILY, 10, "bold"))
+        self.position_segmented.pack(side='left', padx=(5, 15))
         
         # Team filter
         tk.Label(filter_row, text="Team:", bg=self.parent.CONTENT_BG, 
@@ -681,13 +686,18 @@ class ModernScoutingWindow(tk.Toplevel):
         """Apply current filters to player list"""
         filtered = self.all_players.copy()
         
-        # Position filter
+        # Position filter (supports F/D/G groups from the segmented control)
         if hasattr(self, 'position_filter'):
             position = self.position_filter.get()
             if position != "All":
-                filtered = [p for p in filtered 
-                          if (hasattr(p.primary_position, 'value') and p.primary_position.value == position) or
-                             str(p.primary_position) == position]
+                group_map = {"F": ("C", "LW", "RW", "F"),
+                             "D": ("LD", "RD", "D"),
+                             "G": ("G",)}
+                wanted = group_map.get(position, (position,))
+                def _pos_of(p):
+                    pp = getattr(p, 'primary_position', '')
+                    return getattr(pp, 'value', str(pp))
+                filtered = [p for p in filtered if _pos_of(p) in wanted]
         
         # Team filter
         if hasattr(self, 'team_filter'):
@@ -739,7 +749,10 @@ class ModernScoutingWindow(tk.Toplevel):
     
     def _clear_player_filters(self):
         """Clear all player filters"""
-        self.position_filter.set("All")
+        if hasattr(self, 'position_segmented'):
+            self.position_segmented.set("All")  # also sets StringVar + refilters
+        else:
+            self.position_filter.set("All")
         self.team_filter.set("All")
         self.name_search.set("")
         if hasattr(self, 'profile_filter'):

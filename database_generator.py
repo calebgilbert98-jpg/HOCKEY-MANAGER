@@ -23,6 +23,7 @@ class DatabaseConfig:
     international_factor: float  # International player diversity
     minor_league_depth: int  # Number of minor league levels
     staff_count: int  # Support staff per team
+    league_infos: Optional[List[dict]] = None  # Custom league list; if set, overrides LEAGUE_STRUCTURES lookup
 
 # Database size configurations inspired by EHM
 DATABASE_CONFIGURATIONS = {
@@ -313,8 +314,8 @@ class DatabaseGenerator:
         
         update_progress(10, "Creating league structure...", "Building teams and leagues")
         
-        # Generate league structure
-        league_data = LEAGUE_STRUCTURES[self.config.name.split()[0]]
+        # Generate league structure (custom list wins; else fall back to size presets)
+        league_data = self.config.league_infos or LEAGUE_STRUCTURES[self.config.name.split()[0]]
         
         # Generate teams for each league and track NHL/AHL teams
         teams_created = 0
@@ -366,7 +367,7 @@ class DatabaseGenerator:
         update_progress(65, "Generating free agent pool...", f"{players_created:,} team players created")
         
         # Generate free agents pool
-        free_agents_count = max(1000, int(self.config.total_players * 0.15))
+        free_agents_count = max(150, int(self.config.total_players * 0.15))
         free_agents = self._generate_free_agents(free_agents_count)
         main_league.free_agents.extend(free_agents)
         players_created += len(free_agents)
@@ -814,11 +815,16 @@ class DatabaseGenerator:
         return player
     
     def _set_enhanced_attributes(self, player: Player, age: int, quality_modifier: float):
-        """Set realistic attributes based on age, position, and quality"""
-        
-        # Base attribute ranges adjusted by quality
-        base_min = max(1, int(5 * quality_modifier))
-        base_max = min(20, int(15 * quality_modifier))
+        """Set realistic attributes based on age, position, and quality.
+
+        Uses the canonical ~50-point attribute scale (same as player_generator
+        and the sim engine): NHL-quality players land roughly 28-46 before
+        age adjustment.
+        """
+
+        # Base attribute ranges adjusted by quality (50-point scale)
+        base_min = max(5, int(28 * quality_modifier))
+        base_max = min(50, int(44 * quality_modifier))
         
         # Age-based adjustments
         if age < 20:
@@ -846,16 +852,16 @@ class DatabaseGenerator:
         for attr in core_attributes:
             base_value = random.randint(base_min, base_max)
             adjusted_value = int(base_value * current_factor)
-            adjusted_value = max(1, min(20, adjusted_value))
+            adjusted_value = max(1, min(50, adjusted_value))
             setattr(player, attr, adjusted_value)
         
         # Position-specific attributes
         if player.primary_position == PlayerPosition.GOALIE:
             goalie_attrs = ['goaltending', 'reflexes', 'positioning', 'rebound_control', 'puck_handling']
             for attr in goalie_attrs:
-                base_value = random.randint(base_min + 2, base_max + 3)
+                base_value = random.randint(min(50, base_min + 4), min(50, base_max + 6))
                 adjusted_value = int(base_value * current_factor)
-                adjusted_value = max(1, min(20, adjusted_value))
+                adjusted_value = max(1, min(50, adjusted_value))
                 setattr(player, attr, adjusted_value)
         
         # Advanced attributes
@@ -869,7 +875,7 @@ class DatabaseGenerator:
             else:
                 base_value = random.randint(base_min, base_max)
                 value = int(base_value * current_factor)
-                value = max(1, min(20, value))
+                value = max(1, min(50, value))
             setattr(player, attr, value)
         
         # Set playing tendencies

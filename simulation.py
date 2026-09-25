@@ -384,6 +384,10 @@ class GameSim:
         self.game_log = []
         self.notable_events = []
         self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
+
+        # Play-by-play visualizer hooks (additive; zero overhead when unused).
+        # Listeners are callables receiving one event dict each.
+        self.pbp_listeners = []
         # Sudden-death OT bookkeeping (set by _handle_overtime)
         self._ot_sudden_death = False
         self._ot_start_score = None
@@ -1825,13 +1829,18 @@ class GameSim:
     def run(self):
         """Runs the entire game simulation from period 1 through OT/shootout if necessary."""
         self._log_event("Game Start!", "PERIOD_START")
+        self._emit_pbp("game_start",
+                       home_team=self.home_team.team_name,
+                       away_team=self.away_team.team_name)
 
         for p in range(1, 4):
             self.period = p
             self.clock = 1200
             self._period_length = 1200
+            self._emit_pbp("period_start", period=p)
             self._simulate_period()
             self._log_event(f"End of Period {self.period}. Score: {self.home_score}-{self.away_score}", "PERIOD_END")
+            self._emit_pbp("period_end", period=p)
 
         if self.home_score == self.away_score:
             self._handle_overtime()
@@ -1845,6 +1854,9 @@ class GameSim:
         winner = self.home_team if self.home_score > self.away_score else self.away_team
         loser = self.away_team if self.home_score > self.away_score else self.home_team
         
+        self._emit_pbp("game_end", winner=winner.team_name,
+                       home_score=self.home_score, away_score=self.away_score)
+
         return winner, loser, (self.home_score, self.away_score), self.game_log, self.notable_events
     
     def simulate_game(self):
@@ -2737,6 +2749,11 @@ class GameSim:
         self.team_stats[def_team_name]['corsi_against'] += 1
         
         self._log_event(f"Shot by {shooter.full_name} blocked by {blocker.full_name}!", "BLOCKED_SHOT")
+        self._emit_pbp("blocked_shot",
+                       shooter=shooter,
+                       blocker=blocker,
+                       attacking_team=attacking_team.team_name,
+                       defending_team=defending_team.team_name)
 
     def _handle_missed_shot(self, shooter, attacking_team, location, shot_type):
         """Handle a missed shot event."""
@@ -2753,6 +2770,11 @@ class GameSim:
         self.team_stats[att_team_name]['corsi_for'] += 1
         
         self._log_event(f"Shot by {shooter.full_name} misses the net!", "MISSED_SHOT")
+        self._emit_pbp("missed_shot",
+                       shooter=shooter,
+                       attacking_team=attacking_team.team_name,
+                       shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
+                       location=location.value if hasattr(location, "value") else str(location))
 
     def _apply_archetype_matchup(self, quality, attacking_team, defending_team):
         """
@@ -2803,6 +2825,16 @@ class GameSim:
         # Update expected goals tracking
         self.expected_goals[attacking_team.team_name] = \
             self.expected_goals.get(attacking_team.team_name, 0.0) + expected_goal
+
+        self._emit_pbp("shot",
+                       shooter=shooter,
+                       passer=passer,
+                       attacking_team=attacking_team.team_name,
+                       defending_team=defending_team.team_name,
+                       shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
+                       location=location.value if hasattr(location, "value") else str(location),
+                       quality=self._pbp_num(quality),
+                       distance=self._pbp_num(distance))
         
         # Determine goaltender positioning and style
         self._adjust_goaltender_positioning(goalie, location, self.current_situation)
@@ -3046,6 +3078,11 @@ class GameSim:
     def _handle_save(self, goalie, shooter, shot_type, quality):
         """Handle a save event."""
         self._log_event(f"Shot by {shooter.full_name}, saved by {goalie.full_name}!", "SAVE")
+        self._emit_pbp("save",
+                       goalie=goalie,
+                       shooter=shooter,
+                       defending_team=getattr(goalie, "team_name", None),
+                       shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type))
 
     def _handle_goal(self, scoring_team, shooter, assists, shot_type=None, location=None):
         """Updates score, stats, and log after a goal."""
@@ -3135,6 +3172,13 @@ class GameSim:
         zone_desc = self.faceoff_zone.value.replace('_', ' ')
         outcome_desc = outcome.value.replace('_', ' ')
         self._log_event(f"Faceoff in {zone_desc}: {winner_player.full_name} wins ({outcome_desc})", "FACEOFF")
+        self._emit_pbp("faceoff",
+                       winner_team=winner.team_name,
+                       winner_player=winner_player,
+                       home_center=home_player,
+                       away_center=away_player,
+                       zone=self.faceoff_zone.value,
+                       outcome=outcome.value)
         
         return winner
 
@@ -3397,6 +3441,10 @@ class GameSim:
         
         penalty_desc = f"{penalty_length}-minute penalty"
         self._log_event(f"{penalty_desc} to {player.full_name} ({team.team_name}). {opposing_team.team_name} on power play.", "PENALTY")
+        self._emit_pbp("penalty",
+                       player=player,
+                       team=team.team_name,
+                       minutes=penalty_length)
 
     def _update_penalties(self, time_elapsed):
         """
@@ -3486,6 +3534,14 @@ class GameSim:
             log_msg += f" (Assists: {', '.join(assist_str)})"
         log_msg += f". Score: {self.home_score}-{self.away_score}"
         self._log_event(log_msg, "GOAL")
+        self._emit_pbp("goal",
+                       scoring_team=scoring_team.team_name,
+                       shooter=shooter,
+                       assists=list(assists),
+                       shot_type=shot_type.value if shot_type is not None and hasattr(shot_type, "value") else None,
+                       location=location.value if location is not None and hasattr(location, "value") else None,
+                       home_score=self.home_score,
+                       away_score=self.away_score)
         
         # End power play on power play goal (most common rule)
         if self._is_team_on_power_play(scoring_team):
@@ -3670,6 +3726,7 @@ class GameSim:
     def _handle_shootout(self):
         """Simulates a 3-round shootout if the game is still tied."""
         self._log_event("Overtime ends, still tied. Heading to a shootout!", "SHOOTOUT_START")
+        self._emit_pbp("shootout_start")
         home_shooters = random.sample([p for p in self.home_team.roster if p.primary_position != PlayerPosition.GOALIE], 3)
         away_shooters = random.sample([p for p in self.away_team.roster if p.primary_position != PlayerPosition.GOALIE], 3)
 
@@ -3685,6 +3742,10 @@ class GameSim:
             if self._resolve_shootout_attempt(away_shooter, self.home_team.get_starting_goalie()): self.away_score += 1
             if self._resolve_shootout_attempt(home_shooter, self.away_team.get_starting_goalie()): self.home_score += 1
 
+        self._emit_pbp("shootout_end",
+                       winner=self.home_team.team_name if self.home_score > self.away_score else self.away_team.team_name,
+                       home_score=self.home_score, away_score=self.away_score)
+
     def _resolve_shootout_attempt(self, shooter, goalie):
         """Resolves a single shootout attempt."""
         shot_roll = shooter.shooting + shooter.deking + random.randint(1, 20)
@@ -3692,6 +3753,9 @@ class GameSim:
         is_goal = shot_roll > save_roll
         result = "scores" if is_goal else "is stopped"
         self._log_event(f"Shootout: {shooter.full_name} {result} against {goalie.full_name}!", "SHOOTOUT_ATTEMPT")
+        self._emit_pbp("shootout_attempt", shooter=shooter, goalie=goalie,
+                       scored=is_goal,
+                       shooting_team=getattr(shooter, "team_name", None))
         return is_goal
         
     def _check_for_notable_performances(self):
@@ -3759,6 +3823,39 @@ class GameSim:
         """Selects the players to start a shift."""
         self.home_on_ice = self._get_on_ice(self.home_team)
         self.away_on_ice = self._get_on_ice(self.away_team)
+
+    def _emit_pbp(self, event_type, **payload):
+        """Emit a play-by-play event to registered listeners (no-op if none)."""
+        if not self.pbp_listeners:
+            return
+        try:
+            clock = max(0, self.clock)
+            elapsed = max(0, self._period_length - clock)
+        except Exception:
+            clock, elapsed = 0, 0
+        ev = {
+            "type": event_type,
+            "period": getattr(self, "period", 1),
+            "clock": clock,               # seconds remaining in period (clamped)
+            "elapsed": elapsed,            # seconds elapsed in period
+            "t": (max(1, getattr(self, "period", 1)) - 1) * 1200 + elapsed,
+            "home_score": getattr(self, "home_score", 0),
+            "away_score": getattr(self, "away_score", 0),
+        }
+        ev.update(payload)
+        for cb in list(self.pbp_listeners):
+            try:
+                cb(ev)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _pbp_num(value):
+        """Best-effort numeric coercion for PBP payloads (quality may be an enum/str)."""
+        try:
+            return round(float(value), 3)
+        except (TypeError, ValueError):
+            return str(value) if value is not None else None
 
     def _log_event(self, message, event_type="INFO"):
         """Adds an event to the game log with a timestamp."""
@@ -4114,6 +4211,11 @@ class GameSim:
         # Log significant hits
         if result in [HitResult.TURNOVER_CAUSED, HitResult.PENALTY_DRAWN, HitResult.INJURY_CAUSED]:
             self._log_event(f"{hit_type.value.title()} by {hitting_player.full_name} on {target_player.full_name} - {result.value}", "HIT")
+            self._emit_pbp("hit",
+                           hitting_player=hitting_player,
+                           target_player=target_player,
+                           hit_type=hit_type.value,
+                           result=result.value)
 
     def _resolve_turnover(self, player_losing_puck, player_gaining_puck, turnover_type):
         """

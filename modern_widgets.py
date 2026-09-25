@@ -177,6 +177,16 @@ class RoundedButton(tk.Canvas):
         self._text = text
         self.itemconfig(self._label, text=text)
 
+    def set_fill(self, bg):
+        """Change the pill fill color (updates hover/press shades too)."""
+        self._bg = bg
+        self._hover_bg = _shade(bg, 1.18)
+        self._press_bg = _shade(bg, 0.82)
+        if self._state == "disabled":
+            self._set_disabled_look()
+        else:
+            self._paint(bg)
+
     # -- tk.Button-compatible shims -------------------------------------
     def config(self, **kw):
         if "text" in kw:
@@ -519,3 +529,212 @@ def apply_dark_form_theme(root):
                         arrowcolor=_st)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Mini canvas icons (no emoji, no image files — drawn with primitives)
+# ---------------------------------------------------------------------------
+def draw_mini_icon(canvas, cx, cy, size, kind, color):
+    """Draw a small geometric icon centered at (cx, cy). Returns item ids."""
+    s = size / 2
+    k = kind.lower()
+    ids = []
+    if k == "trophy":
+        ids.append(canvas.create_arc(cx - s, cy - s, cx + s, cy + s * 0.6,
+                                     start=0, extent=180, style="arc",
+                                     outline=color, width=max(2, size // 8)))
+        ids.append(canvas.create_rectangle(cx - s * 0.5, cy - s * 0.2,
+                                           cx + s * 0.5, cy + s * 0.5,
+                                           fill=color, outline=""))
+        ids.append(canvas.create_rectangle(cx - s * 0.7, cy + s * 0.5,
+                                           cx + s * 0.7, cy + s * 0.75,
+                                           fill=color, outline=""))
+        ids.append(canvas.create_rectangle(cx - s * 0.9, cy + s * 0.75,
+                                           cx + s * 0.9, cy + s,
+                                           fill=color, outline=""))
+    elif k == "puck":
+        ids.append(canvas.create_oval(cx - s, cy - s * 0.7, cx + s, cy + s * 0.7,
+                                      fill="#111111", outline=color,
+                                      width=max(1, size // 12)))
+        ids.append(canvas.create_line(cx - s * 0.9, cy, cx + s * 0.9, cy,
+                                      fill=color, width=max(1, size // 12)))
+    elif k == "chart":
+        for i, h in enumerate((0.45, 0.75, 1.0)):
+            x0 = cx - s + i * (size / 3) + 1
+            ids.append(canvas.create_rectangle(
+                x0, cy + s - h * size * 0.9, x0 + size / 3 - 2, cy + s,
+                fill=color, outline=""))
+    elif k == "mail":
+        ids.append(canvas.create_rectangle(cx - s, cy - s * 0.7, cx + s, cy + s * 0.7,
+                                           outline=color, width=max(2, size // 8)))
+        ids.append(canvas.create_line(cx - s, cy - s * 0.5, cx, cy + s * 0.2,
+                                      fill=color, width=max(2, size // 10)))
+        ids.append(canvas.create_line(cx + s, cy - s * 0.5, cx, cy + s * 0.2,
+                                      fill=color, width=max(2, size // 10)))
+    elif k == "calendar":
+        ids.append(canvas.create_rectangle(cx - s, cy - s * 0.6, cx + s, cy + s,
+                                           outline=color, width=max(2, size // 8)))
+        ids.append(canvas.create_line(cx - s, cy - s * 0.1, cx + s, cy - s * 0.1,
+                                      fill=color, width=max(2, size // 10)))
+        for dx in (-s * 0.5, s * 0.5):
+            ids.append(canvas.create_line(cx + dx, cy - s, cx + dx, cy - s * 0.3,
+                                          fill=color, width=max(2, size // 8)))
+    elif k == "whistle":
+        ids.append(canvas.create_oval(cx - s, cy - s * 0.8, cx + s * 0.2, cy + s * 0.8,
+                                      outline=color, width=max(2, size // 8)))
+        ids.append(canvas.create_oval(cx - s * 0.35, cy - s * 0.15,
+                                      cx + s * 0.05, cy + s * 0.25,
+                                      fill=color, outline=""))
+        ids.append(canvas.create_rectangle(cx + s * 0.2, cy - s * 0.25,
+                                           cx + s, cy + s * 0.25,
+                                           fill=color, outline=""))
+    elif k == "star":
+        import math
+        pts = []
+        for i in range(10):
+            r = s if i % 2 == 0 else s * 0.45
+            a = -math.pi / 2 + i * math.pi / 5
+            pts += [cx + r * math.cos(a), cy + r * math.sin(a)]
+        ids.append(canvas.create_polygon(pts, fill=color, outline=""))
+    elif k == "users":
+        ids.append(canvas.create_oval(cx - s * 0.9, cy - s, cx - s * 0.1, cy - s * 0.2,
+                                      fill=color, outline=""))
+        ids.append(canvas.create_arc(cx - s * 1.1, cy - s * 0.1, cx + s * 0.1, cy + s,
+                                     start=0, extent=180, style="arc",
+                                     outline=color, width=max(2, size // 8)))
+        ids.append(canvas.create_oval(cx + s * 0.1, cy - s * 0.8, cx + s * 0.9, cy,
+                                      fill=color, outline=""))
+    elif k == "shield":
+        ids.append(canvas.create_polygon(
+            cx - s, cy - s * 0.8, cx + s, cy - s * 0.8,
+            cx + s, cy, cx, cy + s, cx - s, cy,
+            fill="", outline=color, width=max(2, size // 8)))
+    elif k == "bolt":
+        ids.append(canvas.create_polygon(
+            cx + s * 0.2, cy - s, cx - s * 0.5, cy + s * 0.2,
+            cx, cy + s * 0.2, cx - s * 0.2, cy + s,
+            cx + s * 0.5, cy - s * 0.2, cx, cy - s * 0.2,
+            fill=color, outline=""))
+    else:  # "dot" fallback
+        ids.append(canvas.create_oval(cx - s * 0.5, cy - s * 0.5,
+                                      cx + s * 0.5, cy + s * 0.5,
+                                      fill=color, outline=""))
+    return ids
+
+
+# ---------------------------------------------------------------------------
+# SegmentedControl — pill toggle group replacing small dropdowns
+# ---------------------------------------------------------------------------
+class SegmentedControl(tk.Frame):
+    """A row of pill segments; exactly one selected. Drop-in for 2-6 option dropdowns."""
+
+    def __init__(self, parent, options, initial=0, command=None, *,
+                 accent=None, bg=None, fg=None, font=("Segoe UI", 10, "bold"),
+                 padx=10, pady=6):
+        super().__init__(parent, bg=_blend_bg(parent, bg),
+                         highlightthickness=0, bd=0)
+        self._seg_options = list(options)
+        self._command = command
+        self._accent = accent or _DEFAULTS["primary_accent"]
+        self._fg = fg or _DEFAULTS["primary_text"]
+        self._font = font
+        self._selected = None
+        self._buttons = []
+        self._ready = False
+        for i, opt in enumerate(self._seg_options):
+            b = RoundedButton(self, text=str(opt), radius=999,
+                              bg=_DEFAULTS["tertiary_bg"], fg=self._fg,
+                              font=font, padx=padx, pady=pady,
+                              command=lambda v=opt: self.set(v))
+            b.pack(side="left", padx=2)
+            self._buttons.append(b)
+        self.set(self._seg_options[initial] if self._seg_options else None)
+        self._ready = True
+
+    def set(self, value):
+        if value not in self._seg_options:
+            return
+        self._selected = value
+        for b, opt in zip(self._buttons, self._seg_options):
+            if opt == value:
+                b.set_fill(self._accent)
+            else:
+                b.set_fill(_DEFAULTS["tertiary_bg"])
+        if self._command and getattr(self, "_ready", False):
+            self._command(value)
+
+    def get(self):
+        return self._selected
+
+
+# ---------------------------------------------------------------------------
+# IconTile — tappable visual tile replacing text-only action buttons
+# ---------------------------------------------------------------------------
+class IconTile(tk.Canvas):
+    """A rounded tile with a drawn icon, title and subtitle. For dashboards."""
+
+    def __init__(self, parent, *, icon="star", title="", subtitle="",
+                 command=None, width=160, height=104,
+                 bg=None, accent=None, icon_color=None,
+                 title_font=("Segoe UI", 11, "bold"),
+                 sub_font=("Segoe UI", 9)):
+        self._bg = bg or _DEFAULTS["secondary_bg"]
+        self._accent = accent or _DEFAULTS["primary_accent"]
+        parent_bg = _blend_bg(parent)
+        super().__init__(parent, width=width, height=height, bg=parent_bg,
+                         highlightthickness=0, bd=0)
+        self._tw, self._th = width, height
+        self._command = command
+        self._icon = icon
+        self._icon_color = icon_color or _DEFAULTS["primary_text"]
+        self._title = title
+        self._subtitle = subtitle
+        self._title_font = title_font
+        self._sub_font = sub_font
+        self._draw(False)
+        if command:
+            self.configure(cursor="hand2")
+            self.bind("<Button-1>", lambda e: command())
+            self.bind("<Enter>", lambda e: self._draw(True))
+            self.bind("<Leave>", lambda e: self._draw(False))
+
+    def _draw(self, hover):
+        self.delete("all")
+        w, h = self._tw, self._th
+        fill = _shade(self._bg, 1.18) if hover else self._bg
+        self.create_polygon(_rounded_polygon_points(2, 2, w - 2, h - 2, 12),
+                            smooth=True, fill=fill, outline="")
+        # accent bar on the left edge
+        self.create_polygon(_rounded_polygon_points(2, 2, 8, h - 2, 4),
+                            smooth=True, fill=self._accent, outline="")
+        draw_mini_icon(self, 34, 32, 30, self._icon, self._icon_color)
+        self.create_text(20, 58, text=self._title, anchor="w",
+                         fill=_DEFAULTS["primary_text"], font=self._title_font)
+        if self._subtitle:
+            self.create_text(20, 80, text=self._subtitle, anchor="w",
+                             fill=_DEFAULTS["muted_text"], font=self._sub_font)
+
+
+# ---------------------------------------------------------------------------
+# FormStreak — W/L/OTL dots for recent form
+# ---------------------------------------------------------------------------
+class FormStreak(tk.Canvas):
+    """Row of colored dots: W green, L red, OTL/T yellow. Most recent last."""
+
+    COLORS = {"W": "#46C93A", "L": "#DC3545", "O": "#FF9F43", "T": "#FF9F43"}
+
+    def __init__(self, parent, results, *, dot=14, gap=6, bg=None, **kw):
+        self._results = [r.upper() for r in results]
+        w = len(self._results) * (dot + gap) + gap
+        h = dot + gap * 2
+        kw.setdefault("highlightthickness", 0)
+        kw.setdefault("bd", 0)
+        super().__init__(parent, width=w, height=h, bg=_blend_bg(parent, bg), **kw)
+        y = h / 2
+        for i, r in enumerate(self._results):
+            x = gap + dot / 2 + i * (dot + gap)
+            color = self.COLORS.get(r, "#7A8AA3")
+            self.create_oval(x - dot / 2, y - dot / 2, x + dot / 2, y + dot / 2,
+                             fill=color, outline="")
+            self.create_text(x, y, text=r, fill="#0B0F16",
+                             font=("Segoe UI", 8, "bold"))

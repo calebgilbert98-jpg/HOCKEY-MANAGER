@@ -80,12 +80,25 @@ def attribute_value(player, key: str) -> float:
         return 0.0
 
 
+# ---------------------------------------------------------------------------
+# Fog-of-war master switch
+# ---------------------------------------------------------------------------
+# Set by the new-game setup wizard (see new_game_setup.py). When False, all
+# scouting displays show true ratings (no fog). None/True = default behavior.
+FOG_OF_WAR_OVERRIDE = None
+
+
 def fogged_value(player, key: str, scouted: bool) -> float:
     """Attribute value with fog-of-war noise for unscouted players.
 
     Noise is stable per player+attribute (seeded), so repeated views agree.
+
+    FOG_OF_WAR_OVERRIDE: set by the new-game setup wizard. False disables
+    fog entirely (all ratings shown true); True/None keeps default behavior.
     """
     val = attribute_value(player, key)
+    if FOG_OF_WAR_OVERRIDE is False:
+        return val
     if scouted:
         return val
     rng = random.Random(f"fog-{getattr(player, 'id', '')}-{key}")

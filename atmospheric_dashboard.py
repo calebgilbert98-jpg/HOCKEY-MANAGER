@@ -11,7 +11,8 @@ from visual_identity_system import (
     AnimationManager, ContextualElementsManager, 
     StorytellingDataPresentation
 )
-from modern_widgets import RoundedButton
+from modern_widgets import (RoundedButton, SegmentedControl, IconTile,
+                              FormStreak, draw_mini_icon)
 
 class AtmosphericDashboard:
     """Immersive dashboard that makes you feel like a real GM"""
@@ -151,6 +152,32 @@ class AtmosphericDashboard:
                               fg=self.theme.colors.text_light,
                               bg=self.theme.colors.background)
         motto_label.pack(anchor='w', pady=(2, 0))
+
+        # Record + recent form (visual, not a text list)
+        user_team = getattr(self.parent, 'user_team', self.user_team)
+        wins = getattr(user_team, 'wins', 0)
+        losses = getattr(user_team, 'losses', 0)
+        otl = getattr(user_team, 'ot_losses', 0)
+        record_label = tk.Label(identity_frame,
+                               text=f"{wins}-{losses}-{otl}",
+                               font=('Segoe UI', 20, 'bold'),
+                               fg=self.theme.colors.text_light,
+                               bg=self.theme.colors.background)
+        record_label.pack(anchor='w', pady=(8, 2))
+        tk.Label(identity_frame, text="RECORD",
+                 font=('Segoe UI', 8, 'bold'),
+                 fg=self.theme.colors.primary,
+                 bg=self.theme.colors.background).pack(anchor='w')
+        form = self._get_recent_form()
+        if form:
+            form_row = tk.Frame(identity_frame, bg=self.theme.colors.background)
+            form_row.pack(anchor='w', pady=(6, 0))
+            tk.Label(form_row, text="FORM",
+                     font=('Segoe UI', 8, 'bold'),
+                     fg=self.theme.colors.primary,
+                     bg=self.theme.colors.background).pack(side='left', padx=(0, 8))
+            FormStreak(form_row, form,
+                       bg=self.theme.colors.background).pack(side='left')
         
         # Team mood indicator
         mood_frame = self.contextual_manager.create_mood_indicator(
@@ -192,7 +219,7 @@ class AtmosphericDashboard:
                                   relief='flat', bd=1)
         situation_frame.pack(fill='x', pady=(8, 0))
         
-        situation_title = tk.Label(situation_frame, text="🎯 Current Situation",
+        situation_title = tk.Label(situation_frame, text="Current Situation",
                                   font=self.theme.fonts['subheading'],
                                   fg=self.theme.colors.primary,
                                   bg=self.theme.colors.secondary)
@@ -252,28 +279,26 @@ class AtmosphericDashboard:
         # Gentle "alive" pulse on the primary action
         self._pulse_continue_button(continue_btn)
         
-        # Quick actions menu
+        # Quick actions as icon tiles (visual, not text buttons)
         quick_actions_label = tk.Label(action_frame, text="Quick Actions",
                                       font=self.theme.fonts['caption'],
                                       fg=self.theme.colors.text_light,
                                       bg=self.theme.colors.background)
-        quick_actions_label.pack(anchor='w', pady=(8, 4))
-        
-        quick_actions = [
-            ("Team Stats", self._quick_stats_action),
-            ("Roster", self._quick_roster_action),
-            ("Standings", self._quick_standings_action),
-        ]
+        quick_actions_label.pack(anchor='w', pady=(8, 6))
 
-        for action_text, action_command in quick_actions:
-            action_btn = RoundedButton(action_frame, text=action_text,
-                                       command=action_command,
-                                       font=self.theme.fonts['body'],
-                                       bg=self.theme.colors.secondary,
-                                       fg=self.theme.colors.text_light,
-                                       radius=9, padx=16, pady=8,
-                                       width=170)
-            action_btn.pack(pady=3)
+        tiles_row = tk.Frame(action_frame, bg=self.theme.colors.background)
+        tiles_row.pack()
+
+        quick_actions = [
+            ("trophy", "Team Stats", "League ranks", self._quick_stats_action),
+            ("users", "Roster", "Manage players", self._quick_roster_action),
+            ("chart", "Standings", "League table", self._quick_standings_action),
+        ]
+        for icon, title, sub, cmd in quick_actions:
+            IconTile(tiles_row, icon=icon, title=title, subtitle=sub,
+                     command=cmd, width=132, height=96,
+                     bg=self.theme.colors.secondary,
+                     accent=self.theme.colors.primary).pack(side='left', padx=4)
         
         self.widgets['action_panel'] = action_frame
         self.widgets['continue_btn'] = continue_btn
@@ -377,7 +402,7 @@ class AtmosphericDashboard:
         
         # Enhanced inbox section
         inbox_card, inbox_content = self.hierarchy_manager.create_card_with_hierarchy(
-            sidebar_frame, "📬 GM Inbox", "inbox"
+            sidebar_frame, "GM Inbox", "inbox"
         )
         inbox_card.pack(fill='x', pady=(0, 12))
         
@@ -386,17 +411,17 @@ class AtmosphericDashboard:
         
         # Enhanced Next Game card with interactivity
         next_game_card, next_game_content = self.hierarchy_manager.create_card_with_hierarchy(
-            sidebar_frame, "🏒 Next Game", "info"
+            sidebar_frame, "Next Game", "info"
         )
         next_game_card.pack(fill='x', pady=(0, 8))
         self._create_enhanced_next_game_widget(next_game_content)
         
         # Other Quick information cards
         info_cards = [
-            ("🏆 Standings", self._get_quick_standings_info()),
-            ("💰 Cap Space", self._get_cap_space_info()),
-            ("🏥 Injuries", self._get_injury_info()),
-            ("📈 Trending", self._get_trending_info())
+            ("Standings", self._get_quick_standings_info()),
+            ("Cap Space", self._get_cap_space_info()),
+            ("Injuries", self._get_injury_info()),
+            ("Trending", self._get_trending_info())
         ]
         
         for card_title, card_info in info_cards:
@@ -451,6 +476,64 @@ class AtmosphericDashboard:
         self.widgets['action_center'] = action_center
     
     # Helper methods for content generation
+    def _iter_schedule_games(self):
+        """Yield (date, home_name, away_name, raw) for every league.schedule entry,
+        handling both dict and legacy object/tuple formats."""
+        gm = getattr(self.parent, 'game_manager', None)
+        league = getattr(gm, 'league', None)
+        schedule = getattr(league, 'schedule', None) or getattr(gm, 'schedule', None) or []
+        for g in schedule:
+            try:
+                if isinstance(g, dict):
+                    d = g.get('date')
+                    h, a = g.get('home_team'), g.get('away_team')
+                    if h is None or a is None:
+                        continue  # event entry, not a game
+                    yield d, self._sched_name(h), self._sched_name(a), g
+                elif isinstance(g, (tuple, list)) and len(g) >= 3 and not isinstance(g[1], dict):
+                    yield g[0], self._sched_name(g[1]), self._sched_name(g[2]), g
+                elif hasattr(g, 'date') and hasattr(g, 'home_team'):
+                    yield g.date, self._sched_name(g.home_team), self._sched_name(g.away_team), g
+            except Exception:
+                continue
+
+    @staticmethod
+    def _sched_name(t):
+        return getattr(t, 'team_name', t) if not isinstance(t, str) else t
+
+    def _get_recent_form(self) -> List[str]:
+        """Last up to 5 results as W/L/O dots (most recent last)."""
+        form: List[str] = []
+        try:
+            gm = getattr(self.parent, 'game_manager', None)
+            today = getattr(gm, 'current_date', None)
+            team_name = getattr(self.user_team, 'team_name', '')
+            past = []
+            for d, h, a, raw in self._iter_schedule_games():
+                if today is not None and d is not None and d >= today:
+                    continue
+                if team_name not in (h, a):
+                    continue
+                if isinstance(raw, dict):
+                    hs, aws = raw.get('home_score'), raw.get('away_score')
+                else:
+                    hs, aws = getattr(raw, 'home_score', None), getattr(raw, 'away_score', None)
+                if hs is None or aws is None:
+                    continue
+                is_home = (h == team_name)
+                if isinstance(raw, dict):
+                    ot = bool(raw.get('overtime') or raw.get('went_to_ot'))
+                else:
+                    ot = bool(getattr(raw, 'overtime', False) or getattr(raw, 'went_to_ot', False))
+                past.append((d, is_home, hs, aws, ot))
+            past.sort(key=lambda g: g[0] or date.min)
+            for _, is_home, hs, aws, ot in past[-5:]:
+                won = (hs > aws) if is_home else (aws > hs)
+                form.append('W' if won else ('O' if ot else 'L'))
+        except Exception:
+            pass
+        return form
+
     def _get_team_initials(self) -> str:
         """Get team initials for logo"""
         words = self.user_team.team_name.split()
@@ -572,6 +655,7 @@ class AtmosphericDashboard:
             return [
                 {
                     "icon": "🏆",
+                    "icon_kind": "trophy",
                     "title": "Wins",
                     "value": str(wins),
                     "subtitle": wins_subtitle,
@@ -580,6 +664,7 @@ class AtmosphericDashboard:
                 },
                 {
                     "icon": "💰",
+                    "icon_kind": "chart",
                     "title": "Cap Space",
                     "value": f"${cap_space/1000000:.1f}M",
                     "subtitle": cap_subtitle,
@@ -588,6 +673,7 @@ class AtmosphericDashboard:
                 },
                 {
                     "icon": "⭐",
+                    "icon_kind": "star",
                     "title": "Top Scorer",
                     "value": f"{top_scorer_points} pts",
                     "subtitle": top_scorer_name.split()[-1] if top_scorer_name != "Unknown" else "No stats yet",
@@ -596,6 +682,7 @@ class AtmosphericDashboard:
                 },
                 {
                     "icon": "🥅",
+                    "icon_kind": "puck",
                     "title": "Goals For",
                     "value": goals_value,
                     "subtitle": goals_subtitle,
@@ -606,42 +693,44 @@ class AtmosphericDashboard:
         except Exception as e:
             # Fallback to basic metrics if something goes wrong
             return [
-                {"icon": "🏆", "title": "Wins", "value": "0", "subtitle": "Season starting", "context": "neutral", "trend": "→"},
-                {"icon": "💰", "title": "Cap Space", "value": "Loading...", "subtitle": "Calculating", "context": "neutral", "trend": "→"},
-                {"icon": "⭐", "title": "Top Scorer", "value": "0 pts", "subtitle": "No stats yet", "context": "neutral", "trend": "→"},
-                {"icon": "🥅", "title": "Goals For", "value": "0.0/game", "subtitle": "Season starting", "context": "neutral", "trend": "→"}
+                {"icon": "🏆", "icon_kind": "trophy", "title": "Wins", "value": "0", "subtitle": "Season starting", "context": "neutral", "trend": "→"},
+                {"icon": "💰", "icon_kind": "chart", "title": "Cap Space", "value": "Loading...", "subtitle": "Calculating", "context": "neutral", "trend": "→"},
+                {"icon": "⭐", "icon_kind": "star", "title": "Top Scorer", "value": "0 pts", "subtitle": "No stats yet", "context": "neutral", "trend": "→"},
+                {"icon": "🥅", "icon_kind": "puck", "title": "Goals For", "value": "0.0/game", "subtitle": "Season starting", "context": "neutral", "trend": "→"}
             ]
     
     def _create_metric_card(self, parent, metric: Dict, index: int) -> tk.Frame:
-        """Create individual metric card with storytelling"""
+        """Create individual metric card: drawn icon, accent bar, big value."""
         accent = self._get_context_color(metric.get("context", "neutral"))
         card = tk.Frame(parent, bg=self.theme.colors.secondary,
                        relief='flat', bd=0, padx=16, pady=12)
-        # Slim accent line on top instead of a chunky border
-        tk.Frame(card, bg=accent, height=2).pack(fill='x', pady=(0, 8))
-        
-        # Icon and trend
+        # Accent bar on top
+        tk.Frame(card, bg=accent, height=3).pack(fill='x', pady=(0, 10))
+
+        # Icon and trend row
         header_frame = tk.Frame(card, bg=self.theme.colors.secondary)
         header_frame.pack(fill='x')
-        
-        icon_label = tk.Label(header_frame, text=metric["icon"],
-                             font=('Segoe UI', 16),
-                             bg=self.theme.colors.secondary)
-        icon_label.pack(side='left')
-        
+
+        icon_canvas = tk.Canvas(header_frame, width=30, height=30,
+                                bg=self.theme.colors.secondary,
+                                highlightthickness=0, bd=0)
+        icon_canvas.pack(side='left')
+        draw_mini_icon(icon_canvas, 15, 15, 26,
+                       metric.get("icon_kind", "star"), accent)
+
         trend_label = tk.Label(header_frame, text=metric.get("trend", ""),
                               font=self.theme.fonts['caption'],
                               fg=self._get_trend_color(metric.get("trend", "")),
                               bg=self.theme.colors.secondary)
         trend_label.pack(side='right')
-        
-        # Value
+
+        # Value — big and bold
         value_label = tk.Label(card, text=metric["value"],
-                              font=self.theme.fonts['heading'],
+                              font=('Segoe UI', 22, 'bold'),
                               fg=self._get_context_color(metric.get("context", "neutral")),
                               bg=self.theme.colors.secondary)
-        value_label.pack()
-        
+        value_label.pack(pady=(4, 2))
+
         # Store reference for specific metrics we want to update
         metric_title = metric.get("title", "")
         if "Record" in metric_title or "Wins" in metric_title:
@@ -650,20 +739,20 @@ class AtmosphericDashboard:
             self.widget_refs['cap_label'] = value_label
         elif "Top Scorer" in metric_title or "Scorer" in metric_title:
             self.widget_refs['scorer_label'] = value_label
-        
+
         # Title and subtitle
         title_label = tk.Label(card, text=metric["title"],
                               font=self.theme.fonts['body'],
                               fg=self.theme.colors.text_light,
                               bg=self.theme.colors.secondary)
         title_label.pack()
-        
+
         subtitle_label = tk.Label(card, text=metric["subtitle"],
                                  font=self.theme.fonts['caption'],
                                  fg=self.theme.colors.text_light,
                                  bg=self.theme.colors.secondary)
         subtitle_label.pack()
-        
+
         return card
     
     def _generate_situation_narrative(self) -> str:
@@ -683,7 +772,7 @@ class AtmosphericDashboard:
         perf_frame.pack(fill='both', expand=True, padx=16, pady=16)
         
         # Story headline
-        headline = tk.Label(perf_frame, text="📈 Your Team's Journey This Season",
+        headline = tk.Label(perf_frame, text="Your Team's Journey This Season",
                            font=self.theme.fonts['heading'],
                            fg=self.theme.colors.primary,
                            bg=self.theme.colors.background)
@@ -696,12 +785,18 @@ class AtmosphericDashboard:
             highlight_frame = tk.Frame(perf_frame, bg=self.theme.colors.secondary,
                                      relief='flat', bd=1)
             highlight_frame.pack(fill='x', pady=4)
-            
+
+            dot = tk.Canvas(highlight_frame, width=14, height=14,
+                            bg=self.theme.colors.secondary,
+                            highlightthickness=0, bd=0)
+            dot.create_oval(4, 4, 10, 10, fill=self.theme.colors.primary, outline="")
+            dot.pack(side='left', padx=(14, 2))
+
             highlight_label = tk.Label(highlight_frame, text=highlight,
                                       font=self.theme.fonts['body'],
                                       fg=self.theme.colors.text_light,
                                       bg=self.theme.colors.secondary)
-            highlight_label.pack(anchor='w', padx=16, pady=8)
+            highlight_label.pack(side='left', anchor='w', padx=(4, 16), pady=8)
     
     def _generate_performance_highlights(self):
         """Generate dynamic performance highlights based on actual team data"""
@@ -720,17 +815,17 @@ class AtmosphericDashboard:
             if total_games > 0:
                 win_pct = wins / total_games
                 if win_pct >= 0.7:
-                    highlights.append("🔥 Dominant season performance - elite tier team")
+                    highlights.append("Dominant season performance - elite tier team")
                 elif win_pct >= 0.6:
-                    highlights.append("⭐ Strong season with excellent chemistry")
+                    highlights.append("Strong season with excellent chemistry")
                 elif win_pct >= 0.5:
-                    highlights.append("📈 Competitive season, building momentum")
+                    highlights.append("Competitive season, building momentum")
                 elif win_pct >= 0.4:
-                    highlights.append("🛠️ Developing team showing improvement")
+                    highlights.append("Developing team showing improvement")
                 else:
-                    highlights.append("🔧 Rebuilding phase - focusing on development")
+                    highlights.append("Rebuilding phase - focusing on development")
             else:
-                highlights.append("🏒 Season beginning - ready for action")
+                highlights.append("Season beginning - ready for action")
             
             # Analyze roster for highlights
             if hasattr(user_team, 'roster') and user_team.roster:
@@ -741,19 +836,19 @@ class AtmosphericDashboard:
                 if top_players and (getattr(top_players[0], 'goals', 0) + getattr(top_players[0], 'assists', 0)) > 0:
                     top_scorer = top_players[0]
                     points = getattr(top_scorer, 'goals', 0) + getattr(top_scorer, 'assists', 0)
-                    highlights.append(f"⭐ {getattr(top_scorer, 'full_name', 'Top player')} leading with {points} points")
+                    highlights.append(f"{getattr(top_scorer, 'full_name', 'Top player')} leading with {points} points")
                 else:
-                    highlights.append("🎯 Balanced scoring across all lines")
+                    highlights.append("Balanced scoring across all lines")
                 
                 # Check for young talent
                 young_players = [p for p in user_team.roster if getattr(p, 'age', 25) < 23]
                 if young_players:
-                    highlights.append(f"🌟 {len(young_players)} promising prospects developing in system")
+                    highlights.append(f"{len(young_players)} promising prospects developing in system")
                 
                 # Goalie performance
                 goalies = [p for p in user_team.roster if getattr(p, 'primary_position', None) == 'G']
                 if goalies:
-                    highlights.append("🥅 Goaltending providing solid foundation")
+                    highlights.append("Goaltending providing solid foundation")
             
             # Cap situation
             try:
@@ -763,9 +858,9 @@ class AtmosphericDashboard:
                 cap_space = total_cap - used_cap
                 
                 if cap_space > 15000000:
-                    highlights.append("💰 Excellent cap flexibility for strategic moves")
+                    highlights.append("Excellent cap flexibility for strategic moves")
                 elif cap_space > 5000000:
-                    highlights.append("💼 Solid cap management with room to maneuver")
+                    highlights.append("Solid cap management with room to maneuver")
                 else:
                     highlights.append("⚖️ Tight cap situation requiring strategic planning")
             except:
@@ -774,9 +869,9 @@ class AtmosphericDashboard:
             # Ensure we have at least some highlights
             if len(highlights) < 3:
                 highlights.extend([
-                    "🏆 Building championship culture",
-                    "📈 Continuous improvement focus",
-                    "🎯 Strategic development approach"
+                    "Building championship culture",
+                    "Continuous improvement focus",
+                    "Strategic development approach"
                 ])
             
             return highlights[:4]  # Return max 4 highlights
@@ -786,7 +881,7 @@ class AtmosphericDashboard:
                 "📊 Performance analysis loading...",
                 "⏳ Team data synchronizing...",
                 "🔄 Statistics updating...",
-                "📈 Preparing detailed insights..."
+                "Preparing detailed insights..."
             ]
     
     def _create_enhanced_inbox_content(self, parent):
@@ -798,32 +893,37 @@ class AtmosphericDashboard:
                                    relief='flat', bd=0)
             unread_frame.pack(fill='x', pady=(0, 8))
             
-            unread_label = tk.Label(unread_frame, text=f"📧 {unread_count} unread messages",
+            unread_label = tk.Label(unread_frame, text=f"{unread_count} unread messages",
                                    font=self.theme.fonts['body'],
                                    fg=self.theme.colors.text_light,
                                    bg=self.theme.colors.danger)
             unread_label.pack(padx=8, pady=6)
         
-        # Recent messages with icons
+        # Recent messages with drawn icons
         messages = self._get_recent_messages()
         for message in messages[:3]:  # Show top 3
             msg_frame = tk.Frame(parent, bg=self.theme.colors.background,
                                relief='flat', bd=1, cursor='hand2')
             msg_frame.pack(fill='x', pady=2)
-            
-            # Message icon and preview
-            icon = self._get_message_icon(message.get('type', 'general'))
-            msg_text = f"{icon} {message.get('subject', 'No subject')}"
-            
-            msg_label = tk.Label(msg_frame, text=msg_text,
+
+            # Drawn message-type icon
+            icon_kind = self._get_message_icon(message.get('type', 'general'))
+            icon_canvas = tk.Canvas(msg_frame, width=22, height=22,
+                                    bg=self.theme.colors.background,
+                                    highlightthickness=0, bd=0)
+            icon_canvas.pack(side='left', padx=(8, 2), pady=4)
+            draw_mini_icon(icon_canvas, 11, 11, 16, icon_kind,
+                           self.theme.colors.primary)
+
+            msg_label = tk.Label(msg_frame, text=message.get('subject', 'No subject'),
                                 font=self.theme.fonts['caption'],
                                 fg=self.theme.colors.text_light,
                                 bg=self.theme.colors.background,
                                 wraplength=180, justify='left')
-            msg_label.pack(anchor='w', padx=8, pady=4)
+            msg_label.pack(side='left', anchor='w', padx=(2, 8), pady=4)
         
         # View all button
-        view_all_btn = RoundedButton(parent, text="📨 View All Messages",
+        view_all_btn = RoundedButton(parent, text="View All Messages",
                                      font=self.theme.fonts['caption'],
                                      bg=self.theme.colors.primary,
                                      fg=self.theme.colors.text_light,
@@ -984,6 +1084,24 @@ class AtmosphericDashboard:
         }
         return context_colors.get(context, self.theme.colors.text_light)
     
+    def _team_dot(self, parent, initials, color, size=56):
+        """Circle badge with team initials — visual matchup dot."""
+        c = tk.Canvas(parent, width=size, height=size,
+                      bg=self.theme.colors.secondary,
+                      highlightthickness=0, bd=0)
+        c.create_oval(3, 3, size - 3, size - 3, fill=color, outline="")
+        c.create_text(size / 2, size / 2, text=initials,
+                      fill="#FFFFFF", font=('Segoe UI', 13, 'bold'))
+        return c
+
+    def _initials_for(self, name: str) -> str:
+        words = [w for w in str(name).replace('.', ' ').split() if w]
+        if not words:
+            return "??"
+        if len(words) == 1:
+            return words[0][:2].upper()
+        return (words[0][0] + words[-1][0]).upper()
+
     def _create_enhanced_next_game_widget(self, parent):
         """Create enhanced next game widget with interactivity"""
         # Get next game data
@@ -1010,48 +1128,44 @@ class AtmosphericDashboard:
                                    bg=self.theme.colors.secondary)
             details_label.pack(anchor='w', padx=8, pady=(0, 4))
             
-            # Team comparison section
+            # Team comparison section — visual matchup dots
             comparison_frame = tk.Frame(opponent_frame, bg=self.theme.colors.secondary)
             comparison_frame.pack(fill='x', padx=8, pady=(0, 8))
-            
-            # Your team column
-            your_team_frame = tk.Frame(comparison_frame, bg=self.theme.colors.secondary)
-            your_team_frame.pack(side='left', fill='x', expand=True)
-            
-            your_label = tk.Label(your_team_frame, text="Your Team",
-                                font=self.theme.fonts['caption'],
-                                fg=self.theme.colors.primary,
-                                bg=self.theme.colors.secondary)
-            your_label.pack(anchor='w')
-            
-            your_record = tk.Label(your_team_frame, text=next_game_data['your_record'],
-                                 font=self.theme.fonts['caption'],
-                                 fg=self.theme.colors.text_light,
-                                 bg=self.theme.colors.secondary)
-            your_record.pack(anchor='w')
-            
-            # VS separator
-            vs_label = tk.Label(comparison_frame, text="VS",
-                              font=self.theme.fonts['caption'],
-                              fg=self.theme.colors.text_light,
-                              bg=self.theme.colors.secondary)
-            vs_label.pack(side='left', padx=8)
-            
-            # Opponent column
-            opp_team_frame = tk.Frame(comparison_frame, bg=self.theme.colors.secondary)
-            opp_team_frame.pack(side='right', fill='x', expand=True)
-            
-            opp_label = tk.Label(opp_team_frame, text="Opponent",
-                               font=self.theme.fonts['caption'],
-                               fg=self.theme.colors.primary,
-                               bg=self.theme.colors.secondary)
-            opp_label.pack(anchor='e')
-            
-            opp_record = tk.Label(opp_team_frame, text=next_game_data['opponent_record'],
-                                font=self.theme.fonts['caption'],
-                                fg=self.theme.colors.text_light,
-                                bg=self.theme.colors.secondary)
-            opp_record.pack(anchor='e')
+
+            your_initials = self._get_team_initials()
+            opp_initials = self._initials_for(next_game_data['opponent'])
+            opp_color = "#4A9EFF"
+
+            self._team_dot(comparison_frame, your_initials,
+                           self.theme.colors.primary).pack(side='left', padx=4)
+            your_col = tk.Frame(comparison_frame, bg=self.theme.colors.secondary)
+            your_col.pack(side='left', padx=4)
+            tk.Label(your_col, text="YOU",
+                     font=('Segoe UI', 8, 'bold'),
+                     fg=self.theme.colors.primary,
+                     bg=self.theme.colors.secondary).pack(anchor='w')
+            tk.Label(your_col, text=next_game_data['your_record'],
+                     font=self.theme.fonts['caption'],
+                     fg=self.theme.colors.text_light,
+                     bg=self.theme.colors.secondary).pack(anchor='w')
+
+            tk.Label(comparison_frame, text="VS",
+                     font=('Segoe UI', 14, 'bold'),
+                     fg=self.theme.colors.text_light,
+                     bg=self.theme.colors.secondary).pack(side='left', padx=10)
+
+            opp_col = tk.Frame(comparison_frame, bg=self.theme.colors.secondary)
+            opp_col.pack(side='left', padx=4)
+            tk.Label(opp_col, text=next_game_data['opponent'][:18].upper(),
+                     font=('Segoe UI', 8, 'bold'),
+                     fg=opp_color,
+                     bg=self.theme.colors.secondary).pack(anchor='e')
+            tk.Label(opp_col, text=next_game_data['opponent_record'],
+                     font=self.theme.fonts['caption'],
+                     fg=self.theme.colors.text_light,
+                     bg=self.theme.colors.secondary).pack(anchor='e')
+            self._team_dot(comparison_frame, opp_initials,
+                           opp_color).pack(side='left', padx=4)
             
             # Game preview button
             if next_game_data['days_until'] <= 1:  # Show preview for games today or tomorrow
@@ -1077,57 +1191,64 @@ class AtmosphericDashboard:
     def _get_detailed_next_game_info(self):
         """Get detailed next game information for enhanced widget"""
         try:
-            if hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'league'):
-                user_team_name = self.parent.user_team.team_name
-                today = getattr(self.parent.game_manager, 'current_date', None)
-                
-                # Look for next scheduled game
-                for team in self.parent.game_manager.league.teams:
-                    if hasattr(team, 'schedule'):
-                        for game in team.schedule:
-                            if (hasattr(game, 'home_team') and hasattr(game, 'away_team') and 
-                                hasattr(game, 'date') and 
-                                (game.home_team == user_team_name or game.away_team == user_team_name)):
-                                if today is None or game.date > today:
-                                    # Found next game
-                                    opponent_name = game.away_team if game.home_team == user_team_name else game.home_team
-                                    is_home = game.home_team == user_team_name
-                                    
-                                    # Get opponent team object for stats
-                                    opponent_team = None
-                                    for t in self.parent.game_manager.league.teams:
-                                        if t.team_name == opponent_name:
-                                            opponent_team = t
-                                            break
-                                    
-                                    # Calculate days until game
-                                    days_until = (game.date - today).days if today else 0
-                                    
-                                    # Format date
-                                    date_formatted = game.date.strftime("%m/%d")
-                                    if days_until == 0:
-                                        date_formatted += " (Today)"
-                                    elif days_until == 1:
-                                        date_formatted += " (Tomorrow)"
-                                    
-                                    # Get records
-                                    your_record = f"{self.parent.user_team.wins}-{self.parent.user_team.losses}-{getattr(self.parent.user_team, 'ties', 0)}"
-                                    opponent_record = "0-0-0"
-                                    if opponent_team:
-                                        opponent_record = f"{opponent_team.wins}-{opponent_team.losses}-{getattr(opponent_team, 'ties', 0)}"
-                                    
-                                    return {
-                                        'opponent': opponent_name,
-                                        'date': game.date,
-                                        'date_formatted': date_formatted,
-                                        'home_away': "Home" if is_home else "Away",
-                                        'days_until': days_until,
-                                        'your_record': your_record,
-                                        'opponent_record': opponent_record,
-                                        'opponent_team': opponent_team,
-                                        'is_home': is_home
-                                    }
-            return None
+            gm = getattr(self.parent, 'game_manager', None)
+            league = getattr(gm, 'league', None)
+            if not league:
+                return None
+            user_team_name = self.parent.user_team.team_name
+            today = getattr(gm, 'current_date', None)
+
+            upcoming = []
+            for d, h, a, raw in self._iter_schedule_games():
+                if user_team_name not in (h, a):
+                    continue
+                if d is None or (today is not None and d <= today):
+                    continue
+                if isinstance(raw, dict):
+                    played = raw.get('home_score') is not None
+                else:
+                    played = getattr(raw, 'home_score', None) is not None
+                if played:
+                    continue
+                upcoming.append((d, h, a, raw))
+            if not upcoming:
+                return None
+            upcoming.sort(key=lambda g: g[0])
+            d, h, a, raw = upcoming[0]
+
+            is_home = (h == user_team_name)
+            opponent_name = a if is_home else h
+
+            opponent_team = None
+            for t in league.teams:
+                if getattr(t, 'team_name', t) == opponent_name:
+                    opponent_team = t
+                    break
+
+            days_until = (d - today).days if (today and d) else 0
+
+            date_formatted = d.strftime("%m/%d") if d else "TBD"
+            if days_until == 0:
+                date_formatted += " (Today)"
+            elif days_until == 1:
+                date_formatted += " (Tomorrow)"
+
+            your_record = f"{self.parent.user_team.wins}-{self.parent.user_team.losses}-{getattr(self.parent.user_team, 'ties', 0)}"
+            opponent_record = "0-0-0"
+            if opponent_team:
+                opponent_record = f"{opponent_team.wins}-{opponent_team.losses}-{getattr(opponent_team, 'ties', 0)}"
+
+            return {
+                'opponent': opponent_name,
+                'date': d,
+                'date_formatted': date_formatted,
+                'home_away': "Home" if is_home else "Away",
+                'days_until': days_until,
+                'your_record': your_record,
+                'opponent_record': opponent_record,
+                'opponent_team': opponent_team,
+                'is_home': is_home
+            }
         except Exception as e:
             print(f"Error getting detailed next game info: {e}")
             return None
@@ -1494,16 +1615,16 @@ class AtmosphericDashboard:
         ]
     
     def _get_message_icon(self, msg_type: str) -> str:
-        """Get icon for message type"""
+        """Get icon kind for message type (drawn, not emoji)"""
         icons = {
-            'trade': '🔄',
-            'achievement': '🏆',
-            'medical': '🏥',
-            'contract': '📝',
-            'scout': '🔍',
-            'general': '📧'
+            'trade': 'users',
+            'achievement': 'trophy',
+            'medical': 'shield',
+            'contract': 'mail',
+            'scout': 'star',
+            'general': 'mail'
         }
-        return icons.get(msg_type, '📧')
+        return icons.get(msg_type, 'mail')
 
     def update_data(self, current_date=None, team_record=None, next_game=None, 
                    roster_highlights=None, recent_news=None):
