@@ -60,12 +60,14 @@ class DatabaseManager:
         team_index = 0
         position_assignments = {team.team_name: {pos: 0 for pos in PlayerPosition} for team in teams}
         
-        # First pass: Ensure each team gets minimum requirements
+        # First pass: snake-draft each position so talent is spread evenly
+        # (round 1 goes team 1..32, round 2 goes 32..1, etc.)
         for position, required_count in roster_requirements.items():
             position_players = [p for p in nhl_players if p.primary_position == position and p.team_name == "Free Agent"]
-            
-            for team in teams:
-                for _ in range(required_count):
+
+            for pick_round in range(required_count):
+                order = teams if pick_round % 2 == 0 else list(reversed(teams))
+                for team in order:
                     if position_players:
                         player = position_players.pop(0)
                         player.team_name = team.team_name
@@ -85,11 +87,11 @@ class DatabaseManager:
             target_team = teams_by_position_need[0]
             player.team_name = target_team.team_name
             
-            # Determine roster level based on overall rating
+            # Determine roster level based on overall rating (50-point scale)
             overall = player.overall_rating()
-            if overall >= 75:
+            if overall >= 44:
                 target_team.add_player(player, "roster")
-            elif overall >= 65:
+            elif overall >= 40:
                 # Some go to AHL
                 if random.random() < 0.3:
                     target_team.add_player(player, "ahl")
@@ -120,6 +122,23 @@ class DatabaseManager:
                 prospect.team_name = team.team_name
                 team.add_player(prospect, "prospects")
         
+        # Generate contracts now that players are on NHL teams
+        contract_gen = PlayerGenerator()
+        for team in teams:
+            for player in list(team.roster) + list(team.ahl_roster):
+                ovr = player.overall_rating()
+                if ovr >= 49:
+                    tier = "NHL_ELITE"
+                elif ovr >= 44:
+                    tier = "NHL_STARTER"
+                elif ovr >= 38:
+                    tier = "NHL_DEPTH"
+                else:
+                    tier = "AHL_VETERAN"
+                salary, years = contract_gen.determine_contract_info(player, tier)
+                player.contract.salary = salary
+                player.contract.years_remaining = years
+
         print("NHL teams populated successfully")
         self._print_roster_summary(teams)
     
