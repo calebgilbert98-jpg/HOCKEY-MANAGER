@@ -745,14 +745,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         self.practice_type_combo = ttk.Combobox(type_combo_frame, textvariable=self.practice_type_var,
                                               values=[opt[0] for opt in self.type_options], 
                                               state='readonly', width=25)
-        # Configure combobox styling for visibility
-        try:
-            self.practice_type_combo.configure(foreground='black', fieldbackground='white')
-        except:
-            try:
-                self.practice_type_combo.configure(foreground='black')
-            except:
-                pass
+        # Dark combobox theme is applied app-wide (modern_widgets).
         self.practice_type_combo.pack(side='left')
         
         # Recommendations button
@@ -803,11 +796,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         trainer_options = ["Basic (8)", "Good (12)", "Excellent (16)", "Elite (20)"]
         trainer_combo = ttk.Combobox(settings_grid, textvariable=self.trainer_var,
                                    values=trainer_options, state='readonly', width=15)
-        trainer_combo.configure(foreground='black')
-        try:
-            trainer_combo.configure(fieldbackground='white')
-        except:
-            pass  # fieldbackground may not be available on all systems
+        # Dark combobox theme is applied app-wide (modern_widgets).
         trainer_combo.set("Good (12)")
         trainer_combo.grid(row=1, column=1, sticky='w', pady=(5, 0))
         

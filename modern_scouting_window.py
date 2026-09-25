@@ -26,6 +26,8 @@ class ModernScoutingWindow(tk.Toplevel):
         
         # Data containers
         self.game_data = self._get_game_data()
+        self.all_players = list(self.game_data.get('players', []))
+        self.all_scouts = list(self.game_data.get('scouts', []))
         self.filter_vars = {}
         self.ui_components = {}
         
@@ -342,6 +344,33 @@ class ModernScoutingWindow(tk.Toplevel):
                             command=self._edit_scout)
         edit_btn.pack(side='left')
     
+    def _create_draft_tab(self):
+        """Create draft prospects tab"""
+        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        self.notebook.add(tab_frame, text="📋 Draft")
+
+        header = tk.Label(tab_frame, text="Upcoming Draft Class",
+                          bg=self.parent.CONTENT_BG, fg=self.parent.HEADER_COLOR,
+                          font=(self.parent.FONT_FAMILY, 12, "bold"))
+        header.pack(anchor="w", padx=12, pady=(10, 4))
+
+        cols = ("Player", "Pos", "Age", "Potential")
+        tree = ttk.Treeview(tab_frame, columns=cols, show="headings", height=20)
+        for c, w in zip(cols, (220, 70, 60, 100)):
+            tree.heading(c, text=c)
+            tree.column(c, width=w, anchor="center" if c != "Player" else "w")
+        tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        for p in self.game_data.get("draft_class", [])[:200]:
+            try:
+                pos = getattr(p.primary_position, "value", str(p.primary_position))
+                tree.insert("", "end", values=(
+                    getattr(p, "full_name", "?"), pos,
+                    getattr(p, "age", "?"),
+                    getattr(p, "potential_grade", getattr(p, "potential", "?"))))
+            except Exception:
+                continue
+
     def _create_assignments_tab(self):
         """Create scouting assignments tab"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
@@ -439,6 +468,10 @@ class ModernScoutingWindow(tk.Toplevel):
         self.report_text.pack(side='left', fill='both', expand=True, padx=10, pady=10)
         report_scrollbar.pack(side='right', fill='y', pady=10)
     
+    def _load_initial_data(self):
+        """Initial data load after the interface is built."""
+        self._populate_data()
+
     def _populate_data(self):
         """Populate all tabs with data"""
         try:

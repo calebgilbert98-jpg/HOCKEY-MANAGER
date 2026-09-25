@@ -88,7 +88,7 @@ class RoundedButton(tk.Canvas):
     """
 
     def __init__(self, parent, text="", command=None, *,
-                 radius=12, bg=None, fg=None, font=None,
+                 radius=None, bg=None, fg=None, font=None,
                  padx=20, pady=10, width=None, height=None,
                  hover_bg=None, press_bg=None, state="normal",
                  blend_bg=None, **kw):
@@ -97,7 +97,7 @@ class RoundedButton(tk.Canvas):
         self._press_bg = press_bg or _shade(self._bg, 0.82)
         self._fg = fg or _DEFAULTS["primary_text"]
         self._font = font or _FONT
-        self._radius = radius
+        self._radius = radius  # None -> full pill
         self._command = command
         self._state = state
         self._text = text
@@ -112,6 +112,7 @@ class RoundedButton(tk.Canvas):
             tw, th = len(text) * 9, 20
         w = width or (tw + padx * 2)
         h = height or (th + pady * 2)
+        self._radius = h / 2 - 2 if radius is None else radius
 
         # Match the parent background so corners look transparent.
         parent_bg = _blend_bg(parent, blend_bg)
@@ -120,7 +121,7 @@ class RoundedButton(tk.Canvas):
         super().__init__(parent, width=w, height=h, bg=parent_bg, **kw)
 
         self._rect = self.create_polygon(
-            _rounded_polygon_points(2, 2, w - 2, h - 2, radius),
+            _rounded_polygon_points(2, 2, w - 2, h - 2, self._radius),
             smooth=True, fill=self._bg, outline="")
         self._label = self.create_text(
             w / 2, h / 2, text=text, fill=self._fg, font=self._font)
@@ -291,5 +292,230 @@ def style_treeview(style, *, row_bg=None, alt_bg=None):
                                if "selected_bg" in _DEFAULTS
                                else "#335577")],
                   foreground=[("selected", _DEFAULTS["primary_text"])])
+    except Exception:
+        pass
+
+
+# ----------------------------------------------------------------------
+# Dark input family: replaces white tk.Entry / Text / Combobox boxes.
+# ----------------------------------------------------------------------
+
+_INPUT_BG = "#161D29"
+_INPUT_BORDER = "#3A4A63"
+_INPUT_FOCUS = "#4A9EFF"
+
+
+class DarkEntry(tk.Canvas):
+    """A dark, pill-shaped text entry. Drop-in-ish replacement for tk.Entry.
+
+    Delegates the common Entry API (get/insert/delete/bind/focus_set) to the
+    inner widget: ``entry = DarkEntry(parent); entry.get()``.
+    """
+
+    def __init__(self, parent, *, radius=None, width=24, font=None,
+                 textvariable=None, show=None, state="normal",
+                 blend_bg=None, **kw):
+        self._radius = radius
+        self._input_bg = kw.pop("bg", _INPUT_BG)
+        self._border = _INPUT_BORDER
+        self._font = font or ("Segoe UI", 10)
+        try:
+            import tkinter.font as tkfont
+            fnt = tkfont.Font(font=self._font)
+            cw, ch = fnt.measure("0") * width, fnt.metrics("linespace")
+        except Exception:
+            cw, ch = width * 8, 20
+        w, h = cw + 24, ch + 14
+        self._radius = h / 2 - 2 if radius is None else radius
+        parent_bg = _blend_bg(parent, blend_bg)
+        kw.setdefault("highlightthickness", 0)
+        kw.setdefault("bd", 0)
+        super().__init__(parent, width=w, height=h, bg=parent_bg, **kw)
+        self._frame = self.create_polygon(
+            _rounded_polygon_points(2, 2, w - 2, h - 2, self._radius),
+            smooth=True, fill=self._input_bg, outline=self._border, width=1)
+        self.entry = tk.Entry(self, bg=self._input_bg,
+                              fg=_DEFAULTS["primary_text"],
+                              insertbackground=_DEFAULTS["primary_text"],
+                              relief="flat", bd=0, highlightthickness=0,
+                              font=self._font, textvariable=textvariable,
+                              show=show, state=state,
+                              disabledbackground=self._input_bg,
+                              disabledforeground=_DEFAULTS["muted_text"])
+        self.create_window(12, h / 2, anchor="w", window=self.entry,
+                           width=cw)
+        self.entry.bind("<FocusIn>", lambda _e: self._set_border(_INPUT_FOCUS))
+        self.entry.bind("<FocusOut>", lambda _e: self._set_border(_INPUT_BORDER))
+
+    def _set_border(self, color):
+        self._border = color
+        self.itemconfig(self._frame, outline=color)
+
+    # -- Entry API delegation -------------------------------------------
+    def get(self):
+        return self.entry.get()
+
+    def insert(self, index, text):
+        return self.entry.insert(index, text)
+
+    def delete(self, first, last=None):
+        return self.entry.delete(first, last) if last is not None \
+            else self.entry.delete(first)
+
+    def index(self, i):
+        return self.entry.index(i)
+
+    def icursor(self, i):
+        return self.entry.icursor(i)
+
+    def selection_clear(self):
+        return self.entry.selection_clear()
+
+    def focus_set(self):
+        return self.entry.focus_set()
+
+    def bind(self, sequence, func=None, add=None):
+        return self.entry.bind(sequence, func, add)
+
+    def config(self, **kw):
+        if "state" in kw:
+            self.entry.config(state=kw.pop("state"))
+        if "textvariable" in kw:
+            self.entry.config(textvariable=kw.pop("textvariable"))
+        if "show" in kw:
+            self.entry.config(show=kw.pop("show"))
+        if kw:
+            super().config(**kw)
+
+    configure = config
+
+
+class DarkText(tk.Text):
+    """Dark multi-line text box (no white background, no harsh border)."""
+
+    def __init__(self, parent, *, font=None, **kw):
+        kw.setdefault("bg", _INPUT_BG)
+        kw.setdefault("fg", _DEFAULTS["primary_text"])
+        kw.setdefault("insertbackground", _DEFAULTS["primary_text"])
+        kw.setdefault("selectbackground", "#335577")
+        kw.setdefault("selectforeground", _DEFAULTS["primary_text"])
+        kw.setdefault("relief", "flat")
+        kw.setdefault("bd", 0)
+        kw.setdefault("highlightthickness", 1)
+        kw.setdefault("highlightbackground", _INPUT_BORDER)
+        kw.setdefault("highlightcolor", _INPUT_FOCUS)
+        kw.setdefault("font", font or ("Segoe UI", 10))
+        kw.setdefault("padx", 8)
+        kw.setdefault("pady", 8)
+        super().__init__(parent, **kw)
+
+
+def style_combobox(style, style_name="Dark.TCombobox"):
+    """Register a dark ttk.Combobox style; apply with style=style_name."""
+    try:
+        style.configure(style_name,
+                        fieldbackground=_INPUT_BG,
+                        background=_INPUT_BG,
+                        foreground=_DEFAULTS["primary_text"],
+                        arrowcolor=_DEFAULTS["secondary_text"],
+                        borderwidth=1,
+                        relief="flat")
+        style.map(style_name,
+                  fieldbackground=[("readonly", _INPUT_BG),
+                                   ("disabled", _INPUT_BG)],
+                  foreground=[("readonly", _DEFAULTS["primary_text"]),
+                              ("disabled", _DEFAULTS["muted_text"])])
+        # The dropdown is a plain tk Listbox; recolor it via the option db.
+        try:
+            root = style.master
+            root.option_add("*TCombobox*Listbox.background", _INPUT_BG)
+            root.option_add("*TCombobox*Listbox.foreground",
+                            _DEFAULTS["primary_text"])
+            root.option_add("*TCombobox*Listbox.selectBackground", "#335577")
+            root.option_add("*TCombobox*Listbox.selectForeground",
+                            _DEFAULTS["primary_text"])
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return style_name
+
+
+class DarkListbox(tk.Listbox):
+    """Dark listbox matching the input family."""
+
+    def __init__(self, parent, *, font=None, **kw):
+        kw.setdefault("bg", _INPUT_BG)
+        kw.setdefault("fg", _DEFAULTS["secondary_text"])
+        kw.setdefault("selectbackground", "#335577")
+        kw.setdefault("selectforeground", _DEFAULTS["primary_text"])
+        kw.setdefault("relief", "flat")
+        kw.setdefault("bd", 0)
+        kw.setdefault("highlightthickness", 1)
+        kw.setdefault("highlightbackground", _INPUT_BORDER)
+        kw.setdefault("highlightcolor", _INPUT_FOCUS)
+        kw.setdefault("font", font or ("Segoe UI", 10))
+        kw.setdefault("activestyle", "none")
+        super().__init__(parent, **kw)
+
+
+def apply_dark_form_theme(root):
+    """Recolor every form control in the app: no more white text boxes.
+
+    Call once, right after the Tk root exists and before windows are built.
+    Uses the option database for tk.Entry/Text/Listbox/Spinbox and the
+    default ttk styles for TEntry/TCombobox, so all existing call sites pick
+    it up without edits. Explicit per-widget colors still win.
+    """
+    _pt = _DEFAULTS["primary_text"]
+    _st = _DEFAULTS["secondary_text"]
+    for cls in ("Entry", "Text", "Listbox", "Spinbox"):
+        root.option_add(f"*{cls}.background", _INPUT_BG)
+        root.option_add(f"*{cls}.foreground", _pt if cls != "Listbox" else _st)
+        root.option_add(f"*{cls}.insertBackground", _pt)
+        root.option_add(f"*{cls}.selectBackground", "#335577")
+        root.option_add(f"*{cls}.selectForeground", _pt)
+        root.option_add(f"*{cls}.highlightBackground", _INPUT_BORDER)
+        root.option_add(f"*{cls}.highlightColor", _INPUT_FOCUS)
+        root.option_add(f"*{cls}.highlightThickness", 1)
+        root.option_add(f"*{cls}.relief", "flat")
+        root.option_add(f"*{cls}.borderWidth", 0)
+    # Combobox dropdown listbox.
+    root.option_add("*TCombobox*Listbox.background", _INPUT_BG)
+    root.option_add("*TCombobox*Listbox.foreground", _pt)
+    root.option_add("*TCombobox*Listbox.selectBackground", "#335577")
+    root.option_add("*TCombobox*Listbox.selectForeground", _pt)
+
+    try:
+        from tkinter import ttk as _ttk
+        style = _ttk.Style(root)
+        style.configure("TEntry",
+                        fieldbackground=_INPUT_BG,
+                        foreground=_pt,
+                        insertcolor=_pt,
+                        borderwidth=1,
+                        relief="flat")
+        style.map("TEntry",
+                  fieldbackground=[("disabled", _INPUT_BG)],
+                  foreground=[("disabled", _DEFAULTS["muted_text"])])
+        style.configure("TCombobox",
+                        fieldbackground=_INPUT_BG,
+                        background=_INPUT_BG,
+                        foreground=_pt,
+                        arrowcolor=_st,
+                        borderwidth=1,
+                        relief="flat")
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", _INPUT_BG),
+                                   ("disabled", _INPUT_BG),
+                                   ("active", _INPUT_BG)],
+                  foreground=[("readonly", _pt),
+                              ("disabled", _DEFAULTS["muted_text"])],
+                  background=[("readonly", _INPUT_BG)])
+        style.configure("TSpinbox",
+                        fieldbackground=_INPUT_BG,
+                        background=_INPUT_BG,
+                        foreground=_pt,
+                        arrowcolor=_st)
     except Exception:
         pass

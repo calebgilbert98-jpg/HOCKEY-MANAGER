@@ -2929,7 +2929,14 @@ class HockeyManagerGUI(tk.Tk):
 
     def __init__(self, game_manager):
         super().__init__()
-        
+
+        # Dark form controls app-wide: no more white text boxes.
+        try:
+            from modern_widgets import apply_dark_form_theme
+            apply_dark_form_theme(self)
+        except Exception:
+            pass
+
         # Initialize modern UI systems FIRST
         self.modern_theme = create_modern_theme()
         self.typography = TypographySystem()
