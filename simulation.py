@@ -376,6 +376,7 @@ class GameSim:
         self.away_score = 0
         self.period = 1
         self.clock = 1200  # 20 minutes in seconds
+        self._period_length = 1200  # for event_log elapsed timestamps
         self.game_log = []
         self.notable_events = []
         self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
@@ -1842,6 +1843,7 @@ class GameSim:
         for p in range(1, 4):
             self.period = p
             self.clock = 1200
+            self._period_length = 1200
             self._simulate_period()
             self._log_event(f"End of Period {self.period}. Score: {self.home_score}-{self.away_score}", "PERIOD_END")
 
@@ -2579,7 +2581,8 @@ class GameSim:
             ShotType.BACKHAND: 0.1,
             ShotType.TIP_IN: 0.05,
             ShotType.WRAPAROUND: 0.03,
-            ShotType.DEFLECTION: 0.02
+            ShotType.DEFLECTION: 0.01,
+            ShotType.REBOUND: 0.01
         }
         
         # Adjust based on distance
@@ -2781,7 +2784,7 @@ class GameSim:
             
             # Log advanced goal details
             self.event_log.append({
-                'timestamp': self.time,
+                'timestamp': self._period_length - self.clock,
                 'duration': 1.0,
                 'type': 'GOAL_ADVANCED',
                 'details': {
@@ -2804,7 +2807,7 @@ class GameSim:
             # Handle rebound outcome
             if rebound_control in [ReboundControl.WEAK_REBOUND, ReboundControl.DANGEROUS_REBOUND]:
                 # Create a rebound opportunity
-                self._create_rebound_chance(shooter, goalie, location, rebound_control)
+                self._resolve_rebound_chance(attacking_team, defending_team)
             else:
                 # Regular save
                 self._handle_save(goalie, shooter, shot_type, quality)
@@ -2814,7 +2817,7 @@ class GameSim:
             
             # Log advanced save details
             self.event_log.append({
-                'timestamp': self.time,
+                'timestamp': self._period_length - self.clock,
                 'duration': 0.5,
                 'type': 'SAVE_ADVANCED',
                 'details': {
@@ -2963,8 +2966,8 @@ class GameSim:
             # Attacker gets rebound - quick shot attempt
             self.game_stats[best_attacker.id]['rebounds_created'] += 1
             
-            # High chance of goal on rebound
-            if random.random() < 0.4:  # 40% rebound goal chance
+            # Rebound conversion (~22%, in line with NHL second-chance rates)
+            if random.random() < 0.22:
                 self.game_stats[best_attacker.id]['rebounds_scored'] += 1
                 self._handle_goal(attacking_team, best_attacker, [], ShotType.REBOUND, ShotLocation.CREASE)
                 return True
@@ -3541,24 +3544,62 @@ class GameSim:
                     )
                     self.period = 3 + ot_num
                     self.clock = 1200  # 20 minutes, 5-on-5
+                    self._period_length = 1200
                     self._ot_start_score = (self.home_score, self.away_score)
                     self._simulate_period()
                     ot_num += 1
-                    # Safety valve: should never trigger (sudden death always ends),
-                    # but prevents an infinite loop if scoring breaks
+                    # Marathon guard: should essentially never trigger (sudden death
+                    # always ends on a goal), but prevents an infinite loop if
+                    # scoring somehow stalls. NO shootout in playoffs — resolve
+                    # with a strength-weighted golden goal instead.
                     if ot_num > 10:
-                        self._log_event("Marathon game! Awarding win by shootout.", "SHOOTOUT_START")
-                        self._handle_shootout()
+                        self._log_event(
+                            f"Marathon game! {ot_num - 1} scoreless OT periods — "
+                            "going to a golden-goal resolution.",
+                            "PERIOD_START",
+                        )
+                        self._resolve_marathon_golden_goal()
                         break
             else:
                 self._log_event("End of regulation, game is tied. Starting Overtime!", "PERIOD_START")
                 self.period = 4
                 self.clock = 300  # 5-minute 3-on-3
+                self._period_length = 300
                 self._ot_start_score = (self.home_score, self.away_score)
                 self._simulate_period()
         finally:
             self._ot_sudden_death = False
             self._ot_start_score = None
+
+    def _resolve_marathon_golden_goal(self):
+        """Resolve a marathon playoff OT (10+ scoreless periods) with a
+        strength-weighted golden goal. Playoffs never use shootouts."""
+        def ot_strength(team):
+            skaters = [p for p in team.roster
+                       if p.primary_position != PlayerPosition.GOALIE][:18]
+            if not skaters:
+                return 75.0
+            return sum((p.shooting_accuracy + p.offensive_awareness + p.skating) / 3
+                       for p in skaters) / len(skaters)
+
+        home_s = ot_strength(self.home_team)
+        away_s = ot_strength(self.away_team)
+        home_prob = home_s / (home_s + away_s)
+        winner = self.home_team if random.random() < home_prob else self.away_team
+        candidates = [p for p in self._get_on_ice(winner)
+                      if p.primary_position != PlayerPosition.GOALIE]
+        if not candidates:
+            candidates = [p for p in winner.roster
+                          if p.primary_position != PlayerPosition.GOALIE]
+        scorer = max(candidates,
+                     key=lambda p: p.shooting_accuracy + p.offensive_awareness)
+        self._handle_goal(winner, scorer, [], ShotType.WRIST_SHOT,
+                          ShotLocation.HIGH_SLOT)
+        self._log_event(
+            f"GOLDEN GOAL in marathon OT! {scorer.full_name} wins it for "
+            f"{winner.team_name}. Final: {self.home_score}-{self.away_score}",
+            "GOAL",
+        )
 
     def _handle_shootout(self):
         """Simulates a 3-round shootout if the game is still tied."""
@@ -4137,17 +4178,17 @@ class GameSim:
         """
         Stage 5: Calculate the expected goal value for a shot (xG calculation).
         """
-        # Base xG values by shot location
+        # Base xG values by shot location (calibrated to NHL ~9% avg conversion)
         base_xg = {
-            ShotLocation.CREASE: 0.45,
-            ShotLocation.LOW_SLOT: 0.25,
-            ShotLocation.HIGH_SLOT: 0.15,
-            ShotLocation.LEFT_CIRCLE: 0.12,
-            ShotLocation.RIGHT_CIRCLE: 0.12,
-            ShotLocation.POINT: 0.05,
-            ShotLocation.LEFT_WING: 0.08,
-            ShotLocation.RIGHT_WING: 0.08
-        }.get(shot_location, 0.1)
+            ShotLocation.CREASE: 0.28,
+            ShotLocation.LOW_SLOT: 0.15,
+            ShotLocation.HIGH_SLOT: 0.09,
+            ShotLocation.LEFT_CIRCLE: 0.07,
+            ShotLocation.RIGHT_CIRCLE: 0.07,
+            ShotLocation.POINT: 0.03,
+            ShotLocation.LEFT_WING: 0.045,
+            ShotLocation.RIGHT_WING: 0.045
+        }.get(shot_location, 0.06)
         
         # Shot type modifiers
         type_modifier = {
@@ -4164,9 +4205,9 @@ class GameSim:
         
         # Shot quality modifiers
         quality_modifier = {
-            'high': 1.5,
+            'high': 1.3,
             'medium': 1.0,
-            'low': 0.6
+            'low': 0.7
         }.get(shot_quality, 1.0)
         
         # Distance modifier (closer = higher xG)
@@ -4195,6 +4236,22 @@ class GameSim:
         else:
             return GoaltenderStyle.STAND_UP
 
+    def _determine_goal_type(self, shot_type, location, save_type):
+        """Classify how a goal beat the goalie (for advanced logging)."""
+        if shot_type == ShotType.REBOUND:
+            return GoalType.REBOUND
+        if shot_type in (ShotType.TIP_IN, ShotType.DEFLECTION):
+            return GoalType.DEFLECTION
+        if location in (ShotLocation.CREASE, ShotLocation.LOW_SLOT):
+            return random.choice([GoalType.FIVE_HOLE, GoalType.SCREEN_SHOT])
+        if location in (ShotLocation.LEFT_CIRCLE, ShotLocation.RIGHT_CIRCLE):
+            return random.choice([GoalType.TOP_SHELF, GoalType.HIGH_GLOVE,
+                                  GoalType.HIGH_BLOCKER])
+        if location == ShotLocation.POINT:
+            return GoalType.SCREEN_SHOT
+        return random.choice([GoalType.LOW_GLOVE, GoalType.LOW_BLOCKER,
+                              GoalType.FIVE_HOLE, GoalType.TOP_SHELF])
+
     def _get_save_type(self, shot_location, shot_type, goaltender_position, goaltender_style):
         """
         Stage 5: Determine the type of save attempt based on shot and goalie positioning.
@@ -4206,7 +4263,8 @@ class GameSim:
             SaveType.PAD_SAVE: 0.3,
             SaveType.STICK_SAVE: 0.1,
             SaveType.CHEST_SAVE: 0.15,
-            SaveType.DESPERATION_SAVE: 0.05
+            SaveType.DESPERATION_SAVE: 0.04,
+            SaveType.DIVING_SAVE: 0.01
         }
         
         # Adjust probabilities based on shot location
@@ -4266,8 +4324,13 @@ class GameSim:
         # Overall goaltender skill
         goalie_skill = (positioning_skill + reaction_skill + technique_skill) / 3
         
-        # Skill modifier (scale goalie skill to a multiplier)
-        skill_modifier = (goalie_skill / 15.0)  # Normalize around 15 (average skill)
+        # Skill modifier: normalize against the league-average starter skill
+        # (measured ~11.6 from the player generator's attribute distribution;
+        # an average goalie gets a 1.0 modifier). Dampened 60/40 so the
+        # starter talent spread maps to NHL-like sv% ranges instead of
+        # producing constant blowouts against weak goalies.
+        LEAGUE_AVG_GOALIE_SKILL = 11.6
+        skill_modifier = 0.6 + 0.4 * (goalie_skill / LEAGUE_AVG_GOALIE_SKILL)
         
         # Fatigue factor
         fatigue_factor = self.goaltender_fatigue.get(goaltender.id, 100) / 100
@@ -4302,7 +4365,9 @@ class GameSim:
         Stage 5: Determine how well the goaltender controls the rebound.
         """
         # Base rebound control based on goaltender's rebound control attribute
-        base_control = goaltender.rebound_control / 20.0
+        # Calibrated so an average goalie (~12) controls ~80% of saves cleanly;
+        # elite goalies ~95%, weak ones ~70% (before save/shot modifiers)
+        base_control = 0.5 + (goaltender.rebound_control / 20.0) * 0.5
         
         # Save type modifiers
         save_type_modifier = {
@@ -4325,17 +4390,19 @@ class GameSim:
         }.get(shot_type, 1.0)
         
         # Calculate final rebound control probability
-        control_probability = base_control * save_type_modifier * shot_type_modifier
-        
-        # Determine rebound outcome
+        control_probability = min(base_control * save_type_modifier * shot_type_modifier, 0.97)
+
+        # Determine rebound outcome: controlled outcomes scale with the
+        # goalie's control; the remainder become rebound chances
+        # (split weak/dangerous for flavor)
         rand = random.random()
-        if rand < control_probability * 0.4:
+        if rand < control_probability * 0.45:
             return ReboundControl.ABSORBED
-        elif rand < control_probability * 0.7:
+        elif rand < control_probability * 0.75:
             return ReboundControl.CONTROLLED
-        elif rand < control_probability * 0.85:
+        elif rand < control_probability:
             return ReboundControl.DEFLECTED_AWAY
-        elif rand < 0.9:
+        elif rand < control_probability + (1 - control_probability) * 0.7:
             return ReboundControl.WEAK_REBOUND
         else:
             return ReboundControl.DANGEROUS_REBOUND
