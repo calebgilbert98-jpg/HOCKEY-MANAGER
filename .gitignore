@@ -51,3 +51,6 @@ create_distribution.ps1
 BETA_READY_CHECKLIST.md
 face_cache/
 .screenshots/
+test_extract/
+*.exe
+*.ipynb
