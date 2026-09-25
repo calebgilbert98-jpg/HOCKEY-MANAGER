@@ -6250,13 +6250,77 @@ class HockeyManagerGUI(tk.Tk):
         if hasattr(self, 'media_system') and self.media_system:
             self.media_system.process_game_result(game_result)
         
-        # Update player stats
+        # Update player stats from game events
+        # Records: goals, assists, shots, saves, PIM, games played
+        
+        # Build roster lookups for assist selection
+        home_roster = {p.id: p for p in home_team.roster}
+        away_roster = {p.id: p for p in away_team.roster}
+        
+        # Identify starting goalies for save tracking
+        def get_starting_goalie(team):
+            goalies = [p for p in team.roster 
+                      if getattr(p, 'primary_position', None) and p.primary_position.name == "G"]
+            return goalies[0] if goalies else None
+        
+        home_goalie = get_starting_goalie(home_team)
+        away_goalie = get_starting_goalie(away_team)
+        
         for event in notable_events:
-            if event['event'] == 'Goal' or event['event'] == 'Shootout Goal':
-                player = event['player']
-                player.stats.goals += 1
+            event_type = event.get('event')
+            player = event.get('player')
+            team_name = event.get('team')
             
-            # Add more event types as needed (assists, penalties, etc.)
+            if not player:
+                continue
+            
+            if event_type == 'Goal':
+                # Scorer gets goal + shot
+                player.stats.goals += 1
+                player.stats.shots += 1
+                
+                # Assists: up to 2 teammates (NHL: ~70% get 2, ~20% get 1, ~10% unassisted)
+                team_roster = home_roster if team_name == home_team.team_name else away_roster
+                potential_assisters = [
+                    p for p in team_roster.values()
+                    if p.id != player.id 
+                    and getattr(p, 'primary_position', None) 
+                    and p.primary_position.name != "G"
+                ]
+                num_assists = random.choices([2, 1, 0], weights=[0.7, 0.2, 0.1])[0]
+                if potential_assisters and num_assists > 0:
+                    assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
+                    for assister in assisters:
+                        assister.stats.assists += 1
+                
+                # Opposing goalie: shot against (goal counts as shot faced, not a save)
+                opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
+                if opp_goalie:
+                    opp_goalie.stats.shots_against += 1
+            
+            elif event_type == 'Shootout Goal':
+                # NHL rule: shootout goals don't count in player stats
+                pass
+            
+            elif event_type == 'Shot':
+                # Shooter gets a shot on goal
+                player.stats.shots += 1
+                # Opposing goalie gets a save + shot against
+                opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
+                if opp_goalie:
+                    opp_goalie.stats.saves += 1
+                    opp_goalie.stats.shots_against += 1
+            
+            elif event_type == 'Penalty':
+                # Standard minor penalty: 2 PIM
+                player.stats.penalties += 1
+                player.stats.penalties_in_minutes += 2
+        
+        # Games played: all roster players get credit
+        # (In real NHL only dressed players get GP, but sim doesn't track scratches)
+        for team in [home_team, away_team]:
+            for player in team.roster:
+                player.stats.games_played += 1
         
         # Update news log for user team games
         if self.user_team in (home_team, away_team):

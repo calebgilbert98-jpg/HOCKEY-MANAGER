@@ -132,8 +132,11 @@ class PlayerStats:
     goals: int = 0
     assists: int = 0
     penalties_in_minutes: int = 0
-    saves: int = 0  # <-- Add this line
-    penalties: int = 0  # <-- Add this line
+    saves: int = 0
+    penalties: int = 0
+    shots: int = 0
+    games_played: int = 0
+    shots_against: int = 0  # For goalies: total shots faced
 
     @property
     def points(self) -> int:
