@@ -3511,17 +3511,47 @@ class HockeyManagerGUI(tk.Tk):
         # Create enhanced menu bar at the top
         self._create_enhanced_menu_bar(main_container)
         
-        # Create atmospheric dashboard instance for immersive GM experience
-        self.dashboard = AtmosphericDashboard(
-            parent=self,
-            game_manager=self.game_manager,
-            user_team=self.user_team
-        )
+        # Use Sleeper-inspired dashboard (modern, clean)
+        # Set use_sleeper_dashboard=False to revert to AtmosphericDashboard
+        use_sleeper_dashboard = True
         
-        # Create the dashboard UI in its own frame
-        dashboard_frame = ttk.Frame(main_container, style='Panel.TFrame')
-        dashboard_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
-        self.dashboard.create_immersive_dashboard(dashboard_frame)
+        if use_sleeper_dashboard:
+            try:
+                from sleeper_dashboard import SleeperDashboard
+                from sleeper_ui import apply_sleeper_theme, SleeperColors
+                
+                # Apply Sleeper theme
+                apply_sleeper_theme(self)
+                
+                self.dashboard = SleeperDashboard(
+                    parent=self,
+                    game_manager=self.game_manager,
+                    user_team=self.user_team
+                )
+                
+                # Create the dashboard UI in its own frame
+                dashboard_frame = tk.Frame(main_container, bg=SleeperColors.BG)
+                dashboard_frame.grid(row=1, column=0, sticky="nsew")
+                self.dashboard.create_dashboard(dashboard_frame)
+                
+            except Exception as e:
+                print(f"Sleeper dashboard failed, falling back: {e}")
+                import traceback
+                traceback.print_exc()
+                use_sleeper_dashboard = False
+        
+        if not use_sleeper_dashboard:
+            # Create atmospheric dashboard instance for immersive GM experience
+            self.dashboard = AtmosphericDashboard(
+                parent=self,
+                game_manager=self.game_manager,
+                user_team=self.user_team
+            )
+            
+            # Create the dashboard UI in its own frame
+            dashboard_frame = ttk.Frame(main_container, style='Panel.TFrame')
+            dashboard_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+            self.dashboard.create_immersive_dashboard(dashboard_frame)
         
         # Update dashboard with current data
         self.update_dashboard_data()
