@@ -11,6 +11,7 @@ import datetime
 import random
 from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
 from game_classes import debug_print
+from ui_widgets import PillButton
 
 
 class ProfessionalScoutingWindow(tk.Toplevel):
@@ -398,101 +399,109 @@ class ProfessionalScoutingWindow(tk.Toplevel):
         
     def _create_advanced_player_filters(self, parent):
         """Create comprehensive filtering system"""
-        filter_frame = tk.LabelFrame(parent, text="Advanced Player Search & Analysis", 
-                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+        filter_frame = tk.LabelFrame(parent, text="Advanced Player Search & Analysis", \
+                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,\
                                    font=(self.parent.FONT_FAMILY, 11, "bold"), relief='groove')
         filter_frame.pack(fill='x', padx=15, pady=10)
-        
+
         # Initialize filter variables with broadest settings to show all players
         self.filter_vars.update({
             'player_position': tk.StringVar(value="All Positions"),
-            'player_team': tk.StringVar(value="All Teams"), 
+            'player_team': tk.StringVar(value="All Teams"),
             'player_age_min': tk.StringVar(value="16"),
-            'player_age_max': tk.StringVar(value="50"),  # Increased to cover all ages
+            'player_age_max': tk.StringVar(value="60"),
             'player_overall_min': tk.StringVar(value="1"),  # Start at 1 to show all players
             'player_search': tk.StringVar(value=""),  # Empty search
             'player_status': tk.StringVar(value="All Players")
         })
-        
-        # First row - primary filters
-        row1 = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
-        row1.pack(fill='x', padx=12, pady=8)
-        
-        # Position filter
-        tk.Label(row1, text="Position:", bg=self.parent.CONTENT_BG, 
+
+        # Top row: name search + team dropdown (dynamic, too many teams for pills) + clear
+        top_row = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
+        top_row.pack(fill='x', padx=12, pady=8)
+        tk.Label(top_row, text="Search:", bg=self.parent.CONTENT_BG,
                 fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
-        position_combo = ttk.Combobox(row1, textvariable=self.filter_vars['player_position'], 
-                                    width=14, state="readonly",
-                                    values=["All Positions", "Forwards", "Defensemen", "Goalies", 
-                                           "Centers", "Wingers", "C", "LW", "RW", "LD", "RD", "G"])
-        position_combo.pack(side='left', padx=(5, 20))
-        
-        # Team filter  
-        tk.Label(row1, text="Team:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
-        self.player_team_combo = ttk.Combobox(row1, textvariable=self.filter_vars['player_team'],
-                                           width=16, state="readonly")
-        self.player_team_combo.pack(side='left', padx=(5, 20))
-        
-        # Status filter
-        tk.Label(row1, text="Status:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
-        status_combo = ttk.Combobox(row1, textvariable=self.filter_vars['player_status'],
-                                  width=12, state="readonly",
-                                  values=["All Players", "NHL Roster", "AHL Roster", "Prospects", "Free Agents"])
-        status_combo.pack(side='left', padx=(5, 0))
-        
-        # Second row - range filters and search
-        row2 = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
-        row2.pack(fill='x', padx=12, pady=(0, 8))
-        
-        # Age range
-        tk.Label(row2, text="Age:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
-        age_min_spin = tk.Spinbox(row2, from_=16, to=50, width=4,
-                                textvariable=self.filter_vars['player_age_min'])
-        age_min_spin.pack(side='left', padx=(5, 2))
-        tk.Label(row2, text="to", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR).pack(side='left', padx=2)
-        age_max_spin = tk.Spinbox(row2, from_=16, to=60, width=4,  # Extended max age range
-                                textvariable=self.filter_vars['player_age_max'])
-        age_max_spin.pack(side='left', padx=(2, 15))
-        
-        # Overall rating minimum
-        tk.Label(row2, text="Min Overall:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
-        overall_spin = tk.Spinbox(row2, from_=1, to=99, width=4,
-                                textvariable=self.filter_vars['player_overall_min'])
-        overall_spin.pack(side='left', padx=(5, 20))
-        
-        # Search box
-        tk.Label(row2, text="Search Name:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
-        search_entry = tk.Entry(row2, textvariable=self.filter_vars['player_search'], 
-                              width=25, font=(self.parent.FONT_FAMILY, 10))
+        search_entry = tk.Entry(top_row, textvariable=self.filter_vars['player_search'],
+                              width=22, font=(self.parent.FONT_FAMILY, 10))
         search_entry.pack(side='left', padx=(5, 20))
-        
-        # Action buttons
-        btn_frame = tk.Frame(row2, bg=self.parent.CONTENT_BG)
-        btn_frame.pack(side='right')
-        
-        apply_btn = tk.Button(btn_frame, text="🔍 Apply Filters", 
-                            bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
-                            font=(self.parent.FONT_FAMILY, 9, "bold"),
-                            command=self._apply_player_filters)
-        apply_btn.pack(side='left', padx=(0, 5))
-        
-        clear_btn = tk.Button(btn_frame, text="↻ Clear All", 
-                            bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                            font=(self.parent.FONT_FAMILY, 9),
-                            command=self._clear_player_filters)
-        clear_btn.pack(side='left')
-        
-        # Real-time filtering bindings
         search_entry.bind('<KeyRelease>', lambda e: self._apply_player_filters())
-        for combo in [position_combo, self.player_team_combo, status_combo]:
-            combo.bind('<<ComboboxSelected>>', lambda e: self._apply_player_filters())
-    
+        tk.Label(top_row, text="Team:", bg=self.parent.CONTENT_BG,
+                fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
+        self.player_team_combo = ttk.Combobox(top_row, textvariable=self.filter_vars['player_team'],
+                                           width=16, state="readonly")
+        self.player_team_combo.pack(side='left', padx=(5, 0))
+        self.player_team_combo.bind('<<ComboboxSelected>>', lambda e: self._apply_player_filters())
+        clear_btn = PillButton(top_row, text="Clear All", bg=self.parent.CONTENT_BG,
+                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                               padx=12, pady=4, command=self._clear_player_filters)
+        clear_btn.pack(side='right')
+
+        # Pill filter rows (instant-apply; no Apply button needed)
+        self._scout_pill_groups = []
+        _AGE_RANGES = {'all': ('16', '60'), 'u18': ('16', '17'), '1822': ('18', '22'),
+                       '2329': ('23', '29'), '30p': ('30', '60')}
+        self._scout_age_ranges = _AGE_RANGES
+        self._scout_pill_setters = {
+            'position': lambda v: self.filter_vars['player_position'].set(v),
+            'status': lambda v: self.filter_vars['player_status'].set(v),
+            'age': lambda v: (self.filter_vars['player_age_min'].set(_AGE_RANGES[v][0]),
+                              self.filter_vars['player_age_max'].set(_AGE_RANGES[v][1])),
+            'overall': lambda v: self.filter_vars['player_overall_min'].set(v),
+        }
+        self._scout_pill_getters = {
+            'position': lambda: self.filter_vars['player_position'].get(),
+            'status': lambda: self.filter_vars['player_status'].get(),
+            'age': lambda: next((k for k, r in _AGE_RANGES.items()
+                                 if r == (self.filter_vars['player_age_min'].get(),
+                                          self.filter_vars['player_age_max'].get())), 'all'),
+            'overall': lambda: self.filter_vars['player_overall_min'].get(),
+        }
+
+        def _scout_pill_row(row_id, label, options):
+            row = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
+            row.pack(fill='x', padx=12, pady=2)
+            tk.Label(row, text=label, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                     font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                     width=10, anchor='w').pack(side='left')
+            btns = {}
+            for value, text in options:
+                b = PillButton(row, text=text, bg=self.parent.CONTENT_BG,
+                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                               padx=11, pady=4,
+                               command=lambda v=value: self._scout_set_filter(row_id, v))
+                b.pack(side='left', padx=2)
+                btns[value] = b
+            self._scout_pill_groups.append((row_id, btns))
+
+        _scout_pill_row('position', "Position:",
+                        [("All Positions", "All"), ("Forwards", "Forwards"),
+                         ("Defensemen", "Defense"), ("Goalies", "Goalies")])
+        _scout_pill_row('status', "Status:",
+                        [("All Players", "All"), ("NHL Roster", "NHL"),
+                         ("AHL Roster", "AHL"), ("Prospects", "Prospects"),
+                         ("Free Agents", "Free Agents")])
+        _scout_pill_row('age', "Age:",
+                        [("all", "All"), ("u18", "U18"), ("1822", "18-22"),
+                         ("2329", "23-29"), ("30p", "30+")])
+        _scout_pill_row('overall', "Min OVR:",
+                        [("1", "All"), ("70", "70+"), ("80", "80+"),
+                         ("85", "85+"), ("90", "90+")])
+        self._paint_scout_pills()
+
+    def _scout_set_filter(self, row_id, value):
+        """Set a scouting pill filter and refresh instantly."""
+        self._scout_pill_setters[row_id](value)
+        self._paint_scout_pills()
+        self._apply_player_filters()
+
+    def _paint_scout_pills(self):
+        for row_id, btns in getattr(self, '_scout_pill_groups', []):
+            try:
+                current = self._scout_pill_getters[row_id]()
+            except Exception:
+                current = None
+            for value, btn in btns.items():
+                btn.set_selected(value == current)
+
     def _create_enhanced_player_list(self, parent):
         """Create enhanced player list with sorting and context menus"""
         list_frame = tk.LabelFrame(parent, text="Player Database & Scouting Targets", 
@@ -859,6 +868,22 @@ class ProfessionalScoutingWindow(tk.Toplevel):
                                   if getattr(p, 'team_name', 'Free Agent') == team_filter]
         except:
             pass
+
+        # Apply status filter (was read but never applied)
+        try:
+            status_filter = self.filter_vars.get('player_status', tk.StringVar()).get()
+            if status_filter and status_filter not in ["All Players", ""]:
+                status_map = {
+                    "NHL Roster": {'NHL Star', 'NHL Regular'},
+                    "AHL Roster": {'AHL/Fringe', 'Minor League'},
+                    "Prospects": {'Prospect'},
+                    "Free Agents": {'Free Agent'},
+                }
+                allowed = status_map.get(status_filter, set())
+                filtered_players = [p for p in filtered_players
+                                    if self._get_player_status(p) in allowed]
+        except:
+            pass
         
         # Apply age range
         try:
@@ -937,11 +962,12 @@ class ProfessionalScoutingWindow(tk.Toplevel):
                 elif 'age_min' in var_name:
                     var.set("16")
                 elif 'age_max' in var_name:
-                    var.set("50")  # Broad age range
+                    var.set("60")  # Broad age range
                 elif 'overall_min' in var_name:
                     var.set("1")   # Show all players regardless of rating
                 elif 'search' in var_name:
                     var.set("")
+        self._paint_scout_pills()
         self._populate_player_database()
     
     def _sort_players_by(self, column):
