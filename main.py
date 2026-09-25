@@ -1692,6 +1692,7 @@ class AdvancedGameSim:
         }
         self.pp_team = None
         self.pk_team = None
+        self.pp_end_time = None  # When the current power play expires (penalty clock)
         self.puck_x = 100  # X position of puck on ice (center ice)
         self.puck_y = 42.5  # Y position of puck on ice (center)
         self.state_history = []  # List to store state after each shift/event
@@ -2405,16 +2406,24 @@ class AdvancedGameSim:
                     'faceoff_pos': (50, 25)
                 }
             })
-        if random.random() < 0.03:
-            penalized = shooter  # Use the shooter instead of undefined shooters
+        # Penalty check: NHL averages ~3-4 penalties per team per game
+        # 8% per shot event + checks on other physical events = realistic rate
+        if random.random() < 0.08:
+            penalized = shooter
             self.stats[puck_team_name][penalized.id].setdefault('penalties', 0)
             self.stats[puck_team_name][penalized.id]['penalties'] += 1
             self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': penalized, 'event': 'Penalty'})
             self.pp_team = opp_team_name
             self.pk_team = puck_team_name
-        if self.pp_team and random.random() < 0.5:
+            # 2-minute minor penalty (120 seconds)
+            self.pp_end_time = self.time + 120
+        
+        # End power play when penalty expires (real clock, not coin flip)
+        # PP also ends if the PP team scores (handled in goal scoring logic)
+        if self.pp_team and self.pp_end_time and self.time >= self.pp_end_time:
             self.pp_team = None
             self.pk_team = None
+            self.pp_end_time = None
         self._record_state()
 
     def run(self):
@@ -2614,6 +2623,11 @@ class AdvancedGameSim:
             self.stats[puck_team_name][shooter.id]['goals'] = self.stats[puck_team_name][shooter.id].get('goals', 0) + 1
             # Add goal event
             self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Goal'})
+            # PP ends when the PP team scores (NHL rule)
+            if self.pp_team == puck_team_name:
+                self.pp_team = None
+                self.pk_team = None
+                self.pp_end_time = None
         elif goalie and random.random() < 0.8:
             shot_result = 'SAVE'
             if goalie:
