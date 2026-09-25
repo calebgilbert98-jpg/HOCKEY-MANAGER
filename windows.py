@@ -7625,10 +7625,12 @@ class EditLinesWindow(tk.Toplevel):
                       style='TButton').pack(side="right", padx=5)
             
             # Calculate and display line chemistry when fully populated
-            chemistry = self.calculate_line_chemistry(self.lineup['Forwards'][i])
-            if chemistry:
-                chem_label = ttk.Label(line_header, text=f"Chemistry: {chemistry}",
-                                     foreground=self._get_chemistry_color(chemistry))
+            chem_det = self.calculate_line_chemistry_detailed(self.lineup['Forwards'][i])
+            if chem_det:
+                _score, chemistry, _factors = chem_det
+                chem_label = ttk.Label(line_header, text=f"Chemistry: {_score} ({chemistry})",
+                                     foreground=self._get_chemistry_color(chemistry),
+                                     font=('Segoe UI', 9, 'bold'))
                 chem_label.pack(side="right", padx=5)
             
             # Position selector frame
@@ -7688,11 +7690,12 @@ class EditLinesWindow(tk.Toplevel):
                       style='TButton', width=3).pack(side="right", padx=2)  # Compact button
             
             # Calculate and display pair chemistry when fully populated
-            chemistry = self.calculate_defense_chemistry(self.lineup['Defense'][i])
-            if chemistry:
-                chem_label = ttk.Label(pair_header, text=f"Chem: {chemistry}%",  # Shortened text
+            chem_det = self.calculate_defense_chemistry_detailed(self.lineup['Defense'][i])
+            if chem_det:
+                _score, chemistry, _factors = chem_det
+                chem_label = ttk.Label(pair_header, text=f"Chem: {_score} ({chemistry})",
                                      foreground=self._get_chemistry_color(chemistry),
-                                     font=(self.parent.FONT_FAMILY, 9))  # Smaller font
+                                     font=(self.parent.FONT_FAMILY, 9, 'bold'))  # Smaller font
                 chem_label.pack(side="right", padx=5)
             
             # Compact position selector frame - horizontal layout
@@ -8107,69 +8110,24 @@ class EditLinesWindow(tk.Toplevel):
         return int(position_rating)
     
     def calculate_line_chemistry(self, line):
-        """Calculate chemistry rating for a forward line"""
-        if not all(line):
-            return None
-            
-        # Check if any players are badly out of position
-        for i, pos_name in enumerate(["LW", "C", "RW"]):
-            player = line[i]
-            if player.primary_position.name not in ["LW", "C", "RW"]:
-                return "Poor"  # Non-forward in forward position
-        
-        # Calculate teamwork and skill compatibility
-        avg_teamwork = sum(p.teamwork for p in line) / 3
-        
-        # Check playstyle compatibility
-        shoot_pass_variance = max(p.shoot_pass_tendency for p in line) - min(p.shoot_pass_tendency for p in line)
-        
-        # Check for natural center at center position
-        has_natural_center = line[1].primary_position.name == "C"
-        
-        # Determine chemistry level
-        if avg_teamwork > 15 and shoot_pass_variance < 30 and has_natural_center:
-            return "Excellent"
-        elif avg_teamwork > 12 and shoot_pass_variance < 40 and has_natural_center:
-            return "Good"
-        elif avg_teamwork > 10 and has_natural_center:
-            return "Average"
-        else:
-            return "Poor"
+        """Calculate chemistry rating for a forward line (uses detailed model)."""
+        det = self.calculate_line_chemistry_detailed(line)
+        return det[1] if det else None
+
+    def get_line_chemistry_score(self, line):
+        """Chemistry score 0-100 for a forward line, or None if incomplete."""
+        det = self.calculate_line_chemistry_detailed(line)
+        return det[0] if det else None
     
     def calculate_defense_chemistry(self, pair):
-        """Calculate chemistry rating for a defense pair"""
-        if not all(pair):
-            return None
-            
-        # Check if both players are defensemen
-        for i, pos_name in enumerate(["LD", "RD"]):
-            player = pair[i]
-            if player.primary_position.name not in ["LD", "RD", "D"]:
-                return "Poor"  # Non-defenseman in defense position
-        
-        # Calculate teamwork and compatibility
-        avg_teamwork = sum(p.teamwork for p in pair) / 2
-        
-        # Check playstyle compatibility - offensive vs defensive defensemen
-        off_def_diff = abs(pair[0].offensive_awareness - pair[0].defensive_awareness) - \
-                     abs(pair[1].offensive_awareness - pair[1].defensive_awareness)
-        
-        # One offensive and one defensive defenseman is good
-        complementary_styles = abs(off_def_diff) > 3
-        
-        # Natural LD at LD and RD at RD
-        proper_sides = (pair[0].primary_position.name in ["LD", "D"] and 
-                      pair[1].primary_position.name in ["RD", "D"])
-        
-        # Determine chemistry level
-        if avg_teamwork > 15 and complementary_styles and proper_sides:
-            return "Excellent"
-        elif avg_teamwork > 12 and (complementary_styles or proper_sides):
-            return "Good"
-        elif avg_teamwork > 10:
-            return "Average"
-        else:
-            return "Poor"
+        """Calculate chemistry rating for a defense pair (uses detailed model)."""
+        det = self.calculate_defense_chemistry_detailed(pair)
+        return det[1] if det else None
+
+    def get_defense_chemistry_score(self, pair):
+        """Chemistry score 0-100 for a defense pair, or None if incomplete."""
+        det = self.calculate_defense_chemistry_detailed(pair)
+        return det[0] if det else None
     
     def _get_chemistry_color(self, chemistry):
         """Get color for chemistry rating"""
@@ -8181,6 +8139,173 @@ class EditLinesWindow(tk.Toplevel):
             return "#f39c12"  # Orange
         else:
             return "#c0392b"  # Red
+
+    # ------------------------------------------------------------------
+    # Detailed chemistry model: score (0-100) + per-factor +/- breakdown.
+    # Each factor is a tuple: (delta, title, detail). Positive deltas help,
+    # negative deltas hurt. This powers the Chemistry tab and the per-line
+    # labels, so players can SEE why a line clicks or not.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _chemistry_rating(score):
+        if score >= 80:
+            return "Excellent"
+        if score >= 65:
+            return "Good"
+        if score >= 45:
+            return "Average"
+        return "Poor"
+
+    @staticmethod
+    def _teamwork_factor(players, n):
+        # Teamwork runs ~20-69 league-wide, median ~48: score relative to that.
+        avg = sum(p.teamwork for p in players) / n
+        delta = max(-18, min(18, round((avg - 48) * 2)))
+        if delta >= 9:
+            return (delta, "High teamwork", f"Avg teamwork {avg:.0f} - well above league average, they read off each other")
+        if delta >= 0:
+            return (delta, "Decent teamwork", f"Avg teamwork {avg:.0f} - around league average")
+        return (delta, "Low teamwork", f"Avg teamwork {avg:.0f} - below league average, too many individuals")
+
+    def calculate_line_chemistry_detailed(self, line):
+        """Forward line chemistry -> (score, rating, factors). None if incomplete."""
+        if not all(line):
+            return None
+        factors = []
+        score = 50
+
+        # Non-forwards at forward slots: hard penalty
+        for i, pos_name in enumerate(["LW", "C", "RW"]):
+            p = line[i]
+            pname = p.primary_position.value
+            if pname not in ["LW", "C", "RW"]:
+                d = -25
+                factors.append((d, f"{p.full_name} out of position",
+                                f"A {pname} slotted at {pos_name} - big drag on the line"))
+                score += d
+
+        # Teamwork
+        d, t, det = self._teamwork_factor(line, 3)
+        factors.append((d, t, det))
+        score += d
+
+        # Playstyle fit (shoot vs pass tendencies)
+        tends = [p.shoot_pass_tendency for p in line]
+        var = max(tends) - min(tends)
+        if var <= 20:
+            d, t, det = 12, "Playstyles mesh", f"Shoot/pass tendencies within {var:.0f} - everyone on the same page"
+        elif var <= 30:
+            d, t, det = 6, "Compatible styles", f"Tendencies within {var:.0f} - mostly complementary"
+        elif var <= 40:
+            d, t, det = 0, "Mixed tendencies", f"Tendencies spread {var:.0f} - no clear identity"
+        else:
+            d, t, det = -12, "Clashing tendencies", f"Tendencies spread {var:.0f} - snipers and passers pulling apart"
+        factors.append((d, t, det))
+        score += d
+
+        # Center fit
+        center = line[1]
+        cname = center.primary_position.value
+        if cname == "C":
+            d, t, det = 8, "Natural center", f"{center.full_name} is a true center - draws the line together"
+        elif cname in ["LW", "RW"]:
+            d, t, det = -8, "Winger forced at center", f"{center.full_name} is a winger - faceoffs and coverage suffer"
+        else:
+            d, t, det = 0, "", ""
+        if d:
+            factors.append((d, t, det))
+            score += d
+
+        # Winger fit
+        off_wing = []
+        for i, pos_name in ((0, "LW"), (2, "RW")):
+            p = line[i]
+            if p.primary_position.value not in ["LW", "C", "RW"]:
+                continue  # already penalized above
+            if p.primary_position.value not in ["LW", "RW"]:
+                off_wing.append((p, pos_name))
+        if off_wing:
+            for p, pos_name in off_wing:
+                d = -10
+                factors.append((d, f"{p.full_name} off-wing",
+                                f"A center playing {pos_name} - workable, but not ideal"))
+                score += d
+        else:
+            d = 4
+            factors.append((d, "Natural wingers", "Both wingers on their proper side"))
+            score += d
+
+        # Shooter + playmaker balance
+        has_shooter = any(p.shoot_pass_tendency >= 65 for p in line)
+        has_playmaker = any(p.shoot_pass_tendency <= 35 for p in line)
+        if has_shooter and has_playmaker:
+            d = 6
+            factors.append((d, "Shooter + playmaker", "A finisher and a distributor on the same unit"))
+            score += d
+
+        score = max(5, min(99, score))
+        factors.sort(key=lambda f: f[0])
+        return (score, self._chemistry_rating(score), factors)
+
+    def calculate_defense_chemistry_detailed(self, pair):
+        """Defense pair chemistry -> (score, rating, factors). None if incomplete."""
+        if not all(pair):
+            return None
+        factors = []
+        score = 50
+
+        for i, pos_name in enumerate(["LD", "RD"]):
+            p = pair[i]
+            pname = p.primary_position.value
+            if pname not in ["LD", "RD", "D"]:
+                d = -25
+                factors.append((d, f"{p.full_name} out of position",
+                                f"A {pname} on the blue line - major liability"))
+                score += d
+
+        # Teamwork
+        d, t, det = self._teamwork_factor(pair, 2)
+        factors.append((d, t, det))
+        score += d
+
+        # Style complement: offensive D vs defensive D
+        def tilt(p):
+            diff = p.offensive_awareness - p.defensive_awareness
+            if diff > 3:
+                return "offensive"
+            if diff < -3:
+                return "defensive"
+            return "balanced"
+        tilts = [tilt(p) for p in pair]
+        if "offensive" in tilts and "defensive" in tilts:
+            d, t, det = 12, "Perfect complement", "One jumps into the play, one holds the fort"
+        elif tilts[0] == tilts[1] and tilts[0] != "balanced":
+            d, t, det = -8, "Redundant styles", f"Two {tilts[0]} defensemen - same strengths, same holes"
+        else:
+            d, t, det = 4, "Steady pairing", "No glaring style conflict"
+        factors.append((d, t, det))
+        score += d
+
+        # Sides
+        sides_ok = (pair[0].primary_position.value in ["LD", "D"] and
+                    pair[1].primary_position.value in ["RD", "D"])
+        if sides_ok:
+            d = 8
+            factors.append((d, "Proper sides", "LD on the left, RD on the right - clean breakouts"))
+            score += d
+        else:
+            for i, pos_name in enumerate(["LD", "RD"]):
+                p = pair[i]
+                pname = p.primary_position.value
+                if pname in ["LD", "RD", "D"] and pname not in (["LD", "D"] if i == 0 else ["RD", "D"]):
+                    d = -8
+                    factors.append((d, f"{p.full_name} on off-side",
+                                    f"A {pname} playing {pos_name} - retrievals and first passes suffer"))
+                    score += d
+
+        score = max(5, min(99, score))
+        factors.sort(key=lambda f: f[0])
+        return (score, self._chemistry_rating(score), factors)
     
     # def draw_current_lines_on_ice(self):
     #     """Draw current lines on ice visualization - DISABLED"""
@@ -8818,6 +8943,8 @@ class EditLinesWindow(tk.Toplevel):
         self.notebook.add(self.pk_frame, text="Penalty Kill")
         self.notebook.add(self.g_frame, text="Goalies")
         self.notebook.add(self.strat_frame, text="Tactics")
+        self.chem_frame = self._create_enhanced_tab_frame(self.notebook, "Chemistry")
+        self.notebook.add(self.chem_frame, text="Chemistry")
         self.notebook.add(self.analytics_frame, text="Analytics")
         
         # Create the right panel content
@@ -8836,7 +8963,9 @@ class EditLinesWindow(tk.Toplevel):
         self._build_enhanced_penalty_kill_tab()
         self._build_enhanced_goalie_tab()
         self._build_enhanced_strategy_tab()
+        self._build_chemistry_tab()
         self._build_real_time_analytics_tab()
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_lines_tab_changed)
         
         # Stage 3: Initialize advanced features
         self._initialize_drag_drop_system()
@@ -10726,6 +10855,159 @@ CHEMISTRY: {chemistry:.1f}%
         return analysis
 
     # Stage 3: Enhanced interface builders (using existing functionality for now)
+    # ------------------------------------------------------------------
+    def _ui_color(self, key, default):
+        """Theme color with safe fallback (parent may not expose a COLORS dict)."""
+        colors = getattr(self.parent, 'COLORS', None)
+        if isinstance(colors, dict):
+            return colors.get(key, default)
+        return {'bg': getattr(self.parent, 'BG_COLOR', '#1a1d24'),
+                'card': getattr(self.parent, 'CARD_COLOR', '#242832')}.get(key, default)
+
+    # Chemistry tab: every line's score plus exactly what helps / hurts it.
+    # ------------------------------------------------------------------
+    def _build_chemistry_tab(self):
+        """Build the Chemistry tab: per-line scores with +/- factor breakdowns."""
+        for child in self.chem_frame.winfo_children():
+            child.destroy()
+        wrap = ttk.Frame(self.chem_frame, style='Panel.TFrame')
+        wrap.pack(fill="both", expand=True, padx=12, pady=10)
+
+        header = ttk.Frame(wrap, style='Panel.TFrame')
+        header.pack(fill="x", pady=(0, 8))
+        ttk.Label(header, text="Line Chemistry",
+                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  style='Heading.TLabel').pack(side="left")
+        ttk.Label(header, text="What makes each unit click - and what drags it down",
+                  style='Secondary.TLabel').pack(side="left", padx=(12, 0))
+        ttk.Button(header, text="Refresh",
+                   command=self._build_chemistry_tab).pack(side="right")
+
+        # Scrollable content
+        canvas = tk.Canvas(wrap, highlightthickness=0,
+                           background=self._ui_color('bg', '#1a1d24'))
+        scroll = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas, style='Panel.TFrame')
+        body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        units = []
+        for i in range(4):
+            det = self.calculate_line_chemistry_detailed(self.lineup['Forwards'][i])
+            if det:
+                names = " - ".join(p.full_name for p in self.lineup['Forwards'][i])
+                units.append((f"Forward Line {i+1}", names, det))
+        for i in range(3):
+            det = self.calculate_defense_chemistry_detailed(self.lineup['Defense'][i])
+            if det:
+                names = " - ".join(p.full_name for p in self.lineup['Defense'][i])
+                units.append((f"Defense Pair {i+1}", names, det))
+
+        if not units:
+            ttk.Label(body, text="Set your lines first - chemistry appears once a unit is complete.",
+                      style='Secondary.TLabel').pack(pady=30)
+            return
+
+        avg = sum(u[2][0] for u in units) / len(units)
+        self._chem_card(body, "Team Average", f"{len(units)} units dressed",
+                        (round(avg), self._chemistry_rating(round(avg)),
+                         [(0, "Overall blend", "Average across all forward lines and defense pairs")]),
+                        summary=True)
+
+        for title, names, det in units:
+            self._chem_card(body, title, names, det)
+
+    def _chem_card(self, parent, title, subtitle, det, summary=False):
+        """One unit's chemistry card: score bar, rating, and +/- factor rows."""
+        score, rating, factors = det
+        color = self._get_chemistry_color(rating)
+        card = ttk.Frame(parent, style='Card.TFrame', padding=12)
+        card.pack(fill="x", pady=6)
+
+        top = ttk.Frame(card, style='Card.TFrame')
+        top.pack(fill="x")
+        ttk.Label(top, text=title, font=(self.parent.FONT_FAMILY, 12, 'bold'),
+                  style='Card.TLabel').pack(side="left")
+        ttk.Label(top, text=f"  {score}", font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  foreground=color, background=self._ui_color('card', '#242832')).pack(side="left")
+        ttk.Label(top, text=f"  {rating}", font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                  foreground=color, background=self._ui_color('card', '#242832')).pack(side="left")
+        ttk.Label(top, text=subtitle, style='Secondary.TLabel').pack(side="left", padx=(10, 0))
+
+        # Score bar
+        bar = tk.Canvas(card, height=8, highlightthickness=0,
+                        background=self._ui_color('bg', '#1a1d24'))
+        bar.pack(fill="x", pady=(8, 4))
+        bar.update_idletasks()
+        w = bar.winfo_width() or 400
+        bar.create_rectangle(0, 0, w, 8, fill="#3a3f4b", outline="")
+        bar.create_rectangle(0, 0, w * score / 100, 8, fill=color, outline="")
+
+        if summary:
+            return
+
+        pos = [f for f in factors if f[0] > 0]
+        neg = [f for f in factors if f[0] < 0]
+        neut = [f for f in factors if f[0] == 0]
+
+        cols = ttk.Frame(card, style='Card.TFrame')
+        cols.pack(fill="x", pady=(4, 0))
+        left = ttk.Frame(cols, style='Card.TFrame')
+        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        right = ttk.Frame(cols, style='Card.TFrame')
+        right.pack(side="left", fill="both", expand=True)
+
+        ttk.Label(left, text="Helping", font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                  foreground="#27ae60",
+                  background=self._ui_color('card', '#242832')).pack(anchor="w", pady=(0, 2))
+        if pos:
+            for d, t, detl in sorted(pos, key=lambda f: -f[0]):
+                self._chem_factor_row(left, d, t, detl, "#27ae60")
+        else:
+            ttk.Label(left, text="Nothing working for this unit yet.",
+                      style='Secondary.TLabel').pack(anchor="w")
+
+        ttk.Label(right, text="Hurting", font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                  foreground="#e74c3c",
+                  background=self._ui_color('card', '#242832')).pack(anchor="w", pady=(0, 2))
+        if neg:
+            for d, t, detl in sorted(neg, key=lambda f: f[0]):
+                self._chem_factor_row(right, d, t, detl, "#e74c3c")
+        else:
+            ttk.Label(right, text="No drag factors - clean unit.",
+                      style='Secondary.TLabel').pack(anchor="w")
+
+        for d, t, detl in neut:
+            row = ttk.Frame(card, style='Card.TFrame')
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text=f"· {t}: {detl}", style='Secondary.TLabel',
+                      wraplength=520, justify="left").pack(anchor="w")
+
+    def _chem_factor_row(self, parent, delta, title, detail, color):
+        row = ttk.Frame(parent, style='Card.TFrame')
+        row.pack(fill="x", pady=2)
+        sign = "+" if delta > 0 else ""
+        ttk.Label(row, text=f"{sign}{delta}", font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                  foreground=color, width=5,
+                  background=self._ui_color('card', '#242832')).pack(side="left")
+        txt = ttk.Frame(row, style='Card.TFrame')
+        txt.pack(side="left", fill="x", expand=True)
+        ttk.Label(txt, text=title, font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                  background=self._ui_color('card', '#242832')).pack(anchor="w")
+        ttk.Label(txt, text=detail, style='Secondary.TLabel',
+                  wraplength=300, justify="left").pack(anchor="w")
+
+    def _on_lines_tab_changed(self, event=None):
+        """Refresh the Chemistry tab whenever it is opened so it tracks edits."""
+        try:
+            if self.notebook.tab(self.notebook.select(), "text") == "Chemistry":
+                self._build_chemistry_tab()
+        except Exception:
+            pass
+
     def _build_enhanced_even_strength_tab(self):
         """Build enhanced even strength tab - Stage 3 with fallback"""
         try:
