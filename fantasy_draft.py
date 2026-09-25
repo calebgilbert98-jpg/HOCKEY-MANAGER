@@ -10,6 +10,7 @@ import random
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from game_classes import Player, Team, PlayerPosition, to_100_scale
+from game_classes import debug_print
 
 @dataclass
 class DraftPick:
@@ -71,7 +72,7 @@ class FantasyDraftManager:
         self.draft_order = self.teams.copy()
         random.shuffle(self.draft_order)
         
-        print(f"DEBUG: Draft order established with {len(self.draft_order)} teams")
+        debug_print(f"DEBUG: Draft order established with {len(self.draft_order)} teams")
         
     def setup_draft_picks(self):
         """Create all draft picks in serpentine order"""
@@ -95,7 +96,7 @@ class FantasyDraftManager:
                 self.draft_picks.append(pick)
                 overall_pick += 1
                 
-        print(f"DEBUG: Created {len(self.draft_picks)} total picks ({self.config.rounds} rounds)")
+        debug_print(f"DEBUG: Created {len(self.draft_picks)} total picks ({self.config.rounds} rounds)")
     
     def setup_team_strategies(self):
         """Initialize AI drafting strategies for each team"""
@@ -122,13 +123,13 @@ class FantasyDraftManager:
             # Use team name as key instead of team object (teams are not hashable)
             self.team_strategies[team.team_name] = strategy
             
-        print(f"DEBUG: Generated unique draft strategies for {len(self.team_strategies)} teams")
+        debug_print(f"DEBUG: Generated unique draft strategies for {len(self.team_strategies)} teams")
                 
     def get_available_players(self) -> List[Player]:
         """Get all players not yet drafted"""
         drafted_player_ids = {pick.player.id for pick in self.draft_picks if pick.player}
         available_players = [p for p in self.all_players if p.id not in drafted_player_ids]
-        print(f"DEBUG: get_available_players() - Total players: {len(self.all_players)}, Drafted IDs: {len(drafted_player_ids)}, Available: {len(available_players)}")
+        debug_print(f"DEBUG: get_available_players() - Total players: {len(self.all_players)}, Drafted IDs: {len(drafted_player_ids)}, Available: {len(available_players)}")
         return available_players
         
     def get_current_pick(self) -> Optional[DraftPick]:
@@ -152,13 +153,13 @@ class FantasyDraftManager:
                     current_pick.player = actual_player
                     actual_player.team_name = current_pick.team.team_name
                     self.current_pick += 1
-                    print(f"DEBUG: Successfully drafted {actual_player.full_name} for {current_pick.team.team_name}")
+                    debug_print(f"DEBUG: Successfully drafted {actual_player.full_name} for {current_pick.team.team_name}")
                     return True
                 else:
-                    print(f"DEBUG: Player {player.full_name} (ID: {player.id}) not found in available players")
+                    debug_print(f"DEBUG: Player {player.full_name} (ID: {player.id}) not found in available players")
             else:
-                print(f"DEBUG: Player {player.full_name} (ID: {player.id}) not available for drafting")
-                print(f"DEBUG: Available player count: {len(available_players)}")
+                debug_print(f"DEBUG: Player {player.full_name} (ID: {player.id}) not available for drafting")
+                debug_print(f"DEBUG: Available player count: {len(available_players)}")
         return False
         
     def is_draft_complete(self) -> bool:
@@ -334,7 +335,7 @@ class FantasyDraftManager:
         
         selected_player = random.choices(candidates, weights=weights, k=1)[0]
         
-        print(f"DEBUG: {team.team_name} selects {selected_player.full_name} "
+        debug_print(f"DEBUG: {team.team_name} selects {selected_player.full_name} "
               f"(OVR {selected_player.overall_rating()}, {selected_player.primary_position.value}) "
               f"- Score: {player_scores[selected_player]:.1f}")
               
@@ -359,7 +360,7 @@ class FantasyDraftWindow(tk.Toplevel):
                     if team.league_name == "National Hockey League"]
         all_nhl_players = self.collect_all_nhl_players(nhl_teams)
         
-        print(f"DEBUG: Collected {len(all_nhl_players)} NHL players for fantasy draft")
+        debug_print(f"DEBUG: Collected {len(all_nhl_players)} NHL players for fantasy draft")
         
         self.draft_manager = FantasyDraftManager(nhl_teams, all_nhl_players)
         self.user_team = game_manager.user_team
@@ -368,10 +369,10 @@ class FantasyDraftWindow(tk.Toplevel):
         if not self.user_team and nhl_teams:
             self.user_team = nhl_teams[0]  # Use first team as fallback
             game_manager.user_team = self.user_team
-            print(f"DEBUG: No user team found, setting to: {self.user_team.team_name}")
+            debug_print(f"DEBUG: No user team found, setting to: {self.user_team.team_name}")
         
-        print(f"DEBUG: User team set to: {self.user_team.team_name if self.user_team else 'None'}")
-        print(f"DEBUG: Draft has {len(self.draft_manager.draft_picks)} total picks ({self.draft_manager.config.rounds} rounds)")
+        debug_print(f"DEBUG: User team set to: {self.user_team.team_name if self.user_team else 'None'}")
+        debug_print(f"DEBUG: Draft has {len(self.draft_manager.draft_picks)} total picks ({self.draft_manager.config.rounds} rounds)")
         
         # Track UI state
         self.selected_player = None
@@ -388,18 +389,18 @@ class FantasyDraftWindow(tk.Toplevel):
         
         # Initial population of players list
         if hasattr(self, 'players_tree'):
-            print("DEBUG: Starting initial player population...")
+            debug_print("DEBUG: Starting initial player population...")
             self.after(100, self.initial_player_load)  # Slight delay to ensure UI is ready
             
     def initial_player_load(self):
         """Load players after UI initialization"""
-        print("DEBUG: Performing initial player load...")
+        debug_print("DEBUG: Performing initial player load...")
         try:
             # Force update display for integrated browser
             if hasattr(self, 'integrated_players_tree'):
-                print("DEBUG: Loading integrated player browser...")
+                debug_print("DEBUG: Loading integrated player browser...")
                 available_players = self.draft_manager.get_available_players()
-                print(f"DEBUG: Initial load - {len(available_players)} players available")
+                debug_print(f"DEBUG: Initial load - {len(available_players)} players available")
                 self.integrated_populate_players()
                 
             # Also update legacy systems if they exist
@@ -407,10 +408,10 @@ class FantasyDraftWindow(tk.Toplevel):
                 self.clear_filters()
                 self.filter_players()
                 self.players_tree.update_idletasks()
-                print(f"DEBUG: Legacy tree now has {len(self.players_tree.get_children())} visible items")
+                debug_print(f"DEBUG: Legacy tree now has {len(self.players_tree.get_children())} visible items")
                 
         except Exception as e:
-            print(f"DEBUG: Error in initial player load: {e}")
+            debug_print(f"DEBUG: Error in initial player load: {e}")
             import traceback
             traceback.print_exc()
             
@@ -462,7 +463,7 @@ class FantasyDraftWindow(tk.Toplevel):
         """Collect all NHL players from all teams for fantasy draft"""
         all_players = []
         
-        print(f"DEBUG: Processing {len(teams)} NHL teams for player collection")
+        debug_print(f"DEBUG: Processing {len(teams)} NHL teams for player collection")
         
         # Collect players from all teams
         for team in teams:
@@ -470,7 +471,7 @@ class FantasyDraftWindow(tk.Toplevel):
             team_ahl_size = len(team.ahl_roster) if hasattr(team, 'ahl_roster') else 0 
             team_prospects_size = len(team.prospects) if hasattr(team, 'prospects') else 0
             
-            print(f"DEBUG: Team {team.team_name} - Roster: {team_roster_size}, AHL: {team_ahl_size}, Prospects: {team_prospects_size}")
+            debug_print(f"DEBUG: Team {team.team_name} - Roster: {team_roster_size}, AHL: {team_ahl_size}, Prospects: {team_prospects_size}")
             
             # Collect all players from all levels
             team_players = []
@@ -487,7 +488,7 @@ class FantasyDraftWindow(tk.Toplevel):
                     player.former_team = team.team_name
                     all_players.append(player)
             
-        print(f"DEBUG: Collected total of {len(all_players)} players from teams")
+        debug_print(f"DEBUG: Collected total of {len(all_players)} players from teams")
         
         # Also check league-level players if they exist
         if hasattr(self.game_manager, 'league'):
@@ -496,11 +497,11 @@ class FantasyDraftWindow(tk.Toplevel):
             # Check if league has a get_all_players method
             if hasattr(league, 'get_all_players'):
                 league_players = league.get_all_players()
-                print(f"DEBUG: Found {len(league_players)} players via league.get_all_players()")
+                debug_print(f"DEBUG: Found {len(league_players)} players via league.get_all_players()")
                 
                 # If we didn't get players from teams, use league players
                 if len(all_players) == 0 and len(league_players) > 0:
-                    print("DEBUG: Using league players since team rosters were empty")
+                    debug_print("DEBUG: Using league players since team rosters were empty")
                     all_players = league_players.copy()
                     
                     # Mark all as available and set former teams
@@ -512,14 +513,14 @@ class FantasyDraftWindow(tk.Toplevel):
             
             # Check league teams more thoroughly
             if len(all_players) == 0:
-                print("DEBUG: Attempting comprehensive team search...")
+                debug_print("DEBUG: Attempting comprehensive team search...")
                 for team in league.teams:
                     # Try to get all player lists
                     for attr_name in ['roster', 'ahl_roster', 'prospects', 'players']:
                         if hasattr(team, attr_name):
                             player_list = getattr(team, attr_name)
                             if player_list and isinstance(player_list, list):
-                                print(f"DEBUG: Found {len(player_list)} players in {team.team_name}.{attr_name}")
+                                debug_print(f"DEBUG: Found {len(player_list)} players in {team.team_name}.{attr_name}")
                                 for player in player_list:
                                     if hasattr(player, 'full_name'):
                                         player.former_team = team.team_name
@@ -527,12 +528,12 @@ class FantasyDraftWindow(tk.Toplevel):
         
         # Check free agents if any exist
         if hasattr(self.game_manager, 'free_agents') and self.game_manager.free_agents:
-            print(f"DEBUG: Adding {len(self.game_manager.free_agents)} free agents")
+            debug_print(f"DEBUG: Adding {len(self.game_manager.free_agents)} free agents")
             for player in self.game_manager.free_agents:
                 player.former_team = "Free Agent"
                 all_players.append(player)
             
-        print(f"DEBUG: Total collected: {len(all_players)} players")
+        debug_print(f"DEBUG: Total collected: {len(all_players)} players")
         
         # Remove duplicates (same player object)
         seen = set()
@@ -543,7 +544,7 @@ class FantasyDraftWindow(tk.Toplevel):
                 seen.add(player_id)
                 unique_players.append(player)
                 
-        print(f"DEBUG: After removing duplicates: {len(unique_players)} unique players")
+        debug_print(f"DEBUG: After removing duplicates: {len(unique_players)} unique players")
         
         # If we still have no players, create some sample data for testing
         if len(unique_players) == 0:
@@ -553,11 +554,11 @@ class FantasyDraftWindow(tk.Toplevel):
         # Ensure we have enough players for 40 rounds
         required_players = len(teams) * 40  # 40 rounds worth of players
         if len(unique_players) < required_players:
-            print(f"DEBUG: Need {required_players} players for 40 rounds, but only have {len(unique_players)}")
-            print("DEBUG: Generating additional players to fill out draft...")
+            debug_print(f"DEBUG: Need {required_players} players for 40 rounds, but only have {len(unique_players)}")
+            debug_print("DEBUG: Generating additional players to fill out draft...")
             additional_players = self.generate_additional_players(required_players - len(unique_players), teams)
             unique_players.extend(additional_players)
-            print(f"DEBUG: Added {len(additional_players)} additional players, total now: {len(unique_players)}")
+            debug_print(f"DEBUG: Added {len(additional_players)} additional players, total now: {len(unique_players)}")
         
         # Ensure all players have proper contracts for strategic drafting
         self.ensure_player_contracts(unique_players)
@@ -566,7 +567,7 @@ class FantasyDraftWindow(tk.Toplevel):
         unique_players.sort(key=lambda p: p.overall_rating(), reverse=True)
         
         # Clear all team rosters for redistribution (do this AFTER collection)
-        print("DEBUG: Clearing team rosters for fantasy draft redistribution...")
+        debug_print("DEBUG: Clearing team rosters for fantasy draft redistribution...")
         for team in teams:
             if hasattr(team, 'roster'):
                 team.roster.clear()
@@ -612,7 +613,7 @@ class FantasyDraftWindow(tk.Toplevel):
             
             sample_players.append(player)
         
-        print(f"DEBUG: Created {len(sample_players)} sample players for testing")
+        debug_print(f"DEBUG: Created {len(sample_players)} sample players for testing")
         return sample_players
         
     def setup_integrated_ui(self):
@@ -686,7 +687,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
     def begin_fantasy_draft(self):
         """Begin the fantasy draft and ensure all rosters are cleared"""
-        print("DEBUG: Beginning fantasy draft - clearing all team rosters")
+        debug_print("DEBUG: Beginning fantasy draft - clearing all team rosters")
         
         # CRITICAL: Clear ALL team rosters completely
         self.clear_all_team_rosters_completely()
@@ -705,7 +706,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Recreate the UI with the main interface
         self.setup_integrated_ui()
         
-        print("DEBUG: Fantasy draft started - all rosters cleared, draft interface active")
+        debug_print("DEBUG: Fantasy draft started - all rosters cleared, draft interface active")
         
         # Schedule a delayed update to ensure draft board gets populated even if initial updates were skipped
         self.after(200, self.ensure_draft_board_current)
@@ -713,7 +714,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
     def clear_all_team_rosters_completely(self):
         """Completely clear all team rosters to ensure no players remain for trades/extensions"""
-        print("DEBUG: Clearing ALL team rosters completely for fantasy draft")
+        debug_print("DEBUG: Clearing ALL team rosters completely for fantasy draft")
         
         cleared_count = 0
         for team in self.draft_manager.teams:
@@ -737,7 +738,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                     cleared_count += len(team.players)
                     team.players.clear()
                     
-        print(f"DEBUG: Cleared {cleared_count} players from all team rosters")
+        debug_print(f"DEBUG: Cleared {cleared_count} players from all team rosters")
         
         # Also clear any additional roster references
         for team in self.draft_manager.teams:
@@ -749,7 +750,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             if not hasattr(team, 'prospects'):
                 team.prospects = []
                 
-        print("DEBUG: All team rosters completely cleared and initialized for fantasy draft")
+        debug_print("DEBUG: All team rosters completely cleared and initialized for fantasy draft")
         
     def create_draft_header(self, parent):
         """Create draft status header"""
@@ -1078,7 +1079,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             self.roster_team_var.set(self.user_team.team_name)
             self.refresh_team_roster_display()
         
-        print("DEBUG: Team rosters tab created with working display tree")
+        debug_print("DEBUG: Team rosters tab created with working display tree")
         
     def create_draft_order_tab(self):
         """Create the draft order tab with integrated browser"""
@@ -1449,7 +1450,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             self.integrated_populate_players()
             
         except Exception as e:
-            print(f"DEBUG: Error in integrated filter: {e}")
+            debug_print(f"DEBUG: Error in integrated filter: {e}")
     
     def integrated_clear_filters(self):
         """Clear all filters in integrated browser"""
@@ -1468,7 +1469,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.filtered_players = available_players.copy()
         self.filtered_players.sort(key=lambda p: p.overall_rating(), reverse=True)
         
-        print(f"DEBUG: Populating integrated browser with {len(self.filtered_players)} players")
+        debug_print(f"DEBUG: Populating integrated browser with {len(self.filtered_players)} players")
         
         # Add players to tree (limit for performance)
         display_limit = min(1000, len(self.filtered_players))
@@ -1490,7 +1491,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 self.parent.tree_maps[item_id] = player
                 
             except Exception as e:
-                print(f"DEBUG: Error adding player {i}: {e}")
+                debug_print(f"DEBUG: Error adding player {i}: {e}")
                 continue
         
         # Update count
@@ -1505,7 +1506,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
         self.count_label.configure(text=count_text)
         
-        print(f"DEBUG: Added {displayed_count} players to integrated tree")
+        debug_print(f"DEBUG: Added {displayed_count} players to integrated tree")
     
     def integrated_on_player_select(self, event):
         """Handle player selection in integrated browser"""
@@ -1544,7 +1545,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                     self.integrated_draft_btn.configure(state='disabled')
                     self.integrated_info_label.configure(text="Invalid selection")
             except Exception as e:
-                print(f"DEBUG: Error selecting player: {e}")
+                debug_print(f"DEBUG: Error selecting player: {e}")
                 self.selected_player = None
                 self.integrated_draft_btn.configure(state='disabled')
                 self.integrated_info_label.configure(text="Error selecting player")
@@ -1555,22 +1556,22 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
     def integrated_draft_player(self):
         """Draft the selected player from integrated browser"""
-        print(f"DEBUG: integrated_draft_player called")
-        print(f"DEBUG: selected_player = {self.selected_player}")
+        debug_print(f"DEBUG: integrated_draft_player called")
+        debug_print(f"DEBUG: selected_player = {self.selected_player}")
         
         if not self.selected_player:
             messagebox.showwarning("No Selection", "Please select a player to draft.")
             return
             
         current_pick = self.draft_manager.get_current_pick()
-        print(f"DEBUG: current_pick = {current_pick}")
+        debug_print(f"DEBUG: current_pick = {current_pick}")
         if not current_pick:
             messagebox.showinfo("Draft Complete", "The draft is complete!")
             return
             
         # Check if it's user's turn
-        print(f"DEBUG: current_pick.team = {current_pick.team.team_name}")
-        print(f"DEBUG: user_team = {self.user_team.team_name if self.user_team else 'None'}")
+        debug_print(f"DEBUG: current_pick.team = {current_pick.team.team_name}")
+        debug_print(f"DEBUG: user_team = {self.user_team.team_name if self.user_team else 'None'}")
         if current_pick.team != self.user_team:
             messagebox.showinfo("Not Your Turn", f"It's {current_pick.team.team_name}'s turn to pick.")
             return
@@ -1580,11 +1581,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Debug player availability and prevent drafting unavailable players
         available_players = self.draft_manager.get_available_players()
         player_available = any(p.id == player.id for p in available_players)
-        print(f"DEBUG: Player {player.full_name} (ID: {player.id}) available: {player_available}")
-        print(f"DEBUG: Available players count: {len(available_players)}")
+        debug_print(f"DEBUG: Player {player.full_name} (ID: {player.id}) available: {player_available}")
+        debug_print(f"DEBUG: Available players count: {len(available_players)}")
         
         if not player_available:
-            print("DEBUG: Player not available - may already be drafted")
+            debug_print("DEBUG: Player not available - may already be drafted")
             messagebox.showerror(
                 "Player Unavailable", 
                 f"❌ {player.full_name} is no longer available!\n\n"
@@ -1612,48 +1613,48 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         result = messagebox.askyesno("🏒 Draft Player", confirm_text)
         
         if result:
-            print(f"DEBUG: User confirmed draft of {player.full_name}")
+            debug_print(f"DEBUG: User confirmed draft of {player.full_name}")
             # Make the draft pick
             success = self.draft_manager.make_pick(player)
-            print(f"DEBUG: Draft pick success = {success}")
+            debug_print(f"DEBUG: Draft pick success = {success}")
             
             if success:
                 # Add to appropriate roster based on rating
                 if player.overall_rating() >= 40:
                     current_pick.team.roster.append(player)
-                    print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} roster")
+                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} roster")
                 elif player.overall_rating() >= 35:
                     current_pick.team.ahl_roster.append(player)
-                    print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} AHL roster")
+                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} AHL roster")
                 else:
                     current_pick.team.prospects.append(player)
-                    print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} prospects")
+                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} prospects")
                 
                 # CRITICAL: Immediate UI updates with forced refresh
-                print("DEBUG: ===== STARTING COMPREHENSIVE UI UPDATE =====")
+                debug_print("DEBUG: ===== STARTING COMPREHENSIVE UI UPDATE =====")
                 
                 # 1. Update all display components
                 self.update_display()
-                print("DEBUG: Called update_display()")
+                debug_print("DEBUG: Called update_display()")
                 
                 # 2. FORCE immediate draft board update
                 self.force_draft_board_update()
-                print("DEBUG: Called force_draft_board_update()")
+                debug_print("DEBUG: Called force_draft_board_update()")
                 
                 # 3. FORCE immediate team roster update
                 self.force_team_roster_update()
-                print("DEBUG: Called force_team_roster_update()")
+                debug_print("DEBUG: Called force_team_roster_update()")
                 
                 # 4. Make sure draft board tab is visible
                 self.ensure_draft_board_visible()
-                print("DEBUG: Called ensure_draft_board_visible()")
+                debug_print("DEBUG: Called ensure_draft_board_visible()")
                 
                 # 5. Additional UI refresh cycles
                 self.update_idletasks()
                 self.update()
-                print("DEBUG: Called additional UI refresh cycles")
+                debug_print("DEBUG: Called additional UI refresh cycles")
                 
-                print("DEBUG: ===== COMPLETED COMPREHENSIVE UI UPDATE =====")
+                debug_print("DEBUG: ===== COMPLETED COMPREHENSIVE UI UPDATE =====")
                 
                 # Show success message
                 messagebox.showinfo("Player Drafted!", 
@@ -1694,10 +1695,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                     self.complete_draft()
                     
             else:
-                print(f"DEBUG: Draft pick failed for {player.full_name}")
+                debug_print(f"DEBUG: Draft pick failed for {player.full_name}")
                 messagebox.showerror("Draft Error", "Unable to complete the draft pick. Please try again.")
         else:
-            print(f"DEBUG: User cancelled draft of {player.full_name}")
+            debug_print(f"DEBUG: User cancelled draft of {player.full_name}")
     
     def setup_integrated_draft_order(self, parent):
         """Setup integrated draft order browser directly in the tab"""
@@ -1771,7 +1772,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         for item in self.integrated_draft_tree.get_children():
             self.integrated_draft_tree.delete(item)
             
-        print(f"DEBUG: Populating integrated draft order with {len(self.draft_manager.draft_picks)} picks")
+        debug_print(f"DEBUG: Populating integrated draft order with {len(self.draft_manager.draft_picks)} picks")
         
         current_pick_num = self.draft_manager.current_pick
         
@@ -1812,7 +1813,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             if hasattr(self, 'integrated_current_label'):
                 self.integrated_current_label.configure(text="Draft Complete")
                 
-        print(f"DEBUG: Added {len(self.integrated_draft_tree.get_children())} picks to integrated draft order")
+        debug_print(f"DEBUG: Added {len(self.integrated_draft_tree.get_children())} picks to integrated draft order")
         
     def create_modern_header(self, parent):
         """Create a modern header similar to the free agent window"""
@@ -2186,7 +2187,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         if completed_picks:
             # Show the most recently drafted player
             most_recent_pick = completed_picks[-1]  # Last pick in chronological order
-            print(f"DEBUG: Auto-showing spotlight for most recent pick: {most_recent_pick.player.full_name}")
+            debug_print(f"DEBUG: Auto-showing spotlight for most recent pick: {most_recent_pick.player.full_name}")
             self.show_main_player_card(most_recent_pick.player)
         else:
             # No picks yet, show welcome card
@@ -2205,7 +2206,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             latest_pick = completed_picks[-1]  # Last pick in chronological order
             latest_player = latest_pick.player
             
-            print(f"DEBUG: Updating main spotlight with most recent pick: {latest_player.full_name}")
+            debug_print(f"DEBUG: Updating main spotlight with most recent pick: {latest_player.full_name}")
             
             # Show the latest drafted player's card
             self.show_main_player_card_with_draft_info(latest_player, latest_pick)
@@ -2501,7 +2502,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Increase limit
         self.display_limit = min(self.display_limit + 500, 5000)  # Max 5000 for performance
-        print(f"DEBUG: Increased display limit to {self.display_limit}")
+        debug_print(f"DEBUG: Increased display limit to {self.display_limit}")
         
         # Refresh the display
         self.filter_players()
@@ -2655,7 +2656,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         if not hasattr(self, 'draft_order_tree'):
             return
             
-        print("DEBUG: Populating draft order...")
+        debug_print("DEBUG: Populating draft order...")
         self.draft_order_tree.delete(*self.draft_order_tree.get_children())
         
         current_pick_index = self.draft_manager.current_pick
@@ -2682,7 +2683,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 self.draft_order_tree.selection_set(item)
                 self.draft_order_tree.see(item)
                 
-        print(f"DEBUG: Added {len(self.draft_order_tree.get_children())} picks to draft order tree")
+        debug_print(f"DEBUG: Added {len(self.draft_order_tree.get_children())} picks to draft order tree")
                 
     def filter_players(self, *args):
         """Advanced filtering of available players"""
@@ -2704,10 +2705,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             team_filter = self.team_filter.get() if hasattr(self, 'team_filter') else "All"
             
             available_players = self.draft_manager.get_available_players()
-            print(f"DEBUG: filter_players called - {len(available_players)} available players")
+            debug_print(f"DEBUG: filter_players called - {len(available_players)} available players")
             
             if len(available_players) == 0:
-                print("DEBUG: No available players found!")
+                debug_print("DEBUG: No available players found!")
                 self.populate_players_list([])
                 return
             
@@ -2747,7 +2748,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                     
                 filtered_players.append(player)
                 
-            print(f"DEBUG: After filtering: {len(filtered_players)} players")
+            debug_print(f"DEBUG: After filtering: {len(filtered_players)} players")
             
             # Sort by overall rating (highest first)
             filtered_players.sort(key=lambda p: p.overall_rating(), reverse=True)
@@ -2761,19 +2762,19 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 self.available_count_label.configure(text=f"Showing {filtered_count} of {total_available}")
                 
         except Exception as e:
-            print(f"DEBUG: Error in filter_players: {e}")
+            debug_print(f"DEBUG: Error in filter_players: {e}")
             import traceback
             traceback.print_exc()
         
     def populate_players_list(self, players: List[Player]):
         """Populate the players treeview with enhanced display"""
-        print(f"DEBUG: populate_players_list called with {len(players)} players")
+        debug_print(f"DEBUG: populate_players_list called with {len(players)} players")
         
         # Clear existing items
         self.players_tree.delete(*self.players_tree.get_children())
         
         if len(players) == 0:
-            print("DEBUG: No players to display in tree")
+            debug_print("DEBUG: No players to display in tree")
             return
         
         # Initialize tree_maps if it doesn't exist
@@ -2810,11 +2811,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                     self.players_tree.set(item, 'overall', f"{rating} 💎")
                     
             except Exception as e:
-                print(f"DEBUG: Error adding player {i}: {e}")
+                debug_print(f"DEBUG: Error adding player {i}: {e}")
                 continue
         
         items_added = len(self.players_tree.get_children())
-        print(f"DEBUG: Added {items_added} items to tree")
+        debug_print(f"DEBUG: Added {items_added} items to tree")
         
         # Update the UI to show how many players are displayed vs total available
         if hasattr(self, 'available_count_label') and self.available_count_label:
@@ -2907,7 +2908,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
     def advance_one_pick(self):
         """Advance exactly one draft pick (AI or user)"""
-        print(f"DEBUG: advance_one_pick called")
+        debug_print(f"DEBUG: advance_one_pick called")
         
         if self.draft_manager.is_draft_complete():
             self.complete_draft()
@@ -2918,8 +2919,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             messagebox.showinfo("Draft Complete", "The fantasy draft is complete!")
             return
             
-        print(f"DEBUG: Current pick #{current_pick.overall_pick} - {current_pick.team.team_name}")
-        print(f"DEBUG: User team: {self.user_team.team_name if self.user_team else 'None'}")
+        debug_print(f"DEBUG: Current pick #{current_pick.overall_pick} - {current_pick.team.team_name}")
+        debug_print(f"DEBUG: User team: {self.user_team.team_name if self.user_team else 'None'}")
         
         # Update simple status
         if hasattr(self, 'simple_status_label'):
@@ -2967,7 +2968,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                     
                     # FORCE immediate refresh of draft board specifically
                     if hasattr(self, 'recent_picks_tree'):
-                        print(f"DEBUG: FORCE refreshing draft board after AI pick")
+                        debug_print(f"DEBUG: FORCE refreshing draft board after AI pick")
                         self.update_recent_picks()
                         self.update_idletasks()
                         
@@ -3004,7 +3005,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
     
     def sim_to_user_pick(self):
         """Simulate all picks until it's the user's turn"""
-        print(f"DEBUG: sim_to_user_pick called")
+        debug_print(f"DEBUG: sim_to_user_pick called")
         
         if hasattr(self, 'simple_status_label'):
             self.simple_status_label.configure(text="Simulating picks until your turn...")
@@ -3089,7 +3090,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 
                 # CRITICAL: Force draft board update every few picks during simulation
                 if picks_simmed % 3 == 0:  # Update every 3 picks instead of 5
-                    print(f"DEBUG: Updating draft board during simulation - {picks_simmed} picks")
+                    debug_print(f"DEBUG: Updating draft board during simulation - {picks_simmed} picks")
                     self.update_recent_picks()
                     if hasattr(self, 'simple_status_label'):
                         self.simple_status_label.configure(text=f"Simulated {picks_simmed} picks... (Pick #{current_pick.overall_pick})")
@@ -3104,12 +3105,12 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 break  # Something went wrong
                 
         # CRITICAL: Final display update after simulation with forced refresh
-        print(f"DEBUG: Final update after simulating {picks_simmed} picks")
+        debug_print(f"DEBUG: Final update after simulating {picks_simmed} picks")
         self.update_display()
         
         # FORCE immediate draft board refresh and make it visible
         if hasattr(self, 'recent_picks_tree'):
-            print("DEBUG: FORCE final draft board refresh")
+            debug_print("DEBUG: FORCE final draft board refresh")
             self.ensure_draft_board_visible()  # Make sure draft board tab is active
             self.update_recent_picks()
             
@@ -3128,7 +3129,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
     
     def sim_rest_of_draft(self):
         """Simulate the entire remainder of the draft for all teams"""
-        print(f"DEBUG: sim_rest_of_draft called")
+        debug_print(f"DEBUG: sim_rest_of_draft called")
         
         if hasattr(self, 'simple_status_label'):
             self.simple_status_label.configure(text="Preparing to simulate entire draft...")
@@ -3223,12 +3224,12 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         progress_window.destroy()
         
         # CRITICAL: Update display after simulation with forced refresh
-        print(f"DEBUG: Final update after simulating {picks_simmed} picks in sim_rest_of_draft")
+        debug_print(f"DEBUG: Final update after simulating {picks_simmed} picks in sim_rest_of_draft")
         self.update_display()
         
         # FORCE immediate draft board refresh and make it visible
         if hasattr(self, 'recent_picks_tree'):
-            print("DEBUG: FORCE final draft board refresh in sim_rest_of_draft")
+            debug_print("DEBUG: FORCE final draft board refresh in sim_rest_of_draft")
             self.ensure_draft_board_visible()  # Make sure draft board tab is active
             self.update_recent_picks()
             
@@ -3450,7 +3451,7 @@ NHL League Office""",
         
     def update_display(self):
         """Update all UI elements comprehensively with forced refresh"""
-        print("DEBUG: update_display called - refreshing all UI elements")
+        debug_print("DEBUG: update_display called - refreshing all UI elements")
         
         current_pick = self.draft_manager.get_current_pick()
         
@@ -3481,11 +3482,11 @@ NHL League Office""",
         
         # Force update integrated browsers
         if hasattr(self, 'integrated_players_tree'):
-            print("DEBUG: Updating integrated players browser")
+            debug_print("DEBUG: Updating integrated players browser")
             self.integrated_populate_players()
             
         if hasattr(self, 'integrated_draft_tree'):
-            print("DEBUG: Updating integrated draft order")
+            debug_print("DEBUG: Updating integrated draft order")
             self.integrated_populate_draft_order()
             
         # Update legacy components if they exist
@@ -3493,7 +3494,7 @@ NHL League Office""",
             self.filter_players()
         
         # Update draft board and team rosters
-        print("DEBUG: Updating draft board and team rosters")
+        debug_print("DEBUG: Updating draft board and team rosters")
         self.update_recent_picks()
         self.update_all_team_rosters()
         
@@ -3524,7 +3525,7 @@ NHL League Office""",
         # Schedule another refresh to ensure it sticks
         self.after_idle(lambda: self.update_idletasks())
         
-        print("DEBUG: update_display completed - all UI elements force refreshed")
+        debug_print("DEBUG: update_display completed - all UI elements force refreshed")
     
     def update_header_stats(self):
         """Update statistics in the header"""
@@ -3551,7 +3552,7 @@ NHL League Office""",
             update_stats_recursive(self)
             
         except Exception as e:
-            print(f"DEBUG: Error updating header stats: {e}")
+            debug_print(f"DEBUG: Error updating header stats: {e}")
         
     def begin_draft(self):
         """Start the fantasy draft"""
@@ -3583,7 +3584,7 @@ NHL League Office""",
             self.after(400, self.update_main_player_spotlight)
             
             # Also ensure team rosters tab shows initial state
-            print("DEBUG: Scheduling initial team roster display update")
+            debug_print("DEBUG: Scheduling initial team roster display update")
             self.after(500, lambda: self.update_team_roster() if hasattr(self, 'update_team_roster') else None)
             
             # Show success message
@@ -3640,7 +3641,7 @@ NHL League Office""",
         if not hasattr(self, 'round_trees'):
             return
             
-        print("DEBUG: Updating round-by-round draft board")
+        debug_print("DEBUG: Updating round-by-round draft board")
         
         # Get all completed picks
         completed_picks = [pick for pick in self.draft_manager.draft_picks if pick.player]
@@ -3709,9 +3710,9 @@ NHL League Office""",
             try:
                 self.refresh_team_roster_display()
             except Exception as e:
-                print(f"DEBUG: Error updating team rosters: {e}")
+                debug_print(f"DEBUG: Error updating team rosters: {e}")
         
-        print(f"DEBUG: Updated draft board with {len(completed_picks)} picks across {len(picks_by_round)} rounds")
+        debug_print(f"DEBUG: Updated draft board with {len(completed_picks)} picks across {len(picks_by_round)} rounds")
     
     def get_round_tab_index(self, round_num):
         """Get the index of a round tab in the notebook"""
@@ -3732,19 +3733,19 @@ NHL League Office""",
                 current_items = len(self.recent_picks_tree.get_children())
                 
                 if len(completed_picks) != current_items:
-                    print(f"DEBUG: Draft board sync issue - {len(completed_picks)} picks vs {current_items} displayed, forcing update")
+                    debug_print(f"DEBUG: Draft board sync issue - {len(completed_picks)} picks vs {current_items} displayed, forcing update")
                     self.update_recent_picks()
                 else:
-                    print(f"DEBUG: Draft board is current - {len(completed_picks)} picks displayed correctly")
+                    debug_print(f"DEBUG: Draft board is current - {len(completed_picks)} picks displayed correctly")
         except Exception as e:
-            print(f"DEBUG: Error checking draft board currency: {e}")
+            debug_print(f"DEBUG: Error checking draft board currency: {e}")
         
     def force_draft_board_update(self):
         """Force immediate update of the draft board"""
-        print("DEBUG: force_draft_board_update called")
+        debug_print("DEBUG: force_draft_board_update called")
         try:
             if hasattr(self, 'recent_picks_tree') and self.recent_picks_tree.winfo_exists():
-                print("DEBUG: Found recent_picks_tree, updating...")
+                debug_print("DEBUG: Found recent_picks_tree, updating...")
                 self.update_recent_picks()
                 
                 # Additional forced refresh
@@ -3753,28 +3754,28 @@ NHL League Office""",
                 
                 # Schedule another update to ensure it sticks
                 self.after(100, lambda: self.recent_picks_tree.update_idletasks())
-                print("DEBUG: Draft board forced update completed")
+                debug_print("DEBUG: Draft board forced update completed")
             else:
-                print("DEBUG: No recent_picks_tree found or not visible")
+                debug_print("DEBUG: No recent_picks_tree found or not visible")
         except Exception as e:
-            print(f"DEBUG: Error in force_draft_board_update: {e}")
+            debug_print(f"DEBUG: Error in force_draft_board_update: {e}")
             
     def force_team_roster_update(self):
         """Force immediate update of team rosters"""
-        print("DEBUG: force_team_roster_update called")
+        debug_print("DEBUG: force_team_roster_update called")
         try:
             if hasattr(self, 'team_roster_tree') and self.team_roster_tree.winfo_exists():
-                print("DEBUG: Found team_roster_tree, updating...")
+                debug_print("DEBUG: Found team_roster_tree, updating...")
                 self.update_team_roster()
                 
                 # Additional forced refresh
                 self.team_roster_tree.update_idletasks()
                 self.team_roster_tree.update()
-                print("DEBUG: Team roster forced update completed")
+                debug_print("DEBUG: Team roster forced update completed")
             else:
-                print("DEBUG: No team_roster_tree found or not visible")
+                debug_print("DEBUG: No team_roster_tree found or not visible")
         except Exception as e:
-            print(f"DEBUG: Error in force_team_roster_update: {e}")
+            debug_print(f"DEBUG: Error in force_team_roster_update: {e}")
 
     def ensure_draft_board_visible(self):
         """Ensure the draft board tab is visible when updates happen"""
@@ -3784,12 +3785,12 @@ NHL League Office""",
                 for i in range(self.notebook.index('end')):
                     tab_text = self.notebook.tab(i, 'text')
                     if 'Draft Board' in tab_text:
-                        print(f"DEBUG: Switching to Draft Board tab for visibility")
+                        debug_print(f"DEBUG: Switching to Draft Board tab for visibility")
                         self.notebook.select(i)
                         self.notebook.update_idletasks()
                         break
         except Exception as e:
-            print(f"DEBUG: Error switching to draft board tab: {e}")
+            debug_print(f"DEBUG: Error switching to draft board tab: {e}")
         
     def on_draft_pick_select(self, event):
         """Handle selection of a draft pick to show player card"""
@@ -4054,12 +4055,12 @@ NHL League Office""",
             # Update currently selected team roster if it exists
             if hasattr(self, 'update_team_roster') and hasattr(self, 'team_roster_tree'):
                 self.update_team_roster()
-                print("DEBUG: Successfully updated team rosters")
+                debug_print("DEBUG: Successfully updated team rosters")
             else:
-                print("DEBUG: Team roster components not found, skipping update")
+                debug_print("DEBUG: Team roster components not found, skipping update")
                 
         except Exception as e:
-            print(f"DEBUG: Error updating all team rosters: {e}")
+            debug_print(f"DEBUG: Error updating all team rosters: {e}")
             import traceback
             traceback.print_exc()
             
@@ -4077,15 +4078,15 @@ NHL League Office""",
                 position_counts[pos] = position_counts.get(pos, 0) + 1
                 
             total_picks = len(team_picks)
-            print(f"DEBUG: {team_name} has made {total_picks} picks: {position_counts}")
+            debug_print(f"DEBUG: {team_name} has made {total_picks} picks: {position_counts}")
             
         except Exception as e:
-            print(f"DEBUG: Error updating roster stats: {e}")
+            debug_print(f"DEBUG: Error updating roster stats: {e}")
             
     def refresh_team_roster_display(self, event=None):
         """Refresh the team roster display with actual drafted players"""
         selected_team_name = self.roster_team_var.get()
-        print(f"DEBUG: Refreshing team roster for: {selected_team_name}")
+        debug_print(f"DEBUG: Refreshing team roster for: {selected_team_name}")
         
         # Clear existing display
         for item in self.roster_display_tree.get_children():
@@ -4121,7 +4122,7 @@ NHL League Office""",
                     hasattr(pick, 'player') and pick.player):
                     team_drafted_players.append(pick)
         
-        print(f"DEBUG: Found {len(team_drafted_players)} drafted players for {selected_team_name}")
+        debug_print(f"DEBUG: Found {len(team_drafted_players)} drafted players for {selected_team_name}")
         
         # Sort by pick order
         team_drafted_players.sort(key=lambda p: getattr(p, 'overall_pick', 999))
@@ -4184,7 +4185,7 @@ NHL League Office""",
         else:
             self.roster_user_indicator.config(text="")
         
-        print(f"DEBUG: Roster display updated - {num_picks} players shown")
+        debug_print(f"DEBUG: Roster display updated - {num_picks} players shown")
     
     def get_player_key_stats(self, player):
         """Get key stats string for a player based on position"""
@@ -4219,10 +4220,10 @@ NHL League Office""",
                             self.notebook.select(i)
                             break
                             
-                print(f"DEBUG: Showing details for drafted player: {player.full_name}")
+                debug_print(f"DEBUG: Showing details for drafted player: {player.full_name}")
                 
         except Exception as e:
-            print(f"DEBUG: Error showing roster player details: {e}")
+            debug_print(f"DEBUG: Error showing roster player details: {e}")
     
     # Phase 1 Integrated Interface Methods
     def update_all_displays(self):
@@ -4388,7 +4389,7 @@ NHL League Office""",
                 self.show_roster_player_card(player)
                 
         except Exception as e:
-            print(f"DEBUG: Error selecting roster player: {e}")
+            debug_print(f"DEBUG: Error selecting roster player: {e}")
 
     def show_roster_player_card(self, player):
         """Show detailed player card in roster spotlight"""
@@ -4590,7 +4591,7 @@ NHL League Office""",
         import random
         import uuid
         
-        print(f"DEBUG: Generating {num_needed} additional players for deep draft")
+        debug_print(f"DEBUG: Generating {num_needed} additional players for deep draft")
         
         additional_players = []
         positions = [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING, 
@@ -4671,7 +4672,7 @@ NHL League Office""",
             
             additional_players.append(player)
             
-        print(f"DEBUG: Generated {len(additional_players)} additional players with varied skill levels")
+        debug_print(f"DEBUG: Generated {len(additional_players)} additional players with varied skill levels")
         return additional_players
     
     def ensure_player_contracts(self, players: List[Player]):
@@ -4679,7 +4680,7 @@ NHL League Office""",
         from game_classes import Contract
         import random
         
-        print("DEBUG: Ensuring all players have strategic contract information")
+        debug_print("DEBUG: Ensuring all players have strategic contract information")
         
         contracts_added = 0
         contracts_updated = 0
@@ -4746,11 +4747,11 @@ NHL League Office""",
                     player.contract.no_movement_clause = random.random() < 0.05
                 contracts_updated += 1
         
-        print(f"DEBUG: Contract setup complete - Added: {contracts_added}, Updated: {contracts_updated}")
+        debug_print(f"DEBUG: Contract setup complete - Added: {contracts_added}, Updated: {contracts_updated}")
         
         # Add salary information to roster display if not already there
         self.update_salary_display_integration()
     
     def update_salary_display_integration(self):
         """Ensure salary information is properly displayed in draft interface"""
-        print("DEBUG: Salary display integration completed - contracts ready for strategic drafting")
+        debug_print("DEBUG: Salary display integration completed - contracts ready for strategic drafting")

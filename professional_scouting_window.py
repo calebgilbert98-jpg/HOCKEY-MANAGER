@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 import datetime
 import random
 from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
+from game_classes import debug_print
 
 
 class ProfessionalScoutingWindow(tk.Toplevel):
@@ -47,20 +48,20 @@ class ProfessionalScoutingWindow(tk.Toplevel):
         """Initialize game data structure with proper error handling"""
         try:
             game_manager = getattr(self.parent, 'game_manager', None)
-            print(f"DEBUG: game_manager exists: {game_manager is not None}")
+            debug_print(f"DEBUG: game_manager exists: {game_manager is not None}")
             if not game_manager:
-                print("DEBUG: Using fallback data (no game_manager)")
+                debug_print("DEBUG: Using fallback data (no game_manager)")
                 return self._generate_fallback_data()
             
             # Get core game objects
             user_team = getattr(game_manager, 'user_team', None)
             league = getattr(game_manager, 'league', None)
-            print(f"DEBUG: user_team exists: {user_team is not None}")
-            print(f"DEBUG: league exists: {league is not None}")
+            debug_print(f"DEBUG: user_team exists: {user_team is not None}")
+            debug_print(f"DEBUG: league exists: {league is not None}")
             
             # Collect all players
             all_players = self._collect_all_players(league, game_manager)
-            print(f"DEBUG: Collected {len(all_players)} players")
+            debug_print(f"DEBUG: Collected {len(all_players)} players")
             
             # Get scouting staff - generate some if empty
             scouts = self._get_scouting_staff(user_team)
@@ -190,11 +191,11 @@ class ProfessionalScoutingWindow(tk.Toplevel):
         if game_manager and hasattr(game_manager, 'get_all_players'):
             try:
                 all_players = game_manager.get_all_players()
-                print(f"DEBUG: get_all_players() returned {len(all_players)} players")
+                debug_print(f"DEBUG: get_all_players() returned {len(all_players)} players")
                 if all_players:  # If we got players this way, return them
                     return all_players
             except Exception as e:
-                print(f"DEBUG: get_all_players() failed: {e}")
+                debug_print(f"DEBUG: get_all_players() failed: {e}")
                 pass  # Fall back to manual collection
         
         # Fallback: collect manually from league
@@ -630,7 +631,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
     
     def _populate_player_database(self):
         """Populate the player database tree"""
-        print(f"DEBUG: _populate_player_database called")
+        debug_print(f"DEBUG: _populate_player_database called")
         
         # Clear existing
         for item in self.players_tree.get_children():
@@ -638,11 +639,11 @@ class ProfessionalScoutingWindow(tk.Toplevel):
         
         # Get players from game data
         players = self.game_data.get('players', [])
-        print(f"DEBUG: Found {len(players)} players in game_data")
+        debug_print(f"DEBUG: Found {len(players)} players in game_data")
         
         if not players:
             # Show message if no players found
-            print("DEBUG: No players found - showing 'No players found' message")
+            debug_print("DEBUG: No players found - showing 'No players found' message")
             self.players_tree.insert('', 'end', values=(
                 'No players found', '', '', '', '', '', '', '', ''
             ))
@@ -662,11 +663,11 @@ class ProfessionalScoutingWindow(tk.Toplevel):
         
         # Apply current filters and populate
         filtered_players = self._get_filtered_players()
-        print(f"DEBUG: After filtering: {len(filtered_players)} players remain")
+        debug_print(f"DEBUG: After filtering: {len(filtered_players)} players remain")
         
         if not filtered_players:
             # Show message if no players pass filters
-            print("DEBUG: No players pass filters - showing 'No players match current filters' message")
+            debug_print("DEBUG: No players pass filters - showing 'No players match current filters' message")
             self.players_tree.insert('', 'end', values=(
                 'No players match current filters', '', '', '', '', '', '', '', ''
             ))

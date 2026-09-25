@@ -1042,7 +1042,7 @@ class StartupWindow(tk.Tk):
     
     def _create_gm_profile_section(self, parent):
         """Create comprehensive GM profile creation interface"""
-        from game_classes import GMProfile
+        from game_classes import GMProfile, debug_print
         
         # Initialize GM profile
         self.gm_profile = GMProfile()
@@ -1672,7 +1672,7 @@ class StartupWindow(tk.Tk):
         """Start the game with selected settings"""
         # Debug: Print current team selection
         current_team = self.team_var.get()
-        print(f"DEBUG: Current team selection: '{current_team}'")
+        debug_print(f"DEBUG: Current team selection: '{current_team}'")
         
         # Validate team selection
         if not current_team:

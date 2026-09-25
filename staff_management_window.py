@@ -8,6 +8,7 @@ from tkinter import ttk, messagebox
 import random
 from typing import Dict, List, Optional
 from game_classes import Staff, StaffRole
+from game_classes import debug_print
 
 class StaffManagementWindow(tk.Toplevel):
     """Comprehensive staff management interface with EHM-style functionality."""
@@ -665,7 +666,7 @@ class StaffManagementWindow(tk.Toplevel):
         for item in self.available_staff_tree.get_children():
             self.available_staff_tree.delete(item)
         
-        print(f"DEBUG: Updating available staff view with {len(self.available_staff)} total staff")
+        debug_print(f"DEBUG: Updating available staff view with {len(self.available_staff)} total staff")
         
         # Get filter values (with safe defaults)
         name_search = self.name_search.get().lower() if hasattr(self, 'name_search') else ''
@@ -798,7 +799,7 @@ class StaffManagementWindow(tk.Toplevel):
             elif staff.overall_rating >= 75:
                 self.available_staff_tree.set(item_id, 'overall', f"🔹 {staff.overall_rating}")
         
-        print(f"DEBUG: Added {len(filtered_staff)} staff to the tree view")
+        debug_print(f"DEBUG: Added {len(filtered_staff)} staff to the tree view")
         
         # Update results summary
         total_available = len(self.available_staff)
@@ -1795,11 +1796,11 @@ class StaffManagementWindow(tk.Toplevel):
     
     def generate_organizational_chart(self, team):
         """Generate organizational chart text."""
-        print(f"DEBUG: Generating org chart for {team.team_name}")
-        print(f"DEBUG: Team has {len(team.staff)} staff members")
+        debug_print(f"DEBUG: Generating org chart for {team.team_name}")
+        debug_print(f"DEBUG: Team has {len(team.staff)} staff members")
         
         staff_categories = self.categorize_staff(team.staff)
-        print(f"DEBUG: Staff categories: {[(k, len(v)) for k, v in staff_categories.items()]}")
+        debug_print(f"DEBUG: Staff categories: {[(k, len(v)) for k, v in staff_categories.items()]}")
         
         chart = f"{team.team_name} Organizational Chart\n"
         chart += "=" * 50 + "\n\n"

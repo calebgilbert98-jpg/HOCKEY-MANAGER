@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
+from game_classes import debug_print
 from windows import (RosterWindow, FreeAgencyWindow, TradeWindow, ScoutingWindow, 
                      DraftWindow, ScheduleWindow, FinancesWindow, NewsWindow, 
                      GMOptionsWindow, EditLinesWindow, ContractNegotiationWindow, 
@@ -122,8 +123,8 @@ class GameManager:
         
     def apply_startup_settings(self, settings):
         """Apply settings from startup window and generate database"""
-        print("DEBUG: apply_startup_settings called!")
-        print(f"DEBUG: Settings received: {settings}")
+        debug_print("DEBUG: apply_startup_settings called!")
+        debug_print(f"DEBUG: Settings received: {settings}")
         
         self.startup_settings = settings
         print(f"Applying startup settings: {settings}")
@@ -133,39 +134,39 @@ class GameManager:
         print(f"Generating {database_size} database...")
         
         try:
-            print("DEBUG: Attempting to import progress_window...")
+            debug_print("DEBUG: Attempting to import progress_window...")
             # Import progress window
             from progress_window import DatabaseGenerationProgress
-            print("DEBUG: Progress window import successful")
+            debug_print("DEBUG: Progress window import successful")
             
-            print("DEBUG: Attempting to import database_generator...")
+            debug_print("DEBUG: Attempting to import database_generator...")
             # Generate the comprehensive database with progress tracking
             from database_generator import generate_database, DatabaseGenerator, DATABASE_CONFIGURATIONS
-            print("DEBUG: Database generator import successful")
+            debug_print("DEBUG: Database generator import successful")
             
-            print(f"DEBUG: Available database configurations: {list(DATABASE_CONFIGURATIONS.keys())}")
+            debug_print(f"DEBUG: Available database configurations: {list(DATABASE_CONFIGURATIONS.keys())}")
             
             # Always generate database regardless of existing league
-            print("DEBUG: Generating new database with full roster population...")
+            debug_print("DEBUG: Generating new database with full roster population...")
             # Show progress window during database generation
             with DatabaseGenerationProgress() as progress:
                 def progress_callback(percentage, status, detail=""):
                     progress.update(percentage, status, detail)
-                    print(f"DEBUG: Progress - {percentage}% - {status} - {detail}")
+                    debug_print(f"DEBUG: Progress - {percentage}% - {status} - {detail}")
                 
                 config = DATABASE_CONFIGURATIONS[database_size]
-                print(f"DEBUG: Using config: {config.name}")
+                debug_print(f"DEBUG: Using config: {config.name}")
                 # New-game setup wizard can supply a custom DatabaseConfig
                 # (league selection); otherwise use the size preset.
                 db_config = settings.get('database_config')
                 if db_config is not None:
-                    print(f"DEBUG: Using wizard database config: {db_config.name}")
+                    debug_print(f"DEBUG: Using wizard database config: {db_config.name}")
                     generator = DatabaseGenerator(db_config)
                 else:
                     generator = DatabaseGenerator(config)
-                print("DEBUG: DatabaseGenerator created, starting generation...")
+                debug_print("DEBUG: DatabaseGenerator created, starting generation...")
                 self.league = generator.generate_comprehensive_database(progress_callback)
-                print("DEBUG: Database generation completed")
+                debug_print("DEBUG: Database generation completed")
                 self.league.set_game_manager(self)
 
                 # New-game wizard options (stored for the session)
@@ -185,9 +186,9 @@ class GameManager:
                 print("Draft picks initialized!")
             
             # Apply comprehensive game settings
-            print("DEBUG: Applying game settings...")
+            debug_print("DEBUG: Applying game settings...")
             self.apply_all_game_settings(settings)
-            print("DEBUG: Game settings applied successfully")
+            debug_print("DEBUG: Game settings applied successfully")
             
             # Handle fantasy draft if enabled
             if settings.get('fantasy_draft', False):
@@ -207,11 +208,11 @@ class GameManager:
             print(f"Error generating database: {e}")
             import traceback
             traceback.print_exc()
-            print("DEBUG: Falling back to old system...")
+            debug_print("DEBUG: Falling back to old system...")
             
             # Initialize a basic league if none exists
             if not hasattr(self, 'league') or self.league is None:
-                print("DEBUG: Creating basic league structure...")
+                debug_print("DEBUG: Creating basic league structure...")
                 from game_classes import League
                 self.league = League("NHL")
                 # Add basic NHL teams
@@ -220,7 +221,7 @@ class GameManager:
                 for team_name in NHL_TEAMS:
                     team = Team(team_name=team_name, city=team_name.split()[-1])
                     self.league.add_team(team)
-                print(f"DEBUG: Created {len(self.league.teams)} basic teams")
+                debug_print(f"DEBUG: Created {len(self.league.teams)} basic teams")
                 
                 # Initialize draft picks for basic teams
                 self.league.initialize_all_draft_picks()
@@ -350,12 +351,12 @@ class GameManager:
         
         # Set user team first so inbox messages work properly
         selected_team_name = settings.get('selected_team')
-        print(f"DEBUG apply_all_game_settings: selected_team_name = '{selected_team_name}'")
+        debug_print(f"DEBUG apply_all_game_settings: selected_team_name = '{selected_team_name}'")
         if selected_team_name and hasattr(self, 'league') and self.league:
-            print(f"DEBUG: Looking for team in {len(self.league.teams)} teams...")
+            debug_print(f"DEBUG: Looking for team in {len(self.league.teams)} teams...")
             team_found = False
             for team in self.league.teams:
-                print(f"DEBUG: Checking team '{team.team_name}' == '{selected_team_name}'")
+                debug_print(f"DEBUG: Checking team '{team.team_name}' == '{selected_team_name}'")
                 if team.team_name == selected_team_name:
                     self.user_team = team
                     team.is_user_team = True
@@ -365,7 +366,7 @@ class GameManager:
             if not team_found:
                 print(f"WARNING: Could not find team '{selected_team_name}' in league teams!")
         else:
-            print(f"DEBUG: No team to set - selected_team_name={selected_team_name}, has league={hasattr(self, 'league') and self.league is not None}")
+            debug_print(f"DEBUG: No team to set - selected_team_name={selected_team_name}, has league={hasattr(self, 'league') and self.league is not None}")
         
         # Basic game settings
         self.apply_game_difficulty(settings.get('difficulty', 'Normal'))
@@ -3029,10 +3030,10 @@ class HockeyManagerGUI(tk.Tk):
         
         self.withdraw()
         # Check if user team is already set from startup
-        print(f"DEBUG HockeyManagerGUI: Checking for user_team...")
-        print(f"DEBUG: hasattr(game_manager, 'user_team') = {hasattr(self.game_manager, 'user_team')}")
+        debug_print(f"DEBUG HockeyManagerGUI: Checking for user_team...")
+        debug_print(f"DEBUG: hasattr(game_manager, 'user_team') = {hasattr(self.game_manager, 'user_team')}")
         if hasattr(self.game_manager, 'user_team'):
-            print(f"DEBUG: game_manager.user_team = {self.game_manager.user_team}")
+            debug_print(f"DEBUG: game_manager.user_team = {self.game_manager.user_team}")
         
         # Try to get user team from multiple sources
         user_team_found = None
@@ -3040,19 +3041,19 @@ class HockeyManagerGUI(tk.Tk):
         # First, check if game_manager already has user_team set
         if hasattr(self.game_manager, 'user_team') and self.game_manager.user_team:
             user_team_found = self.game_manager.user_team
-            print(f"DEBUG: Found user_team from game_manager: {user_team_found.team_name}")
+            debug_print(f"DEBUG: Found user_team from game_manager: {user_team_found.team_name}")
         
         # If not found, try to find it from startup_settings
         if not user_team_found and hasattr(self.game_manager, 'startup_settings') and self.game_manager.startup_settings:
             selected_team_name = self.game_manager.startup_settings.get('selected_team') or self.game_manager.startup_settings.get('user_team')
-            print(f"DEBUG: Looking for team from startup_settings: '{selected_team_name}'")
+            debug_print(f"DEBUG: Looking for team from startup_settings: '{selected_team_name}'")
             if selected_team_name and hasattr(self, 'league') and self.league:
                 # Try exact match first
                 for team in self.league.teams:
                     if team.team_name == selected_team_name:
                         user_team_found = team
                         self.game_manager.user_team = team
-                        print(f"DEBUG: Found team from startup_settings (exact): {team.team_name}")
+                        debug_print(f"DEBUG: Found team from startup_settings (exact): {team.team_name}")
                         break
                 
                 # If not found, try case-insensitive partial match (handles encoding differences)
@@ -3063,14 +3064,14 @@ class HockeyManagerGUI(tk.Tk):
                         if selected_lower in team_lower or team_lower in selected_lower:
                             user_team_found = team
                             self.game_manager.user_team = team
-                            print(f"DEBUG: Found team from startup_settings (partial): {team.team_name}")
+                            debug_print(f"DEBUG: Found team from startup_settings (partial): {team.team_name}")
                             break
                 
                 # If still not found, just use the first team to avoid hanging
                 if not user_team_found and self.league.teams:
                     user_team_found = self.league.teams[0]
                     self.game_manager.user_team = user_team_found
-                    print(f"DEBUG: Team not found, defaulting to: {user_team_found.team_name}")
+                    debug_print(f"DEBUG: Team not found, defaulting to: {user_team_found.team_name}")
         
         if user_team_found:
             # Team already selected from startup window
@@ -5343,7 +5344,7 @@ class HockeyManagerGUI(tk.Tk):
         current_setting = settings.get('simulation', {}).get('use_game_viewer', False)
         new_setting = not current_setting
         
-        print(f"DEBUG: Toggling game viewer from {current_setting} to {new_setting}")
+        debug_print(f"DEBUG: Toggling game viewer from {current_setting} to {new_setting}")
         
         # Update settings
         settings['simulation']['use_game_viewer'] = new_setting
@@ -5356,7 +5357,7 @@ class HockeyManagerGUI(tk.Tk):
             with open(settings_file, 'w') as f:
                 json.dump(settings, f, indent=2)
             print(f"Game viewer toggled: {'ON' if new_setting else 'OFF'}")
-            print(f"DEBUG: Settings saved to file successfully")
+            debug_print(f"DEBUG: Settings saved to file successfully")
         except Exception as e:
             print(f"Error saving game viewer setting: {e}")
         
@@ -5364,15 +5365,15 @@ class HockeyManagerGUI(tk.Tk):
         # lives in GM Options -> Game Presentation)
         if hasattr(self, 'game_viewer_btn'):
             self.game_viewer_btn.config(text=f"🎮 Viewer: {'ON' if new_setting else 'OFF'}")
-        print(f"DEBUG: Button text updated to: {'ON' if new_setting else 'OFF'}")
+        debug_print(f"DEBUG: Button text updated to: {'ON' if new_setting else 'OFF'}")
 
     def _update_game_viewer_button_state(self):
         """Update the game viewer button to show the current setting"""
         if hasattr(self, 'game_viewer_btn'):
             settings = self.get_settings()
             current_setting = settings.get('simulation', {}).get('use_game_viewer', False)
-            print(f"DEBUG: Loading game viewer button state: {current_setting}")
-            print(f"DEBUG: Full simulation settings: {settings.get('simulation', {})}")
+            debug_print(f"DEBUG: Loading game viewer button state: {current_setting}")
+            debug_print(f"DEBUG: Full simulation settings: {settings.get('simulation', {})}")
             self.game_viewer_btn.config(text=f"Viewer: {'ON' if current_setting else 'OFF'}")
 
     def toggle_season_flow_panel(self):
@@ -7550,8 +7551,8 @@ class HockeyManagerGUI(tk.Tk):
 
     def _simulate_game_with_viewer(self, home_team, away_team):
         """Simulate a game using the visual game viewer"""
-        print(f"DEBUG: _simulate_game_with_viewer CALLED!")
-        print(f"DEBUG: Starting game viewer simulation: {home_team.team_name} vs {away_team.team_name}")
+        debug_print(f"DEBUG: _simulate_game_with_viewer CALLED!")
+        debug_print(f"DEBUG: Starting game viewer simulation: {home_team.team_name} vs {away_team.team_name}")
         
         import tkinter as tk
         from GAME_VIEWER import launch_game_viewer
@@ -7580,7 +7581,7 @@ class HockeyManagerGUI(tk.Tk):
             'notable_events': notable_events
         }
         
-        print(f"DEBUG: About to launch game viewer")
+        debug_print(f"DEBUG: About to launch game viewer")
         
         # Launch the game viewer using the launch function
         # Opens as a modal Toplevel on the main window; returns when closed

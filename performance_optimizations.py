@@ -4,6 +4,7 @@ Implements caching, fast simulation, and batch processing for better performance
 """
 
 import random
+from game_classes import debug_print
 import time
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
@@ -302,10 +303,10 @@ class BatchProcessor:
                     elif isinstance(game, dict) and all(key in game for key in ['date', 'home', 'away']):
                         game_date, home_team, away_team = game['date'], game['home'], game['away']
                     else:
-                        print(f"DEBUG: Unexpected batch game format: {type(game)} - {game}")
+                        debug_print(f"DEBUG: Unexpected batch game format: {type(game)} - {game}")
                         continue
                 except (IndexError, KeyError, ValueError) as e:
-                    print(f"DEBUG: Error processing batch game: {e}")
+                    debug_print(f"DEBUG: Error processing batch game: {e}")
                     continue
                     
                 # Use fast simulation for non-user games

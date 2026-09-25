@@ -10,6 +10,17 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 from datetime import date, timedelta, datetime, time
 
+import os as _os
+
+DEBUG_ENABLED = _os.environ.get("PUCK_DYNASTY_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def debug_print(*args, **kwargs):
+    """Print only when PUCK_DYNASTY_DEBUG=1 is set. Use for all DEBUG output."""
+    if DEBUG_ENABLED:
+        print(*args, **kwargs)
+
+
 # --- Constants and Configuration ---
 class GameBalance:
     MIN_ATTRIBUTE = 1

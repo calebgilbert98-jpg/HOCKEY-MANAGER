@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import List, Optional
 from game_classes import Player, PlayerPosition, to_100_scale
+from game_classes import debug_print
 
 class PlayerBrowserWindow(tk.Toplevel):
     """Standalone player browser with guaranteed player display"""
@@ -151,7 +152,7 @@ class PlayerBrowserWindow(tk.Toplevel):
         for item in self.tree.get_children():
             self.tree.delete(item)
             
-        print(f"DEBUG: Populating player browser with {len(self.filtered_players)} players")
+        debug_print(f"DEBUG: Populating player browser with {len(self.filtered_players)} players")
         
         # Add players to tree
         for i, player in enumerate(self.filtered_players):
@@ -170,7 +171,7 @@ class PlayerBrowserWindow(tk.Toplevel):
                 self.tree.set(item_id, '#0', str(i))  # Store index
                 
             except Exception as e:
-                print(f"DEBUG: Error adding player {i}: {e}")
+                debug_print(f"DEBUG: Error adding player {i}: {e}")
                 continue
         
         # Update count
@@ -178,7 +179,7 @@ class PlayerBrowserWindow(tk.Toplevel):
         filtered_count = len(self.filtered_players)
         self.count_label.configure(text=f"Showing {filtered_count} of {total_count} players")
         
-        print(f"DEBUG: Added {len(self.tree.get_children())} players to tree")
+        debug_print(f"DEBUG: Added {len(self.tree.get_children())} players to tree")
         
     def on_filter_change(self, *args):
         """Handle filter changes"""
@@ -211,7 +212,7 @@ class PlayerBrowserWindow(tk.Toplevel):
             self.populate_players()
             
         except Exception as e:
-            print(f"DEBUG: Error in filter: {e}")
+            debug_print(f"DEBUG: Error in filter: {e}")
             
     def clear_filters(self):
         """Clear all filters"""
@@ -238,7 +239,7 @@ class PlayerBrowserWindow(tk.Toplevel):
                     self.draft_btn.configure(state='disabled')
                     self.info_label.configure(text="Invalid selection")
             except (ValueError, IndexError) as e:
-                print(f"DEBUG: Error selecting player: {e}")
+                debug_print(f"DEBUG: Error selecting player: {e}")
                 self.selected_player = None
                 self.draft_btn.configure(state='disabled')
                 self.info_label.configure(text="Error selecting player")
@@ -352,7 +353,7 @@ class SimpleDraftOrderWindow(tk.Toplevel):
         for item in self.tree.get_children():
             self.tree.delete(item)
             
-        print(f"DEBUG: Populating draft order with {len(self.draft_manager.draft_picks)} picks")
+        debug_print(f"DEBUG: Populating draft order with {len(self.draft_manager.draft_picks)} picks")
         
         current_pick_num = self.draft_manager.current_pick
         
@@ -383,4 +384,4 @@ class SimpleDraftOrderWindow(tk.Toplevel):
                 self.tree.selection_set(item)
                 self.tree.see(item)
                 
-        print(f"DEBUG: Added {len(self.tree.get_children())} picks to draft order")
+        debug_print(f"DEBUG: Added {len(self.tree.get_children())} picks to draft order")

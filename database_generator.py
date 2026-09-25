@@ -6,7 +6,7 @@ import random
 import math
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional, Callable, Union
-from game_classes import Player, Team, League, PlayerPosition, GameBalance, Contract
+from game_classes import Player, Team, League, PlayerPosition, GameBalance, Contract, debug_print
 from dataclasses import dataclass
 
 @dataclass
@@ -432,7 +432,7 @@ class DatabaseGenerator:
         ]
         
         for team in teams:
-            print(f"Generating staff for {team.team_name}...")
+            debug_print(f"Generating staff for {team.team_name}...")
             
             for role, count in staff_positions:
                 for _ in range(count):
