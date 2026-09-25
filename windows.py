@@ -2203,7 +2203,7 @@ class FreeAgencyWindow(tk.Toplevel):
                 staff.full_name,
                 staff.role.value,
                 department,
-                staff.overall_rating,
+                to_100_scale(staff.overall_rating),
                 f"{experience}y",
                 f"${staff.salary:,}",
                 f"{staff.contract_years}y",
@@ -2309,7 +2309,7 @@ class FreeAgencyWindow(tk.Toplevel):
                   text=f"{staff.role.value}  •  {dept}  •  Age {staff.age}  •  {staff.nationality}",
                   style='Secondary.TLabel').pack(anchor='w')
         ttk.Label(header,
-                  text=f"Rating: {staff.overall_rating}   •   Asking: ${asking:,} / yr",
+                  text=f"Rating: {to_100_scale(staff.overall_rating)}   •   Asking: ${asking:,} / yr",
                   style='TLabel').pack(anchor='w', pady=(4, 0))
 
         # Unique-role replacement warning
@@ -2474,7 +2474,7 @@ class FreeAgencyWindow(tk.Toplevel):
                   style='Secondary.TLabel').pack(anchor='w')
         ttk.Label(header,
                   text=f"Age {staff.age}  •  {staff.nationality}  •  "
-                       f"Overall {staff.overall_rating}",
+                       f"Overall {to_100_scale(staff.overall_rating)}",
                   style='TLabel').pack(anchor='w', pady=(4, 0))
 
         attrs = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
@@ -2501,7 +2501,7 @@ class FreeAgencyWindow(tk.Toplevel):
             r.pack(fill=tk.X, pady=1)
             ttk.Label(r, text=label, style='Secondary.TLabel',
                       width=24).pack(side=tk.LEFT)
-            ttk.Label(r, text=str(val), style='TLabel',
+            ttk.Label(r, text=str(to_100_scale(val)), style='TLabel',
                       font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(side=tk.LEFT)
 
         footer = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
@@ -2785,19 +2785,19 @@ class FreeAgencyWindow(tk.Toplevel):
             ("Department", lambda s: self._staff_dept(s), False),
             ("Age", lambda s: s.age, False),
             ("Nationality", lambda s: s.nationality, False),
-            ("Overall", lambda s: s.overall_rating, True),
+            ("Overall", lambda s: to_100_scale(s.overall_rating), True),
             ("Salary", lambda s: f"${s.salary:,}", False),
             ("Contract", lambda s: f"{s.contract_years} yr", False),
-            ("Tactical Knowledge", lambda s: s.tactical_knowledge, True),
-            ("Man Management", lambda s: s.man_management, True),
-            ("Motivating", lambda s: s.motivating, True),
-            ("Working w/ Youngsters", lambda s: s.working_with_youngsters, True),
-            ("Player Development", lambda s: s.player_development, True),
-            ("Judging Ability", lambda s: s.judging_player_ability, True),
-            ("Judging Potential", lambda s: s.judging_player_potential, True),
-            ("Determination", lambda s: s.determination, True),
-            ("Adaptability", lambda s: s.adaptability, True),
-            ("Discipline", lambda s: s.discipline, True),
+            ("Tactical Knowledge", lambda s: to_100_scale(s.tactical_knowledge), True),
+            ("Man Management", lambda s: to_100_scale(s.man_management), True),
+            ("Motivating", lambda s: to_100_scale(s.motivating), True),
+            ("Working w/ Youngsters", lambda s: to_100_scale(s.working_with_youngsters), True),
+            ("Player Development", lambda s: to_100_scale(s.player_development), True),
+            ("Judging Ability", lambda s: to_100_scale(s.judging_player_ability), True),
+            ("Judging Potential", lambda s: to_100_scale(s.judging_player_potential), True),
+            ("Determination", lambda s: to_100_scale(s.determination), True),
+            ("Adaptability", lambda s: to_100_scale(s.adaptability), True),
+            ("Discipline", lambda s: to_100_scale(s.discipline), True),
         ]
         for r, (label, func, higher_better) in enumerate(rows, 1):
             ttk.Label(inner, text=label, style='Secondary.TLabel',
@@ -3126,7 +3126,58 @@ class FreeAgencyWindow(tk.Toplevel):
     
     def export_free_agents(self):
         """Export the free agent lists."""
-        tk.messagebox.showinfo("Export", "Export feature coming soon!")
+        import csv
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")],
+            title="Export Free Agents",
+            initialfile="free_agents.csv")
+        if not path:
+            return
+        try:
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # Players
+                writer.writerow(["PLAYERS"])
+                writer.writerow(["Name", "Pos", "Age", "OVR", "Potential",
+                                 "Salary", "Years", "Country", "Shoots",
+                                 "Height", "Weight"])
+                pmap = self.parent.tree_maps.get('fa_players', {})
+                for item in self.fa_player_tree.get_children():
+                    p = pmap.get(item)
+                    if not p:
+                        continue
+                    writer.writerow([
+                        p.full_name, p.primary_position.value, p.age,
+                        to_100_scale(p.overall_rating()),
+                        getattr(p, 'potential_grade', ''),
+                        getattr(p.contract, 'salary', ''),
+                        getattr(p.contract, 'years_remaining', ''),
+                        getattr(p, 'nationality', ''),
+                        getattr(p, 'shoots', ''),
+                        f"{getattr(p, 'height_feet', '')}'{getattr(p, 'height_inches', '')}\"",
+                        getattr(p, 'weight', ''),
+                    ])
+                writer.writerow([])
+                # Staff
+                writer.writerow(["STAFF"])
+                writer.writerow(["Name", "Role", "Department", "Rating",
+                                 "Age", "Salary", "Contract Yrs", "Country"])
+                smap = self.parent.tree_maps.get('fa_staff', {})
+                for item in self.fa_staff_tree.get_children():
+                    s = smap.get(item)
+                    if not s:
+                        continue
+                    writer.writerow([
+                        s.full_name, s.role.value, self._staff_dept(s),
+                        to_100_scale(s.overall_rating), s.age, s.salary,
+                        s.contract_years, s.nationality,
+                    ])
+            tk.messagebox.showinfo("Export Complete",
+                                   f"Free agent lists exported to:\n{path}")
+        except Exception as e:
+            tk.messagebox.showerror("Export Failed", f"Could not export:\n{e}")
     
     def show_help(self):
         """Show help information."""
