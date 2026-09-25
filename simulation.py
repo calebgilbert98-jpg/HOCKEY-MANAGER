@@ -3109,10 +3109,10 @@ class GameSim:
             except Exception:
                 pass
         
-        # Categorize danger level
-        if quality_score >= 0.7:
+        # Categorize danger level (calibrated for ~30% high, 30% medium, 40% low)
+        if quality_score >= 0.5:
             return "high"
-        elif quality_score >= 0.4:
+        elif quality_score >= 0.25:
             return "medium"
         else:
             return "low"
@@ -5099,9 +5099,6 @@ class GameSim:
         """
         Stage 5: Calculate the probability of a save based on goaltender skills and shot characteristics.
         """
-        # Base save probability (inverse of expected goal)
-        base_save_probability = 1.0 - expected_goal
-        
         # Goaltender skill factors
         positioning_skill = (goaltender.positioning + goaltender.anticipation) / 2
         reaction_skill = (goaltender.reflexes + goaltender.agility) / 2
@@ -5110,39 +5107,43 @@ class GameSim:
         # Overall goaltender skill
         goalie_skill = (positioning_skill + reaction_skill + technique_skill) / 3
         
-        # Skill modifier: normalize against the league-average starter skill
-        # (measured ~11.6 from the player generator's attribute distribution;
-        # an average goalie gets a 1.0 modifier). Dampened 60/40 so the
-        # starter talent spread maps to NHL-like sv% ranges instead of
-        # producing constant blowouts against weak goalies.
+        # Skill edge: good goalies reduce xG, bad goalies increase it.
+        # League average skill ~11.6. Each point above/below adjusts xG by 2%.
+        # Elite (16): 0.91x xG. Weak (8): 1.07x xG.
         LEAGUE_AVG_GOALIE_SKILL = 11.6
-        skill_modifier = 0.6 + 0.4 * (goalie_skill / LEAGUE_AVG_GOALIE_SKILL)
+        skill_diff = goalie_skill - LEAGUE_AVG_GOALIE_SKILL
+        xg_multiplier = max(0.7, min(1.3, 1.0 - (skill_diff * 0.02)))
+        effective_xg = expected_goal * xg_multiplier
         
-        # Fatigue factor
-        fatigue_factor = self.goaltender_fatigue.get(goaltender.id, 100) / 100
+        # Base save probability (inverse of effective xG)
+        save_probability = 1.0 - effective_xg
         
-        # Position modifier
+        # Fatigue factor (tired goalies allow more goals)
+        fatigue = self.goaltender_fatigue.get(goaltender.id, 100) / 100
+        # Fatigue below 80 starts to hurt: each 10 points below 80 = -0.01 save prob
+        if fatigue < 0.8:
+            save_probability -= (0.8 - fatigue) * 0.1
+        
+        # Position modifier (additive, not multiplicative, to avoid stacking)
         position = self.goaltender_positioning.get(goaltender.id, GoaltenderPosition.IN_NET)
-        position_modifier = {
-            GoaltenderPosition.IN_NET: 1.0,
-            GoaltenderPosition.CHALLENGING: 1.1,
-            GoaltenderPosition.DEEP_NET: 0.9,
-            GoaltenderPosition.AGGRESSIVE: 1.15,
-            GoaltenderPosition.BUTTERFLY: 1.05,
-            GoaltenderPosition.STAND_UP: 0.95
-        }.get(position, 1.0)
+        position_bonus = {
+            GoaltenderPosition.IN_NET: 0.0,
+            GoaltenderPosition.CHALLENGING: 0.02,
+            GoaltenderPosition.DEEP_NET: -0.02,
+            GoaltenderPosition.AGGRESSIVE: 0.03,
+            GoaltenderPosition.BUTTERFLY: 0.01,
+            GoaltenderPosition.STAND_UP: -0.01
+        }.get(position, 0.0)
+        save_probability += position_bonus
         
-        # Calculate final save probability
-        save_probability = base_save_probability * skill_modifier * fatigue_factor * position_modifier
-        
-        # Apply style-specific modifiers
+        # Apply style-specific modifiers (additive)
         goalie_style = self._determine_goaltender_style(goaltender)
         if goalie_style == GoaltenderStyle.POSITIONAL and shot_type in [ShotType.WRIST_SHOT, ShotType.SNAP_SHOT]:
-            save_probability *= 1.1
+            save_probability += 0.02
         elif goalie_style == GoaltenderStyle.REACTIONARY and shot_type in [ShotType.TIP_IN, ShotType.DEFLECTION]:
-            save_probability *= 1.15
+            save_probability += 0.03
         elif goalie_style == GoaltenderStyle.BUTTERFLY and shot_location in [ShotLocation.LOW_SLOT, ShotLocation.CREASE]:
-            save_probability *= 1.1
+            save_probability += 0.02
 
         # Trait: Wall goalies are harder to beat
         save_probability *= _trait_bonus(goaltender, "save_chance_mult")
@@ -5156,7 +5157,10 @@ class GameSim:
         except Exception:
             pass
         
-        return min(max(save_probability, 0.05), 0.98)  # Clamp between 5% and 98%
+        # Global calibration: NHL average SV% is ~.905.
+        # (Removed - formula now naturally calibrates via xG reduction)
+        
+        return min(max(save_probability, 0.05), 0.94)  # Clamp between 5% and 94% (NHL elite ~.930)
 
     def _determine_rebound_control(self, goaltender, save_type, shot_type, shot_power):
         """
