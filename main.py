@@ -2670,6 +2670,37 @@ class AdvancedGameSim:
                             if hasattr(self, 'user_team') and team == self.user_team:
                                 self.add_news(f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available.")
 
+    def _process_monthly_development(self):
+        """Run monthly player development for all players league-wide.
+        
+        Young players grow toward potential; veterans decline with age.
+        Notable changes for the user's team get logged as news.
+        """
+        if not hasattr(self, '_dev_engine'):
+            self._dev_engine = PlayerDevelopmentEngine()
+        
+        notable = []
+        for team in self.league.teams:
+            for roster_name in ('roster', 'prospects'):
+                for player in getattr(team, roster_name, []) or []:
+                    changes = self._dev_engine.process_monthly_development(player)
+                    if not changes:
+                        continue
+                    # Track meaningful growth for user's team
+                    if team == self.user_team:
+                        ups = {a: c for a, c in changes.items() if c >= 2}
+                        for attr, delta in ups.items():
+                            notable.append(
+                                f"📈 {player.first_name} {player.last_name} "
+                                f"{attr.replace('_', ' ')} +{delta} (now {getattr(player, attr)})"
+                            )
+        
+        # Cap news spam; show the most interesting ones
+        for story in notable[:5]:
+            self.add_news(story)
+        if notable:
+            print(f"📈 Monthly development: {len(notable)} notable improvements")
+
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
         """Enhanced shot resolution using multiple attributes"""
         # Determine shot type based on position and situation
@@ -6099,6 +6130,11 @@ class HockeyManagerGUI(tk.Tk):
                     self._schedule_cache.clear()
                 if hasattr(self, '_strength_cache'):
                     self._strength_cache.clear()
+                # Monthly player development (ratings change -> strength recomputed)
+                try:
+                    self._process_monthly_development()
+                except Exception as e:
+                    print(f"Player development error (non-fatal): {e}")
             
             # Update game_manager's current_date for dashboard synchronization
             self.game_manager.current_date = self.current_date
