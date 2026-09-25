@@ -6212,25 +6212,20 @@ class HockeyManagerGUI(tk.Tk):
         if away_team.team_name not in self.league.standings:
             self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
         
-        if winner == home_team:
-            self.league.standings[home_team.team_name]['W'] += 1
-            self.league.standings[away_team.team_name]['L'] += 1
-            self.league.standings[home_team.team_name]['Points'] += 2
-        elif winner == away_team:
-            self.league.standings[away_team.team_name]['W'] += 1
-            self.league.standings[home_team.team_name]['L'] += 1
-            self.league.standings[away_team.team_name]['Points'] += 2
-        else:  # In case of tie that went to shootout
-            if home_score > away_score:
-                self.league.standings[home_team.team_name]['W'] += 1
-                self.league.standings[away_team.team_name]['OTL'] += 1
-                self.league.standings[home_team.team_name]['Points'] += 2
-                self.league.standings[away_team.team_name]['Points'] += 1
-            else:
-                self.league.standings[away_team.team_name]['W'] += 1
-                self.league.standings[home_team.team_name]['OTL'] += 1
-                self.league.standings[away_team.team_name]['Points'] += 2
-                self.league.standings[home_team.team_name]['Points'] += 1
+        # Detect if game went to overtime/shootout (for OTL point)
+        # NHL rule: loser in OT/SO gets 1 point (OTL)
+        went_to_ot = len([e for e in notable_events if e.get('period', 0) > 3]) > 0
+        
+        # Winner gets 2 points
+        self.league.standings[winner.team_name]['W'] += 1
+        self.league.standings[winner.team_name]['Points'] += 2
+        
+        # Loser: OTL point if game went to OT/SO, else regulation loss
+        if went_to_ot:
+            self.league.standings[loser.team_name]['OTL'] += 1
+            self.league.standings[loser.team_name]['Points'] += 1
+        else:
+            self.league.standings[loser.team_name]['L'] += 1
         
         # Store game result for later viewing
         player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
@@ -6663,19 +6658,19 @@ class HockeyManagerGUI(tk.Tk):
                 
                 # LIGHTWEIGHT simulation - just calculate winner and score
                 result = self._simulate_game_lightweight(home_team, away_team)
-                winner, loser, scores = result
+                winner, loser, scores, went_to_ot = result
                 
-                batch_results.append((game_date, home_team, away_team, winner, loser, scores))
+                batch_results.append((game_date, home_team, away_team, winner, loser, scores, went_to_ot))
                 
                 # Update standings immediately (no batch delay)
-                self._update_standings_fast(home_team, away_team, winner, scores)
+                self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot)
                 
             except Exception as e:
                 print(f"Error in batch simulation: {e}")
                 continue
         
         # Store minimal game results for performance
-        for game_date, home_team, away_team, winner, loser, scores in batch_results:
+        for game_date, home_team, away_team, winner, loser, scores, went_to_ot in batch_results:
             home_score, away_score = scores
             
             # Store minimal game result
@@ -6690,7 +6685,7 @@ class HockeyManagerGUI(tk.Tk):
                 'notable_events': [],  # No notable events
                 'player_ratings': {},  # No player ratings
                 'event_log': [],  # No event log
-                'overtime': home_score == away_score,  # Simple OT detection
+                'overtime': went_to_ot,  # Track OT for OTL points
                 'shootout': False
             }
             
@@ -6766,10 +6761,11 @@ class HockeyManagerGUI(tk.Tk):
         home_goal_expectation = max(1.0, min(4.5, home_goal_expectation))
         away_goal_expectation = max(1.0, min(4.5, away_goal_expectation))
         
-        # Generate goals with potential for rare low-scoring games
-        # Use wider standard deviation to allow more variety including 1-0 games
-        home_goals = max(0, min(8, int(random.normalvariate(home_goal_expectation, 1.25))))
-        away_goals = max(0, min(8, int(random.normalvariate(away_goal_expectation, 1.25))))
+        # Generate goals with realistic NHL distribution
+        # Use round() not int() to avoid truncation bias (~0.5 goals lost per team)
+        # σ=1.0 gives ~7% shutout rate (NHL realistic) vs 24.5% with σ=1.25
+        home_goals = max(0, min(8, round(random.normalvariate(home_goal_expectation, 1.0))))
+        away_goals = max(0, min(8, round(random.normalvariate(away_goal_expectation, 1.0))))
         
         # Apply clutch performance factors in close games
         if abs(home_goals - away_goals) <= 1:
@@ -6788,8 +6784,11 @@ class HockeyManagerGUI(tk.Tk):
                 else:
                     home_goals = max(0, home_goals - 1)
         
-        # Handle ties (add overtime goal with star player influence)
+        # Handle ties (NHL: 5-min 3v3 OT, then shootout)
+        # Track if game went to OT for OTL point
+        went_to_ot = False
         if home_goals == away_goals:
+            went_to_ot = True
             home_ot_chance = 0.55 + (home_star_effects['clutch_factor'] * 0.1)  # Star players help in OT
             if random.random() < home_ot_chance:
                 home_goals += 1
@@ -6807,7 +6806,7 @@ class HockeyManagerGUI(tk.Tk):
         # Generate realistic individual player stats
         self._generate_player_stats(home_team, away_team, home_goals, away_goals)
         
-        return winner, loser, (home_goals, away_goals)
+        return winner, loser, (home_goals, away_goals), went_to_ot
     
     def _calculate_team_strength(self, team):
         """Quick team strength calculation for lightweight simulation"""
@@ -7208,7 +7207,7 @@ class HockeyManagerGUI(tk.Tk):
             except:
                 pass
     
-    def _update_standings_fast(self, home_team, away_team, winner, scores):
+    def _update_standings_fast(self, home_team, away_team, winner, scores, went_to_ot=False):
         """Fast standings update without complex calculations"""
         home_score, away_score = scores
         
@@ -7217,13 +7216,17 @@ class HockeyManagerGUI(tk.Tk):
             if team.team_name not in self.league.standings:
                 self.league.standings[team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
         
-        # Update winner
+        # Update winner (2 points)
         self.league.standings[winner.team_name]["W"] += 1
         self.league.standings[winner.team_name]["Points"] += 2
         
-        # Update loser
+        # Update loser (OTL point if went to OT/SO, else regulation loss)
         loser = away_team if winner == home_team else home_team
-        self.league.standings[loser.team_name]["L"] += 1
+        if went_to_ot:
+            self.league.standings[loser.team_name]["OTL"] += 1
+            self.league.standings[loser.team_name]["Points"] += 1
+        else:
+            self.league.standings[loser.team_name]["L"] += 1
 
     def _simulate_game_with_viewer(self, home_team, away_team):
         """Simulate a game using the visual game viewer"""
