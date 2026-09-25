@@ -3653,13 +3653,11 @@ class HockeyManagerGUI(tk.Tk):
         left_menu_frame.pack(side="left", fill="x", expand=True)
         
         # Primary action buttons (always visible) - temporarily disable icons
-        self.inbox_btn = ttk.Button(left_menu_frame, text=self._get_inbox_button_text(), 
-                                  style="TeamMenu.TButton", command=self.open_inbox_window)
-        self.inbox_btn.pack(side="left", padx=4)
+        self.inbox_btn = self._create_nav_pill(left_menu_frame, self._get_inbox_button_text(),
+                                               self.open_inbox_window)
 
-        ttk.Button(left_menu_frame, text="Roster",
-                 style="TeamMenu.TButton", 
-                 command=self.open_roster_window).pack(side="left", padx=4)        # Schedule & Calendar dropdown
+        self._create_nav_pill(left_menu_frame, "Roster", self.open_roster_window)
+        # Schedule & Calendar dropdown
         self._create_dropdown_menu(left_menu_frame, "Schedule", {
             "Schedule": self.open_schedule_window,
             "🗓️ Calendar": self.open_calendar_window
@@ -3711,32 +3709,49 @@ class HockeyManagerGUI(tk.Tk):
         })
 
         # Right menu buttons - temporarily back to text
-        ttk.Button(right_menu_frame, text="News", style="TeamMenu.TButton", 
-                 command=self.open_news_window).pack(side="right", padx=4)
+        self._create_nav_pill(right_menu_frame, "News",
+                              self.open_news_window, side="right")
 
         # Media Center button (optional system)
-        ttk.Button(right_menu_frame, text="Media", style="TeamMenu.TButton", 
-                 command=self.open_media_center).pack(side="right", padx=4)
+        self._create_nav_pill(right_menu_frame, "Media",
+                              self.open_media_center, side="right")
 
         # Stats & Standings button
-        ttk.Button(right_menu_frame, text="Stats", style="TeamMenu.TButton", 
-                 command=self.open_stats_standings_window).pack(side="right", padx=4)
+        self._create_nav_pill(right_menu_frame, "Stats",
+                              self.open_stats_standings_window, side="right")
         
         # GM Options as standalone button
-        ttk.Button(right_menu_frame, text="GM Options", style="TeamMenu.TButton", 
-                 command=self.open_gm_options_window).pack(side="right", padx=4)
+        self._create_nav_pill(right_menu_frame, "GM Options",
+                              self.open_gm_options_window, side="right")
         
         # Settings as its own button
-        ttk.Button(right_menu_frame, text="Settings", style="TeamMenu.TButton", 
-                 command=self.open_settings_window).pack(side="right", padx=4)
+        self._create_nav_pill(right_menu_frame, "Settings",
+                              self.open_settings_window, side="right")
     
+    def _create_nav_pill(self, parent, text, command, side="left"):
+        """Create a pill-style navigation button for the top menu bar."""
+        # Get the menu bar background for seamless pill blending
+        try:
+            bg = parent.cget('bg')
+        except Exception:
+            try:
+                from tkinter import ttk as _ttk
+                bg = _ttk.Style().lookup('Panel.TFrame', 'background') or '#0d1420'
+            except Exception:
+                bg = '#0d1420'
+        pill = PillButton(parent, text=text, command=command,
+                         font=(self.FONT_FAMILY, 10, 'bold'),
+                         padx=14, pady=6, bg=bg,
+                         fg='#c8d0e0', hover_bg='#2a3550')
+        pill.pack(side=side, padx=4)
+        return pill
+
     def _create_dropdown_menu(self, parent, button_text, menu_items):
         """Create a dropdown menu button with organized menu items."""
         import tkinter as tk
         
-        # Create the main dropdown button
-        dropdown_btn = ttk.Button(parent, text=button_text, style="TeamMenu.TButton")
-        dropdown_btn.pack(side="left", padx=4)
+        # Create the main dropdown button as a nav pill
+        dropdown_btn = self._create_nav_pill(parent, button_text, None)
         
         # Create dropdown menu
         dropdown_menu = tk.Menu(self.master, tearoff=0, font=(self.FONT_FAMILY, 9))
@@ -3764,7 +3779,7 @@ class HockeyManagerGUI(tk.Tk):
             except:
                 pass
         
-        dropdown_btn.configure(command=show_dropdown)
+        dropdown_btn.command = show_dropdown
         
         return dropdown_btn
 

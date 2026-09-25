@@ -78,3 +78,26 @@ class PillButton(tk.Canvas):
     def set_selected(self, selected):
         self._selected = bool(selected)
         self._draw()
+
+    def set_text(self, text):
+        """Update the button text, resizing the pill if needed."""
+        if text == self.text:
+            return
+        self.text = text
+        # Re-measure and resize
+        probe = tk.Label(self.master, text=text, font=self.font)
+        probe.update_idletasks()
+        tw, th = probe.winfo_reqwidth(), probe.winfo_reqheight()
+        probe.destroy()
+        w, h = tw + self.padx * 2, th + self.pady * 2
+        self._pw, self._ph = w, h
+        self.configure(width=w, height=h)
+        self._draw()
+
+    # Compatibility: allow .config(text=...) like a ttk.Button
+    def configure(self, *args, **kwargs):
+        if 'text' in kwargs:
+            self.set_text(kwargs.pop('text'))
+        if kwargs or args:
+            super().configure(*args, **kwargs)
+    config = configure
