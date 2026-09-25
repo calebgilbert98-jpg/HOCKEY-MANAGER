@@ -161,10 +161,26 @@ class PlayerStats:
     shots: int = 0
     games_played: int = 0
     shots_against: int = 0  # For goalies: total shots faced
+    wins: int = 0  # Goalie wins
+    losses: int = 0  # Goalie losses (incl. OTL?)
+    goals_against: int = 0  # Goalie goals against
+    shutouts: int = 0  # Goalie shutouts
+    save_percentage: float = 0.0  # 0-1 decimal
+    goals_against_avg: float = 0.0
 
     @property
     def points(self) -> int:
         return self.goals + self.assists
+
+    def _update_goalie_stats(self):
+        """Update calculated goalie statistics (SV% as 0-1 decimal, GAA)."""
+        if self.shots_against > 0:
+            self.save_percentage = self.saves / self.shots_against
+        else:
+            self.save_percentage = 0.0
+
+        games = max(self.wins + self.losses, 1)
+        self.goals_against_avg = self.goals_against / games
 
 player_id_counter = itertools.count()
 

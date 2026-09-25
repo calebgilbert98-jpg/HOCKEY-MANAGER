@@ -1848,13 +1848,40 @@ class GameSim:
         
         self._check_for_notable_performances()
 
-        # Games played: only dressed players (those in team.lineup) get credit.
+        # Games played: only dressed players get credit.
         # Healthy scratches (roster players not in lineup) do NOT get GP.
+        # Skaters: credit from F1-F4 and D1-D3 slots.
+        # Goalies: ONLY the goalie who actually played (faced shots) gets GP.
+        # The backup (G2) dressing as backup does NOT get a GP.
         # Falls back to full roster only if lineup is empty (shouldn't happen
         # in normal app flow, but keeps standalone sims working).
         for team in (self.home_team, self.away_team):
             lineup = getattr(team, 'lineup', None) or {}
-            dressed = [p for p in lineup.values() if p is not None]
+            dressed = []
+            goalie_played_ids = set()
+            # First, find which goalies actually played (from game_stats)
+            for stats in self.game_stats.values():
+                p = stats.get('player')
+                if p is None:
+                    continue
+                if getattr(getattr(p, 'primary_position', None), 'value', '') == 'G':
+                    if stats.get('shots_against', 0) > 0 or stats.get('saves', 0) > 0:
+                        goalie_played_ids.add(p.id)
+            # Collect dressed skaters from F*/D* slots, and only the playing goalie
+            for key, p in lineup.items():
+                if p is None or isinstance(p, dict):
+                    continue
+                if not hasattr(p, 'id'):
+                    continue
+                # Skip goalie slots unless this goalie actually played
+                if key.startswith('G'):
+                    if p.id in goalie_played_ids:
+                        dressed.append(p)
+                    # Backup goalie (G2) who didn't play gets NO GP
+                    continue
+                # Only count F and D slots (skip PP/PK nested or other keys)
+                if key.startswith('F') or key.startswith('D'):
+                    dressed.append(p)
             # Deduplicate (a player could theoretically appear twice)
             seen = set()
             dressed_unique = []
@@ -1882,6 +1909,7 @@ class GameSim:
                     continue
                 player.stats.saves += stats.get('saves', 0)
                 player.stats.shots_against += stats.get('shots_against', 0)
+                player.stats.goals_against += stats.get('goals_against', 0)
                 # Recalculate SV% now that saves/shots_against changed
                 player.stats._update_goalie_stats()
             except Exception:
@@ -1889,6 +1917,32 @@ class GameSim:
 
         winner = self.home_team if self.home_score > self.away_score else self.away_team
         loser = self.away_team if self.home_score > self.away_score else self.home_team
+
+        # Credit goalie wins/losses (only the goalies who played)
+        home_ids = {p.id for p in self.home_team.roster}
+        for stats in self.game_stats.values():
+            player = stats.get('player')
+            if player is None:
+                continue
+            try:
+                if getattr(getattr(player, 'primary_position', None), 'value', '') != 'G':
+                    continue
+                # Only goalies who faced shots played in the game
+                if stats.get('shots_against', 0) == 0 and stats.get('saves', 0) == 0:
+                    continue
+                # Determine if this goalie's team won
+                is_home = player.id in home_ids
+                goalie_won = (is_home and self.home_score > self.away_score) or \
+                            (not is_home and self.away_score > self.home_score)
+                goalie_lost = (is_home and self.home_score < self.away_score) or \
+                             (not is_home and self.away_score < self.home_score)
+                if goalie_won:
+                    player.stats.wins += 1
+                elif goalie_lost:
+                    player.stats.losses += 1
+                player.stats._update_goalie_stats()
+            except Exception:
+                pass
         
         self._emit_pbp("game_end", winner=winner.team_name,
                        home_score=self.home_score, away_score=self.away_score)
