@@ -83,6 +83,11 @@ class ModernUITheme:
         style.configure('TFrame', background=self.colors.primary_bg)
         style.configure('Panel.TFrame', background=self.colors.secondary_bg, relief='flat', borderwidth=1)
         style.configure('Card.TFrame', background=self.colors.tertiary_bg, relief='flat', borderwidth=1)
+        style.configure('Card.TLabel',
+            background=self.colors.tertiary_bg,
+            foreground=self.colors.primary_text,
+            font=self.fonts['body']
+        )
         style.configure('TitleBar.TFrame', background=self.colors.border_dark)
         
         # Label styles

@@ -2665,153 +2665,414 @@ The Market Overview tab provides analytics and top available talent.
                           f"Recommended: Increase offer by 10%")
 
 class TradeWindow(tk.Toplevel):
+    """Modern Trade Center: live value meter, picks, AI counter-offers, history."""
+
+    METER_W = 280
+    METER_H = 22
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
         self.title("Trade Center")
-        self.geometry("1300x700")
-        self.configure(background='#1E1E1E')
+        self.geometry("1280x760")
+        self.configure(background=parent.BG_COLOR)
         self.trade_offers = {'user': [], 'partner': []}
-        
-        # Initialize context menu manager
-        self.context_menu_manager = PlayerContextMenu(self.parent)
+        self._history_visible = False
 
-        main_pane = ttk.PanedWindow(self, orient='horizontal')
-        main_pane.pack(fill='both', expand=True, padx=5, pady=5)
+        import trade_engine as te
+        self.te = te
+        gm = getattr(parent, 'game_manager', None)
+        if gm is not None and not hasattr(gm, 'trade_history'):
+            gm.trade_history = []
 
-        user_frame = ttk.LabelFrame(main_pane, text=self.parent.user_team.team_name, padding=5)
-        main_pane.add(user_frame, weight=2)
-        self.user_trade_tree = parent._create_treeview(user_frame, {'name': ('Name', 150), 'ovr': ('OVR', 40)}, 20)
-        self.user_trade_tree.pack(fill='both', expand=True)
-        # Add context menu to user trade tree
-        self.user_trade_tree.bind('<Button-3>', self._show_trade_context_menu)
-        ttk.Button(user_frame, text="Add to Offer >>", command=lambda: self._add_to_trade('user')).pack(pady=5)
+        # ---- Header ----
+        header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
+        header.pack(fill='x', padx=10, pady=(10, 0))
+        ttk.Label(header, text="Trade Center",
+                  font=(parent.FONT_FAMILY, 18, 'bold'),
+                  style='Heading.TLabel').pack(side='left')
+        ttk.Label(header, text="Build a deal both GMs can live with",
+                  style='Secondary.TLabel').pack(side='left', padx=(12, 0))
+        hist_btn = ttk.Button(header, text="Trade History",
+                              command=self._toggle_history,
+                              style='Secondary.TButton')
+        hist_btn.pack(side='right')
 
-        center_frame = ttk.Frame(main_pane)
-        main_pane.add(center_frame, weight=1)
-        ttk.Label(center_frame, text="Your Offer:").pack()
-        self.user_offer_list = tk.Listbox(center_frame, bg='#3C3C3C', fg='white', height=8)
-        self.user_offer_list.pack(fill='x', expand=True, pady=5)
-        ttk.Button(center_frame, text="Remove", command=lambda: self._remove_from_trade('user')).pack()
-        
-        ttk.Separator(center_frame, orient='horizontal').pack(fill='x', pady=15)
-
-        ttk.Label(center_frame, text="Their Offer:").pack()
-        self.partner_offer_list = tk.Listbox(center_frame, bg='#3C3C3C', fg='white', height=8)
-        self.partner_offer_list.pack(fill='x', expand=True, pady=5)
-        ttk.Button(center_frame, text="Remove", command=lambda: self._remove_from_trade('partner')).pack()
-
-        ttk.Button(center_frame, text="Propose Trade", command=self.propose_trade).pack(pady=20)
-
-        partner_frame = ttk.LabelFrame(main_pane, text="Trade Partner", padding=5)
-        main_pane.add(partner_frame, weight=2)
-        partner_teams = [t.team_name for t in self.parent.league.teams if t != self.parent.user_team]
+        # Partner selector row
+        partner_row = ttk.Frame(self, style='Panel.TFrame', padding=(14, 6))
+        partner_row.pack(fill='x', padx=10)
+        ttk.Label(partner_row, text="Trade partner:", style='TLabel').pack(side='left')
+        partner_teams = sorted(t.team_name for t in parent.league.teams
+                               if t != parent.user_team)
         self.partner_var = tk.StringVar(master=self)
-        partner_dropdown = ttk.Combobox(partner_frame, textvariable=self.partner_var, values=partner_teams, state='readonly')
-        partner_dropdown.pack(fill='x', pady=5)
-        partner_dropdown.bind("<<ComboboxSelected>>", self.update_trade_partner_roster)
-        self.partner_trade_tree = parent._create_treeview(partner_frame, {'name': ('Name', 150), 'ovr': ('OVR', 40)}, 20)
+        self.partner_combo = ttk.Combobox(partner_row, textvariable=self.partner_var,
+                                          values=partner_teams, state='readonly', width=28)
+        self.partner_combo.pack(side='left', padx=(8, 16))
+        self.partner_combo.bind("<<ComboboxSelected>>", self.update_trade_partner_roster)
+        if partner_teams:
+            self.partner_var.set(partner_teams[0])
+        ttk.Label(partner_row, text="Their needs:", style='Secondary.TLabel').pack(side='left')
+        self.needs_label = ttk.Label(partner_row, text="", style='TLabel',
+                                     font=(parent.FONT_FAMILY, 10, 'bold'))
+        self.needs_label.pack(side='left', padx=(6, 0))
+
+        # ---- Main 3-column layout ----
+        main_pane = ttk.PanedWindow(self, orient='horizontal')
+        main_pane.pack(fill='both', expand=True, padx=10, pady=8)
+        self.main_pane = main_pane
+
+        # Your roster
+        user_frame = ttk.Frame(main_pane, style='Card.TFrame', padding=8)
+        main_pane.add(user_frame, weight=2)
+        ttk.Label(user_frame, text=parent.user_team.team_name,
+                  font=(parent.FONT_FAMILY, 12, 'bold'),
+                  style='Card.TLabel').pack(anchor='w', pady=(0, 4))
+        self.user_trade_tree = parent._create_treeview(
+            user_frame, {'name': ('Name', 150), 'ovr': ('OVR', 40)})
+        self.user_trade_tree.pack(fill='both', expand=True)
+        btn_row = ttk.Frame(user_frame, style='Card.TFrame')
+        btn_row.pack(fill='x', pady=(6, 0))
+        ttk.Button(btn_row, text="Add Player  →",
+                   command=lambda: self._add_to_trade('user'),
+                   style='Secondary.TButton').pack(side='left', padx=(0, 6))
+        ttk.Button(btn_row, text="Add Pick",
+                   command=lambda: self._add_pick_dialog('user'),
+                   style='Secondary.TButton').pack(side='left')
+
+        # Center: deal panel
+        center = ttk.Frame(main_pane, style='Panel.TFrame', padding=10)
+        main_pane.add(center, weight=1)
+
+        ttk.Label(center, text="YOUR OFFER", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+        self.user_offer_list = tk.Listbox(center, height=6, activestyle='none',
+                                          bg='#232a3a', fg='#e8ecf4',
+                                          selectbackground='#335577', relief='flat',
+                                          highlightthickness=1, highlightbackground='#3a4a63')
+        self.user_offer_list.pack(fill='x', pady=(2, 2))
+        ttk.Button(center, text="Remove selected",
+                   command=lambda: self._remove_from_trade('user'),
+                   style='Secondary.TButton').pack(anchor='e', pady=(0, 8))
+
+        # Live trade meter
+        ttk.Label(center, text="TRADE METER", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+        self.meter_canvas = tk.Canvas(center, width=self.METER_W, height=self.METER_H,
+                                      highlightthickness=0, bg='#141a26')
+        self.meter_canvas.pack(fill='x', pady=(2, 2))
+        self.meter_label = ttk.Label(center, text="Add assets to evaluate",
+                                     style='TLabel', font=(parent.FONT_FAMILY, 10, 'bold'))
+        self.meter_label.pack(anchor='w', pady=(0, 2))
+        self.cap_label = ttk.Label(center, text="", style='Secondary.TLabel',
+                                   wraplength=300, justify='left')
+        self.cap_label.pack(anchor='w', pady=(0, 8))
+
+        ttk.Label(center, text="THEIR OFFER", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+        self.partner_offer_list = tk.Listbox(center, height=6, activestyle='none',
+                                             bg='#232a3a', fg='#e8ecf4',
+                                             selectbackground='#335577', relief='flat',
+                                             highlightthickness=1, highlightbackground='#3a4a63')
+        self.partner_offer_list.pack(fill='x', pady=(2, 2))
+        ttk.Button(center, text="Remove selected",
+                   command=lambda: self._remove_from_trade('partner'),
+                   style='Secondary.TButton').pack(anchor='e', pady=(0, 8))
+
+        ttk.Button(center, text="Propose Trade", command=self.propose_trade,
+                   style='TButton').pack(fill='x', pady=(6, 0))
+        ttk.Label(center, text="The AI GM evaluates value, needs and cap space.\nLowball and expect a counter.",
+                  style='Secondary.TLabel', wraplength=300, justify='center',
+                  font=(parent.FONT_FAMILY, 9)).pack(pady=(8, 0))
+
+        # Partner roster
+        partner_frame = ttk.Frame(main_pane, style='Card.TFrame', padding=8)
+        main_pane.add(partner_frame, weight=2)
+        self.partner_title = ttk.Label(partner_frame, text="Trade Partner",
+                                       font=(parent.FONT_FAMILY, 12, 'bold'),
+                                       style='Card.TLabel')
+        self.partner_title.pack(anchor='w', pady=(0, 4))
+        self.partner_trade_tree = parent._create_treeview(
+            partner_frame, {'name': ('Name', 150), 'ovr': ('OVR', 40)})
         self.partner_trade_tree.pack(fill='both', expand=True)
-        # Add context menu to partner trade tree  
-        self.partner_trade_tree.bind('<Button-3>', self._show_trade_context_menu)
-        ttk.Button(partner_frame, text="<< Add to Offer", command=lambda: self._add_to_trade('partner')).pack(pady=5)
+        pbtn_row = ttk.Frame(partner_frame, style='Card.TFrame')
+        pbtn_row.pack(fill='x', pady=(6, 0))
+        ttk.Button(pbtn_row, text="←  Add Player",
+                   command=lambda: self._add_to_trade('partner'),
+                   style='Secondary.TButton').pack(side='left', padx=(0, 6))
+        ttk.Button(pbtn_row, text="Add Pick",
+                   command=lambda: self._add_pick_dialog('partner'),
+                   style='Secondary.TButton').pack(side='left')
+
+        # History panel (hidden by default)
+        self.history_frame = ttk.Frame(self, style='Panel.TFrame', padding=(14, 6))
 
         self.update_views()
 
+    # ------------------------------------------------------------------
+    # Views
+    # ------------------------------------------------------------------
     def update_views(self):
-        self.parent._populate_player_tree(self.user_trade_tree, self.parent.user_team.roster, trade_view=True)
+        self.parent._populate_player_tree(self.user_trade_tree,
+                                          self.parent.user_team.roster,
+                                          trade_view=True)
         self.update_trade_partner_roster()
-        self.user_offer_list.delete(0, tk.END)
-        self.partner_offer_list.delete(0, tk.END)
-        self.trade_offers = {'user': [], 'partner': []}
+        self._refresh_offer_lists()
+        self._update_meter()
 
     def update_trade_partner_roster(self, event=None):
-        partner_name = self.partner_var.get()
-        if partner_name:
-            partner_team = next((t for t in self.parent.league.teams if t.team_name == partner_name), None)
-            if partner_team:
-                self.parent._populate_player_tree(self.partner_trade_tree, partner_team.roster, trade_view=True)
+        name = self.partner_var.get()
+        team = next((t for t in self.parent.league.teams
+                     if t.team_name == name), None)
+        if team:
+            self.partner_title.config(text=team.team_name)
+            self.parent._populate_player_tree(self.partner_trade_tree,
+                                              team.roster, trade_view=True)
+            needs = self.te.team_needs(team)[:3]
+            self.needs_label.config(text="  ".join(needs) if needs else "—")
+        # Partner changed -> clear their side of the deal
+        self.trade_offers['partner'] = []
+        self._refresh_offer_lists()
+        self._update_meter()
 
+    def _refresh_offer_lists(self):
+        for side, lb in (('user', self.user_offer_list),
+                         ('partner', self.partner_offer_list)):
+            lb.delete(0, tk.END)
+            for a in self.trade_offers[side]:
+                lb.insert(tk.END,
+                          f"{self.te.asset_label(a)}  [{self.te.asset_value(a)}]")
+
+    # ------------------------------------------------------------------
+    # Trade meter
+    # ------------------------------------------------------------------
+    def _eval(self):
+        return self.te.evaluate_trade(self.trade_offers['user'],
+                                      self.trade_offers['partner'])
+
+    def _update_meter(self):
+        c = self.meter_canvas
+        c.delete('all')
+        w = c.winfo_width() or self.METER_W
+        h = self.METER_H
+        ev = self._eval()
+        total = ev.user_value + ev.partner_value
+        # Track
+        c.create_rectangle(0, 0, w, h, fill='#232a3a', outline='')
+        if total > 0:
+            uw = w * ev.user_value / total
+            c.create_rectangle(0, 0, uw, h, fill='#4a9eff', outline='')
+            c.create_rectangle(uw, 0, w, h, fill='#e8b93c', outline='')
+            # Center marker
+            c.create_line(w/2, 0, w/2, h, fill='#0e1420', width=2)
+        # Label
+        if not self.trade_offers['user'] or not self.trade_offers['partner']:
+            self.meter_label.config(text="Add assets on both sides to evaluate",
+                                    foreground='#7a8aa3')
+        else:
+            color = {'Fair deal': '#46c93a', 'You overpay': '#4a9eff',
+                     'They overpay': '#e8b93c'}.get(ev.label, '#e8ecf4')
+            self.meter_label.config(
+                text=f"{ev.label}  (you {ev.user_value} vs them {ev.partner_value})",
+                foreground=color)
+        # Cap impact for the user
+        gm_team = self.parent.user_team
+        in_sal = sum(getattr(p, 'salary', 0) or 0 for p in self.trade_offers['partner']
+                     if not self.te._is_pick(p))
+        out_sal = sum(getattr(p, 'salary', 0) or 0 for p in self.trade_offers['user']
+                      if not self.te._is_pick(p))
+        try:
+            new_pay = gm_team.payroll - out_sal + in_sal
+            room = gm_team.salary_cap - new_pay
+            ok = room >= 0
+            self.cap_label.config(
+                text=f"Cap room after: ${room/1e6:.1f}M"
+                     if ok else f"OVER CAP by ${-room/1e6:.1f}M — shed salary!",
+                foreground='#46c93a' if ok else '#e74c3c')
+        except Exception:
+            self.cap_label.config(text="")
+
+    # ------------------------------------------------------------------
+    # Building the deal
+    # ------------------------------------------------------------------
     def _add_to_trade(self, side):
         tree = self.user_trade_tree if side == 'user' else self.partner_trade_tree
         tree_map = self.parent.tree_maps.get(tree, {})
-        selected_item_id = tree.selection()
-        if not selected_item_id: return
-        player = tree_map.get(selected_item_id[0])
+        sel = tree.selection()
+        if not sel:
+            return
+        player = tree_map.get(sel[0])
         if player and player not in self.trade_offers[side]:
             self.trade_offers[side].append(player)
-            offer_list = self.user_offer_list if side == 'user' else self.partner_offer_list
-            offer_list.insert(tk.END, f"{player.full_name} (OVR: {player.overall_rating()})")
+            self._refresh_offer_lists()
+            self._update_meter()
 
     def _remove_from_trade(self, side):
-        offer_list = self.user_offer_list if side == 'user' else self.partner_offer_list
-        selected_indices = offer_list.curselection()
-        if not selected_indices: return
-        player_name = offer_list.get(selected_indices[0]).split(' (OVR:')[0]
-        self.trade_offers[side] = [p for p in self.trade_offers[side] if p.full_name != player_name]
-        offer_list.delete(selected_indices[0])
+        lb = self.user_offer_list if side == 'user' else self.partner_offer_list
+        sel = lb.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        del self.trade_offers[side][idx]
+        self._refresh_offer_lists()
+        self._update_meter()
+
+    def _team_picks(self, team):
+        picks = []
+        for yr in sorted(getattr(team, 'draft_picks', {}).keys()):
+            for pk in team.draft_picks[yr]:
+                if getattr(pk, 'current_team', '') == team.team_name:
+                    picks.append(pk)
+        return picks
+
+    def _add_pick_dialog(self, side):
+        team = (self.parent.user_team if side == 'user' else
+                next((t for t in self.parent.league.teams
+                      if t.team_name == self.partner_var.get()), None))
+        if team is None:
+            return
+        picks = [p for p in self._team_picks(team)
+                 if p not in self.trade_offers[side]]
+        if not picks:
+            messagebox.showinfo("No picks", f"{team.team_name} has no tradeable picks.")
+            return
+        dlg = tk.Toplevel(self)
+        dlg.title("Add draft pick")
+        dlg.geometry("420x320")
+        dlg.configure(background=self.parent.BG_COLOR)
+        dlg.transient(self)
+        ttk.Label(dlg, text=f"Select a {team.team_name} pick:",
+                  style='TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(pady=10)
+        lb = tk.Listbox(dlg, height=12, bg='#232a3a', fg='#e8ecf4',
+                        selectbackground='#335577', relief='flat')
+        lb.pack(fill='both', expand=True, padx=12)
+        for pk in picks:
+            lb.insert(tk.END, f"{self.te.asset_label(pk)}  [{self.te.asset_value(pk)}]")
+        def add():
+            sel = lb.curselection()
+            if sel:
+                self.trade_offers[side].append(picks[sel[0]])
+                self._refresh_offer_lists()
+                self._update_meter()
+                dlg.destroy()
+        ttk.Button(dlg, text="Add to Offer", command=add,
+                   style='TButton').pack(pady=10)
+
+    # ------------------------------------------------------------------
+    # Proposing + AI negotiation
+    # ------------------------------------------------------------------
+    def _partner_team(self):
+        return next((t for t in self.parent.league.teams
+                     if t.team_name == self.partner_var.get()), None)
 
     def propose_trade(self):
-        user_offer_value = sum(p.overall_rating() for p in self.trade_offers['user'])
-        partner_offer_value = sum(p.overall_rating() for p in self.trade_offers['partner'])
-        if user_offer_value >= partner_offer_value * 0.95:
-            messagebox.showinfo("Trade Accepted!", "The other team has accepted your trade proposal.")
-            partner_team = next(t for t in self.parent.league.teams if t.team_name == self.partner_var.get())
-            
-            # Store trade details for media system
-            traded_players = []
-            received_players = []
-            
-            for player in self.trade_offers['user']:
-                self.parent.user_team.remove_player(player)
-                partner_team.add_player(player)
-                traded_players.append(player)
-            for player in self.trade_offers['partner']:
-                partner_team.remove_player(player)
-                self.parent.user_team.add_player(player)
-                received_players.append(player)
-            
-            # Generate media event for trade (if media system enabled)
-            if hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'media_system') and self.parent.game_manager.media_system:
-                self.parent.game_manager.media_system.process_trade(
-                    user_team=self.parent.user_team,
-                    other_team=partner_team,
-                    traded_players=traded_players,
-                    received_players=received_players
-                )
-            
-            self.parent.update_all_views()
-            self.update_views()
+        partner = self._partner_team()
+        if partner is None:
+            messagebox.showwarning("No partner", "Select a trade partner first.")
+            return
+        user_assets = list(self.trade_offers['user'])
+        partner_assets = list(self.trade_offers['partner'])
+        if not user_assets or not partner_assets:
+            messagebox.showwarning("Incomplete", "Put assets on both sides first.")
+            return
+        # Cap check for the user before bothering the AI
+        if not self.te._cap_ok_after(self.parent.user_team, user_assets, partner_assets):
+            messagebox.showerror("Cap problem",
+                                 "This trade puts YOU over the salary cap. Shed salary first.")
+            return
+        resp = self.te.ai_consider_trade(partner, user_assets, partner_assets,
+                                         user_team=self.parent.user_team)
+        if resp.decision == 'accept':
+            self._complete_trade(partner, user_assets, partner_assets)
+            messagebox.showinfo("Trade Accepted", resp.message +
+                                "\n\n" + self._last_summary)
+        elif resp.decision == 'reject':
+            messagebox.showerror("Trade Rejected", resp.message)
         else:
-            messagebox.showerror("Trade Rejected", "The other team has rejected your proposal.")
-    
-    def _show_trade_context_menu(self, event):
-        """Show context menu for players in trade window"""
-        tree = event.widget
-        item = tree.identify_row(event.y)
-        if item and item in self.parent.tree_maps:
-            player = self.parent.tree_maps[item]
-            
-            # Trade-specific additional options
-            trade_options = [
-                ("🔄 Add to Trade Offer", lambda: self._quick_add_to_trade(player)),
-                ("📊 Evaluate Trade Value", lambda: self._evaluate_trade_value(player))
-            ]
-            
-            self.context_menu_manager.show_context_menu(event, player, trade_options)
-    
-    def _quick_add_to_trade(self, player):
-        """Quick add player to trade offer"""
-        if player in self.parent.user_team.roster + self.parent.user_team.ahl_roster + self.parent.user_team.prospects:
-            self.trade_offers['user'].append(player)
+            self._counter_dialog(partner, user_assets, partner_assets, resp)
+
+    def _counter_dialog(self, partner, user_assets, partner_assets, resp):
+        dlg = tk.Toplevel(self)
+        dlg.title("Counter-offer")
+        dlg.geometry("460x260")
+        dlg.configure(background=self.parent.BG_COLOR)
+        dlg.transient(self)
+        ttk.Label(dlg, text=f"{partner.team_name} counters",
+                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
+                  style='Heading.TLabel').pack(pady=(14, 6))
+        ttk.Label(dlg, text=resp.message, style='TLabel',
+                  wraplength=400, justify='center',
+                  font=(self.parent.FONT_FAMILY, 11)).pack(pady=6)
+        btns = ttk.Frame(dlg, style='Panel.TFrame')
+        btns.pack(pady=16)
+        def accept_counter():
+            ua = list(user_assets) + list(resp.want_added)
+            pa = list(partner_assets) + list(resp.will_add)
+            if not self.te._cap_ok_after(self.parent.user_team, ua, pa):
+                messagebox.showerror("Cap problem",
+                                     "The counter puts you over the cap.")
+                return
+            dlg.destroy()
+            self._complete_trade(partner, ua, pa)
+            messagebox.showinfo("Trade Accepted",
+                                "Counter accepted!\n\n" + self._last_summary)
+        ttk.Button(btns, text="Accept Counter", command=accept_counter,
+                   style='TButton').pack(side='left', padx=8)
+        ttk.Button(btns, text="Walk Away", command=dlg.destroy,
+                   style='Secondary.TButton').pack(side='left', padx=8)
+
+    def _complete_trade(self, partner, user_assets, partner_assets):
+        gm = getattr(self.parent, 'game_manager', None)
+        date_str = str(getattr(gm, 'current_date', '')) if gm else ''
+        trade = self.te.execute_trade(self.parent.user_team, partner,
+                                      user_assets, partner_assets, date_str)
+        self._last_summary = trade.summary
+        if gm is not None:
+            gm.trade_history.append(trade)
+            # Media + news
+            try:
+                traded = [a for a in user_assets if not self.te._is_pick(a)]
+                received = [a for a in partner_assets if not self.te._is_pick(a)]
+                if hasattr(gm, 'media_system') and gm.media_system:
+                    gm.media_system.process_trade(
+                        user_team=self.parent.user_team, other_team=partner,
+                        traded_players=traded, received_players=received)
+            except Exception:
+                pass
+            try:
+                self.parent.add_news_story(f"TRADE: {trade.summary}")
+            except Exception:
+                pass
+        self.trade_offers = {'user': [], 'partner': []}
+        self.parent.update_all_views()
+        self.update_views()
+
+    # ------------------------------------------------------------------
+    # History
+    # ------------------------------------------------------------------
+    def _toggle_history(self):
+        gm = getattr(self.parent, 'game_manager', None)
+        history = list(getattr(gm, 'trade_history', [])) if gm else []
+        if self._history_visible:
+            self.history_frame.pack_forget()
+            self._history_visible = False
+            return
+        for child in self.history_frame.winfo_children():
+            child.destroy()
+        ttk.Label(self.history_frame, text=f"Trade History ({len(history)})",
+                  font=(self.parent.FONT_FAMILY, 12, 'bold'),
+                  style='Heading.TLabel').pack(anchor='w')
+        if not history:
+            ttk.Label(self.history_frame, text="No trades yet this save.",
+                      style='Secondary.TLabel').pack(anchor='w', pady=4)
         else:
-            self.trade_offers['partner'].append(player)
-        messagebox.showinfo("Added to Trade", f"{player.full_name} added to trade offer.")
-    
-    def _evaluate_trade_value(self, player):
-        """Show trade value evaluation"""
-        value = player.overall_rating() * 1000  # Mock trade value
-        messagebox.showinfo("Trade Value", f"{player.full_name} Trade Value: ${value:,}")
+            lb = tk.Listbox(self.history_frame, height=5, bg='#232a3a',
+                            fg='#e8ecf4', relief='flat')
+            lb.pack(fill='x', pady=4)
+            for t in reversed(history[-20:]):
+                lb.insert(tk.END, f"{t.date} — {t.summary}")
+        self.history_frame.pack(fill='x', padx=10, pady=(0, 8), before=self.main_pane)
+        self._history_visible = True
+
 
 class ScoutingWindow(tk.Toplevel):
     def __init__(self, parent):
