@@ -2727,8 +2727,114 @@ class FreeAgencyWindow(tk.Toplevel):
                     ttk.Label(row_frame, text=value, width=15).grid(row=0, column=i+1, padx=5)
     
     def compare_selected_staff(self):
-        """Compare selected staff."""
-        tk.messagebox.showinfo("Staff Comparison", "Staff comparison feature coming soon!")
+        """Compare selected staff (2-4) side by side."""
+        selection = self.fa_staff_tree.selection()
+        if len(selection) < 2:
+            tk.messagebox.showwarning("Selection Required",
+                                      "Please select 2-4 staff members to compare.")
+            return
+        if len(selection) > 4:
+            tk.messagebox.showwarning("Too Many Selected",
+                                      "Please select no more than 4 staff members to compare.")
+            return
+        selected = [self.parent.tree_maps.get('fa_staff', {}).get(i)
+                    for i in selection]
+        selected = [s for s in selected if s]
+        if len(selected) < 2:
+            tk.messagebox.showwarning("Invalid Selection",
+                                      "Could not find selected staff for comparison.")
+            return
+        self.create_staff_comparison_window(selected)
+
+    def create_staff_comparison_window(self, staff_list):
+        """Side-by-side staff comparison with best-value highlighting."""
+        from game_classes import Staff as StaffClass
+        win = tk.Toplevel(self)
+        win.title("Staff Comparison")
+        win.configure(background=self.parent.BG_COLOR)
+        win.geometry("900x640")
+
+        main = ttk.Frame(win, style='Panel.TFrame', padding=12)
+        main.pack(fill='both', expand=True)
+        ttk.Label(main, text="Staff Comparison", style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(anchor='w', pady=(0, 8))
+
+        canvas = tk.Canvas(main, background=self.parent.BG_COLOR,
+                           highlightthickness=0)
+        scroll = ttk.Scrollbar(main, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas, style='Panel.TFrame')
+        inner.bind("<Configure>",
+                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        n = len(staff_list)
+        # header row
+        ttk.Label(inner, text="Attribute", style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                  width=24).grid(row=0, column=0, padx=6, pady=4, sticky='w')
+        for c, s in enumerate(staff_list, 1):
+            ttk.Label(inner, text=s.full_name, style='TLabel',
+                      font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                      width=20).grid(row=0, column=c, padx=6, pady=4, sticky='w')
+
+        rows = [
+            ("Role", lambda s: s.role.value, False),
+            ("Department", lambda s: self._staff_dept(s), False),
+            ("Age", lambda s: s.age, False),
+            ("Nationality", lambda s: s.nationality, False),
+            ("Overall", lambda s: s.overall_rating, True),
+            ("Salary", lambda s: f"${s.salary:,}", False),
+            ("Contract", lambda s: f"{s.contract_years} yr", False),
+            ("Tactical Knowledge", lambda s: s.tactical_knowledge, True),
+            ("Man Management", lambda s: s.man_management, True),
+            ("Motivating", lambda s: s.motivating, True),
+            ("Working w/ Youngsters", lambda s: s.working_with_youngsters, True),
+            ("Player Development", lambda s: s.player_development, True),
+            ("Judging Ability", lambda s: s.judging_player_ability, True),
+            ("Judging Potential", lambda s: s.judging_player_potential, True),
+            ("Determination", lambda s: s.determination, True),
+            ("Adaptability", lambda s: s.adaptability, True),
+            ("Discipline", lambda s: s.discipline, True),
+        ]
+        for r, (label, func, higher_better) in enumerate(rows, 1):
+            ttk.Label(inner, text=label, style='Secondary.TLabel',
+                      width=24).grid(row=r, column=0, padx=6, pady=2, sticky='w')
+            vals = []
+            for s in staff_list:
+                try:
+                    vals.append(func(s))
+                except Exception:
+                    vals.append("—")
+            best_idx = -1
+            if higher_better:
+                nums = [v for v in vals if isinstance(v, (int, float))]
+                if nums:
+                    best = max(nums)
+                    best_idx = next(i for i, v in enumerate(vals) if v == best)
+            for c, v in enumerate(vals, 1):
+                style = 'TLabel'
+                font = (self.parent.FONT_FAMILY, 10,
+                        'bold' if c - 1 == best_idx else 'normal')
+                fg = '#7ee787' if c - 1 == best_idx else None
+                lbl = ttk.Label(inner, text=str(v), style=style, font=font,
+                                width=20)
+                if fg:
+                    lbl.configure(foreground=fg)
+                lbl.grid(row=r, column=c, padx=6, pady=2, sticky='w')
+
+        ttk.Label(main, text="Best value in each attribute is highlighted.",
+                  style='Secondary.TLabel',
+                  font=(self.parent.FONT_FAMILY, 9, 'italic')).pack(anchor='w', pady=(8, 0))
+
+    def _staff_dept(self, s):
+        from game_classes import Staff as StaffClass
+        try:
+            return StaffClass.get_role_department(s.role)
+        except Exception:
+            return "—"
     
     def show_player_market_analysis(self):
         """Show market analysis for the selected player."""
