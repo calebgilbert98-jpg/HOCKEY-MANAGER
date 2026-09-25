@@ -378,6 +378,9 @@ class GameSim:
         self.clock = 1200  # 20 minutes in seconds
         self.game_log = []
         self.notable_events = []
+        # Sudden-death OT bookkeeping (set by _handle_overtime)
+        self._ot_sudden_death = False
+        self._ot_start_score = None
         
         self.home_penalties = []
         self.away_penalties = []
@@ -1844,7 +1847,8 @@ class GameSim:
         if self.home_score == self.away_score:
             self._handle_overtime()
 
-        if self.home_score == self.away_score:
+        # Shootout only in regular season; playoffs use continuous sudden-death OT
+        if self.home_score == self.away_score and not self.is_playoff:
             self._handle_shootout()
         
         self._check_for_notable_performances()
@@ -1887,6 +1891,16 @@ class GameSim:
             self.clock -= time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
+
+            # Sudden-death OT: stop the period as soon as someone scores
+            if getattr(self, '_ot_sudden_death', False) and self._ot_start_score is not None:
+                if (self.home_score, self.away_score) != self._ot_start_score:
+                    self._log_event(
+                        f"Sudden-death goal! Game over: "
+                        f"{self.home_score}-{self.away_score}",
+                        "GOAL",
+                    )
+                    break
             
             # Update fatigue and check for line changes
             self._update_fatigue(time_elapsed)
@@ -3506,11 +3520,43 @@ class GameSim:
             return self._maintain_offensive_possession(attacking_team)
 
     def _handle_overtime(self):
-        """Simulates a 5-minute, 3-on-3 sudden death overtime."""
-        self._log_event("End of regulation, game is tied. Starting Overtime!", "PERIOD_START")
-        self.period = 4
-        self.clock = 300
-        self._simulate_period()
+        """Simulates overtime.
+
+        Regular season: 5-minute 3-on-3 sudden death, then shootout.
+        Playoffs: 20-minute 5-on-5 sudden-death periods until someone scores.
+        """
+        # Sudden-death bookkeeping consumed by _simulate_period
+        self._ot_sudden_death = True
+        try:
+            if self.is_playoff:
+                ot_num = 1
+                while self.home_score == self.away_score:
+                    label = f"OT{ot_num}" if ot_num > 1 else "OT"
+                    self._log_event(
+                        f"End of {'regulation' if ot_num == 1 else 'overtime'}, game is tied. "
+                        f"Starting {label} (20-min 5-on-5 sudden death)!",
+                        "PERIOD_START",
+                    )
+                    self.period = 3 + ot_num
+                    self.clock = 1200  # 20 minutes, 5-on-5
+                    self._ot_start_score = (self.home_score, self.away_score)
+                    self._simulate_period()
+                    ot_num += 1
+                    # Safety valve: should never trigger (sudden death always ends),
+                    # but prevents an infinite loop if scoring breaks
+                    if ot_num > 10:
+                        self._log_event("Marathon game! Awarding win by shootout.", "SHOOTOUT_START")
+                        self._handle_shootout()
+                        break
+            else:
+                self._log_event("End of regulation, game is tied. Starting Overtime!", "PERIOD_START")
+                self.period = 4
+                self.clock = 300  # 5-minute 3-on-3
+                self._ot_start_score = (self.home_score, self.away_score)
+                self._simulate_period()
+        finally:
+            self._ot_sudden_death = False
+            self._ot_start_score = None
 
     def _handle_shootout(self):
         """Simulates a 3-round shootout if the game is still tied."""
