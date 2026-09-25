@@ -1848,13 +1848,24 @@ class GameSim:
         
         self._check_for_notable_performances()
 
-        # Games played: every roster player gets credit for dressing.
-        # (The sim doesn't track healthy scratches; this matches the app's
-        # existing convention.) The engine owns this so all GameSim paths —
-        # watched games, playoff sims, and full-detail batch sims — stay
-        # consistent; app-level callers must not add GP on top.
+        # Games played: only dressed players (those in team.lineup) get credit.
+        # Healthy scratches (roster players not in lineup) do NOT get GP.
+        # Falls back to full roster only if lineup is empty (shouldn't happen
+        # in normal app flow, but keeps standalone sims working).
         for team in (self.home_team, self.away_team):
-            for player in team.roster:
+            lineup = getattr(team, 'lineup', None) or {}
+            dressed = [p for p in lineup.values() if p is not None]
+            # Deduplicate (a player could theoretically appear twice)
+            seen = set()
+            dressed_unique = []
+            for p in dressed:
+                pid = id(p)
+                if pid not in seen:
+                    seen.add(pid)
+                    dressed_unique.append(p)
+            # Fallback: if no lineup set, use full roster (old behavior)
+            players_to_credit = dressed_unique if dressed_unique else team.roster
+            for player in players_to_credit:
                 try:
                     player.stats.games_played += 1
                 except Exception:
