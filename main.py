@@ -7464,15 +7464,19 @@ class HockeyManagerGUI(tk.Tk):
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
-        # Show season summary first
-        self._show_season_summary()
-        
+        # Show season summary first (skip the modal dialog when bulk simming)
+        if not getattr(self, '_bulk_simming', False):
+            self._show_season_summary()
+
         # Reset draft flag for new season
         if hasattr(self, '_draft_held_this_year'):
             self._draft_held_this_year.clear()
-        
+
         # Check if playoffs should start
-        result = messagebox.askyesno("Playoffs", "Start the Stanley Cup Playoffs?")
+        if getattr(self, '_bulk_simming', False):
+            result = True  # bulk sims auto-start playoffs, matching test behavior
+        else:
+            result = messagebox.askyesno("Playoffs", "Start the Stanley Cup Playoffs?")
         if result:
             self.open_playoffs_window()
         else:
@@ -7735,7 +7739,16 @@ class HockeyManagerGUI(tk.Tk):
         """Start the offseason phase."""
         # Age players and reset stats
         self.league.end_of_season()
-        
+
+        # A new schedule was generated: drop cached season dates/games so the
+        # season-end safety net in simulate_day recomputes from the new slate
+        # instead of the previous season's.
+        self._season_last_game_date = None
+        if hasattr(self, '_schedule_cache'):
+            self._schedule_cache.clear()
+        if hasattr(self, '_strength_cache'):
+            self._strength_cache.clear()
+
         # Generate new draft class
         self.league.draft_prospects = generate_draft_class(num_prospects=224)  # 7 rounds × 32 teams = 224 players
         
