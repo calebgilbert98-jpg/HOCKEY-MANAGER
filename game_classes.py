@@ -3659,17 +3659,30 @@ class League:
     def _verify_no_same_day_conflicts_for_league(self, league_teams, league_name):
         """Verify that no team in this league plays multiple games on the same day."""
         from collections import defaultdict
-        
+
         team_names = {team.team_name for team in league_teams}
         team_games_by_date = defaultdict(lambda: defaultdict(int))
-        
-        # Count games per team per date for this league
-        for game_date, home_team, away_team in self.schedule:
-            if home_team.team_name in team_names:
-                team_games_by_date[game_date][home_team.team_name] += 1
-            if away_team.team_name in team_names:
-                team_games_by_date[game_date][away_team.team_name] += 1
-        
+
+        def _team_name(t):
+            return t.team_name if hasattr(t, 'team_name') else str(t)
+
+        # Count games per team per date for this league (handles dict and tuple formats)
+        for entry in self.schedule:
+            if isinstance(entry, dict):
+                game_date = entry.get('date')
+                home_team, away_team = entry.get('home_team'), entry.get('away_team')
+            elif isinstance(entry, (tuple, list)) and len(entry) >= 3:
+                game_date, home_team, away_team = entry[0], entry[1], entry[2]
+            else:
+                continue
+            if game_date is None or home_team is None or away_team is None:
+                continue
+            hn, an = _team_name(home_team), _team_name(away_team)
+            if hn in team_names:
+                team_games_by_date[game_date][hn] += 1
+            if an in team_names:
+                team_games_by_date[game_date][an] += 1
+
         # Check for conflicts
         conflicts_found = False
         for game_date, team_counts in team_games_by_date.items():
@@ -3677,24 +3690,11 @@ class League:
                 if game_count > 1:
                     print(f"⚠️ CONFLICT: {team_name} has {game_count} games on {game_date} in {league_name}")
                     conflicts_found = True
-        
+
         if not conflicts_found:
             print(f"✅ No same-day conflicts found in {league_name}")
-        
+
         return not conflicts_found
-        for game_date, home_team, away_team in self.schedule:
-            if home_team.team_name in team_names:
-                team_games_by_date[game_date][home_team.team_name] += 1
-            if away_team.team_name in team_names:
-                team_games_by_date[game_date][away_team.team_name] += 1
-        
-        # Check for conflicts
-        conflicts_found = False
-        for game_date, team_counts in team_games_by_date.items():
-            for team_name, game_count in team_counts.items():
-                if game_count > 1:
-                    print(f"⚠️ CONFLICT: {team_name} has {game_count} games on {game_date} in {league_name}")
-                    conflicts_found = True
         
         if not conflicts_found:
             print(f"✅ No same-day conflicts found in {league_name}")

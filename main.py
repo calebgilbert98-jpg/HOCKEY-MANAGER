@@ -1903,10 +1903,11 @@ class AdvancedGameSim:
         # --- Random penalty check with improved logic ---
         self._check_for_penalty(shooters, puck_team_name, opp_team_name, fatigue_factor)
         
-        # --- End power play randomly ---
-        if self.pp_team and random.random() < 0.5:
+        # --- End power play when the 2-minute penalty clock expires ---
+        if self.pp_team and self.pp_end_time and self.time >= self.pp_end_time:
             self.pp_team = None
             self.pk_team = None
+            self.pp_end_time = None
         self._record_state()
         
         # Don't advance time here - it's managed in _simulate_shift
@@ -2031,34 +2032,6 @@ class AdvancedGameSim:
             }
         })
 
-    def _check_for_penalty(self, shooters, puck_team_name, opp_team_name, fatigue_factor):
-        """Enhanced penalty logic"""
-        penalty_chance = 0.04 * (2.0 - fatigue_factor)  # Tired players take more penalties
-        
-        if random.random() < penalty_chance:
-            penalized = random.choice(shooters)
-            penalty_types = ['Slashing', 'Tripping', 'High-sticking', 'Interference', 'Roughing']
-            penalty_type = random.choice(penalty_types)
-            
-            self.stats[puck_team_name][penalized.id].setdefault('penalties', 0)
-            self.stats[puck_team_name][penalized.id]['penalties'] += 1
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': penalized, 'event': f'{penalty_type} Penalty'})
-            
-            self.pp_team = opp_team_name
-            self.pk_team = puck_team_name
-            
-            self.event_log.append({
-                'timestamp': self.time,
-                'duration': 1.0,
-                'type': 'PENALTY',
-                'details': {
-                    'player_id': penalized.id,
-                    'player_name': penalized.full_name,
-                    'penalty_type': penalty_type,
-                    'team': puck_team_name
-                }
-            })
-
     def _calculate_fatigue_factor(self, player, team_name):
         """Calculate comprehensive fatigue factor"""
         player_fatigue = self.stats[team_name][player.id].get('fatigue', 0)
@@ -2149,296 +2122,6 @@ class AdvancedGameSim:
             return "SCREEN"
         else:
             return "DEFLECTION"
-
-    def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
-        """Enhanced shot resolution using cached player skills for better performance"""
-        # Use cached player skills instead of multiple getattr() calls
-        shooter_cache = self.cache.get_player_cache(shooter)
-        shot_skill = shooter_cache.shooting_skill * fatigue_factor
-
-        # Use cached goalie skills
-        if goalie:
-            goalie_cache = self.cache.get_player_cache(goalie)
-            goalie_skill = goalie_cache.goalie_skill
-        else:
-            goalie_skill = 10.0
-
-        shot_chance = 0.10 + (shot_skill - goalie_skill) * 0.015  # Improved base shooting percentage
-        if self.pp_team: shot_chance += 0.08  # Power play advantage
-        
-        # Adjust shot chance based on position and pressure
-        shot_chance *= pressure_modifier
-        shot_chance *= position_factor
-        
-        # Make shot chance more realistic (typical NHL shooting percentage is 8-12%)
-        shot_chance = max(0.05, min(0.25, shot_chance))  # Clamp between 5-25%
-
-        # Move puck to shooter's position for shot event
-        self.puck_x = shooter.x
-        self.puck_y = shooter.y
-
-        # Simulate shooter moving forward (towards offensive zone)
-        if puck_team_name == self.home_team.team_name:
-            shooter.x = min(100, shooter.x + random.randint(3, 8))
-        else:
-            shooter.x = max(0, shooter.x - random.randint(3, 8))
-        shooter.y += random.randint(-2, 2)
-        shooter.y = max(0, min(50, shooter.y))
-
-        # --- Puck Battle outcome using new attributes ---
-        if random.random() < 0.15:
-            battlers = random.sample(shooters, 2) if len(shooters) > 1 else [shooter, shooter]
-            p1, p2 = battlers
-            p1_skill = (
-                p1.strength * 0.25 +
-                p1.aggressiveness * 0.2 +
-                p1.balance * 0.2 +
-                p1.work_rate * 0.2 +
-                p1.stamina * 0.15
-            ) * (1 - self.stats[puck_team_name][p1.id].get('fatigue', 0) / max(1, p1.endurance + p1.stamina))
-            p2_skill = (
-                p2.strength * 0.25 +
-                p2.aggressiveness * 0.2 +
-                p2.balance * 0.2 +
-                p2.work_rate * 0.2 +
-                p2.stamina * 0.15
-            ) * (1 - self.stats[puck_team_name][p2.id].get('fatigue', 0) / max(1, p2.endurance + p2.stamina))
-            winner = p1 if p1_skill >= p2_skill else p2
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': winner, 'event': 'Puck Battle Won'})
-
-        # --- Successful Deke (random chance, use stickhandling, agility, anticipation) ---
-        if random.random() < 0.10:
-            deker = random.choice(shooters)
-            deke_skill = (
-                deker.stickhandling * 0.4 +
-                deker.agility * 0.3 +
-                deker.anticipation * 0.3
-            ) * (1 - self.stats[puck_team_name][deker.id].get('fatigue', 0) / max(1, deker.endurance + deker.stamina))
-            if deke_skill > 12:  # Arbitrary threshold
-                self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': deker, 'event': 'Successful Deke'})
-
-        # --- Enhanced PASS event with coordinate tracking ---
-        if len(shooters) > 1 and random.random() < 0.35:
-            passer = shooter
-            receiver = random.choice([p for p in shooters if p != shooter])
-            
-            # Get coordinate positions
-            passer_pos = self.coordinate_engine.player_positions.get(passer.id, (passer.x, passer.y))
-            receiver_pos = self.coordinate_engine.player_positions.get(receiver.id, (receiver.x, receiver.y))
-            
-            pass_skill = (
-                getattr(passer, 'passing_accuracy', 10) * 0.3 +
-                getattr(passer, 'passing_creativity', 10) * 0.25 +
-                getattr(passer, 'vision', 10) * 0.2 +
-                getattr(passer, 'off_the_puck', 10) * 0.15 +
-                getattr(passer, 'hockey_iq', 10) * 0.1
-            ) * (1 - self.stats[puck_team_name][passer.id].get('fatigue', 0) / max(1, getattr(passer, 'endurance', 10) + getattr(passer, 'stamina', 10)))
-            
-            # Enhanced defensive pressure with coordinate awareness
-            defenders = [p for p in self.on_ice[opp_team_name]['Defense'] if p]
-            defender = random.choice(defenders) if defenders else None
-            
-            defense_skill = (
-                getattr(defender, 'pokecheck', 10) * 0.4 +
-                getattr(defender, 'defensive_awareness', 10) * 0.4 +
-                getattr(defender, 'anticipation', 10) * 0.2
-            ) if defender else 10
-            
-            # Calculate pass success with distance factor
-            pass_distance = ((receiver_pos[0] - passer_pos[0])**2 + (receiver_pos[1] - passer_pos[1])**2)**0.5
-            distance_factor = max(0.7, 1.0 - (pass_distance / 60))  # Longer passes harder
-            
-            pass_success = (pass_skill * distance_factor) > defense_skill or random.random() < 0.7
-            
-            # Generate coordinate-based pass event
-            pass_event = self.coordinate_engine.generate_coordinate_event(
-                "PASS", passer.id, receiver.id,
-                timestamp=self.time
-            )
-            
-            # Enhanced pass event logging
-            self.event_log.append({
-                'timestamp': self.time,
-                'duration': pass_event['duration'],
-                'type': 'PASS',
-                'details': {
-                    'passer_id': passer.id,
-                    'passer_name': passer.full_name,
-                    'passer_jersey': getattr(passer, 'jersey_number', 0),
-                    'receiver_id': receiver.id,
-                    'receiver_name': receiver.full_name,
-                    'receiver_jersey': getattr(receiver, 'jersey_number', 0),
-                    'puck_start_pos': passer_pos,
-                    'puck_end_pos': receiver_pos,
-                    'distance': pass_distance,
-                    'zone_start': self.coordinate_engine.get_zone_from_coordinates(*passer_pos).value,
-                    'zone_end': self.coordinate_engine.get_zone_from_coordinates(*receiver_pos).value,
-                    'team': puck_team_name,
-                    'success': pass_success
-                }
-            })
-            
-            # Update puck and player positions
-            if pass_success:
-                self.coordinate_engine.puck_position = receiver_pos
-                self.puck_x, self.puck_y = receiver_pos
-            else:
-                # Intercepted: move puck to defender
-                if defender:
-                    defender_pos = self.coordinate_engine.player_positions.get(defender.id, (defender.x, defender.y))
-                    self.coordinate_engine.puck_position = defender_pos
-                    self.puck_x, self.puck_y = defender_pos
-
-        # --- SHOT event with coordinate-based danger zone analysis ---
-        # Get shooter's position from coordinate engine
-        shooter_pos = self.coordinate_engine.player_positions.get(shooter.id, (shooter.x, shooter.y))
-        
-        # Determine if attacking home goal (away team attacking) or away goal (home team attacking)
-        attacking_home_goal = puck_team_name == self.away_team.team_name
-        
-        # Generate coordinate-based shot event with danger analysis
-        shot_event = self.coordinate_engine.generate_coordinate_event(
-            "SHOT", shooter.id, 
-            timestamp=self.time,
-            attacking_home_goal=attacking_home_goal
-        )
-        
-        # Extract danger analysis for shot quality
-        shot_details = shot_event['details']
-        danger_level = shot_details['danger_level']
-        expected_goal = shot_details['expected_goal']
-        distance = shot_details['distance']
-        angle = shot_details['angle']
-        
-        # Enhanced shot skill calculation with danger zone modifiers
-        shot_skill = (
-            shooting_base * 0.3 +
-            getattr(shooter, 'shooting_accuracy', 10) * 0.25 +
-            getattr(shooter, 'off_the_puck', 10) * 0.2 +
-            getattr(shooter, 'composure', 10) * 0.15 +
-            getattr(shooter, 'vision', 10) * 0.1
-        ) * fatigue_factor * pressure_modifier * position_factor
-        
-        # Apply danger zone multiplier to shot skill
-        danger_multipliers = {
-            'very_high': 2.5,  # Crease/slot shots much more dangerous
-            'high': 1.8,       # High slot, faceoff circles
-            'medium': 1.2,     # Wing areas, point shots
-            'low': 0.9         # Long distance, bad angles
-        }
-        danger_multiplier = danger_multipliers.get(danger_level, 1.0)
-        shot_skill *= danger_multiplier
-
-        # Enhanced goalie attributes with position-specific saves
-        goalie_skill = self._calculate_goalie_save_skill(goalie, shot_type, danger_level, distance) if goalie else 8
-        
-        # Shot outcome calculation - use expected goal value as base
-        shot_chance = max(0.05, min(0.40, expected_goal * (shot_skill / max(1, goalie_skill))))
-        
-        if self.pp_team: 
-            shot_chance += 0.06  # Power play advantage (reduced since danger zones already factor in)
-        
-        # Shot blocking check with coordinate awareness
-        shot_blocked = self._check_shot_blocking_coordinate(opp_team_name, shot_details, fatigue_factor)
-        
-        # Position shooter and determine result
-        shot_start = shot_details['puck_start_pos']
-        target_pos = shot_details['target_pos']
-        duration = random.uniform(1.0, 1.7)
-        
-        if shot_blocked:
-            shot_result = 'BLOCKED'
-        elif random.random() < shot_chance:  # Enhanced shot chance with coordinate analysis
-            shot_result = 'GOAL'
-            self.score[puck_team_name] += 1
-            # Add goal event
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Goal'})
-            # Update player stats
-            self.stats[puck_team_name][shooter.id]['goals'] += 1
-        elif goalie and random.random() < 0.8:
-            shot_result = 'SAVE'
-            # Add shot/save event  
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Shot'})
-            # Update goalie stats
-            self.stats[opp_team_name][goalie.id]['saves'] = self.stats[opp_team_name][goalie.id].get('saves', 0) + 1
-        else:
-            shot_result = 'MISS'
-            # Add missed shot event
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Shot'})
-        # Enhanced event logging with coordinate data and danger analysis
-        self.event_log.append({
-            'timestamp': self.time,
-            'duration': duration,
-            'type': 'SHOT',
-            'details': {
-                'shooter_id': shooter.id,
-                'shooter_name': shooter.full_name,
-                'shooter_position': shooter.primary_position.name if hasattr(shooter, 'primary_position') else 'F',
-                'shooter_jersey': getattr(shooter, 'jersey_number', 0),
-                'goalie_id': goalie.id if goalie else None,
-                'goalie_name': goalie.full_name if goalie else None,
-                'puck_start_pos': shot_start,
-                'target_pos': target_pos,
-                'distance': distance,
-                'angle': angle,
-                'danger_level': danger_level,
-                'expected_goal': expected_goal,
-                'shot_type': shot_type,
-                'zone': self.coordinate_engine.get_zone_from_coordinates(*shot_start).value,
-                'result': shot_result,
-                'team': puck_team_name
-            }
-        })
-        
-        # Track shot in coordinate engine for analytics
-        self.coordinate_engine.shot_locations.append({
-            'position': shot_start,
-            'distance': distance,
-            'angle': angle,
-            'danger_level': danger_level,
-            'expected_goal': expected_goal,
-            'result': shot_result
-        })
-        # If goal or save, add STOPPAGE event
-        if shot_result == 'GOAL':
-            self.event_log.append({
-                'timestamp': self.time + duration,
-                'duration': 2.0,
-                'type': 'STOPPAGE',
-                'details': {
-                    'reason': 'Goal Scored',
-                    'faceoff_pos': (50, 25)
-                }
-            })
-        elif shot_result == 'SAVE':
-            self.event_log.append({
-                'timestamp': self.time + duration,
-                'duration': 1.5,
-                'type': 'STOPPAGE',
-                'details': {
-                    'reason': 'Save',
-                    'faceoff_pos': (50, 25)
-                }
-            })
-        # Penalty check: NHL averages ~3-4 penalties per team per game
-        # 8% per shot event + checks on other physical events = realistic rate
-        if random.random() < 0.08:
-            penalized = shooter
-            self.stats[puck_team_name][penalized.id].setdefault('penalties', 0)
-            self.stats[puck_team_name][penalized.id]['penalties'] += 1
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': penalized, 'event': 'Penalty'})
-            self.pp_team = opp_team_name
-            self.pk_team = puck_team_name
-            # 2-minute minor penalty (120 seconds)
-            self.pp_end_time = self.time + 120
-        
-        # End power play when penalty expires (real clock, not coin flip)
-        # PP also ends if the PP team scores (handled in goal scoring logic)
-        if self.pp_team and self.pp_end_time and self.time >= self.pp_end_time:
-            self.pp_team = None
-            self.pk_team = None
-            self.pp_end_time = None
-        self._record_state()
 
     def run(self):
         # NHL rules: 5-minute 3v3 sudden-death OT, then shootout
@@ -3106,34 +2789,41 @@ class AdvancedGameSim:
                 })
     
     def _check_for_penalty(self, players, puck_team_name, opp_team_name, fatigue_factor):
-        """Enhanced penalty checking with more attribute considerations"""
-        if random.random() > 0.03:
+        """Penalty checking tuned to NHL rates (~3-4 penalties per team per game).
+
+        Called once per game event (~110 events/game), so per-event probability
+        of ~6% yields realistic penalty totals. Player discipline/aggressiveness
+        and fatigue modulate the chance. Sets a real 2-minute penalty clock.
+        """
+        if not players:
             return
-            
+
         penalized = random.choice(players)
-        
-        # Calculate penalty likelihood based on player attributes
         discipline_rating = getattr(penalized, 'discipline', 10)
         aggressiveness = getattr(penalized, 'aggressiveness', 10)
-        composure = getattr(penalized, 'composure', 10)
-        
-        # Tired players more likely to take penalties
-        penalty_chance = (
-            (20 - discipline_rating) * 0.4 +
-            aggressiveness * 0.3 +
-            (20 - composure) * 0.2 +
-            (1 - fatigue_factor) * 20 * 0.1  # Fatigue increases penalties
-        ) / 100
-        
-        if random.random() < penalty_chance:
-            self.stats[puck_team_name][penalized.id]['penalties'] = self.stats[puck_team_name][penalized.id].get('penalties', 0) + 1
-            self.events.append({
-                'time': self.time, 'period': self.period, 
-                'team': puck_team_name, 'player': penalized, 
-                'event': 'Penalty'
-            })
-            self.pp_team = opp_team_name
-            self.pk_team = puck_team_name
+
+        # Base ~2.2% per check (~250 checks/game -> ~6-8 penalties/game, NHL rate);
+        # tired/undisciplined/aggressive players foul more
+        base = 0.022 * (2.0 - fatigue_factor)
+        discipline_mod = (10 - discipline_rating) * 0.001
+        aggr_mod = (aggressiveness - 10) * 0.0008
+        penalty_chance = min(0.06, max(0.005, base + discipline_mod + aggr_mod))
+
+        if random.random() >= penalty_chance:
+            return
+
+        self.stats[puck_team_name][penalized.id]['penalties'] = \
+            self.stats[puck_team_name][penalized.id].get('penalties', 0) + 1
+        self.events.append({
+            'time': self.time, 'period': self.period,
+            'team': puck_team_name, 'player': penalized,
+            'event': 'Penalty'
+        })
+        self.pp_team = opp_team_name
+        self.pk_team = puck_team_name
+        # 2-minute minor; on a 5-on-3 the PP lasts until the later expiry
+        new_expiry = self.time + 120
+        self.pp_end_time = new_expiry if not self.pp_end_time else max(self.pp_end_time, new_expiry)
 
     def get_state(self, step):
         # Defensive: check bounds
