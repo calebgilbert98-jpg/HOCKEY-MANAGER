@@ -342,21 +342,13 @@ class DatabaseManager:
             
             stats["age_distribution"][age_range] = count
         
-        # Overall rating distribution
-        for rating_range in ["50-59", "60-69", "70-79", "80-89", "90+"]:
-            if rating_range == "50-59":
-                count = len([p for p in all_players_list if 50 <= p.overall_rating() <= 59])
-            elif rating_range == "60-69":
-                count = len([p for p in all_players_list if 60 <= p.overall_rating() <= 69])
-            elif rating_range == "70-79":
-                count = len([p for p in all_players_list if 70 <= p.overall_rating() <= 79])
-            elif rating_range == "80-89":
-                count = len([p for p in all_players_list if 80 <= p.overall_rating() <= 89])
-            else:  # 90+
-                count = len([p for p in all_players_list if p.overall_rating() >= 90])
-            
+        # Overall rating distribution (50-point scale)
+        for rating_range in ["25-32", "33-39", "40-44", "45-49", "50+"]:
+            lo, hi = {"25-32": (25, 32), "33-39": (33, 39), "40-44": (40, 44),
+                      "45-49": (45, 49), "50+": (50, 99)}[rating_range]
+            count = len([p for p in all_players_list if lo <= p.overall_rating() <= hi])
             stats["overall_distribution"][rating_range] = count
-        
+
         return stats
 
 # Convenience function for main game integration
