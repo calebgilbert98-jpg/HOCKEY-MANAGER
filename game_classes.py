@@ -176,6 +176,14 @@ class Player:
     important_matches: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     morale: int = 10
 
+    # Football Manager-style career fields (happiness, squad status, chats)
+    happiness: int = 70  # 0-100, how happy the player is at the club
+    squad_status: str = "Rotation"  # Star Player / Key Player / Regular Starter / Rotation / Prospect / Surplus
+    playing_time_concern: int = 0  # 0-100, worry about lack of ice time
+    transfer_requested: bool = False
+    promise_made: str = ""  # e.g. "more_icetime"
+    last_chat: str = ""  # ISO date of last private chat
+
     # Career and development tracking
     pro_debut: str = field(default_factory=lambda: f"{random.randint(2015, 2024)}-{random.randint(10, 12)}-{random.randint(1, 28):02d}")
     teams_count: int = field(default_factory=lambda: random.randint(1, 4))

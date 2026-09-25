@@ -283,7 +283,11 @@ class AutomatedSeasonFlow:
             # Check if we should advance
             if self.should_auto_advance():
                 # Simulate the day
-                self.game_manager.simulate_day()
+                self.game_manager._bulk_simming = True
+                try:
+                    self.game_manager.simulate_day()
+                finally:
+                    self.game_manager._bulk_simming = False
                 
                 # Update phase
                 self.update_season_phase()

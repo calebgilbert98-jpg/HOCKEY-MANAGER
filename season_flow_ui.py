@@ -231,8 +231,12 @@ class SeasonFlowControlPanel(ttk.Frame):
     def _advance_days(self, days):
         """Advance the specified number of days"""
         try:
-            for _ in range(days):
-                self.game_manager.simulate_day()
+            self.game_manager._bulk_simming = True
+            try:
+                for _ in range(days):
+                    self.game_manager.simulate_day()
+            finally:
+                self.game_manager._bulk_simming = False
                 
             # Update displays
             self.update_display()

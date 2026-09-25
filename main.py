@@ -51,6 +51,9 @@ from player_development_system import PlayerDevelopmentEngine, initialize_player
 from media_system import MediaSystem
 from media_center_window import MediaCenterWindow
 
+# Import Football Manager-style career systems
+import manager_career
+
 # Import position-specific attributes if available
 try:
     from position_specific_attributes import PlayerV2, convert_to_v2
@@ -1658,6 +1661,8 @@ class AdvancedGameSim:
     def __init__(self, home_team, away_team):
         self.home_team = home_team
         self.away_team = away_team
+        # FM team-talk boost: team_name -> multiplier (default 1.0)
+        self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
 
         # Initialize performance cache
         from performance_optimizations import get_global_cache
@@ -1716,6 +1721,10 @@ class AdvancedGameSim:
         home_players = [p for p in home_team.roster]
         away_players = [p for p in away_team.roster] 
         self.coordinate_engine.initialize_player_positions(home_players, away_players)
+
+    def set_team_talk_boost(self, team_name: str, multiplier: float):
+        """FM-style: apply a team-talk/morale multiplier to a team's scoring."""
+        self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
 
     def _select_lines(self, team_name, fatigue=False):
         lineup = self.lineups[team_name]
@@ -2472,6 +2481,10 @@ class AdvancedGameSim:
         # Clamp to realistic NHL range (5% - 15%)
         shot_chance = max(0.05, min(0.15, shot_chance))
 
+        # FM team-talk / morale boost (set via set_team_talk_boost)
+        shot_chance *= self.team_boost.get(puck_team_name, 1.0)
+        shot_chance = max(0.04, min(0.16, shot_chance))
+
         # Shot blocking check
         shot_blocked = self._check_shot_blocking(opp_team_name, fatigue_factor)
         
@@ -2914,6 +2927,9 @@ class HockeyManagerGUI(tk.Tk):
         # Initialize Season Flow system
         self.season_flow_panel = None
         self.season_flow_visible = False
+
+        # FM-style career systems: bulk-sim flag suppresses interactive prompts
+        self._bulk_simming = False
 
         # use_game_viewer is now controlled through settings.json, no longer a hardcoded instance variable
 
@@ -3643,7 +3659,8 @@ class HockeyManagerGUI(tk.Tk):
             "� Player Development": self.open_development_window,
             "�🔍 Scouting": self.open_scouting_management_window,
             "📊 Performance": self.open_performance_monitor,
-            "🏒 Practice Center": self.open_practice_center
+            "🏒 Practice Center": self.open_practice_center,
+            "🎩 Manager Hub": self.open_manager_hub
         })
         
         # Finances dropdown
@@ -5924,6 +5941,9 @@ class HockeyManagerGUI(tk.Tk):
         # Process player development weekly (during off days or end of week)
         if self.current_date.weekday() == 6:  # Sunday - weekly development processing
             self._process_player_development()
+
+        # FM-style career systems: board, happiness, youth, press (cheap daily)
+        self._process_career_daily()
     
     def _process_player_development(self):
         """Process weekly player development for all teams"""
@@ -5958,6 +5978,13 @@ class HockeyManagerGUI(tk.Tk):
                             
                             # Calculate weekly development (scaled from annual to weekly)
                             weekly_rate = (base_rate * training_modifier) / 52.0
+
+                            # FM training schedule: user's weekly schedule modifies development
+                            try:
+                                if team == self.user_team:
+                                    weekly_rate *= self.career.training.weekly_effects()["development_mult"]
+                            except Exception:
+                                pass
                             
                             # Apply development to attributes based on player age and stage
                             if player.age <= 27:  # Only develop younger players
@@ -6113,12 +6140,20 @@ class HockeyManagerGUI(tk.Tk):
                 result = self._simulate_game_with_viewer(home_team, away_team)
                 winner, loser, scores, events, notable_events, sim_engine = result
             else:
+                # FM-style pre-match team talk (interactive, skipped in bulk sim)
+                opponent = away_team if home_team == self.user_team else home_team
+                talk_boost = self._career_team_talk(opponent)
                 # Standard full simulation for user games
                 sim_engine = AdvancedGameSim(home_team, away_team)
+                if talk_boost != 1.0 and self.user_team is not None:
+                    sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
                 winner, loser, scores, events, notable_events = sim_engine.run()
-            
+
             # Update league standings and store game result for user team games
             self._process_single_game_result(game_date, home_team, away_team, winner, loser, scores, events, notable_events, sim_engine)
+            # FM-style: board, profile, morale, post-match presser
+            went_ot = len([e for e in (notable_events or []) if isinstance(e, dict) and e.get('period', 0) > 3]) > 0
+            self._career_after_user_game(winner, loser, scores, home_team, away_team, went_ot, sim_engine)
         
         # Process other games using batch processing
         if other_games:
@@ -6747,6 +6782,10 @@ class HockeyManagerGUI(tk.Tk):
         # Allow for low-scoring games but maintain reasonable averages
         home_goal_expectation = max(1.0, min(4.5, home_goal_expectation))
         away_goal_expectation = max(1.0, min(4.5, away_goal_expectation))
+
+        # FM-style squad morale modifier (subtle: +/-3%)
+        home_goal_expectation *= self._career_morale_modifier(home_team)
+        away_goal_expectation *= self._career_morale_modifier(away_team)
         
         # Generate goals with realistic NHL distribution
         # Use round() not int() to avoid truncation bias (~0.5 goals lost per team)
@@ -7036,8 +7075,9 @@ class HockeyManagerGUI(tk.Tk):
     
     def _check_player_records(self, player):
         """Check if player broke any records and notify if so"""
+        # record_manager lives on GameManager; GUI lookup falls through to Tk.__getattr__
         # Initialize player in record manager if needed
-        tracker = self.record_manager.get_or_create_tracker(
+        tracker = self.game_manager.record_manager.get_or_create_tracker(
             str(player.id), 
             player.full_name, 
             player.team_name,
@@ -7045,7 +7085,7 @@ class HockeyManagerGUI(tk.Tk):
         )
         
         # Update the tracker with current stats
-        self.record_manager.player_trackers[str(player.id)] = tracker
+        self.game_manager.record_manager.player_trackers[str(player.id)] = tracker
         tracker.season_goals = player.goals
         tracker.season_assists = player.assists
         tracker.season_points = player.points
@@ -7067,10 +7107,10 @@ class HockeyManagerGUI(tk.Tk):
         tracker.current_goal_streak = player.current_goal_streak
         
         # Check for broken records
-        self.record_manager._check_for_records(tracker)
+        self.game_manager.record_manager._check_for_records(tracker)
         
         # Show record breaking notifications
-        recent_records = self.record_manager.get_recent_records(1)  # Just the most recent
+        recent_records = self.game_manager.record_manager.get_recent_records(1)  # Just the most recent
         if recent_records and recent_records[-1]['player_id'] == str(player.id):
             self._show_record_notification(recent_records[-1])
     
@@ -7985,6 +8025,414 @@ class HockeyManagerGUI(tk.Tk):
         """Send an email message to the user's inbox."""
         self.user_team.inbox.add_message(message)
         self.update_inbox_notification()
+
+    # ------------------------------------------------------------------
+    # Football Manager-style career systems
+    # ------------------------------------------------------------------
+    @property
+    def career(self):
+        """Lazy FM-style career state, stored on the GameManager so it survives."""
+        gm = self.game_manager
+        career = getattr(gm, "career", None)
+        if career is None:
+            career = manager_career.CareerState()
+            gm.career = career
+        return career
+
+    def open_manager_hub(self):
+        """Open the FM-style Manager Hub window."""
+        from manager_hub_window import ManagerHubWindow
+        if "manager_hub" not in self.open_windows or not self.open_windows["manager_hub"].winfo_exists():
+            self.open_windows["manager_hub"] = ManagerHubWindow(self)
+        self.open_windows["manager_hub"].focus_set()
+
+    def _career_prompts_allowed(self) -> bool:
+        """Interactive prompts only for manual day-by-day play."""
+        return (not getattr(self, "_bulk_simming", False)
+                and self.career.prompts_enabled
+                and not self.career.board.sacked)
+
+    def _process_career_daily(self):
+        """FM-style daily career processing: board, happiness, youth, press."""
+        try:
+            career = self.career
+            team = self.user_team
+            if team is None:
+                return
+            # 1. First-run: set board expectation from squad strength
+            if not career.career_start_date:
+                career.career_start_date = self.current_date.isoformat()
+                strength = self._career_team_strength(team)
+                career.board.auto_expectation(strength)
+                exp = manager_career.EXPECTATIONS[career.board.expectation]
+                from game_classes import EmailMessage
+                self.send_email_to_user(EmailMessage(
+                    sender="Board of Directors", sender_type="Owner",
+                    subject="Season expectations",
+                    content=(f"Welcome to {team.team_name}.\n\n"
+                             f"The board's expectation this season is: {exp['label']}.\n"
+                             f"{exp['description']}\n\n"
+                             f"Board confidence starts at {career.board.confidence}/100. "
+                             f"Results, signings and your media handling will move it. "
+                             f"If it hits zero, you're gone."),
+                    date_sent=self.current_date, category="General",
+                    is_important=True))
+            # 2. Weekly update: happiness, concerns, training effects
+            if self.current_date.weekday() == 0:
+                self._career_weekly_update()
+            # 3. Monthly board review (first Monday of month)
+            if self.current_date.weekday() == 0 and self.current_date.day <= 7:
+                self._career_board_review()
+            # 4. Youth intake cycle
+            self._career_youth_check()
+            # 5. Matchday: scout report + pre-match presser
+            self._career_matchday_pre()
+        except Exception as e:
+            print(f"Career daily error (non-fatal): {e}")
+
+    def _career_team_strength(self, team) -> float:
+        """Rough 0-100 squad strength for board expectations."""
+        try:
+            ratings = [manager_career._player_rating(p)
+                       for p in (getattr(team, "roster", []) or [])]
+            if not ratings:
+                return 50.0
+            return max(0.0, min(100.0, sum(ratings) / len(ratings) * 5.0))
+        except Exception:
+            return 50.0
+
+    def _career_team_games(self) -> int:
+        b = self.career.board
+        return b.season_wins + b.season_losses + b.season_otl
+
+    def _career_morale_modifier(self, team) -> float:
+        """Subtle goal-expectation modifier from squad morale (0.97-1.03)."""
+        try:
+            roster = getattr(team, "roster", []) or []
+            if not roster:
+                return 1.0
+            avg = sum((getattr(p, "morale", 7) or 7) for p in roster) / len(roster)
+            return 1.0 + (avg - 7) * 0.01
+        except Exception:
+            return 1.0
+
+    def _career_weekly_update(self):
+        """Happiness/concerns, training morale & injury risk, assistant advice."""
+        from game_classes import EmailMessage
+        team = self.user_team
+        team_games = self._career_team_games()
+        noteworthy = []
+        for p in (getattr(team, "roster", []) or []):
+            try:
+                noteworthy.extend(manager_career.update_player_happiness(p, team_games))
+            except Exception:
+                continue
+        # Training effects: morale + injury risk
+        fx = self.career.training.weekly_effects()
+        if fx["morale_delta"]:
+            for p in (getattr(team, "roster", []) or []):
+                m = getattr(p, "morale", 7) or 7
+                p.morale = max(1, min(10, m + (1 if fx["morale_delta"] > 0 else -1)))
+        import random as _r
+        if _r.random() < 0.02 * fx["injury_risk_mult"]:
+            candidates = [p for p in (getattr(team, "roster", []) or [])
+                          if not getattr(p, "is_injured", False)]
+            if candidates:
+                victim = _r.choice(candidates)
+                victim.is_injured = True
+                victim.injury_type = "Training knock"
+                victim.games_remaining_injured = _r.randint(1, 4)
+                self.add_news(f"🤕 {victim.first_name} {victim.last_name} injured in training "
+                              f"({victim.games_remaining_injured} games).")
+        # Player concerns -> inbox (max 2 per week)
+        concerns = manager_career.check_squad_concerns(team)[:2]
+        for player, text in concerns:
+            action_hint = ("Reply via Manager Hub → Squad tab to hold a private chat."
+                           if not getattr(player, "transfer_requested", False)
+                           else "Urgent: discuss his future in the Manager Hub → Squad tab.")
+            self.send_email_to_user(EmailMessage(
+                sender=f"{player.first_name} {player.last_name}",
+                sender_type="Player",
+                subject="Squad concern" + (" — TRANSFER REQUEST" if getattr(player, "transfer_requested", False) else ""),
+                content=f"{text}\n\n{action_hint}",
+                date_sent=self.current_date, category="Contracts",
+                is_important=getattr(player, "transfer_requested", False),
+                related_player_id=str(getattr(player, "id", ""))))
+        for note in noteworthy[:3]:
+            self.add_news(f"📋 {note}")
+        # Occasional assistant coach advice
+        if _r.random() < 0.25:
+            advice = self._career_assistant_advice()
+            if advice:
+                self.send_email_to_user(EmailMessage(
+                    sender="Assistant Coach", sender_type="Staff",
+                    subject="Training & squad advice",
+                    content=advice, date_sent=self.current_date,
+                    category="General"))
+
+    def _career_assistant_advice(self) -> str:
+        """Generate a context-aware tip from the assistant coach."""
+        import random as _r
+        team = self.user_team
+        roster = getattr(team, "roster", []) or []
+        unhappy = [p for p in roster if (getattr(p, "happiness", 70) or 70) < 40]
+        low_morale = sum(1 for p in roster if (getattr(p, "morale", 7) or 7) <= 4)
+        tips = []
+        if unhappy:
+            p = _r.choice(unhappy)
+            tips.append(f"{p.first_name} {p.last_name} looks unhappy — maybe a private chat would help (Manager Hub → Squad).")
+        if low_morale >= 5:
+            tips.append("Dressing-room morale is low. Consider a lighter training week or an encouraging team talk.")
+        fx = self.career.training.weekly_effects()
+        if fx["injury_risk_mult"] >= 1.5:
+            tips.append("This training load is brutal — I'd schedule a recovery week before someone breaks down.")
+        if not tips:
+            tips.append("The squad looks in good shape. Keep the routine going.")
+        return "Morning boss.\n\n" + "\n".join("• " + t for t in tips)
+
+    def _career_board_review(self):
+        """Monthly board confidence review email."""
+        from game_classes import EmailMessage
+        b = self.career.board
+        games = self._career_team_games()
+        if games == 0:
+            return
+        points = b.season_wins * 2 + b.season_otl
+        pct = points / (games * 2)
+        headline, body = b.monthly_review(pct)
+        self.send_email_to_user(EmailMessage(
+            sender="Board of Directors", sender_type="Owner",
+            subject=headline, content=body, date_sent=self.current_date,
+            category="General", is_important=b.confidence < 30))
+        if b.sacked:
+            self._career_handle_sack()
+
+    def _career_handle_sack(self):
+        """Board has lost patience: game-over flow."""
+        from tkinter import messagebox
+        self.add_news("🚨 BREAKING: The board has sacked the manager.")
+        messagebox.showwarning(
+            "Sacked",
+            "The board has lost faith and terminated your contract.\n\n"
+            "Your career at this club is over. You can start a new career "
+            "from the main menu.")
+        # Disable further prompts; user can keep browsing but career is over
+        self.career.prompts_enabled = False
+
+    def _career_youth_check(self):
+        """April preview + July 1 academy intake."""
+        from game_classes import EmailMessage, Player, PlayerPosition
+        career = self.career
+        year = self.current_date.year
+        # Preview in April
+        if self.current_date.month == 4 and self.current_date.day == 1 \
+                and career.intake_preview_sent != year:
+            career.intake_preview_sent = year
+            self.send_email_to_user(EmailMessage(
+                sender="Head of Academy", sender_type="Staff",
+                subject="Youth intake preview",
+                content=("Our scouts are excited about this summer's academy class. "
+                         "Expect 3-6 graduates in July — a couple could push for "
+                         "first-team minutes within a year."),
+                date_sent=self.current_date, category="Scouting"))
+        # Intake on July 1
+        if self.current_date.month == 7 and self.current_date.day == 1 \
+                and career.last_intake_year != year:
+            career.last_intake_year = year
+            import random as _r
+            prospects = manager_career.generate_youth_intake(
+                self.user_team.team_name, _r.randint(3, 6))
+            pos_map = {"C": PlayerPosition.CENTER, "LW": PlayerPosition.LEFT_WING,
+                       "RW": PlayerPosition.RIGHT_WING, "D": PlayerPosition.DEFENSE,
+                       "G": PlayerPosition.GOALIE}
+            added = []
+            if not hasattr(self.user_team, "prospects") or self.user_team.prospects is None:
+                self.user_team.prospects = []
+            for pr in prospects:
+                p = Player(pr["first_name"], pr["last_name"], pr["age"],
+                           pos_map.get(pr["position"], PlayerPosition.CENTER))
+                p.potential = pr["potential"]
+                p.squad_status = "Prospect"
+                p.happiness = 80
+                self.user_team.prospects.append(p)
+                added.append(f"{pr['first_name']} {pr['last_name']} ({pr['position']}, POT {pr['potential']})")
+            career.youth_history.append({"year": year, "prospects": prospects})
+            self.send_email_to_user(EmailMessage(
+                sender="Head of Academy", sender_type="Staff",
+                subject=f"Academy intake {year}: {len(added)} graduates",
+                content=("The new academy class has graduated:\n\n" +
+                         "\n".join("• " + a for a in added) +
+                         "\n\nThey've been added to your prospects list."),
+                date_sent=self.current_date, category="Scouting",
+                is_important=True))
+            self.add_news(f"🌱 Academy intake: {len(added)} prospects graduate.")
+
+    def _career_user_game_today(self):
+        """Return (home_team, away_team) if the user plays today, else None."""
+        team = self.user_team
+        today = self.current_date
+        for item in (self.league.schedule or []):
+            try:
+                if isinstance(item, dict):
+                    d, h, a = item.get("date"), item.get("home_team"), item.get("away_team")
+                elif isinstance(item, (tuple, list)) and len(item) >= 3:
+                    d, h, a = item[0], item[1], item[2]
+                else:
+                    continue
+                if d == today and (h == team or a == team):
+                    return h, a
+            except Exception:
+                continue
+        return None
+
+    def _career_matchday_pre(self):
+        """Matchday morning: scout report to inbox + optional pre-match presser."""
+        from game_classes import EmailMessage
+        matchup = self._career_user_game_today()
+        if not matchup:
+            return
+        home, away = matchup
+        opponent = away if home == self.user_team else home
+        # Scout report -> inbox (no popup)
+        report = manager_career.generate_opposition_report(opponent, self.league.standings)
+        lines = [f"SCOUT REPORT: {report['team']} (Danger: {report['danger_level']})",
+                 f"Record: {report['record']}", "", "Strengths:"]
+        lines += ["• " + s for s in report["strengths"]]
+        lines.append("Weaknesses:")
+        lines += ["• " + w for w in report["weaknesses"]]
+        lines.append("Tactical advice:")
+        lines += ["• " + a for a in report["tactical_advice"]]
+        self.send_email_to_user(EmailMessage(
+            sender="Chief Scout", sender_type="Scout",
+            subject=f"Opposition report: {report['team']}",
+            content="\n".join(lines), date_sent=self.current_date,
+            category="Scouting"))
+        # Pre-match presser (interactive)
+        if not self._career_prompts_allowed():
+            return
+        from manager_hub_window import PressConferenceDialog
+        form_word = self._career_form_word()
+        ctx = {"form_word": form_word,
+               "opp": report["team"], "opp_word": report["danger_level"].lower()}
+        questions = manager_career.build_prematch_presser(self.user_team, opponent, ctx)
+        dlg = PressConferenceDialog(self, questions, title="Pre-Match Press Conference")
+        self._career_apply_press_answers(dlg.chosen, "pre-match")
+
+    def _career_form_word(self) -> str:
+        b = self.career.board
+        games = self._career_team_games()
+        if games < 3:
+            return "mixed"
+        pct = (b.season_wins * 2 + b.season_otl) / (games * 2)
+        if pct >= 0.65:
+            return "excellent"
+        if pct >= 0.5:
+            return "decent"
+        return "poor"
+
+    def _career_apply_press_answers(self, answers, kind: str):
+        """Apply press conference answer effects."""
+        if not answers:
+            return
+        team = self.user_team
+        total_morale = sum(a.get("morale_effect", 0) for a in answers)
+        total_board = sum(a.get("board_effect", 0) for a in answers)
+        if total_morale:
+            for p in (getattr(team, "roster", []) or []):
+                m = getattr(p, "morale", 7) or 7
+                p.morale = max(1, min(10, m + (1 if total_morale > 0 else -1)))
+        if total_board:
+            self.career.board.confidence = max(0, min(100, self.career.board.confidence + total_board))
+        summary = f"{kind}: " + "; ".join(a.get("label", "") for a in answers)
+        self.career.press_history.append(
+            {"date": self.current_date.isoformat(), "type": kind, "summary": summary})
+
+    def _career_team_talk(self, opponent) -> float:
+        """Show pre-match team talk dialog. Returns sim boost multiplier."""
+        if not self._career_prompts_allowed():
+            return 1.0
+        from manager_hub_window import TeamTalkDialog
+        my_strength = self._career_team_strength(self.user_team)
+        opp_strength = self._career_team_strength(opponent)
+        situation = "favorite" if my_strength > opp_strength + 5 else (
+            "underdog" if opp_strength > my_strength + 5 else "even")
+        if self.career.board.season_losses >= 3 and self._career_team_games() >= 4:
+            # recent form check for "after_loss"
+            pass
+        context = {"situation": situation,
+                   "opponent_name": getattr(opponent, "team_name", "the opposition")}
+        dlg = TeamTalkDialog(self, self.user_team, "prematch", context)
+        if dlg.result:
+            _opt, _reaction, boost = dlg.result
+            return boost
+        return 1.0
+
+    def _career_after_user_game(self, winner, loser, scores, home_team, away_team,
+                                went_ot: bool, sim_engine=None):
+        """Board/profile/morale updates + post-match presser after user games."""
+        try:
+            team = self.user_team
+            user_won = (winner == team)
+            my_strength = self._career_team_strength(team)
+            opp = away_team if home_team == team else home_team
+            opp_strength = self._career_team_strength(opp)
+            was_favorite = my_strength >= opp_strength
+
+            delta = self.career.board.record_result(user_won, went_ot, was_favorite)
+            self.career.profile.record_result(user_won, went_ot, is_playoff=False)
+
+            # Dressing room mood swing
+            for p in (getattr(team, "roster", []) or []):
+                m = getattr(p, "morale", 7) or 7
+                h = getattr(p, "happiness", 70) or 70
+                if user_won:
+                    p.morale = min(10, m + 1)
+                    p.happiness = min(100, h + 3)
+                else:
+                    p.morale = max(1, m - 1)
+                    p.happiness = max(0, h - 3)
+
+            if self.career.board.sacked:
+                self._career_handle_sack()
+                return
+
+            # Post-match presser (interactive)
+            if self._career_prompts_allowed():
+                from manager_hub_window import PressConferenceDialog
+                hs, aws = scores
+                score_str = f"{hs}-{aws}"
+                star = self._career_star_of_game(sim_engine, team)
+                ctx = {"n": "a few"}
+                questions = manager_career.build_postmatch_presser(
+                    team, opp, user_won, went_ot, score_str, star, ctx)
+                dlg = PressConferenceDialog(
+                    self, questions,
+                    title="Post-Match Press Conference")
+                self._career_apply_press_answers(dlg.chosen, "post-match")
+        except Exception as e:
+            print(f"Career post-game error (non-fatal): {e}")
+
+    def _career_star_of_game(self, sim_engine, team) -> str:
+        """Best performer name for the presser."""
+        try:
+            stats = getattr(sim_engine, "stats", {}) or {}
+            team_stats = stats.get(team.team_name, {})
+            best_id, best_g = None, -1
+            for pid, st in team_stats.items():
+                g = st.get("goals", 0) if isinstance(st, dict) else 0
+                if g > best_g:
+                    best_g, best_id = g, pid
+            if best_id is not None:
+                for p in (getattr(team, "roster", []) or []):
+                    if p.id == best_id:
+                        return f"{p.first_name} {p.last_name}"
+        except Exception:
+            pass
+        # Fallback: captain or random skater
+        for p in (getattr(team, "roster", []) or []):
+            if getattr(p, "captaincy", None) == "C":
+                return f"{p.first_name} {p.last_name}"
+        return "your top line"
     
     def open_save_window(self):
         """Open the Save Game window."""

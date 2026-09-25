@@ -71,6 +71,17 @@ class GameSaveManager:
                 'inbox_messages': getattr(self.game_manager, 'inbox_messages', []),
                 'news_stories': getattr(self.game_manager, 'news_stories', []),
             }
+
+            # FM-style career state (board, training, reputation, press history)
+            try:
+                gm = self.game_manager
+                career = getattr(gm, 'career', None)
+                if career is None:
+                    career = getattr(getattr(gm, 'game_manager', None), 'career', None)
+                save_data['career_data'] = career.to_dict() if career else {}
+            except Exception as e:
+                print(f"Could not save career data: {e}")
+                save_data['career_data'] = {}
             
             return save_data
             
@@ -498,6 +509,18 @@ class GameSaveManager:
                        'contract_negotiations', 'inbox_messages', 'news_stories']:
                 if key in save_data:
                     setattr(self.game_manager, key, save_data[key])
+
+            # Restore FM-style career state
+            if save_data.get('career_data'):
+                try:
+                    from manager_career import CareerState
+                    target = self.game_manager
+                    # Career lives on the GameManager; SaveLoadWindow may wrap the GUI
+                    if not hasattr(target, 'user_team') and hasattr(target, 'game_manager'):
+                        target = target.game_manager
+                    target.career = CareerState.from_dict(save_data['career_data'])
+                except Exception as e:
+                    print(f"Could not restore career data: {e}")
             
             # Restore free agents
             if 'free_agents' in save_data:

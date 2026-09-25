@@ -378,6 +378,7 @@ class GameSim:
         self.clock = 1200  # 20 minutes in seconds
         self.game_log = []
         self.notable_events = []
+        self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
         # Sudden-death OT bookkeeping (set by _handle_overtime)
         self._ot_sudden_death = False
         self._ot_start_score = None
@@ -415,7 +416,7 @@ class GameSim:
         # Stage 5: Goaltending systems
         self.goaltender_fatigue = {}  # Track goalie fatigue
         self.goaltender_positioning = {}  # Track goalie positioning
-        self.expected_goals = 0  # Track expected goals for GSAx calculation
+        self.expected_goals = {}  # team_name -> xG; track expected goals for GSAx calculation
         self.save_quality_tracking = {}  # Track save difficulty and quality
         
         # Stage 6: Player chemistry and line combinations
@@ -2731,7 +2732,8 @@ class GameSim:
         expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance)
         
         # Update expected goals tracking
-        self.expected_goals[attacking_team.team_name] += expected_goal
+        self.expected_goals[attacking_team.team_name] = \
+            self.expected_goals.get(attacking_team.team_name, 0.0) + expected_goal
         
         # Determine goaltender positioning and style
         self._adjust_goaltender_positioning(goalie, location, self.current_situation)
