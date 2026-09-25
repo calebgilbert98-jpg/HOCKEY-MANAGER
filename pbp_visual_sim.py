@@ -328,12 +328,12 @@ class PBPVisualSim(tk.Toplevel):
         ice = self._rr_points(2, 2, W - 2, H - 2, rr)
         c.create_polygon(ice, fill=ICE, outline="")
 
-        # --- skate-mark texture (subtle) ---
-        for _ in range(130):
-            x = rnd.uniform(30, W - 30)
-            y = rnd.uniform(30, H - 30)
+        # --- skate-mark texture (subtle, sparse) ---
+        for _ in range(45):
+            x = rnd.uniform(40, W - 40)
+            y = rnd.uniform(40, H - 40)
             ang = rnd.uniform(0, math.pi)
-            ln = rnd.uniform(8, 30)
+            ln = rnd.uniform(8, 24)
             dx, dy = math.cos(ang) * ln / 2, math.sin(ang) * ln / 2
             c.create_line(x - dx, y - dy, x + dx, y + dy,
                           fill=ICE_SCRATCH, width=1)
@@ -359,19 +359,20 @@ class PBPVisualSim(tk.Toplevel):
                       outline=LINE_BLUE, width=3)
         c.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill=LINE_BLUE)
 
-        # --- faceoff dots/circles: end zones (31/169) + neutral (80/120) ---
-        for dx, dy in ((169, 30), (169, 55), (31, 30), (31, 55)):
+        # --- faceoff dots/circles: end zones (31/169, 22 ft off center)
+        # and neutral-zone dots (80/120). 15 ft circles, 44 ft apart: no overlap.
+        for dx, dy in ((169, 20.5), (169, 64.5), (31, 20.5), (31, 64.5)):
             ex, ey = self.X(dx), self.Y(dy)
             c.create_oval(ex - 62, ey - 62, ex + 62, ey + 62,
                           outline=FACEOFF_RED, width=3)
-            # hash marks
-            for hx in (-78, 78):
-                c.create_line(ex + hx, ey - 66, ex + hx, ey - 50,
-                              fill=FACEOFF_RED, width=2)
-                c.create_line(ex + hx, ey + 50, ex + hx, ey + 66,
-                              fill=FACEOFF_RED, width=2)
+            # hash marks: paired ticks just outside the circle's left/right edge
+            for sx in (-1, 1):
+                hx = ex + sx * 74
+                for oy in (-13, 13):
+                    c.create_line(hx - 8, ey + oy, hx + 8, ey + oy,
+                                  fill=FACEOFF_RED, width=3)
             c.create_oval(ex - 4, ey - 4, ex + 4, ey + 4, fill=FACEOFF_RED)
-        for dx, dy in ((80, 30), (80, 55), (120, 30), (120, 55)):
+        for dx, dy in ((80, 20.5), (80, 64.5), (120, 20.5), (120, 64.5)):
             ex, ey = self.X(dx), self.Y(dy)
             c.create_oval(ex - 4, ey - 4, ex + 4, ey + 4, fill=FACEOFF_RED)
 
