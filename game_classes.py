@@ -188,6 +188,8 @@ class Player:
     days_missed: int = 0
     career_games_missed: int = field(default_factory=lambda: random.randint(0, 50))
     last_injury: str = "None"
+    injury_type: str = "None"
+    games_remaining_injured: int = 0
     
     # Development attributes
     coachability: int = field(default_factory=lambda: random.randint(5, 20))

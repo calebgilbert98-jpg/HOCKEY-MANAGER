@@ -2553,7 +2553,81 @@ class AdvancedGameSim:
             winner, loser = self.away_team, self.home_team
         scores = (self.score[self.home_team.team_name], self.score[self.away_team.team_name])
         notable_events = [e for e in self.events if e['event'] == 'Goal']
+        
+        # Gameplay injuries: small chance per game (NHL: ~1 injury per 3-4 games)
+        self._process_gameplay_injuries()
+        
         return winner, loser, scores, self.events, notable_events
+
+    def _process_gameplay_injuries(self):
+        """Process potential injuries from gameplay.
+        
+        NHL averages roughly 1 man-game lost to injury per 3-4 games.
+        Injury-prone players (high injury_proneness) are more likely to get hurt.
+        """
+        import random
+        
+        # 25% chance of at least one injury per game
+        if random.random() > 0.25:
+            return
+        
+        # Pick 1 player (rarely 2) from both teams
+        all_skaters = []
+        for team in [self.home_team, self.away_team]:
+            for p in team.roster:
+                # Skip goalies (lower injury rate) and already-injured
+                if getattr(p, 'is_injured', False):
+                    continue
+                pos = getattr(p, 'primary_position', None)
+                if pos and pos.name == 'GOALIE':
+                    continue
+                all_skaters.append(p)
+        
+        if not all_skaters:
+            return
+        
+        # Weight by injury proneness (1-20 scale, higher = more likely)
+        weights = []
+        for p in all_skaters:
+            proneness = getattr(p, 'injury_proneness', 10)
+            # Also factor in age (older = more fragile) and physical play
+            age = getattr(p, 'age', 25)
+            age_factor = max(0.5, min(2.0, (age - 20) / 10))
+            weights.append(proneness * age_factor)
+        
+        # Select injured player
+        injured = random.choices(all_skaters, weights=weights, k=1)[0]
+        
+        # Determine injury severity (games missed)
+        # Minor: 1-3 games (60%), Moderate: 4-10 games (30%), Severe: 11+ games (10%)
+        severity_roll = random.random()
+        if severity_roll < 0.6:
+            games_missed = random.randint(1, 3)
+            injury_type = random.choice(['Bruised ribs', 'Minor sprain', 'Sore shoulder', 'Tweaked knee'])
+        elif severity_roll < 0.9:
+            games_missed = random.randint(4, 10)
+            injury_type = random.choice(['Sprained ankle', 'Pulled groin', 'Shoulder strain', 'Knee sprain'])
+        else:
+            games_missed = random.randint(11, 25)
+            injury_type = random.choice(['Broken collarbone', 'Torn MCL', 'Concussion', 'Broken wrist'])
+        
+        # Apply injury
+        injured.is_injured = True
+        injured.injury_type = injury_type
+        injured.games_remaining_injured = games_missed
+        injured.last_injury = injury_type
+        
+        # Log the injury event
+        self.events.append({
+            'time': self.time,
+            'period': self.period,
+            'team': self.home_team.team_name if injured in self.home_team.roster else self.away_team.team_name,
+            'player': injured,
+            'event': 'Injury',
+            'details': f'{injury_type} ({games_missed} games)'
+        })
+        
+        print(f"🏥 Injury: {injured.first_name} {injured.last_name} - {injury_type} ({games_missed} games)")
 
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
         """Enhanced shot resolution using multiple attributes"""
@@ -2603,6 +2677,11 @@ class AdvancedGameSim:
         # Power play: modest boost (NHL PP units shoot a higher percentage)
         if self.pp_team:
             shot_chance += 0.025
+        
+        # Home-ice advantage: small boost for home team (NHL home win ~55%)
+        # +0.5% absolute shooting chance ≈ the observed home edge
+        if puck_team_name == self.home_team.team_name:
+            shot_chance += 0.005
         
         # Clamp to realistic NHL range (5% - 15%)
         shot_chance = max(0.05, min(0.15, shot_chance))
