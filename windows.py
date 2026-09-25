@@ -2272,16 +2272,163 @@ class FreeAgencyWindow(tk.Toplevel):
             self.parent.open_contract_negotiation_window(player)
     
     def hire_selected_staff(self):
-        """Hire the selected staff member."""
+        """Hire the selected staff member via a real contract offer."""
         selection = self.fa_staff_tree.selection()
         if not selection:
             tk.messagebox.showwarning("No Selection", "Please select a staff member to hire.")
             return
-        
+
         staff = self.parent.tree_maps.get('fa_staff', {}).get(selection[0])
         if staff:
-            # Implement staff hiring logic here
-            tk.messagebox.showinfo("Staff Hired", f"{staff.full_name} has been hired!")
+            self._open_staff_contract_dialog(staff)
+
+    def _open_staff_contract_dialog(self, staff):
+        """Contract offer dialog: years + salary pills, live acceptance odds."""
+        from game_classes import StaffRole
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Offer Contract — {staff.full_name}")
+        dlg.configure(background=self.parent.BG_COLOR)
+        dlg.geometry("460x480")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        asking = max(50_000, int(staff.salary or 50_000))
+        dept = ""
+        try:
+            from game_classes import Staff as StaffClass
+            dept = StaffClass.get_role_department(staff.role)
+        except Exception:
+            pass
+
+        header = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
+        header.pack(fill=tk.X, padx=12, pady=(12, 6))
+        ttk.Label(header, text=staff.full_name,
+                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
+                  style='TLabel').pack(anchor='w')
+        ttk.Label(header,
+                  text=f"{staff.role.value}  •  {dept}  •  Age {staff.age}  •  {staff.nationality}",
+                  style='Secondary.TLabel').pack(anchor='w')
+        ttk.Label(header,
+                  text=f"Rating: {staff.overall_rating}   •   Asking: ${asking:,} / yr",
+                  style='TLabel').pack(anchor='w', pady=(4, 0))
+
+        # Unique-role replacement warning
+        incumbent = None
+        if staff.role in (StaffRole.GENERAL_MANAGER, StaffRole.HEAD_COACH):
+            for s in getattr(self.parent.user_team, 'staff', []):
+                if s.role == staff.role:
+                    incumbent = s
+                    break
+        if incumbent:
+            warn = ttk.Frame(dlg, style='Panel.TFrame', padding=10)
+            warn.pack(fill=tk.X, padx=12, pady=4)
+            ttk.Label(warn,
+                      text=f"You already employ {incumbent.full_name} as {staff.role.value}.\n"
+                           f"Hiring {staff.full_name} will replace them "
+                           f"({incumbent.full_name} becomes a free agent).",
+                      style='Secondary.TLabel', wraplength=400,
+                      justify='left').pack(anchor='w')
+
+        years_var = tk.StringVar(master=dlg, value="2")
+        salary_mult_var = tk.StringVar(master=dlg, value="1.0")
+
+        def _chance():
+            mult = float(salary_mult_var.get())
+            if mult >= 1.0:
+                return 100
+            return max(5, int(100 * mult) - 10)
+
+        def _offer():
+            return int(asking * float(salary_mult_var.get()))
+
+        body = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
+        body.pack(fill=tk.X, padx=12, pady=4)
+
+        ttk.Label(body, text="Contract length:", style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+        years_row = ttk.Frame(body, style='Panel.TFrame')
+        years_row.pack(fill=tk.X, pady=(4, 10))
+        year_btns = {}
+        for y in ("1", "2", "3", "4", "5"):
+            b = PillButton(years_row, text=f"{y} yr", bg='#111826',
+                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                           padx=12, pady=5,
+                           command=lambda v=y: (years_var.set(v), _paint()))
+            b.pack(side=tk.LEFT, padx=3)
+            year_btns[y] = b
+
+        ttk.Label(body, text="Salary offer:", style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+        sal_row = ttk.Frame(body, style='Panel.TFrame')
+        sal_row.pack(fill=tk.X, pady=(4, 6))
+        sal_btns = {}
+        for mult, label in (("0.8", "80%"), ("1.0", "Asking"), ("1.2", "120%")):
+            b = PillButton(sal_row, text=label, bg='#111826',
+                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                           padx=12, pady=5,
+                           command=lambda v=mult: (salary_mult_var.set(v), _paint()))
+            b.pack(side=tk.LEFT, padx=3)
+            sal_btns[mult] = b
+
+        offer_label = ttk.Label(body, text="", style='TLabel',
+                                font=(self.parent.FONT_FAMILY, 11))
+        offer_label.pack(anchor='w', pady=(2, 0))
+        chance_label = ttk.Label(body, text="", style='Secondary.TLabel',
+                                 font=(self.parent.FONT_FAMILY, 10, 'italic'))
+        chance_label.pack(anchor='w')
+
+        def _paint():
+            for y, b in year_btns.items():
+                b.set_selected(y == years_var.get())
+            for m, b in sal_btns.items():
+                b.set_selected(m == salary_mult_var.get())
+            offer_label.config(
+                text=f"Offer: ${_offer():,} / yr  ×  {years_var.get()} yr")
+            chance_label.config(
+                text=f"Estimated acceptance chance: {_chance()}%")
+        _paint()
+
+        footer = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
+        footer.pack(fill=tk.X, padx=12, pady=(4, 12))
+        PillButton(footer, text="Make Offer", bg='#111826',
+                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                   padx=16, pady=7,
+                   command=lambda: self._resolve_staff_offer(
+                       dlg, staff, incumbent, int(years_var.get()),
+                       _offer(), _chance())).pack(side=tk.LEFT, padx=(0, 8))
+        PillButton(footer, text="Cancel", bg='#111826',
+                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                   padx=16, pady=7,
+                   command=dlg.destroy).pack(side=tk.LEFT)
+
+    def _resolve_staff_offer(self, dlg, staff, incumbent, years, offer, chance):
+        """Roll the acceptance dice and apply a successful hire."""
+        import random
+        if random.randint(1, 100) > chance:
+            tk.messagebox.showinfo(
+                "Offer Rejected",
+                f"{staff.full_name} rejected your offer of ${offer:,}/yr.\n"
+                f"Try matching or beating their asking price.")
+            return
+        league = self.parent.league
+        user_team = self.parent.user_team
+        if staff in league.free_agent_staff:
+            league.free_agent_staff.remove(staff)
+        if incumbent is not None and incumbent in user_team.staff:
+            user_team.staff.remove(incumbent)
+            league.free_agent_staff.append(incumbent)
+        staff.salary = offer
+        staff.contract_years = years
+        if staff not in user_team.staff:
+            user_team.staff.append(staff)
+        dlg.destroy()
+        self.populate_filtered_staff()
+        note = (f"\n{incumbent.full_name} was released to free agency."
+                if incumbent else "")
+        tk.messagebox.showinfo(
+            "Staff Hired",
+            f"{staff.full_name} has signed as {staff.role.value}!\n"
+            f"${offer:,}/yr for {years} year(s).{note}")
     
     def view_selected_player_profile(self):
         """View the selected player's profile."""
@@ -2300,9 +2447,74 @@ class FreeAgencyWindow(tk.Toplevel):
         if not selection:
             tk.messagebox.showwarning("No Selection", "Please select a staff member to view.")
             return
-        
-        # Implement staff profile viewing
-        tk.messagebox.showinfo("Staff Profile", "Staff profile viewing coming soon!")
+
+        staff = self.parent.tree_maps.get('fa_staff', {}).get(selection[0])
+        if staff:
+            self._open_staff_profile_dialog(staff)
+
+    def _open_staff_profile_dialog(self, staff):
+        """Compact staff profile: bio, key attributes, contract."""
+        from game_classes import Staff as StaffClass
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Staff Profile — {staff.full_name}")
+        dlg.configure(background=self.parent.BG_COLOR)
+        dlg.geometry("420x520")
+        dlg.transient(self)
+
+        try:
+            dept = StaffClass.get_role_department(staff.role)
+        except Exception:
+            dept = ""
+        header = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
+        header.pack(fill=tk.X, padx=12, pady=(12, 6))
+        ttk.Label(header, text=staff.full_name,
+                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
+                  style='TLabel').pack(anchor='w')
+        ttk.Label(header, text=f"{staff.role.value}  •  {dept}",
+                  style='Secondary.TLabel').pack(anchor='w')
+        ttk.Label(header,
+                  text=f"Age {staff.age}  •  {staff.nationality}  •  "
+                       f"Overall {staff.overall_rating}",
+                  style='TLabel').pack(anchor='w', pady=(4, 0))
+
+        attrs = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
+        attrs.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        ttk.Label(attrs, text="Attributes", style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w', pady=(0, 6))
+        rows = [
+            ("Tactical Knowledge", 'tactical_knowledge'),
+            ("Man Management", 'man_management'),
+            ("Motivating", 'motivating'),
+            ("Working with Youngsters", 'working_with_youngsters'),
+            ("Player Development", 'player_development'),
+            ("Judging Ability", 'judging_player_ability'),
+            ("Judging Potential", 'judging_player_potential'),
+            ("Determination", 'determination'),
+            ("Adaptability", 'adaptability'),
+            ("Discipline", 'discipline'),
+        ]
+        for label, attr in rows:
+            val = getattr(staff, attr, None)
+            if val is None:
+                continue
+            r = ttk.Frame(attrs, style='Panel.TFrame')
+            r.pack(fill=tk.X, pady=1)
+            ttk.Label(r, text=label, style='Secondary.TLabel',
+                      width=24).pack(side=tk.LEFT)
+            ttk.Label(r, text=str(val), style='TLabel',
+                      font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(side=tk.LEFT)
+
+        footer = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
+        footer.pack(fill=tk.X, padx=12, pady=(4, 12))
+        ttk.Label(footer,
+                  text=f"Salary: ${staff.salary:,}/yr  •  Contract: {staff.contract_years} yr",
+                  style='Secondary.TLabel').pack(anchor='w')
+        PillButton(footer, text="Offer Contract", bg='#111826',
+                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                   padx=16, pady=7,
+                   command=lambda: (dlg.destroy(),
+                                    self._open_staff_contract_dialog(staff))
+                   ).pack(anchor='w', pady=(8, 0))
     
     def negotiate_with_player(self, event=None):
         """Negotiate with a player (double-click handler)."""
