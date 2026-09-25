@@ -1871,6 +1871,8 @@ class GameSim:
                     continue
                 player.stats.saves += stats.get('saves', 0)
                 player.stats.shots_against += stats.get('shots_against', 0)
+                # Recalculate SV% now that saves/shots_against changed
+                player.stats._update_goalie_stats()
             except Exception:
                 pass
 
@@ -5075,11 +5077,11 @@ class GameSim:
             elif shot_result == 'goal':
                 self.game_stats[goalie_id]['goals_against'] += 1
             
-            # Update save percentage
+            # Update save percentage (decimal 0-1 scale, consistent with player.stats)
             shots_against = self.game_stats[goalie_id]['shots_against']
             saves = self.game_stats[goalie_id]['saves']
             if shots_against > 0:
-                self.game_stats[goalie_id]['save_percentage'] = (saves / shots_against) * 100
+                self.game_stats[goalie_id]['save_percentage'] = saves / shots_against
         
         # Update team goaltending stats
         if team_name in self.team_stats:
