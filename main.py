@@ -6738,7 +6738,7 @@ class HockeyManagerGUI(tk.Tk):
             print("Generating draft prospects...")
             from draft_generator import generate_draft_class
             draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
-            self.league.draft_prospects = generate_draft_class(year, quality=draft_quality)
+            self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)
             print(f"Generated {len(self.league.draft_prospects)} draft prospects")
         
         # Ensure draft picks are set up
