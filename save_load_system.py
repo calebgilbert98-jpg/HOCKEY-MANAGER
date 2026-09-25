@@ -101,6 +101,8 @@ class GameSaveManager:
             'teams': [],  # teams is a list, not dict
             'standings': getattr(league, 'standings', {}),
             'schedule_generated': getattr(league, 'schedule_generated', False),
+            'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
+            'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
         }
         
         # Serialize all teams
@@ -572,6 +574,12 @@ class GameSaveManager:
             league.season_year = league_data.get('season_year', 2024)
             league.standings = league_data.get('standings', {})
             league.schedule_generated = league_data.get('schedule_generated', False)
+            # Tentpole event state (years the entry draft was held, event
+            # prompts already shown). Defaults keep old saves working.
+            league.draft_held_years = list(league_data.get('draft_held_years', []) or [])
+            league.event_day_prompted = [
+                list(p) for p in (league_data.get('event_day_prompted', []) or [])
+            ]
             
             # Restore teams (clear existing and restore from save)
             league.teams.clear()

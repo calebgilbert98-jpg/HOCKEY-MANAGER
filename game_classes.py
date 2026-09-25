@@ -1982,6 +1982,10 @@ class League:
     standings: Dict[str, Dict] = field(default_factory=dict)
     current_game_index: int = 0
     _game_manager: object = field(default=None, init=False, repr=False)  # Reference to game manager
+    # Tentpole event state (persisted in saves): years the entry draft was
+    # held, and (event, year) pairs the user was already prompted about.
+    draft_held_years: List[int] = field(default_factory=list)
+    event_day_prompted: List[List] = field(default_factory=list)
     
     def set_game_manager(self, game_manager):
         """Set reference to game manager for database access."""
@@ -2029,7 +2033,13 @@ class League:
         self.initialize_standings()
 
     def initialize_standings(self):
-        """Sets up the standings dictionary for each team."""
+        """Sets up the standings dictionary for each team.
+
+        Rebuilds from scratch so stale keys (e.g. template team names from
+        before database generation renamed teams) are removed and every
+        current team is present.
+        """
+        self.standings.clear()
         for team in self.teams:
             self.standings[team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
 
@@ -4229,7 +4239,7 @@ class League:
         
         # Sort teams by points (worst to best for each round)
         sorted_teams = sorted(self.teams, 
-                            key=lambda t: self.standings[t.team_name]['Points'])
+                            key=lambda t: self.standings.get(t.team_name, {}).get('Points', 0))
         
         for round_num in range(1, 8):  # 7 rounds
             round_picks = []
@@ -4277,7 +4287,7 @@ class League:
         
         # Sort by original team standings (worst to best)
         sorted_teams = sorted(self.teams, 
-                            key=lambda t: self.standings[t.team_name]['Points'])
+                            key=lambda t: self.standings.get(t.team_name, {}).get('Points', 0))
         
         first_round_picks.sort(key=lambda pick: sorted_teams.index(
             next(t for t in self.teams if t.team_name == pick.original_team)

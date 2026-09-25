@@ -168,6 +168,9 @@ class GameManager:
                 self.league = generator.generate_comprehensive_database(progress_callback)
                 debug_print("DEBUG: Database generation completed")
                 self.league.set_game_manager(self)
+                # Rebuild standings from the generated teams: generation may
+                # rename/replace the template teams, leaving stale keys.
+                self.league.initialize_standings()
 
                 # New-game wizard options (stored for the session)
                 self.fog_of_war = settings.get('fog_of_war', True)
@@ -6030,13 +6033,11 @@ class HockeyManagerGUI(tk.Tk):
         """Process daily maintenance tasks with performance optimizations"""
         # Only run heavy tasks on specific days to reduce CPU load
 
-        # Event-day hubs: prompt once per year when a tentpole day arrives
+        # Event-day hubs: prompt once per year when a tentpole day arrives.
+        # (Entry draft is handled daily inside _check_for_event_day; it must
+        # NOT be Monday-gated since June 23-25 often contains no Monday.)
         self._check_for_event_day()
-        
-        # Check for Entry Draft (held in June) - only check once per week
-        if self.current_date.weekday() == 0:  # Monday only
-            self._check_for_entry_draft()
-        
+
         # Process trade block offers (once per week) - unchanged
         if self.current_date.weekday() == 0:  # Monday
             self.process_trade_block_offers()
@@ -6535,48 +6536,66 @@ class HockeyManagerGUI(tk.Tk):
             traceback.print_exc()
 
     def _check_for_event_day(self):
-        """Detect tentpole event days (draft, deadline, free agency) and offer the hub once per year."""
-        try:
-            from event_day_hubs import get_todays_event
-            event = get_todays_event(self.current_date)
-            if not event:
-                return
-            if not hasattr(self, '_event_day_prompted'):
-                self._event_day_prompted = set()
-            key = (event, self.current_date.year)
-            if key in self._event_day_prompted:
-                return
-            self._event_day_prompted.add(key)
-            # Defer the prompt so the daily sim UI finishes updating first
-            self.after(500, lambda: prompt_event_day(self, self.game_manager, event))
-        except Exception:
-            pass
+        """Detect tentpole event days (draft, deadline, free agency).
 
-    def _check_for_entry_draft(self):
-        """Check if today is the Entry Draft and open draft window if so"""
+        - Runs the entry draft once per year on June 23-25. (The draft used
+          to be Monday-gated, so in seasons where June 23-25 had no Monday
+          it was silently skipped entirely.)
+        - Prompts the event-day hub once per year per event.
+        State lives on the league object so it survives save/load.
+        """
         try:
-            # Entry Draft is typically held in late June
-            draft_month = 6  # June
-            draft_day = 23   # Usually around June 23-25
-            
-            if (self.current_date.month == draft_month and 
-                self.current_date.day >= draft_day and 
-                self.current_date.day <= draft_day + 2):  # Give 3-day window
-                
-                # Check if we've already held the draft this year
-                if not hasattr(self, '_draft_held_this_year'):
-                    self._draft_held_this_year = set()
-                
-                current_year = self.current_date.year
-                if current_year not in self._draft_held_this_year:
-                    # It's draft time! 
-                    self._hold_entry_draft(current_year)
-                    self._draft_held_this_year.add(current_year)
-                    
+            from event_day_hubs import get_todays_event, is_draft_day, prompt_event_day
+        except ImportError as e:
+            debug_print(f"Event-day hubs unavailable: {e}")
+            return
+
+        league = getattr(self.game_manager, 'league', None) or getattr(self, 'league', None)
+        if league is None:
+            return
+
+        today = self.current_date
+        year = today.year
+
+        # Entry draft: run once per year inside the draft window. Runs BEFORE
+        # the hub prompt so Draft Day Central shows the real draft class.
+        if is_draft_day(today):
+            held = set(getattr(league, 'draft_held_years', None) or [])
+            if year not in held:
+                try:
+                    self._hold_entry_draft(year)
+                except Exception:
+                    debug_print(f"Entry draft failed for {year}:")
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    held.add(year)
+                    league.draft_held_years = sorted(held)
+
+        # Hub prompt: once per (event, year)
+        try:
+            event = get_todays_event(today)
         except Exception as e:
-            print(f"Error checking for entry draft: {e}")
-            import traceback
-            traceback.print_exc()
+            debug_print(f"Event-day detection failed: {e}")
+            return
+        if not event:
+            return
+        prompted = [tuple(p) for p in (getattr(league, 'event_day_prompted', None) or [])]
+        key = (event, year)
+        if key in prompted:
+            return
+        prompted.append(key)
+        league.event_day_prompted = [list(p) for p in prompted]
+        # Defer the prompt so the daily sim UI finishes updating first
+        self.after(500, lambda ev=event: self._prompt_event_day_safe(ev))
+
+    def _prompt_event_day_safe(self, event):
+        """Show the event-day hub prompt, logging failures instead of crashing."""
+        try:
+            from event_day_hubs import prompt_event_day
+            prompt_event_day(self, self.game_manager, event)
+        except Exception as e:
+            debug_print(f"Event-day prompt failed ({event}): {e}")
 
     def _hold_entry_draft(self, year):
         """Hold the annual entry draft"""
@@ -6597,21 +6616,10 @@ class HockeyManagerGUI(tk.Tk):
         
         # Add news story about the draft
         draft_story = f"The {year} NHL Entry Draft begins today! Teams will select from a pool of {len(self.league.draft_prospects)} eligible prospects over 7 rounds."
-        self.add_news_story(draft_story)
-        
-        # Open the draft window
-        if 'draft' not in self.open_windows or not self.open_windows['draft'].winfo_exists():
-            self.open_windows['draft'] = DraftWindow(self)
-        self.open_windows['draft'].focus_set()
-        
-        # Show notification to user
-        messagebox.showinfo(
-            "Entry Draft", 
-            f"The {year} NHL Entry Draft is beginning!\n\n"
-            f"The draft window has been opened. Your team can now make selections "
-            f"when it's your turn to pick.\n\n"
-            f"Good luck building your franchise!"
-        )
+        self.add_news(draft_story)
+        # NOTE: no UI is opened here. The draft-day hub prompt (Draft Day
+        # Central) follows immediately and its buttons open the draft board,
+        # so draft day has a single entry point instead of two popups.
 
     def conduct_fantasy_draft(self):
         """Conduct a fantasy draft by redistributing all players among NHL teams"""
@@ -6676,7 +6684,7 @@ class HockeyManagerGUI(tk.Tk):
         
         # Add news story about fantasy draft
         fantasy_story = f"Fantasy Draft Complete! All {len(all_players)} NHL players have been redistributed among the 32 teams. Every franchise starts fresh with a completely new roster!"
-        self.add_news_story(fantasy_story)
+        self.add_news(fantasy_story)
         
         print("🎉 Fantasy draft complete! All teams have new rosters.")
         print(f"Players redistributed: {len(all_players)}")
@@ -7687,9 +7695,7 @@ class HockeyManagerGUI(tk.Tk):
         if not getattr(self, '_bulk_simming', False):
             self._show_season_summary()
 
-        # Reset draft flag for new season
-        if hasattr(self, '_draft_held_this_year'):
-            self._draft_held_this_year.clear()
+        # Draft state is per-year on the league (draft_held_years); nothing to reset.
 
         # Check if playoffs should start
         if getattr(self, '_bulk_simming', False):
