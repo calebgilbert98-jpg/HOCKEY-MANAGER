@@ -4139,6 +4139,8 @@ class ScheduleWindow(tk.Toplevel):
         columns = {'date': ('Date', 100), 'away': ('Away Team', 200), 'score': ('Score', 100), 'home': ('Home Team', 200), 'status': ('Status', 100)}
         
         my_team_frame = ttk.Frame(schedule_notebook)
+        self.my_sched_header = ttk.Label(my_team_frame, text="", style='CardTitle.TLabel')
+        self.my_sched_header.pack(anchor='w', padx=8, pady=(8, 2))
         self.my_schedule_tree = parent._create_treeview(my_team_frame, columns, 25)
         self.my_schedule_tree.pack(fill='both', expand=True, padx=5, pady=5)
         
@@ -4447,6 +4449,7 @@ class ScheduleWindow(tk.Toplevel):
         self.league_schedule_tree.delete(*self.league_schedule_tree.get_children())
         
         self.schedule_data.clear()
+        self._first_upcoming = None
         
         for game_entry in self.parent.league.schedule:
             # Handle different schedule formats
@@ -4460,6 +4463,10 @@ class ScheduleWindow(tk.Toplevel):
                 game_date, home, away = game_entry[0], game_entry[1], game_entry[2]
             else:
                 continue  # Skip malformed entries
+
+            # Skip special events (All-Star, outdoor games, etc.) - not real games
+            if not (hasattr(home, 'team_name') and hasattr(away, 'team_name')):
+                continue
             
             # Determine game status and score
             status = "Scheduled"
@@ -4494,17 +4501,37 @@ class ScheduleWindow(tk.Toplevel):
             
             item_id = self.league_schedule_tree.insert('', 'end', values=values)
             if self.parent.user_team in (home, away):
-                my_item_id = self.my_schedule_tree.insert('', 'end', values=values)
-                
-                # Highlight user team games
-                if status == "Today":
-                    self.my_schedule_tree.item(my_item_id, tags=('today',))
-                elif status == "Final":
-                    self.my_schedule_tree.item(my_item_id, tags=('completed',))
+                row_tag = 'completed'
+                if status == "Final" and "-" in score:
+                    try:
+                        a_s, h_s = (int(x) for x in score.split("-"))
+                        mine = h_s if home == self.parent.user_team else a_s
+                        theirs = a_s if home == self.parent.user_team else h_s
+                        row_tag = 'win' if mine > theirs else 'loss'
+                    except (ValueError, IndexError):
+                        row_tag = 'completed'
+                elif status == "Today":
+                    row_tag = 'today'
+                my_item_id = self.my_schedule_tree.insert('', 'end', values=values,
+                                                           tags=(row_tag,))
+                if self._first_upcoming is None and status in ("Today", "Scheduled"):
+                    self._first_upcoming = my_item_id
                     
         # Configure tags for styling
-        self.my_schedule_tree.tag_configure('today', background='#4A5C2A', foreground='#FFFFFF')
-        self.my_schedule_tree.tag_configure('completed', background='#2A3F5F', foreground='#CCCCCC')
+        self.my_schedule_tree.tag_configure('today', background='#1B2A4A', foreground='#FFFFFF')
+        self.my_schedule_tree.tag_configure('completed', foreground='#8A8A8A')
+        self.my_schedule_tree.tag_configure('win', foreground='#7ED492')
+        self.my_schedule_tree.tag_configure('loss', foreground='#E07A7A')
+        if self._first_upcoming:
+            self.my_schedule_tree.see(self._first_upcoming)
+            self.my_schedule_tree.selection_set(self._first_upcoming)
+        try:
+            team = self.parent.user_team
+            rec = f"{getattr(team, 'wins', 0)}-{getattr(team, 'losses', 0)}-{getattr(team, 'otl', getattr(team, 'ot_losses', 0))}"
+            self.my_sched_header.configure(
+                text=f"{team.team_name}  \u2022  {rec}  \u2022  Green = win, red = loss")
+        except Exception:
+            pass
 
 class FinancesWindow(tk.Toplevel):
     """Comprehensive financial management window with detailed breakdown and projections."""
