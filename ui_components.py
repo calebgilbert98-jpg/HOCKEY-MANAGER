@@ -667,48 +667,148 @@ class PlayerProfileWindow(tk.Toplevel):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
+        # Traits banner at top (if player has traits)
+        self._create_traits_banner(scrollable_frame)
+
         # Create attribute sections
         if self.player.primary_position == PlayerPosition.GOALIE:
             self._create_goalie_attributes(scrollable_frame)
         else:
             self._create_skater_attributes(scrollable_frame)
 
+    def _bar_color_for_value(self, disp):
+        """Color for attribute bars: muted blue-gray scale, green only for elite."""
+        if disp >= 85:
+            return "#4CAF50"  # Elite - green
+        elif disp >= 70:
+            return "#7eb8ff"  # Good - light blue
+        elif disp >= 55:
+            return "#5a6c7d"  # Average - gray-blue
+        elif disp >= 40:
+            return "#8a6d3b"  # Below avg - muted amber
+        else:
+            return "#a04040"  # Poor - muted red
+
+    def _draw_attr_bar(self, canvas, value):
+        """Draw a clean progress bar for an attribute value (1-100)."""
+        canvas.delete("all")
+        w = canvas.winfo_width()
+        h = canvas.winfo_height()
+        if w <= 1:
+            w = 200
+        if h <= 1:
+            h = 18
+        # Track
+        canvas.create_rectangle(0, 5, w, h - 5, fill="#23262e", outline="")
+        # Fill
+        color = self._bar_color_for_value(value)
+        bar_w = max(3, int(w * value / 100))
+        canvas.create_rectangle(0, 5, bar_w, h - 5, fill=color, outline="")
+
+    def _create_traits_banner(self, parent):
+        """Display player traits as pills at the top of the attributes tab."""
+        try:
+            from player_traits import get_player_traits
+            traits = get_player_traits(self.player)
+        except Exception:
+            traits = []
+        if not traits:
+            return
+
+        banner = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        banner.pack(fill='x', padx=8, pady=(8, 4))
+
+        ttk.Label(banner, text="Traits", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 6))
+
+        pills_frame = ttk.Frame(banner, style='PlayerTab.TFrame')
+        pills_frame.pack(fill='x')
+
+        for trait in traits:
+            pill = tk.Label(
+                pills_frame, text=f" {trait.name} ",
+                bg="#1e3a5f", fg="#8ec2ff",
+                font=(self.parent.FONT_FAMILY, 11, "bold"),
+                padx=10, pady=3, cursor="hand2",
+            )
+            pill.pack(side="left", padx=(0, 8), pady=2)
+            # Hover tooltip with trait description
+            self._bind_trait_tooltip(pill, trait.name, trait.description)
+
+    def _bind_trait_tooltip(self, widget, title, description):
+        """Simple hover tooltip for trait pills."""
+        tooltip = None
+
+        def show(event):
+            nonlocal tooltip
+            if tooltip:
+                return
+            tooltip = tk.Toplevel(widget)
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 12}")
+            frame = tk.Frame(tooltip, bg="#1a1d24", padx=10, pady=8)
+            frame.pack()
+            tk.Label(frame, text=title, bg="#1a1d24", fg="#8ec2ff",
+                     font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w")
+            tk.Label(frame, text=description, bg="#1a1d24", fg="#c0c5ce",
+                     font=(self.parent.FONT_FAMILY, 10), wraplength=280,
+                     justify="left").pack(anchor="w", pady=(4, 0))
+
+        def hide(event):
+            nonlocal tooltip
+            if tooltip:
+                tooltip.destroy()
+                tooltip = None
+
+        widget.bind("<Enter>", show)
+        widget.bind("<Leave>", hide)
+
     def _create_attribute_section(self, parent, title, attributes, row_start=0):
-        """Creates a section of attributes with title and organized display."""
-        section_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=8)
-        section_frame.pack(fill='both', expand=True, padx=5, pady=3)  # Changed to fill both and expand
-        
+        """Creates a clean section of attributes with progress bars.
+
+        Modern design: attribute name + subtle bar + numeric value,
+        replacing the old colored-badge grid.
+        """
+        section_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        section_frame.pack(fill='x', padx=8, pady=4)
+
         # Section title
-        ttk.Label(section_frame, text=title, style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 5))
-        
-        # Attributes grid - 4 columns for better space usage
-        attr_grid = ttk.Frame(section_frame, style='PlayerTab.TFrame')
-        attr_grid.pack(fill='both', expand=True)  # Changed to fill both and expand
-        
-        # Configure grid columns (4 attributes × 2 columns each)
-        for i in range(8):
-            attr_grid.grid_columnconfigure(i, weight=1 if i % 2 == 1 else 0)
-        
-        # Add attributes in 4-column layout
+        ttk.Label(section_frame, text=title, style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        # Two-column layout for compactness
+        cols_frame = ttk.Frame(section_frame, style='PlayerTab.TFrame')
+        cols_frame.pack(fill='x')
+        cols_frame.grid_columnconfigure(0, weight=1)
+        cols_frame.grid_columnconfigure(1, weight=1)
+
+        left_col = ttk.Frame(cols_frame, style='PlayerTab.TFrame')
+        left_col.grid(row=0, column=0, sticky='nsew', padx=(0, 12))
+        right_col = ttk.Frame(cols_frame, style='PlayerTab.TFrame')
+        right_col.grid(row=0, column=1, sticky='nsew', padx=(12, 0))
+
         for i, (attr_name, attr_key) in enumerate(attributes):
-            row = i // 4
-            col_base = (i % 4) * 2
-            
-            # Attribute label
-            ttk.Label(attr_grid, text=f"{attr_name}:", style='PlayerInfo.TLabel').grid(
-                row=row, column=col_base, sticky='w', padx=(2, 1), pady=1
-            )
-            
-            # Attribute value with color coding
-            value = getattr(self.player, attr_key, 10)
+            col = left_col if i % 2 == 0 else right_col
+
+            row = ttk.Frame(col, style='PlayerTab.TFrame')
+            row.pack(fill='x', pady=3)
+
+            # Attribute name
+            ttk.Label(row, text=attr_name, style='PlayerInfo.TLabel', width=18).pack(side='left')
+
+            # Value on 1-100 display scale
+            raw = getattr(self.player, attr_key, 10)
             if attr_key == 'morale':
-                # Morale runs 1-10 internally; show it on the 1-100 display scale
-                style, text = self._get_morale_style_and_text(value)
+                disp = max(1, min(100, int(round(float(raw) * 10))))
             else:
-                style, text = self._get_attribute_style_and_text(value)
-            ttk.Label(attr_grid, text=text, style=style, anchor='center', width=12).grid(
-                row=row, column=col_base+1, padx=(1, 8), pady=1
-            )
+                disp = _to_100_scale(raw)
+
+            # Bar
+            bar = tk.Canvas(row, height=16, bg=self.parent.CONTENT_BG, highlightthickness=0)
+            # Numeric value (pack right first so bar doesn't squeeze it out)
+            ttk.Label(row, text=str(disp), style='PlayerValue.TLabel', width=4).pack(side='right', padx=(6, 0))
+            bar.pack(side='left', fill='x', expand=True, padx=(6, 0))
+            bar.bind('<Configure>', lambda e, c=bar, v=disp: self._draw_attr_bar(c, v))
+            # Draw immediately too (in case Configure already fired)
+            bar.after(10, lambda c=bar, v=disp: self._draw_attr_bar(c, v))
 
     def _create_skater_attributes(self, parent):
         """Creates attribute sections for skaters (non-goalies)."""
