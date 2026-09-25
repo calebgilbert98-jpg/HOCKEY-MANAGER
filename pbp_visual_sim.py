@@ -175,6 +175,10 @@ class PBPVisualSim(tk.Toplevel):
         self.shootout_mode = False
         self.shootout_state = None
         self._instant = False         # True during sim-to-end: no flights
+        self.puck_target = None       # sim-authored puck destination (eased)
+        self._pass_arrival = None     # pass event awaiting flight landing
+        self._battle_winner = None
+        self._battle_settle_at = 0.0
 
         self._build_widgets()
         self._draw_rink()
@@ -449,12 +453,19 @@ class PBPVisualSim(tk.Toplevel):
             "role": role, "x": x, "y": y, "tx": x, "ty": y,
             "oval": oval, "text": txt, "r": r,
             "nudge": None,  # (dx, dy, until) hit animation
+            "jx": random.uniform(-2.5, 2.5),  # fixed personal jitter
+            "jy": random.uniform(-2.5, 2.5),
+            "sim_set": False,  # True while the sim positions this dot
         }
 
     def _dot_by_player(self, player):
         if player is None:
             return None
-        pid = getattr(player, "id", None)
+        return self._dot_by_id(getattr(player, "id", None))
+
+    def _dot_by_id(self, pid):
+        if pid is None:
+            return None
         for d in self.dots.values():
             if getattr(d["player"], "id", None) == pid:
                 return d
@@ -512,7 +523,9 @@ class PBPVisualSim(tk.Toplevel):
         return HOME_NET_X if is_home else AWAY_NET_X
 
     def _update_targets(self):
-        """Simple hockey sense: skate to formation spots around the puck."""
+        """Fallback hockey sense for dots the sim isn't positioning (e.g.
+        benched lines); sim-authored dots keep their sim targets. Goalies
+        always shuffle with the puck."""
         px, py = self.puck["x"], self.puck["y"]
         for d in self.dots.values():
             if d["id"] in self.penalty_box:
@@ -525,12 +538,13 @@ class PBPVisualSim(tk.Toplevel):
                 d["tx"] = own
                 d["ty"] = 42.5 + max(-8, min(8, (py - 42.5) * 0.35))
                 continue
+            if d.get("sim_set"):
+                continue
             has_puck = (self.possession_home == home) if self.possession_home is not None else None
             adir = self._attack_dir(home)
             anx = self._net_x(home, attacking=True)     # net we attack
             onx = self._net_x(home, attacking=False)    # net we defend
-            jx = random.uniform(-2.5, 2.5)
-            jy = random.uniform(-2.5, 2.5)
+            jx, jy = d["jx"], d["jy"]
             if d["id"] == self.carrier_id:
                 d["tx"], d["ty"] = px, py
             elif has_puck:
@@ -618,6 +632,12 @@ class PBPVisualSim(tk.Toplevel):
             self._on_hit(ev)
         elif et == "penalty":
             self._on_penalty(ev)
+        elif et == "skate":
+            self._on_skate(ev)
+        elif et == "pass":
+            self._on_pass(ev)
+        elif et == "battle":
+            self._on_battle(ev)
         elif et == "shootout_start":
             self._feed("Shootout!", tag="period", ev=ev)
             self.shootout_mode = True
@@ -640,6 +660,70 @@ class PBPVisualSim(tk.Toplevel):
                 sim = self.sim
                 if cb is not None:
                     self.after(500, lambda: cb(sim))
+
+    def _on_skate(self, ev):
+        """Sim-authored positions: tween dots there, ease puck, set carrier."""
+        seen = set()
+        for pid, (x, y) in (ev.get("positions") or {}).items():
+            d = self._dot_by_id(pid)
+            if d is None:
+                continue
+            seen.add(d["id"])
+            d["sim_set"] = True
+            d["jx"], d["jy"] = random.uniform(-2.5, 2.5), random.uniform(-2.5, 2.5)
+            d["tx"], d["ty"] = x + d["jx"], y + d["jy"]
+        # dots the sim benched go back to fallback behavior
+        for d in self.dots.values():
+            if d["role"] != "G" and d["id"] not in seen:
+                d["sim_set"] = False
+        pk = ev.get("puck")
+        if pk:
+            self.puck_target = (pk[0], pk[1])
+        cpid = ev.get("possession_player")
+        d = self._dot_by_id(cpid)
+        self.carrier_id = d["id"] if d else None
+
+    def _on_pass(self, ev):
+        pp = ev.get("passer_pos") or (100.0, 42.5)
+        rp = ev.get("receiver_pos") or (100.0, 42.5)
+        pd = self._dot_by_player(ev.get("passer"))
+        rd = self._dot_by_player(ev.get("receiver"))
+        sx, sy = (pd["x"], pd["y"]) if pd else (pp[0], pp[1])
+        rx, ry = (rd["x"], rd["y"]) if rd else (rp[0], rp[1])
+        if self._instant:
+            d = self._dot_by_player(ev.get("receiver") if ev.get("completed")
+                                    else ev.get("interceptor"))
+            self.carrier_id = d["id"] if d else None
+            self.puck["x"], self.puck["y"] = rx, ry
+        else:
+            self.puck_flight = (sx, sy, rx, ry, self._now(), 0.45, None)
+            self._pass_arrival = ev
+            self.carrier_id = None  # puck in transit
+        self.puck_target = None
+        if ev.get("completed"):
+            extra = " (got open)" if ev.get("got_open") else ""
+            self._feed(f"Pass: {self._pname(ev.get('passer'))} to "
+                       f"{self._pname(ev.get('receiver'))}{extra}.", ev=ev)
+        else:
+            self._feed(f"Pass by {self._pname(ev.get('passer'))} picked off by "
+                       f"{self._pname(ev.get('interceptor'))}!", tag="penalty", ev=ev)
+
+    def _on_battle(self, ev):
+        spot = ev.get("puck_spot") or (100.0, 42.5)
+        now = self._now()
+        for key in ("player_a", "player_b"):
+            d = self._dot_by_player(ev.get(key))
+            if d:
+                d["nudge"] = (spot[0], spot[1], now + 0.5)
+        w = self._dot_by_player(ev.get("winner"))
+        self._feed(f"Puck battle: {self._pname(ev.get('winner'))} digs it free.", ev=ev)
+        if self._instant:
+            self.carrier_id = w["id"] if w else None
+            self.puck["x"], self.puck["y"] = spot[0], spot[1]
+        else:
+            self._battle_winner = w["id"] if w else None
+            self._battle_settle_at = now + 0.55
+            self.hold_until = max(self.hold_until, now + 0.55)
 
     def _on_faceoff(self, ev):
         winner_is_home = ev["winner_team"] == self.home_team.team_name
@@ -850,6 +934,9 @@ class PBPVisualSim(tk.Toplevel):
         self.puck_flight = None
         self.pending_outcome = None
         self._shootout_pending = None
+        self._pass_arrival = None
+        self._battle_winner = None
+        self._battle_settle_at = 0.0
         self.hold_until = 0
         for d in self.dots.values():
             self._move_dot(d, d["tx"], d["ty"])
@@ -879,7 +966,12 @@ class PBPVisualSim(tk.Toplevel):
             self._step()
         except Exception:
             pass
-        self.after(50, self._tick)
+        if self.closed:
+            return
+        try:
+            self.after(50, self._tick)
+        except Exception:
+            pass
 
     def _step(self):
         now = self._now()
@@ -927,6 +1019,13 @@ class PBPVisualSim(tk.Toplevel):
                     self._apply_outcome(oc)
                     # puck ends: goal -> in net; save -> corner; block -> loose; miss -> behind net
                     self._scatter_puck(oc)
+                elif getattr(self, "_pass_arrival", None):
+                    pa = self._pass_arrival
+                    self._pass_arrival = None
+                    d = self._dot_by_player(pa.get("receiver") if pa.get("completed")
+                                            else pa.get("interceptor"))
+                    self.carrier_id = d["id"] if d else None
+                    self.puck_target = None
                 elif getattr(self, "_shootout_pending", None):
                     so = self._shootout_pending
                     self._shootout_pending = None
@@ -942,20 +1041,31 @@ class PBPVisualSim(tk.Toplevel):
                 else:
                     d["nudge"] = None
 
-        # drift dots toward targets
-        if not self.puck_flight:
-            self._update_targets()
+        # drift dots toward targets (kept live even during puck flights)
+        self._update_targets()
         for d in self.dots.values():
             x, y = d["x"], d["y"]
             d["x"] = x + (d["tx"] - x) * 0.14
             d["y"] = y + (d["ty"] - y) * 0.14
             self._move_dot(d, d["x"], d["y"])
 
-        # puck follows carrier when not flying
+        # puck eases toward carrier (or sim puck target) when not flying
         if not self.puck_flight:
+            tx, ty = None, None
             if self.carrier_id and self.carrier_id in self.dots:
                 c = self.dots[self.carrier_id]
-                self.puck["x"], self.puck["y"] = c["x"] + 1.5, c["y"] + 1.5
+                tx, ty = c["x"] + 1.5, c["y"] + 1.5
+            elif self.puck_target:
+                tx, ty = self.puck_target
+            if tx is not None:
+                self.puck["x"] += (tx - self.puck["x"]) * 0.35
+                self.puck["y"] += (ty - self.puck["y"]) * 0.35
+
+        # battle winner takes the puck once the pile settles
+        if self._battle_settle_at and now >= self._battle_settle_at:
+            self._battle_settle_at = 0.0
+            self.carrier_id = self._battle_winner
+            self._battle_winner = None
 
         # draw puck
         px, py = self.X(self.puck["x"]), self.Y(self.puck["y"])

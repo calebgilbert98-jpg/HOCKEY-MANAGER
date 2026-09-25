@@ -1828,6 +1828,7 @@ class GameSim:
 
     def run(self):
         """Runs the entire game simulation from period 1 through OT/shootout if necessary."""
+        self._ppos_ensure()
         self._log_event("Game Start!", "PERIOD_START")
         self._emit_pbp("game_start",
                        home_team=self.home_team.team_name,
@@ -1916,7 +1917,12 @@ class GameSim:
 
             # Determine what happens based on current zone and possession
             event_outcome = self._resolve_zone_based_event()
-            
+            # Positional safety net: flush any un-emitted movement (throttled)
+            try:
+                self._emit_skate()
+            except Exception:
+                pass
+
             # Force line changes periodically or due to fatigue
             if self._should_change_lines():
                 self._select_starting_lines()
@@ -1984,7 +1990,17 @@ class GameSim:
         
         # Apply fatigue effects
         fatigue_factor = self.player_fatigue.get(puck_carrier.id, 100) / 100
-        
+
+        # Regroup: move the puck with a pass before the entry attempt
+        if random.random() < 0.35:
+            self.puck_pos = self._ppos_get(puck_carrier)[:]
+            self._shape_positions(attacking_team, self.puck_pos)
+            res = self._attempt_pass(puck_carrier, attacking_team, defending_team,
+                                     kind="regroup")
+            if res is not None and self.possession_team != attacking_team:
+                return "Turnover", defending_team
+            puck_carrier = getattr(self, "possession_player", None) or puck_carrier
+
         # Decide on zone entry attempt
         entry_type = self._determine_zone_entry_type(puck_carrier, defending_skaters, fatigue_factor)
         
@@ -2231,7 +2247,15 @@ class GameSim:
         for player in self._get_on_ice(new_team):
             if player.id in self.game_stats:
                 self.game_stats[player.id]['possession_gains'] += 1
-        
+
+        # Positional: transition shape (throttled emit)
+        try:
+            self._ppos_ensure()
+            self._shape_positions(new_team, self.puck_pos)
+            self._emit_skate()
+        except Exception:
+            pass
+
         return "TURNOVER"
 
     def _zone_clear(self, clearing_team):
@@ -2248,7 +2272,12 @@ class GameSim:
             self.possession_player = clearer
             self.game_stats[clearer.id]['zone_exits'] += 1
             self._log_event(f"{clearer.full_name} clears the zone", "ZONE_CLEAR")
-        
+            # outlet pass to start the breakout
+            other = self.away_team if clearing_team == self.home_team else self.home_team
+            self.puck_pos = self._ppos_get(clearer)[:]
+            self._shape_positions(clearing_team, self.puck_pos)
+            self._attempt_pass(clearer, clearing_team, other, kind="breakout")
+
         self.team_stats[clearing_team.team_name]['zone_exits'] += 1
         return "ZONE_CLEAR"
 
@@ -2285,8 +2314,15 @@ class GameSim:
         def_roll = def_skill + random.randint(-15, 15)
         
         if att_roll > def_roll:
-            # Successful cycle
+            # Successful cycle: work the puck -- someone gets open down low
             self._log_event(f"{attacking_team.team_name} maintains possession with cycling", "CYCLE")
+            carrier = getattr(self, "possession_player", None) or random.choice(attacking_skaters)
+            if random.random() < 0.65:
+                res = self._attempt_pass(carrier, attacking_team, defending_team, kind="cycle")
+                if res is not None and self.possession_team != attacking_team:
+                    return "TURNOVER"
+            self._shape_positions(attacking_team)
+            self._emit_skate()
             return "CYCLE"
         else:
             # Turnover
@@ -2422,25 +2458,330 @@ class GameSim:
                 return self._zone_clear(defending_team)
 
     def _resolve_loose_puck_battle(self):
-        """Resolve who gets possession when puck is loose."""
-        all_players = self.home_on_ice + self.away_on_ice
-        eligible_players = [p for p in all_players if p.primary_position != PlayerPosition.GOALIE]
-        
-        if not eligible_players:
+        """A real puck battle: the nearest skater from each side converges
+        on the loose puck and they fight for it (strength/balance/checking).
+        The winner's team gets possession; support players collapse around."""
+        self._ppos_ensure()
+        px, py = self.puck_pos
+
+        def nearest(team):
+            sk = self._on_ice_skaters(team)
+            if not sk:
+                return None
+            return min(sk, key=lambda p: self._ppos_dist(self._ppos_get(p), (px, py)))
+
+        hb, ab = nearest(self.home_team), nearest(self.away_team)
+        if hb is None and ab is None:
             return "FACEOFF"
-        
-        # Find best positioned player
-        best_player = max(eligible_players, key=lambda p: p.anticipation + p.skating + p.puck_handling)
-        best_team = self.home_team if best_player in self.home_on_ice else self.away_team
-        
-        self.possession_team = best_team
-        self.possession_player = best_player
+        if hb is None or ab is None:
+            winner = hb or ab
+            loser = None
+        else:
+            hs = (hb.strength * 0.45 + hb.balance * 0.25 + hb.checking * 0.20
+                  + hb.anticipation * 0.10 + random.randint(-6, 6))
+            aws = (ab.strength * 0.45 + ab.balance * 0.25 + ab.checking * 0.20
+                   + ab.anticipation * 0.10 + random.randint(-6, 6))
+            winner, loser = (hb, ab) if hs >= aws else (ab, hb)
+        wteam = self.home_team if winner.id in [p.id for p in self._get_on_ice(self.home_team)] \
+            else self.away_team
+
+        # both battlers converge on the puck; support collapses around it
+        for b in (hb, ab):
+            if b is not None:
+                self._ppos_place(b, px, py, jitter=1.5)
+        self.possession_team = wteam
+        self.possession_player = winner
         self.possession_time = 0
-        
-        self.game_stats[best_player.id]['puck_battles_won'] += 1
-        self._log_event(f"{best_player.full_name} wins the loose puck", "PUCK_RECOVERY")
-        
+        self.puck_pos = [px, py]
+
+        self.game_stats[winner.id]['puck_battles_won'] += 1
+        if loser is not None and loser.id in self.game_stats:
+            self.game_stats[loser.id]['puck_battles_lost'] += 1
+        self._log_event(f"{winner.full_name} wins the battle for the loose puck",
+                        "PUCK_RECOVERY")
+        self._emit_pbp("battle",
+                       player_a=hb, player_b=ab, winner=winner,
+                       puck_spot=(round(px, 1), round(py, 1)),
+                       winner_team=wteam.team_name)
+        self._shape_positions(wteam, (px, py))
+        # keep the battlers at the pile
+        for b in (hb, ab):
+            if b is not None:
+                self.player_positions[b.id] = [px, py]
+        self._emit_skate()
         return "PUCK_RECOVERY"
+
+    # ------------------------------------------------------------------
+    # Positional tracking + off-puck play (drives the live visual sim)
+    # Every on-ice skater has an (x, y) in rink coords (0-200 x, 0-85 y)
+    # that follows what the sim is actually doing: formations, breakouts,
+    # forechecks, battles. The UI tweens dots to these spots.
+    # ------------------------------------------------------------------
+    def _ppos_ensure(self):
+        if not hasattr(self, "player_positions"):
+            self.player_positions = {}   # player.id -> [x, y]
+            self.puck_pos = [100.0, 42.5]
+            self._last_skate_sent = {}
+
+    @staticmethod
+    def _ppos_role(p):
+        pos = p.primary_position
+        if pos == PlayerPosition.CENTER:
+            return "C"
+        if pos == PlayerPosition.LEFT_WING:
+            return "LW"
+        if pos == PlayerPosition.RIGHT_WING:
+            return "RW"
+        if pos == PlayerPosition.GOALIE:
+            return "G"
+        return "D"
+
+    def _ppos_get(self, p):
+        self._ppos_ensure()
+        return self.player_positions.get(getattr(p, "id", None), [100.0, 42.5])
+
+    @staticmethod
+    def _ppos_dist(a, b):
+        return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+    def _ppos_place(self, p, x, y, jitter=2.5):
+        x += random.uniform(-jitter, jitter)
+        y += random.uniform(-jitter, jitter)
+        self.player_positions[p.id] = [min(196.0, max(4.0, x)),
+                                       min(81.0, max(4.0, y))]
+
+    def _on_ice_skaters(self, team):
+        return [p for p in self._get_on_ice(team) if self._ppos_role(p) != "G"]
+
+    def _on_ice_goalie(self, team):
+        for p in self._get_on_ice(team):
+            if self._ppos_role(p) == "G":
+                return p
+        return None
+
+    def _shape_positions(self, attacking_team, puck=None):
+        """Position both on-ice units for the current situation.
+
+        attacking_team: team with possession (or pressing). puck: (x, y).
+        Shapes: attack (ozone setup), breakout (own end), neutral,
+        dzone (defending), forecheck.
+        """
+        self._ppos_ensure()
+        if puck is None:
+            puck = self.puck_pos
+        px, py = puck
+        defending_team = (self.away_team if attacking_team == self.home_team
+                          else self.home_team)
+        carrier = getattr(self, "possession_player", None)
+        carrier_id = getattr(carrier, "id", None)
+
+        for team in (attacking_team, defending_team):
+            is_att = (team == attacking_team)
+            adir = 1 if team == self.home_team else -1  # direction team attacks
+            att_net = 189.0 if adir == 1 else 11.0     # net this team attacks
+            def_net = 11.0 if adir == 1 else 189.0     # net this team defends
+            # where is the puck relative to this team?
+            deep_off = (adir == 1 and px > 125) or (adir == -1 and px < 75)
+            deep_def = (adir == 1 and px < 75) or (adir == -1 and px > 125)
+            if is_att:
+                shape = "attack" if deep_off else ("breakout" if deep_def else "neutral")
+            else:
+                shape = "dzone" if deep_def else ("forecheck" if deep_off else "neutral")
+
+            skaters = self._on_ice_skaters(team)
+            by_role = {"C": [], "W": [], "D": []}
+            for p in skaters:
+                r = self._ppos_role(p)
+                by_role["C" if r == "C" else "W" if r in ("LW", "RW") else "D"].append(p)
+            centers, wings, ds = by_role["C"], by_role["W"], by_role["D"]
+
+            if shape == "attack":
+                spots = {"C": [(att_net - 24 * adir, 42.5)],
+                         "W": [(att_net - 36 * adir, 22.0), (att_net - 36 * adir, 63.0)],
+                         "D": [(att_net - 54 * adir, 30.0), (att_net - 54 * adir, 55.0)]}
+            elif shape == "breakout":
+                spots = {"C": [(def_net + 20 * adir, 42.5)],
+                         "W": [(def_net + 34 * adir, 22.0), (def_net + 34 * adir, 63.0)],
+                         "D": [(def_net + 8 * adir, 42.5), (def_net + 28 * adir, 42.5)]}
+            elif shape == "dzone":
+                spots = {"C": [(def_net + 26 * adir, 42.5)],
+                         "W": [(def_net + 32 * adir, 24.0), (def_net + 32 * adir, 61.0)],
+                         "D": [(def_net + 14 * adir, 36.0), (def_net + 14 * adir, 49.0)]}
+            elif shape == "forecheck":
+                spots = {"C": [(px - 10 * adir, 42.5)],
+                         "W": [(px - 10 * adir, 28.0), (px - 10 * adir, 57.0)],
+                         "D": [(px - 32 * adir, 32.0), (px - 32 * adir, 53.0)]}
+                # F1 hunts the puck
+                if centers:
+                    spots["C"] = [(px, py)]
+            else:  # neutral: lanes stretched through the middle
+                spots = {"C": [(px + 2 * adir, 42.5)],
+                         "W": [(px + 10 * adir, 25.0), (px + 10 * adir, 60.0)],
+                         "D": [(px - 14 * adir, 32.0), (px - 14 * adir, 53.0)]}
+
+            for p in centers[:1]:
+                self._ppos_place(p, *spots["C"][0])
+            for p, s in zip(wings, spots["W"]):
+                self._ppos_place(p, *s)
+            for p, s in zip(ds, spots["D"]):
+                self._ppos_place(p, *s)
+            # extras (odd-man units) fill nearest free spot
+            extras = centers[1:] + wings[2:] + ds[2:]
+            for p in extras:
+                self._ppos_place(p, px - 18 * adir, 42.5)
+            # puck carrier skates with the puck
+            if carrier_id and is_att:
+                for p in skaters:
+                    if p.id == carrier_id:
+                        self._ppos_place(p, px, py, jitter=1.0)
+            # goalie holds his net, shuffling with the puck
+            g = self._on_ice_goalie(team)
+            if g is not None:
+                self._ppos_place(g, def_net, 42.5 + max(-9.0, min(9.0, (py - 42.5) * 0.3)),
+                                 jitter=0.5)
+
+    def _emit_skate(self, force=False):
+        """Send position snapshot to visual listeners if anyone moved."""
+        self._ppos_ensure()
+        if not self.pbp_listeners:
+            return
+        snap, changed = {}, force
+        for team in (self.home_team, self.away_team):
+            for p in self._get_on_ice(team):
+                x, y = self.player_positions.get(p.id, (100.0, 42.5))
+                snap[p.id] = (round(x, 1), round(y, 1))
+                old = self._last_skate_sent.get(p.id)
+                if old is None or abs(old[0] - x) > 6 or abs(old[1] - y) > 6:
+                    changed = True
+        if changed:
+            self._last_skate_sent = dict(snap)
+            carrier = getattr(self, "possession_player", None)
+            self._emit_pbp("skate", positions=snap,
+                           puck=(round(self.puck_pos[0], 1), round(self.puck_pos[1], 1)),
+                           possession_player=getattr(carrier, "id", None))
+
+    def _faceoff_formation(self, winner, zone):
+        """Line everyone up for the draw, then tell the visual sim."""
+        self._ppos_ensure()
+        wdir = 1 if winner == self.home_team else -1   # direction winner attacks
+        wnet = 189.0 if wdir == 1 else 11.0
+        # dot: neutral -> center ice; else the relevant end-zone dot
+        if zone == FaceoffZone.NEUTRAL_ZONE:
+            dx, dy = 100.0, 42.5
+        else:
+            # offensive-zone draw ~20 ft outside the attacked net, else own end
+            nx = wnet - 20 * wdir if zone == FaceoffZone.OFFENSIVE_ZONE else (11.0 if wdir == 1 else 189.0) + 20 * wdir
+            dx, dy = nx, random.choice((20.5, 64.5))
+        loser = self.away_team if winner == self.home_team else self.home_team
+        for team in (winner, loser):
+            won = (team == winner)
+            tdir = wdir if won else -wdir
+            skaters = self._on_ice_skaters(team)
+            centers = [p for p in skaters if self._ppos_role(p) == "C"]
+            wings = [p for p in skaters if self._ppos_role(p) in ("LW", "RW")]
+            ds = [p for p in skaters if self._ppos_role(p) == "D"]
+            if centers:
+                self._ppos_place(centers[0], dx - (2 if won else -2), dy, jitter=0.5)
+            for p, s in zip(wings, (-9, 9)):
+                self._ppos_place(p, dx + (0 if won else 6 * tdir), dy + s, jitter=1.0)
+            for p, s in zip(ds, (30, 55)):
+                # D hold back toward their own end
+                own = 11.0 if team == self.home_team else 189.0
+                bx = dx + (24 if (own < dx) else -24)
+                self._ppos_place(p, bx, s, jitter=1.5)
+            for p in centers[1:] + wings[2:] + ds[2:]:
+                self._ppos_place(p, dx + 18 * tdir, 42.5)
+            g = self._on_ice_goalie(team)
+            if g is not None:
+                own = 11.0 if team == self.home_team else 189.0
+                self._ppos_place(g, own, 42.5, jitter=0.5)
+        self.puck_pos = [dx, dy]
+        self._emit_skate(force=True)
+
+    def _nearest_defender(self, player, defenders):
+        px, py = self._ppos_get(player)
+        best, bd = None, 1e9
+        for d in defenders:
+            dd = self._ppos_dist((px, py), self._ppos_get(d))
+            if dd < bd:
+                best, bd = d, dd
+        return best, bd
+
+    def _attempt_pass(self, passer, attacking_team, defending_team, kind="cycle"):
+        """A real pass with off-puck play.
+
+        Each potential receiver first battles his coverage to get open
+        (offensive awareness + agility vs defensive awareness + anticipation).
+        Winners shake to space; the passer then picks a target and the pass
+        is completed or picked off. Returns the receiver, the interceptor,
+        or None.
+        """
+        self._ppos_ensure()
+        mates = [p for p in self._on_ice_skaters(attacking_team) if p.id != passer.id]
+        if not mates:
+            return None
+        defenders = self._on_ice_skaters(defending_team)
+        adir = 1 if attacking_team == self.home_team else -1
+        att_net = 189.0 if adir == 1 else 11.0
+        px, py = self._ppos_get(passer)
+
+        # --- off-puck battle: get open ---
+        cands = []
+        for m in mates:
+            mx, my = self._ppos_get(m)
+            nd, dd = self._nearest_defender(m, defenders)
+            off = m.offensive_awareness + m.agility + random.randint(-8, 8)
+            dfn = (nd.defensive_awareness + nd.anticipation + random.randint(-8, 8)) \
+                if nd is not None else -99
+            got_open = off > dfn
+            if got_open and nd is not None:
+                # shake the checker: step away into space, drift dangerous
+                nx_, ny_ = self._ppos_get(nd)
+                ang = math.atan2(my - ny_, mx - nx_)
+                mx2 = mx + math.cos(ang) * 7 + (adir * 4 if kind in ("cycle", "attack") else 0)
+                my2 = my + math.sin(ang) * 7
+                self._ppos_place(m, mx2, my2, jitter=1.0)
+                mx, my = self.player_positions[m.id]
+                dd = self._ppos_dist((mx, my), self._ppos_get(nd))
+            fwd = (mx - px) * adir
+            danger = -abs(mx - att_net) / 10.0
+            score = ((14 if got_open else 0) + dd * 0.6 + fwd * 0.25 + danger
+                     + random.uniform(0, 4))
+            cands.append((score, m, mx, my, nd, dd, got_open))
+        cands.sort(key=lambda t: -t[0])
+        _, receiver, rx, ry, nd, dd, got_open = cands[0]
+
+        # --- pass execution ---
+        lane_pressure = max(0.0, 10.0 - dd) if nd is not None else 0.0
+        q = (52 + passer.passing * 1.0 + min(dd, 10.0) * 1.2
+             - lane_pressure * 3.0)
+        q = max(10.0, min(95.0, q))
+        completed = random.uniform(0, 100) < q
+        interceptor = None
+        if not completed and defenders:
+            mid = ((px + rx) / 2.0, (py + ry) / 2.0)
+            interceptor = min(defenders,
+                              key=lambda d: self._ppos_dist(mid, self._ppos_get(d)))
+
+        self._emit_pbp("pass",
+                       passer=passer, receiver=receiver,
+                       passer_pos=(round(px, 1), round(py, 1)),
+                       receiver_pos=(round(rx, 1), round(ry, 1)),
+                       completed=completed, got_open=got_open,
+                       interceptor=interceptor,
+                       attacking_team=attacking_team.team_name,
+                       kind=kind)
+        if completed:
+            self.possession_player = receiver
+            self.puck_pos = [rx, ry]
+            self._emit_skate()
+            return receiver
+        if interceptor is not None:
+            self._resolve_turnover(passer, interceptor, TurnoverType.INTERCEPTION)
+        else:
+            self._turnover_possession(defending_team)
+        self._emit_skate()
+        return interceptor
 
     def _is_on_penalty_kill(self, player):
         """Check if player is on penalty kill."""
@@ -2758,6 +3099,14 @@ class GameSim:
                        blocker=blocker,
                        attacking_team=attacking_team.team_name,
                        defending_team=defending_team.team_name)
+        # Loose puck off the block -- both teams scramble for it
+        if random.random() < 0.55:
+            self._ppos_ensure()
+            bx, by = self._ppos_get(blocker)
+            self.puck_pos = [bx, by]
+            self.possession_team = None
+            self.possession_player = None
+            self.possession_time = 0
 
     def _handle_missed_shot(self, shooter, attacking_team, location, shot_type):
         """Handle a missed shot event."""
@@ -2779,6 +3128,15 @@ class GameSim:
                        attacking_team=attacking_team.team_name,
                        shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
                        location=location.value if hasattr(location, "value") else str(location))
+        # Missed shot rims around -- loose puck battle behind the net
+        if random.random() < 0.40:
+            self._ppos_ensure()
+            nx = 189.0 if attacking_team == self.home_team else 11.0
+            self.puck_pos = [min(196.0, max(4.0, nx + random.uniform(-8, 8))),
+                             min(81.0, max(4.0, 42.5 + random.uniform(-14, 14)))]
+            self.possession_team = None
+            self.possession_player = None
+            self.possession_time = 0
 
     def _apply_archetype_matchup(self, quality, attacking_team, defending_team):
         """
@@ -2829,7 +3187,12 @@ class GameSim:
         quality = self._apply_archetype_matchup(
             quality, attacking_team, defending_team)
         expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance)
-        
+
+        # Team tactics shape finishing: systems and special-teams approach
+        # move xG up/down for both sides.
+        expected_goal = min(0.95, expected_goal * self._team_tactics_xg_factor(
+            attacking_team, defending_team))
+
         # Update expected goals tracking
         self.expected_goals[attacking_team.team_name] = \
             self.expected_goals.get(attacking_team.team_name, 0.0) + expected_goal
@@ -2843,6 +3206,9 @@ class GameSim:
                        location=location.value if hasattr(location, "value") else str(location),
                        quality=self._pbp_num(quality),
                        distance=self._pbp_num(distance))
+        # Positional: the shot heads for the net
+        self._ppos_ensure()
+        self.puck_pos = [189.0 if attacking_team == self.home_team else 11.0, 42.5]
         
         # Determine goaltender positioning and style
         self._adjust_goaltender_positioning(goalie, location, self.current_situation)
@@ -3107,7 +3473,12 @@ class GameSim:
             self.home_score += 1
         else:
             self.away_score += 1
-            
+
+        # Positional: puck in the net
+        self._ppos_ensure()
+        self.puck_pos = [189.0 if scoring_team == self.home_team else 11.0, 42.5]
+        self._emit_skate()
+
         log_msg = f"GOAL for {scoring_team.team_name}! Scored by {shooter.full_name}"
         if shot_type:
             log_msg += f" ({shot_type.value.replace('_', ' ').title()})"
@@ -3187,7 +3558,8 @@ class GameSim:
                        away_center=away_player,
                        zone=self.faceoff_zone.value,
                        outcome=outcome.value)
-        
+        self._faceoff_formation(winner, self.faceoff_zone)
+
         return winner
 
     def _calculate_faceoff_skill(self, player, faceoff_zone, team):
@@ -4261,10 +4633,16 @@ class GameSim:
         # Change possession
         self.possession_team = gaining_team
         self.possession_player = player_gaining_puck
-        
+
+        # Positional: puck jumps to the thief, teams transition
+        self._ppos_ensure()
+        self.puck_pos = self._ppos_get(player_gaining_puck)[:]
+        self._shape_positions(gaining_team, self.puck_pos)
+        self._emit_skate()
+
         # Log event
         self._log_event(f"{turnover_type.value.title()}: {player_gaining_puck.full_name} strips puck from {player_losing_puck.full_name}", "TURNOVER")
-        
+
         return gaining_team
 
     def _attempt_defensive_play(self, defending_player, attacking_player, action_type):
@@ -4788,10 +5166,65 @@ class GameSim:
         
         return total_adjustment
 
-    def _get_tactical_system_bonus(self, situation):
+    def _team_situation(self, team, situation):
+        """Translate the home-centric situation to the given team's perspective."""
+        if team == self.home_team:
+            return situation
+        swap = {SpecialSituation.POWER_PLAY: SpecialSituation.PENALTY_KILL,
+                SpecialSituation.PENALTY_KILL: SpecialSituation.POWER_PLAY}
+        return swap.get(situation, situation)
+
+    def _team_tactical_system(self, team):
+        """Map a team's even-strength tactic choice to the sim's tactical system."""
+        es = getattr(team, 'tactic_even_strength', 'Balanced')
+        return {
+            'Very Defensive': TacticalSystem.NEUTRAL_ZONE_TRAP,
+            'Defensive': TacticalSystem.NEUTRAL_ZONE_TRAP,
+            'Balanced': TacticalSystem.CYCLE_GAME,
+            'Offensive': TacticalSystem.AGGRESSIVE_FORECHECK,
+            'Very Offensive': TacticalSystem.RUSH_OFFENSE,
+        }.get(es, TacticalSystem.CYCLE_GAME)
+
+    def _team_tactics_xg_factor(self, attacking_team, defending_team):
+        """xG multiplier from both teams' tactic settings.
+
+        Even-strength style boosts your own finishing and suppresses (or
+        leaks) opponent chances; special-teams approach moves power-play
+        and penalty-kill efficiency. Net effect is ~+/-8% per side.
         """
-        Stage 6: Get tactical system effectiveness bonus for current situation.
+        situation = self._get_current_situation()
+        sit_att = self._team_situation(attacking_team, situation)
+        sit_def = self._team_situation(defending_team, situation)
+
+        es_attack = {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
+                     'Offensive': 1.04, 'Very Offensive': 1.08}
+        es_defense = {'Very Defensive': 0.92, 'Defensive': 0.96, 'Balanced': 1.0,
+                      'Offensive': 1.03, 'Very Offensive': 1.06}
+        factor = (es_attack.get(getattr(attacking_team, 'tactic_even_strength', 'Balanced'), 1.0)
+                  * es_defense.get(getattr(defending_team, 'tactic_even_strength', 'Balanced'), 1.0))
+
+        # Special-teams approach
+        if sit_att == SpecialSituation.POWER_PLAY:
+            pp = getattr(attacking_team, 'tactic_power_play', 'Offensive')
+            factor *= {'Conservative': 0.96, 'Balanced': 1.0, 'Offensive': 1.05,
+                       'Very Offensive': 1.10}.get(pp, 1.05)
+            pk = getattr(defending_team, 'tactic_penalty_kill', 'Defensive')
+            factor /= {'Very Defensive': 1.10, 'Defensive': 1.05, 'Balanced': 1.0,
+                       'Aggressive': 0.96}.get(pk, 1.05)
+        elif sit_def == SpecialSituation.POWER_PLAY:
+            # Attacking team is shorthanded: their PK approach suppresses own xG slightly
+            pk = getattr(attacking_team, 'tactic_penalty_kill', 'Defensive')
+            factor *= {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
+                       'Aggressive': 1.02}.get(pk, 0.97)
+
+        return max(0.8, min(1.25, factor))
+
+    def _get_tactical_system_bonus(self, team, situation):
         """
+        Stage 6: Get tactical system effectiveness bonus for the given team
+        and situation, based on that team's even-strength tactic setting.
+        """
+        system = self._team_tactical_system(team)
         system_bonuses = {
             TacticalSystem.CYCLE_GAME: {
                 SpecialSituation.EVEN_STRENGTH: 1.05,
@@ -4815,7 +5248,7 @@ class GameSim:
             }
         }
         
-        return system_bonuses.get(self.tactical_system, {}).get(situation, 1.0)
+        return system_bonuses.get(system, {}).get(situation, 1.0)
 
     def _calculate_role_bonus(self, player, action_type):
         """
