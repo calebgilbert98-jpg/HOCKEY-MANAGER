@@ -11342,7 +11342,7 @@ class TradeBlockWindow(tk.Toplevel):
         self.summary_label = ttk.Label(self.summary_panel, text="", style='Summary.TLabel')
         self.summary_label.pack(anchor="w")
 
-        # --- Filter panel ---
+        # --- Filter panel (pill rows, instant-apply) ---
         filter_panel = ttk.Frame(self, style='Panel.TFrame', padding=8)
         filter_panel.pack(fill="x", padx=18, pady=(8, 0))
         self.filter_vars = {
@@ -11352,18 +11352,39 @@ class TradeBlockWindow(tk.Toplevel):
             'contract': tk.StringVar(master=self, value="All"),
             'on_block': tk.StringVar(master=self, value="All"),
         }
-        ttk.Label(filter_panel, text="Position:").pack(side="left")
-        pos_options = ["All", "LW", "C", "RW", "LD", "RD", "G"]
-        ttk.Combobox(filter_panel, textvariable=self.filter_vars['pos'], values=pos_options, width=6, state="readonly").pack(side="left", padx=2)
-        ttk.Label(filter_panel, text="Min OVR:").pack(side="left")
-        tk.Entry(filter_panel, textvariable=self.filter_vars['min_ovr'], width=4, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR, insertbackground=self.parent.TEXT_COLOR).pack(side="left", padx=2)
-        ttk.Label(filter_panel, text="Max Age:").pack(side="left")
-        tk.Entry(filter_panel, textvariable=self.filter_vars['max_age'], width=4, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR, insertbackground=self.parent.TEXT_COLOR).pack(side="left", padx=2)
-        ttk.Label(filter_panel, text="Contract:").pack(side="left")
-        ttk.Combobox(filter_panel, textvariable=self.filter_vars['contract'], values=["All", "Signed", "Unsigned"], width=8, state="readonly").pack(side="left", padx=2)
-        ttk.Label(filter_panel, text="On Block:").pack(side="left")
-        ttk.Combobox(filter_panel, textvariable=self.filter_vars['on_block'], values=["All", "Yes", "No"], width=5, state="readonly").pack(side="left", padx=2)
-        ttk.Button(filter_panel, text="Apply", command=self._populate_tree).pack(side="left", padx=8)
+        self._tb_pill_groups = []
+
+        def _tb_pill_row(label, var_key, options):
+            row = ttk.Frame(filter_panel, style='Panel.TFrame')
+            row.pack(fill="x", pady=2)
+            ttk.Label(row, text=label, style='Content.TLabel', width=10).pack(side="left")
+            var = self.filter_vars[var_key]
+            btns = {}
+            try:
+                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+            except Exception:
+                canvas_bg = '#111826'
+            for value, text in options:
+                b = PillButton(row, text=text, bg=canvas_bg,
+                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                               padx=10, pady=3,
+                               command=lambda v=value, vv=var: self._tb_set_filter(vv, v))
+                b.pack(side="left", padx=2)
+                btns[value] = b
+            self._tb_pill_groups.append((var, btns))
+
+        _tb_pill_row("Position:", 'pos',
+                     [("All", "All"), ("LW", "LW"), ("C", "C"), ("RW", "RW"),
+                      ("LD", "LD"), ("RD", "RD"), ("G", "G")])
+        _tb_pill_row("Min OVR:", 'min_ovr',
+                     [("", "All"), ("70", "70+"), ("80", "80+"), ("90", "90+")])
+        _tb_pill_row("Max Age:", 'max_age',
+                     [("", "All"), ("25", "\u226425"), ("30", "\u226430"), ("35", "\u226435")])
+        _tb_pill_row("Contract:", 'contract',
+                     [("All", "All"), ("Signed", "Signed"), ("Unsigned", "Unsigned")])
+        _tb_pill_row("On Block:", 'on_block',
+                     [("All", "All"), ("Yes", "Yes"), ("No", "No")])
+        self._tb_paint_pills()
 
         # --- Panel frame ---
         panel = ttk.Frame(self, style='Panel.TFrame', padding=12)
@@ -11415,6 +11436,18 @@ class TradeBlockWindow(tk.Toplevel):
 
         self._populate_tree()
 
+    def _tb_set_filter(self, var, value):
+        """Set a trade-block pill filter and refresh instantly."""
+        var.set(value)
+        self._tb_paint_pills()
+        self._populate_tree()
+
+    def _tb_paint_pills(self):
+        for var, btns in getattr(self, '_tb_pill_groups', []):
+            current = var.get()
+            for value, btn in btns.items():
+                btn.set_selected(value == current)
+
     def _filter_players(self, roster):
         pos = self.filter_vars['pos'].get()
         min_ovr = self.filter_vars['min_ovr'].get()
@@ -11423,9 +11456,9 @@ class TradeBlockWindow(tk.Toplevel):
         on_block = self.filter_vars['on_block'].get()
         filtered = []
         for p in roster:
-            if pos != "All" and p.primary_position.name != pos:
+            if pos != "All" and p.primary_position.value != pos:
                 continue
-            if min_ovr and p.overall_rating() < int(min_ovr):
+            if min_ovr and to_100_scale(p.overall_rating()) < int(min_ovr):
                 continue
             if max_age and p.age > int(max_age):
                 continue
