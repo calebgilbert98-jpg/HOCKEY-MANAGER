@@ -505,7 +505,17 @@ class ModernScoutingWindow(tk.Toplevel):
             return None
 
     def _is_player_scouted(self, player):
-        """Check if the user team has a scouting report for a player."""
+        """Check if the user team has a scouting report for a player.
+
+        Delegates to the central fog-of-war definition so the label always
+        agrees with displayed_overall: own-team players and fog-disabled
+        games count as scouted, not just filed reports.
+        """
+        try:
+            from scouting_profiles import is_scouted as central_is_scouted
+            return bool(central_is_scouted(player, self._user_team()))
+        except Exception:
+            pass
         try:
             gm = getattr(self.parent, 'game_manager', None)
             team = getattr(gm, 'user_team', None) if gm else None

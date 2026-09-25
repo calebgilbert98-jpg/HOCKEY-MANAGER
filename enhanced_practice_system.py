@@ -286,10 +286,10 @@ class PracticeEngine:
             effectiveness *= 0.8
         
         # Age factor for skill retention
-        if age > 30:
-            effectiveness *= 0.8
-        elif age > 35:
+        if age > 35:
             effectiveness *= 0.6
+        elif age > 30:
+            effectiveness *= 0.8
         
         return max(0, min(1.0, effectiveness))  # Cap at 1 point per session
     
