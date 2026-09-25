@@ -3075,668 +3075,457 @@ class TradeWindow(tk.Toplevel):
 
 
 class ScoutingWindow(tk.Toplevel):
+    """Modern Scouting Department: fog-of-war prospects, regional scouts, draft board."""
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
         self.title("Scouting Department")
-        self.geometry("1200x800")
+        self.geometry("1280x780")
         self.configure(background=parent.BG_COLOR)
-
-        # Initialize variables
+        import scouting as scmod
+        self.scmod = scmod
+        self._gm = getattr(parent, 'game_manager', parent)
         self.selected_scout = None
-        self.selected_player = None
+        self.selected_prospect = None
         self.filter_var = tk.StringVar(master=self, value="All Prospects")
-
-        # Create main layout
-        main_pane = ttk.PanedWindow(self, orient='horizontal')
-        main_pane.pack(fill='both', expand=True, padx=5, pady=5)
-
-        # Left panel (scouts and assignments)
-        left_frame = ttk.Frame(main_pane, style='Panel.TFrame')
-        main_pane.add(left_frame, weight=1)
-        
-        # Scout management section
-        scout_header = ttk.Label(left_frame, text="Scouting Department", 
-                               font=(parent.FONT_FAMILY, 14, 'bold'), style='Title.TLabel')
-        scout_header.pack(anchor='w', pady=(5, 15), padx=10)
-        
-        scouts_frame = self.parent._create_packed_panel(left_frame, "Your Scouts")
-        
-        scout_columns = {
-            'name': ('Name', 150), 
-            'jpa': ('JPA', 40), 
-            'jpp': ('JPP', 40),
-            'specialization': ('Specialization', 100)
-        }
-        self.scouts_tree = parent._create_treeview(scouts_frame, scout_columns, height=5, is_staff=True)
-        self.scouts_tree.pack(fill='both', expand=True, padx=5, pady=5)
-        self.scouts_tree.bind('<<TreeviewSelect>>', self.on_scout_selected)
-        
-        scout_buttons_frame = ttk.Frame(scouts_frame)
-        scout_buttons_frame.pack(fill='x', padx=5, pady=5)
-        ttk.Button(scout_buttons_frame, text="Hire New Scout", 
-                  command=self.hire_scout).pack(side='left', padx=5)
-        ttk.Button(scout_buttons_frame, text="View Scout Details", 
-                  command=self.view_scout_details).pack(side='left', padx=5)
-        
-        # Assignments section
-        assignments_frame = self.parent._create_packed_panel(left_frame, "Current Assignments")
-        
-        assignment_columns = {
-            'player': ('Player', 150), 
-            'scout': ('Scout', 100), 
-            'accuracy': ('Accuracy', 60),
-            'viewings': ('Viewings', 60),
-            'potential': ('Potential', 60)
-        }
-        self.assignments_tree = parent._create_treeview(assignments_frame, assignment_columns, height=15)
-        self.assignments_tree.pack(fill='both', expand=True, padx=5, pady=5)
-        self.assignments_tree.bind('<<TreeviewSelect>>', self.on_assignment_selected)
-        
-        assignment_buttons_frame = ttk.Frame(assignments_frame)
-        assignment_buttons_frame.pack(fill='x', padx=5, pady=5)
-        ttk.Button(assignment_buttons_frame, text="Remove Assignment", 
-                  command=self.remove_assignment).pack(side='left', padx=5)
-        ttk.Button(assignment_buttons_frame, text="View Report", 
-                  command=self.view_scouting_report).pack(side='left', padx=5)
-
-        # Right panel (prospects)
-        right_frame = ttk.Frame(main_pane, style='Panel.TFrame')
-        main_pane.add(right_frame, weight=2)
-        
-        # Draft class header and filters
-        draft_header = ttk.Label(right_frame, text="Draft Eligible Prospects", 
-                               font=(parent.FONT_FAMILY, 14, 'bold'), style='Title.TLabel')
-        draft_header.pack(anchor='w', pady=(5, 15), padx=10)
-        
-        filters_frame = ttk.Frame(right_frame)
-        filters_frame.pack(fill='x', padx=10, pady=(0, 10))
-        
-        ttk.Label(filters_frame, text="Filter:").pack(side='left', padx=(0, 5))
-        filter_options = ["All Prospects", "Forwards", "Defensemen", "Goalies", "Top 50", "Not Scouted"]
-        filter_menu = ttk.Combobox(filters_frame, textvariable=self.filter_var, 
-                                 values=filter_options, width=15, state="readonly")
-        filter_menu.pack(side='left', padx=5)
-        filter_menu.bind("<<ComboboxSelected>>", self.apply_filter)
-        
-        search_frame = ttk.Frame(filters_frame)
-        search_frame.pack(side='right', padx=5)
         self.search_var = tk.StringVar(master=self)
-        ttk.Label(search_frame, text="Search:").pack(side='left', padx=(0, 5))
-        ttk.Entry(search_frame, textvariable=self.search_var, width=20).pack(side='left')
-        ttk.Button(search_frame, text="Go", command=self.search_prospects).pack(side='left', padx=5)
-        
-        # Prospects section
-        prospects_frame = self.parent._create_packed_panel(right_frame, "Draft Class")
-        
-        prospect_columns = {
-            'rank': ('Rank', 50),
-            'name': ('Name', 150), 
-            'pos': ('Pos', 50), 
-            'age': ('Age', 40),
-            'nation': ('Nation', 60),
-            'pot': ('Potential', 70),
-            'status': ('Status', 100)
-        }
-        self.prospects_tree = parent._create_treeview(prospects_frame, prospect_columns, height=25)
-        self.prospects_tree.pack(fill='both', expand=True, padx=5, pady=5)
-        self.prospects_tree.bind('<<TreeviewSelect>>', self.on_prospect_selected)
-        self.prospects_tree.bind('<Double-1>', lambda e: self.view_prospect_profile())
-        add_player_context_menu(self.prospects_tree, self)
-        
-        # Action buttons
-        buttons_frame = ttk.Frame(prospects_frame)
-        buttons_frame.pack(fill='x', padx=5, pady=5)
-        
-        ttk.Button(buttons_frame, text="Assign Scout", 
-                  command=self.assign_scout).pack(side='left', padx=5)
-        ttk.Button(buttons_frame, text="View Profile", 
-                  command=self.view_prospect_profile).pack(side='left', padx=5)
-        ttk.Button(buttons_frame, text="Generate Reports", 
-                  command=self.batch_assign_scouts).pack(side='right', padx=5)
-        
-        # Initial data population
-        self.update_views()
+        self.region_var = tk.StringVar(master=self)
 
-    def update_views(self):
-        """Update all the treeviews with current data."""
-        # Update scouts list
-        self.parent._populate_staff_tree(self.scouts_tree, 
-                                       [s for s in self.parent.user_team.staff if s.role == StaffRole.SCOUT])
-        
-        # Update assignments list
-        self.assignments_tree.delete(*self.assignments_tree.get_children())
-        for player, scout in self.parent.scouting_assignments.items():
-            report = self.parent.user_team.scouting_reports.get(player.id)
-            
-            status = "Not started"
-            potential = "Unknown"
-            viewings = "0"
-            
-            if report:
-                status = report.accuracy
-                potential = report.scouted_potential or "Unknown"
-                viewings = str(report.viewings)
-            
-            values = (player.full_name, scout.full_name, status, viewings, potential)
-            self.assignments_tree.insert('', 'end', values=values)
-        
-        # Apply the current filter to update the prospects view
-        self.apply_filter()
+        # ---- Header ----
+        header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
+        header.pack(fill='x', padx=10, pady=(10, 0))
+        ttk.Label(header, text="Scouting Department",
+                  font=(parent.FONT_FAMILY, 18, 'bold'),
+                  style='Heading.TLabel').pack(side='left')
+        n_prospects = len(getattr(parent.league, 'draft_prospects', []) or [])
+        ttk.Label(header, text=f"{n_prospects} draft-eligible prospects on the radar",
+                  style='Secondary.TLabel').pack(side='left', padx=(12, 0))
 
-    def apply_filter(self, event=None):
-        """Filter the prospects tree based on the selected filter."""
-        # Clear existing items
-        self.prospects_tree.delete(*self.prospects_tree.get_children())
-        
-        # Get all prospects
-        all_prospects = sorted(self.parent.league.draft_prospects, 
-                              key=lambda p: getattr(p, 'draft_ranking', p.overall_rating()), 
-                              reverse=True)
-        
-        # Apply filter
-        filter_type = self.filter_var.get()
-        filtered_prospects = []
-        
-        if filter_type == "Forwards":
-            filtered_prospects = [p for p in all_prospects if p.primary_position in 
-                                [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]]
-        elif filter_type == "Defensemen":
-            filtered_prospects = [p for p in all_prospects if p.primary_position in 
-                                [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]]
-        elif filter_type == "Goalies":
-            filtered_prospects = [p for p in all_prospects if p.primary_position == PlayerPosition.GOALIE]
-        elif filter_type == "Top 50":
-            filtered_prospects = all_prospects[:50]
-        elif filter_type == "Not Scouted":
-            filtered_prospects = [p for p in all_prospects if p.id not in self.parent.user_team.scouting_reports]
-        else:  # "All Prospects"
-            filtered_prospects = all_prospects
-        
-        # Search filter if needed
-        search_text = self.search_var.get().lower()
-        if search_text:
-            filtered_prospects = [p for p in filtered_prospects if search_text in p.full_name.lower()]
-        
-        # Populate tree with filtered prospects
-        for i, player in enumerate(filtered_prospects):
-            # Check if this player has a scouting report
+        main_pane = ttk.PanedWindow(self, orient='horizontal')
+        main_pane.pack(fill='both', expand=True, padx=10, pady=8)
+
+        # ============ LEFT: scouts ============
+        left = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
+        main_pane.add(left, weight=1)
+
+        ttk.Label(left, text="YOUR SCOUTS", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.scouts_tree = parent._create_treeview(
+            left, {'name': ('Name', 120), 'jpa': ('JPA', 36),
+                   'jpp': ('JPP', 36), 'region': ('Region', 90)}, height=6)
+        self.scouts_tree.pack(fill='x', pady=(0, 4))
+        self.scouts_tree.bind('<<TreeviewSelect>>', self._on_scout_selected)
+
+        reg_frame = ttk.Frame(left, style='Panel.TFrame')
+        reg_frame.pack(fill='x', pady=(0, 4))
+        ttk.Label(reg_frame, text="Region:", style='Secondary.TLabel').pack(side='left')
+        self.region_combo = ttk.Combobox(reg_frame, textvariable=self.region_var,
+                                        values=self.scmod.SCOUT_REGIONS,
+                                        state='readonly', width=16)
+        self.region_combo.pack(side='left', padx=6)
+        ttk.Button(reg_frame, text="Assign", command=self._assign_region,
+                   style='Secondary.TButton').pack(side='left', padx=2)
+        ttk.Button(reg_frame, text="Clear", command=self._clear_region,
+                   style='Secondary.TButton').pack(side='left', padx=2)
+
+        ttk.Button(left, text="Hire Scout", command=self._hire_scout,
+                   style='Secondary.TButton').pack(anchor='w', pady=(0, 8))
+
+        ttk.Label(left, text="ACTIVE ASSIGNMENTS", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.assign_tree = parent._create_treeview(
+            left, {'player': ('Player', 110), 'view': ('Views', 44),
+                   'acc': ('Acc', 36)}, height=8)
+        self.assign_tree.pack(fill='both', expand=True)
+        ttk.Button(left, text="Remove Assignment", command=self._remove_assignment,
+                   style='Secondary.TButton').pack(anchor='w', pady=(6, 0))
+        ttk.Label(left, text="Regional scouts file reports automatically every few days.",
+                  style='Secondary.TLabel', wraplength=260,
+                  font=(parent.FONT_FAMILY, 9)).pack(anchor='w', pady=(6, 0))
+
+        # ============ CENTER: prospects + report ============
+        center = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
+        main_pane.add(center, weight=2)
+
+        top_row = ttk.Frame(center, style='Panel.TFrame')
+        top_row.pack(fill='x', pady=(0, 4))
+        ttk.Label(top_row, text="PROSPECT POOL", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(side='left')
+        filt = ttk.Combobox(top_row, textvariable=self.filter_var, width=14,
+                            state='readonly',
+                            values=["All Prospects", "Forwards", "Defensemen",
+                                    "Goalies", "Top 50", "Not Scouted"])
+        filt.pack(side='left', padx=(10, 4))
+        filt.bind("<<ComboboxSelected>>", lambda e: self._refresh_prospects())
+        ttk.Entry(top_row, textvariable=self.search_var, width=14).pack(side='left', padx=4)
+        ttk.Button(top_row, text="Search", command=self._refresh_prospects,
+                   style='Secondary.TButton').pack(side='left')
+
+        self.prospects_tree = parent._create_treeview(
+            center, {'rank': ('#', 36), 'name': ('Name', 140), 'pos': ('Pos', 40),
+                     'age': ('Age', 36), 'nat': ('Nat', 70), 'pot': ('Pot', 80),
+                     'status': ('Status', 90)}, height=11)
+        self.prospects_tree.pack(fill='both', expand=True, pady=(0, 6))
+        self.prospects_tree.bind('<<TreeviewSelect>>', self._on_prospect_selected)
+        for g in self.scmod.GRADE_ORDER:
+            self.prospects_tree.tag_configure(f"pot_{g}",
+                                              foreground=self.scmod.grade_color(g))
+
+        # Report card
+        self.report_frame = ttk.Frame(center, style='Card.TFrame', padding=10)
+        self.report_frame.pack(fill='x')
+        self._build_report_card()
+
+        # ============ RIGHT: draft board ============
+        right = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
+        main_pane.add(right, weight=1)
+        ttk.Label(right, text="MY DRAFT BOARD", style='Secondary.TLabel',
+                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        ttk.Label(right, text="Your rankings drive auto-draft on draft night.",
+                  style='Secondary.TLabel', wraplength=240,
+                  font=(parent.FONT_FAMILY, 9)).pack(anchor='w', pady=(0, 4))
+        self.board_list = tk.Listbox(right, height=24, activestyle='none',
+                                     bg='#232a3a', fg='#e8ecf4',
+                                     selectbackground='#335577', relief='flat',
+                                     highlightthickness=1,
+                                     highlightbackground='#3a4a63')
+        self.board_list.pack(fill='both', expand=True)
+        brow = ttk.Frame(right, style='Panel.TFrame')
+        brow.pack(fill='x', pady=(6, 0))
+        ttk.Button(brow, text="▲", width=3, command=lambda: self._move_board(-1),
+                   style='Secondary.TButton').pack(side='left', padx=2)
+        ttk.Button(brow, text="▼", width=3, command=lambda: self._move_board(1),
+                   style='Secondary.TButton').pack(side='left', padx=2)
+        ttk.Button(brow, text="Remove", command=self._remove_board,
+                   style='Secondary.TButton').pack(side='left', padx=2)
+        ttk.Button(right, text="Reset to Consensus Top 50",
+                   command=self._reset_board,
+                   style='Secondary.TButton').pack(fill='x', pady=(6, 0))
+
+        self._refresh_all()
+
+    # ------------------------------------------------------------------
+    def _build_report_card(self):
+        f = self.report_frame
+        self.rep_title = ttk.Label(f, text="Select a prospect",
+                                  font=(self.parent.FONT_FAMILY, 13, 'bold'),
+                                  style='Card.TLabel')
+        self.rep_title.pack(anchor='w')
+        self.rep_pot = ttk.Label(f, text="", font=(self.parent.FONT_FAMILY, 12, 'bold'),
+                                style='Card.TLabel')
+        self.rep_pot.pack(anchor='w', pady=(2, 0))
+        self.rep_meta = ttk.Label(f, text="", style='Card.TLabel',
+                                 font=(self.parent.FONT_FAMILY, 10))
+        self.rep_meta.pack(anchor='w')
+        cols = ttk.Frame(f, style='Card.TFrame')
+        cols.pack(fill='x', pady=(6, 0))
+        left_c = ttk.Frame(cols, style='Card.TFrame')
+        left_c.pack(side='left', fill='x', expand=True)
+        right_c = ttk.Frame(cols, style='Card.TFrame')
+        right_c.pack(side='left', fill='x', expand=True)
+        ttk.Label(left_c, text="Strengths", style='Card.TLabel',
+                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+        self.rep_strengths = ttk.Label(left_c, text="—", style='Card.TLabel',
+                                      wraplength=260, justify='left')
+        self.rep_strengths.pack(anchor='w')
+        ttk.Label(right_c, text="Weaknesses", style='Card.TLabel',
+                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+        self.rep_weak = ttk.Label(right_c, text="—", style='Card.TLabel',
+                                  wraplength=260, justify='left')
+        self.rep_weak.pack(anchor='w')
+        self.rep_notes = ttk.Label(f, text="", style='Card.TLabel',
+                                  wraplength=560, justify='left',
+                                  font=(self.parent.FONT_FAMILY, 10))
+        self.rep_notes.pack(anchor='w', pady=(6, 0))
+        brow = ttk.Frame(f, style='Card.TFrame')
+        brow.pack(fill='x', pady=(8, 0))
+        ttk.Button(brow, text="Assign Selected Scout",
+                   command=self._assign_scout_to_prospect,
+                   style='Secondary.TButton').pack(side='left', padx=(0, 6))
+        ttk.Button(brow, text="Add to Draft Board",
+                   command=self._add_prospect_to_board,
+                   style='Secondary.TButton').pack(side='left')
+
+    # ------------------------------------------------------------------
+    def _refresh_all(self):
+        self._refresh_scouts()
+        self._refresh_assignments()
+        self._refresh_prospects()
+        self._refresh_board()
+
+    def _refresh_scouts(self):
+        from game_classes import StaffRole
+        tree = self.scouts_tree
+        tree.delete(*tree.get_children())
+        scouts = [s for s in self.parent.user_team.staff
+                  if self.scmod.is_scout(s)]
+        tm = self.parent.tree_maps.setdefault(tree, {})
+        for s in scouts:
+            region = self.scmod.get_scout_region(self._gm, s) or "—"
+            item = tree.insert('', 'end', values=(
+                getattr(s, 'full_name', '?'),
+                getattr(s, 'judging_player_ability', '?'),
+                getattr(s, 'judging_player_potential', '?'),
+                region))
+            tm[item] = s
+
+    def _on_scout_selected(self, event=None):
+        sel = self.scouts_tree.selection()
+        tm = self.parent.tree_maps.get(self.scouts_tree, {})
+        self.selected_scout = tm.get(sel[0]) if sel else None
+        if self.selected_scout:
+            self.region_var.set(
+                self.scmod.get_scout_region(self._gm, self.selected_scout) or "")
+
+    def _assign_region(self):
+        if not self.selected_scout:
+            messagebox.showwarning("No Scout", "Select a scout first.")
+            return
+        region = self.region_var.get()
+        if not region:
+            return
+        self.scmod.set_scout_region(self._gm, self.selected_scout, region)
+        self._refresh_scouts()
+
+    def _clear_region(self):
+        if self.selected_scout:
+            self.scmod.set_scout_region(self._gm, self.selected_scout, None)
+            self.region_var.set("")
+            self._refresh_scouts()
+
+    def _hire_scout(self):
+        from game_classes import Staff, StaffRole
+        import random as _r
+        names = [("Jim", "Gregory"), ("Marie", "Labelle"), ("Ken", "Holland"),
+                 ("Sofia", "Lindqvist"), ("Petr", "Novak"), ("Dave", "Morrison")]
+        fn, ln = _r.choice(names)
+        scout = Staff(first_name=fn, last_name=ln, role=StaffRole.AMATEUR_SCOUT)
+        self.parent.user_team.staff.append(scout)
+        messagebox.showinfo("Scout Hired",
+                            f"{scout.full_name} joined your scouting department.\n"
+                            f"Assign them a region to start filing reports.")
+        self._refresh_scouts()
+
+    def _refresh_assignments(self):
+        tree = self.assign_tree
+        tree.delete(*tree.get_children())
+        tm = self.parent.tree_maps.setdefault(tree, {})
+        for player, scout in getattr(self.parent, 'scouting_assignments', {}).items():
             report = self.parent.user_team.scouting_reports.get(player.id)
-            scout_assigned = any(p == player for p in self.parent.scouting_assignments)
-            
+            views = getattr(report, 'viewings', 0) if report else 0
+            acc = getattr(report, 'accuracy', '—') if report else '—'
+            item = tree.insert('', 'end', values=(
+                player.full_name,
+                views, acc))
+            tm[item] = player
+
+    def _remove_assignment(self):
+        sel = self.assign_tree.selection()
+        tm = self.parent.tree_maps.get(self.assign_tree, {})
+        player = tm.get(sel[0]) if sel else None
+        if player and player in getattr(self.parent, 'scouting_assignments', {}):
+            del self.parent.scouting_assignments[player]
+            self._refresh_assignments()
+            self._refresh_prospects()
+
+    # ------------------------------------------------------------------
+    def _filtered_prospects(self):
+        all_p = sorted(getattr(self.parent.league, 'draft_prospects', []) or [],
+                       key=lambda p: getattr(p, 'draft_ranking', 0), reverse=True)
+        ft = self.filter_var.get()
+        from game_classes import PlayerPosition
+        if ft == "Forwards":
+            all_p = [p for p in all_p if p.primary_position in
+                     (PlayerPosition.CENTER, PlayerPosition.LEFT_WING,
+                      PlayerPosition.RIGHT_WING)]
+        elif ft == "Defensemen":
+            all_p = [p for p in all_p if p.primary_position in
+                     (PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE,
+                      PlayerPosition.DEFENSE)]
+        elif ft == "Goalies":
+            all_p = [p for p in all_p
+                     if p.primary_position == PlayerPosition.GOALIE]
+        elif ft == "Top 50":
+            all_p = all_p[:50]
+        elif ft == "Not Scouted":
+            reports = self.parent.user_team.scouting_reports
+            all_p = [p for p in all_p if p.id not in reports]
+        q = self.search_var.get().lower().strip()
+        if q:
+            all_p = [p for p in all_p if q in p.full_name.lower()]
+        return all_p
+
+    def _refresh_prospects(self):
+        tree = self.prospects_tree
+        tree.delete(*tree.get_children())
+        tm = self.parent.tree_maps.setdefault(tree, {})
+        reports = self.parent.user_team.scouting_reports
+        assigns = getattr(self.parent, 'scouting_assignments', {})
+        for i, p in enumerate(self._filtered_prospects()[:400]):
+            report = reports.get(p.id)
             if report:
-                status = f"Scouted ({report.accuracy})"
-                potential = report.scouted_potential or "?"
-            elif scout_assigned:
+                pot = self.scmod.report_potential_display(report, p)
+                status = f"Scouted ({getattr(report, 'accuracy', '?')})"
+                top_grade = pot.split("–")[-1].strip()
+            elif p in assigns:
+                pot = self.scmod.consensus_range(p)
                 status = "In progress"
-                potential = "?"
+                top_grade = pot.split("–")[-1].strip()
             else:
-                status = "Not scouted"
-                potential = "?"
-            
-            rank = getattr(player, 'draft_ranking', 0)
-            if rank:
-                rank = f"{i+1}"
-            else:
-                rank = "-"
-                
-            nationality = getattr(player, 'nationality', 'Unknown')
-            
-            values = (
-                rank,
-                player.full_name, 
-                player.primary_position.name,
-                player.age,
-                nationality,
-                potential,
-                status
-            )
-            
-            item_id = self.prospects_tree.insert('', 'end', values=values)
-            self.parent.tree_maps.setdefault(self.prospects_tree, {})[item_id] = player
-    
-    def search_prospects(self):
-        """Apply search filter to prospects."""
-        self.apply_filter()
+                pot = self.scmod.consensus_range(p)
+                status = "—"
+                top_grade = pot.split("–")[-1].strip()
+            try:
+                pos = p.primary_position.value
+            except Exception:
+                pos = "?"
+            tag = f"pot_{top_grade}" if top_grade in self.scmod.GRADE_ORDER else ""
+            item = tree.insert('', 'end', values=(
+                i + 1, p.full_name, pos, p.age,
+                getattr(p, 'nationality', '?'), pot, status),
+                tags=(tag,) if tag else ())
+            tm[item] = p
 
-    def on_scout_selected(self, event=None):
-        """Handle scout selection in the scouts tree."""
-        selection = self.scouts_tree.selection()
-        if selection:
-            scout_name = self.scouts_tree.item(selection[0])['values'][0]
-            self.selected_scout = next((s for s in self.parent.user_team.staff 
-                                     if s.full_name == scout_name), None)
+    def _on_prospect_selected(self, event=None):
+        sel = self.prospects_tree.selection()
+        tm = self.parent.tree_maps.get(self.prospects_tree, {})
+        self.selected_prospect = tm.get(sel[0]) if sel else None
+        self._show_report()
 
-    def on_prospect_selected(self, event=None):
-        """Handle prospect selection in the prospects tree."""
-        selection = self.prospects_tree.selection()
-        if selection:
-            self.selected_player = self.parent.tree_maps.get(self.prospects_tree, {}).get(selection[0])
-
-    def on_assignment_selected(self, event=None):
-        """Handle assignment selection in the assignments tree."""
-        selection = self.assignments_tree.selection()
-        if selection:
-            player_name = self.assignments_tree.item(selection[0])['values'][0]
-            self.selected_player = next((p for p in self.parent.scouting_assignments.keys() 
-                                     if p.full_name == player_name), None)
-
-    def assign_scout(self):
-        """Assign the selected scout to the selected player."""
-        if not self.selected_scout:
-            messagebox.showwarning("No Scout Selected", "Please select a scout from your staff.")
+    def _show_report(self):
+        p = self.selected_prospect
+        if p is None:
             return
-            
-        if not self.selected_player:
-            messagebox.showwarning("No Player Selected", "Please select a player to scout.")
-            return
-            
-        # Check if this player is already being scouted
-        if self.selected_player in self.parent.scouting_assignments:
-            messagebox.showinfo("Already Assigned", 
-                              f"{self.selected_player.full_name} is already being scouted.")
-            return
-            
-        # Check if scout has reached assignment limit
-        scout_assignments = sum(1 for scout in self.parent.scouting_assignments.values() 
-                              if scout == self.selected_scout)
-        if scout_assignments >= 5:
-            messagebox.showwarning("Assignment Limit", 
-                                 f"{self.selected_scout.full_name} already has 5 assignments. "
-                                 f"Please select another scout or remove an existing assignment.")
-            return
-            
-        # Assign the scout
-        self.parent.scouting_assignments[self.selected_player] = self.selected_scout
-        messagebox.showinfo("Assignment Started", 
-                          f"{self.selected_scout.full_name} will now begin scouting {self.selected_player.full_name}.")
-        
-        # Create initial scouting report if needed
-        if self.selected_player.id not in self.parent.user_team.scouting_reports:
-            self.parent.user_team.scouting_reports[self.selected_player.id] = ScoutingReport(
-                player=self.selected_player,
-                scout=self.selected_scout
-            )
-        
-        self.update_views()
-
-    def remove_assignment(self):
-        """Remove the selected scouting assignment."""
-        if not self.selected_player:
-            messagebox.showwarning("No Assignment Selected", 
-                                 "Please select an assignment to remove.")
-            return
-            
-        if self.selected_player in self.parent.scouting_assignments:
-            del self.parent.scouting_assignments[self.selected_player]
-            messagebox.showinfo("Assignment Removed", 
-                              f"Scouting assignment for {self.selected_player.full_name} has been removed.")
-            self.update_views()
-        else:
-            messagebox.showinfo("Not Found", 
-                              f"{self.selected_player.full_name} is not currently being scouted.")
-
-    def view_scouting_report(self):
-        """View the scouting report for the selected player."""
-        if not self.selected_player:
-            messagebox.showwarning("No Player Selected", 
-                                 "Please select a player to view the scouting report.")
-            return
-            
-        report = self.parent.user_team.scouting_reports.get(self.selected_player.id)
-        if not report:
-            messagebox.showinfo("No Report", 
-                              f"No scouting report available for {self.selected_player.full_name}.")
-            return
-            
-        # Create a scouting report window
-        report_window = tk.Toplevel(self)
-        report_window.title(f"Scouting Report: {self.selected_player.full_name}")
-        report_window.geometry("800x600")
-        report_window.configure(background=self.parent.BG_COLOR)
-        report_window.grab_set()
-        
-        # Create main content panel
-        main_frame = ttk.Frame(report_window, style='Panel.TFrame', padding=15)
-        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Header with player name and scout info
-        header_frame = ttk.Frame(main_frame)
-        header_frame.pack(fill='x', pady=(0, 15))
-        
-        ttk.Label(header_frame, text=f"Scouting Report: {self.selected_player.full_name}", 
-                 font=(self.parent.FONT_FAMILY, 16, 'bold'), style='Title.TLabel').pack(anchor='w')
-        
-        position_text = f"Position: {self.selected_player.primary_position.name}"
-        age_text = f"Age: {self.selected_player.age}"
-        
-        info_frame = ttk.Frame(header_frame)
-        info_frame.pack(fill='x', pady=5)
-        ttk.Label(info_frame, text=position_text).pack(side='left', padx=(0, 15))
-        ttk.Label(info_frame, text=age_text).pack(side='left')
-        
-        # Scout information
-        scout_frame = ttk.Frame(main_frame)
-        scout_frame.pack(fill='x', pady=(0, 10))
-        ttk.Label(scout_frame, text=f"Scout: {report.scout.full_name}", 
-                 font=(self.parent.FONT_FAMILY, 11)).pack(side='left')
-        ttk.Label(scout_frame, text=f"Report Accuracy: {report.accuracy}", 
-                 font=(self.parent.FONT_FAMILY, 11)).pack(side='right')
-        
-        if report.last_viewed:
-            last_viewed = report.last_viewed.strftime("%b %d, %Y")
-            ttk.Label(scout_frame, text=f"Last Updated: {last_viewed}", 
-                     font=(self.parent.FONT_FAMILY, 11)).pack(side='right', padx=15)
-        
-        # Separator
-        ttk.Separator(main_frame, orient='horizontal').pack(fill='x', pady=10)
-        
-        # Potential rating
-        potential_frame = ttk.Frame(main_frame)
-        potential_frame.pack(fill='x', pady=10)
-        ttk.Label(potential_frame, text="Potential Grade:", 
-                 font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side='left')
-        
-        pot_val = report.scouted_potential or "Unknown"
-        pot_label = ttk.Label(potential_frame, text=pot_val, 
-                            font=(self.parent.FONT_FAMILY, 12, 'bold'))
-        pot_label.pack(side='left', padx=10)
-        
-        # Style the potential label based on grade
-        if pot_val in ["A+", "A", "A-"]:
-            pot_label.configure(foreground="#28a745")  # Green for high potential
-        elif pot_val in ["B+", "B", "B-"]:
-            pot_label.configure(foreground="#17a2b8")  # Blue for good potential
-        elif pot_val in ["C+", "C", "C-"]:
-            pot_label.configure(foreground="#ffc107")  # Yellow for average potential
-        else:  # D, F or Unknown
-            pot_label.configure(foreground="#dc3545")  # Red for low potential
-        
-        # Scout notes
-        notes_frame = ttk.LabelFrame(main_frame, text="Scout Notes")
-        notes_frame.pack(fill='x', pady=10)
-        
-        notes_text = tk.Text(notes_frame, wrap='word', height=5, 
-                           bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                           font=(self.parent.FONT_FAMILY, 11))
-        notes_text.pack(fill='both', expand=True, padx=5, pady=5)
-        notes_text.insert('1.0', report.notes)
-        notes_text.config(state='disabled')
-        
-        # Attributes section
-        attrs_frame = ttk.LabelFrame(main_frame, text="Scouted Attributes")
-        attrs_frame.pack(fill='both', expand=True, pady=10)
-        
-        # Create a canvas with scrollbar for attributes
-        canvas = tk.Canvas(attrs_frame, bg=self.parent.CONTENT_BG, 
-                         highlightthickness=0)
-        scrollbar = ttk.Scrollbar(attrs_frame, orient="vertical", 
-                                command=canvas.yview)
-        attr_container = ttk.Frame(canvas)
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        
-        canvas.create_window((0, 0), window=attr_container, anchor="nw")
-        attr_container.bind("<Configure>", lambda e: canvas.configure(
-            scrollregion=canvas.bbox("all")))
-        
-        # Group attributes by category
-        attribute_categories = {
-            "Technical": [
-                'skating', 'shooting', 'passing', 'checking', 'faceoffs', 
-                'deking', 'shot_blocking', 'puck_control', 'shooting_accuracy'
-            ],
-            "Mental": [
-                'offensive_awareness', 'defensive_awareness', 'determination', 
-                'teamwork', 'leadership', 'discipline', 'flair', 'vision'
-            ],
-            "Physical": [
-                'strength', 'stamina', 'puck_protection'
-            ],
-            "Goaltending": [
-                'goaltending', 'reflexes', 'positioning', 'rebound_control', 'puck_handling'
-            ]
-        }
-        
-        # Display attributes by category
-        row = 0
-        for category, attrs in attribute_categories.items():
-            # Only show goalie attributes for goalies
-            if category == "Goaltending" and self.selected_player.primary_position != PlayerPosition.GOALIE:
-                continue
-                
-            # Category header
-            ttk.Label(attr_container, text=category, 
-                     font=(self.parent.FONT_FAMILY, 12, 'bold')).grid(
-                row=row, column=0, sticky='w', pady=(10, 5), padx=5)
-            row += 1
-            
-            # Attributes in this category
-            for i, attr in enumerate(attrs):
-                if attr in report.scouted_attributes:
-                    col = i % 3
-                    if col == 0 and i > 0:
-                        row += 1
-                        
-                    attr_name = attr.replace('_', ' ').title()
-                    attr_val = report.scouted_attributes[attr]
-                    
-                    attr_frame = ttk.Frame(attr_container)
-                    attr_frame.grid(row=row, column=col, sticky='w', padx=10, pady=2)
-                    
-                    ttk.Label(attr_frame, text=f"{attr_name}:", width=15, 
-                             anchor='e').pack(side='left')
-                    ttk.Label(attr_frame, text=attr_val, width=5).pack(side='left')
-            
-            row += 1
-        
-        # Close button
-        ttk.Button(main_frame, text="Close", 
-                  command=report_window.destroy).pack(pady=15)
-
-    def view_prospect_profile(self):
-        """View the full profile for the selected prospect."""
-        if not self.selected_player:
-            messagebox.showwarning("No Player Selected", 
-                                 "Please select a player to view.")
-            return
-            
-        # Get scouting report if available
-        report = self.parent.user_team.scouting_reports.get(self.selected_player.id)
-        is_scouted = report is not None
-        
-        # Open the profile window
-        self.parent.show_player_profile(self.selected_player)
-
-    def hire_scout(self):
-        """Open a dialog to hire a new scout."""
-        # TO DO: Implement hiring interface
-        messagebox.showinfo("Coming Soon", 
-                          "Scout hiring feature will be available in a future update.")
-
-    def view_scout_details(self):
-        """View detailed information about the selected scout."""
-        if not self.selected_scout:
-            messagebox.showwarning("No Scout Selected", 
-                                 "Please select a scout to view details.")
-            return
-            
-        # Create a scout details window
-        details_window = tk.Toplevel(self)
-        details_window.title(f"Scout Details: {self.selected_scout.full_name}")
-        details_window.geometry("500x400")
-        details_window.configure(background=self.parent.BG_COLOR)
-        details_window.grab_set()
-        
-        # Create main content panel
-        main_frame = ttk.Frame(details_window, style='Panel.TFrame', padding=15)
-        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Scout header
-        ttk.Label(main_frame, text=f"{self.selected_scout.full_name}", 
-                 font=(self.parent.FONT_FAMILY, 16, 'bold'), style='Title.TLabel').pack(anchor='w')
-        ttk.Label(main_frame, text="Scout", 
-                 font=(self.parent.FONT_FAMILY, 12)).pack(anchor='w')
-        
-        # Scout attributes
-        attr_frame = ttk.Frame(main_frame)
-        attr_frame.pack(fill='x', pady=15)
-        
-        ttk.Label(attr_frame, text=f"Judging Player Ability: {self.selected_scout.judging_player_ability}",
-                 font=(self.parent.FONT_FAMILY, 11)).pack(anchor='w', pady=2)
-        ttk.Label(attr_frame, text=f"Judging Player Potential: {self.selected_scout.judging_player_potential}",
-                 font=(self.parent.FONT_FAMILY, 11)).pack(anchor='w', pady=2)
-        
-        # Current assignments
-        assignments_frame = ttk.LabelFrame(main_frame, text="Current Assignments")
-        assignments_frame.pack(fill='both', expand=True, pady=10)
-        
-        # List assignments for this scout
-        assignments = [player for player, scout in self.parent.scouting_assignments.items() 
-                     if scout == self.selected_scout]
-        
-        if assignments:
-            assignment_text = tk.Text(assignments_frame, wrap='word', height=10, 
-                                    bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                    font=(self.parent.FONT_FAMILY, 11))
-            assignment_text.pack(fill='both', expand=True, padx=5, pady=5)
-            
-            for player in assignments:
-                report = self.parent.user_team.scouting_reports.get(player.id)
-                viewings = report.viewings if report else 0
-                assignment_text.insert('end', f"{player.full_name} ({viewings} viewings)\n")
-                
-            assignment_text.config(state='disabled')
-        else:
-            ttk.Label(assignments_frame, text="No current assignments", 
-                     font=(self.parent.FONT_FAMILY, 11)).pack(pady=10)
-        
-        # Close button
-        ttk.Button(main_frame, text="Close", 
-                  command=details_window.destroy).pack(pady=15)
-
-    def batch_assign_scouts(self):
-        """Auto-assign scouts to the top prospects."""
-        # Get available scouts
-        scouts = [s for s in self.parent.user_team.staff if s.role == StaffRole.SCOUT]
-        if not scouts:
-            messagebox.showwarning("No Scouts", 
-                                 "You don't have any scouts on your staff.")
-            return
-            
-        # Get prospects to scout
-        all_prospects = sorted(self.parent.league.draft_prospects, 
-                              key=lambda p: getattr(p, 'draft_ranking', p.overall_rating()), 
-                              reverse=True)
-        
-        # Only consider prospects that aren't already being scouted
-        available_prospects = [p for p in all_prospects if p not in self.parent.scouting_assignments]
-        
-        if not available_prospects:
-            messagebox.showinfo("No Prospects", 
-                              "All prospects are already being scouted.")
-            return
-            
-        # Ask how many prospects to auto-scout
-        top_n = tk.simpledialog.askinteger(
-            "Auto-Scout", 
-            "How many top prospects would you like to scout?",
-            minvalue=1, maxvalue=min(50, len(available_prospects)),
-            initialvalue=min(20, len(available_prospects))
-        )
-        
-        if not top_n:
-            return  # User cancelled
-            
-        # Get the top N prospects
-        top_prospects = available_prospects[:top_n]
-        
-        # Assign scouts evenly
-        assignments_made = 0
-        for i, prospect in enumerate(top_prospects):
-            # Choose scout (rotate through the list)
-            scout = scouts[i % len(scouts)]
-            
-            # Check if this scout has reached assignment limit (5 per scout)
-            scout_assignments = sum(1 for s in self.parent.scouting_assignments.values() if s == scout)
-            if scout_assignments >= 5:
-                continue  # Skip this assignment
-                
-            # Assign the scout
-            self.parent.scouting_assignments[prospect] = scout
-            
-            # Create initial scouting report if needed
-            if prospect.id not in self.parent.user_team.scouting_reports:
-                self.parent.user_team.scouting_reports[prospect.id] = ScoutingReport(
-                    player=prospect,
-                    scout=scout
-                )
-                
-            assignments_made += 1
-            
-        # Show results
-        messagebox.showinfo("Auto-Scout Complete", 
-                          f"Successfully assigned scouts to {assignments_made} prospects.")
-        
-        self.update_views()
-    
-    def _show_scouting_context_menu(self, event):
-        """Show context menu for scouting-specific options"""
-        if hasattr(self, 'prospects_tree'):
-            selection = self.prospects_tree.selection()
-            if selection:
-                player = self.parent.tree_maps.get(self.prospects_tree, {}).get(selection[0])
-                if player:
-                    # Create context menu with scouting options
-                    context_menu = PlayerContextMenu(self)
-                    context_menu.add_separator()
-                    context_menu.add_command("Assign Scout", lambda p=player: self._quick_assign_scout(p))
-                    context_menu.add_command("View Scouting Report", lambda p=player: self._view_scouting_report_for(p))
-                    context_menu.add_command("Set Scout Priority", lambda p=player: self._set_scout_priority(p))
-                    context_menu.show_context_menu(event, player)
-    
-    def _quick_assign_scout(self, player):
-        """Quick assign available scout to player"""
-        available_scouts = [s for s in self.parent.user_team.staff if s.role == StaffRole.SCOUT]
-        if available_scouts:
-            # Find scout with fewest assignments
-            best_scout = min(available_scouts, 
-                           key=lambda s: sum(1 for scout in self.parent.scouting_assignments.values() if scout == s))
-            
-            self.parent.scouting_assignments[player] = best_scout
-            
-            # Create scouting report if needed
-            if player.id not in self.parent.user_team.scouting_reports:
-                self.parent.user_team.scouting_reports[player.id] = ScoutingReport(
-                    player=player,
-                    scout=best_scout
-                )
-            
-            messagebox.showinfo("Scout Assigned", f"{best_scout.full_name} assigned to scout {player.full_name}")
-            self.update_views()
-        else:
-            messagebox.showwarning("No Scouts", "No scouts available for assignment.")
-    
-    def _view_scouting_report_for(self, player):
-        """View detailed scouting report"""
-        report = self.parent.user_team.scouting_reports.get(player.id)
+        reports = self.parent.user_team.scouting_reports
+        report = reports.get(p.id)
+        try:
+            pos = p.primary_position.value
+        except Exception:
+            pos = "?"
+        self.rep_title.config(
+            text=f"{p.full_name}  ·  {pos}  ·  {p.age}  ·  {getattr(p, 'nationality', '?')}")
         if report:
-            accuracy = getattr(report.scout, 'jpa', 75)  # Scout accuracy
-            potential = report.scouted_potential or "Unknown"
-            messagebox.showinfo("Scouting Report", 
-                              f"Player: {player.full_name}\n"
-                              f"Scout: {report.scout.full_name}\n"
-                              f"Potential: {potential}\n"
-                              f"Scout Accuracy: {accuracy}%\n"
-                              f"Viewings: {report.viewings}")
+            pot = self.scmod.report_potential_display(report, p)
+            top = pot.split("–")[-1].strip()
+            self.rep_pot.config(text=f"Potential: {pot}",
+                                foreground=self.scmod.grade_color(top))
+            info = self.scmod.report_summary(report)
+            self.rep_meta.config(
+                text=f"Report accuracy {info['accuracy']}  ·  {info['viewings']} viewings  ·  "
+                     f"Scout: {info['scout']}  ·  Region: {info['region']}")
+            self.rep_strengths.config(
+                text="\n".join(f"• {s}" for s in info['strengths']) or "—")
+            self.rep_weak.config(
+                text="\n".join(f"• {w}" for w in info['weaknesses']) or "—")
+            notes = []
+            if info['comparable'] != '—':
+                notes.append(f"Comparable: {info['comparable']}")
+            if info['projection'] != '—':
+                notes.append(f"ETA: {info['projection']}")
+            if info['notes']:
+                notes.append(info['notes'][:220])
+            self.rep_notes.config(text="   ".join(notes))
         else:
-            messagebox.showinfo("No Report", f"No scouting report available for {player.full_name}")
-    
-    def _set_scout_priority(self, player):
-        """Set scouting priority for player"""
-        messagebox.showinfo("Priority Set", f"Set {player.full_name} as high priority for scouting")
+            pot = self.scmod.consensus_range(p)
+            top = pot.split("–")[-1].strip()
+            self.rep_pot.config(text=f"Potential: {pot}  (consensus — scout for certainty)",
+                                foreground=self.scmod.grade_color(top))
+            assigned = p in getattr(self.parent, 'scouting_assignments', {})
+            self.rep_meta.config(
+                text="No report yet — " +
+                     ("a scout is watching." if assigned else "assign a scout or a region."))
+            self.rep_strengths.config(text="—")
+            self.rep_weak.config(text="—")
+            self.rep_notes.config(text="")
+
+    def _assign_scout_to_prospect(self):
+        p = self.selected_prospect
+        if p is None:
+            messagebox.showwarning("No Prospect", "Select a prospect first.")
+            return
+        scout = self.selected_scout
+        if scout is None:
+            from game_classes import StaffRole
+            scouts = [s for s in self.parent.user_team.staff
+                      if self.scmod.is_scout(s)]
+            if not scouts:
+                messagebox.showwarning("No Scouts", "Hire a scout first.")
+                return
+            scout = scouts[0]
+        assigns = self.parent.scouting_assignments
+        if p in assigns:
+            messagebox.showinfo("Already Assigned", "This prospect is already being scouted.")
+            return
+        if len(assigns) >= 30:
+            messagebox.showwarning("Limit", "You have 30 active assignments already.")
+            return
+        assigns[p] = scout
+        messagebox.showinfo("Assignment Started",
+                            f"{scout.full_name} will scout {p.full_name}.")
+        self._refresh_assignments()
+        self._refresh_prospects()
+        self._show_report()
+
+    # ------------------------------------------------------------------
+    def _refresh_board(self):
+        lb = self.board_list
+        lb.delete(0, tk.END)
+        ids = self.scmod.get_draft_board(self.parent.user_team)
+        by_id = {p.id: p for p in
+                 getattr(self.parent.league, 'draft_prospects', []) or []}
+        # prune missing
+        ids = [i for i in ids if i in by_id]
+        self.scmod.set_draft_board(self.parent.user_team, ids)
+        for n, pid in enumerate(ids, 1):
+            p = by_id[pid]
+            try:
+                pos = p.primary_position.value
+            except Exception:
+                pos = "?"
+            lb.insert(tk.END, f"{n}. {p.full_name} ({pos})")
+
+    def _add_prospect_to_board(self):
+        p = self.selected_prospect
+        if p is None:
+            return
+        ids = self.scmod.get_draft_board(self.parent.user_team)
+        if p.id not in ids:
+            ids.append(p.id)
+            self.scmod.set_draft_board(self.parent.user_team, ids)
+            self._refresh_board()
+
+    def _move_board(self, direction):
+        lb = self.board_list
+        sel = lb.curselection()
+        if not sel:
+            return
+        i = sel[0]
+        j = i + direction
+        ids = self.scmod.get_draft_board(self.parent.user_team)
+        if 0 <= j < len(ids):
+            ids[i], ids[j] = ids[j], ids[i]
+            self.scmod.set_draft_board(self.parent.user_team, ids)
+            self._refresh_board()
+            lb.select_set(j)
+
+    def _remove_board(self):
+        lb = self.board_list
+        sel = lb.curselection()
+        if not sel:
+            return
+        ids = self.scmod.get_draft_board(self.parent.user_team)
+        del ids[sel[0]]
+        self.scmod.set_draft_board(self.parent.user_team, ids)
+        self._refresh_board()
+
+    def _reset_board(self):
+        prospects = sorted(getattr(self.parent.league, 'draft_prospects', []) or [],
+                           key=lambda p: getattr(p, 'draft_ranking', 0),
+                           reverse=True)[:50]
+        self.scmod.set_draft_board(self.parent.user_team, [p.id for p in prospects])
+        self._refresh_board()
+
 
 class DraftWindow(tk.Toplevel):
     def __init__(self, parent):

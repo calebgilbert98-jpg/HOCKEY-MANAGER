@@ -5987,6 +5987,12 @@ class HockeyManagerGUI(tk.Tk):
         # Process scouting assignments - optimized to run every 3 days instead of daily
         if self.current_date.day % 3 == 0:  # Every 3 days
             self.process_scouting_assignments()
+            try:
+                import scouting as scouting_mod
+                scouting_mod.process_regional_scouting(self.game_manager
+                                                       if hasattr(self, 'game_manager') else self)
+            except Exception:
+                pass
         
         # Process waivers - reduced frequency
         if self.current_date.weekday() in [0, 3]:  # Monday and Thursday only
