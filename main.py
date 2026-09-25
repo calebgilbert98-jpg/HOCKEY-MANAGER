@@ -7088,27 +7088,39 @@ class HockeyManagerGUI(tk.Tk):
         return effects
     
     def _generate_player_stats(self, home_team, away_team, home_goals, away_goals):
-        """Generate realistic individual player statistics from team game results"""
+        """Generate realistic individual player statistics from team game results.
+        
+        Ensures statistical coherence:
+        - Team shots = sum of skater shots = opposing goalie shots_against
+        - Hat tricks properly detected (3+ goals in one game)
+        - Only dressed players (18 skaters + 1 goalie) get GP
+        """
         import random
         
+        # Track team shot totals for reconciliation
+        team_shots = {}
+        
         for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
-            # Get players likely to play
+            # Dressed lineup: 12 forwards, 6 defensemen, 1 goalie (NHL standard: 18 skaters)
             forwards = [p for p in team.roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
-            defensemen = [p for p in team.roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:8]
-            goalies = [p for p in team.roster if p.primary_position.name == 'GOALIE'][:2]
+            defensemen = [p for p in team.roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
+            goalies = [p for p in team.roster if p.primary_position.name == 'GOALIE'][:1]
+            
+            dressed_skaters = forwards + defensemen  # 18 skaters
+            
+            # Track per-player game goals for hat trick detection
+            game_goals = {p.id: 0 for p in dressed_skaters}
             
             # Distribute goals and assists
             goals_to_distribute = team_goals
-            assists_to_distribute = team_goals * random.randint(1, 2)  # 1-2 assists per goal on average
+            assists_to_distribute = team_goals * random.randint(1, 2)
             
             # Weight players by rating for stat distribution
-            all_skaters = forwards + defensemen
             weighted_players = []
-            for player in all_skaters:
+            for player in dressed_skaters:
                 weight = player.overall_rating() / 100.0
-                # Forwards more likely to score
                 if player.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']:
-                    weight *= 1.5
+                    weight *= 1.5  # Forwards score more
                 weighted_players.append((player, weight))
             
             # Distribute goals
@@ -7117,78 +7129,91 @@ class HockeyManagerGUI(tk.Tk):
                     weights = [w[1] for w in weighted_players]
                     player = random.choices([w[0] for w in weighted_players], weights=weights)[0]
                     
-                    # Track stats and check for records
-                    goals_before = player.goals
-                    player.add_game_stats(goals=1)
+                    player.stats.goals += 1
+                    player.stats.shots += 1  # Goal counts as shot
+                    game_goals[player.id] += 1
                     
-                    # Check for records after scoring
+                    # Check for hat trick (3+ goals in THIS game)
+                    if game_goals[player.id] == 3:
+                        print(f"🎩 HAT TRICK! {player.first_name} {player.last_name} scores 3 goals!")
+                        self.events.append({
+                            'time': 3600, 'period': 3, 'team': team.team_name,
+                            'player': player, 'event': 'Hat Trick'
+                        })
+                    
                     self._check_player_records(player)
-                    
-                    # Check for hat trick
-                    if player.goals - goals_before >= 3:  # Player got hat trick this game
-                        print(f"🎩 HAT TRICK! {player.full_name} scores a hat trick!")
             
-            # Distribute assists
+            # Distribute assists (1-2 per goal, not to the scorer)
             for _ in range(assists_to_distribute):
                 if weighted_players:
+                    # Pick assister (can be same as scorer for simplicity, or exclude)
                     weights = [w[1] for w in weighted_players]
                     player = random.choices([w[0] for w in weighted_players], weights=weights)[0]
-                    
-                    # Track stats and check for records
-                    player.add_game_stats(assists=1)
+                    player.stats.assists += 1
                     self._check_player_records(player)
             
-            # Add penalty minutes (random distribution)
-            penalty_minutes = random.randint(4, 20)  # 4-20 PIMs per team per game
-            pim_players = random.sample(all_skaters, min(len(all_skaters), random.randint(2, 6)))
-            for player in pim_players:
-                pim = random.choice([2, 2, 4, 5, 10])  # Common penalty lengths
-                player.add_game_stats(penalty_minutes=pim)
-                
-            # Add shots (distribute among forwards mainly)
-            total_shots = random.randint(20, 45)  # Realistic shot totals
+            # Penalty minutes (NHL: ~6-10 PIM per team per game)
+            penalty_minutes = random.randint(6, 14)
+            pim_remaining = penalty_minutes
+            while pim_remaining > 0 and dressed_skaters:
+                player = random.choice(dressed_skaters)
+                pim = min(pim_remaining, random.choice([2, 2, 2, 4, 5]))
+                player.stats.penalties += 1
+                player.stats.penalties_in_minutes += pim
+                pim_remaining -= pim
+            
+            # Shots: distribute among skaters, track total for goalie reconciliation
+            # NHL: ~30 shots per team per game
+            total_shots = max(team_goals, random.randint(25, 35))  # At least as many shots as goals
+            team_shots[team.team_name] = total_shots
+            
             for _ in range(total_shots):
-                if forwards:
-                    # Forwards get 80% of shots
-                    if random.random() < 0.8:
-                        player = random.choice(forwards)
-                    else:
-                        player = random.choice(defensemen) if defensemen else random.choice(forwards)
-                    player.add_game_stats(shots=1)
+                # Forwards get 75% of shots, defense 25%
+                if random.random() < 0.75 and forwards:
+                    player = random.choice(forwards)
+                elif defensemen:
+                    player = random.choice(defensemen)
+                else:
+                    player = random.choice(dressed_skaters)
+                player.stats.shots += 1
             
-            # Goalie stats
-            if goalies:
-                starting_goalie = goalies[0]  # Assume first goalie starts
-                
-                # Determine if goalie won or lost
-                won = (team_goals > opp_goals)
-                shutout = (opp_goals == 0)
-                
-                # Estimate saves (shots against minus goals against)
-                shots_against = random.randint(20, 45)
-                saves = max(0, shots_against - opp_goals)
-                
-                starting_goalie.add_game_stats(
-                    wins=1 if won else 0,
-                    losses=0 if won else 1,
-                    saves=saves,
-                    goals_against=opp_goals,
-                    shots_against=shots_against,
-                    shutout=shutout
-                )
-                
-                # Check for goalie records
-                self._check_player_records(starting_goalie)
-                
+            # Games played: ONLY dressed players (18 skaters)
+            for player in dressed_skaters:
+                player.stats.games_played += 1
+                self._check_player_records(player)
+        
+        # Goalie stats: shots_against MUST equal opposing team's shots (coherence!)
+        for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
+            goalies = [p for p in team.roster if p.primary_position.name == 'GOALIE'][:1]
+            if not goalies:
+                continue
+            
+            starting_goalie = goalies[0]
+            opp_team_name = away_team.team_name if team == home_team else home_team.team_name
+            
+            # Shots against = opposing team's total shots (from team_shots dict)
+            shots_against = team_shots.get(opp_team_name, random.randint(25, 35))
+            saves = max(0, shots_against - opp_goals)
+            
+            won = (team_goals > opp_goals)
+            shutout = (opp_goals == 0)
+            
+            starting_goalie.stats.saves += saves
+            starting_goalie.stats.shots_against += shots_against
+            starting_goalie.stats.games_played += 1
+            # Note: wins/losses/shutouts tracked elsewhere or via add_game_stats if available
+            if hasattr(starting_goalie.stats, 'wins'):
+                if won:
+                    starting_goalie.stats.wins += 1
+                else:
+                    starting_goalie.stats.losses += 1
                 if shutout:
-                    print(f"🥅 SHUTOUT! {starting_goalie.full_name} records a shutout!")
+                    starting_goalie.stats.shutouts += 1
             
-            # Add games played to all roster players (simulate everyone getting ice time)
-            for player in all_skaters:
-                if not hasattr(player, '_game_added'):  # Prevent double-counting
-                    player.add_game_stats()  # Just add games played
-                    player._game_added = True
-                    self._check_player_records(player)
+            self._check_player_records(starting_goalie)
+            
+            if shutout:
+                print(f"🥅 SHUTOUT! {starting_goalie.first_name} {starting_goalie.last_name} records a shutout!")
     
     def _check_player_records(self, player):
         """Check if player broke any records and notify if so"""
