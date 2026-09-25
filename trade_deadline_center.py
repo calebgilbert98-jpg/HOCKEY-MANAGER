@@ -61,12 +61,100 @@ class TradeDeadlineCenter(tk.Toplevel):
         """Configure the main window with immersive design"""
         self.title("🚨 NHL TRADE DEADLINE CENTER 🚨")
         self.configure(bg='#0D1421')  # Deep navy background
-        self.state('zoomed')  # Full screen on Windows
+        try:
+            self.state('zoomed')  # Full screen on Windows
+        except Exception:
+            self.geometry("1600x950")  # Fallback for Linux/macOS
         
         # Window styling
         self.attributes('-topmost', True)
         self.protocol("WM_DELETE_WINDOW", self._close_deadline_center)
         
+    def _close_deadline_center(self):
+        """Close the trade deadline center"""
+        self.auto_trades_active = False
+        self.destroy()
+
+    def _create_intelligence_panel(self, parent):
+        """Right column: league intelligence - rumors and buyers/sellers"""
+        panel = tk.Frame(parent, bg=self.PANEL_COLOR, relief='raised', bd=2)
+        panel.pack(side='right', fill='both', expand=True, padx=(10, 0))
+
+        tk.Label(panel, text="LEAGUE INTELLIGENCE", bg=self.PANEL_COLOR,
+                 fg=self.DEADLINE_GOLD, font=('Segoe UI', 13, 'bold')).pack(pady=(10, 6))
+
+        tk.Label(panel, text="Latest Rumors", bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
+                 font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=12)
+        rumors_box = tk.Text(panel, bg=self.DEADLINE_BG, fg=self.TEXT_WHITE, height=9,
+                             font=('Segoe UI', 10), wrap='word', relief='flat',
+                             highlightthickness=0)
+        rumors_box.pack(fill='x', padx=12, pady=(4, 10))
+        for rumor in getattr(self, 'trade_rumors', []):
+            rumors_box.insert('end', f"\u2022 {rumor}\n\n")
+        rumors_box.config(state='disabled')
+
+        tk.Label(panel, text="Buyers / Sellers Watch", bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
+                 font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=12)
+        intel_box = tk.Text(panel, bg=self.DEADLINE_BG, fg=self.TEXT_WHITE, height=9,
+                            font=('Segoe UI', 10), wrap='word', relief='flat',
+                            highlightthickness=0)
+        intel_box.pack(fill='both', expand=True, padx=12, pady=(4, 12))
+        try:
+            activity = self.deadline_manager.get_team_activity_status()
+            buyers = [t for t, a in activity.items() if a.get('activity_level') == 'hot'][:6]
+            sellers = [t for t, a in activity.items() if a.get('activity_level') == 'warm'][:6]
+            intel_box.insert('end', "BUYERS:\n" + ("\n".join(f"  \u25b2 {t}" for t in buyers) or "  --") + "\n\n")
+            intel_box.insert('end', "SELLERS:\n" + ("\n".join(f"  \u25bc {t}" for t in sellers) or "  --"))
+        except Exception:
+            intel_box.insert('end', "Intel unavailable.")
+        intel_box.config(state='disabled')
+
+    def _create_footer(self, parent):
+        """Footer with deadline status and close button"""
+        footer = tk.Frame(parent, bg=self.DEADLINE_BG)
+        footer.pack(fill='x', pady=(15, 0))
+        self.status_label = tk.Label(footer, text="Trade deadline is today - all deals must be finalized before the cutoff.",
+                                     bg=self.DEADLINE_BG, fg=self.DEADLINE_GOLD,
+                                     font=('Segoe UI', 11))
+        self.status_label.pack(side='left')
+        tk.Button(footer, text="Close Center", bg=self.NEUTRAL_GRAY, fg=self.TEXT_WHITE,
+                  font=('Segoe UI', 11, 'bold'), relief='flat', padx=16, pady=6,
+                  command=self._close_deadline_center).pack(side='right')
+
+    def _start_animations(self):
+        """Start countdown and ticker animations"""
+        self._update_countdown()
+        self._animate_ticker()
+
+    def _update_countdown(self):
+        """Update the countdown timer each second"""
+        if getattr(self, 'deadline_passed', False):
+            return
+        try:
+            time_info = self.deadline_manager.get_time_until_deadline()
+            if time_info.get('expired'):
+                self.deadline_passed = True
+                self.countdown_label.config(text="DEADLINE PASSED", foreground=self.NEUTRAL_GRAY)
+                self.status_label.config(text="TRADE DEADLINE HAS PASSED - No more trades allowed")
+                return
+            self.countdown_label.config(text=time_info.get('formatted', '--:--:--'))
+        except Exception:
+            pass
+        if self.winfo_exists():
+            self.after(1000, self._update_countdown)
+
+    def _animate_ticker(self):
+        """Scroll the news ticker"""
+        try:
+            x = self.ticker_label.winfo_x() - 2
+            if x < -self.ticker_label.winfo_width():
+                x = self.ticker_label.master.winfo_width()
+            self.ticker_label.place(x=x, y=10)
+        except Exception:
+            pass
+        if self.winfo_exists():
+            self.after(50, self._animate_ticker)
+
     def _create_styles(self):
         """Create custom styles for deadline center"""
         style = ttk.Style()
@@ -74,10 +162,13 @@ class TradeDeadlineCenter(tk.Toplevel):
         # Deadline theme colors
         self.DEADLINE_BG = '#0D1421'      # Deep navy
         self.URGENT_RED = '#FF1744'       # Bright red for urgency
+        self.DEADLINE_RED = '#FF1744'     # Alias for urgency red
         self.DEADLINE_GOLD = '#FFD600'    # Gold for highlights
         self.NEUTRAL_GRAY = '#37474F'     # Gray for inactive elements
         self.TEXT_WHITE = '#FFFFFF'       # White text
         self.SUCCESS_GREEN = '#00E676'    # Green for completed trades
+        self.PANEL_COLOR = '#16202F'      # Panel background
+        self.BORDER_COLOR = '#2A3A52'     # Borders
         
         # Custom styles
         style.configure('Deadline.TFrame', background=self.DEADLINE_BG)

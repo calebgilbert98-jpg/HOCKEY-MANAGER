@@ -36,6 +36,8 @@ from modern_dashboard import ModernDashboard
 
 # Import Trade Deadline Center
 from trade_deadline_center import TradeDeadlineCenter, is_trade_deadline_day
+from event_day_hubs import (DraftDayCentral, FreeAgencyFrenzy, is_draft_day,
+                            is_free_agency_day, prompt_event_day)
 
 # Import Phase 1 systems
 from save_load_system import SaveLoadWindow, GameSaveManager
@@ -3700,8 +3702,10 @@ class HockeyManagerGUI(tk.Tk):
         self._create_dropdown_menu(left_menu_frame, "Transactions", {
             "� Fantasy Draft": self.open_fantasy_draft_window,
             "�🆓 Free Agents": self.open_free_agency_window,
+            "💥 Free Agent Frenzy": self.open_free_agency_frenzy,  # Only visible on July 1
             "🔄 Trade Center": self.open_trade_window,
             "� Trade Deadline": self.open_trade_deadline_center,  # Only visible on deadline day
+            "🏒 Draft Day Central": self.open_draft_day_central,  # Only visible on draft days
             "�📋 Trade Block": self.open_trade_block_window,
             "⚖️ Waivers": self.open_waivers_window
         })
@@ -3761,6 +3765,12 @@ class HockeyManagerGUI(tk.Tk):
             # Special handling for Trade Deadline Center - only show on deadline day
             if "Trade Deadline" in item_text and not is_trade_deadline_day():
                 continue  # Skip this menu item if it's not deadline day
+            # Draft Day Central - only show on draft days
+            if "Draft Day Central" in item_text and not is_draft_day(self.current_date):
+                continue
+            # Free Agent Frenzy - only show on July 1
+            if "Free Agent Frenzy" in item_text and not is_free_agency_day(self.current_date):
+                continue
             dropdown_menu.add_command(label=item_text, command=command)
         
         # Bind button click to show menu
@@ -5975,6 +5985,9 @@ class HockeyManagerGUI(tk.Tk):
     def _process_daily_maintenance(self):
         """Process daily maintenance tasks with performance optimizations"""
         # Only run heavy tasks on specific days to reduce CPU load
+
+        # Event-day hubs: prompt once per year when a tentpole day arrives
+        self._check_for_event_day()
         
         # Check for Entry Draft (held in June) - only check once per week
         if self.current_date.weekday() == 0:  # Monday only
@@ -6460,6 +6473,24 @@ class HockeyManagerGUI(tk.Tk):
             print(f"Error showing daily results: {e}")
             import traceback
             traceback.print_exc()
+
+    def _check_for_event_day(self):
+        """Detect tentpole event days (draft, deadline, free agency) and offer the hub once per year."""
+        try:
+            from event_day_hubs import get_todays_event
+            event = get_todays_event(self.current_date)
+            if not event:
+                return
+            if not hasattr(self, '_event_day_prompted'):
+                self._event_day_prompted = set()
+            key = (event, self.current_date.year)
+            if key in self._event_day_prompted:
+                return
+            self._event_day_prompted.add(key)
+            # Defer the prompt so the daily sim UI finishes updating first
+            self.after(500, lambda: prompt_event_day(self, self.game_manager, event))
+        except Exception:
+            pass
 
     def _check_for_entry_draft(self):
         """Check if today is the Entry Draft and open draft window if so"""
@@ -8078,6 +8109,18 @@ class HockeyManagerGUI(tk.Tk):
         if 'trade_deadline' not in self.open_windows or not self.open_windows['trade_deadline'].winfo_exists():
             self.open_windows['trade_deadline'] = TradeDeadlineCenter(self)
         self.open_windows['trade_deadline'].focus_set()
+
+    def open_draft_day_central(self):
+        """Open Draft Day Central - the draft-day event hub"""
+        if 'draft_central' not in self.open_windows or not self.open_windows['draft_central'].winfo_exists():
+            self.open_windows['draft_central'] = DraftDayCentral(self, self.game_manager)
+        self.open_windows['draft_central'].focus_set()
+
+    def open_free_agency_frenzy(self):
+        """Open Free Agent Frenzy - the July 1 event hub"""
+        if 'fa_frenzy' not in self.open_windows or not self.open_windows['fa_frenzy'].winfo_exists():
+            self.open_windows['fa_frenzy'] = FreeAgencyFrenzy(self, self.game_manager)
+        self.open_windows['fa_frenzy'].focus_set()
 
     def open_fantasy_draft_window(self):
         """Open the Fantasy Draft window."""
