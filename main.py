@@ -2095,13 +2095,15 @@ class AdvancedGameSim:
         stickhandling = getattr(player, 'stickhandling', 10)
         passing = getattr(player, 'passing', 10)
         
-        # Base probabilities - Maximize shots for realistic NHL totals (60+ shots/game)
-        shot_prob = 0.90  # Massive increase to 90% for NHL-realistic shot totals
-        pass_prob = 0.06 if len(shooters) > 1 else 0.0  # Minimal passing
-        deke_prob = 0.025  # Minimal deking
-        battle_prob = 0.01  # Minimal battles  
-        screen_prob = 0.004  # Minimal screens
-        deflection_prob = 0.001  # Minimal deflections
+        # Base probabilities - tuned for realistic NHL game flow
+        # Target: ~70-75 shot attempts from ~225 events per game (~32% shots)
+        # Hockey is mostly passing and puck battles, not constant shooting
+        shot_prob = 0.32
+        pass_prob = 0.40 if len(shooters) > 1 else 0.0
+        deke_prob = 0.08
+        battle_prob = 0.12
+        screen_prob = 0.05
+        deflection_prob = 0.03
         
         # Modify based on attributes
         if creativity > 15:
@@ -2416,10 +2418,23 @@ class AdvancedGameSim:
         self._record_state()
 
     def run(self):
-        overtime_limit = 600  # 10 minutes max OT
-        shootout_attempts = 3
-        while self.time < 3600 or (self.period == 4 and self.score[self.home_team.team_name] == self.score[self.away_team.team_name] and self.time < 3600 + overtime_limit):
+        # NHL rules: 5-minute 3v3 sudden-death OT, then shootout
+        overtime_limit = 300  # 5 minutes OT (NHL regular season)
+        shootout_rounds = 3  # Initial shootout rounds, then sudden death
+        
+        # Regulation: 60 minutes
+        while self.time < 3600:
             self._simulate_shift()
+        
+        # Overtime: sudden death - first goal wins
+        if self.score[self.home_team.team_name] == self.score[self.away_team.team_name]:
+            ot_start = self.time
+            self.period = 4
+            while (self.time < ot_start + overtime_limit and 
+                   self.score[self.home_team.team_name] == self.score[self.away_team.team_name]):
+                self._simulate_shift()
+                # Sudden death: stop immediately on goal
+                # (The loop condition checks the tie each iteration)
         # If still tied after OT, do shootout
 
         # Defensive: get home/away goalies safely
@@ -2435,52 +2450,80 @@ class AdvancedGameSim:
         away_goalie = get_goalie(self.away_team, self.lineups[self.away_team.team_name])
 
         if self.score[self.home_team.team_name] == self.score[self.away_team.team_name]:
+            # Shootout: 3 rounds, then sudden-death rounds until winner
+            # NHL rule: shootout winner is credited with +1 goal
             home_goals = 0
             away_goals = 0
-            shooters_home = [p for line in self.lineups[self.home_team.team_name].get('Forwards', []) for p in line if p][:shootout_attempts]
-            shooters_away = [p for line in self.lineups[self.away_team.team_name].get('Forwards', []) for p in line if p][:shootout_attempts]
-            for i in range(shootout_attempts):
-                if i < len(shooters_home):
-                    shooter = shooters_home[i]
-                    # Use position-specific attributes for shootout attempt
-                    shot_skill = (
-                        getattr(shooter, 'wristshot', 10) * 0.4 +
-                        getattr(shooter, 'deking', 10) * 0.4 +
-                        getattr(shooter, 'composure', 10) * 0.2
-                    )
-                    goalie_skill = (
-                        getattr(away_goalie, 'reflexes', 10) * 0.4 +
-                        getattr(away_goalie, 'positioning', 10) * 0.3 +
-                        getattr(away_goalie, 'breakaway_skill', 10) * 0.3
-                    ) if away_goalie else 10
-                    
-                    success_chance = 0.33 + (shot_skill - goalie_skill) * 0.015
-                    if random.random() < min(0.7, max(0.1, success_chance)):
-                        home_goals += 1
-                        self.events.append({'time': self.time, 'period': 5, 'team': self.home_team.team_name, 'player': shooter, 'event': 'Shootout Goal'})
+            
+            # Get shooters (cycle through forwards if needed for sudden death)
+            home_forwards = [p for line in self.lineups[self.home_team.team_name].get('Forwards', []) for p in line if p]
+            away_forwards = [p for line in self.lineups[self.away_team.team_name].get('Forwards', []) for p in line if p]
+            
+            def shootout_attempt(shooter, goalie, team_name):
+                """Single shootout attempt. Returns True if goal scored."""
+                shot_skill = (
+                    getattr(shooter, 'wristshot', 10) * 0.4 +
+                    getattr(shooter, 'deking', 10) * 0.4 +
+                    getattr(shooter, 'composure', 10) * 0.2
+                )
+                goalie_skill = (
+                    getattr(goalie, 'reflexes', 10) * 0.4 +
+                    getattr(goalie, 'positioning', 10) * 0.3 +
+                    getattr(goalie, 'breakaway_skill', 10) * 0.3
+                ) if goalie else 10
                 
-                if i < len(shooters_away):
-                    shooter = shooters_away[i]
-                    # Use position-specific attributes for shootout attempt
-                    shot_skill = (
-                        getattr(shooter, 'wristshot', 10) * 0.4 +
-                        getattr(shooter, 'deking', 10) * 0.4 +
-                        getattr(shooter, 'composure', 10) * 0.2
-                    )
-                    goalie_skill = (
-                        getattr(home_goalie, 'reflexes', 10) * 0.4 +
-                        getattr(home_goalie, 'positioning', 10) * 0.3 +
-                        getattr(home_goalie, 'breakaway_skill', 10) * 0.3
-                    ) if home_goalie else 10
-                    
-                    success_chance = 0.33 + (shot_skill - goalie_skill) * 0.015
-                    if random.random() < min(0.7, max(0.1, success_chance)):
+                success_chance = 0.33 + (shot_skill - goalie_skill) * 0.015
+                if random.random() < min(0.7, max(0.1, success_chance)):
+                    self.events.append({'time': self.time, 'period': 5, 'team': team_name, 'player': shooter, 'event': 'Shootout Goal'})
+                    return True
+                return False
+            
+            # Initial 3 rounds
+            round_num = 0
+            for i in range(shootout_rounds):
+                round_num += 1
+                if i < len(home_forwards):
+                    if shootout_attempt(home_forwards[i], away_goalie, self.home_team.team_name):
+                        home_goals += 1
+                if i < len(away_forwards):
+                    if shootout_attempt(away_forwards[i], home_goalie, self.away_team.team_name):
                         away_goals += 1
-                        self.events.append({'time': self.time, 'period': 5, 'team': self.away_team.team_name, 'player': shooter, 'event': 'Shootout Goal'})
+            
+            # Sudden death rounds if tied (NHL rule)
+            sudden_death_round = 0
+            while home_goals == away_goals and sudden_death_round < 20:  # Safety cap
+                sudden_death_round += 1
+                # Cycle through shooters
+                home_shooter = home_forwards[(shootout_rounds + sudden_death_round - 1) % max(1, len(home_forwards))] if home_forwards else None
+                away_shooter = away_forwards[(shootout_rounds + sudden_death_round - 1) % max(1, len(away_forwards))] if away_forwards else None
+                
+                home_scored = shootout_attempt(home_shooter, away_goalie, self.home_team.team_name) if home_shooter else False
+                away_scored = shootout_attempt(away_shooter, home_goalie, self.away_team.team_name) if away_shooter else False
+                
+                if home_scored:
+                    home_goals += 1
+                if away_scored:
+                    away_goals += 1
+                
+                # In sudden death, if one scores and the other doesn't, it's over
+                # (both scored or both missed = continue)
+                if home_scored != away_scored:
+                    break
+            
+            # Determine winner (no more auto-win for away on tie - sudden death ensures a winner)
             if home_goals > away_goals:
                 winner, loser = self.home_team, self.away_team
-            else:
+                # NHL: shootout winner credited with +1 goal
+                self.score[self.home_team.team_name] += 1
+            elif away_goals > home_goals:
                 winner, loser = self.away_team, self.home_team
+                self.score[self.away_team.team_name] += 1
+            else:
+                # Extremely rare: still tied after 20 sudden death rounds
+                # Home team wins coin flip (better than auto-away-win)
+                winner, loser = self.home_team, self.away_team
+                self.score[self.home_team.team_name] += 1
+            
             scores = (self.score[self.home_team.team_name], self.score[self.away_team.team_name])
             notable_events = [e for e in self.events if e['event'] == 'Goal' or e['event'] == 'Shootout Goal']
             return winner, loser, scores, self.events, notable_events
@@ -2518,23 +2561,31 @@ class AdvancedGameSim:
             shooting_base = slapshot_val
             shot_type = "slap shot"
             
-        shot_skill = (
+        # Shooter skill on 1-20 scale (no multiplicative inflation)
+        # Fatigue reduces effectiveness; pressure/position are situational, not skill multipliers
+        shooter_skill = (
             shooting_base * 0.3 +
             getattr(shooter, 'shooting_accuracy', 10) * 0.25 +
             getattr(shooter, 'off_the_puck', 10) * 0.2 +
             getattr(shooter, 'composure', 10) * 0.15 +
             getattr(shooter, 'vision', 10) * 0.1
-        ) * fatigue_factor * pressure_modifier * position_factor
+        ) * fatigue_factor
 
         # Enhanced goalie attributes
         goalie_skill = self._calculate_goalie_save_skill(goalie, shot_type) if goalie else 8
         
-        # Shot outcome calculation - improved for realistic scoring
-        shot_chance = 0.10 + (shot_skill - goalie_skill) * 0.015  # Improved base shooting percentage
-        if self.pp_team: shot_chance += 0.08  # Power play advantage
+        # NHL-realistic shooting percentage: ~9% base
+        # Each point of skill difference shifts scoring chance by ~0.8%
+        # (Elite 18 vs weak 8 = +8% → ~17% is the realistic ceiling for great chances)
+        skill_diff = shooter_skill - goalie_skill
+        shot_chance = 0.09 + (skill_diff * 0.008)
         
-        # Make shot chance more realistic (typical NHL shooting percentage is 8-12%)
-        shot_chance = max(0.05, min(0.25, shot_chance))  # Clamp between 5-25%
+        # Power play: modest boost (NHL PP units shoot a higher percentage)
+        if self.pp_team:
+            shot_chance += 0.025
+        
+        # Clamp to realistic NHL range (5% - 15%)
+        shot_chance = max(0.05, min(0.15, shot_chance))
 
         # Shot blocking check
         shot_blocked = self._check_shot_blocking(opp_team_name, fatigue_factor)
