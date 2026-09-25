@@ -9134,7 +9134,7 @@ class CleanEditLinesWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
-        self.title("🏒 Edit Lines")
+        self.title("Edit Lines")
         self.geometry("1000x700")
         self.configure(bg=parent.BG_COLOR)
         self.resizable(True, True)
@@ -9200,6 +9200,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         # Create the interface
         self.create_clean_interface()
         self.load_current_lineup()
+        self.refresh_all_line_ratings()
     
     def create_team_overview(self, parent_frame):
         """Create a quick team overview with key stats"""
@@ -9430,11 +9431,11 @@ class CleanEditLinesWindow(tk.Toplevel):
         header_buttons.pack(side=tk.RIGHT)
         
         # Stylish buttons
-        self.create_modern_button(header_buttons, "💫 Auto Best Lines", self.auto_populate_best_lines, 
+        self.create_modern_button(header_buttons, "Auto Best Lines", self.auto_populate_best_lines, 
                                  bg='#28a745', hover_bg='#218838')
-        self.create_modern_button(header_buttons, "💾 Save Lines", self.save_lines_with_feedback, 
+        self.create_modern_button(header_buttons, "Save Lines", self.save_lines_with_feedback, 
                                  bg='#007bff', hover_bg='#0056b3')
-        self.create_modern_button(header_buttons, "🔄 Reset", self.reset_lines, 
+        self.create_modern_button(header_buttons, "Reset", self.reset_lines, 
                                  bg='#6c757d', hover_bg='#545b62')
         
         instruction_label = tk.Label(header_content, 
@@ -9733,9 +9734,12 @@ class CleanEditLinesWindow(tk.Toplevel):
                      style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'italic')).pack(side=tk.LEFT)
             
             # Line rating display (will be updated when players are selected)
-            rating_label = ttk.Label(line_info_frame, text="Line Rating: --", 
+            rating_label = ttk.Label(line_info_frame, text="Line Rating: --",
                                    style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
             rating_label.pack(side=tk.RIGHT)
+            if not hasattr(self, 'forward_rating_labels'):
+                self.forward_rating_labels = {}
+            self.forward_rating_labels[i] = rating_label
             
             # Horizontal position layout: LW - C - RW
             positions_frame = ttk.Frame(line_frame)
@@ -9765,7 +9769,7 @@ class CleanEditLinesWindow(tk.Toplevel):
     def create_defense_tab(self):
         """Create the defense tab with horizontal LD-RD layout and scrolling"""
         defense_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(defense_frame, text="🛡️ Defense")
+        self.notebook.add(defense_frame, text="Defense")
         
         # Create scrollable frame
         canvas = tk.Canvas(defense_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
@@ -9804,9 +9808,12 @@ class CleanEditLinesWindow(tk.Toplevel):
                      style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'italic')).pack(side=tk.LEFT)
             
             # Pair rating display
-            rating_label = ttk.Label(pair_info_frame, text="Pair Rating: --", 
+            rating_label = ttk.Label(pair_info_frame, text="Pair Rating: --",
                                    style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
             rating_label.pack(side=tk.RIGHT)
+            if not hasattr(self, 'defense_rating_labels'):
+                self.defense_rating_labels = {}
+            self.defense_rating_labels[i] = rating_label
             
             # Horizontal position layout: LD - RD
             positions_frame = ttk.Frame(pair_frame)
@@ -9832,8 +9839,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                 pair_vars.append(drop_zone)
             
             self.defense_vars.append(pair_vars)
-            self.defense_vars.append(pair_vars)
-    
+
     def get_line_type_name(self, line_index):
         """Get descriptive name for each line"""
         line_types = ["Top Line", "Second Line", "Third Line", "Fourth Line"]
@@ -10100,6 +10106,10 @@ class CleanEditLinesWindow(tk.Toplevel):
         drop_zone.assigned_player = player
         if player.id in self.player_widgets:
             self.player_widgets[player.id]['assigned_position'] = drop_zone.zone_id
+        try:
+            self._refresh_ratings_for_zone(drop_zone.zone_id)
+        except AttributeError:
+            pass
     
     def clear_drop_zone(self, drop_zone, zone_id):
         """Clear a drop zone"""
@@ -10110,6 +10120,10 @@ class CleanEditLinesWindow(tk.Toplevel):
                 self.player_widgets[player.id]['assigned_position'] = None
         
         drop_zone.assigned_player = None
+        try:
+            self._refresh_ratings_for_zone(zone_id)
+        except AttributeError:
+            pass
         
         # Clear widgets
         for widget in drop_zone.winfo_children():
@@ -10142,13 +10156,54 @@ class CleanEditLinesWindow(tk.Toplevel):
             self.update_line_rating_for_drop_zones(line_idx)
     
     def update_line_rating_for_drop_zones(self, line_index):
-        """Update line rating for drop zone based lines"""
-        # Find all drop zones for this line
-        line_players = []
-        
-        # This would need to be implemented to work with the actual line structure
-        # For now, we'll skip the automatic rating updates for drop zones
-        pass
+        """Update line rating for drop zone based lines."""
+        if line_index >= len(self.forward_vars):
+            return
+        players = [getattr(dz, 'assigned_player', None) for dz in self.forward_vars[line_index]]
+        players = [p for p in players if p is not None]
+        label = getattr(self, 'forward_rating_labels', {}).get(line_index)
+        if label is None:
+            return
+        if players:
+            avg = sum(p.overall_rating() for p in players) / len(players)
+            chem = self.calculate_chemistry_bonus(players)
+            label.config(text=f"Line Rating: {avg:.1f} (+{chem:.1f} chem)")
+        else:
+            label.config(text="Line Rating: --")
+
+    def update_pair_rating_for_drop_zones(self, pair_index):
+        """Update pair rating for drop zone based defense pairs."""
+        if pair_index >= len(self.defense_vars):
+            return
+        players = [getattr(dz, 'assigned_player', None) for dz in self.defense_vars[pair_index]]
+        players = [p for p in players if p is not None]
+        label = getattr(self, 'defense_rating_labels', {}).get(pair_index)
+        if label is None:
+            return
+        if players:
+            avg = sum(p.overall_rating() for p in players) / len(players)
+            chem = self.calculate_chemistry_bonus(players)
+            label.config(text=f"Pair Rating: {avg:.1f} (+{chem:.1f} chem)")
+        else:
+            label.config(text="Pair Rating: --")
+
+    def _refresh_ratings_for_zone(self, zone_id):
+        """Refresh line/pair rating labels affected by a drop-zone change."""
+        try:
+            parts = zone_id.split("_")
+            if zone_id.startswith("forward_line_"):
+                self.update_line_rating_for_drop_zones(int(parts[2]))
+            elif zone_id.startswith("defense_pair_"):
+                self.update_pair_rating_for_drop_zones(int(parts[2]))
+        except (ValueError, IndexError, AttributeError):
+            pass
+
+    def refresh_all_line_ratings(self):
+        """Refresh every line and pair rating (call after initial load)."""
+        for i in range(len(getattr(self, 'forward_vars', []))):
+            self.update_line_rating_for_drop_zones(i)
+        for i in range(len(getattr(self, 'defense_vars', []))):
+            self.update_pair_rating_for_drop_zones(i)
     
     def refresh_roster_panel(self):
         """Refresh the roster panel to show current assignments"""
