@@ -7042,6 +7042,40 @@ class HockeyManagerGUI(tk.Tk):
         
         return effects
     
+    def _select_starting_goalie(self, team):
+        """Pick tonight's starting goalie with realistic rotation.
+
+        Starters play ~75-80% of games; the backup's chance grows the longer
+        the starter's consecutive-starts streak runs (covers back-to-backs).
+        Injured goalies never dress.
+        """
+        import random
+        goalies = sorted(
+            [p for p in team.roster
+             if p.primary_position.name == 'GOALIE'
+             and not getattr(p, 'is_injured', False)],
+            key=lambda p: p.overall_rating(), reverse=True)
+        if not goalies:
+            return None
+        if len(goalies) == 1:
+            return goalies[0]
+        if not hasattr(self, '_goalie_tracker'):
+            self._goalie_tracker = {}
+        track = self._goalie_tracker.setdefault(team.team_name, {'last': None, 'consec': 0})
+        starter, backup = goalies[0], goalies[1]
+        # Backup probability grows with the starter's streak
+        p_backup = 0.08 + 0.15 * track['consec']
+        if track['last'] == starter.id and random.random() < p_backup:
+            pick = backup
+        else:
+            pick = starter
+        if pick.id == starter.id:
+            track['consec'] = track['consec'] + 1 if track['last'] == starter.id else 1
+        else:
+            track['consec'] = 0
+        track['last'] = pick.id
+        return pick
+
     def _generate_player_stats(self, home_team, away_team, home_goals, away_goals):
         """Generate realistic individual player statistics from team game results.
         
@@ -7061,8 +7095,6 @@ class HockeyManagerGUI(tk.Tk):
             healthy = [p for p in team.roster if not getattr(p, 'is_injured', False)]
             forwards = [p for p in healthy if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
             defensemen = [p for p in healthy if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
-            goalies = [p for p in healthy if p.primary_position.name == 'GOALIE'][:1]
-            
             dressed_skaters = forwards + defensemen  # 18 skaters
             
             # Track per-player game goals for hat trick detection
@@ -7145,11 +7177,9 @@ class HockeyManagerGUI(tk.Tk):
         
         # Goalie stats: shots_against MUST equal opposing team's shots (coherence!)
         for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
-            goalies = [p for p in team.roster if p.primary_position.name == 'GOALIE'][:1]
-            if not goalies:
+            starting_goalie = self._select_starting_goalie(team)
+            if not starting_goalie:
                 continue
-            
-            starting_goalie = goalies[0]
             opp_team_name = away_team.team_name if team == home_team else home_team.team_name
             
             # Shots against = opposing team's total shots (from team_shots dict)
