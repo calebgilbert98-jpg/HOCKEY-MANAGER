@@ -187,7 +187,7 @@ class ModernScoutingWindow(tk.Toplevel):
     def _create_players_tab(self):
         """Create players browsing and scouting tab"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="🏒 Players")
+        self.notebook.add(tab_frame, text="Players")
         
         # Filter frame at top
         filter_frame = tk.LabelFrame(tab_frame, text="Player Filters", 
@@ -295,12 +295,12 @@ class ModernScoutingWindow(tk.Toplevel):
         btn_frame = tk.Frame(list_frame, bg=self.parent.CONTENT_BG)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
-        scout_btn = tk.Button(btn_frame, text="🔍 Scout Player", 
+        scout_btn = tk.Button(btn_frame, text="Scout Player", 
                              bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
                              command=self._scout_player)
         scout_btn.pack(side='left', padx=(0, 10))
         
-        profile_btn = tk.Button(btn_frame, text="� View Profile", 
+        profile_btn = tk.Button(btn_frame, text="View Profile", 
                                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
                                command=self._view_player_profile)
         profile_btn.pack(side='left')
@@ -308,7 +308,7 @@ class ModernScoutingWindow(tk.Toplevel):
     def _create_scouts_tab(self):
         """Create scouts management tab"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="👥 Scouts")
+        self.notebook.add(tab_frame, text="Scouts")
         
         # Scouts list
         list_frame = tk.LabelFrame(tab_frame, text="Scouting Staff", 
@@ -355,7 +355,7 @@ class ModernScoutingWindow(tk.Toplevel):
     def _create_draft_tab(self):
         """Create draft prospects tab"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="📋 Draft")
+        self.notebook.add(tab_frame, text="Draft")
 
         header = tk.Label(tab_frame, text="Upcoming Draft Class",
                           bg=self.parent.CONTENT_BG, fg=self.parent.HEADER_COLOR,
@@ -382,7 +382,7 @@ class ModernScoutingWindow(tk.Toplevel):
     def _create_assignments_tab(self):
         """Create scouting assignments tab"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="📋 Assignments")
+        self.notebook.add(tab_frame, text="Assignments")
         
         # Active assignments
         active_frame = tk.LabelFrame(tab_frame, text="Active Assignments", 
@@ -426,7 +426,7 @@ class ModernScoutingWindow(tk.Toplevel):
     def _create_reports_tab(self):
         """Create scouting reports tab"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="📄 Reports")
+        self.notebook.add(tab_frame, text="Reports")
         
         # Split view: reports list on left, report details on right
         main_paned = tk.PanedWindow(tab_frame, orient='horizontal', bg=self.parent.CONTENT_BG)
@@ -834,10 +834,10 @@ Checking: {to_100_scale(getattr(player, 'checking', 25))}
             
             # Create context menu
             context_menu = tk.Menu(self, tearoff=0)
-            context_menu.add_command(label="🔍 Scout Player", command=self._scout_player)
+            context_menu.add_command(label="Scout Player", command=self._scout_player)
             context_menu.add_command(label="👤 View Profile", command=self._view_player_profile)
             context_menu.add_separator()
-            context_menu.add_command(label="📋 Add to Watchlist", command=self._add_to_watchlist)
+            context_menu.add_command(label="Add to Watchlist", command=self._add_to_watchlist)
             
             try:
                 context_menu.tk_popup(event.x_root, event.y_root)

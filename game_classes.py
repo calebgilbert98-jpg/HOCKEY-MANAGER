@@ -1962,7 +1962,7 @@ class Team:
 class League:
     """Represents the entire league, structured like the NHL."""
     league_name: str
-    season_year: int = 2024
+    season_year: int = field(default_factory=lambda: datetime.now().year)
     teams: List[Team] = field(default_factory=list)
     free_agents: List[Player] = field(default_factory=list)  # Kept for compatibility, but may be overridden
     free_agent_staff: List[Staff] = field(default_factory=list)
@@ -2022,13 +2022,16 @@ class League:
         for team in self.teams:
             self.standings[team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
 
-    def generate_schedule(self, season_year=2024, rotation_seed=None):
+    def generate_schedule(self, season_year=None, rotation_seed=None):
         """Generate complete league schedule with authentic NHL rotating patterns and realistic distribution.
-        
+
         Args:
-            season_year: The year this season starts (default: 2024)
+            season_year: The year this season starts (default: the league's
+                season_year, which defaults to the current year)
             rotation_seed: Optional seed for reproducible schedule variations (uses season_year if None)
         """
+        if season_year is None:
+            season_year = self.season_year
         print(f"🏒 Generating league schedule for {season_year}-{season_year+1} season...")
         
         # Set up seasonal rotation seed

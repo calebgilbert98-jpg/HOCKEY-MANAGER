@@ -4,7 +4,7 @@
 import random
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from windows import (RosterWindow, FreeAgencyWindow, TradeWindow, ScoutingWindow, 
                      DraftWindow, ScheduleWindow, FinancesWindow, NewsWindow, 
@@ -76,7 +76,7 @@ PROSPECT_POOL_SIZE = 15
 GAMES_PER_SIM_DAY = 8 
 SALARY_CAP = 83_500_000
 PLAYER_BUDGET = 92_000_000
-START_DATE = date(2024, 10, 1)
+START_DATE = date(datetime.now().year, 10, 1)
 
 # --- Game Engine Class ---
 class GameManager:
@@ -3495,7 +3495,7 @@ class HockeyManagerGUI(tk.Tk):
         gm_name = getattr(self.user_team, 'gm_name', 'General Manager')
         
         hiring_email = EmailGenerator.create_league_announcement_email(
-            f"🎉 Welcome Aboard, {gm_name}!",
+            f"Welcome Aboard, {gm_name}!",
             f"Dear {gm_name},\n\n"
             f"On behalf of the entire {self.user_team.team_name} organization, we are thrilled to officially welcome you as our new General Manager!\n\n"
             f"Your appointment has been announced to the media, and the hockey world is excited to see what you bring to our franchise. As GM, you will have complete authority over:\n\n"
@@ -3706,7 +3706,7 @@ class HockeyManagerGUI(tk.Tk):
         
     def _create_enhanced_menu_bar(self, parent):
         """Create a streamlined menu bar with dropdown organization."""
-        menu_bar = ttk.Frame(parent, style='Panel.TFrame', padding=8)
+        menu_bar = ttk.Frame(parent, style='Panel.TFrame', padding=4)
         menu_bar.grid(row=0, column=0, sticky="ew", pady=(0, 5))
         
         # Left side - Main action buttons (most frequently used)
@@ -3735,7 +3735,7 @@ class HockeyManagerGUI(tk.Tk):
             "📋 Edit Lines": self.open_edit_lines_window,
             "👥 Staff Management": self.open_staff_management_window,
             "� Player Development": self.open_development_window,
-            "�🔍 Scouting": self.open_scouting_management_window,
+            "Scouting": self.open_scouting_management_window,
             "📊 Performance": self.open_performance_monitor,
             "🏒 Practice Center": self.open_practice_center,
             "🎩 Manager Hub": self.open_manager_hub
@@ -3789,14 +3789,6 @@ class HockeyManagerGUI(tk.Tk):
         # Settings as its own button
         ttk.Button(right_menu_frame, text="Settings", style="TeamMenu.TButton", 
                  command=self.open_settings_window).pack(side="right", padx=4)
-        
-        # Game viewer toggle
-        self.game_viewer_btn = ttk.Button(right_menu_frame, text="Viewer: OFF", 
-                                        style="TeamMenu.TButton", command=self.toggle_game_viewer)
-        self.game_viewer_btn.pack(side="right", padx=4)
-        
-        # Initialize button state based on current settings
-        self._update_game_viewer_button_state()
     
     def _create_dropdown_menu(self, parent, button_text, menu_items):
         """Create a dropdown menu button with organized menu items."""
@@ -5368,8 +5360,10 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             print(f"Error saving game viewer setting: {e}")
         
-        # Update button text
-        self.game_viewer_btn.config(text=f"🎮 Viewer: {'ON' if new_setting else 'OFF'}")
+        # Update button text (menu-bar button was removed; the toggle now
+        # lives in GM Options -> Game Presentation)
+        if hasattr(self, 'game_viewer_btn'):
+            self.game_viewer_btn.config(text=f"🎮 Viewer: {'ON' if new_setting else 'OFF'}")
         print(f"DEBUG: Button text updated to: {'ON' if new_setting else 'OFF'}")
 
     def _update_game_viewer_button_state(self):
@@ -8319,7 +8313,11 @@ class HockeyManagerGUI(tk.Tk):
     
     def open_scouting_management_window(self):
         if 'scouting' not in self.open_windows or not self.open_windows['scouting'].winfo_exists():
-            self.open_windows['scouting'] = ProfessionalScoutingWindow(self)
+            try:
+                from modern_scouting_window import ModernScoutingWindow
+                self.open_windows['scouting'] = ModernScoutingWindow(self)
+            except Exception:
+                self.open_windows['scouting'] = ProfessionalScoutingWindow(self)
         self.open_windows['scouting'].focus_set()
     
     def open_staff_management_window(self):
@@ -12715,7 +12713,7 @@ class GMOptionsWindow(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.title("GM Options")
-        self.geometry("500x450")
+        self.geometry("500x720")
         self.configure(bg=parent.BG_COLOR)
         self.style = ttk.Style(self)
         self.style.theme_use('clam')
@@ -12767,8 +12765,31 @@ class GMOptionsWindow(tk.Toplevel):
         ttk.Button(quick_section, text="📧 Check Inbox", 
                   command=parent.open_inbox_window).pack(fill="x", pady=3)
 
+        # Game Presentation section — visual PBP viewer toggle lives here
+        # (moved off the crowded menu bar)
+        pres_section = ttk.LabelFrame(content_frame, text="Game Presentation", padding=15)
+        pres_section.pack(fill="x", pady=(0, 15))
+        self._viewer_btn = ttk.Button(pres_section, text="",
+                                      command=self._toggle_viewer)
+        self._viewer_btn.pack(fill="x", pady=3)
+        self._refresh_viewer_btn()
+
         # Close button
         ttk.Button(content_frame, text="Close", command=self.destroy).pack(fill="x", pady=(10, 0))
+
+    def _viewer_enabled(self):
+        try:
+            return bool(self.parent.get_settings().get('simulation', {}).get('use_game_viewer', False))
+        except Exception:
+            return False
+
+    def _refresh_viewer_btn(self):
+        state = "ON" if self._viewer_enabled() else "OFF"
+        self._viewer_btn.config(text=f"Watch Games Live: {state}")
+
+    def _toggle_viewer(self):
+        self.parent.toggle_game_viewer()
+        self._refresh_viewer_btn()
 
     def open_shortlist_window(self):
         """Open the player shortlist management window"""

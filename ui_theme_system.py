@@ -174,7 +174,7 @@ class ModernUITheme:
             font=self.fonts['button'],
             foreground='#c3cddd',
             background='#141b2a',
-            padding=(10, 8),
+            padding=(6, 8),
             borderwidth=0,
             relief='flat'
         )
@@ -336,7 +336,7 @@ class ModernUITheme:
             font=self.fonts['button'],
             foreground='#c3cddd',
             background='#141b2a',
-            padding=(10, 8),
+            padding=(6, 8),
             borderwidth=0,
             relief='flat'
         )
