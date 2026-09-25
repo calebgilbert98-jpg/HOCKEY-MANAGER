@@ -2893,6 +2893,11 @@ class HockeyManagerGUI(tk.Tk):
     def __init__(self, game_manager):
         super().__init__()
 
+        # Square window corners: disable Windows 11 rounded-corner chrome so
+        # the dashboard page itself never looks like its corners are cut out.
+        # Silent no-op on other platforms.
+        self._disable_rounded_window_corners()
+
         # Dark form controls app-wide: no more white text boxes.
         try:
             from modern_widgets import apply_dark_form_theme
@@ -6840,6 +6845,32 @@ class HockeyManagerGUI(tk.Tk):
                 
         except Exception as e:
             print(f"Phase 2 maintenance error: {e}")
+
+    def _disable_rounded_window_corners(self):
+        """Force square window corners on Windows 11.
+
+        Windows 11 rounds every top-level window's corners via DWM, which
+        makes the whole dashboard page look like its corners are cut out.
+        Setting DWMWA_WINDOW_CORNER_PREFERENCE to DONOTROUND restores
+        sharp 90-degree corners. No-op on macOS/Linux.
+        """
+        try:
+            import ctypes
+            import platform
+            if platform.system() != "Windows":
+                return
+            DWMWA_WINDOW_CORNER_PREFERENCE = 33
+            DWMWCP_DONOTROUND = 1
+            preference = ctypes.c_int(DWMWCP_DONOTROUND)
+            # On Windows, winfo_id() is the HWND for Tk windows.
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(self.winfo_id()),
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                ctypes.byref(preference),
+                ctypes.sizeof(preference),
+            )
+        except Exception:
+            pass
 
     def _initialize_phase2_systems(self):
         """Initialize Phase 2 optimization systems"""
