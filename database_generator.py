@@ -901,13 +901,13 @@ class DatabaseGenerator:
         # Salary based on overall rating and age
         overall = player.overall_rating()
         
-        if overall >= 85:
+        if overall >= 47:
             salary = random.randint(7000000, 12000000)  # Elite players
-        elif overall >= 80:
+        elif overall >= 44:
             salary = random.randint(4000000, 8000000)   # Top players
-        elif overall >= 75:
+        elif overall >= 40:
             salary = random.randint(2000000, 5000000)   # Good players
-        elif overall >= 70:
+        elif overall >= 37:
             salary = random.randint(900000, 2500000)    # Role players
         else:
             salary = random.randint(750000, 1200000)    # Depth players
@@ -921,7 +921,7 @@ class DatabaseGenerator:
         contract = Contract(
             salary=salary,
             years_remaining=years,
-            no_trade_clause=overall >= 85 and random.random() < 0.3
+            no_trade_clause=overall >= 47 and random.random() < 0.3
         )
         
         return contract

@@ -774,11 +774,11 @@ class ProfessionalScoutingWindow(tk.Toplevel):
             return 'Prospect'
         elif age > 35:
             return 'Veteran'
-        elif overall > 80:
+        elif overall > 46:
             return 'NHL Star'
-        elif overall > 70:
+        elif overall > 40:
             return 'NHL Regular'
-        elif overall > 60:
+        elif overall > 35:
             return 'AHL/Fringe'
         else:
             return 'Minor League'
@@ -790,13 +790,13 @@ class ProfessionalScoutingWindow(tk.Toplevel):
             age = getattr(player, 'age', 25)
             
             # High priority for young high-potential players
-            if age < 22 and overall > 75:
+            if age < 22 and overall > 42:
                 return 'High'
-            elif age < 25 and overall > 70:
+            elif age < 25 and overall > 40:
                 return 'High'
-            elif overall > 80:
+            elif overall > 46:
                 return 'High'
-            elif age < 20 or overall > 65:
+            elif age < 20 or overall > 35:
                 return 'Medium'
             else:
                 return 'Low'
@@ -1594,16 +1594,16 @@ Months Until Draft: 6
                 
                 # Generate projection based on age and overall
                 if age < 20:
-                    if overall > 75:
+                    if overall > 42:
                         projection = "Elite prospect with franchise player potential"
-                    elif overall > 65:
+                    elif overall > 35:
                         projection = "High-end prospect with top-6 upside"
                     else:
                         projection = "Solid prospect with NHL potential"
                 else:
-                    if overall > 80:
+                    if overall > 46:
                         projection = "Ready for immediate NHL impact"
-                    elif overall > 70:
+                    elif overall > 40:
                         projection = "NHL-ready with room for growth"
                     else:
                         projection = "Depth player with specific role potential"
@@ -1717,15 +1717,15 @@ Grade {grade} - Worth monitoring progress."""
                     
                     # Grade prospects
                     if isinstance(overall, (int, float)):
-                        if overall >= 80:
+                        if overall >= 39:
                             grade = "A+"
-                        elif overall >= 75:
+                        elif overall >= 37:
                             grade = "A"
-                        elif overall >= 70:
+                        elif overall >= 35:
                             grade = "A-"
-                        elif overall >= 65:
+                        elif overall >= 33:
                             grade = "B+"
-                        elif overall >= 60:
+                        elif overall >= 31:
                             grade = "B"
                         else:
                             grade = "B-"
@@ -1849,15 +1849,15 @@ Grade {grade} - Worth monitoring progress."""
                     # Grade based on player's overall rating
                     overall = getattr(player, 'overall_rating', lambda: random.randint(50, 85))()
                     if isinstance(overall, (int, float)):
-                        if overall >= 85:
+                        if overall >= 39:
                             grade = "A+"
-                        elif overall >= 80:
+                        elif overall >= 37:
                             grade = "A"
-                        elif overall >= 75:
+                        elif overall >= 35:
                             grade = "A-"
-                        elif overall >= 70:
+                        elif overall >= 33:
                             grade = "B+"
-                        elif overall >= 65:
+                        elif overall >= 31:
                             grade = "B"
                         else:
                             grade = "B-"

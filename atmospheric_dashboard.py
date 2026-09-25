@@ -1338,7 +1338,7 @@ class AtmosphericDashboard:
                     trends.append("Chemistry needs work")
             
             # Check for young talent
-            young_players = [p for p in roster if p.age <= 22 and p.overall_rating() >= 75]
+            young_players = [p for p in roster if p.age <= 22 and p.overall_rating() >= 42]
             if len(young_players) >= 3:
                 trends.append("Young core developing")
             

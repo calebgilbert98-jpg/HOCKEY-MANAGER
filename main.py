@@ -7971,7 +7971,7 @@ class HockeyManagerGUI(tk.Tk):
         team_players = sorted(team.roster, key=self.calculate_player_value, reverse=True)
         
         # Don't offer top 3 players unless getting a superstar
-        if player_wanted.overall_rating() < 85:
+        if player_wanted.overall_rating() < 48:
             team_players = team_players[3:]
             
         # Don't offer more than 3 players

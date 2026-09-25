@@ -315,7 +315,7 @@ class AITeamManager:
                     offer_details={
                         "salary": estimated_salary,
                         "term": self._determine_contract_length(fa, strategy),
-                        "no_trade_clause": fa.overall_rating() > 85
+                        "no_trade_clause": fa.overall_rating() > 47
                     },
                     priority_score=priority_score,
                     reasoning=f"Addresses {fa.primary_position.value} need, fits strategy",
@@ -336,7 +336,7 @@ class AITeamManager:
         # Look for trade opportunities based on strategy
         if strategy.priority == ManagementPriority.REBUILD:
             # Look to trade veterans for picks/prospects
-            veterans = [p for p in team.roster if p.age > 28 and p.overall_rating() > 75]
+            veterans = [p for p in team.roster if p.age > 28 and p.overall_rating() > 40]
             for veteran in veterans[:2]:  # Limit trade attempts
                 trade_decision = self._create_veteran_trade_offer(veteran, team, strategy, current_date)
                 if trade_decision:
@@ -362,7 +362,7 @@ class AITeamManager:
         # Look for prospects ready for promotion
         if hasattr(team, 'prospects'):
             ready_prospects = [p for p in team.prospects 
-                             if p.age >= 20 and p.overall_rating() > 70]
+                             if p.age >= 20 and p.overall_rating() > 37]
             
             for prospect in ready_prospects[:2]:  # Limit promotions
                 decision = AIDecision(
@@ -448,7 +448,7 @@ class AITeamManager:
             priority += 0.4
         
         # Overall rating bonus
-        priority += min(player.overall_rating() / 100, 0.3)
+        priority += min(player.overall_rating() / 170, 0.3)  # 51 OVR -> full 0.3
         
         # Age preference
         if strategy.prefer_youth and player.age < 26:
@@ -457,7 +457,7 @@ class AITeamManager:
             priority += 0.2
         
         # Strategic fit
-        if strategy.priority == ManagementPriority.CONTEND and player.overall_rating() > 85:
+        if strategy.priority == ManagementPriority.CONTEND and player.overall_rating() > 47:
             priority += 0.2
         elif strategy.priority == ManagementPriority.REBUILD and player.age < 24:
             priority += 0.2
@@ -467,7 +467,7 @@ class AITeamManager:
     def _should_extend_player(self, player: Player, strategy: TeamStrategy) -> bool:
         """Determine if a player should be extended"""
         # Core players (high overall) should usually be extended
-        if player.overall_rating() > 85:
+        if player.overall_rating() > 47:
             return True
         
         # Age considerations
@@ -480,9 +480,9 @@ class AITeamManager:
         if strategy.priority == ManagementPriority.REBUILD:
             return player.age < 26  # Only extend young players
         elif strategy.priority == ManagementPriority.CONTEND:
-            return player.overall_rating() > 75  # Extend quality players
+            return player.overall_rating() > 40  # Extend quality players
         
-        return player.overall_rating() > 70  # Default threshold
+        return player.overall_rating() > 37  # Default threshold
     
     def _create_veteran_trade_offer(self, veteran: Player, team: Team, 
                                   strategy: TeamStrategy, current_date: date) -> Optional[AIDecision]:

@@ -733,9 +733,9 @@ class RosterWindow(tk.Toplevel):
                 tags.append('selected')
             if injury_status != 'Healthy':
                 tags.append('injured')
-            if overall >= 85:
+            if overall >= 47:
                 tags.append('elite')
-            elif overall >= 80:
+            elif overall >= 44:
                 tags.append('star')
             
             if tags:
@@ -752,7 +752,7 @@ class RosterWindow(tk.Toplevel):
     
     def calculate_nhl_readiness(self, player):
         """Calculate NHL readiness percentage for AHL players."""
-        readiness = min(100, max(0, (player.overall_rating() - 65) * 2.5))
+        readiness = min(100, max(0, (player.overall_rating() - 35) * 5))
         return f"{readiness:.0f}%"
     
     def calculate_development_trend(self, player):
@@ -768,11 +768,11 @@ class RosterWindow(tk.Toplevel):
     
     def calculate_eta(self, player):
         """Calculate estimated time of arrival for prospects."""
-        if player.overall_rating() >= 75:
+        if player.overall_rating() >= 40:
             return "Ready"
-        elif player.overall_rating() >= 70:
+        elif player.overall_rating() >= 37:
             return "1-2 years"
-        elif player.overall_rating() >= 65:
+        elif player.overall_rating() >= 34:
             return "2-3 years"
         else:
             return "3+ years"
@@ -1327,7 +1327,7 @@ class FreeAgencyWindow(tk.Toplevel):
         
         # Overall rating
         ttk.Label(filter_row1, text="Rating:", style='Content.TLabel').grid(row=0, column=6, padx=(0, 5), pady=2, sticky='w')
-        rating_ranges = ['All', '85+', '80-84', '75-79', '70-74', '65-69', '60-64', '<60']
+        rating_ranges = ['All', '47+', '44-46', '40-43', '37-39', '34-36', '<34']
         self.player_rating_filter = ttk.Combobox(filter_row1, values=rating_ranges, state='readonly', width=10)
         self.player_rating_filter.set('All')
         self.player_rating_filter.grid(row=0, column=7, padx=(0, 15), pady=2)
@@ -1922,19 +1922,17 @@ class FreeAgencyWindow(tk.Toplevel):
             # Rating filter
             if rating_filter != 'All':
                 rating = player.overall_rating()
-                if rating_filter == '85+' and rating < 85:
+                if rating_filter == '47+' and rating < 47:
                     continue
-                elif rating_filter == '80-84' and not (80 <= rating <= 84):
+                elif rating_filter == '44-46' and not (44 <= rating <= 46):
                     continue
-                elif rating_filter == '75-79' and not (75 <= rating <= 79):
+                elif rating_filter == '40-43' and not (40 <= rating <= 43):
                     continue
-                elif rating_filter == '70-74' and not (70 <= rating <= 74):
+                elif rating_filter == '37-39' and not (37 <= rating <= 39):
                     continue
-                elif rating_filter == '65-69' and not (65 <= rating <= 69):
+                elif rating_filter == '34-36' and not (34 <= rating <= 36):
                     continue
-                elif rating_filter == '60-64' and not (60 <= rating <= 64):
-                    continue
-                elif rating_filter == '<60' and rating >= 60:
+                elif rating_filter == '<34' and rating >= 34:
                     continue
             
             filtered_players.append(player)
@@ -2543,9 +2541,9 @@ class FreeAgencyWindow(tk.Toplevel):
         elif player.age > 33:
             factors.append("Veteran experience but declining years")
         
-        if player.overall_rating() > 85:
+        if player.overall_rating() > 47:
             factors.append("Elite talent commands premium")
-        elif player.overall_rating() < 70:
+        elif player.overall_rating() < 37:
             factors.append("Developing player or depth role")
         
         goals = getattr(player, 'goals', 0)
@@ -6585,7 +6583,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             position_modifier = 1.1
         elif player.primary_position == PlayerPosition.GOALIE:
             # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 85 else 0.9
+            position_modifier = 1.0 if player.overall_rating() >= 47 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0
@@ -7402,11 +7400,11 @@ class EditLinesWindow(tk.Toplevel):
 
     def _get_quality_tier(self, overall):
         """Determine player quality tier for visual feedback"""
-        if overall >= 85:
+        if overall >= 47:
             return 'elite'
-        elif overall >= 75:
+        elif overall >= 42:
             return 'good'
-        elif overall >= 65:
+        elif overall >= 37:
             return 'average'
         else:
             return 'poor'
@@ -9470,15 +9468,15 @@ class EditLinesWindow(tk.Toplevel):
                 rating_filter = self.rating_filter_var.get()
                 overall = player.overall_rating()
                 
-                if rating_filter == "85+" and overall < 85:
+                if rating_filter == "47+" and overall < 47:
                     continue
-                elif rating_filter == "80-84" and not (80 <= overall < 85):
+                elif rating_filter == "44-46" and not (44 <= overall < 47):
                     continue
-                elif rating_filter == "75-79" and not (75 <= overall < 80):
+                elif rating_filter == "40-43" and not (40 <= overall < 44):
                     continue
-                elif rating_filter == "70-74" and not (70 <= overall < 75):
+                elif rating_filter == "37-39" and not (37 <= overall < 40):
                     continue
-                elif rating_filter == "<70" and overall >= 70:
+                elif rating_filter == "<37" and overall >= 37:
                     continue
             
             filtered.append(player)
@@ -9507,13 +9505,13 @@ class EditLinesWindow(tk.Toplevel):
 
     def _get_quality_indicator(self, overall):
         """Get visual quality indicator for player"""
-        if overall >= 85:
+        if overall >= 47:
             return "⭐"  # Elite
-        elif overall >= 80:
+        elif overall >= 44:
             return "🔸"  # Star
-        elif overall >= 75:
+        elif overall >= 40:
             return "🔹"  # Good
-        elif overall >= 70:
+        elif overall >= 37:
             return "▫️"  # Average
         else:
             return "▪️"  # Depth
@@ -10484,13 +10482,13 @@ CHEMISTRY: {chemistry:.1f}%
         
         # Simple assessment based on overall rating
         overall = getattr(player, 'overall', 75)
-        if overall >= 90:
+        if overall >= 48:
             return "Elite"
-        elif overall >= 85:
+        elif overall >= 45:
             return "Star"
-        elif overall >= 80:
+        elif overall >= 42:
             return "Solid"
-        elif overall >= 75:
+        elif overall >= 38:
             return "Average"
         else:
             return "Depth"

@@ -172,7 +172,7 @@ class EHMGameIntegration:
             reach=random.randint(8, 18),
             
             # Personality attributes
-            leadership=random.randint(8, 18) if player.overall_rating() > 80 else random.randint(5, 12),
+            leadership=random.randint(8, 18) if player.overall_rating() > 44 else random.randint(5, 12),
             teamwork=random.randint(10, 18),
             selfishness=random.randint(5, 15),
             aggression=random.randint(8, 16),
@@ -196,7 +196,7 @@ class EHMGameIntegration:
         """Determine personality type based on PlayerV2 attributes"""
         overall = player.overall_rating()
         
-        if overall >= 85:
+        if overall >= 47:
             # Elite players
             if random.random() < 0.3:
                 return PersonalityType.CLUTCH_PERFORMER
@@ -204,7 +204,7 @@ class EHMGameIntegration:
                 return PersonalityType.VOLATILE_STAR
             else:
                 return PersonalityType.STEADY_VETERAN
-        elif overall >= 75:
+        elif overall >= 40:
             # Good players
             if random.random() < 0.4:
                 return PersonalityType.STEADY_VETERAN
@@ -223,7 +223,7 @@ class EHMGameIntegration:
     
     def _determine_personality_type(self, player: Player) -> PersonalityType:
         """Determine personality type based on player attributes"""
-        if player.overall_rating() >= 85:
+        if player.overall_rating() >= 47:
             # Elite players
             if random.random() < 0.3:
                 return PersonalityType.CLUTCH_PERFORMER
@@ -231,7 +231,7 @@ class EHMGameIntegration:
                 return PersonalityType.VOLATILE_STAR
             else:
                 return PersonalityType.STEADY_VETERAN
-        elif player.overall_rating() >= 75:
+        elif player.overall_rating() >= 40:
             # Good players
             if random.random() < 0.4:
                 return PersonalityType.STEADY_VETERAN

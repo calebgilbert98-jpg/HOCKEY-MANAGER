@@ -1159,9 +1159,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         success = self.draft_manager.make_pick(player)
         if success:
             # Add to appropriate roster
-            if player.overall_rating() >= 75:
+            if player.overall_rating() >= 40:
                 current_pick.team.roster.append(player)
-            elif player.overall_rating() >= 65:
+            elif player.overall_rating() >= 35:
                 current_pick.team.ahl_roster.append(player)
             else:
                 current_pick.team.prospects.append(player)
@@ -1619,10 +1619,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
             if success:
                 # Add to appropriate roster based on rating
-                if player.overall_rating() >= 75:
+                if player.overall_rating() >= 40:
                     current_pick.team.roster.append(player)
                     print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} roster")
-                elif player.overall_rating() >= 65:
+                elif player.overall_rating() >= 35:
                     current_pick.team.ahl_roster.append(player)
                     print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} AHL roster")
                 else:
@@ -2955,9 +2955,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 success = self.draft_manager.make_pick(ai_pick)
                 if success:
                     # Add to appropriate roster
-                    if ai_pick.overall_rating() >= 75:
+                    if ai_pick.overall_rating() >= 40:
                         current_pick.team.roster.append(ai_pick)
-                    elif ai_pick.overall_rating() >= 65:
+                    elif ai_pick.overall_rating() >= 35:
                         current_pick.team.ahl_roster.append(ai_pick)
                     else:
                         current_pick.team.prospects.append(ai_pick)
@@ -3078,9 +3078,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             success = self.draft_manager.make_pick(ai_pick)
             if success:
                 # Add to appropriate roster
-                if ai_pick.overall_rating() >= 75:
+                if ai_pick.overall_rating() >= 40:
                     current_pick.team.roster.append(ai_pick)
-                elif ai_pick.overall_rating() >= 65:
+                elif ai_pick.overall_rating() >= 35:
                     current_pick.team.ahl_roster.append(ai_pick)
                 else:
                     current_pick.team.prospects.append(ai_pick)
@@ -3205,9 +3205,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             success = self.draft_manager.make_pick(ai_pick)
             if success:
                 # Add to appropriate roster based on rating
-                if ai_pick.overall_rating() >= 75:
+                if ai_pick.overall_rating() >= 40:
                     current_pick.team.roster.append(ai_pick)
-                elif ai_pick.overall_rating() >= 65:
+                elif ai_pick.overall_rating() >= 35:
                     current_pick.team.ahl_roster.append(ai_pick)
                 else:
                     current_pick.team.prospects.append(ai_pick)
@@ -3339,9 +3339,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         success = self.draft_manager.make_pick(self.selected_player)
         if success:
             # Add player to appropriate roster based on rating
-            if self.selected_player.overall_rating() >= 75:
+            if self.selected_player.overall_rating() >= 40:
                 current_pick.team.roster.append(self.selected_player)
-            elif self.selected_player.overall_rating() >= 65:
+            elif self.selected_player.overall_rating() >= 35:
                 current_pick.team.ahl_roster.append(self.selected_player)
             else:
                 current_pick.team.prospects.append(self.selected_player)
@@ -3374,9 +3374,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 success = self.draft_manager.make_pick(ai_pick)
                 if success:
                     # Add to appropriate roster
-                    if ai_pick.overall_rating() >= 75:
+                    if ai_pick.overall_rating() >= 40:
                         current_pick.team.roster.append(ai_pick)
-                    elif ai_pick.overall_rating() >= 65:
+                    elif ai_pick.overall_rating() >= 35:
                         current_pick.team.ahl_roster.append(ai_pick)
                     else:
                         current_pick.team.prospects.append(ai_pick)
