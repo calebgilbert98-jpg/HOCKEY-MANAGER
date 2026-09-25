@@ -14,6 +14,7 @@ from player_archetypes import (
     get_archetype, complementarity, matchup_multiplier, get_tendency,
     ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
 )
+from player_traits import get_sim_bonus as _trait_bonus, has_trait as _has_trait
 
 class ShotType(Enum):
     WRIST_SHOT = "wrist_shot"
@@ -2831,7 +2832,7 @@ class GameSim:
         shot_type = self._determine_shot_type(shooter, shot_location, distance)
         
         # Calculate shot quality (high/medium/low danger)
-        shot_quality = self._calculate_shot_quality(shot_location, distance, shot_type, attacking_team)
+        shot_quality = self._calculate_shot_quality(shot_location, distance, shot_type, attacking_team, shooter)
         
         # Check if shot misses the net
         if self._check_shot_miss(shooter, shot_quality, distance):
@@ -2968,7 +2969,7 @@ class GameSim:
         
         return self._weighted_random_choice(type_weights)
 
-    def _calculate_shot_quality(self, location, distance, shot_type, attacking_team):
+    def _calculate_shot_quality(self, location, distance, shot_type, attacking_team, shooter=None):
         """Calculate shot quality (high/medium/low danger) and return quality score."""
         base_quality = {
             ShotLocation.CREASE: 0.9,
@@ -2997,6 +2998,15 @@ class GameSim:
         distance_modifier = max(0.3, 1.0 - (distance - 10) * 0.02)
         
         quality_score = base_quality * type_modifier * distance_modifier
+
+        # Trait: Sniper / Two-Way / One-Timer Specialist elevate shot quality
+        if shooter is not None:
+            try:
+                quality_score *= _trait_bonus(shooter, "shot_quality_mult")
+                if shot_type in (ShotType.SLAP_SHOT, ShotType.ONE_TIMER if hasattr(ShotType, 'ONE_TIMER') else None):
+                    quality_score *= _trait_bonus(shooter, "one_timer_mult")
+            except Exception:
+                pass
         
         # Categorize danger level
         if quality_score >= 0.7:
@@ -3044,12 +3054,25 @@ class GameSim:
 
         E.g. "shoot" makes snipers the shooter far more often than
         playmakers; "hit" makes power forwards/enforcers throw the hits.
+        Trait bonuses (Big Hitter, Sniper, etc.) further weight selection.
         Falls back to uniform choice if anything goes wrong.
         """
         if not skaters:
             return None
         try:
-            weights = [max(0.05, get_tendency(p, tendency_key)) for p in skaters]
+            # Trait frequency multipliers per tendency
+            _TRAIT_FREQ = {
+                "hit": "hit_frequency_mult",
+                "shoot": "shot_frequency_mult",
+                "block": "block_chance_mult",
+            }
+            freq_key = _TRAIT_FREQ.get(tendency_key)
+            weights = []
+            for p in skaters:
+                w = max(0.05, get_tendency(p, tendency_key))
+                if freq_key:
+                    w *= _trait_bonus(p, freq_key)
+                weights.append(w)
             return random.choices(skaters, weights=weights, k=1)[0]
         except Exception:
             return random.choice(skaters)
@@ -4528,6 +4551,9 @@ class GameSim:
         # Base success rate depends on player attributes
         hit_skill = (hitting_player.checking + hitting_player.aggressiveness + hitting_player.determination) / 3
         target_avoidance = (target_player.speed + target_player.agility + target_player.anticipation) / 3
+
+        # Trait: Big Hitter throws harder, more effective checks
+        hit_skill *= _trait_bonus(hitting_player, "hit_force_mult")
         
         # Hit type modifiers
         type_modifier = {
@@ -4586,7 +4612,19 @@ class GameSim:
                 (HitResult.PENALTY_DRAWN, 0.05),
                 (HitResult.INJURY_CAUSED, 0.05)
             ]
-        
+
+        # Trait: Big Hitter's heavy hits carry a slightly higher injury risk
+        # for the recipient (subtle: +3% flat, not game-breaking).
+        try:
+            injury_bonus = _trait_bonus(hitting_player, "big_hit_injury_bonus", 0.0)
+        except Exception:
+            injury_bonus = 0.0
+        if injury_bonus:
+            results = [
+                (r, p + injury_bonus if r == HitResult.INJURY_CAUSED else p)
+                for r, p in results
+            ]
+
         # Select result based on probabilities
         rand = random.random()
         cumulative = 0

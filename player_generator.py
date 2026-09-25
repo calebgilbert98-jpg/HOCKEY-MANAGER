@@ -360,6 +360,13 @@ class PlayerGenerator:
             player.archetype = classify_player(player)
         except Exception:
             player.archetype = archetype_name
+
+        # Infer traits from final attributes (Big Hitter, Speedster, etc.)
+        try:
+            from player_traits import infer_traits
+            player.traits = infer_traits(player)
+        except Exception:
+            player.traits = []
         
         # Set contract info if not free agent
         if team_name != "Free Agent":

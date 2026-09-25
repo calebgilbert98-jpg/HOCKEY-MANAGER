@@ -228,6 +228,10 @@ class Player:
     work_ethic: int = field(default_factory=lambda: random.randint(25, 45))
     adaptability: int = field(default_factory=lambda: random.randint(25, 45))
     team_chemistry: int = field(default_factory=lambda: random.randint(10, 20))
+
+    # Traits: exceptional abilities (e.g. 'big_hitter', 'speedster') inferred
+    # from attributes. See player_traits.py. Stored as trait ID strings.
+    traits: list = field(default_factory=list)
     line_chemistry: int = field(default_factory=lambda: random.randint(10, 20))
     
     # SEASON STATISTICS - Reset each season
