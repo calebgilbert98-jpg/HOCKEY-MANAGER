@@ -10,6 +10,32 @@ import os
 from player_context_menu import PlayerContextMenu, add_player_context_menu
 from ui_widgets import PillButton
 
+
+def make_pill_group(parent, options, on_select, font_family='Segoe UI'):
+    """Row of PillButtons shared by all windows.
+
+    options: list of (value, label). Returns dict value -> PillButton.
+    Caller paints selection state via btn.set_selected(...).
+    """
+    try:
+        canvas_bg = parent.cget('bg')
+    except tk.TclError:
+        # ttk containers have no -bg; fall back to the theme background
+        try:
+            canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+        except Exception:
+            canvas_bg = '#111826'
+    btns = {}
+    for value, label in options:
+        b = PillButton(parent, text=label, bg=canvas_bg,
+                       font=(font_family, 9, 'bold'),
+                       padx=12, pady=4,
+                       command=lambda v=value: on_select(v))
+        b.pack(side=tk.LEFT, padx=2)
+        btns[value] = b
+    return btns
+
+
 class RosterWindow(tk.Toplevel):
     """Enhanced Roster Management window with modern UI, advanced filtering, depth charts, and comprehensive team management."""
     
@@ -287,24 +313,8 @@ class RosterWindow(tk.Toplevel):
     def _make_pill_group(self, parent, options, current_value, on_select):
         """Row of PillButtons; returns dict value -> button. Caller keeps it
         in a group list so _paint_pill_groups can repaint all copies."""
-        try:
-            canvas_bg = parent.cget('bg')
-        except tk.TclError:
-            # ttk containers have no -bg; fall back to the theme background
-            try:
-                from tkinter import ttk as _ttk
-                canvas_bg = _ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
-            except Exception:
-                canvas_bg = '#111826'
-        btns = {}
-        for value, label in options:
-            b = PillButton(parent, text=label, bg=canvas_bg,
-                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
-                           padx=12, pady=4,
-                           command=lambda v=value: on_select(v))
-            b.pack(side=tk.LEFT, padx=2)
-            btns[value] = b
-        return btns
+        return make_pill_group(parent, options, on_select,
+                               font_family=self.parent.FONT_FAMILY)
 
     def _paint_pill_groups(self):
         for groups_attr, current in (
@@ -3680,12 +3690,14 @@ class ScoutingWindow(tk.Toplevel):
         top_row.pack(fill='x', pady=(0, 4))
         ttk.Label(top_row, text="PROSPECT POOL", style='Secondary.TLabel',
                   font=(parent.FONT_FAMILY, 10, 'bold')).pack(side='left')
-        filt = ttk.Combobox(top_row, textvariable=self.filter_var, width=14,
-                            state='readonly',
-                            values=["All Prospects", "Forwards", "Defensemen",
-                                    "Goalies", "Top 50", "Not Scouted"])
-        filt.pack(side='left', padx=(10, 4))
-        filt.bind("<<ComboboxSelected>>", lambda e: self._refresh_prospects())
+        filt_frame = ttk.Frame(top_row, style='Panel.TFrame')
+        filt_frame.pack(side='left', padx=(10, 4))
+        self._prospect_pills = make_pill_group(
+            filt_frame,
+            [(o, o) for o in ("All Prospects", "Forwards", "Defensemen",
+                              "Goalies", "Top 50", "Not Scouted")],
+            self._set_prospect_filter, parent.FONT_FAMILY)
+        self._paint_prospect_pills()
         ttk.Entry(top_row, textvariable=self.search_var, width=14).pack(side='left', padx=4)
         ttk.Button(top_row, text="Search", command=self._refresh_prospects,
                    style='Secondary.TButton').pack(side='left')
@@ -3883,6 +3895,16 @@ class ScoutingWindow(tk.Toplevel):
         if q:
             all_p = [p for p in all_p if q in p.full_name.lower()]
         return all_p
+
+    def _set_prospect_filter(self, value):
+        self.filter_var.set(value)
+        self._paint_prospect_pills()
+        self._refresh_prospects()
+
+    def _paint_prospect_pills(self):
+        current = self.filter_var.get()
+        for value, btn in getattr(self, '_prospect_pills', {}).items():
+            btn.set_selected(value == current)
 
     def _refresh_prospects(self):
         tree = self.prospects_tree
@@ -5263,26 +5285,34 @@ class FinancesWindow(tk.Toplevel):
         filter_grid = ttk.Frame(filter_frame)
         filter_grid.pack(fill=tk.X, padx=10, pady=10)
         
-        # Roster filter
+        # Roster filter (pills)
         ttk.Label(filter_grid, text="Roster:", style='Info.TLabel').grid(row=0, column=0, padx=5, sticky='w')
-        self.roster_filter = ttk.Combobox(filter_grid, values=['All', 'NHL', 'AHL', 'Prospects'], width=12)
-        self.roster_filter.set('All')
-        self.roster_filter.grid(row=0, column=1, padx=5)
-        self.roster_filter.bind('<<ComboboxSelected>>', lambda e: self.update_contracts_view())
-        
-        # Position filter
+        self.roster_filter = tk.StringVar(master=self, value='All')
+        _roster_pill_frame = ttk.Frame(filter_grid)
+        _roster_pill_frame.grid(row=0, column=1, padx=5, sticky='w')
+        self._fin_roster_pills = make_pill_group(
+            _roster_pill_frame, [(o, o) for o in ('All', 'NHL', 'AHL', 'Prospects')],
+            self._set_finance_filter('roster_filter'), self.parent.FONT_FAMILY)
+
+        # Position filter (pills)
         ttk.Label(filter_grid, text="Position:", style='Info.TLabel').grid(row=0, column=2, padx=5, sticky='w')
-        self.position_filter = ttk.Combobox(filter_grid, values=['All', 'G', 'D', 'F'], width=12)
-        self.position_filter.set('All')
-        self.position_filter.grid(row=0, column=3, padx=5)
-        self.position_filter.bind('<<ComboboxSelected>>', lambda e: self.update_contracts_view())
-        
-        # Contract status filter
+        self.position_filter = tk.StringVar(master=self, value='All')
+        _pos_pill_frame = ttk.Frame(filter_grid)
+        _pos_pill_frame.grid(row=0, column=3, padx=5, sticky='w')
+        self._fin_pos_pills = make_pill_group(
+            _pos_pill_frame, [(o, o) for o in ('All', 'G', 'D', 'F')],
+            self._set_finance_filter('position_filter'), self.parent.FONT_FAMILY)
+
+        # Contract status filter (pills)
         ttk.Label(filter_grid, text="Status:", style='Info.TLabel').grid(row=0, column=4, padx=5, sticky='w')
-        self.status_filter = ttk.Combobox(filter_grid, values=['All', 'Expiring', 'RFA', 'UFA', 'Long-term'], width=12)
-        self.status_filter.set('All')
-        self.status_filter.grid(row=0, column=5, padx=5)
-        self.status_filter.bind('<<ComboboxSelected>>', lambda e: self.update_contracts_view())
+        self.status_filter = tk.StringVar(master=self, value='All')
+        _status_pill_frame = ttk.Frame(filter_grid)
+        _status_pill_frame.grid(row=0, column=5, padx=5, sticky='w')
+        self._fin_status_pills = make_pill_group(
+            _status_pill_frame,
+            [(o, o) for o in ('All', 'Expiring', 'RFA', 'UFA', 'Long-term')],
+            self._set_finance_filter('status_filter'), self.parent.FONT_FAMILY)
+        self._paint_finance_pills()
         
         # Contracts treeview
         contract_columns = {
@@ -5584,6 +5614,22 @@ class FinancesWindow(tk.Toplevel):
             pos_data['avg'] = pos_data['total'] // pos_data['count'] if pos_data['count'] > 0 else 0
         
         return positions
+
+    def _set_finance_filter(self, attr):
+        """Returns an on_select callback for a finance pill group."""
+        def _select(value):
+            getattr(self, attr).set(value)
+            self._paint_finance_pills()
+            self.update_contracts_view()
+        return _select
+
+    def _paint_finance_pills(self):
+        for pills_attr, var_attr in (('_fin_roster_pills', 'roster_filter'),
+                                     ('_fin_pos_pills', 'position_filter'),
+                                     ('_fin_status_pills', 'status_filter')):
+            current = getattr(self, var_attr).get()
+            for value, btn in getattr(self, pills_attr, {}).items():
+                btn.set_selected(value == current)
 
     def update_contracts_view(self):
         """Update the contracts view with filtering."""
