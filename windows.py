@@ -8,6 +8,7 @@ from datetime import timedelta
 import random
 import os
 from player_context_menu import PlayerContextMenu, add_player_context_menu
+from ui_widgets import PillButton
 
 class RosterWindow(tk.Toplevel):
     """Enhanced Roster Management window with modern UI, advanced filtering, depth charts, and comprehensive team management."""
@@ -283,53 +284,111 @@ class RosterWindow(tk.Toplevel):
         # Contract details
         self.create_contract_breakdown(cap_frame)
     
+    def _make_pill_group(self, parent, options, current_value, on_select):
+        """Row of PillButtons; returns dict value -> button. Caller keeps it
+        in a group list so _paint_pill_groups can repaint all copies."""
+        try:
+            canvas_bg = parent.cget('bg')
+        except tk.TclError:
+            # ttk containers have no -bg; fall back to the theme background
+            try:
+                from tkinter import ttk as _ttk
+                canvas_bg = _ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+            except Exception:
+                canvas_bg = '#111826'
+        btns = {}
+        for value, label in options:
+            b = PillButton(parent, text=label, bg=canvas_bg,
+                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                           padx=12, pady=4,
+                           command=lambda v=value: on_select(v))
+            b.pack(side=tk.LEFT, padx=2)
+            btns[value] = b
+        return btns
+
+    def _paint_pill_groups(self):
+        for groups_attr, current in (
+                ('_pos_pill_groups', self.roster_filters['position'].get()),
+                ('_age_pill_groups', self._age_filter_value()),
+                ('_ovr_pill_groups', self.roster_filters['overall_min'].get() or "All")):
+            for group in getattr(self, groups_attr, []):
+                for value, btn in group.items():
+                    btn.set_selected(value == current)
+
+    def _age_filter_value(self):
+        lo, hi = self.roster_filters['age_min'].get(), self.roster_filters['age_max'].get()
+        if not lo and not hi:
+            return "All"
+        if not lo and hi == "22":
+            return "U23"
+        if lo == "23" and hi == "29":
+            return "23-29"
+        if lo == "30" and not hi:
+            return "30+"
+        return "All"
+
+    def _set_age_filter(self, value):
+        f = self.roster_filters
+        presets = {"All": ("", ""), "U23": ("", "22"),
+                   "23-29": ("23", "29"), "30+": ("30", "")}
+        lo, hi = presets[value]
+        f['age_min'].set(lo)
+        f['age_max'].set(hi)
+        self._paint_pill_groups()
+        self._refresh_all_roster_tabs()
+
+    def _set_ovr_filter(self, value):
+        self.roster_filters['overall_min'].set("" if value == "All" else value)
+        self._paint_pill_groups()
+        self._refresh_all_roster_tabs()
+
+    def _refresh_all_roster_tabs(self):
+        for rt in ('nhl', 'ahl', 'prospects'):
+            try:
+                self.update_roster_tab(rt)
+            except Exception:
+                pass
+
     def create_roster_toolbar(self, parent, roster_type):
         """Create filtering and action toolbar for roster tabs."""
         toolbar_frame = ttk.Frame(parent, style='Panel.TFrame', padding=10)
         toolbar_frame.pack(fill=tk.X)
-        
+
         # Filter section
         filter_frame = ttk.LabelFrame(toolbar_frame, text="Filters", )
         filter_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-        
+
         filter_content = ttk.Frame(filter_frame, style='Panel.TFrame', padding=5)
         filter_content.pack(fill=tk.X)
-        
+
         # Position filter pills (instant-apply, no dropdown)
         ttk.Label(filter_content, text="Position:", style='Content.TLabel').pack(side=tk.LEFT)
         if not hasattr(self, '_pos_pill_groups'):
             self._pos_pill_groups = []
-        pos_options = ["All", "F", "D", "G"]
-        pill_btns = {}
-        for opt in pos_options:
-            b = tk.Button(filter_content, text=opt, relief='flat', bd=0, cursor='hand2',
-                          font=(self.parent.FONT_FAMILY, 9, 'bold'), padx=12, pady=3,
-                          command=lambda o=opt: self._set_position_filter(o))
-            b.pack(side=tk.LEFT, padx=2)
-            pill_btns[opt] = b
-        self._pos_pill_groups.append(pill_btns)
-        self._paint_position_pills()
+        self._pos_pill_groups.append(self._make_pill_group(
+            filter_content, [(o, o) for o in ("All", "F", "D", "G")],
+            self.roster_filters['position'].get(), self._set_position_filter))
 
-        # Age filters
+        # Age filter pills (instant-apply, no text boxes)
         ttk.Label(filter_content, text="Age:", style='Content.TLabel').pack(side=tk.LEFT, padx=(10, 5))
-        age_min_entry = ttk.Entry(filter_content, textvariable=self.roster_filters['age_min'], width=4)
-        age_min_entry.pack(side=tk.LEFT, padx=2)
-        ttk.Label(filter_content, text="to", style='Content.TLabel').pack(side=tk.LEFT)
-        age_max_entry = ttk.Entry(filter_content, textvariable=self.roster_filters['age_max'], width=4)
-        age_max_entry.pack(side=tk.LEFT, padx=2)
+        if not hasattr(self, '_age_pill_groups'):
+            self._age_pill_groups = []
+        self._age_pill_groups.append(self._make_pill_group(
+            filter_content, [("All", "All"), ("U23", "U23"),
+                             ("23-29", "23-29"), ("30+", "30+")],
+            self._age_filter_value(), self._set_age_filter))
 
-        # Overall rating filter
+        # Overall rating filter pills (instant-apply, no text box)
         ttk.Label(filter_content, text="Min OVR:", style='Content.TLabel').pack(side=tk.LEFT, padx=(10, 5))
-        ovr_entry = ttk.Entry(filter_content, textvariable=self.roster_filters['overall_min'], width=4)
-        ovr_entry.pack(side=tk.LEFT, padx=2)
-        for entry in (age_min_entry, age_max_entry, ovr_entry):
-            entry.bind('<Return>', lambda e, rt=roster_type: self.apply_filters(rt))
+        if not hasattr(self, '_ovr_pill_groups'):
+            self._ovr_pill_groups = []
+        self._ovr_pill_groups.append(self._make_pill_group(
+            filter_content, [("All", "All"), ("70", "70+"),
+                             ("80", "80+"), ("90", "90+")],
+            self.roster_filters['overall_min'].get() or "All",
+            self._set_ovr_filter))
+        self._paint_pill_groups()
 
-        # Apply filter button
-        ttk.Button(filter_content, text="Apply Filters",
-                  command=lambda: self.apply_filters(roster_type),
-                  style='TButton').pack(side=tk.LEFT, padx=10)
-        
         # Action buttons section
         actions_frame = ttk.Frame(toolbar_frame, style='Panel.TFrame')
         actions_frame.pack(side=tk.RIGHT)
@@ -929,23 +988,8 @@ class RosterWindow(tk.Toplevel):
     def _set_position_filter(self, value):
         """Set the position filter via pill and refresh all roster tabs."""
         self.roster_filters['position'].set(value)
-        self._paint_position_pills()
-        for rt in ('nhl', 'ahl', 'prospects'):
-            try:
-                self.update_roster_tab(rt)
-            except Exception:
-                pass
-
-    def _paint_position_pills(self):
-        current = self.roster_filters['position'].get()
-        for group in getattr(self, '_pos_pill_groups', []):
-            for value, btn in group.items():
-                if value == current:
-                    btn.configure(bg='#E63946', fg='white',
-                                  activebackground='#c1121f', activeforeground='white')
-                else:
-                    btn.configure(bg='#2a3350', fg='#c8d0e0',
-                                  activebackground='#3a4568', activeforeground='white')
+        self._paint_pill_groups()
+        self._refresh_all_roster_tabs()
 
     def apply_filters(self, roster_type):
         """Apply filters to roster view."""
