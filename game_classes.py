@@ -1576,8 +1576,10 @@ class DraftPick:
     def __post_init__(self):
         """Calculate overall pick number based on round."""
         if self.overall_pick == 0:
-            # Estimate overall pick (32 teams per round)
-            self.overall_pick = ((self.round - 1) * 32) + 1
+            # Estimate overall pick (32 teams per round). Mid-round is the
+            # honest default for an unknown pick - estimating pick #1 of the
+            # round inflates trade value via the lottery premium.
+            self.overall_pick = ((self.round - 1) * 32) + 16
     
     @property
     def description(self) -> str:

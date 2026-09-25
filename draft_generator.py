@@ -246,12 +246,12 @@ COUNTRY_DISTRIBUTION = {
 }
 
 POSITION_DISTRIBUTION = {
-    PlayerPosition.CENTER: 0.25,
-    PlayerPosition.LEFT_WING: 0.15,
-    PlayerPosition.RIGHT_WING: 0.15,
-    PlayerPosition.LEFT_DEFENSE: 0.15,
-    PlayerPosition.RIGHT_DEFENSE: 0.15,
-    PlayerPosition.GOALIE: 0.15
+    PlayerPosition.CENTER: 0.20,
+    PlayerPosition.LEFT_WING: 0.18,
+    PlayerPosition.RIGHT_WING: 0.18,
+    PlayerPosition.LEFT_DEFENSE: 0.14,
+    PlayerPosition.RIGHT_DEFENSE: 0.14,
+    PlayerPosition.GOALIE: 0.16
 }
 
 # --- Potential Distribution ---

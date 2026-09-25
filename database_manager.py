@@ -43,19 +43,39 @@ class DatabaseManager:
         """Populate NHL teams with realistic rosters."""
         print("Populating NHL teams with players...")
         
-        # Sort players by overall rating
         nhl_players.sort(key=lambda p: p.overall_rating(), reverse=True)
         
         # Define roster requirements per team
+        # 12F/6D/2G = 20: a full dressed lineup so all 4 forward lines
+        # can be filled (the lines editor builds 4 x 3F + 3 x 2D + 2G).
         roster_requirements = {
             PlayerPosition.CENTER: 4,
-            PlayerPosition.LEFT_WING: 3,
-            PlayerPosition.RIGHT_WING: 3,
+            PlayerPosition.LEFT_WING: 4,
+            PlayerPosition.RIGHT_WING: 4,
             PlayerPosition.LEFT_DEFENSE: 3,
             PlayerPosition.RIGHT_DEFENSE: 3,
             PlayerPosition.GOALIE: 2
         }
-        
+
+        # Guarantee the pool can satisfy the snake draft: top up any position
+        # that random generation left short (these fill 4th-line/depth roles).
+        _gen = PlayerGenerator()
+        for position, required_count in roster_requirements.items():
+            need = required_count * len(teams)
+            have = sum(1 for p in nhl_players if p.primary_position == position
+                       and p.team_name == "Free Agent")
+            for _ in range(max(0, need - have)):
+                extra = _gen.create_player(skill_tier="NHL_DEPTH",
+                                           age_category="PRIME",
+                                           team_name="Free Agent",
+                                           position=position)
+                nhl_players.append(extra)
+            if need > have:
+                print(f"  topped up {need - have} {position.value}")
+
+        # Re-sort after top-ups so the snake draft still deals best-first
+        nhl_players.sort(key=lambda p: p.overall_rating(), reverse=True)
+
         # Track assignments
         team_index = 0
         position_assignments = {team.team_name: {pos: 0 for pos in PlayerPosition} for team in teams}
