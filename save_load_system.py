@@ -588,9 +588,15 @@ class GameSaveManager:
     def _restore_team(self, team_data: Dict[str, Any]):
         """Restore a team from save data"""
         try:
-            from game_classes import Team, TeamStats
+            from game_classes import Team
+            from types import SimpleNamespace
             
-            team = Team(team_data.get('team_name', ''), team_data.get('city', ''))
+            team = Team(
+                team_data.get('team_name', ''),
+                team_data.get('city', ''),
+                team_data.get('division', ''),
+                team_data.get('conference', ''),
+            )
             
             # Restore basic team info
             team.division = team_data.get('division', '')
@@ -605,7 +611,7 @@ class GameSaveManager:
             if 'stats' in team_data:
                 team.stats = self._restore_team_stats(team_data['stats'])
             else:
-                team.stats = TeamStats()
+                team.stats = SimpleNamespace()
             
             # Restore players
             team.roster = [self._restore_player(p) for p in team_data.get('roster', [])]
@@ -630,28 +636,32 @@ class GameSaveManager:
             
             if not player_data:
                 return None
-            
+
+            # Resolve primary position first (required positional arg)
+            pos_value = player_data.get('primary_position')
+            try:
+                primary_position = PlayerPosition[pos_value] if isinstance(pos_value, str) else pos_value
+            except Exception:
+                primary_position = PlayerPosition.CENTER  # Default
+            if primary_position is None:
+                primary_position = PlayerPosition.CENTER
+
             # Create player with basic info
             player = Player(
                 player_data.get('first_name', ''),
                 player_data.get('last_name', ''),
-                player_data.get('age', 25)
+                player_data.get('age', 25),
+                primary_position,
             )
             
             # Restore all player attributes
             for key, value in player_data.items():
-                if key in ['first_name', 'last_name', 'age']:
+                if key in ['first_name', 'last_name', 'age', 'primary_position']:
                     continue  # Already set
                 elif key == 'contract' and value:
                     player.contract = self._restore_contract(value)
                 elif key == 'stats' and value:
                     player.stats = self._restore_player_stats(value)
-                elif key == 'primary_position' and value:
-                    # Handle enum restoration
-                    try:
-                        player.primary_position = PlayerPosition[value] if isinstance(value, str) else value
-                    except:
-                        player.primary_position = PlayerPosition.CENTER  # Default
                 elif key.endswith('_date') and value:
                     # Handle date fields
                     try:
@@ -715,9 +725,9 @@ class GameSaveManager:
     def _restore_team_stats(self, stats_data: Dict[str, Any]):
         """Restore team statistics"""
         try:
-            from game_classes import TeamStats
+            from types import SimpleNamespace
             
-            stats = TeamStats()
+            stats = SimpleNamespace()
             
             for key, value in stats_data.items():
                 setattr(stats, key, value)
@@ -726,8 +736,8 @@ class GameSaveManager:
             
         except Exception as e:
             print(f"Error restoring team stats: {e}")
-            from game_classes import TeamStats
-            return TeamStats()
+            from types import SimpleNamespace
+            return SimpleNamespace()
     
     def _restore_user_team(self, user_team_name: str):
         """Restore the user's selected team"""

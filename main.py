@@ -5974,8 +5974,8 @@ class HockeyManagerGUI(tk.Tk):
             development_events = []
             
             for team in self.league.teams:
-                for roster_type in ['roster', 'ahl', 'prospects']:
-                    for player in team.players.get(roster_type, []):
+                for roster_list in (team.roster, team.ahl_roster, team.prospects):
+                    for player in roster_list:
                         try:
                             # Skip if player has no potential info
                             if not hasattr(player, 'potential_info') or player.potential_info is None:
@@ -6618,8 +6618,8 @@ class HockeyManagerGUI(tk.Tk):
             if self.league and self.league.teams:
                 players_initialized = 0
                 for team in self.league.teams:
-                    for roster_type in ['roster', 'ahl', 'prospects']:
-                        for player in team.players.get(roster_type, []):
+                    for roster_list in (team.roster, team.ahl_roster, team.prospects):
+                        for player in roster_list:
                             if not hasattr(player, 'potential_info') or player.potential_info is None:
                                 player.potential_info = initialize_player_potential(player)
                                 players_initialized += 1
