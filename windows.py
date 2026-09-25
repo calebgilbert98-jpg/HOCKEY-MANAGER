@@ -8726,7 +8726,7 @@ class EditLinesWindow(tk.Toplevel):
         self._update_strategy_analysis()
     
     def _update_strategy_analysis(self):
-        """Update the strategy analysis display"""
+        """Update the strategy analysis display and save tactics to team"""
         try:
             self.strategy_analysis_text.delete(1.0, tk.END)
             
@@ -8735,6 +8735,14 @@ class EditLinesWindow(tk.Toplevel):
             pp_strat = self.strategy_combos['power_play'].get()
             pk_strat = self.strategy_combos['penalty_kill'].get()
             matching_strat = self.strategy_combos['line_matching'].get()
+            
+            # Save tactics to the user's team (connects UI to sim engine)
+            if hasattr(self, 'parent') and hasattr(self.parent, 'user_team') and self.parent.user_team:
+                team = self.parent.user_team
+                team.tactic_even_strength = es_strat
+                team.tactic_power_play = pp_strat
+                team.tactic_penalty_kill = pk_strat
+                team.tactic_line_matching = matching_strat
             
             self.strategy_analysis_text.insert(tk.END, "🎯 CURRENT STRATEGY ANALYSIS\n")
             self.strategy_analysis_text.insert(tk.END, "=" * 40 + "\n\n")

@@ -1592,6 +1592,16 @@ class Team:
     scouting_reports: Dict[int, ScoutingReport] = field(default_factory=dict)
     inbox: EmailInbox = field(default_factory=EmailInbox)  # Email inbox system
     
+    # Team tactics (connected to strategy UI and sim engine)
+    # Even strength: 'Offensive', 'Balanced', 'Defensive'
+    tactic_even_strength: str = "Balanced"
+    # Power play: 'Very Offensive', 'Offensive', 'Balanced'
+    tactic_power_play: str = "Offensive"
+    # Penalty kill: 'Aggressive', 'Defensive', 'Very Defensive'
+    tactic_penalty_kill: str = "Defensive"
+    # Line matching: 'Aggressive', 'Standard', 'Conservative'
+    tactic_line_matching: str = "Standard"
+    
     # Draft picks owned by this team
     draft_picks: Dict[int, List[DraftPick]] = field(default_factory=dict)  # Year -> List of picks
     

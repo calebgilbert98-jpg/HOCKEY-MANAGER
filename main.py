@@ -2674,9 +2674,40 @@ class AdvancedGameSim:
         skill_diff = shooter_skill - goalie_skill
         shot_chance = 0.09 + (skill_diff * 0.008)
         
-        # Power play: modest boost (NHL PP units shoot a higher percentage)
+        # Team tactics affect shot quality
+        # Get the shooting team's tactics
+        shooting_team = self.home_team if puck_team_name == self.home_team.team_name else self.away_team
+        defending_team = self.away_team if puck_team_name == self.home_team.team_name else self.home_team
+        
         if self.pp_team:
-            shot_chance += 0.025
+            # Power play tactics
+            pp_tactic = getattr(shooting_team, 'tactic_power_play', 'Offensive')
+            if pp_tactic == 'Very Offensive':
+                shot_chance += 0.035  # More aggressive, higher risk/reward
+            elif pp_tactic == 'Offensive':
+                shot_chance += 0.025
+            else:  # Balanced
+                shot_chance += 0.015
+        elif self.pk_team == puck_team_name:
+            # Shorthanded: PK tactics affect shorthanded chances
+            pk_tactic = getattr(shooting_team, 'tactic_penalty_kill', 'Defensive')
+            if pk_tactic == 'Aggressive':
+                shot_chance += 0.01  # More shorthanded rushes
+            # Defensive/Very Defensive: focus on clearing, fewer shots
+        else:
+            # Even strength tactics
+            es_tactic = getattr(shooting_team, 'tactic_even_strength', 'Balanced')
+            if es_tactic == 'Offensive':
+                shot_chance += 0.01  # More shots, higher quality chances
+            elif es_tactic == 'Defensive':
+                shot_chance -= 0.008  # Fewer shots, focus on defense
+            
+            # Defending team's tactics affect shot quality against
+            def_tactic = getattr(defending_team, 'tactic_even_strength', 'Balanced')
+            if def_tactic == 'Defensive':
+                shot_chance -= 0.008  # Tight defense reduces quality
+            elif def_tactic == 'Offensive':
+                shot_chance += 0.005  # Aggressive D leaves gaps
         
         # Home-ice advantage: small boost for home team (NHL home win ~55%)
         # +0.5% absolute shooting chance ≈ the observed home edge
