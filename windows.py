@@ -3778,19 +3778,32 @@ class DraftWindow(tk.Toplevel):
         strat_row = ttk.Frame(center, style='Panel.TFrame')
         strat_row.pack(fill='x', pady=(0, 4))
         ttk.Label(strat_row, text="Strategy:", style='Secondary.TLabel').pack(side='left')
-        ttk.Radiobutton(strat_row, text="Best Available", variable=self.strategy_var,
-                        value="BPA").pack(side='left', padx=4)
-        ttk.Radiobutton(strat_row, text="Positional Need", variable=self.strategy_var,
-                        value="Need").pack(side='left', padx=4)
+        self._draft_pill_groups = []
+        try:
+            _dbg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+        except Exception:
+            _dbg = '#111826'
+        self._draft_pill_bg = _dbg
+        for sval, stext in (("BPA", "Best Available"), ("Need", "Positional Need")):
+            b = PillButton(strat_row, text=stext, bg=_dbg,
+                           font=(parent.FONT_FAMILY, 9, 'bold'),
+                           padx=11, pady=4,
+                           command=lambda v=sval: self._draft_set_pill(self.strategy_var, v))
+            b.pack(side='left', padx=3)
+            self._draft_pill_groups.append((self.strategy_var, sval, b))
 
         filt_row = ttk.Frame(center, style='Panel.TFrame')
         filt_row.pack(fill='x', pady=(0, 4))
         ttk.Label(filt_row, text="Show:", style='Secondary.TLabel').pack(side='left')
-        pos_combo = ttk.Combobox(filt_row, textvariable=self.pos_filter_var,
-                                 values=["All Positions", "Forwards", "Defensemen", "Goalies"],
-                                 state='readonly', width=14)
-        pos_combo.pack(side='left', padx=4)
-        pos_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_shortlist())
+        for pval, ptext in (("All Positions", "All"), ("Forwards", "Forwards"),
+                            ("Defensemen", "Defense"), ("Goalies", "Goalies")):
+            b = PillButton(filt_row, text=ptext, bg=_dbg,
+                           font=(parent.FONT_FAMILY, 9, 'bold'),
+                           padx=11, pady=4,
+                           command=lambda v=pval: self._draft_set_pill(self.pos_filter_var, v))
+            b.pack(side='left', padx=3)
+            self._draft_pill_groups.append((self.pos_filter_var, pval, b))
+        self._draft_paint_pills()
 
         ttk.Label(center, text="SHORTLIST", style='Secondary.TLabel',
                   font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(4, 2))
@@ -3888,6 +3901,15 @@ class DraftWindow(tk.Toplevel):
         if not rank:
             return avail
         return sorted(avail, key=lambda p: rank.get(p.id, 10_000 + getattr(p, 'draft_ranking', 0) * -1))
+
+    def _draft_set_pill(self, var, value):
+        var.set(value)
+        self._draft_paint_pills()
+        self._refresh_shortlist()
+
+    def _draft_paint_pills(self):
+        for var, value, btn in getattr(self, '_draft_pill_groups', []):
+            btn.set_selected(var.get() == value)
 
     def _refresh_shortlist(self):
         self.shortlist.delete(0, tk.END)
