@@ -61,28 +61,51 @@ class PlayoffBracket:
         self.stanley_cup_champion: Optional[Team] = None
         
     def generate_playoff_bracket(self):
-        """Generate the complete playoff bracket based on standings"""
-        qualified_teams = self._get_playoff_qualified_teams()
-        self.eastern_teams = [team for team in qualified_teams if self._is_eastern_team(team)][:8]
-        self.western_teams = [team for team in qualified_teams if not self._is_eastern_team(team)][:8]
-        
-        # Sort by standings position
-        self.eastern_teams.sort(key=lambda t: t.standings_position)
-        self.western_teams.sort(key=lambda t: t.standings_position)
-        
+        """Generate the complete playoff bracket based on standings.
+
+        Top 8 teams per conference by league standings (points, then wins,
+        then goal differential), mirroring the NHL format.
+        """
+        eastern, western = self._get_playoff_qualified_teams()
+        self.eastern_teams = eastern
+        self.western_teams = western
+
+        # Assign 1-8 seeds for display/sorting
+        for i, team in enumerate(self.eastern_teams):
+            team.standings_position = i + 1
+        for i, team in enumerate(self.western_teams):
+            team.standings_position = i + 1
+
         # Generate first round matchups
         self._create_wild_card_round()
-        
-    def _get_playoff_qualified_teams(self) -> List[Team]:
-        """Get the top 16 teams that qualify for playoffs"""
-        all_teams = list(self.league.teams)  # teams is a list, not dict
-        # Sort by points, then by wins, then by goal differential
-        all_teams.sort(key=lambda t: (
-            -t.points,  # More points = better
-            -t.wins,    # More wins = better
-            -(getattr(t, 'goals_for', 0) - getattr(t, 'goals_against', 0))  # Better goal diff = better
-        ))
-        return all_teams[:16]
+
+    def _get_playoff_qualified_teams(self):
+        """Get the top 8 teams per conference that qualify for playoffs.
+
+        Returns (eastern_teams, western_teams), each sorted best-first.
+        Reads the league standings dict (source of truth for the season).
+        """
+        standings = getattr(self.league, 'standings', {})
+
+        def sort_key(team):
+            st = standings.get(team.team_name, {})
+            points = st.get('Points', 0)
+            wins = st.get('W', st.get('Wins', 0))
+            goal_diff = getattr(team, 'goals_for', 0) - getattr(team, 'goals_against', 0)
+            return (-points, -wins, -goal_diff)
+
+        eastern, western = [], []
+        for team in self.league.teams:
+            if getattr(team, 'league_name', '') != 'National Hockey League':
+                continue
+            if getattr(team, 'conference', '') == 'Eastern':
+                eastern.append(team)
+            else:
+                western.append(team)
+
+        eastern.sort(key=sort_key)
+        western.sort(key=sort_key)
+        return eastern[:8], western[:8]
     
     def _is_eastern_team(self, team: Team) -> bool:
         """Determine if team is in Eastern Conference"""
@@ -112,11 +135,14 @@ class PlayoffBracket:
             series = PlayoffSeries("Wild Card Round", team1, team2)
             self.playoff_series['wild_card'].append(series)
     
+    ROUND_ORDER = ['wild_card', 'division_semifinals', 'division_finals',
+                   'conference_finals', 'stanley_cup_final']
+
     def advance_to_next_round(self, round_name: str):
         """Advance winners to the next playoff round"""
         current_series = self.playoff_series[round_name]
         winners = [series.winner for series in current_series if series.is_complete and series.winner]
-        
+
         if round_name == 'wild_card':
             self._create_division_semifinals(winners)
         elif round_name == 'division_semifinals':
@@ -128,6 +154,14 @@ class PlayoffBracket:
         elif round_name == 'stanley_cup_final':
             if winners:
                 self.stanley_cup_champion = winners[0]
+
+        # Move the current-round pointer forward
+        try:
+            next_idx = self.ROUND_ORDER.index(round_name) + 1
+            self.current_round = (self.ROUND_ORDER[next_idx]
+                                  if next_idx < len(self.ROUND_ORDER) else 'complete')
+        except ValueError:
+            pass
     
     def _create_division_semifinals(self, winners: List[Team]):
         """Create Division Semifinals matchups"""

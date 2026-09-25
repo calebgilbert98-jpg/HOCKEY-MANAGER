@@ -1,4 +1,4 @@
-﻿# main.py
+# main.py
 # The central application file, now with an enhanced visual design.
 
 import random
@@ -1083,6 +1083,66 @@ NHL League Office""",
             for team in self.league.teams:
                 print(f"  - {team.team_name}")
 
+    def _process_injury_recovery(self):
+        """Process daily injury recovery for all players.
+        
+        Decrements games_remaining_injured. When it reaches 0, player is healed.
+        Only counts down on days with games (players don't recover on off-days
+        in terms of games missed, but we use days as proxy).
+        """
+        for team in self.league.teams:
+            for player in team.roster:
+                if getattr(player, 'is_injured', False):
+                    remaining = getattr(player, 'games_remaining_injured', 0)
+                    if remaining > 0:
+                        # Only decrement if the team played today (games missed, not days)
+                        # For simplicity, decrement daily - close enough
+                        player.games_remaining_injured = remaining - 1
+                        
+                        if player.games_remaining_injured <= 0:
+                            # Player is healed!
+                            player.is_injured = False
+                            player.injury_type = "None"
+                            player.games_remaining_injured = 0
+                            print(f"✅ {player.first_name} {player.last_name} has recovered from injury!")
+                            
+                            # Notify if it's the user's team
+                            if hasattr(self, 'user_team') and team == self.user_team:
+                                if hasattr(self, 'news_log'):
+                                    self.news_log.append({'date': self.current_date, 'story': f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available."})
+
+    def _process_monthly_development(self):
+        """Run monthly player development for all players league-wide.
+        
+        Young players grow toward potential; veterans decline with age.
+        Notable changes for the user's team get logged as news.
+        """
+        if not hasattr(self, '_dev_engine'):
+            self._dev_engine = PlayerDevelopmentEngine()
+        
+        notable = []
+        for team in self.league.teams:
+            for roster_name in ('roster', 'prospects'):
+                for player in getattr(team, roster_name, []) or []:
+                    changes = self._dev_engine.process_monthly_development(player)
+                    if not changes:
+                        continue
+                    # Track meaningful growth for user's team
+                    if team == self.user_team:
+                        ups = {a: c for a, c in changes.items() if c >= 2}
+                        for attr, delta in ups.items():
+                            notable.append(
+                                f"📈 {player.first_name} {player.last_name} "
+                                f"{attr.replace('_', ' ')} +{delta} (now {getattr(player, attr)})"
+                            )
+        
+        # Cap news spam; show the most interesting ones
+        for story in notable[:5]:
+            if hasattr(self, 'news_log'):
+                self.news_log.append({'date': self.current_date, 'story': story})
+        if notable:
+            print(f"📈 Monthly development: {len(notable)} notable improvements")
+
 def best_lines(team):
     """Builds the best possible lineup for the given team based on player ratings and positions."""
     # Select top 13 forwards, 8 defensemen, 2 goalies by position and rating
@@ -1253,6 +1313,7 @@ def clamp(val, minv, maxv):
     return max(minv, min(maxv, val))
 
 # --- Advanced Simulation Engine ---
+
 class LiveHockeySimulation:
     """Real-time live hockey simulation engine that generates events as they happen"""
     
@@ -2334,64 +2395,6 @@ class AdvancedGameSim:
         })
         
         print(f"🏥 Injury: {injured.first_name} {injured.last_name} - {injury_type} ({games_missed} games)")
-
-    def _process_injury_recovery(self):
-        """Process daily injury recovery for all players.
-        
-        Decrements games_remaining_injured. When it reaches 0, player is healed.
-        Only counts down on days with games (players don't recover on off-days
-        in terms of games missed, but we use days as proxy).
-        """
-        for team in self.league.teams:
-            for player in team.roster:
-                if getattr(player, 'is_injured', False):
-                    remaining = getattr(player, 'games_remaining_injured', 0)
-                    if remaining > 0:
-                        # Only decrement if the team played today (games missed, not days)
-                        # For simplicity, decrement daily - close enough
-                        player.games_remaining_injured = remaining - 1
-                        
-                        if player.games_remaining_injured <= 0:
-                            # Player is healed!
-                            player.is_injured = False
-                            player.injury_type = "None"
-                            player.games_remaining_injured = 0
-                            print(f"✅ {player.first_name} {player.last_name} has recovered from injury!")
-                            
-                            # Notify if it's the user's team
-                            if hasattr(self, 'user_team') and team == self.user_team:
-                                self.add_news(f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available.")
-
-    def _process_monthly_development(self):
-        """Run monthly player development for all players league-wide.
-        
-        Young players grow toward potential; veterans decline with age.
-        Notable changes for the user's team get logged as news.
-        """
-        if not hasattr(self, '_dev_engine'):
-            self._dev_engine = PlayerDevelopmentEngine()
-        
-        notable = []
-        for team in self.league.teams:
-            for roster_name in ('roster', 'prospects'):
-                for player in getattr(team, roster_name, []) or []:
-                    changes = self._dev_engine.process_monthly_development(player)
-                    if not changes:
-                        continue
-                    # Track meaningful growth for user's team
-                    if team == self.user_team:
-                        ups = {a: c for a, c in changes.items() if c >= 2}
-                        for attr, delta in ups.items():
-                            notable.append(
-                                f"📈 {player.first_name} {player.last_name} "
-                                f"{attr.replace('_', ' ')} +{delta} (now {getattr(player, attr)})"
-                            )
-        
-        # Cap news spam; show the most interesting ones
-        for story in notable[:5]:
-            self.add_news(story)
-        if notable:
-            print(f"📈 Monthly development: {len(notable)} notable improvements")
 
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
         """Enhanced shot resolution using multiple attributes"""
@@ -5888,35 +5891,28 @@ class HockeyManagerGUI(tk.Tk):
 
     def _check_season_complete(self):
         """Check if the regular season is complete by counting games played."""
+        def _gp(stats):
+            # Standings dicts use "W"/"L" keys (some legacy code used "Wins"/"Losses")
+            return (stats.get('W', stats.get('Wins', 0))
+                    + stats.get('L', stats.get('Losses', 0))
+                    + stats.get('OTL', 0))
         try:
             # Get target games per team based on season length
             target_games = getattr(self, 'season_games_count', 82)
-            
-            # Check if user team has completed their games
-            user_games_played = 0
-            if hasattr(self, 'user_team') and self.user_team:
-                user_stats = self.league.standings.get(self.user_team.team_name, {})
-                user_games_played = user_stats.get('Wins', 0) + user_stats.get('Losses', 0) + user_stats.get('OTL', 0)
-                
-                if user_games_played >= target_games:
-                    return True
-            
-            # Also check if all teams have completed majority of games (in case schedule is different)
+
+            # Season is complete when every NHL team has played its full slate
             if self.league.standings:
-                total_games = 0
-                team_count = len(self.league.standings)
-                for team_name, stats in self.league.standings.items():
-                    total_games += stats.get('Wins', 0) + stats.get('Losses', 0) + stats.get('OTL', 0)
-                
-                if team_count > 0:
-                    avg_games = total_games / team_count
-                    # If average team has played 80+ games, season is essentially complete
-                    if avg_games >= target_games - 2:
-                        return True
-            
+                nhl_names = {t.team_name for t in self.league.teams
+                             if getattr(t, 'league_name', '') == 'National Hockey League'}
+                gps = [_gp(stats) for name, stats in self.league.standings.items()
+                       if name in nhl_names]
+                if gps and min(gps) >= target_games:
+                    return True
+
             return False
         except Exception as e:
             print(f"Error checking season completion: {e}")
+            return False
             return False
 
     def _process_daily_maintenance(self):
