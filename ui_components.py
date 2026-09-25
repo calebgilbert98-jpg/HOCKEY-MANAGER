@@ -5,6 +5,14 @@ import tkinter as tk
 from tkinter import ttk
 from game_classes import PlayerPosition
 
+def _to_20_scale(value, default=10):
+    """Convert a 50-point-scale attribute to the 1-20 display scale."""
+    try:
+        return max(1, min(20, round(float(value) * 0.4)))
+    except Exception:
+        return default
+
+
 class PlayerProfileWindow(tk.Toplevel):
     """A comprehensive player profile window similar to Eastside Hockey Manager."""
     def __init__(self, parent, player, is_scouted=False, report=None):
@@ -1045,13 +1053,13 @@ class PlayerProfileWindow(tk.Toplevel):
         # Sample performance indicators
         performance_notes = [
             ("Form", "Good"),
-            ("Consistency", f"{self.player.consistency}/20"),
-            ("Big Game Player", f"{self.player.important_matches}/20"),
+            ("Consistency", f"{_to_20_scale(self.player.consistency)}/20"),
+            ("Big Game Player", f"{_to_20_scale(self.player.important_matches)}/20"),
             ("Injury History", "Clean" if self.player.injury_proneness < 10 else "Concerning"),
             ("Morale", f"{self.player.morale}/20"),
             ("Development", "Improving" if self.player.age < 25 else "Stable"),
-            ("Work Rate", f"{self.player.work_rate}/20"),
-            ("Leadership", f"{self.player.leadership}/20")
+            ("Work Rate", f"{_to_20_scale(self.player.work_rate)}/20"),
+            ("Leadership", f"{_to_20_scale(self.player.leadership)}/20")
         ]
         
         for i, (label, value) in enumerate(performance_notes):
@@ -1910,8 +1918,8 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Age Group:", self._get_age_group()),
             ("Development Phase:", self._get_development_status()),
             ("Training Focus:", self._get_training_focus()),
-            ("Coachability:", f"{getattr(self.player, 'coachability', 10)}/20"),
-            ("Work Ethic:", f"{getattr(self.player, 'work_ethic', 10)}/20"),
+            ("Coachability:", f"{_to_20_scale(getattr(self.player, 'coachability', 25))}/20"),
+            ("Work Ethic:", f"{_to_20_scale(getattr(self.player, 'work_ethic', 25))}/20"),
             ("Learning Rate:", self._get_learning_rate()),
         ]
         
@@ -2108,8 +2116,8 @@ class PlayerProfileWindow(tk.Toplevel):
     def _get_learning_rate(self):
         """Calculates learning rate based on age and attributes."""
         base_rate = max(1, 21 - self.player.age) * 5  # Younger players learn faster
-        coachability = getattr(self.player, 'coachability', 10)
-        work_ethic = getattr(self.player, 'work_ethic', 10)
+        coachability = _to_20_scale(getattr(self.player, 'coachability', 25))
+        work_ethic = _to_20_scale(getattr(self.player, 'work_ethic', 25))
         
         rate = (base_rate + coachability + work_ethic) / 3
         if rate >= 15:

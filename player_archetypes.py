@@ -330,6 +330,56 @@ def matchup_multiplier(attacking_archetypes: List[str],
 
 
 # ---------------------------------------------------------------------------
+# Simulation: behavioral tendencies (how archetypes PLAY, not just how well)
+# ---------------------------------------------------------------------------
+# Multipliers around 1.0 applied to event-selection in the sim:
+#   shoot      - likelihood of being picked as the shooter on a shot chance
+#   hit        - likelihood of being picked to throw a hit
+#   shoot_bias - shoot-vs-pass decision bias (scales shoot_pass_tendency)
+#   block      - shot-blocking involvement
+#   carry      - controlled zone-entry (rush) tendency
+#
+# These make archetypes visible in the box score: snipers pile up shots,
+# power forwards pile up hits, playmakers pass up shots, grinders block.
+
+ARCHETYPE_TENDENCIES: Dict[str, Dict[str, float]] = {
+    # Forwards
+    "Sniper":               {"shoot": 1.8, "hit": 0.7, "shoot_bias": 1.5, "block": 0.6, "carry": 1.1},
+    "Playmaker":            {"shoot": 0.8, "hit": 0.7, "shoot_bias": 0.6, "block": 0.7, "carry": 1.3},
+    "Power Forward":        {"shoot": 1.3, "hit": 1.9, "shoot_bias": 1.1, "block": 0.9, "carry": 1.2},
+    "Two-Way Forward":      {"shoot": 1.0, "hit": 1.0, "shoot_bias": 1.0, "block": 1.3, "carry": 1.0},
+    "Grinder":              {"shoot": 0.8, "hit": 1.6, "shoot_bias": 0.9, "block": 1.4, "carry": 0.8},
+    "Enforcer":             {"shoot": 0.5, "hit": 2.2, "shoot_bias": 0.7, "block": 1.0, "carry": 0.7},
+    # Defense
+    "Offensive Defenseman": {"shoot": 1.4, "hit": 0.7, "shoot_bias": 1.2, "block": 0.8, "carry": 1.2},
+    "Defensive Defenseman": {"shoot": 0.6, "hit": 1.4, "shoot_bias": 0.8, "block": 1.8, "carry": 0.7},
+    "Two-Way Defenseman":   {"shoot": 1.0, "hit": 1.0, "shoot_bias": 1.0, "block": 1.3, "carry": 1.0},
+    "Physical Defenseman":  {"shoot": 0.7, "hit": 2.0, "shoot_bias": 0.8, "block": 1.4, "carry": 0.8},
+    "Puck-Moving Defenseman": {"shoot": 0.9, "hit": 0.8, "shoot_bias": 0.9, "block": 0.9, "carry": 1.4},
+    # Goalies / depth: neutral
+    "Butterfly Goalie":     {"shoot": 1.0, "hit": 1.0, "shoot_bias": 1.0, "block": 1.0, "carry": 1.0},
+    "Hybrid Goalie":        {"shoot": 1.0, "hit": 1.0, "shoot_bias": 1.0, "block": 1.0, "carry": 1.0},
+    "Athletic Goalie":      {"shoot": 1.0, "hit": 1.0, "shoot_bias": 1.0, "block": 1.0, "carry": 1.0},
+    "Puck-Handling Goalie": {"shoot": 1.0, "hit": 1.0, "shoot_bias": 1.0, "block": 1.0, "carry": 1.0},
+}
+
+_DEFAULT_TENDENCY = {"shoot": 1.0, "hit": 1.0, "shoot_bias": 1.0,
+                     "block": 1.0, "carry": 1.0}
+
+
+def get_tendency(player, key: str) -> float:
+    """Behavioral tendency multiplier for a player (1.0 = neutral).
+
+    Never raises; falls back to 1.0 for unknown archetypes/keys.
+    """
+    try:
+        arch = get_archetype(player)
+        return float(ARCHETYPE_TENDENCIES.get(arch, _DEFAULT_TENDENCY).get(key, 1.0))
+    except Exception:
+        return 1.0
+
+
+# ---------------------------------------------------------------------------
 # Flavor for UI / commentary
 # ---------------------------------------------------------------------------
 

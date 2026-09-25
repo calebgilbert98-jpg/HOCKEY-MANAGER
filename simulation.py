@@ -11,7 +11,7 @@ import math
 from enum import Enum
 from game_classes import Team, Player, PlayerPosition
 from player_archetypes import (
-    get_archetype, complementarity, matchup_multiplier,
+    get_archetype, complementarity, matchup_multiplier, get_tendency,
     ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
 )
 
@@ -1960,7 +1960,9 @@ class GameSim:
         except Exception:
             pass
         if self.physical_intensity > 1.0 and random.random() < hit_chance:
-            potential_hitter = random.choice(defending_skaters)
+            # Archetype tendency: the hitter is usually a power forward,
+            # enforcer, grinder or physical defenseman - not a sniper.
+            potential_hitter = self._weighted_skater_choice(defending_skaters, "hit")
             hit_result = self._attempt_hit(potential_hitter, puck_carrier, HitType.BODY_CHECK)
             if hit_result == HitResult.TURNOVER_CAUSED:
                 return self._resolve_turnover(puck_carrier, potential_hitter, TurnoverType.FORCED_ERROR)
@@ -2008,7 +2010,9 @@ class GameSim:
         event_roll = random.random()
         
         if event_roll < 0.3:  # 30% chance of shot attempt
-            shooter = random.choice(attacking_skaters)
+            # Archetype tendency: snipers get the puck in shooting spots far
+            # more often than playmakers or grinders.
+            shooter = self._weighted_skater_choice(attacking_skaters, "shoot")
             self._resolve_scoring_chance(shooter, attacking_team, defending_team)
         elif event_roll < 0.5:  # 20% chance of turnover/zone clear
             return self._attempt_zone_clear(defending_team, attacking_team)
@@ -2061,7 +2065,14 @@ class GameSim:
                 ZoneEntryType.CHIP_IN: 0.3,
                 ZoneEntryType.DUMP_IN: 0.3
             }
-        
+
+        # Archetype tendency: puck-movers and skilled carriers try to beat
+        # defenders one-on-one; grinders and defensive types dump it in.
+        try:
+            weights[ZoneEntryType.CONTROLLED_CARRY] *= get_tendency(puck_carrier, "carry")
+        except Exception:
+            pass
+
         return self._weighted_random_choice(weights)
 
     def _attempt_controlled_entry(self, puck_carrier, attacking_team, defending_team):
@@ -2568,6 +2579,12 @@ class GameSim:
         shooter_skill = (shooter.shooting_accuracy + shooter.shooting_power) / 2
         
         block_chance = base_block_chance * (blocker_skill / max(shooter_skill, 1)) * 0.01
+        # Archetype tendency: defensive defensemen and grinders sell out to
+        # block; snipers and offensive defensemen rarely do.
+        try:
+            block_chance *= get_tendency(best_blocker, "block")
+        except Exception:
+            pass
         block_chance = min(block_chance, 0.5)  # Cap at 50%
         
         if random.random() < block_chance:
@@ -2680,6 +2697,21 @@ class GameSim:
             upto += weight
         return items[-1]  # Fallback
 
+    def _weighted_skater_choice(self, skaters, tendency_key):
+        """Pick a skater weighted by archetype behavioral tendency.
+
+        E.g. "shoot" makes snipers the shooter far more often than
+        playmakers; "hit" makes power forwards/enforcers throw the hits.
+        Falls back to uniform choice if anything goes wrong.
+        """
+        if not skaters:
+            return None
+        try:
+            weights = [max(0.05, get_tendency(p, tendency_key)) for p in skaters]
+            return random.choices(skaters, weights=weights, k=1)[0]
+        except Exception:
+            return random.choice(skaters)
+
     def _handle_blocked_shot(self, shooter, blocker, attacking_team, defending_team):
         """Handle a blocked shot event with proper stat tracking."""
         # Update player stats
@@ -2751,7 +2783,10 @@ class GameSim:
         
         # Handle passing play possibility
         passer = None
-        if random.random() * 100 < shooter.shoot_pass_tendency and shot_type not in [ShotType.REBOUND, ShotType.TIP_IN]:
+        # Archetype tendency: snipers shoot first, playmakers look pass first.
+        shoot_bias = get_tendency(shooter, "shoot_bias")
+        if random.random() * 100 < shooter.shoot_pass_tendency * shoot_bias \
+                and shot_type not in [ShotType.REBOUND, ShotType.TIP_IN]:
             teammates = [p for p in self._get_on_ice(attacking_team) if p != shooter and p.primary_position != PlayerPosition.GOALIE]
             if teammates and random.random() < 0.3:  # 30% chance of pass play
                 passer = shooter
@@ -3546,7 +3581,7 @@ class GameSim:
         event_roll = random.random()
         
         if event_roll < shot_chance:
-            shooter = random.choice(attacking_skaters)
+            shooter = self._weighted_skater_choice(attacking_skaters, "shoot")
             self._resolve_scoring_chance(shooter, attacking_team, defending_team)
         elif event_roll < shot_chance + turnover_chance:
             return self._attempt_zone_clear(defending_team, attacking_team)
