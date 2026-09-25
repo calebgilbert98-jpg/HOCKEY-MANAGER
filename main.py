@@ -2453,6 +2453,8 @@ class AdvancedGameSim:
                 shot_chance += 0.035  # More aggressive, higher risk/reward
             elif pp_tactic == 'Offensive':
                 shot_chance += 0.025
+            elif pp_tactic == 'Conservative':
+                shot_chance += 0.005  # Patient, prevent shorthanded goals against
             else:  # Balanced
                 shot_chance += 0.015
         elif self.pk_team == puck_team_name:
@@ -2460,21 +2462,33 @@ class AdvancedGameSim:
             pk_tactic = getattr(shooting_team, 'tactic_penalty_kill', 'Defensive')
             if pk_tactic == 'Aggressive':
                 shot_chance += 0.01  # More shorthanded rushes
-            # Defensive/Very Defensive: focus on clearing, fewer shots
+            elif pk_tactic == 'Balanced':
+                shot_chance += 0.005
+            elif pk_tactic == 'Very Defensive':
+                shot_chance -= 0.005  # Pure survival mode
+            # Defensive: focus on clearing, fewer shots
         else:
             # Even strength tactics
             es_tactic = getattr(shooting_team, 'tactic_even_strength', 'Balanced')
-            if es_tactic == 'Offensive':
+            if es_tactic == 'Very Offensive':
+                shot_chance += 0.02  # All-out attack
+            elif es_tactic == 'Offensive':
                 shot_chance += 0.01  # More shots, higher quality chances
             elif es_tactic == 'Defensive':
                 shot_chance -= 0.008  # Fewer shots, focus on defense
+            elif es_tactic == 'Very Defensive':
+                shot_chance -= 0.014  # Trap hockey
             
             # Defending team's tactics affect shot quality against
             def_tactic = getattr(defending_team, 'tactic_even_strength', 'Balanced')
-            if def_tactic == 'Defensive':
+            if def_tactic == 'Very Defensive':
+                shot_chance -= 0.012  # Maximum structure
+            elif def_tactic == 'Defensive':
                 shot_chance -= 0.008  # Tight defense reduces quality
             elif def_tactic == 'Offensive':
                 shot_chance += 0.005  # Aggressive D leaves gaps
+            elif def_tactic == 'Very Offensive':
+                shot_chance += 0.008  # Pinching D, odd-man rushes both ways
         
         # Home-ice advantage: small boost for home team (NHL home win ~55%)
         # +0.5% absolute shooting chance ≈ the observed home edge
@@ -5832,6 +5846,10 @@ class HockeyManagerGUI(tk.Tk):
             
             # Process games if any exist
             if todays_games:
+                # Rosters/tactics can change daily (trades, injuries, user tweaks):
+                # drop the cached team-strength values so sims stay current.
+                if hasattr(self, '_strength_cache'):
+                    self._strength_cache.clear()
                 self._process_todays_games(todays_games)
             
             # Process injury recovery (daily)
@@ -6803,6 +6821,21 @@ class HockeyManagerGUI(tk.Tk):
         home_goal_expectation = max(1.0, min(4.5, home_goal_expectation))
         away_goal_expectation = max(1.0, min(4.5, away_goal_expectation))
 
+        # Team tactics shape scoring (EHM-style: style matters, not just talent).
+        # Offensive hockey opens the game up (both teams score more);
+        # defensive systems suppress scoring at both ends.
+        def _tactic_shifts(es_tactic):
+            own_shift = {'Very Offensive': 0.14, 'Offensive': 0.10, 'Balanced': 0.0,
+                         'Defensive': -0.08, 'Very Defensive': -0.11}.get(es_tactic, 0.0)
+            opp_shift = {'Very Offensive': 0.11, 'Offensive': 0.08, 'Balanced': 0.0,
+                         'Defensive': -0.06, 'Very Defensive': -0.09}.get(es_tactic, 0.0)
+            return own_shift, opp_shift
+
+        home_own, home_opp = _tactic_shifts(getattr(home_team, 'tactic_even_strength', 'Balanced'))
+        away_own, away_opp = _tactic_shifts(getattr(away_team, 'tactic_even_strength', 'Balanced'))
+        home_goal_expectation += home_own + away_opp
+        away_goal_expectation += away_own + home_opp
+
         # FM-style squad morale modifier (subtle: +/-3%)
         home_goal_expectation *= self._career_morale_modifier(home_team)
         away_goal_expectation *= self._career_morale_modifier(away_team)
@@ -7339,12 +7372,13 @@ class HockeyManagerGUI(tk.Tk):
         print(f"DEBUG: About to launch game viewer")
         
         # Launch the game viewer using the launch function
-        # This will create its own window and handle the display
+        # Opens as a modal Toplevel on the main window; returns when closed
         launch_game_viewer(
             event_log=sim_engine.event_log,
             duration=3600,  # Game duration in seconds
             home_team=home_team.team_name,
-            away_team=away_team.team_name
+            away_team=away_team.team_name,
+            parent=self  # HockeyManagerGUI is itself the tk.Tk root
         )
         
         print("Game viewer launched and completed")

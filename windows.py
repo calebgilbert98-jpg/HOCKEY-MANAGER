@@ -8598,9 +8598,10 @@ class EditLinesWindow(tk.Toplevel):
         
         es_strategies = ["Very Defensive", "Defensive", "Balanced", "Offensive", "Very Offensive"]
         es_combo = ttk.Combobox(es_frame, values=es_strategies, width=20, state="readonly")
-        es_combo.set("Balanced")
+        es_combo.set(getattr(self.parent.user_team, 'tactic_even_strength', 'Balanced'))
         es_combo.pack(side="left", padx=5)
-        es_combo.bind("<<ComboboxSelected>>", lambda e: self._update_strategy_analysis())
+        es_combo.bind("<<ComboboxSelected>>",
+                      lambda e: self._on_tactic_changed('tactic_even_strength', es_combo.get()))
         
         ttk.Label(es_frame, text="(5v5 play style)", style='TLabel',
                  font=(self.parent.FONT_FAMILY, 9), foreground='#888888').pack(side="left", padx=(10, 0))
@@ -8614,9 +8615,10 @@ class EditLinesWindow(tk.Toplevel):
         
         pp_strategies = ["Conservative", "Balanced", "Offensive", "Very Offensive"]
         pp_combo = ttk.Combobox(pp_frame, values=pp_strategies, width=20, state="readonly")
-        pp_combo.set("Offensive")
+        pp_combo.set(getattr(self.parent.user_team, 'tactic_power_play', 'Offensive'))
         pp_combo.pack(side="left", padx=5)
-        pp_combo.bind("<<ComboboxSelected>>", lambda e: self._update_strategy_analysis())
+        pp_combo.bind("<<ComboboxSelected>>",
+                      lambda e: self._on_tactic_changed('tactic_power_play', pp_combo.get()))
         
         ttk.Label(pp_frame, text="(Man advantage approach)", style='TLabel',
                  font=(self.parent.FONT_FAMILY, 9), foreground='#888888').pack(side="left", padx=(10, 0))
@@ -8630,9 +8632,10 @@ class EditLinesWindow(tk.Toplevel):
         
         pk_strategies = ["Very Defensive", "Defensive", "Balanced", "Aggressive"]
         pk_combo = ttk.Combobox(pk_frame, values=pk_strategies, width=20, state="readonly")
-        pk_combo.set("Defensive")
+        pk_combo.set(getattr(self.parent.user_team, 'tactic_penalty_kill', 'Defensive'))
         pk_combo.pack(side="left", padx=5)
-        pk_combo.bind("<<ComboboxSelected>>", lambda e: self._update_strategy_analysis())
+        pk_combo.bind("<<ComboboxSelected>>",
+                      lambda e: self._on_tactic_changed('tactic_penalty_kill', pk_combo.get()))
         
         ttk.Label(pk_frame, text="(Short-handed defense)", style='TLabel',
                  font=(self.parent.FONT_FAMILY, 9), foreground='#888888').pack(side="left", padx=(10, 0))
@@ -8725,6 +8728,15 @@ class EditLinesWindow(tk.Toplevel):
         
         self._update_strategy_analysis()
     
+    def _on_tactic_changed(self, attr, value):
+        """Persist a tactic choice to the user team, then refresh the analysis."""
+        try:
+            if hasattr(self, 'parent') and hasattr(self.parent, 'user_team') and self.parent.user_team:
+                setattr(self.parent.user_team, attr, value)
+        except Exception:
+            pass
+        self._update_strategy_analysis()
+
     def _update_strategy_analysis(self):
         """Update the strategy analysis display and save tactics to team"""
         try:

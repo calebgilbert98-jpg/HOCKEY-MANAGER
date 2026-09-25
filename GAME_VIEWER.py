@@ -1176,12 +1176,24 @@ class RebuiltNHLGameViewer:
 
 
 # Compatibility function for main.py integration
-def launch_game_viewer(event_log, duration=3600, home_team="HOME", away_team="AWAY"):
+def launch_game_viewer(event_log, duration=3600, home_team="HOME", away_team="AWAY", parent=None):
     """
-    Launch the rebuilt game viewer - compatible with main.py
+    Launch the rebuilt game viewer - compatible with main.py.
+
+    If `parent` is given, the viewer opens as a Toplevel on the existing app
+    and blocks via wait_window until closed (no second tk.Tk()/mainloop).
     """
     print("🏒 Launching Rebuilt NHL Game Viewer...")
     
+    if parent is not None:
+        win = tk.Toplevel(parent)
+        win.transient(parent)
+        viewer = RebuiltNHLGameViewer(win, event_log, duration, home_team, away_team)
+        if event_log:
+            viewer.start_playback()
+        parent.wait_window(win)
+        return
+
     root = tk.Tk()
     viewer = RebuiltNHLGameViewer(root, event_log, duration, home_team, away_team)
     
