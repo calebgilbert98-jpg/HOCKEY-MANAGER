@@ -16,7 +16,7 @@ except Exception:
     _PIL_OK = False
 
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_cache")
-_CACHE_TAG = "v3"  # bump when the art style changes so old cached faces refresh
+_CACHE_TAG = "v4"  # bump when the art style changes so old cached faces refresh
 _MEMO = {}
 
 # Skin tones with undertones (base, shadow, highlight)
