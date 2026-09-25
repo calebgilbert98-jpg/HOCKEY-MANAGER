@@ -124,7 +124,12 @@ class RosterWindow(tk.Toplevel):
         subtitle_frame = ttk.Frame(header_frame, style='TitleBar.TFrame')
         subtitle_frame.pack(fill=tk.X, pady=(10, 0))
         
-        season_info = f"Season: 2024-25 | Total Players: {total_players} | Last Updated: Today"
+        try:
+            season_year = self.parent.league.season_year
+            season_str = f"{season_year}-{str(season_year + 1)[-2:]}"
+        except Exception:
+            season_str = "2026-27"
+        season_info = f"Season: {season_str} | Total Players: {total_players} | Last Updated: Today"
         ttk.Label(
             subtitle_frame,
             text=season_info,
@@ -290,13 +295,21 @@ class RosterWindow(tk.Toplevel):
         filter_content = ttk.Frame(filter_frame, style='Panel.TFrame', padding=5)
         filter_content.pack(fill=tk.X)
         
-        # Position filter
+        # Position filter pills (instant-apply, no dropdown)
         ttk.Label(filter_content, text="Position:", style='Content.TLabel').pack(side=tk.LEFT)
-        pos_options = ["All", "F", "C", "LW", "RW", "D", "LD", "RD", "G"]
-        pos_combo = ttk.Combobox(filter_content, textvariable=self.roster_filters['position'], 
-                                values=pos_options, width=8, state='readonly')
-        pos_combo.pack(side=tk.LEFT, padx=5)
-        
+        if not hasattr(self, '_pos_pill_groups'):
+            self._pos_pill_groups = []
+        pos_options = ["All", "F", "D", "G"]
+        pill_btns = {}
+        for opt in pos_options:
+            b = tk.Button(filter_content, text=opt, relief='flat', bd=0, cursor='hand2',
+                          font=(self.parent.FONT_FAMILY, 9, 'bold'), padx=12, pady=3,
+                          command=lambda o=opt: self._set_position_filter(o))
+            b.pack(side=tk.LEFT, padx=2)
+            pill_btns[opt] = b
+        self._pos_pill_groups.append(pill_btns)
+        self._paint_position_pills()
+
         # Age filters
         ttk.Label(filter_content, text="Age:", style='Content.TLabel').pack(side=tk.LEFT, padx=(10, 5))
         age_min_entry = ttk.Entry(filter_content, textvariable=self.roster_filters['age_min'], width=4)
@@ -304,14 +317,16 @@ class RosterWindow(tk.Toplevel):
         ttk.Label(filter_content, text="to", style='Content.TLabel').pack(side=tk.LEFT)
         age_max_entry = ttk.Entry(filter_content, textvariable=self.roster_filters['age_max'], width=4)
         age_max_entry.pack(side=tk.LEFT, padx=2)
-        
+
         # Overall rating filter
         ttk.Label(filter_content, text="Min OVR:", style='Content.TLabel').pack(side=tk.LEFT, padx=(10, 5))
         ovr_entry = ttk.Entry(filter_content, textvariable=self.roster_filters['overall_min'], width=4)
         ovr_entry.pack(side=tk.LEFT, padx=2)
-        
+        for entry in (age_min_entry, age_max_entry, ovr_entry):
+            entry.bind('<Return>', lambda e, rt=roster_type: self.apply_filters(rt))
+
         # Apply filter button
-        ttk.Button(filter_content, text="Apply Filters", 
+        ttk.Button(filter_content, text="Apply Filters",
                   command=lambda: self.apply_filters(roster_type),
                   style='TButton').pack(side=tk.LEFT, padx=10)
         
@@ -674,13 +689,41 @@ class RosterWindow(tk.Toplevel):
                        foreground=self.parent.HEADER_COLOR,
                        font=(self.parent.FONT_FAMILY, 9, 'bold'))
     
+    def _player_passes_filters(self, player):
+        """True when the player matches the roster toolbar filters."""
+        f = self.roster_filters
+        pos_filter = f['position'].get()
+        if pos_filter and pos_filter != "All":
+            pos = player.primary_position.value
+            groups = {'F': ('LW', 'C', 'RW'), 'D': ('LD', 'RD', 'D'), 'G': ('G',)}
+            if pos_filter in groups:
+                if pos not in groups[pos_filter]:
+                    return False
+            elif pos != pos_filter:
+                return False
+        try:
+            if f['age_min'].get().strip() and player.age < int(f['age_min'].get()):
+                return False
+            if f['age_max'].get().strip() and player.age > int(f['age_max'].get()):
+                return False
+            # Overall filter is on the 1-100 display scale
+            if f['overall_min'].get().strip():
+                from game_classes import to_100_scale
+                if to_100_scale(player.overall_rating()) < int(f['overall_min'].get()):
+                    return False
+        except (ValueError, TypeError):
+            pass
+        return True
+
     def populate_roster_tree(self, tree, players, roster_type):
         """Populate treeview with player data."""
         # Clear existing items
         tree.delete(*tree.get_children())
         self.player_maps[roster_type] = {}
-        
+
         for player in sorted(players, key=lambda p: p.overall_rating(), reverse=True):
+            if not self._player_passes_filters(player):
+                continue
             # Selection checkbox
             is_selected = player.id in self.selected_players[roster_type]
             checkbox = "☑" if is_selected else "☐"
@@ -883,6 +926,27 @@ class RosterWindow(tk.Toplevel):
         for i, item_id in enumerate(items):
             tree.move(item_id, '', i)
     
+    def _set_position_filter(self, value):
+        """Set the position filter via pill and refresh all roster tabs."""
+        self.roster_filters['position'].set(value)
+        self._paint_position_pills()
+        for rt in ('nhl', 'ahl', 'prospects'):
+            try:
+                self.update_roster_tab(rt)
+            except Exception:
+                pass
+
+    def _paint_position_pills(self):
+        current = self.roster_filters['position'].get()
+        for group in getattr(self, '_pos_pill_groups', []):
+            for value, btn in group.items():
+                if value == current:
+                    btn.configure(bg='#E63946', fg='white',
+                                  activebackground='#c1121f', activeforeground='white')
+                else:
+                    btn.configure(bg='#2a3350', fg='#c8d0e0',
+                                  activebackground='#3a4568', activeforeground='white')
+
     def apply_filters(self, roster_type):
         """Apply filters to roster view."""
         # This would filter the displayed players based on the filter criteria
@@ -1005,9 +1069,11 @@ class RosterWindow(tk.Toplevel):
             tk.messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
     
     def open_lines_editor(self):
-        """Open the lines editor."""
-        # This would open the existing lines editor
-        pass
+        """Open the live lines editor."""
+        try:
+            self.parent.open_edit_lines_window()
+        except Exception:
+            pass
     
     def export_roster(self):
         """Export roster to CSV file."""
