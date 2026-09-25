@@ -234,20 +234,22 @@ class AtmosphericDashboard:
         self.day_label.pack()
         
         # Primary action button (Continue Day) with atmosphere
-        continue_btn = tk.Button(action_frame, text="⏭ Continue Day",
+        continue_btn = tk.Button(action_frame, text="Continue Day",
                                font=self.theme.fonts['subheading'],
                                bg=self.theme.colors.primary,
                                fg=self.theme.colors.text_light,
                                activebackground=self.theme.colors.success,
                                activeforeground=self.theme.colors.text_light,
-                               relief='flat', bd=0,
+                               relief='flat', bd=0, highlightthickness=0,
                                padx=24, pady=12,
                                cursor='hand2',
                                command=self._continue_day_action)
         continue_btn.pack(pady=(0, 12))
-        
+
         # Add hover effects
         self._add_button_hover_effects(continue_btn)
+        # Gentle "alive" pulse on the primary action
+        self._pulse_continue_button(continue_btn)
         
         # Quick actions menu
         quick_actions_label = tk.Label(action_frame, text="Quick Actions",
@@ -257,21 +259,21 @@ class AtmosphericDashboard:
         quick_actions_label.pack(anchor='w', pady=(8, 4))
         
         quick_actions = [
-            ("📊 Team Stats", self._quick_stats_action),
-            ("📋 Roster", self._quick_roster_action),
-            ("🏆 Standings", self._quick_standings_action),
+            ("Team Stats", self._quick_stats_action),
+            ("Roster", self._quick_roster_action),
+            ("Standings", self._quick_standings_action),
         ]
-        
+
         for action_text, action_command in quick_actions:
             action_btn = tk.Button(action_frame, text=action_text,
                                   font=self.theme.fonts['body'],
                                   bg=self.theme.colors.secondary,
                                   fg=self.theme.colors.text_light,
-                                  relief='flat', bd=1,
-                                  padx=16, pady=6,
+                                  relief='flat', bd=0, highlightthickness=0,
+                                  padx=16, pady=8,
                                   cursor='hand2',
                                   command=action_command)
-            action_btn.pack(fill='x', pady=2)
+            action_btn.pack(fill='x', pady=3)
             self._add_button_hover_effects(action_btn, subtle=True)
         
         self.widgets['action_panel'] = action_frame
@@ -306,22 +308,29 @@ class AtmosphericDashboard:
         nav_frame.pack(fill='x', pady=(0, 12))
         nav_frame.pack_propagate(False)
         
-        story_tabs = ["📈 Team Performance", "📝 Recent Events", "🎯 Priorities", "📊 League Pulse", "🏆 Standings", "👑 Stat Leaders"]
+        story_tabs = ["Team Performance", "Recent Events", "Priorities", "League Pulse", "Standings", "Stat Leaders"]
         self.active_tab = 0  # Track active tab
         self.tab_buttons = []  # Store tab buttons for styling updates
-        
+        self.tab_indicators = []
+
         for i, tab_text in enumerate(story_tabs):
-            tab_btn = tk.Button(nav_frame, text=tab_text,
+            tab_wrap = tk.Frame(nav_frame, bg=self.theme.colors.secondary)
+            tab_wrap.pack(side='left', padx=6)
+            tab_btn = tk.Button(tab_wrap, text=tab_text,
                                font=self.theme.fonts['body'],
-                               bg=self.theme.colors.primary if i == 0 else self.theme.colors.secondary,
-                               fg=self.theme.colors.text_light,
-                               relief='flat', bd=0,
-                               padx=16, pady=12,
+                               bg=self.theme.colors.secondary,
+                               fg='#ffffff' if i == 0 else '#8b98ac',
+                               relief='flat', bd=0, highlightthickness=0,
+                               padx=10, pady=10,
                                cursor='hand2',
                                command=lambda idx=i: self._switch_tab(idx))
-            tab_btn.pack(side='left', padx=2)
+            tab_btn.pack()
+            indicator = tk.Frame(tab_wrap, height=2,
+                                 bg=self.theme.colors.primary if i == 0 else self.theme.colors.secondary)
+            indicator.pack(fill='x')
             self._add_button_hover_effects(tab_btn, subtle=True)
             self.tab_buttons.append(tab_btn)
+            self.tab_indicators.append(indicator)
         
         # Story content area
         self.story_content = tk.Frame(story_frame, bg=self.theme.colors.background)
@@ -337,12 +346,13 @@ class AtmosphericDashboard:
         # Update active tab
         self.active_tab = tab_index
         
-        # Update button styles
+        # Update button styles: active tab gets white text + red underline
         for i, btn in enumerate(self.tab_buttons):
-            if i == tab_index:
-                btn.configure(bg=self.theme.colors.primary)
-            else:
-                btn.configure(bg=self.theme.colors.secondary)
+            active = (i == tab_index)
+            btn.configure(fg='#ffffff' if active else '#8b98ac')
+            if i < len(self.tab_indicators):
+                self.tab_indicators[i].configure(
+                    bg=self.theme.colors.primary if active else self.theme.colors.secondary)
         
         # Clear current content
         for widget in self.story_content.winfo_children():
@@ -605,8 +615,11 @@ class AtmosphericDashboard:
     
     def _create_metric_card(self, parent, metric: Dict, index: int) -> tk.Frame:
         """Create individual metric card with storytelling"""
-        card = tk.Frame(parent, bg=self.theme.colors.secondary, 
-                       relief='flat', bd=1, padx=12, pady=10)
+        accent = self._get_context_color(metric.get("context", "neutral"))
+        card = tk.Frame(parent, bg=self.theme.colors.secondary,
+                       relief='flat', bd=0, padx=16, pady=12)
+        # Slim accent line on top instead of a chunky border
+        tk.Frame(card, bg=accent, height=2).pack(fill='x', pady=(0, 8))
         
         # Icon and trend
         header_frame = tk.Frame(card, bg=self.theme.colors.secondary)
@@ -891,6 +904,49 @@ class AtmosphericDashboard:
         close_btn.pack(pady=20)
     
     # Animation and effects
+    def _pulse_continue_button(self, button):
+        """Subtle breathing glow on the primary action so the screen feels alive."""
+        base = self.theme.colors.primary
+        glow = '#e5484d'
+        shades = self._shade_range(base, glow, 24)
+        state = {'t': 0.0, 'hover': False}
+
+        def on_enter(_e):
+            state['hover'] = True
+        def on_leave(_e):
+            state['hover'] = False
+        button.bind('<Enter>', on_enter, add='+')
+        button.bind('<Leave>', on_leave, add='+')
+
+        def tick():
+            try:
+                if not button.winfo_exists():
+                    return
+                import math
+                state['t'] += 0.07
+                if not state['hover']:
+                    idx = int((math.sin(state['t']) * 0.5 + 0.5) * (len(shades) - 1))
+                    button.configure(bg=shades[idx])
+                else:
+                    button.configure(bg=glow)
+            except Exception:
+                pass
+            finally:
+                try:
+                    button.after(90, tick)
+                except Exception:
+                    pass
+        tick()
+
+    @staticmethod
+    def _shade_range(c1, c2, n):
+        def hx(h):
+            h = h.lstrip('#')
+            return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+        a, b = hx(c1), hx(c2)
+        return ['#%02x%02x%02x' % tuple(int(a[j] + (b[j]-a[j]) * i/(n-1)) for j in range(3))
+                for i in range(n)]
+
     def _start_ambient_animations(self):
         """Start subtle ambient animations"""
         # Pulse team logo every 3 seconds

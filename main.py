@@ -3665,13 +3665,13 @@ class HockeyManagerGUI(tk.Tk):
         # Primary action buttons (always visible) - temporarily disable icons
         self.inbox_btn = ttk.Button(left_menu_frame, text=self._get_inbox_button_text(), 
                                   style="TeamMenu.TButton", command=self.open_inbox_window)
-        self.inbox_btn.pack(side="left", padx=2)
+        self.inbox_btn.pack(side="left", padx=4)
 
-        ttk.Button(left_menu_frame, text="🏒 Roster",
+        ttk.Button(left_menu_frame, text="Roster",
                  style="TeamMenu.TButton", 
-                 command=self.open_roster_window).pack(side="left", padx=2)        # Schedule & Calendar dropdown
-        self._create_dropdown_menu(left_menu_frame, "📅 Schedule", {
-            "📅 Schedule": self.open_schedule_window,
+                 command=self.open_roster_window).pack(side="left", padx=4)        # Schedule & Calendar dropdown
+        self._create_dropdown_menu(left_menu_frame, "Schedule", {
+            "Schedule": self.open_schedule_window,
             "🗓️ Calendar": self.open_calendar_window
         })
         
@@ -3680,7 +3680,7 @@ class HockeyManagerGUI(tk.Tk):
         separator1.pack(side="left", fill="y", padx=8)
         
         # Team Management dropdown
-        self._create_dropdown_menu(left_menu_frame, "👥 Team", {
+        self._create_dropdown_menu(left_menu_frame, "Team", {
             "📋 Edit Lines": self.open_edit_lines_window,
             "👥 Staff Management": self.open_staff_management_window,
             "� Player Development": self.open_development_window,
@@ -3691,13 +3691,13 @@ class HockeyManagerGUI(tk.Tk):
         })
         
         # Finances dropdown
-        self._create_dropdown_menu(left_menu_frame, "💰 Finances", {
+        self._create_dropdown_menu(left_menu_frame, "Finances", {
             "💰 Team Finances": self.open_finances_window,
             "📝 Negotiate Extensions": self.open_contract_extensions_window
         })
         
         # Transactions dropdown  
-        self._create_dropdown_menu(left_menu_frame, "💼 Transactions", {
+        self._create_dropdown_menu(left_menu_frame, "Transactions", {
             "� Fantasy Draft": self.open_fantasy_draft_window,
             "�🆓 Free Agents": self.open_free_agency_window,
             "🔄 Trade Center": self.open_trade_window,
@@ -3711,36 +3711,36 @@ class HockeyManagerGUI(tk.Tk):
         right_menu_frame.pack(side="right")
 
         # Save/Load dropdown
-        self._create_dropdown_menu(right_menu_frame, "💾 Save/Load", {
+        self._create_dropdown_menu(right_menu_frame, "Save/Load", {
             "💾 Save Game": self.open_save_window,
             "📁 Load Game": self.open_load_window,
             "🏆 Playoffs": self.open_playoffs_window
         })
 
         # Right menu buttons - temporarily back to text
-        ttk.Button(right_menu_frame, text="📰 News", style="TeamMenu.TButton", 
-                 command=self.open_news_window).pack(side="right", padx=2)
+        ttk.Button(right_menu_frame, text="News", style="TeamMenu.TButton", 
+                 command=self.open_news_window).pack(side="right", padx=4)
 
         # Media Center button (optional system)
-        ttk.Button(right_menu_frame, text="🎬 Media", style="TeamMenu.TButton", 
-                 command=self.open_media_center).pack(side="right", padx=2)
+        ttk.Button(right_menu_frame, text="Media", style="TeamMenu.TButton", 
+                 command=self.open_media_center).pack(side="right", padx=4)
 
         # Stats & Standings button
-        ttk.Button(right_menu_frame, text="📊 Stats", style="TeamMenu.TButton", 
-                 command=self.open_stats_standings_window).pack(side="right", padx=2)
+        ttk.Button(right_menu_frame, text="Stats", style="TeamMenu.TButton", 
+                 command=self.open_stats_standings_window).pack(side="right", padx=4)
         
         # GM Options as standalone button
-        ttk.Button(right_menu_frame, text="🏆 GM Options", style="TeamMenu.TButton", 
-                 command=self.open_gm_options_window).pack(side="right", padx=2)
+        ttk.Button(right_menu_frame, text="GM Options", style="TeamMenu.TButton", 
+                 command=self.open_gm_options_window).pack(side="right", padx=4)
         
         # Settings as its own button
-        ttk.Button(right_menu_frame, text="⚙️ Settings", style="TeamMenu.TButton", 
-                 command=self.open_settings_window).pack(side="right", padx=2)
+        ttk.Button(right_menu_frame, text="Settings", style="TeamMenu.TButton", 
+                 command=self.open_settings_window).pack(side="right", padx=4)
         
         # Game viewer toggle
-        self.game_viewer_btn = ttk.Button(right_menu_frame, text="🎮 Viewer: OFF", 
+        self.game_viewer_btn = ttk.Button(right_menu_frame, text="Viewer: OFF", 
                                         style="TeamMenu.TButton", command=self.toggle_game_viewer)
-        self.game_viewer_btn.pack(side="right", padx=2)
+        self.game_viewer_btn.pack(side="right", padx=4)
         
         # Initialize button state based on current settings
         self._update_game_viewer_button_state()
@@ -3751,7 +3751,7 @@ class HockeyManagerGUI(tk.Tk):
         
         # Create the main dropdown button
         dropdown_btn = ttk.Button(parent, text=button_text, style="TeamMenu.TButton")
-        dropdown_btn.pack(side="left", padx=2)
+        dropdown_btn.pack(side="left", padx=4)
         
         # Create dropdown menu
         dropdown_menu = tk.Menu(self.master, tearoff=0, font=(self.FONT_FAMILY, 9))
@@ -4126,7 +4126,7 @@ class HockeyManagerGUI(tk.Tk):
         
     def _create_enhanced_schedule_panel(self, parent):
         """Enhanced schedule panel with better game information."""
-        panel = self._create_panel(parent, "📅 Schedule", 1, 0)
+        panel = self._create_panel(parent, "Schedule", 1, 0)
         
         content_frame = ttk.Frame(panel, style='Panel.TFrame', padding=5)
         content_frame.grid(row=1, column=0, sticky='nsew', padx=5, pady=5)
@@ -5320,7 +5320,7 @@ class HockeyManagerGUI(tk.Tk):
             current_setting = settings.get('simulation', {}).get('use_game_viewer', False)
             print(f"DEBUG: Loading game viewer button state: {current_setting}")
             print(f"DEBUG: Full simulation settings: {settings.get('simulation', {})}")
-            self.game_viewer_btn.config(text=f"🎮 Viewer: {'ON' if current_setting else 'OFF'}")
+            self.game_viewer_btn.config(text=f"Viewer: {'ON' if current_setting else 'OFF'}")
 
     def toggle_season_flow_panel(self):
         """Toggle the visibility of the automated season flow panel"""
@@ -8160,8 +8160,8 @@ class HockeyManagerGUI(tk.Tk):
         """Get the text for the inbox button with unread count."""
         unread_count = self.user_team.inbox.unread_count
         if unread_count > 0:
-            return f"📧 Inbox ({unread_count})"
-        return "📧 Inbox"
+            return f"Inbox ({unread_count})"
+        return "Inbox"
         
     def update_inbox_notification(self):
         """Update the inbox button notification."""
@@ -12803,7 +12803,7 @@ class GMOptionsWindow(tk.Toplevel):
         # Title bar
         title_bar = ttk.Frame(self, padding=(20, 10))
         title_bar.pack(fill="x")
-        ttk.Label(title_bar, text="🏆 GM Options", font=(parent.FONT_FAMILY, 16, 'bold'), 
+        ttk.Label(title_bar, text="GM Options", font=(parent.FONT_FAMILY, 16, 'bold'), 
                  background=parent.BG_COLOR, foreground=parent.HEADER_COLOR).pack()
         
         # Subtitle

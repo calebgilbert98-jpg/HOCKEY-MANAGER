@@ -164,19 +164,20 @@ class ModernUITheme:
             ]
         )
         
-        # Team-colored menu button style (will be updated dynamically)
+        # Modern dark nav pills (neutral chrome; team color reserved for accents)
         style.configure('TeamMenu.TButton',
             font=self.fonts['button'],
-            foreground='white',
-            background=self.colors.primary_accent,  # Default fallback
-            padding=(8, 6),
+            foreground='#c3cddd',
+            background='#141b2a',
+            padding=(10, 8),
             borderwidth=0,
             relief='flat'
         )
         style.map('TeamMenu.TButton',
+            foreground=[('active', '#ffffff')],
             background=[
-                ('active', self.colors.danger),
-                ('pressed', '#C44569')
+                ('active', '#1e2942'),
+                ('pressed', '#d13438')
             ]
         )
         
@@ -325,31 +326,22 @@ class ModernUITheme:
         return frame
     
     def update_team_colors(self, style: ttk.Style, team_name: str):
-        """Update the TeamMenu.TButton style with the team's colors"""
-        if team_name and team_name in self.team_identity.team_colors:
-            team_colors = self.team_identity.team_colors[team_name]
-            
-            # Configure team-colored menu buttons
-            style.configure('TeamMenu.TButton',
-                font=self.fonts['button'],
-                foreground=team_colors.text_on_primary,
-                background=team_colors.primary,
-                padding=(8, 6),
-                borderwidth=0,
-                relief='flat'
-            )
-            
-            # Create hover/active colors based on the team's primary color
-            # Darken the primary color for hover states
-            hover_color = self._darken_color(team_colors.primary, 0.15)
-            pressed_color = self._darken_color(team_colors.primary, 0.25)
-            
-            style.map('TeamMenu.TButton',
-                background=[
-                    ('active', hover_color),
-                    ('pressed', pressed_color)
-                ]
-            )
+        """Keep nav chrome neutral-dark; team color lives in accents only."""
+        style.configure('TeamMenu.TButton',
+            font=self.fonts['button'],
+            foreground='#c3cddd',
+            background='#141b2a',
+            padding=(10, 8),
+            borderwidth=0,
+            relief='flat'
+        )
+        style.map('TeamMenu.TButton',
+            foreground=[('active', '#ffffff')],
+            background=[
+                ('active', '#1e2942'),
+                ('pressed', '#d13438')
+            ]
+        )
     
     def _darken_color(self, hex_color: str, factor: float) -> str:
         """Darken a hex color by the given factor (0.0 to 1.0)"""

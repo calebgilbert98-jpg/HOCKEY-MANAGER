@@ -143,112 +143,317 @@ class MainMenu(tk.Tk):
         y = (self.winfo_screenheight() // 2) - (height // 2)
         self.geometry(f'{width}x{height}+{x}+{y}')
     
+    # ------------------------------------------------------------------
+    # Modern animated game menu
+    # ------------------------------------------------------------------
+    def _menu_font(self, size, weight='normal'):
+        return ('Segoe UI', size, weight)
+
+    def _spaced(self, text):
+        return ' '.join(list(text))
+
     def _create_interface(self):
-        """Create the main menu interface"""
-        # Main container
-        if self.background_photo:
+        """Create the modern animated main menu stage."""
+        self.geometry("1280x800")
+        self.minsize(1024, 640)
+        self.configure(bg='#05070c')
+
+        self.canvas = tk.Canvas(self, highlightthickness=0, bg='#05070c')
+        self.canvas.pack(fill='both', expand=True)
+
+        self._mx = 96
+        self._pulse = 0.0
+        self._items = []
+        self._sel = 0
+        self._particles = []
+        self._glow_shades = self._make_shades('#3d0f14', '#d13438', 28)
+        self._ticker_msg = ("   2025-26 SEASON   \u2022   32 TEAMS   \u2022   1,312 GAMES   "
+                            "\u2022   BUILD YOUR DYNASTY   \u2022   OWN THE ICE   \u2022")
+        self._ticker_x = 0
+        self._menu_alive = True
+        self._paint_w = 0
+
+        self._define_menu_items()
+        self._repaint()
+
+        self.canvas.bind('<Configure>', lambda e: self._on_menu_resize(e))
+        self.bind('<Up>', lambda e: self._menu_move(-1))
+        self.bind('<Down>', lambda e: self._menu_move(1))
+        self.bind('<Return>', lambda e: self._menu_activate())
+        self.bind('<Escape>', lambda e: self._exit_game())
+
+        # Compatibility shims for existing logic
+        self.continue_btn = _MenuItemShim(self, 'continue')
+        self.after(60, self._menu_tick)
+
+    def _define_menu_items(self):
+        self._menu_defs = [
+            {'id': 'new',      'label': 'NEW GAME',  'cmd': self._new_game,      'enabled': True},
+            {'id': 'continue', 'label': 'CONTINUE',  'cmd': self._continue_game, 'enabled': False},
+            {'id': 'load',     'label': 'LOAD GAME', 'cmd': self._load_game,     'enabled': True},
+            {'id': 'settings', 'label': 'SETTINGS',  'cmd': self._open_settings, 'enabled': True},
+            {'id': 'about',    'label': 'ABOUT',     'cmd': self._show_about,    'enabled': True},
+            {'id': 'exit',     'label': 'EXIT',      'cmd': self._exit_game,     'enabled': True},
+        ]
+
+    def _on_menu_resize(self, event):
+        if abs(event.width - self._paint_w) > 40:
+            self._repaint()
+
+    def _repaint(self):
+        c = self.canvas
+        W, H = c.winfo_width(), c.winfo_height()
+        if W < 50 or H < 50:
+            self.after(120, self._repaint)
+            return
+        self._paint_w = W
+        c.delete('bg', 'chrome', 'menu', 'glow')
+        self._paint_backdrop(W, H)
+        self._paint_rink(W, H)
+        self._paint_title_block(W, H)
+        self._paint_menu_items(W, H)
+        self._paint_chrome(W, H)
+        self._sel = 0
+        self._refresh_item_targets()
+
+    # -- backdrop ----------------------------------------------------
+    def _make_shades(self, c1, c2, n):
+        def hx(h):
+            h = h.lstrip('#')
+            return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+        a, b = hx(c1), hx(c2)
+        out = []
+        for i in range(n):
+            t = i / max(n - 1, 1)
+            out.append('#%02x%02x%02x' % tuple(int(a[j] + (b[j] - a[j]) * t) for j in range(3)))
+        return out
+
+    def _paint_backdrop(self, W, H):
+        c = self.canvas
+        top = (13, 22, 38)
+        bottom = (4, 6, 11)
+        steps = 64
+        for i in range(steps):
+            t = i / (steps - 1)
+            col = '#%02x%02x%02x' % tuple(int(top[j] + (bottom[j] - top[j]) * t) for j in range(3))
+            y0 = int(H * i / steps)
+            y1 = int(H * (i + 1) / steps) + 1
+            c.create_rectangle(0, y0, W, y1, fill=col, outline='', tags='bg')
+        # soft red ambience, left side
+        for i, (rx, alpha) in enumerate([(0.55, 1), (0.42, 1), (0.30, 1)]):
+            shade = self._make_shades('#05070c', '#20090d', 3)[i % 3]
+            c.create_oval(-W*0.25, H*0.05, W*rx, H*0.95, fill=shade, outline='', tags='bg')
+
+    def _paint_rink(self, W, H):
+        c = self.canvas
+        line, faint = '#122033', '#0e1826'
+        # blue lines
+        for fy in (0.30, 0.70):
+            y = H * fy
+            c.create_line(W*0.30, y, W, y, fill=line, width=4, tags='bg')
+        # center red line (dim)
+        c.create_line(W*0.65, H*0.30, W*0.65, H*0.70, fill='#231016', width=4, tags='bg')
+        # faceoff circles, right side
+        for fy in (0.30, 0.70):
+            cx, cy = W*0.82, H*fy
+            r = H*0.075
+            c.create_oval(cx-r, cy-r, cx+r, cy+r, outline=faint, width=3, tags='bg')
+            c.create_oval(cx-3, cy-3, cx+3, cy+3, fill=faint, outline='', tags='bg')
+        # goal crease hint
+        c.create_arc(W*0.97, H*0.44, W*1.06, H*0.56, start=90, extent=180,
+                     outline=faint, width=3, style='arc', tags='bg')
+
+    # -- title --------------------------------------------------------
+    def _paint_title_block(self, W, H):
+        c = self.canvas
+        mx = self._mx
+        c.create_text(mx, 108, text=self._spaced('A MODERN HOCKEY MANAGEMENT SIM'),
+                      font=self._menu_font(12), fill='#d13438', anchor='w', tags='chrome')
+        # glow copies (animated color)
+        self._glow1 = c.create_text(mx, 196, text='PUCK', font=self._menu_font(78, 'bold'),
+                                    fill=self._glow_shades[0], anchor='w', tags=('chrome', 'glow'))
+        self._glow2 = c.create_text(mx, 282, text='DYNASTY', font=self._menu_font(78, 'bold'),
+                                    fill=self._glow_shades[0], anchor='w', tags=('chrome', 'glow'))
+        c.create_text(mx, 192, text='PUCK', font=self._menu_font(78, 'bold'),
+                      fill='#f2f4f8', anchor='w', tags='chrome')
+        c.create_text(mx, 278, text='DYNASTY', font=self._menu_font(78, 'bold'),
+                      fill='#d13438', anchor='w', tags='chrome')
+        c.create_text(mx, 336, text='Build your dynasty. Own the ice.',
+                      font=self._menu_font(15, 'italic'), fill='#8b98ac', anchor='w', tags='chrome')
+        c.create_line(mx, 366, mx+300, 366, fill='#d13438', width=2, tags='chrome')
+        c.create_line(mx, 367, mx+300, 367, fill='#5a1418', width=1, tags='chrome')
+
+    # -- menu items ----------------------------------------------------
+    def _paint_menu_items(self, W, H):
+        c = self.canvas
+        self._items = []
+        y0, gap = 406, 56
+        for i, d in enumerate(self._menu_defs):
+            y = y0 + i * gap
+            bar = c.create_rectangle(self._mx-30, y-18, self._mx-30, y+18,
+                                     fill='#d13438', outline='', tags='menu')
+            txt = c.create_text(self._mx, y, text=d['label'],
+                                font=self._menu_font(21, 'bold'),
+                                fill='#e8ecf2' if d['enabled'] else '#4c5563',
+                                anchor='w', tags='menu')
+            tag = f"menuitem{i}"
+            c.itemconfig(bar, tags=('menu', tag))
+            c.itemconfig(txt, tags=('menu', tag))
+            c.tag_bind(tag, '<Enter>', lambda e, i=i: self._menu_hover(i))
+            c.tag_bind(tag, '<Leave>', lambda e: self._menu_hover(self._sel))
+            c.tag_bind(tag, '<Button-1>', lambda e, i=i: self._menu_click(i))
+            self._items.append({'def': d, 'y': y, 'text': txt, 'bar': bar,
+                                'x': float(self._mx), 'tx': float(self._mx),
+                                'bw': 0.0, 'tbw': 0.0})
+
+    def _paint_chrome(self, W, H):
+        c = self.canvas
+        mx = self._mx
+        self._status_id = c.create_text(mx, H-64, text='Ready to play',
+                                        font=self._menu_font(12), fill='#6b7688',
+                                        anchor='w', tags='chrome')
+        self.status_label = _TextShim(c, self._status_id)
+        self._ticker_id = c.create_text(W, H-20, text=self._ticker_msg,
+                                        font=self._menu_font(11), fill='#2c3648',
+                                        anchor='w', tags='chrome')
+        c.create_text(W-28, H-64, text='\u2191 \u2193 NAVIGATE  \u00b7  ENTER SELECT',
+                      font=self._menu_font(11), fill='#4c5563', anchor='e', tags='chrome')
+        c.create_text(W-28, H-40, text='PUCK DYNASTY v2.0',
+                      font=self._menu_font(11), fill='#4c5563', anchor='e', tags='chrome')
+
+    # -- interaction ---------------------------------------------------
+    def _menu_hover(self, i):
+        if self._items[i]['def']['enabled']:
+            self._sel = i
+            self._refresh_item_targets()
+
+    def _menu_click(self, i):
+        d = self._items[i]['def']
+        if d['enabled']:
+            self._sel = i
+            self._refresh_item_targets()
+            d['cmd']()
+
+    def _menu_move(self, direction):
+        n = len(self._items)
+        i = self._sel
+        for _ in range(n):
+            i = (i + direction) % n
+            if self._items[i]['def']['enabled']:
+                self._sel = i
+                break
+        self._refresh_item_targets()
+
+    def _menu_activate(self):
+        d = self._items[self._sel]['def']
+        if d['enabled']:
+            d['cmd']()
+
+    def _refresh_item_targets(self):
+        for i, it in enumerate(self._items):
+            en = it['def']['enabled']
+            if i == self._sel and en:
+                it['tx'], it['tbw'] = self._mx + 16, 6.0
+            else:
+                it['tx'], it['tbw'] = float(self._mx), 0.0
+            c = self.canvas
             try:
-                # Canvas with background image
-                self.canvas = tk.Canvas(self, highlightthickness=0, bg=self.BG_COLOR)
-                self.canvas.pack(fill='both', expand=True)
-                
-                # Test if we can use the image
-                test_label = tk.Label(self.canvas, image=self.background_photo)
-                test_label.destroy()  # If this works, the image is valid
-                
-                self.canvas.create_image(600, 400, anchor='center', image=self.background_photo)
-                parent = self.canvas
-                print("Main menu background image applied successfully")
-            except (tk.TclError, AttributeError) as e:
-                print(f"Main menu background image error: {e}")
-                # Fall back to simple frame
-                if hasattr(self, 'canvas'):
-                    self.canvas.destroy()
-                self.background_photo = None
-                main_frame = tk.Frame(self, bg=self.BG_COLOR)
-                main_frame.pack(fill='both', expand=True)
-                parent = main_frame
-        else:
-            # Simple frame without background
-            main_frame = tk.Frame(self, bg=self.BG_COLOR)
-            main_frame.pack(fill='both', expand=True)
-            parent = main_frame
-        
-        # Central menu panel
-        self.menu_panel = tk.Frame(parent, bg=self.PANEL_COLOR, 
-                                  relief='solid', borderwidth=1)
-        
-        if self.background_photo:
-            self.canvas.create_window(600, 400, anchor='center', window=self.menu_panel)
-        else:
-            self.menu_panel.place(relx=0.5, rely=0.5, anchor='center')
-        
-        self._create_menu_content()
-    
+                c.itemconfig(it['text'],
+                             fill='#ffffff' if (i == self._sel and en)
+                             else ('#e8ecf2' if en else '#4c5563'))
+            except tk.TclError:
+                pass
+
+    def _set_item_enabled(self, item_id, enabled):
+        for it in self._items:
+            if it['def']['id'] == item_id:
+                it['def']['enabled'] = enabled
+                break
+        self._refresh_item_targets()
+
+    # -- animation ------------------------------------------------------
+    def _spawn_particles(self):
+        import random
+        W = max(self.canvas.winfo_width(), 1100)
+        H = max(self.canvas.winfo_height(), 700)
+        for _ in range(34):
+            x = random.uniform(0, W)
+            y = random.uniform(0, H)
+            r = random.uniform(1.0, 2.6)
+            sp = random.uniform(0.25, 0.9)
+            shade = random.choice(['#1b2940', '#24344f', '#2e425f'])
+            pid = self.canvas.create_oval(x-r, y-r, x+r, y+r, fill=shade,
+                                          outline='', tags='fx')
+            self._particles.append({'id': pid, 'sp': sp,
+                                    'wob': random.uniform(0, 6.28),
+                                    'x0': x})
+
+    def _menu_tick(self):
+        if not self._menu_alive:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+            c = self.canvas
+            self._pulse += 0.055
+            import math
+            # title glow pulse
+            gi = int((math.sin(self._pulse) * 0.5 + 0.5) * (len(self._glow_shades) - 1))
+            col = self._glow_shades[gi]
+            for gid in ('_glow1', '_glow2'):
+                g = getattr(self, gid, None)
+                if g:
+                    try:
+                        c.itemconfig(g, fill=col)
+                    except tk.TclError:
+                        pass
+            # particles drift upward
+            W = c.winfo_width() or 1100
+            H = c.winfo_height() or 700
+            for p in self._particles:
+                try:
+                    x0, y0, x1, y1 = c.coords(p['id'])
+                except (tk.TclError, ValueError):
+                    continue
+                ny0, ny1 = y0 - p['sp'], y1 - p['sp']
+                p['wob'] += 0.02
+                nx = p['x0'] + math.sin(p['wob']) * 14
+                dx = nx - (x0 + x1) / 2
+                if ny1 < -6:
+                    ny0, ny1 = H + 2, H + 6
+                    p['x0'] = (p['x0'] + 370) % max(W, 1)
+                    nx = p['x0']
+                    dx = 0
+                    c.coords(p['id'], nx-2, ny0, nx+2, ny1)
+                else:
+                    c.move(p['id'], dx, -p['sp'])
+            # ticker scroll
+            try:
+                self._ticker_x -= 1.1
+                tw = c.bbox(self._ticker_id)
+                if tw and self._ticker_x < - (tw[2] - tw[0]):
+                    self._ticker_x = W
+                c.coords(self._ticker_id, self._ticker_x, H - 20)
+            except tk.TclError:
+                pass
+            # menu item easing
+            for it in self._items:
+                it['x'] += (it['tx'] - it['x']) * 0.28
+                it['bw'] += (it['tbw'] - it['bw']) * 0.30
+                try:
+                    c.coords(it['text'], it['x'], it['y'])
+                    c.coords(it['bar'], self._mx - 30, it['y'] - 18,
+                             self._mx - 30 + it['bw'], it['y'] + 18)
+                except tk.TclError:
+                    pass
+        finally:
+            if self._menu_alive:
+                self.after(40, self._menu_tick)
+
     def _create_menu_content(self):
-        """Create the menu panel content"""
-        # Title section
-        title_frame = tk.Frame(self.menu_panel, bg=self.PANEL_COLOR)
-        title_frame.pack(pady=(40, 20))
-        
-        # Game title
-        title_label = ttk.Label(title_frame, text="HOCKEY MANAGER", 
-                               style='MenuTitle.TLabel')
-        title_label.pack()
-        
-        # Version/subtitle
-        subtitle_label = ttk.Label(title_frame, text="Professional Hockey Management Simulation", 
-                                  style='MenuSubtitle.TLabel')
-        subtitle_label.pack(pady=(5, 0))
-        
-        # Menu buttons section
-        buttons_frame = tk.Frame(self.menu_panel, bg=self.PANEL_COLOR)
-        buttons_frame.pack(pady=20, padx=60)
-        
-        # Main menu buttons
-        self.new_game_btn = ttk.Button(buttons_frame, text="🏒 NEW GAME", 
-                                      command=self._new_game,
-                                      style='MenuButton.TButton')
-        self.new_game_btn.pack(fill='x', pady=8, ipady=15)
-        
-        self.continue_btn = ttk.Button(buttons_frame, text="▶️ CONTINUE", 
-                                      command=self._continue_game,
-                                      style='MenuButton.TButton',
-                                      state='disabled')
-        self.continue_btn.pack(fill='x', pady=8, ipady=15)
-        
-        self.load_game_btn = ttk.Button(buttons_frame, text="📁 LOAD GAME", 
-                                       command=self._load_game,
-                                       style='MenuButton.TButton')
-        self.load_game_btn.pack(fill='x', pady=8, ipady=15)
-        
-        # Secondary options
-        secondary_frame = tk.Frame(self.menu_panel, bg=self.PANEL_COLOR)
-        secondary_frame.pack(pady=(10, 0))
-        
-        settings_btn = ttk.Button(secondary_frame, text="⚙️ Settings", 
-                                 command=self._open_settings,
-                                 style='MenuSecondary.TButton')
-        settings_btn.pack(side='left', padx=(0, 10), ipady=10)
-        
-        about_btn = ttk.Button(secondary_frame, text="ℹ️ About", 
-                              command=self._show_about,
-                              style='MenuSecondary.TButton')
-        about_btn.pack(side='left', padx=10, ipady=10)
-        
-        exit_btn = ttk.Button(secondary_frame, text="❌ Exit", 
-                             command=self._exit_game,
-                             style='MenuSecondary.TButton')
-        exit_btn.pack(side='left', padx=(10, 0), ipady=10)
-        
-        # Status bar
-        status_frame = tk.Frame(self.menu_panel, bg=self.PANEL_COLOR)
-        status_frame.pack(side='bottom', fill='x', pady=(20, 20))
-        
-        self.status_label = ttk.Label(status_frame, text="Ready to play", 
-                                     style='MenuSubtitle.TLabel')
-        self.status_label.pack()
-    
+        """Legacy entry point kept for compatibility (menu is canvas-built)."""
+        pass
+
     def _check_continue_availability(self):
         """Check if there's a recent save to continue from"""
         try:
@@ -479,6 +684,7 @@ Developed with Python and Tkinter"""
     
     def destroy(self):
         """Override destroy to ensure proper cleanup"""
+        self._menu_alive = False
         self._cleanup_resources()
         super().destroy()
 
@@ -561,3 +767,33 @@ def launch_hockey_manager():
 
 if __name__ == "__main__":
     launch_hockey_manager()
+
+
+class _MenuItemShim:
+    """Lets existing code enable/disable canvas menu rows like a button."""
+    def __init__(self, menu, item_id):
+        self._menu = menu
+        self._item_id = item_id
+
+    def configure(self, **kw):
+        if 'state' in kw:
+            self._menu._set_item_enabled(self._item_id, kw['state'] == 'normal')
+
+    config = configure
+
+
+class _TextShim:
+    """Lets existing code set text on a canvas text item like a label."""
+    def __init__(self, canvas, text_id):
+        self._canvas = canvas
+        self._text_id = text_id
+
+    def configure(self, **kw):
+        if 'text' in kw:
+            try:
+                self._canvas.itemconfig(self._text_id, text=kw['text'])
+            except Exception:
+                pass
+
+    config = configure
+
