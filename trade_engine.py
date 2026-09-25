@@ -124,7 +124,7 @@ class TradeEvaluation:
     user_value: int
     partner_value: int
     diff: int            # positive => user overpays
-    ratio: float         # partner_value / user_value (AI's perspective)
+    ratio: float         # user_value / partner_value (value AI receives / value AI gives)
     label: str           # 'Fair', 'You overpay', 'They overpay', ...
     user_cap_ok: bool = True
     partner_cap_ok: bool = True
@@ -135,7 +135,7 @@ def evaluate_trade(user_assets, partner_assets,
     user_value = sum(asset_value(a) for a in user_assets)
     partner_value = sum(asset_value(a) for a in partner_assets)
     diff = user_value - partner_value
-    ratio = (partner_value / user_value) if user_value else 0.0
+    ratio = (user_value / partner_value) if partner_value else 0.0
     if not user_assets or not partner_assets:
         label = "Incomplete"
     elif abs(diff) <= max(60, user_value * 0.08):
@@ -225,7 +225,7 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         except Exception:
             pass
     candidates = sorted(user_roster + user_picks, key=asset_value)
-    shortfall = ev.user_value * greed - ev.partner_value
+    shortfall = ev.partner_value * greed - ev.user_value
     for c in candidates:
         if asset_value(c) >= shortfall * 0.7:
             return AIResponse(
