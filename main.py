@@ -11167,6 +11167,68 @@ class CleanEditLinesWindow(tk.Toplevel):
             team_text_widget.config(state='disabled')
 
 
+class PillButton(tk.Canvas):
+    """A fully-rounded pill button drawn on a Canvas (tk.Button can't do
+    rounded corners on Linux). Used for selector rows in dark UI windows."""
+
+    def __init__(self, parent, text, command=None, font=('Helvetica', 10, 'bold'),
+                 padx=16, pady=8, bg=None, fg='#c8d0e0',
+                 selected_bg='#E63946', selected_fg='white',
+                 hover_bg='#2a3550', **kw):
+        self.text = text
+        self.command = command
+        self.font = font
+        self.padx, self.pady = padx, pady
+        self.fg = fg
+        self.selected_bg = selected_bg
+        self.selected_fg = selected_fg
+        self.hover_bg = hover_bg
+        self._selected = False
+        self._hover = False
+        # Size from text metrics
+        probe = tk.Label(parent, text=text, font=font)
+        probe.update_idletasks()
+        tw, th = probe.winfo_reqwidth(), probe.winfo_reqheight()
+        probe.destroy()
+        w, h = tw + padx * 2, th + pady * 2
+        canvas_bg = bg or kw.pop('canvas_bg', None) or parent.cget('bg')
+        super().__init__(parent, width=w, height=h, bg=canvas_bg,
+                         highlightthickness=0, bd=0, cursor='hand2', **kw)
+        self._pw, self._ph = w, h
+        self._draw()
+        self.bind('<Button-1>', self._on_click)
+        self.bind('<Enter>', lambda e: self._set_hover(True))
+        self.bind('<Leave>', lambda e: self._set_hover(False))
+
+    def _draw(self):
+        self.delete('all')
+        w, h = self._pw, self._ph
+        r = h / 2
+        if self._selected:
+            fill, fg = self.selected_bg, self.selected_fg
+        elif self._hover:
+            fill, fg = self.hover_bg, 'white'
+        else:
+            fill, fg = '#1c2436', self.fg
+        # Pill = two end caps + middle bar
+        self.create_oval(1, 1, 2 * r - 1, h - 1, fill=fill, outline=fill)
+        self.create_oval(w - 2 * r + 1, 1, w - 1, h - 1, fill=fill, outline=fill)
+        self.create_rectangle(r, 1, w - r, h - 1, fill=fill, outline=fill)
+        self.create_text(w / 2, h / 2, text=self.text, font=self.font, fill=fg)
+
+    def _on_click(self, _event):
+        if self.command:
+            self.command()
+
+    def _set_hover(self, on):
+        self._hover = on
+        self._draw()
+
+    def set_selected(self, selected):
+        self._selected = bool(selected)
+        self._draw()
+
+
 class TacticsWindow(tk.Toplevel):
     """Team tactics editor with pill selectors.
 
@@ -11234,9 +11296,8 @@ class TacticsWindow(tk.Toplevel):
             row.pack(anchor='w', pady=(4, 0))
             self.pill_buttons[attr] = {}
             for value in values:
-                btn = tk.Button(
-                    row, text=value, relief='flat', bd=0, cursor='hand2',
-                    font=(font, 10, 'bold'), padx=14, pady=7,
+                btn = PillButton(
+                    row, text=value, bg=bg, font=(font, 10, 'bold'),
                     command=lambda a=attr, v=value: self._select(a, v))
                 btn.pack(side='left', padx=(0, 8))
                 self.pill_buttons[attr][value] = btn
@@ -11252,10 +11313,12 @@ class TacticsWindow(tk.Toplevel):
 
         footer = tk.Frame(self, bg=bg)
         footer.pack(fill='x', padx=20, pady=(8, 16))
-        tk.Button(footer, text="Done", relief='flat', bd=0, cursor='hand2',
-                  bg=accent, fg='white', activebackground='#c1121f',
-                  activeforeground='white', font=(font, 11, 'bold'),
-                  padx=28, pady=8, command=self.destroy).pack(side='right')
+        done_btn = PillButton(footer, text="Done", bg=bg, font=(font, 11, 'bold'),
+                              fg='white', selected_bg='#E63946',
+                              selected_fg='white', hover_bg='#c1121f',
+                              padx=28, pady=8, command=self.destroy)
+        done_btn.pack(side='right')
+        done_btn.set_selected(True)  # Done is always in its active visual state
 
     def _select(self, attr, value):
         setattr(self.team, attr, value)
@@ -11264,29 +11327,37 @@ class TacticsWindow(tk.Toplevel):
 
     def _paint_pills(self, attr, current):
         for value, btn in self.pill_buttons[attr].items():
-            if value == current:
-                btn.configure(bg='#E63946', fg='white',
-                              activebackground='#c1121f', activeforeground='white')
-            else:
-                btn.configure(bg='#1c2436', fg='#c8d0e0',
-                              activebackground='#2a3550', activeforeground='white')
+            btn.set_selected(value == current)
 
     def _update_impact(self):
+        """Expected-impact readout, computed from the same tables the sim uses.
+
+        GameSim._team_tactics_xg_factor multiplies chance quality by the
+        ES attack table for your tactic (when you attack) and by the ES
+        defense table for your tactic (when you defend). On the power play
+        your PP approach multiplies chance quality and the opponent's PK
+        approach divides it. This readout reports exactly those factors.
+        """
         es = getattr(self.team, 'tactic_even_strength', 'Balanced')
         pp = getattr(self.team, 'tactic_power_play', 'Offensive')
         pk = getattr(self.team, 'tactic_penalty_kill', 'Defensive')
         lm = getattr(self.team, 'tactic_line_matching', 'Standard')
         atk = (self._ES_ATTACK.get(es, 1.0) - 1.0) * 100
-        dfn = (1.0 - self._ES_DEFENSE.get(es, 1.0)) * 100
-        pp_f = {'Conservative': -4, 'Balanced': 0, 'Offensive': 5,
-                'Very Offensive': 10}.get(pp, 5)
-        pk_f = {'Very Defensive': 10, 'Defensive': 5, 'Balanced': 0,
-                'Aggressive': -4}.get(pk, 5)
+        allowed = (self._ES_DEFENSE.get(es, 1.0) - 1.0) * 100
+        pp_mult = {'Conservative': 0.96, 'Balanced': 1.0, 'Offensive': 1.05,
+                   'Very Offensive': 1.10}.get(pp, 1.05)
+        # Sim divides opponent chance quality by the PK factor, so the net
+        # effect on chances you allow shorthanded is 1/factor.
+        pk_div = {'Very Defensive': 1.10, 'Defensive': 1.05, 'Balanced': 1.0,
+                  'Aggressive': 0.96}.get(pk, 1.05)
+        pk_effect = (1.0 / pk_div - 1.0) * 100
         lines = [
-            f"Even strength: {atk:+.0f}% your shot quality, "
-            f"{dfn:+.0f}% opponent chances suppressed",
-            f"Power play ({pp}): {pp_f:+.0f}% conversion   "
-            f"Penalty kill ({pk}): {pk_f:+.0f}% kill rate",
+            f"Even strength: your chance quality {atk:+.0f}%, "
+            f"chances you allow {allowed:+.0f}%",
+            f"Power play ({pp}): chance quality {(pp_mult - 1.0) * 100:+.0f}% "
+            f"(before opponent's PK)",
+            f"Penalty kill ({pk}): opponent chances {pk_effect:+.0f}% "
+            f"when shorthanded",
             f"Line matching ({lm}): " + (
                 "top lines sheltered when leading, leaned on when trailing"
                 if lm == "Aggressive" else
