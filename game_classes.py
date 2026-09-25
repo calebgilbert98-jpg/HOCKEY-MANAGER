@@ -4216,6 +4216,13 @@ class League:
             player.stats = PlayerStats()
         
         self.season_year += 1
+
+        # Expire buyout dead-cap years that are now in the past
+        for team in self.teams:
+            hits = getattr(team, 'buyout_cap_hits', None)
+            if hits:
+                for yr in [y for y in hits if y < self.season_year]:
+                    del hits[yr]
         
         # Initialize draft picks for upcoming years
         self.initialize_all_draft_picks()

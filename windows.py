@@ -624,6 +624,10 @@ class RosterWindow(tk.Toplevel):
         salary_cap = 83500000
         current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) 
                            for p in self.parent.user_team.roster)
+        # Buyout dead cap counts against this season's payroll
+        season = getattr(getattr(self.parent, 'league', None), 'season_year', 2026)
+        dead_cap = (getattr(self.parent.user_team, 'buyout_cap_hits', {}) or {}).get(season, 0)
+        current_salary += dead_cap
         cap_space = salary_cap - current_salary
         cap_percentage = (current_salary / salary_cap) * 100
         
@@ -634,6 +638,8 @@ class RosterWindow(tk.Toplevel):
             ("Cap Space:", f"${cap_space:,}"),
             ("Cap Usage:", f"{cap_percentage:.1f}%")
         ]
+        if dead_cap:
+            cap_labels.append(("Buyout Dead Cap:", f"${dead_cap:,}"))
         
         for i, (label, value) in enumerate(cap_labels):
             row = i // 2
