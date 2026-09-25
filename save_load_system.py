@@ -896,7 +896,7 @@ class SaveLoadWindow(tk.Toplevel):
         
         self.title(f"{'Save' if mode == 'save' else 'Load'} Game")
         self.configure(background=parent.BG_COLOR)
-        self.geometry("800x600")
+        self.geometry("820x700")
         
         # Set up proper close protocol to handle X button clicks
         self.protocol("WM_DELETE_WINDOW", self.on_window_close)
@@ -970,8 +970,8 @@ class SaveLoadWindow(tk.Toplevel):
         preview_frame.pack(fill='x', padx=10, pady=10)
         
         preview_content = self._get_game_preview()
-        preview_label = ttk.Label(preview_frame, text=preview_content, 
-                                 style='Content.TLabel', justify='left')
+        preview_label = ttk.Label(preview_frame, text=preview_content,
+                                 style='Card.TLabel', justify='left')
         preview_label.pack(padx=10, pady=10, anchor='w')
         
         # Quick save slots
