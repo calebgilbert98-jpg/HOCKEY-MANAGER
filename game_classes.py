@@ -3783,7 +3783,7 @@ class League:
         self.initialize_all_draft_picks()
         
         self.initialize_standings()
-        self.generate_schedule()
+        self.generate_schedule(season_year=self.season_year)
 
     def initialize_all_draft_picks(self):
         """Initialize draft picks for all teams for the next few years."""

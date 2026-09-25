@@ -66,6 +66,14 @@ class CalendarWindow(tk.Toplevel):
         style.map('AwayGame.TButton',
                  background=[('active', '#0097A7')])
                  
+        # League games style - Slate Grey (other teams' games, no user game)
+        style.configure('LeagueGames.TButton',
+                       background='#546E7A',  # Slate grey for league games
+                       foreground='white',
+                       font=(self.parent.FONT_FAMILY, 8))
+        style.map('LeagueGames.TButton',
+                 background=[('active', '#37474F')])
+                 
         # Break days style - Dark Grey
         style.configure('BreakDay.TButton',
                        background='#424242',  # Dark grey for break days
@@ -357,23 +365,46 @@ class CalendarWindow(tk.Toplevel):
                     self.events_by_date[game_date] = []
                 self.events_by_date[game_date].append(event)
             
-            # Handle regular team games
-            elif self.parent.user_team in (home_team, away_team):
-                is_home = self.parent.user_team == home_team
-                opponent = away_team if is_home else home_team
+            # Handle regular team games - show ALL games (EHM/FM style)
+            # User's games get high importance, others get normal
+            else:
+                is_user_game = self.parent.user_team in (home_team, away_team)
                 
-                event = {
-                    'type': 'game',
-                    'title': f"{'vs' if is_home else '@'} {opponent.team_name}",
-                    'description': f"{'Home' if is_home else 'Away'} game against {opponent.team_name}",
-                    'is_home': is_home,
-                    'opponent': opponent,
-                    'importance': 'high'
-                }
-                
-                # Check if this is a special game
-                if self._is_special_date(game_date):
-                    event['importance'] = 'critical'
+                if is_user_game:
+                    is_home = self.parent.user_team == home_team
+                    opponent = away_team if is_home else home_team
+                    
+                    event = {
+                        'type': 'game',
+                        'title': f"{'vs' if is_home else '@'} {opponent.team_name}",
+                        'description': f"{'Home' if is_home else 'Away'} game against {opponent.team_name}",
+                        'is_home': is_home,
+                        'opponent': opponent,
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'is_user_game': True,
+                        'importance': 'high'
+                    }
+                    
+                    # Check if this is a special game
+                    if self._is_special_date(game_date):
+                        event['importance'] = 'critical'
+                else:
+                    # Other teams' games - show compactly
+                    home_name = home_team.team_name if hasattr(home_team, 'team_name') else str(home_team)
+                    away_name = away_team.team_name if hasattr(away_team, 'team_name') else str(away_team)
+                    
+                    event = {
+                        'type': 'game',
+                        'title': f"{away_name} @ {home_name}",
+                        'description': f"NHL game: {away_name} at {home_name}",
+                        'is_home': None,
+                        'opponent': None,
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'is_user_game': False,
+                        'importance': 'normal'
+                    }
                 
                 if game_date not in self.events_by_date:
                     self.events_by_date[game_date] = []
@@ -386,6 +417,25 @@ class CalendarWindow(tk.Toplevel):
         # Add other important dates
         self._add_important_dates()
         
+    def _get_season_year(self):
+        """Get the season year (year the season starts) from the league.
+        
+        Falls back to deriving from current_date if league not available.
+        The season_year is the year the season starts (e.g., 2024 for 2024-25).
+        """
+        try:
+            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'season_year'):
+                return self.parent.league.season_year
+        except (AttributeError, TypeError):
+            pass
+        # Fallback: derive from current date
+        # If we're in Jan-Sep, the season started last year
+        current = self.parent.current_date
+        if current.month >= 10:
+            return current.year
+        else:
+            return current.year - 1
+    
     def _is_special_date(self, game_date):
         """Check if a date represents a special game (holidays, rivalries, etc.)."""
         # Check for holiday games
@@ -395,8 +445,10 @@ class CalendarWindow(tk.Toplevel):
             return True
             
         # Check for season opener/closer
-        season_start = date(self.parent.current_date.year, 10, 1)
-        season_end = date(self.parent.current_date.year + 1, 4, 15)
+        # Use season_year (year season starts) to avoid year-boundary bugs
+        season_year = self._get_season_year()
+        season_start = date(season_year, 10, 8)
+        season_end = date(season_year + 1, 4, 25)
         
         if abs((game_date - season_start).days) <= 7 or \
            abs((season_end - game_date).days) <= 7:
@@ -405,36 +457,33 @@ class CalendarWindow(tk.Toplevel):
         return False
     
     def _get_nhl_calendar_info(self):
-        """Get NHL calendar information from the league."""
-        # Try to get calendar info from league if available
-        if hasattr(self.parent.league, '_create_nhl_calendar_with_breaks'):
-            # Create calendar info using the same method as scheduling
-            current_year = self.parent.current_date.year
-            return {
-                'all_star_break': (
-                    date(current_year + 1, 1, 28),  # All-Star break start
-                    date(current_year + 1, 2, 3)    # All-Star break end
-                ),
-                'trade_deadline': date(current_year + 1, 3, 3),  # March 3rd
-                'christmas_break': (
-                    date(current_year, 12, 23),     # Christmas break start
-                    date(current_year, 12, 26)      # Christmas break end
-                )
-            }
-        else:
-            # Fallback default NHL calendar
-            current_year = self.parent.current_date.year
-            return {
-                'all_star_break': (
-                    date(current_year + 1, 1, 28),
-                    date(current_year + 1, 2, 3)
-                ),
-                'trade_deadline': date(current_year + 1, 3, 3),
-                'christmas_break': (
-                    date(current_year, 12, 23),
-                    date(current_year, 12, 26)
-                )
-            }
+        """Get NHL calendar information from the league.
+        
+        Uses league.season_year and matches the dates used by the actual
+        schedule generator in game_classes.py (_create_authentic_nhl_calendar).
+        """
+        season_year = self._get_season_year()
+        
+        # Match the real generator dates exactly:
+        # - Thanksgiving: Nov 24 (season_year)
+        # - Christmas: Dec 24-25 (season_year)  
+        # - All-Star: Feb 5-11 (season_year + 1)
+        # - Trade deadline: Mar 8 (season_year + 1)
+        return {
+            'all_star_break': (
+                date(season_year + 1, 2, 5),
+                date(season_year + 1, 2, 11)
+            ),
+            'trade_deadline': date(season_year + 1, 3, 8),
+            'christmas_break': (
+                date(season_year, 12, 24),
+                date(season_year, 12, 25)
+            ),
+            'thanksgiving_break': (
+                date(season_year, 11, 24),
+                date(season_year, 11, 24)
+            )
+        }
     
     def _add_break_days_and_holidays(self):
         """Add break days and holiday periods (main events now come from schedule)."""
@@ -494,17 +543,20 @@ class CalendarWindow(tk.Toplevel):
             current_date += timedelta(days=1)
         
     def _add_important_dates(self):
-        """Add important league dates and events (non-NHL calendar events)."""
-        current_year = self.parent.current_date.year
+        """Add important league dates and events (non-NHL calendar events).
+        
+        Uses league.season_year and matches the actual schedule generator dates.
+        """
+        season_year = self._get_season_year()
         
         important_dates = [
-            (date(current_year, 10, 1), "🏒 Season Opener", "NHL regular season begins"),
-            (date(current_year + 1, 1, 1), "🎊 New Year's Day", "Winter Classic and New Year games"),
-            (date(current_year + 1, 2, 14), "❤️ Valentine's Day", "Special promotional games"),
-            (date(current_year + 1, 4, 15), "🏁 Regular Season End", "End of regular season"),
-            (date(current_year + 1, 4, 16), "🏆 Playoffs Begin", "Stanley Cup Playoffs start"),
-            (date(current_year + 1, 6, 15), "🏒 Draft Day", "NHL Entry Draft"),
-            (date(current_year + 1, 7, 1), "💰 Free Agency", "Free agency period begins")
+            (date(season_year, 10, 8), "🏒 Season Opener", "NHL regular season begins"),
+            (date(season_year + 1, 1, 1), "🎊 New Year's Day", "Winter Classic and New Year games"),
+            (date(season_year + 1, 2, 14), "❤️ Valentine's Day", "Special promotional games"),
+            (date(season_year + 1, 4, 25), "🏁 Regular Season End", "End of regular season"),
+            (date(season_year + 1, 4, 26), "🏆 Playoffs Begin", "Stanley Cup Playoffs start"),
+            (date(season_year + 1, 6, 27), "🏒 Draft Day", "NHL Entry Draft"),
+            (date(season_year + 1, 7, 1), "💰 Free Agency", "Free agency period begins")
         ]
         
         for event_date, title, description in important_dates:
@@ -566,13 +618,21 @@ class CalendarWindow(tk.Toplevel):
                     christmas_events = [e for e in events if e['type'] == 'christmas']
                     
                     if game_events:
-                        game = game_events[0]
-                        if game['is_home']:
-                            button_style = 'HomeGame.TButton'
-                            button_text += "\n🏒"
+                        # Prioritize user's game; otherwise show league game count
+                        user_games = [g for g in game_events if g.get('is_user_game', False)]
+                        if user_games:
+                            game = user_games[0]
+                            if game['is_home']:
+                                button_style = 'HomeGame.TButton'
+                                button_text += "\n🏒"
+                            else:
+                                button_style = 'AwayGame.TButton'
+                                button_text += "\n✈️"
                         else:
-                            button_style = 'AwayGame.TButton'
-                            button_text += "\n✈️"
+                            # No user game today - show how many league games
+                            num_games = len(game_events)
+                            button_style = 'LeagueGames.TButton'
+                            button_text += f"\n{num_games} games"
                     elif all_star_events:
                         button_style = 'AllStar.TButton'
                         button_text += "\n⭐"
@@ -587,7 +647,7 @@ class CalendarWindow(tk.Toplevel):
                             button_text += "\n💰"
                         else:
                             button_style = 'Draft.TButton'
-                            button_text += "\n�"
+                            button_text += "\n🎯"
                     elif christmas_events:
                         button_style = 'ImportantEvent.TButton'
                         button_text += "\n🎄"
@@ -605,6 +665,7 @@ class CalendarWindow(tk.Toplevel):
                 color_map = {
                     'HomeGame.TButton': '#1565C0',      # Deep Blue
                     'AwayGame.TButton': '#00BCD4',      # Bright Cyan
+                    'LeagueGames.TButton': '#546E7A',   # Slate Grey
                     'BreakDay.TButton': '#424242',      # Dark Grey
                     'AllStar.TButton': '#FFC107',       # Bright Gold
                     'TradeDeadline.TButton': '#E53935', # Bright Red
@@ -751,3 +812,17 @@ class CalendarWindow(tk.Toplevel):
         self._populate_calendar()
         if self.selected_date:
             self._update_details_panel()
+    
+    def update_views(self):
+        """Refresh the calendar - called by main window when sim advances.
+        
+        This is the standard interface that main.py's _update_heavy_panels
+        looks for on all open windows.
+        """
+        try:
+            # Only refresh if window still exists
+            if self.winfo_exists():
+                self.update_calendar()
+        except tk.TclError:
+            # Window was destroyed, ignore
+            pass
