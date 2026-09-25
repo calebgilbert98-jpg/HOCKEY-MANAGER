@@ -351,10 +351,10 @@ def calculate_draft_ranking(player: Player) -> float:
     """Calculate a draft ranking score for a player based on attributes and potential."""
     # Convert potential grade to numeric value
     potential_values = {
-        "A+": 100, "A": 95, "A-": 90,
-        "B+": 85, "B": 80, "B-": 75,
-        "C+": 70, "C": 65, "C-": 60,
-        "D": 50, "F": 40
+        "A+": 50, "A": 48, "A-": 46,
+        "B+": 44, "B": 42, "B-": 40,
+        "C+": 38, "C": 36, "C-": 34,
+        "D": 30, "F": 25
     }
     potential_value = potential_values.get(player.potential_grade, 65)
     
@@ -500,20 +500,20 @@ def create_prospect(age: int = 18,
         player.plus_minus = 0
         player.avg_toi = "0:00"
     
-    # Set common attributes (every player gets these)
-    for attr in ['skating', 'shooting', 'passing', 'checking', 'faceoffs', 
+    # Set common attributes (every player gets these) - 50-point scale
+    for attr in ['skating', 'shooting', 'passing', 'checking', 'faceoffs',
                 'determination', 'teamwork', 'leadership', 'discipline', 'flair',
                 'offensive_awareness', 'defensive_awareness', 'deking', 'strength']:
-        setattr(player, attr, get_base_attribute_value(5, 12))
-    
+        setattr(player, attr, get_base_attribute_value(12, 30))
+
     # Set goalie-specific attributes
     if position == PlayerPosition.GOALIE:
         for attr in ['goaltending', 'reflexes', 'positioning', 'rebound_control', 'puck_handling']:
-            setattr(player, attr, get_base_attribute_value(5, 12))
-    
+            setattr(player, attr, get_base_attribute_value(12, 30))
+
     # Set advanced attributes
     for attr in ['vision', 'puck_control', 'shooting_accuracy', 'puck_protection', 'stamina', 'shot_blocking']:
-        setattr(player, attr, get_base_attribute_value(5, 12))
+        setattr(player, attr, get_base_attribute_value(12, 30))
     
     # Set tendencies with defaults
     player.shooting_tendency = random.randint(30, 70)
@@ -524,8 +524,9 @@ def create_prospect(age: int = 18,
         # Get a random value in the archetype's range
         value = random.randint(min_val, max_val)
         # Apply potential-based adjustment (better potential = higher chance of good attributes)
+        # Archetype ranges are 20-scale; convert to the 50-point scale first
         potential_factor = DEVELOPMENT_PROFILES[potential]["ceiling_modifier"]
-        adjusted_value = int(value * potential_factor)
+        adjusted_value = int(value * 2.0 * potential_factor)
         # Ensure it stays within valid bounds
         adjusted_value = max(GameBalance.MIN_ATTRIBUTE, min(GameBalance.MAX_ATTRIBUTE, adjusted_value))
         # Set the attribute

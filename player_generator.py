@@ -157,9 +157,9 @@ class PlayerGenerator:
         else:
             age_factor = 0.85  # Noticeable decline
         
-        # Base attribute range
-        base_min = max(5, int((tier_info["min_overall"] - 20) * age_factor))
-        base_max = min(20, int((tier_info["max_overall"] - 15) * age_factor))
+        # Base attribute range (50-point scale derived from tier's overall range)
+        base_min = max(5, int(tier_info["min_overall"] * 0.5 * age_factor))
+        base_max = min(50, int(tier_info["max_overall"] * 0.5 * age_factor))
         
         # Generate base attributes
         attributes = {}
@@ -203,11 +203,13 @@ class PlayerGenerator:
     
     def apply_archetype_modifiers(self, player: Player, archetype_name: str, archetype_data: Dict) -> None:
         """Apply archetype-specific attribute modifiers to a player."""
-        # Apply attribute bonuses from archetype
+        # Apply attribute bonuses from archetype (archetype ranges are 20-scale; convert to 50-scale)
         for attr, (min_bonus, max_bonus) in archetype_data.get("attributes", {}).items():
             if hasattr(player, attr):
+                min_b = int(min_bonus * 2.5)
+                max_b = int(max_bonus * 2.5)
                 current_value = getattr(player, attr)
-                bonus = random.randint(min_bonus - current_value, max_bonus - current_value)
+                bonus = random.randint(min_b - current_value, max_b - current_value)
                 bonus = max(-5, min(8, bonus))  # Limit bonus range
                 new_value = max(GameBalance.MIN_ATTRIBUTE, 
                               min(GameBalance.MAX_ATTRIBUTE, current_value + bonus))
@@ -245,13 +247,13 @@ class PlayerGenerator:
         age = player.age
         
         # Determine contract category
-        if age <= 22 and overall < 75:
+        if age <= 22 and overall < 44:
             contract_type = "ENTRY_LEVEL"
-        elif age <= 25 and overall < 80:
+        elif age <= 25 and overall < 47:
             contract_type = "BRIDGE"
-        elif overall >= 90:
+        elif overall >= 52:
             contract_type = "SUPERSTAR"
-        elif overall >= 85:
+        elif overall >= 49:
             contract_type = "PREMIUM"
         elif age >= 33:
             contract_type = "VETERAN"
@@ -264,7 +266,7 @@ class PlayerGenerator:
         
         # Calculate salary based on overall rating
         salary_range = contract_info["max"] - contract_info["min"]
-        salary_factor = (overall - 60) / 40  # Normalize to 0-1 range
+        salary_factor = (overall - 30) / 25  # Normalize to 0-1 range
         salary_factor = max(0, min(1, salary_factor))
         
         base_salary = contract_info["min"] + (salary_range * salary_factor)

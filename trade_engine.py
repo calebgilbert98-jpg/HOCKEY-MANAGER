@@ -45,7 +45,7 @@ def player_trade_value(player) -> int:
     expected = max(750_000, (ovr - 28) * 300_000)
     if salary > expected * 1.5:
         base *= 0.85
-    elif salary < expected * 0.6 and ovr >= 75:
+    elif salary < expected * 0.6 and ovr >= 50:
         base *= 1.1  # bargain deal
 
     # Goalies: fewer roster spots, slight premium for starters

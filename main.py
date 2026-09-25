@@ -289,9 +289,9 @@ class GameManager:
                 player = all_nhl_players[current_player_index]
                 
                 # Assign to appropriate roster based on rating
-                if player.overall_rating() >= 75:
+                if player.overall_rating() >= 38:
                     team.roster.append(player)
-                elif player.overall_rating() >= 65:
+                elif player.overall_rating() >= 33:
                     team.ahl_roster.append(player)
                 else:
                     team.prospects.append(player)
@@ -745,22 +745,22 @@ NHL League Office""",
         position = player.primary_position
         
         # Base salary calculation
-        if ovr >= 85:  # Star player
+        if ovr >= 50:  # Star player
             base_salary = random.randint(8_000_000, 12_000_000)
-        elif ovr >= 80:  # First line player
+        elif ovr >= 47:  # First line player
             base_salary = random.randint(5_000_000, 8_000_000)
-        elif ovr >= 75:  # Second line player
+        elif ovr >= 44:  # Second line player
             base_salary = random.randint(3_000_000, 5_000_000)
-        elif ovr >= 70:  # Third line player
+        elif ovr >= 40:  # Third line player
             base_salary = random.randint(1_500_000, 3_000_000)
         else:  # Fourth line or depth player
             base_salary = random.randint(750_000, 1_500_000)
         
         # Position adjustment
         if position == PlayerPosition.GOALIE:
-            if ovr >= 85:  # Elite goalies command premium
+            if ovr >= 50:  # Elite goalies command premium
                 base_salary *= 1.2
-            elif ovr < 75:  # Backup goalies get less
+            elif ovr < 44:  # Backup goalies get less
                 base_salary *= 0.8
         elif position == PlayerPosition.CENTER:
             base_salary *= 1.1  # Centers slightly more valuable
@@ -776,9 +776,9 @@ NHL League Office""",
             max_years = max(1, 8 - (age - 30))
         
         # Contract length
-        if ovr >= 85:
+        if ovr >= 50:
             years = random.randint(max(1, max_years - 2), max_years)
-        elif ovr >= 75:
+        elif ovr >= 44:
             years = random.randint(max(1, max_years - 4), max_years - 1)
         else:
             years = random.randint(1, min(3, max_years))
@@ -4341,13 +4341,13 @@ class HockeyManagerGUI(tk.Tk):
                 agent_names = ["Mike Johnson", "Sarah Williams", "John Anderson", "Lisa Thompson"]
                 
                 # Generate realistic contract demands based on player rating
-                if player.overall_rating() >= 16:
+                if player.overall_rating() >= 48:
                     demand_range = "$8-12M per year"
                     years = "8 years"
-                elif player.overall_rating() >= 14:
+                elif player.overall_rating() >= 44:
                     demand_range = "$5-8M per year" 
                     years = "6 years"
-                elif player.overall_rating() >= 12:
+                elif player.overall_rating() >= 40:
                     demand_range = "$3-5M per year"
                     years = "4 years"
                 else:
@@ -6971,7 +6971,9 @@ class HockeyManagerGUI(tk.Tk):
             player_count += 0.1
         
         # Normalize to 0.5-1.0 range for better goal calculation
-        strength = (total_strength / max(player_count, 1)) / 100.0 if player_count > 0 else 0.75
+        # (50-point OVR scale: ~35 avg -> 0.5, ~50 avg -> 1.0)
+        avg_ovr = (total_strength / max(player_count, 1)) if player_count > 0 else 37.5
+        strength = 0.5 + (avg_ovr - 35) / 30.0
         strength = max(0.5, min(1.0, strength))  # Clamp between 50-100% strength
         
         # Cache the result
@@ -6996,48 +6998,48 @@ class HockeyManagerGUI(tk.Tk):
         # Elite forwards boost offensive production
         for forward in top_forwards:
             rating = forward.overall_rating()
-            if rating >= 94:  # Generational talent
+            if rating >= 52:  # Generational talent
                 effects['offensive_boost'] += 0.25
                 effects['clutch_factor'] += 0.4
-            elif rating >= 90:  # Superstar
+            elif rating >= 50:  # Superstar
                 effects['offensive_boost'] += 0.18
                 effects['clutch_factor'] += 0.3
-            elif rating >= 85:  # Elite
+            elif rating >= 47:  # Elite
                 effects['offensive_boost'] += 0.10
                 effects['clutch_factor'] += 0.18
-            elif rating >= 80:  # Very good
+            elif rating >= 44:  # Very good
                 effects['offensive_boost'] += 0.05
                 effects['clutch_factor'] += 0.08
         
         # Elite defensemen reduce opponent scoring and add clutch
         for defenseman in top_defense:
             rating = defenseman.overall_rating()
-            if rating >= 93:  # Elite defender (Norris level)
+            if rating >= 51:  # Elite defender (Norris level)
                 effects['defensive_reduction'] += 0.25
                 effects['clutch_factor'] += 0.25
-            elif rating >= 88:  # Very good defender
+            elif rating >= 49:  # Very good defender
                 effects['defensive_reduction'] += 0.15
                 effects['clutch_factor'] += 0.15
-            elif rating >= 83:  # Good defender
+            elif rating >= 46:  # Good defender
                 effects['defensive_reduction'] += 0.08
                 effects['clutch_factor'] += 0.08
-            elif rating >= 78:  # Decent defender
+            elif rating >= 43:  # Decent defender
                 effects['defensive_reduction'] += 0.03
                 effects['clutch_factor'] += 0.03
         
         # Elite goalies have major defensive impact
         for goalie in top_goalies:
             rating = goalie.overall_rating()
-            if rating >= 94:  # Elite goalie (Vezina level)
+            if rating >= 52:  # Elite goalie (Vezina level)
                 effects['defensive_reduction'] += 0.35
                 effects['clutch_factor'] += 0.3
-            elif rating >= 90:  # Very good goalie
+            elif rating >= 50:  # Very good goalie
                 effects['defensive_reduction'] += 0.22
                 effects['clutch_factor'] += 0.2
-            elif rating >= 85:  # Good goalie
+            elif rating >= 47:  # Good goalie
                 effects['defensive_reduction'] += 0.12
                 effects['clutch_factor'] += 0.12
-            elif rating >= 80:  # Decent goalie
+            elif rating >= 44:  # Decent goalie
                 effects['defensive_reduction'] += 0.05
                 effects['clutch_factor'] += 0.05
         
@@ -7893,9 +7895,9 @@ class HockeyManagerGUI(tk.Tk):
                 contract_factor = 0.8
                 
             # Longer contracts for good players add value, for poor players reduce value
-            if player.overall_rating() >= 80 and player.contract.years_remaining >= 3:
+            if player.overall_rating() >= 47 and player.contract.years_remaining >= 3:
                 contract_factor *= 1.2
-            elif player.overall_rating() < 75 and player.contract.years_remaining >= 3:
+            elif player.overall_rating() < 44 and player.contract.years_remaining >= 3:
                 contract_factor *= 0.8
         else:
             # Unsigned players are worth less in trades
@@ -11992,7 +11994,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             position_modifier = 1.1
         elif player.primary_position == PlayerPosition.GOALIE:
             # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 85 else 0.9
+            position_modifier = 1.0 if player.overall_rating() >= 50 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0
@@ -12396,10 +12398,10 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         rating_value.grid(row=0, column=1, sticky=tk.W, pady=5, padx=10)
         rating_value.pack_propagate(False)
         
-        ovr_bg_color = "#1A9B00" if player.overall_rating() >= 85 else \
-                      "#4CAF50" if player.overall_rating() >= 80 else \
-                      "#8BC34A" if player.overall_rating() >= 75 else \
-                      "#FFC107" if player.overall_rating() >= 70 else "#FF9800"
+        ovr_bg_color = "#1A9B00" if player.overall_rating() >= 50 else \
+                      "#4CAF50" if player.overall_rating() >= 47 else \
+                      "#8BC34A" if player.overall_rating() >= 44 else \
+                      "#FFC107" if player.overall_rating() >= 40 else "#FF9800"
         
         rating_label = ttk.Label(
             rating_value,
@@ -12732,7 +12734,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
             position_modifier = 1.1
         elif player.primary_position.name == 'G':
             # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 85 else 0.9
+            position_modifier = 1.0 if player.overall_rating() >= 50 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0

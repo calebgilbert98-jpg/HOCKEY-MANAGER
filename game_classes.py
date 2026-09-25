@@ -13,9 +13,9 @@ from datetime import date, timedelta, datetime, time
 # --- Constants and Configuration ---
 class GameBalance:
     MIN_ATTRIBUTE = 1
-    MAX_ATTRIBUTE = 20
-    DEFAULT_MIN_ATTRIBUTE = 5
-    DEFAULT_MAX_ATTRIBUTE = 18
+    MAX_ATTRIBUTE = 50
+    DEFAULT_MIN_ATTRIBUTE = 25
+    DEFAULT_MAX_ATTRIBUTE = 45
     
     PEAK_AGE_START = 27
     PEAK_AGE_END = 32
@@ -200,9 +200,9 @@ class Player:
     games_remaining_injured: int = 0
     
     # Development attributes
-    coachability: int = field(default_factory=lambda: random.randint(5, 20))
-    work_ethic: int = field(default_factory=lambda: random.randint(5, 20))
-    adaptability: int = field(default_factory=lambda: random.randint(5, 20))
+    coachability: int = field(default_factory=lambda: random.randint(25, 45))
+    work_ethic: int = field(default_factory=lambda: random.randint(25, 45))
+    adaptability: int = field(default_factory=lambda: random.randint(25, 45))
     team_chemistry: int = field(default_factory=lambda: random.randint(10, 20))
     line_chemistry: int = field(default_factory=lambda: random.randint(10, 20))
     
@@ -289,57 +289,57 @@ class Player:
     y: int = 0  # Y position on ice
 
     # New attributes (all initialized 5-20)
-    stickhandling: int = field(default_factory=lambda: random.randint(5, 20))
-    vision: int = field(default_factory=lambda: random.randint(5, 20))
-    shooting_accuracy: int = field(default_factory=lambda: random.randint(5, 20))
-    shooting_power: int = field(default_factory=lambda: random.randint(5, 20))
-    passing_accuracy: int = field(default_factory=lambda: random.randint(5, 20))
-    passing_creativity: int = field(default_factory=lambda: random.randint(5, 20))
-    first_pass: int = field(default_factory=lambda: random.randint(5, 20))
-    breakout_passes: int = field(default_factory=lambda: random.randint(5, 20))
-    forechecking: int = field(default_factory=lambda: random.randint(5, 20))
-    puck_protection: int = field(default_factory=lambda: random.randint(5, 20))
-    deflections: int = field(default_factory=lambda: random.randint(5, 20))
-    shot_blocking: int = field(default_factory=lambda: random.randint(5, 20))
-    hockey_iq: int = field(default_factory=lambda: random.randint(5, 20))
-    composure: int = field(default_factory=lambda: random.randint(5, 20))
-    aggressiveness: int = field(default_factory=lambda: random.randint(5, 20))
-    work_rate: int = field(default_factory=lambda: random.randint(5, 20))
-    anticipation: int = field(default_factory=lambda: random.randint(5, 20))
-    decision_making: int = field(default_factory=lambda: random.randint(5, 20))
-    focus: int = field(default_factory=lambda: random.randint(5, 20))
-    confidence: int = field(default_factory=lambda: random.randint(5, 20))
-    acceleration: int = field(default_factory=lambda: random.randint(5, 20))
-    balance: int = field(default_factory=lambda: random.randint(5, 20))
-    endurance: int = field(default_factory=lambda: random.randint(5, 20))
-    agility: int = field(default_factory=lambda: random.randint(5, 20))
-    speed: int = field(default_factory=lambda: random.randint(5, 20))
-    stamina: int = field(default_factory=lambda: random.randint(5, 20))
-    durability: int = field(default_factory=lambda: random.randint(5, 20))
+    stickhandling: int = field(default_factory=lambda: random.randint(25, 45))
+    vision: int = field(default_factory=lambda: random.randint(25, 45))
+    shooting_accuracy: int = field(default_factory=lambda: random.randint(25, 45))
+    shooting_power: int = field(default_factory=lambda: random.randint(25, 45))
+    passing_accuracy: int = field(default_factory=lambda: random.randint(25, 45))
+    passing_creativity: int = field(default_factory=lambda: random.randint(25, 45))
+    first_pass: int = field(default_factory=lambda: random.randint(25, 45))
+    breakout_passes: int = field(default_factory=lambda: random.randint(25, 45))
+    forechecking: int = field(default_factory=lambda: random.randint(25, 45))
+    puck_protection: int = field(default_factory=lambda: random.randint(25, 45))
+    deflections: int = field(default_factory=lambda: random.randint(25, 45))
+    shot_blocking: int = field(default_factory=lambda: random.randint(25, 45))
+    hockey_iq: int = field(default_factory=lambda: random.randint(25, 45))
+    composure: int = field(default_factory=lambda: random.randint(25, 45))
+    aggressiveness: int = field(default_factory=lambda: random.randint(25, 45))
+    work_rate: int = field(default_factory=lambda: random.randint(25, 45))
+    anticipation: int = field(default_factory=lambda: random.randint(25, 45))
+    decision_making: int = field(default_factory=lambda: random.randint(25, 45))
+    focus: int = field(default_factory=lambda: random.randint(25, 45))
+    confidence: int = field(default_factory=lambda: random.randint(25, 45))
+    acceleration: int = field(default_factory=lambda: random.randint(25, 45))
+    balance: int = field(default_factory=lambda: random.randint(25, 45))
+    endurance: int = field(default_factory=lambda: random.randint(25, 45))
+    agility: int = field(default_factory=lambda: random.randint(25, 45))
+    speed: int = field(default_factory=lambda: random.randint(25, 45))
+    stamina: int = field(default_factory=lambda: random.randint(25, 45))
+    durability: int = field(default_factory=lambda: random.randint(25, 45))
     
     # New attributes replacing pace and offensive_read
-    off_the_puck: int = field(default_factory=lambda: random.randint(5, 20))  # Movement without puck
+    off_the_puck: int = field(default_factory=lambda: random.randint(25, 45))  # Movement without puck
     
     # Physical and tactical attributes
-    wristshot: int = field(default_factory=lambda: random.randint(5, 20))
-    slapshot: int = field(default_factory=lambda: random.randint(5, 20))
-    pokecheck: int = field(default_factory=lambda: random.randint(5, 20))
-    bodycheck: int = field(default_factory=lambda: random.randint(5, 20))
-    one_timer: int = field(default_factory=lambda: random.randint(5, 20))
-    backhand: int = field(default_factory=lambda: random.randint(5, 20))
-    faceoff_wins: int = field(default_factory=lambda: random.randint(5, 20))
-    screen_shots: int = field(default_factory=lambda: random.randint(5, 20))
-    loose_puck: int = field(default_factory=lambda: random.randint(5, 20))
-    creativity: int = field(default_factory=lambda: random.randint(5, 20))
-    pressure_player: int = field(default_factory=lambda: random.randint(5, 20))  # Performance under pressure
+    wristshot: int = field(default_factory=lambda: random.randint(25, 45))
+    slapshot: int = field(default_factory=lambda: random.randint(25, 45))
+    pokecheck: int = field(default_factory=lambda: random.randint(25, 45))
+    bodycheck: int = field(default_factory=lambda: random.randint(25, 45))
+    one_timer: int = field(default_factory=lambda: random.randint(25, 45))
+    backhand: int = field(default_factory=lambda: random.randint(25, 45))
+    faceoff_wins: int = field(default_factory=lambda: random.randint(25, 45))
+    screen_shots: int = field(default_factory=lambda: random.randint(25, 45))
+    loose_puck: int = field(default_factory=lambda: random.randint(25, 45))
+    creativity: int = field(default_factory=lambda: random.randint(25, 45))
+    pressure_player: int = field(default_factory=lambda: random.randint(25, 45))  # Performance under pressure
     # Goalie-specific attributes
-    reflexes: int = field(default_factory=lambda: random.randint(5, 20))
-    positioning: int = field(default_factory=lambda: random.randint(5, 20))
-    rebound_control: int = field(default_factory=lambda: random.randint(5, 20))
-    puck_handling: int = field(default_factory=lambda: random.randint(5, 20))
-    glove_hand: int = field(default_factory=lambda: random.randint(5, 20))
-    stick_side: int = field(default_factory=lambda: random.randint(5, 20))
-    breakaway_skill: int = field(default_factory=lambda: random.randint(5, 20))
+    reflexes: int = field(default_factory=lambda: random.randint(25, 45))
+    positioning: int = field(default_factory=lambda: random.randint(25, 45))
+    rebound_control: int = field(default_factory=lambda: random.randint(25, 45))
+    puck_handling: int = field(default_factory=lambda: random.randint(25, 45))
+    glove_hand: int = field(default_factory=lambda: random.randint(25, 45))
+    stick_side: int = field(default_factory=lambda: random.randint(25, 45))
+    breakaway_skill: int = field(default_factory=lambda: random.randint(25, 45))
     
     # Waiver attributes
     on_waivers: bool = False
@@ -349,9 +349,9 @@ class Player:
     def __post_init__(self):
         """Adjusts attributes based on position after initialization."""
         if self.primary_position == PlayerPosition.CENTER:
-            self.faceoffs = random.randint(10, 20)
+            self.faceoffs = random.randint(30, 45)
         elif self.primary_position == PlayerPosition.GOALIE:
-            self.goaltending = random.randint(10, 20)
+            self.goaltending = random.randint(30, 45)
 
     @property
     def full_name(self) -> str:
@@ -456,7 +456,9 @@ class Player:
                 self.backhand * 0.03 +
                 self.screen_shots * 0.03
             )
-        elif self.primary_position == PlayerPosition.DEFENSE:
+        elif self.primary_position in (PlayerPosition.DEFENSE,
+                                             PlayerPosition.LEFT_DEFENSE,
+                                             PlayerPosition.RIGHT_DEFENSE):
             rating = (
                 self.skating * 0.08 +
                 self.passing * 0.06 +
@@ -499,25 +501,87 @@ class Player:
             )
         return int(rating)
 
+    def _potential_cap(self) -> int:
+        """Overall-rating ceiling implied by the player's potential grade (50-scale)."""
+        g = (self.potential_grade or 'C').strip().upper()
+        base = {'A': 48, 'B': 44, 'C': 40, 'D': 35, 'F': 30}
+        cap = base.get(g[:1], 40)
+        if len(g) > 1:
+            if g[1] == '+':
+                cap += 2
+            elif g[1] == '-':
+                cap -= 2
+        return cap
+
     def age_one_year(self):
         """Handles player aging, development, and decline."""
         self.age += 1
         if self.contract.years_remaining > 0:
             self.contract.years_remaining -= 1
 
-        potential_map = {'A': 20, 'B': 18, 'C': 16, 'D': 14, 'F': 12}
-        potential_cap = potential_map.get(self.potential_grade, 10)
-        
+        potential_cap = self._potential_cap()
+
         if self.age < GameBalance.PEAK_AGE_START and self.overall_rating() < potential_cap:
-            if random.random() < GameBalance.DEVELOPMENT_CHANCE:
+            # Development closes a fraction of the gap to the player's ceiling
+            # each year: prospects surge, established players refine slowly.
+            gap = potential_cap - self.overall_rating()
+            if self.age <= 20:
+                frac = 0.25
+            elif self.age <= 23:
+                frac = 0.18
+            elif self.age <= 26:
+                frac = 0.10
+            else:
+                frac = 0.05
+            frac *= random.uniform(0.8, 1.2)
+            # ~0.06 overall per attribute point (weighted average of ~20 attrs)
+            attr_points = min(120, max(1, int(gap * frac / 0.06)))
+            for _ in range(attr_points):
                 self._change_random_attribute(1)
         elif self.age > GameBalance.PEAK_AGE_END:
             if random.random() < GameBalance.DECLINE_CHANCE:
                 self._change_random_attribute(-1)
 
+    def _ovr_attributes(self) -> list:
+        """Attribute names that feed this player's positional overall rating."""
+        if self.primary_position == PlayerPosition.GOALIE:
+            return ['goaltending', 'reflexes', 'positioning', 'rebound_control',
+                    'puck_handling', 'glove_hand', 'stick_side', 'breakaway_skill',
+                    'confidence', 'focus', 'composure']
+        if self.primary_position == PlayerPosition.CENTER:
+            return ['skating', 'shooting', 'shooting_accuracy', 'shooting_power',
+                    'passing', 'passing_accuracy', 'passing_creativity', 'deking',
+                    'stickhandling', 'vision', 'hockey_iq', 'offensive_awareness',
+                    'defensive_awareness', 'faceoffs', 'faceoff_wins', 'composure',
+                    'endurance', 'determination', 'off_the_puck', 'one_timer',
+                    'loose_puck']
+        if self.primary_position in (PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING):
+            return ['skating', 'shooting', 'shooting_accuracy', 'shooting_power',
+                    'wristshot', 'slapshot', 'passing', 'passing_accuracy',
+                    'passing_creativity', 'deking', 'stickhandling', 'vision',
+                    'hockey_iq', 'offensive_awareness', 'defensive_awareness',
+                    'composure', 'endurance', 'determination', 'off_the_puck',
+                    'one_timer', 'backhand', 'screen_shots']
+        if self.primary_position in (PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                                     PlayerPosition.RIGHT_DEFENSE):
+            return ['skating', 'passing', 'passing_accuracy', 'passing_creativity',
+                    'strength', 'checking', 'bodycheck', 'defensive_awareness',
+                    'shot_blocking', 'pokecheck', 'anticipation', 'hockey_iq',
+                    'composure', 'aggressiveness', 'balance', 'endurance',
+                    'determination', 'slapshot', 'loose_puck', 'pressure_player']
+        return ['skating', 'shooting', 'passing', 'deking', 'stickhandling',
+                'vision', 'hockey_iq', 'offensive_awareness', 'defensive_awareness',
+                'composure', 'endurance', 'determination', 'off_the_puck',
+                'loose_puck']
+
     def _change_random_attribute(self, amount: int):
         """Helper to randomly increase or decrease a skill attribute."""
-        skill_attributes = [
+        # Development targets attributes that actually move the player's OVR;
+        # occasionally (25%) it touches a secondary attribute for flavor.
+        if random.random() < 0.75:
+            skill_attributes = self._ovr_attributes()
+        else:
+            skill_attributes = [
             'skating', 'strength', 'shooting', 'passing', 'deking',
             'offensive_awareness', 'defensive_awareness', 'checking', 'faceoffs',
             'goaltending', 'determination', 'teamwork', 'leadership', 'discipline', 'flair',
@@ -561,7 +625,7 @@ class Player:
             position_modifier = 1.1
         elif self.primary_position == PlayerPosition.GOALIE:
             # Goalies have different value curve
-            position_modifier = 1.0 if self.overall_rating() >= 85 else 0.9
+            position_modifier = 1.0 if self.overall_rating() >= 50 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0
