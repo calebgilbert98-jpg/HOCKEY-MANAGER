@@ -2155,6 +2155,13 @@ class GameSim:
         except Exception:
             pass
 
+        # Traits: Speedsters and Danglers attempt more controlled entries
+        try:
+            weights[ZoneEntryType.CONTROLLED_CARRY] *= _trait_bonus(puck_carrier, "zone_entry_mult")
+            weights[ZoneEntryType.CONTROLLED_CARRY] *= _trait_bonus(puck_carrier, "controlled_entry_mult")
+        except Exception:
+            pass
+
         return self._weighted_random_choice(weights)
 
     def _attempt_controlled_entry(self, puck_carrier, attacking_team, defending_team):
@@ -2170,9 +2177,15 @@ class GameSim:
         # Skill battle
         fatigue_factor = self.player_fatigue.get(puck_carrier.id, 100) / 100
         carrier_skill = (puck_carrier.skating + puck_carrier.deking + puck_carrier.puck_handling) * fatigue_factor
+        # Traits: Danglers deke through, Speedsters blow by
+        carrier_skill *= _trait_bonus(puck_carrier, "deke_success_mult")
+        carrier_skill *= _trait_bonus(puck_carrier, "zone_entry_mult")
         defender_skill = best_defender.checking + best_defender.defensive_awareness + best_defender.anticipation
         
         carrier_roll = carrier_skill + random.randint(-10, 10)
+        # Trait: Shutdown defenders are harder to beat on entries
+        defender_skill *= _trait_bonus(best_defender, "takeaway_mult")
+        defender_skill *= _trait_bonus(best_defender, "defensive_stops_mult")
         defender_roll = defender_skill + random.randint(-10, 10)
         
         if carrier_roll > defender_roll:
@@ -2532,8 +2545,11 @@ class GameSim:
         else:
             hs = (hb.strength * 0.45 + hb.balance * 0.25 + hb.checking * 0.20
                   + hb.anticipation * 0.10 + random.randint(-6, 6))
+            # Trait: Grinders win more puck battles
+            hs *= _trait_bonus(hb, "puck_battle_mult")
             aws = (ab.strength * 0.45 + ab.balance * 0.25 + ab.checking * 0.20
                    + ab.anticipation * 0.10 + random.randint(-6, 6))
+            aws *= _trait_bonus(ab, "puck_battle_mult")
             winner, loser = (hb, ab) if hs >= aws else (ab, hb)
         wteam = self.home_team if winner.id in [p.id for p in self._get_on_ice(self.home_team)] \
             else self.away_team
@@ -2808,6 +2824,8 @@ class GameSim:
         lane_pressure = max(0.0, 10.0 - dd) if nd is not None else 0.0
         q = (52 + passer.passing * 1.0 + min(dd, 10.0) * 1.2
              - lane_pressure * 3.0)
+        # Trait: Playmakers complete more passes
+        q *= _trait_bonus(passer, "pass_success_mult")
         q = max(10.0, min(95.0, q))
         completed = random.uniform(0, 100) < q
         interceptor = None
@@ -3072,6 +3090,22 @@ class GameSim:
                 quality_score *= _trait_bonus(shooter, "shot_quality_mult")
                 if shot_type in (ShotType.SLAP_SHOT, ShotType.ONE_TIMER if hasattr(ShotType, 'ONE_TIMER') else None):
                     quality_score *= _trait_bonus(shooter, "one_timer_mult")
+                # Trait: Clutch players elevate in OT and late-game pressure
+                # OT is period 4+; late game is last 5 min of 3rd, tied or down 1
+                is_ot = getattr(self, 'period', 1) >= 4
+                is_late = False
+                try:
+                    # clock counts down; period_length is typical 20 min
+                    time_left = self.clock
+                    score_diff = abs(self.home_score - self.away_score)
+                    is_late = (getattr(self, 'period', 1) == 3 and time_left < 300
+                               and score_diff <= 1)
+                except Exception:
+                    pass
+                if is_ot:
+                    quality_score *= _trait_bonus(shooter, "overtime_mult")
+                if is_late:
+                    quality_score *= _trait_bonus(shooter, "late_game_mult")
             except Exception:
                 pass
         
@@ -3321,11 +3355,20 @@ class GameSim:
             assists = []
             if passer:
                 assists.append(passer)
-            if random.random() < 0.4:  # Secondary assist chance
+            # Trait: Playmakers earn more secondary assists
+            secondary_chance = 0.4
+            # Boost if any on-ice teammate is a playmaker (they're more likely to get the secondary)
+            for p in self._get_on_ice(attacking_team):
+                if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE:
+                    secondary_chance *= _trait_bonus(p, "assist_chance_mult")
+                    break  # Only apply once (highest bonus)
+            if random.random() < min(0.8, secondary_chance):  # Secondary assist chance
                 second_assist_candidates = [p for p in self._get_on_ice(attacking_team) 
                                           if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE]
                 if second_assist_candidates:
-                    assists.append(random.choice(second_assist_candidates))
+                    # Weight by playmaker trait for secondary assist selection
+                    weights = [_trait_bonus(p, "assist_chance_mult") for p in second_assist_candidates]
+                    assists.append(random.choices(second_assist_candidates, weights=weights, k=1)[0])
             
             self._handle_goal(attacking_team, shooter, assists, shot_type, location)
             
@@ -4190,7 +4233,13 @@ class GameSim:
         convert more, elite goalies stop more. Never 0% or 100%.
         """
         shot_roll = (shooter.shooting + shooter.deking) / 4 + random.randint(1, 20)
+        # Traits: clutch shooters elevate, danglers deke better
+        shot_roll *= _trait_bonus(shooter, "shootout_mult")
+        shot_roll *= _trait_bonus(shooter, "deke_success_mult")
         save_roll = goalie.goaltending * 0.45 + random.randint(1, 20)
+        # Traits: wall goalies stop more, big-game goalies elevate in shootouts
+        save_roll *= _trait_bonus(goalie, "save_chance_mult")
+        save_roll *= _trait_bonus(goalie, "shootout_mult")
         is_goal = shot_roll > save_roll
         result = "scores" if is_goal else "is stopped"
         self._log_event(f"Shootout: {shooter.full_name} {result} against {goalie.full_name}!", "SHOOTOUT_ATTEMPT")
@@ -4621,6 +4670,19 @@ class GameSim:
 
         # Trait: Big Hitter throws harder, more effective checks
         hit_skill *= _trait_bonus(hitting_player, "hit_force_mult")
+
+        # Trait: Enforcer aura - teammates hit harder when enforcer is on ice
+        try:
+            hitting_team = self._get_player_team(hitting_player)
+            on_ice = self._on_ice_skaters(hitting_team)
+            for teammate in on_ice:
+                if teammate.id != hitting_player.id:
+                    aura = _trait_bonus(teammate, "team_toughness_aura", 0.0)
+                    if aura:
+                        hit_skill *= (1.0 + aura)
+                        break  # Only one enforcer aura applies
+        except Exception:
+            pass
         
         # Hit type modifiers
         type_modifier = {
@@ -4661,7 +4723,17 @@ class GameSim:
             (HitResult.PENALTY_DRAWN, 0.1),
             (HitResult.INJURY_CAUSED, 0.05)
         ]
-        
+
+        # Trait: Iron Man recipients are harder to injure (0.75x chance).
+        try:
+            iron_mult = _trait_bonus(target_player, "injury_chance_mult", 1.0)
+            if iron_mult != 1.0:
+                results = [
+                    (r, p * iron_mult if r == HitResult.INJURY_CAUSED else p)
+                    for r, p in results
+                ]
+        except Exception:
+            pass        
         # Adjust probabilities based on hit type
         if hit_type in [HitType.CHARGING, HitType.BOARDING]:
             # Dirty hits more likely to cause penalties/injuries
@@ -4757,8 +4829,18 @@ class GameSim:
         # Record turnover stats
         if player_losing_puck.id in self.game_stats:
             if turnover_type in [TurnoverType.GIVEAWAY, TurnoverType.UNFORCED_ERROR]:
-                self.game_stats[player_losing_puck.id]['giveaways'] += 1
-                self.game_stats[player_losing_puck.id]['turnovers_committed'] += 1
+                # Trait: Playmakers commit fewer giveaways (10% reduction)
+                try:
+                    reduction = _trait_bonus(player_losing_puck, "giveaway_reduction", 0.0)
+                    if reduction and random.random() < reduction:
+                        # Playmaker protects the puck - no giveaway recorded
+                        pass
+                    else:
+                        self.game_stats[player_losing_puck.id]['giveaways'] += 1
+                        self.game_stats[player_losing_puck.id]['turnovers_committed'] += 1
+                except Exception:
+                    self.game_stats[player_losing_puck.id]['giveaways'] += 1
+                    self.game_stats[player_losing_puck.id]['turnovers_committed'] += 1
         
         if player_gaining_puck.id in self.game_stats:
             if turnover_type in [TurnoverType.TAKEAWAY, TurnoverType.FORCED_ERROR, TurnoverType.STRIP, TurnoverType.INTERCEPTION]:
@@ -5061,6 +5143,18 @@ class GameSim:
             save_probability *= 1.15
         elif goalie_style == GoaltenderStyle.BUTTERFLY and shot_location in [ShotLocation.LOW_SLOT, ShotLocation.CREASE]:
             save_probability *= 1.1
+
+        # Trait: Wall goalies are harder to beat
+        save_probability *= _trait_bonus(goaltender, "save_chance_mult")
+
+        # Trait: Big-game goalies elevate in playoffs and OT
+        try:
+            if getattr(self, 'is_playoff', False):
+                save_probability *= _trait_bonus(goaltender, "playoff_mult")
+            if getattr(self, 'period', 1) >= 4:
+                save_probability *= _trait_bonus(goaltender, "overtime_mult")
+        except Exception:
+            pass
         
         return min(max(save_probability, 0.05), 0.98)  # Clamp between 5% and 98%
 
