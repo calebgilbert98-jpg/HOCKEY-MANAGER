@@ -384,6 +384,25 @@ class SettingsWindow(tk.Toplevel):
                                           values=viewer_mode_values, state='readonly', width=15)
         viewer_mode_dropdown.pack(side='left', padx=(10, 0))
         viewer_mode_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
+
+        # Draft class quality
+        draft_quality_row = ttk.Frame(simulation_frame, style='Panel.TFrame')
+        draft_quality_row.pack(fill='x', pady=(10, 2))
+
+        tk.Label(draft_quality_row, text="Draft class quality:",
+                font=(self.parent.FONT_FAMILY, 10),
+                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
+
+        self.draft_quality_var = tk.StringVar()
+        draft_quality_values = ['Weak', 'Normal', 'Strong', 'Generational']
+        draft_quality_dropdown = ttk.Combobox(draft_quality_row, textvariable=self.draft_quality_var,
+                                            values=draft_quality_values, state='readonly', width=15)
+        draft_quality_dropdown.pack(side='left', padx=(10, 0))
+        draft_quality_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
+
+        tk.Label(draft_quality_row, text="(applies to future draft classes)",
+                font=(self.parent.FONT_FAMILY, 9, 'italic'),
+                fg='#888888', bg=self.parent.CONTENT_BG).pack(side='left', padx=(10, 0))
         
     def _create_notifications_tab(self):
         """Create tab for notification preferences"""
@@ -523,7 +542,8 @@ class SettingsWindow(tk.Toplevel):
                 'auto_continue_non_game_days': False,
                 'always_show_daily_results': True,
                 'use_game_viewer': False,
-                'game_viewer_mode': 'Full Game'
+                'game_viewer_mode': 'Full Game',
+                'draft_class_quality': 'Normal'
             },
             'notifications': {
                 'email_notifications': {
@@ -595,6 +615,8 @@ class SettingsWindow(tk.Toplevel):
         self.show_daily_results_var.set(simulation.get('always_show_daily_results', True))
         self.use_game_viewer_var.set(simulation.get('use_game_viewer', False))
         self.game_viewer_mode_var.set(simulation.get('game_viewer_mode', 'Full Game'))
+        if hasattr(self, 'draft_quality_var'):
+            self.draft_quality_var.set(simulation.get('draft_class_quality', 'Normal'))
         
         # Notifications
         notifications = self.settings.get('notifications', {})
@@ -677,7 +699,8 @@ class SettingsWindow(tk.Toplevel):
             'auto_continue_non_game_days': self.auto_continue_var.get(),
             'always_show_daily_results': self.show_daily_results_var.get(),
             'use_game_viewer': self.use_game_viewer_var.get(),
-            'game_viewer_mode': self.game_viewer_mode_var.get()
+            'game_viewer_mode': self.game_viewer_mode_var.get(),
+            'draft_class_quality': self.draft_quality_var.get() if hasattr(self, 'draft_quality_var') else 'Normal'
         }
         
         # Notifications

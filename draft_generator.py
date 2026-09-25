@@ -287,6 +287,33 @@ POTENTIAL_DISTRIBUTION = {
     "F": 0.05     # 5.0% - Minor league talent
 }
 
+# Draft class quality presets. "Normal" is the baseline above (~1 generational,
+# ~11 elite/top-line per 224 picks, matching real NHL draft hit rates).
+# Other presets shift probability mass up/down the potential ladder.
+DRAFT_QUALITY_DISTRIBUTIONS = {
+    "Weak": {
+        "A+": 0.001, "A": 0.005, "A-": 0.010,
+        "B+": 0.020, "B": 0.050, "B-": 0.100,
+        "C+": 0.150, "C": 0.220, "C-": 0.200,
+        "D": 0.150, "F": 0.094,
+    },
+    "Normal": POTENTIAL_DISTRIBUTION,
+    "Strong": {
+        "A+": 0.010, "A": 0.030, "A-": 0.060,
+        "B+": 0.080, "B": 0.120, "B-": 0.150,
+        "C+": 0.150, "C": 0.180, "C-": 0.120,
+        "D": 0.070, "F": 0.030,
+    },
+    "Generational": {
+        # A 2023 (Bedard) or 2015 (McDavid/Eichel) type draft: multiple
+        # franchise talents at the top, deep through the first two rounds.
+        "A+": 0.020, "A": 0.040, "A-": 0.080,
+        "B+": 0.100, "B": 0.120, "B-": 0.140,
+        "C+": 0.140, "C": 0.160, "C-": 0.100,
+        "D": 0.070, "F": 0.030,
+    },
+}
+
 # Attribute development profiles based on potential
 DEVELOPMENT_PROFILES = {
     "A+": {"peak_age": 25, "development_speed": 1.5, "ceiling_modifier": 1.3},
@@ -330,10 +357,11 @@ def get_random_position(weighted=True) -> PlayerPosition:
     else:
         return random.choice(list(PlayerPosition))
 
-def get_random_potential() -> str:
+def get_random_potential(distribution=None) -> str:
     """Returns a randomly selected potential grade based on probability distribution."""
-    potentials = list(POTENTIAL_DISTRIBUTION.keys())
-    probabilities = list(POTENTIAL_DISTRIBUTION.values())
+    dist = distribution or POTENTIAL_DISTRIBUTION
+    potentials = list(dist.keys())
+    probabilities = list(dist.values())
     return random.choices(potentials, weights=probabilities, k=1)[0]
 
 def get_archetype_for_position(position: PlayerPosition) -> Tuple[str, dict]:
@@ -404,10 +432,13 @@ def generate_birthdate(age: int, variation_days: int = 180) -> datetime:
 def create_prospect(age: int = 18, 
                    position: Optional[PlayerPosition] = None, 
                    potential: Optional[str] = None,
-                   nationality: Optional[str] = None) -> Player:
+                   nationality: Optional[str] = None,
+                   potential_distribution=None) -> Player:
     """
     Create a new prospect with the specified parameters.
     If parameters are not provided, they will be randomly generated.
+    potential_distribution: override the potential grade distribution
+        (used for draft class quality settings).
     """
     # Determine nationality if not specified
     if nationality is None:
@@ -423,7 +454,7 @@ def create_prospect(age: int = 18,
     
     # Determine potential if not specified
     if potential is None:
-        potential = get_random_potential()
+        potential = get_random_potential(potential_distribution)
     
     # Get an appropriate archetype for the position
     archetype_name, archetype_data = get_archetype_for_position(position)
@@ -552,11 +583,16 @@ def create_prospect(age: int = 18,
     
     return player
 
-def generate_draft_class(num_prospects: int = 224) -> list[Player]:
+def generate_draft_class(num_prospects: int = 224, quality: str = "Normal") -> list[Player]:
     """
     Generates a list of new 18-year-old players for the draft,
     with a realistic distribution of talent.
+
+    quality: "Weak" | "Normal" | "Strong" | "Generational" — shifts the
+        potential distribution up or down. "Normal" matches real NHL draft
+        hit rates (~1 generational talent, ~11 elite/top-line per 224).
     """
+    distribution = DRAFT_QUALITY_DISTRIBUTIONS.get(quality, POTENTIAL_DISTRIBUTION)
     prospects = []
     
     # Ensure we have a minimum number of players at each position
@@ -564,7 +600,7 @@ def generate_draft_class(num_prospects: int = 224) -> list[Player]:
     min_per_position = 20  # Ensure at least 20 players per position
     
     # Ensure we have a minimum number of players at each potential tier
-    potential_counts = {pot: 0 for pot in POTENTIAL_DISTRIBUTION.keys()}
+    potential_counts = {pot: 0 for pot in distribution.keys()}
     
     # Generate enough prospects to meet the requested total
     while len(prospects) < num_prospects:
@@ -576,7 +612,8 @@ def generate_draft_class(num_prospects: int = 224) -> list[Player]:
                 break
         
         # Generate the prospect
-        prospect = create_prospect(position=forced_position)
+        prospect = create_prospect(position=forced_position,
+                                   potential_distribution=distribution)
         
         # Update our counters
         position_counts[prospect.primary_position] += 1
@@ -588,7 +625,7 @@ def generate_draft_class(num_prospects: int = 224) -> list[Player]:
     # Sort prospects by draft ranking for convenience
     prospects.sort(key=lambda p: p.draft_ranking, reverse=True)
     
-    print(f"Generated a new draft class with {len(prospects)} prospects.")
+    print(f"Generated a new draft class with {len(prospects)} prospects (quality: {quality}).")
     print(f"Potential distribution: {potential_counts}")
     
     return prospects

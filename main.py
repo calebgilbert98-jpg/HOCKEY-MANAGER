@@ -6737,7 +6737,8 @@ class HockeyManagerGUI(tk.Tk):
         if not self.league.draft_prospects:
             print("Generating draft prospects...")
             from draft_generator import generate_draft_class
-            self.league.draft_prospects = generate_draft_class(year)
+            draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
+            self.league.draft_prospects = generate_draft_class(year, quality=draft_quality)
             print(f"Generated {len(self.league.draft_prospects)} draft prospects")
         
         # Ensure draft picks are set up
@@ -8132,8 +8133,9 @@ class HockeyManagerGUI(tk.Tk):
         if hasattr(self, '_strength_cache'):
             self._strength_cache.clear()
 
-        # Generate new draft class
-        self.league.draft_prospects = generate_draft_class(num_prospects=224)  # 7 rounds × 32 teams = 224 players
+        # Generate new draft class (quality from settings: Weak/Normal/Strong/Generational)
+        draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
+        self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)  # 7 rounds × 32 teams = 224 players
         
         # Update the current date to offseason
         self.current_date = date(self.league.season_year, 7, 1)  # Jump to July 1st (Free Agency)

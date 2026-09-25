@@ -222,11 +222,11 @@ class DatabaseManager:
         
         print(f"Populated {len(ahl_teams)} AHL teams")
     
-    def generate_draft_class(self, year: int, size: int = 224) -> List[Player]:
+    def generate_draft_class(self, year: int, size: int = 224, quality: str = "Normal") -> List[Player]:
         """Generate a new draft class for the specified year."""
-        print(f"Generating {year} draft class...")
+        print(f"Generating {year} draft class (quality: {quality})...")
         
-        draft_class = generate_draft_class(size)
+        draft_class = generate_draft_class(size, quality=quality)
         
         # Add to database
         for player in draft_class:
