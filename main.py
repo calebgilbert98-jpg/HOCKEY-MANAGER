@@ -5741,11 +5741,26 @@ class HockeyManagerGUI(tk.Tk):
             continue_btn.config(state='disabled')
             
         try:
-            # Check for season end - either by date or by games completed
-            season_end_date = date(self.league.season_year + 1, 4, 15)
+            # Check for season end by games completed (primary trigger).
+            # The date cutoff is only a safety net set AFTER the last scheduled
+            # game, since the generated schedule can run past April 15.
             season_complete = self._check_season_complete()
-            
-            if self.current_date > season_end_date or season_complete:
+
+            if season_complete:
+                self.end_of_season()
+                return
+
+            last_game_date = getattr(self, '_season_last_game_date', None)
+            if last_game_date is None:
+                try:
+                    game_dates = [e.get('date') for e in self.league.schedule
+                                  if isinstance(e, dict) and e.get('date')]
+                    if game_dates:
+                        last_game_date = max(game_dates)
+                except Exception:
+                    last_game_date = None
+                self._season_last_game_date = last_game_date
+            if last_game_date and self.current_date > last_game_date + timedelta(days=7):
                 self.end_of_season()
                 return
 
