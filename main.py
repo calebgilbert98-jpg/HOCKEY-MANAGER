@@ -10246,10 +10246,10 @@ class CleanEditLinesWindow(tk.Toplevel):
                 # Parse zone ID and assign to appropriate lineup position
                 if 'forward_line' in zone_id:
                     parts = zone_id.split('_')
-                    if len(parts) >= 4:
+                    if len(parts) >= 5:
                         try:
                             line_idx = int(parts[2])
-                            pos_idx = int(parts[3])
+                            pos_idx = int(parts[4])
                             if line_idx < 4 and pos_idx < 3:
                                 if not lineup['Forwards'][line_idx]:
                                     lineup['Forwards'][line_idx] = [None, None, None]
@@ -10259,10 +10259,10 @@ class CleanEditLinesWindow(tk.Toplevel):
                 
                 elif 'defense_pair' in zone_id:
                     parts = zone_id.split('_')
-                    if len(parts) >= 4:
+                    if len(parts) >= 5:
                         try:
                             pair_idx = int(parts[2])
-                            pos_idx = int(parts[3])
+                            pos_idx = int(parts[4])
                             if pair_idx < 3 and pos_idx < 2:
                                 if not lineup['Defense'][pair_idx]:
                                     lineup['Defense'][pair_idx] = [None, None]
