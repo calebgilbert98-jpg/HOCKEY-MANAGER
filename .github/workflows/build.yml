@@ -9,6 +9,9 @@ on:
     branches: [main]
   workflow_dispatch:  # manual "Run workflow" button as well
 
+permissions:
+  contents: write  # needed to create GitHub Releases
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -45,3 +48,11 @@ jobs:
         with:
           name: PuckDynasty-v${{ steps.version.outputs.APP_VERSION }}-Windows
           path: dist/PuckDynasty-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.APP_VERSION }}
+          name: Puck Dynasty v${{ steps.version.outputs.APP_VERSION }}
+          files: dist/PuckDynasty-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip
+          fail_on_unmatched_files: true
