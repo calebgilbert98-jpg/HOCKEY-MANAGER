@@ -7,6 +7,7 @@
 # Stage 5: Goaltending Excellence
 
 import random
+from collections import deque
 import math
 from enum import Enum
 from game_classes import Team, Player, PlayerPosition
@@ -491,6 +492,10 @@ class GameSim:
         self.game_log = []
         self.notable_events = []
         self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
+
+        # Recent shooters: keeps one sniper from monopolizing every shot.
+        # After you shoot, the puck moves on -- someone else shoots next.
+        self._recent_shooters = deque(maxlen=8)
 
         # Play-by-play visualizer hooks (additive; zero overhead when unused).
         # Listeners are callables receiving one event dict each.
@@ -1956,6 +1961,21 @@ class GameSim:
             self.clock = 1200
             self._period_length = 1200
             self._emit_pbp("period_start", period=p)
+            if p == 3:
+                # a perfect goalie through 40:00 is a broadcast storyline
+                try:
+                    if self.away_score == 0:
+                        self._emit_pbp(
+                            "milestone", kind="shutout_bid",
+                            player=self._selected_goalie(self.home_team),
+                            team=self.home_team.team_name)
+                    if self.home_score == 0:
+                        self._emit_pbp(
+                            "milestone", kind="shutout_bid",
+                            player=self._selected_goalie(self.away_team),
+                            team=self.away_team.team_name)
+                except Exception:
+                    pass
             self._simulate_period()
             self._log_event(f"End of Period {self.period}. Score: {self.home_score}-{self.away_score}", "PERIOD_END")
             self._emit_pbp("period_end", period=p)
@@ -3390,13 +3410,23 @@ class GameSim:
                 "block": "block_chance_mult",
             }
             freq_key = _TRAIT_FREQ.get(tendency_key)
+            recent = getattr(self, "_recent_shooters", None) \
+                if tendency_key == "shoot" else ()
             weights = []
             for p in skaters:
                 w = max(0.05, get_tendency(p, tendency_key))
                 if freq_key:
                     w *= _trait_bonus(p, freq_key)
+                if tendency_key == "shoot":
+                    # flatten: a sniper should lead, not own, the shot chart
+                    w = w ** 0.5
+                if recent and getattr(p, "id", None) in recent:
+                    w *= 0.35  # you just shot; the puck moves on
                 weights.append(w)
-            return random.choices(skaters, weights=weights, k=1)[0]
+            pick = random.choices(skaters, weights=weights, k=1)[0]
+            if tendency_key == "shoot" and recent is not None:
+                recent.append(getattr(pick, "id", None))
+            return pick
         except Exception:
             return random.choice(skaters)
 
@@ -3750,8 +3780,11 @@ class GameSim:
         if not attackers:
             return False
         
-        # Find best positioned players
-        best_attacker = max(attackers, key=lambda p: p.anticipation + p.offensive_awareness)
+        # Rebound scramble: net-front battle, not a coronation. Smarter
+        # players get there more often, but anyone can win the lottery.
+        _rw = [max(1.0, p.anticipation + p.offensive_awareness)
+               for p in attackers]
+        best_attacker = random.choices(attackers, weights=_rw, k=1)[0]
         best_defender = max(defenders, key=lambda p: p.anticipation + p.defensive_awareness) if defenders else None
         
         att_roll = best_attacker.anticipation + best_attacker.offensive_awareness + random.randint(1, 10)
@@ -4408,6 +4441,19 @@ class GameSim:
                        location=location.value if location is not None and hasattr(location, "value") else None,
                        home_score=self.home_score,
                        away_score=self.away_score)
+        # Broadcast milestone moments: hat-trick watch on #2, hats on #3.
+        # Pure presentation signal; changes nothing about the outcome.
+        try:
+            ng = self.game_stats.get(getattr(shooter, "id", None), {}).get("g", 0)
+            if ng == 2:
+                self._emit_pbp("milestone", kind="hat_trick_watch",
+                               player=shooter,
+                               team=scoring_team.team_name)
+            elif ng == 3:
+                self._emit_pbp("milestone", kind="hat_trick", player=shooter,
+                               team=scoring_team.team_name)
+        except Exception:
+            pass
         
         # End (or stage down) a penalty on a power play goal.
         # - minors terminate; majors do NOT (full 5 served)
@@ -4511,8 +4557,9 @@ class GameSim:
             }.get(current_situation, current_situation)
         formation = self._select_formation(attacking_team, current_situation)
         
-        # Base event probabilities
-        shot_chance = 0.36
+        # Base event probabilities (shot_chance tuned so team SOG lands
+        # near NHL ~30/game with the flattened shooter distribution)
+        shot_chance = 0.40
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
@@ -5749,7 +5796,9 @@ class GameSim:
         """
         goalie_id = goaltender.id
         defending_team = self._get_player_team(goaltender)
-        team_name = defending_team.team_name
+        # Degenerate rosters (no dressed goalie -> throwaway "Default Goalie"
+        # not present in either roster) must degrade, never crash the sim.
+        team_name = defending_team.team_name if defending_team else None
         
         # Update individual goalie stats
         if goalie_id in self.game_stats:

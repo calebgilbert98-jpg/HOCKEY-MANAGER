@@ -913,6 +913,10 @@ class PBPVisualSim(tk.Toplevel):
                                        fill="#bcd6ee", outline="")
         self.puck_item = c.create_oval(px - 5, py - 5, px + 5, py + 5,
                                        fill="#111418", outline="white", width=1)
+        # puck-carrier ring: subtle pulsing halo so the eye tracks the play
+        self.carrier_ring = c.create_oval(0, 0, 0, 0, outline="#ffffff",
+                                          width=2, tags=("fxring",),
+                                          state="hidden")
 
     def _make_dot(self, dot_id, player, is_home, role, color, r=13):
         c = self.canvas
@@ -1391,6 +1395,8 @@ class PBPVisualSim(tk.Toplevel):
             self._on_penalty(ev)
         elif et == "fight":
             self._on_fight(ev)
+        elif et == "milestone":
+            self._on_milestone(ev)
         elif et == "icing":
             self._feed(random.choice(_ICING_T).format(
                 team=ev.get("team", "")), tag="info", ev=ev)
@@ -2338,6 +2344,28 @@ class PBPVisualSim(tk.Toplevel):
             if d:
                 self._set_dot_visible(d, True)
 
+    def _on_milestone(self, ev):
+        """Broadcast milestone: hat-trick watch, hat trick, shutout bid."""
+        kind = ev.get("kind", "")
+        name = self._pname(ev.get("player"))
+        home = self._side_of(ev.get("team")) == "home"
+        color = ACCENT if home else AWAY_COLOR
+        if kind == "hat_trick_watch":
+            title, sub = "HAT-TRICK WATCH", f"{name} has two -- one more for the hats"
+            tag = "goal"
+        elif kind == "hat_trick":
+            title, sub = "HAT TRICK!", f"{name} -- throw the hats!"
+            tag = "goal"
+        elif kind == "shutout_bid":
+            title, sub = "SHUTOUT BID", f"{name} is perfect through two periods"
+            tag = "info"
+        else:
+            return
+        self._feed(f"{title} -- {sub}.", tag=tag, ev=ev)
+        self._note("milestone", f"{title}: {sub}", ev)
+        if not self._instant:
+            self._banner_show("milestone", title, sub, color=color)
+
     def _on_fight(self, ev):
         msg = random.choice(_FIGHT_T).format(
             P=self._pname(ev.get("player")))
@@ -2921,6 +2949,32 @@ class PBPVisualSim(tk.Toplevel):
                 d["y"] = cl["cy"] + math.sin(ang) * 3.2
                 d["_px"], d["_py"] = d["x"], d["y"]
                 self._move_dot(d, d["x"], d["y"])
+            # puck-carrier ring: follow the carrier dot, gentle pulse
+            cd = self.dots.get(self.carrier_id)
+            try:
+                vis = (cd is not None and
+                       self.canvas.itemcget(cd["oval"], "state") == "normal")
+            except Exception:
+                vis = False
+            if vis and not self._faceoff_ceremony:
+                r = 17 + 2.0 * math.sin(now * 6.0)
+                try:
+                    self.canvas.coords(
+                        self.carrier_ring,
+                        self.X(cd["x"]) - r, self.Y(cd["y"]) - r,
+                        self.X(cd["x"]) + r, self.Y(cd["y"]) + r)
+                    self.canvas.itemconfig(self.carrier_ring, state="normal")
+                    try:
+                        self.canvas.tag_raise("fxring")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.canvas.itemconfig(self.carrier_ring, state="hidden")
+                except Exception:
+                    pass
             # beaten goalie flashes red briefly
             for d in self.dots.values():
                 if d["role"] == "G":
