@@ -5645,13 +5645,20 @@ class GameSim:
             elif self._is_team_on_penalty_kill(attacking_team):
                 n_setup = random.choices([0, 1], weights=[0.7, 0.3])[0]
             else:
+                # The coach biases; the opportunity decides. A cycle team
+                # on a 2-on-1 scores off the rush -- it doesn't pull up to
+                # set up the cycle. Distributions overlap heavily; the
+                # tactic just shifts the weight.
                 _sys = self._team_tactical_system(attacking_team)
                 if _sys == TacticalSystem.RUSH_OFFENSE:
-                    n_setup = random.choices([1, 2, 3], weights=[0.45, 0.40, 0.15])[0]
+                    n_setup = random.choices(
+                        [1, 2, 3, 4], weights=[0.35, 0.35, 0.20, 0.10])[0]
                 elif _sys == TacticalSystem.CYCLE_GAME:
-                    n_setup = random.choices([3, 4, 5], weights=[0.35, 0.40, 0.25])[0]
+                    n_setup = random.choices(
+                        [1, 2, 3, 4, 5], weights=[0.10, 0.20, 0.30, 0.25, 0.15])[0]
                 else:
-                    n_setup = random.choices([2, 3, 4], weights=[0.30, 0.45, 0.25])[0]
+                    n_setup = random.choices(
+                        [1, 2, 3, 4, 5], weights=[0.15, 0.25, 0.30, 0.20, 0.10])[0]
             for _ in range(n_setup):
                 self.possession_player = carrier
                 res = self._attempt_pass(carrier, attacking_team,
