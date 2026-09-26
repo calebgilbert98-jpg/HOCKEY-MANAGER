@@ -367,6 +367,11 @@ class PBPVisualSim(tk.Toplevel):
         self.possession_home = None   # True/False/None
         self.carrier_id = None
         self.penalty_box = set()      # dot_ids
+        # Sim-authoritative skater spots: the sim runs the tactical engine
+        # that decides who gets open, who converges on battles, etc. Its
+        # positions (from "skate" snapshots) win over our local formation
+        # guess so the picture matches the play being described.
+        self._sim_pos = {}            # player_id -> (x, y) in rink coords
         self.shootout_mode = False
         self.shootout_state = None
         self._instant = False         # True during sim-to-end: no flights
@@ -1139,6 +1144,16 @@ class PBPVisualSim(tk.Toplevel):
                 d["tx"] = 100 + d["jx"] * 3
                 d["ty"] = 5 if side == "home" else 80
                 continue
+            # Sim-authoritative spot: the sim decided this player is open,
+            # converging on a battle, holding a formation lane, etc. Trust
+            # it over our local formation guess. (Carrier sticks to the puck
+            # and goalies keep their crease logic below.)
+            pid = getattr(d.get("player"), "id", None)
+            sp = self._sim_pos.get(pid) if pid is not None else None
+            if (sp is not None and d["role"] != "G"
+                    and d["id"] != self.carrier_id):
+                d["tx"], d["ty"] = sp[0], sp[1]
+                continue
             role, home = d["role"], d["is_home"]
             if role == "G":
                 own = self._net_x(home, attacking=False)
@@ -1529,13 +1544,18 @@ class PBPVisualSim(tk.Toplevel):
                     self.after(500, lambda: cb(sim))
 
     def _on_skate(self, ev):
-        """Sim movement snapshot: the per-tick tactical engine positions
-        every skater, so the sim only feeds puck position + carrier.
-        The sim's on-ice units are authoritative -- the dots are synced to
-        the sim's actual players (line rotation, PP/PK, icing, matching)."""
+        """Sim movement snapshot: the sim's tactical engine positions every
+        skater (who got open, battle piles, formation shapes). Those spots
+        are authoritative -- _update_targets sends dots to them -- so the
+        picture matches the sim's brain. The sim's on-ice units are
+        authoritative too: the dots are synced to the sim's actual players
+        (line rotation, PP/PK, icing, matching)."""
         pk = ev.get("puck")
         if pk:
             self.puck_target = (pk[0], pk[1])
+        pos = ev.get("positions")
+        if pos:
+            self._sim_pos = {pid: (p[0], p[1]) for pid, p in pos.items()}
         for is_home, key in ((True, "on_ice_home"), (False, "on_ice_away")):
             ids = ev.get(key)
             if ids:
@@ -1664,7 +1684,22 @@ class PBPVisualSim(tk.Toplevel):
         pd = self._dot_by_player(ev.get("passer"))
         rd = self._dot_by_player(ev.get("receiver"))
         sx, sy = (pd["x"], pd["y"]) if pd else (pp[0], pp[1])
-        rx, ry = (rd["x"], rd["y"]) if rd else (rp[0], rp[1])
+        # The puck flies to the sim's receiver spot -- the patch of ice the
+        # receiver actually skated to to get open -- and his dot is sent
+        # there now so the pass visibly hits a man in space. On a pickoff
+        # it goes to the defender who read it instead.
+        if ev.get("completed"):
+            rx, ry = rp[0], rp[1]
+            if rd is not None:
+                rd["tx"], rd["ty"] = rx, ry
+        else:
+            ide = self._dot_by_player(ev.get("interceptor"))
+            if ide is not None:
+                rx, ry = ide["x"], ide["y"]
+            elif rd is not None:
+                rx, ry = rd["x"], rd["y"]
+            else:
+                rx, ry = rp[0], rp[1]
         if self._instant:
             d = self._dot_by_player(ev.get("receiver") if ev.get("completed")
                                     else ev.get("interceptor"))
