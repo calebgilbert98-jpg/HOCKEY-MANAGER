@@ -13,7 +13,10 @@ a = Analysis(
         ('*.png', '.'),
         ('icons', 'icons'),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        'PIL', 'PIL.Image', 'PIL.ImageTk', 'PIL.ImageDraw',
+        'PIL.ImageFont', 'PIL.ImageOps',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

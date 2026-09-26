@@ -1,8 +1,9 @@
 # Required Python packages for Puck Dynasty
 # Install with: pip install -r requirements.txt
 
-# Core GUI framework
-tkinter>=8.6  # Usually included with Python
+# Core GUI framework: tkinter ships with Python itself (python.org and
+# the Microsoft Store builds include it). Not pip-installable, so it must
+# NOT be listed here -- a bad line aborts the whole pip install.
 
 # Image processing for icons and graphics
 Pillow>=9.0.0
