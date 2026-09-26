@@ -688,12 +688,53 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
     def begin_fantasy_draft(self):
         """Begin the fantasy draft and ensure all rosters are cleared"""
         debug_print("DEBUG: Beginning fantasy draft - clearing all team rosters")
+
+        # --- MULTIPLAYER/CHECKPOINTS: pre-draft safety checkpoint ---
+        # Taken BEFORE rosters are wiped, so a mid-draft crash recovers
+        # to an intact league instead of a half-drafted one.
+        try:
+            cpm = getattr(self.game_manager, 'checkpoint_manager', None)
+            if cpm is not None:
+                cpm.checkpoint("Before Fantasy Draft")
+        except Exception as _e:
+            print(f"Pre-draft checkpoint failed (non-fatal): {_e}")
         
         # CRITICAL: Clear ALL team rosters completely
         self.clear_all_team_rosters_completely()
         
         # Mark draft as started
         self.draft_manager.draft_started = True
+
+        # --- MULTIPLAYER/CHECKPOINTS: per-round draft checkpoints ---
+        # Wraps make_pick ONCE so every pick site (human + all AI callers)
+        # is covered without touching them. When a pick completes a round,
+        # the host's checkpoint ring gets a "Fantasy Draft - Round N" entry.
+        try:
+            if not getattr(self.draft_manager, '_checkpoint_wrapped', False):
+                _orig_make_pick = self.draft_manager.make_pick
+                window = self
+
+                def _make_pick_with_checkpoint(player):
+                    prev = window.draft_manager.get_current_pick()
+                    prev_round = (prev.round_num
+                                  if prev is not None else None)
+                    ok = _orig_make_pick(player)
+                    if ok and prev_round is not None:
+                        cur = window.draft_manager.get_current_pick()
+                        new_round = (cur.round_num
+                                     if cur is not None else None)
+                        if new_round != prev_round:
+                            cpm2 = getattr(window.game_manager,
+                                          'checkpoint_manager', None)
+                            if cpm2 is not None:
+                                cpm2.checkpoint(
+                                    f"Fantasy Draft - Round {prev_round}")
+                    return ok
+
+                self.draft_manager.make_pick = _make_pick_with_checkpoint
+                self.draft_manager._checkpoint_wrapped = True
+        except Exception as _e:
+            print(f"Draft checkpoint wrapper failed (non-fatal): {_e}")
         
         # Set fantasy draft as pending in game manager
         if hasattr(self.game_manager, 'pending_fantasy_draft'):

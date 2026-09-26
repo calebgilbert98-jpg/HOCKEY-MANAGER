@@ -145,6 +145,15 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         # Setup-wizard config (set when the user completes the wizard; takes
         # precedence over the tab's own options in _start_main_game)
         self.wizard_config = None
+
+        # --- MULTIPLAYER (Phase 1) ---
+        self._mp_mode = None       # None | "host" (join flow uses a dialog flow)
+        self._mp_config = {}       # {"name":..., "port":...} for host mode
+        self._mp_client = None     # MultiplayerClient while in the join lobby
+        self._mp_lobby = None      # lobby Toplevel, if open
+        self._mp_lobby_started = False
+        # Crash-recovery prompt runs once the UI is up.
+        self.after(800, self._check_crash_recovery)
         
         # Initialize default GM profile values
         self._initialize_random_gm_defaults()
@@ -424,7 +433,442 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                               cursor='hand2',
                               command=self._import_save)
         import_btn.pack(side='left', padx=20, pady=25)
-        
+
+        # --- MULTIPLAYER (Phase 1) ---
+        host_btn = _ThemedButton(action_frame,
+                                 text="HOST MULTIPLAYER",
+                                 style="secondary",
+                                 command=self._host_multiplayer)
+        host_btn.pack(side='left', padx=(0, 10), pady=25)
+        join_btn = _ThemedButton(action_frame,
+                                 text="JOIN MULTIPLAYER",
+                                 style="secondary",
+                                 command=self._join_multiplayer)
+        join_btn.pack(side='left', padx=(0, 20), pady=25)
+
+    # --- MULTIPLAYER (Phase 1) -------------------------------------------
+    # Host flow: dialog -> normal new-game setup -> _start_main_game wires
+    # the host. Join flow: dialog -> connect -> lobby -> build game from
+    # the host's first STATE_SYNC snapshot.
+
+    def _mp_local_ips(self):
+        """Candidate LAN/VPN IPs to show the host (friends need the Radmin one)."""
+        import socket
+        ips = []
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None):
+                ip = info[4][0]
+                if ":" not in ip and not ip.startswith("127."):
+                    if ip not in ips:
+                        ips.append(ip)
+        except Exception:
+            pass
+        if not ips:
+            ips = ["127.0.0.1"]
+        return ips
+
+    def _check_crash_recovery(self):
+        """Offer checkpoint recovery if the last session died uncleanly."""
+        try:
+            from checkpoint_manager import (
+                CheckpointManager, previous_session_crashed,
+                checkpoint_summary)
+        except Exception:
+            return
+        try:
+            if not previous_session_crashed():
+                return
+            cpm = CheckpointManager(None)  # listing needs no save manager
+            latest = cpm.latest()
+            if latest is None:
+                return
+            if messagebox.askyesno(
+                    "Recover last session?",
+                    "The previous session didn't shut down cleanly.\n\n"
+                    f"Recover {checkpoint_summary(latest)}?\n\n"
+                    "No = start fresh (checkpoints are kept)."):
+                self._recover_from_checkpoint(latest)
+        except Exception as e:
+            print(f"Crash recovery check failed (non-fatal): {e}")
+
+    def _recover_from_checkpoint(self, entry):
+        import os
+        try:
+            from main import GameManager, HockeyManagerGUI
+            from save_load_system import GameSaveManager
+            from checkpoint_manager import CheckpointManager
+            gm = GameManager()
+            save_mgr = GameSaveManager(gm)
+            self.withdraw()
+            path = os.path.join("saves", "checkpoints", entry["filename"])
+            if not save_mgr.load_game(path):
+                messagebox.showerror("Recovery", "Could not load the checkpoint.")
+                self.deiconify()
+                return
+            app = HockeyManagerGUI(gm)
+            app.checkpoint_manager = CheckpointManager(
+                app.save_manager, game_date_fn=lambda: str(app.current_date))
+            # Re-sync GUI mirrors seeded from defaults in __init__.
+            if hasattr(app.game_manager, 'current_date'):
+                app.current_date = app.game_manager.current_date
+            app.league = app.game_manager.league
+            if hasattr(app.game_manager, 'user_team'):
+                app.user_team = app.game_manager.user_team
+            app.update_all_views()
+            app.mainloop()
+            try:
+                self.destroy()
+            except Exception:
+                pass
+        except Exception as e:
+            messagebox.showerror("Recovery", f"Recovery failed:\n{e}")
+            try:
+                self.deiconify()
+            except Exception:
+                pass
+
+    def _host_multiplayer(self):
+        """Host flow: display name + port, then normal new-game setup."""
+        dlg = tk.Toplevel(self)
+        dlg.title("Host Multiplayer Game")
+        dlg.geometry("400x300")
+        dlg.transient(self)
+        dlg.grab_set()
+        tk.Label(dlg, text="HOST MULTIPLAYER GAME",
+                 font=AppFonts.H2).pack(pady=(16, 8))
+        tk.Label(dlg, text="Display name:").pack(pady=(4, 0))
+        name_var = tk.StringVar(
+            value=self.gm_profile['name'].get().strip() or "Host")
+        tk.Entry(dlg, textvariable=name_var, width=30).pack(pady=4)
+        tk.Label(dlg, text="Port:").pack(pady=(8, 0))
+        port_var = tk.StringVar(value="27107")
+        tk.Entry(dlg, textvariable=port_var, width=10).pack(pady=4)
+        tk.Label(dlg,
+                 text="Friends join over your Radmin VPN network\n"
+                      "using your Radmin IP address.",
+                 fg="gray").pack(pady=10)
+
+        def _go():
+            try:
+                port = int(port_var.get())
+            except ValueError:
+                messagebox.showwarning("Port", "Port must be a number.")
+                return
+            self._mp_mode = "host"
+            self._mp_config = {"name": name_var.get().strip() or "Host",
+                               "port": port}
+            dlg.destroy()
+            # Continue through the normal new-game flow; the host is wired
+            # in _start_main_game().
+            self._start_new_game()
+
+        _ThemedButton(dlg, text="CONTINUE TO TEAM SETUP",
+                      style="primary", command=_go).pack(pady=12)
+
+    def _wire_multiplayer_host(self, app, gm):
+        """Create CheckpointManager + MultiplayerHost and attach to the game."""
+        import gzip
+        import pickle
+        from multiplayer.net_host import MultiplayerHost, DEFAULT_PORT
+        from checkpoint_manager import CheckpointManager
+        try:
+            save_mgr = app.save_manager
+            cpm = CheckpointManager(
+                save_mgr, game_date_fn=lambda: str(app.current_date))
+            app.checkpoint_manager = cpm
+            gm.checkpoint_manager = cpm  # fantasy draft hooks read it here
+            port = int(self._mp_config.get("port") or DEFAULT_PORT)
+            name = (self._mp_config.get("name") or "Host").strip() or "Host"
+
+            def _state_provider():
+                blob = gzip.compress(pickle.dumps(
+                    save_mgr.create_save_data(),
+                    protocol=pickle.HIGHEST_PROTOCOL))
+                return blob, str(app.current_date), "host-sync"
+
+            def _get_teams():
+                try:
+                    return [{"id": t.team_name, "name": t.team_name}
+                            for t in gm.league.teams]
+                except Exception:
+                    return []
+
+            host = MultiplayerHost(_state_provider, host_name=name,
+                                   port=port, get_teams=_get_teams)
+            host.start()
+            app.mp_host = host
+            # The host manages the team picked in the launcher, locally.
+            cpm.checkpoint("Game started")
+            host.notify_checkpoint("Game started", str(app.current_date))
+            app.after(250, app._poll_multiplayer)
+            self._show_host_lobby(app, host, port)
+        except Exception as e:
+            messagebox.showerror("Multiplayer",
+                                 f"Could not start host:\n{e}")
+
+    def _show_host_lobby(self, app, host, port):
+        lobby = tk.Toplevel(app)
+        lobby.title("Multiplayer Lobby - Hosting")
+        lobby.geometry("440x440")
+        tk.Label(lobby, text="HOSTING MULTIPLAYER",
+                 font=AppFonts.H2).pack(pady=(12, 4))
+        ips = "\n".join(self._mp_local_ips())
+        tk.Label(lobby,
+                 text=f"Port: {port}\n\nGive friends one of these IPs\n"
+                      f"(use your Radmin VPN IP):\n{ips}").pack(pady=4)
+        mgr_var = tk.StringVar(value=[])
+        tk.Label(lobby, text="Managers in lobby:").pack(pady=(8, 0))
+        tk.Listbox(lobby, listvariable=mgr_var, height=8).pack(
+            fill="both", expand=True, padx=16, pady=6)
+        status = tk.Label(lobby, text="Waiting for players...")
+        status.pack()
+
+        def _refresh():
+            try:
+                if not lobby.winfo_exists():
+                    return
+                managers = host.get_lobby()
+                mgr_var.set([f"{m['name']} - {m['team_id'] or 'no team yet'}"
+                             for m in managers])
+                if managers:
+                    status.config(
+                        text=f"{len(managers)} manager(s) waiting")
+                lobby.after(1000, _refresh)
+            except Exception:
+                pass
+
+        _refresh()
+
+        def _start():
+            try:
+                host.start_game()  # broadcasts START_GAME + full snapshot
+            except Exception as e:
+                messagebox.showerror("Lobby", f"Start failed:\n{e}")
+                return
+            try:
+                lobby.destroy()
+            except Exception:
+                pass
+
+        _ThemedButton(lobby, text="START LEAGUE", style="primary",
+                      command=_start).pack(pady=10)
+
+    def _join_multiplayer(self):
+        """Join flow: connect dialog, then lobby."""
+        dlg = tk.Toplevel(self)
+        dlg.title("Join Multiplayer Game")
+        dlg.geometry("400x320")
+        dlg.transient(self)
+        dlg.grab_set()
+        tk.Label(dlg, text="JOIN MULTIPLAYER GAME",
+                 font=AppFonts.H2).pack(pady=(16, 8))
+        tk.Label(dlg, text="Display name:").pack(pady=(4, 0))
+        name_var = tk.StringVar(
+            value=self.gm_profile['name'].get().strip() or "Guest")
+        tk.Entry(dlg, textvariable=name_var, width=30).pack(pady=4)
+        tk.Label(dlg, text="Host IP (host's Radmin VPN IP):").pack(pady=(8, 0))
+        host_var = tk.StringVar(value="")
+        tk.Entry(dlg, textvariable=host_var, width=30).pack(pady=4)
+        tk.Label(dlg, text="Port:").pack(pady=(8, 0))
+        port_var = tk.StringVar(value="27107")
+        tk.Entry(dlg, textvariable=port_var, width=10).pack(pady=4)
+
+        def _go():
+            try:
+                port = int(port_var.get())
+            except ValueError:
+                messagebox.showwarning("Port", "Port must be a number.")
+                return
+            host_ip = host_var.get().strip()
+            if not host_ip:
+                messagebox.showwarning("Host IP",
+                                       "Enter the host's Radmin VPN IP.")
+                return
+            cfg = {"name": name_var.get().strip() or "Guest",
+                   "host": host_ip, "port": port}
+            dlg.destroy()
+            self._join_connect(cfg)
+
+        _ThemedButton(dlg, text="CONNECT", style="primary",
+                      command=_go).pack(pady=12)
+
+    def _join_connect(self, cfg):
+        """Connect in a worker thread (connect() blocks); lobby on success."""
+        import threading
+        from multiplayer.net_client import MultiplayerClient
+        wait = tk.Toplevel(self)
+        wait.title("Connecting")
+        wait.geometry("280x100")
+        wait.transient(self)
+        tk.Label(wait, text=f"Connecting to {cfg['host']}:{cfg['port']}..."
+                 ).pack(pady=30)
+
+        def _work():
+            client = MultiplayerClient(cfg["name"])
+            try:
+                welcome = client.connect(cfg["host"], cfg["port"])
+            except ConnectionError as e:
+                self.after(0, lambda: self._join_failed(wait, str(e)))
+                return
+            self.after(0, lambda: self._join_succeeded(wait, client,
+                                                       welcome))
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _join_failed(self, wait, reason):
+        try:
+            wait.destroy()
+        except Exception:
+            pass
+        messagebox.showerror("Connection failed",
+                             f"Could not reach the host:\n{reason}\n\n"
+                             "Check the Radmin VPN network and IP.")
+
+    def _join_succeeded(self, wait, client, welcome):
+        try:
+            wait.destroy()
+        except Exception:
+            pass
+        self._show_client_lobby(client, welcome)
+
+    def _show_client_lobby(self, client, welcome):
+        """Pre-game lobby: claim a team, wait for the host to start."""
+        self._mp_client = client
+        self._mp_lobby_started = False
+        lobby = tk.Toplevel(self)
+        lobby.title("Multiplayer Lobby")
+        lobby.geometry("460x520")
+        self._mp_lobby = lobby
+        tk.Label(lobby, text="MULTIPLAYER LOBBY",
+                 font=AppFonts.H2).pack(pady=(12, 4))
+        status = tk.Label(lobby, text="Connected. Claim a team!")
+        status.pack()
+        tk.Label(lobby, text="Managers:").pack(pady=(8, 0))
+        mgr_var = tk.StringVar(value=[])
+        tk.Listbox(lobby, listvariable=mgr_var, height=5).pack(
+            fill="x", padx=16, pady=4)
+
+        teams_frame = tk.Frame(lobby)
+        teams_frame.pack(fill="both", expand=True, padx=16, pady=6)
+        tk.Label(teams_frame, text="Claim your team:").pack(anchor="w")
+        canvas = tk.Canvas(teams_frame)
+        scrollbar = tk.Scrollbar(teams_frame, orient="vertical",
+                                 command=canvas.yview)
+        btn_frame = tk.Frame(canvas)
+        btn_frame.bind("<Configure>",
+                       lambda e: canvas.configure(
+                           scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=btn_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        taken = dict(welcome.get("teams_taken", {}))
+        team_buttons = {}
+
+        def _refresh_teams():
+            for tid, btn in team_buttons.items():
+                if tid == client.team_id:
+                    btn.config(state="disabled", text=f"{tid} (you)")
+                elif tid in taken:
+                    btn.config(state="disabled",
+                               text=f"{tid} (taken)")
+                else:
+                    btn.config(state="normal", text=tid)
+
+        for team in client.teams:
+            tid = team.get("id", "")
+            btn = _ThemedButton(btn_frame, text=tid, style="secondary",
+                                command=lambda t=tid: self._claim_team(
+                                    client, t, status, _refresh_teams))
+            btn.pack(fill="x", pady=2)
+            team_buttons[tid] = btn
+        _refresh_teams()
+
+        def _poll():
+            try:
+                if not lobby.winfo_exists():
+                    return
+                for kind, payload in client.poll_events():
+                    if kind == "lobby":
+                        managers = payload.get("managers", [])
+                        taken.update(payload.get("teams_taken", {}))
+                        mgr_var.set([f"{m['name']} - "
+                                     f"{m['team_id'] or 'no team yet'}"
+                                     for m in managers])
+                        _refresh_teams()
+                    elif kind == "team_claimed":
+                        taken[payload.get("team_id", "")] = payload.get(
+                            "name", "")
+                        if payload.get("name", "") == client.name:
+                            status.config(
+                                text=f"Claimed {payload.get('team_id', '')}. "
+                                     "Waiting for host to start...")
+                        _refresh_teams()
+                    elif kind == "game_started":
+                        self._mp_lobby_started = True
+                        status.config(
+                            text="Host started the league. Syncing...")
+                    elif kind == "state_sync":
+                        try:
+                            lobby.destroy()
+                        except Exception:
+                            pass
+                        self._mp_lobby = None
+                        self._build_client_game(
+                            client, payload.get("save_bytes", b""),
+                            payload.get("label", ""))
+                        return
+                    elif kind == "disconnected":
+                        messagebox.showerror(
+                            "Disconnected",
+                            "Lost connection to the host.")
+                        try:
+                            lobby.destroy()
+                        except Exception:
+                            pass
+                        self._mp_lobby = None
+                        self._mp_client = None
+                        return
+                    elif kind == "error":
+                        status.config(text=payload.get("message", ""))
+                lobby.after(250, _poll)
+            except Exception:
+                pass
+
+        _poll()
+
+    def _claim_team(self, client, team_id, status, refresh):
+        # Fire-and-forget: the result arrives via the lobby poll as
+        # "team_claimed" (confirmed) or "error" (taken).
+        try:
+            client.claim_team(team_id)
+            status.config(text=f"Claiming {team_id}...")
+        except Exception as e:
+            status.config(text=f"Claim failed: {e}")
+
+    def _build_client_game(self, client, save_bytes, label):
+        """Construct the client's game from the host's snapshot."""
+        try:
+            from main import GameManager, HockeyManagerGUI
+            gm = GameManager()
+            self.withdraw()
+            app = HockeyManagerGUI(gm, mp_client=client)
+            # Clients never checkpoint locally; the host owns the ring.
+            app._apply_multiplayer_snapshot(save_bytes, label or "Joined game")
+            app.mainloop()
+            try:
+                self.destroy()
+            except Exception:
+                pass
+        except Exception as e:
+            messagebox.showerror("Join failed",
+                                 f"Could not build the game:\n{e}")
+            try:
+                self.deiconify()
+            except Exception:
+                pass
+
     def _create_regular_interface(self):
         """Create regular interface without background"""
         self.configure(bg=AppColors.BG)
@@ -1840,6 +2284,12 @@ This profile will influence player relationships, media interactions, and trade 
             app.startup_settings = startup_settings
             app._update_game_viewer_button_state()
             print("HockeyManagerGUI created successfully")
+
+            # --- MULTIPLAYER (Phase 1): host wiring ---
+            # Set by _host_multiplayer() before _start_new_game() runs.
+            if getattr(self, '_mp_mode', None) == 'host':
+                print("Wiring multiplayer host...")
+                self._wire_multiplayer_host(app, gm)
             
             # Don't destroy the old launcher yet - it can cause Tk root issues
             # Just ensure the new app is in front

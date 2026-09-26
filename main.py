@@ -3014,7 +3014,7 @@ class HockeyManagerGUI(tk.Tk):
     # Modern UI constants
     MODERN_UI_ENABLED = True
 
-    def __init__(self, game_manager):
+    def __init__(self, game_manager, mp_host=None, mp_client=None):
         super().__init__()
 
         # Square window corners: disable Windows 11 rounded-corner chrome so
@@ -3099,6 +3099,19 @@ class HockeyManagerGUI(tk.Tk):
 
         # Initialize save/load system
         self.save_manager = GameSaveManager(self.game_manager)
+
+        # --- MULTIPLAYER (Phase 1) ---
+        # mp_host: MultiplayerHost when this machine is the authoritative host.
+        # mp_client: MultiplayerClient when this machine joined someone's game.
+        # checkpoint_manager: attached by the launcher/host wiring; ALSO used
+        #   for single-player crash checkpoints (fantasy draft etc.).
+        # When all three are None the game behaves exactly as before.
+        self.mp_host = mp_host
+        self.mp_client = mp_client
+        self.checkpoint_manager = None
+        self._mp_role_ui_done = False
+        if self.mp_host is not None or self.mp_client is not None:
+            self.after(400, self._poll_multiplayer)
         
         # Initialize shortlist system
         from shortlist_system import ShortlistManager
@@ -6453,7 +6466,27 @@ class HockeyManagerGUI(tk.Tk):
             
             # Use async update to prevent blocking
             self.after_idle(self.update_all_views)
-            
+
+            # --- MULTIPLAYER (Phase 1) + CHECKPOINTS ---
+            # Placed at the end of the try block so it runs ONLY on a
+            # successful day advance (the early returns above skip it).
+            # Still on the tkinter main thread: safe to snapshot + broadcast.
+            try:
+                cpm = getattr(self, 'checkpoint_manager', None)
+                if cpm is not None:
+                    cpm.checkpoint(f"Day {self.current_date}")
+                    if getattr(self, 'mp_host', None) is not None:
+                        self.mp_host.notify_checkpoint(
+                            f"Day {self.current_date}", str(self.current_date))
+            except Exception as _mp_e:
+                print(f"Checkpoint failed (non-fatal): {_mp_e}")
+            try:
+                if getattr(self, 'mp_host', None) is not None:
+                    self.mp_host.announce_day(str(self.current_date))
+                    self.mp_host.broadcast_state(f"Day {self.current_date}")
+            except Exception as _mp_e:
+                print(f"Multiplayer broadcast failed (non-fatal): {_mp_e}")
+
         finally:
             # Re-enable continue button after simulation is complete
             continue_btn = None
@@ -6466,6 +6499,186 @@ class HockeyManagerGUI(tk.Tk):
                 
             if continue_btn:
                 continue_btn.config(state='normal')
+
+    # --- MULTIPLAYER (Phase 1): main-thread bridge ---------------------
+    # Network threads NEVER touch widgets or game objects. They push plain
+    # events onto host/client queues; _poll_multiplayer drains them here on
+    # the tkinter main thread via after(). This is the only bridge.
+
+    def _poll_multiplayer(self):
+        """Drain multiplayer network events (main thread only)."""
+        try:
+            if not self._mp_role_ui_done:
+                self._apply_multiplayer_role_ui()
+            if self.mp_host is not None:
+                for kind, payload in self.mp_host.poll_events():
+                    self._handle_host_event(kind, payload)
+            if self.mp_client is not None:
+                for kind, payload in self.mp_client.poll_events():
+                    self._handle_client_event(kind, payload)
+        except Exception as e:
+            print(f"Multiplayer poll error (non-fatal): {e}")
+        finally:
+            if self.mp_host is not None or self.mp_client is not None:
+                self.after(250, self._poll_multiplayer)
+
+    def _apply_multiplayer_role_ui(self):
+        """Clients don't advance days -- only the host's Continue is live."""
+        if self.mp_client is None or self.mp_host is not None:
+            self._mp_role_ui_done = True
+            return
+        btn = None
+        if hasattr(self, 'continue_btn'):
+            btn = self.continue_btn
+        elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'continue_btn'):
+            btn = self.dashboard.continue_btn
+        elif (hasattr(self, 'dashboard') and hasattr(self.dashboard, 'widgets')
+                and 'continue_btn' in self.dashboard.widgets):
+            btn = self.dashboard.widgets['continue_btn']
+        if btn is not None:
+            try:
+                btn.config(state='disabled')
+            except Exception:
+                pass
+            self._mp_role_ui_done = True
+        # If the button isn't built yet, leave the flag False so the next
+        # poll tick retries.
+
+    def _handle_host_event(self, kind, payload):
+        if kind == "action":
+            ok, detail = self._apply_multiplayer_action(
+                payload.get("action"), payload.get("params", {}),
+                payload.get("manager", "?"))
+            try:
+                self.mp_host.resolve_action(
+                    payload.get("client_id"), payload.get("seq", 0),
+                    ok, detail)
+            except Exception as e:
+                print(f"resolve_action failed (non-fatal): {e}")
+        elif kind in ("manager_joined", "manager_left", "team_claimed"):
+            self._mp_toast(
+                f"{payload.get('name', '?')} "
+                f"{'joined' if kind == 'manager_joined' else 'left' if kind == 'manager_left' else 'claimed ' + str(payload.get('team_id', ''))}")
+        elif kind == "chat":
+            self._mp_toast(f"{payload.get('from', '?')}: {payload.get('text', '')}")
+
+    def _handle_client_event(self, kind, payload):
+        if kind == "state_sync":
+            self._apply_multiplayer_snapshot(
+                payload.get("save_bytes", b""), payload.get("label", ""))
+        elif kind == "day_advanced":
+            self._mp_toast(f"Day advanced: {payload.get('game_date', '')}")
+        elif kind == "action_ack":
+            self._mp_toast(f"Accepted: {payload.get('action', '')} "
+                            f"({payload.get('result', '')})")
+        elif kind == "action_rejected":
+            self._mp_toast(f"Rejected: {payload.get('action', '')} -- "
+                            f"{payload.get('reason', '')}")
+        elif kind == "checkpoint":
+            self._mp_toast(f"Host checkpoint: {payload.get('label', '')}")
+        elif kind == "chat":
+            self._mp_toast(f"{payload.get('from', '?')}: {payload.get('text', '')}")
+        elif kind == "error":
+            self._mp_toast(f"Host: {payload.get('message', '')}")
+        elif kind == "disconnected":
+            from tkinter import messagebox
+            try:
+                messagebox.showerror(
+                    "Disconnected",
+                    f"Lost connection to the host ({payload.get('reason', '')}).\n"
+                    "Your last synced state was kept as a fallback checkpoint.")
+            except Exception:
+                pass
+            self.mp_client = None  # stops the poll loop
+
+    def _mp_find_team(self, team_id):
+        try:
+            for t in self.league.teams:
+                if getattr(t, 'team_name', '') == team_id:
+                    return t
+        except Exception:
+            pass
+        return None
+
+    def _apply_multiplayer_action(self, action, params, manager):
+        """Apply a client's management intent to the canonical state.
+
+        Returns (ok, detail). Runs on the main thread, called from the
+        host's event poll after net_host validated ownership/shape.
+
+        Phase-1 scoping (deliberate):
+        * set_lines / set_tactics stay LOCAL -- lineup state lives in GUI
+          session state (self.lineup) and is not part of the serialized
+          save, so each manager sets their own lines on their own screen.
+        * Roster/cap mutations (signings, trades, call-ups) are the
+          Phase-1b game-logic surface: validated stubs below. Each real
+          handler mutates the host's canonical objects and returns
+          (True, summary) or (False, reason).
+        """
+        team_id = params.get("team_id", "")
+        team = self._mp_find_team(team_id)
+        if team is None:
+            return False, f"unknown team: {team_id}"
+        if action in ("set_lines", "set_tactics"):
+            return False, "lines & tactics are managed locally in Phase 1"
+        if action in ("sign_free_agent", "propose_trade", "release_player",
+                      "send_to_minors", "call_up"):
+            # TODO(Phase-1b): implement against the canonical Team objects.
+            # Contract: validate every param, mutate host state, return
+            # (True, human summary) or (False, reason). See
+            # docs/MULTIPLAYER_MERGE_GUIDE.md section 3.
+            return False, f"{action} is not implemented yet (Phase 1b)"
+        return False, f"unsupported action: {action}"
+
+    def _apply_multiplayer_snapshot(self, save_bytes, label=""):
+        """Replace local state with the host's snapshot (main thread)."""
+        import gzip
+        import pickle
+        try:
+            data = pickle.loads(gzip.decompress(save_bytes))
+        except Exception as e:
+            print(f"Snapshot decode failed (non-fatal): {e}")
+            return
+        try:
+            self.save_manager._restore_game_state(data)
+        except Exception as e:
+            print(f"Snapshot restore failed (non-fatal): {e}")
+            return
+        try:
+            # Re-sync GUI mirrors that __init__ seeded from defaults.
+            self.league = self.game_manager.league
+            if hasattr(self.game_manager, 'current_date'):
+                self.current_date = self.game_manager.current_date
+            # Clients view the league through THEIR claimed team.
+            if self.mp_client is not None and getattr(self.mp_client, 'team_id', None):
+                claimed = self._mp_find_team(self.mp_client.team_id)
+                if claimed is not None:
+                    self.game_manager.user_team = claimed
+                    self.user_team = claimed
+            elif hasattr(self.game_manager, 'user_team'):
+                self.user_team = self.game_manager.user_team
+            self.update_all_views()
+            if label:
+                self._mp_toast(f"Synced: {label}")
+        except Exception as e:
+            print(f"Snapshot view refresh failed (non-fatal): {e}")
+
+    def _mp_toast(self, text):
+        """Small auto-dismissing notification (main thread only)."""
+        print(f"[MP] {text}")
+        try:
+            toast = tk.Toplevel(self)
+            toast.overrideredirect(True)
+            toast.attributes("-topmost", True)
+            x = self.winfo_x() + self.winfo_width() - 340
+            y = self.winfo_y() + 60
+            toast.geometry(f"320x44+{max(x, 0)}+{max(y, 0)}")
+            tk.Label(toast, text=text, bg="#1c2b33", fg="#e8f1f2",
+                     font=("Segoe UI", 10), wraplength=300,
+                     padx=12, pady=10).pack(fill="both", expand=True)
+            toast.after(2500, toast.destroy)
+        except Exception:
+            pass
 
     def _check_season_complete(self):
         """Check if the regular season is complete by counting games played."""
