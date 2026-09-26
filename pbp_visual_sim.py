@@ -1996,11 +1996,27 @@ class PBPVisualSim(tk.Toplevel):
                    f"on with {ev.get('home_score', 0)}-{ev.get('away_score', 0)} "
                    f"on the board.", tag="info", ev=ev)
         self._update_scoreboard(ev)
+        # The net is empty: the G dot becomes the 6th skater (XF) right
+        # now -- no frame where a tender stands in an empty net. He'll skate
+        # out as a forward; _sync_dots_to_sim keeps the role on later events.
+        for d in self.dots.values():
+            if d["is_home"] == home and d["role"] == "G":
+                d["role"] = "XF"
+                d["r"] = 13
+                # send him out to join the attack, not standing in the crease
+                anx = AWAY_NET_X if home else HOME_NET_X
+                adir = 1 if home else -1
+                d["tx"], d["ty"] = anx - 30 * adir, 42.5
 
     def _on_goalie_back(self, ev):
         home = ev.get("team") == self.home_team.team_name
         self._en["home" if home else "away"] = False
         self._update_scoreboard(ev)
+        # Goalie returns: the XF reverts to G and heads back to his net.
+        for d in self.dots.values():
+            if d["is_home"] == home and d["role"] == "XF":
+                d["role"] = "G"
+                d["r"] = 15
 
     def _on_faceoff(self, ev):
         winner_is_home = ev["winner_team"] == self.home_team.team_name
