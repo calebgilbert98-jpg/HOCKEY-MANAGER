@@ -10132,37 +10132,37 @@ class CleanEditLinesWindow(tk.Toplevel):
         self.configure(bg=parent.BG_COLOR)
         self.resizable(True, True)
         
-        # Make text more readable with better contrast
-        self.LABEL_BG = parent.CONTENT_BG  # Dark background for labels
-        self.ENTRY_BG = '#FFFFFF'  # White background for input fields
-        self.ENTRY_FG = '#000000'  # Black text on white background
+        # Dark-theme field colors (match modern_ui.py AppColors)
+        self.ENTRY_BG = '#16161a'  # BG_ELEVATED for input fields
+        self.ENTRY_FG = '#ffffff'  # White text on dark background
         self.LABEL_FG = parent.TEXT_COLOR  # Light text on dark background
-        
-        # Configure custom style for perfect readability
+
+        # Configure custom style for dark theme
         self.style = ttk.Style()
         self.style.configure('Clean.TCombobox',
-                            fieldbackground='white',
-                            background='white', 
-                            foreground='black',
+                            fieldbackground='#16161a',
+                            background='#16161a',
+                            foreground='#ffffff',
                             borderwidth=1,
-                            relief='solid',
-                            selectbackground='#4CAF50',
+                            relief='flat',
+                            selectbackground='#00ceb8',
                             selectforeground='white',
+                            arrowcolor='#a1a1aa',
                             font=(parent.FONT_FAMILY, 10))
-        
+
         # Modern styling
         self.style.configure('Modern.TFrame',
-                            background='#f8f9fa',
+                            background='#0e0e11',
                             relief='flat',
                             borderwidth=0)
-        
+
         self.style.configure('Card.TFrame',
-                            background='white',
-                            relief='solid',
-                            borderwidth=1)
-        
+                            background='#16161a',
+                            relief='flat',
+                            borderwidth=0)
+
         self.style.configure('Header.TLabel',
-                            background='#343a40',
+                            background='#16161a',
                             foreground='white',
                             font=(parent.FONT_FAMILY, 12, 'bold'),
                             padding=10)
@@ -10289,23 +10289,23 @@ class CleanEditLinesWindow(tk.Toplevel):
         parent_paned.add(roster_frame, weight=1)  # Takes less space
         
         # Modern header with subtle styling
-        header_frame = tk.Frame(roster_frame, bg='#495057', height=50)
+        header_frame = tk.Frame(roster_frame, bg='#16161a', height=50)
         header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
         
-        header_content = tk.Frame(header_frame, bg='#495057')
+        header_content = tk.Frame(header_frame, bg='#16161a')
         header_content.pack(expand=True, fill='both', padx=15, pady=10)
         
         tk.Label(header_content, text="Active Roster", 
-                bg='#495057', fg='white',
+                bg='#16161a', fg='white',
                 font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(side=tk.LEFT)
         
         tk.Label(header_content, text="Drag to Assign", 
-                bg='#495057', fg='#adb5bd',
+                bg='#16161a', fg='#a1a1aa',
                 font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.RIGHT)
         
         # Create notebook for different position groups with subtle styling
-        notebook_frame = tk.Frame(roster_frame, bg='#f8f9fa')
+        notebook_frame = tk.Frame(roster_frame, bg='#0e0e11')
         notebook_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         roster_notebook = ttk.Notebook(notebook_frame, style='TNotebook')
@@ -10384,11 +10384,11 @@ class CleanEditLinesWindow(tk.Toplevel):
     def create_draggable_player_widget(self, parent, player, position_type):
         """Create a draggable player widget with comprehensive info"""
         # Darker player card with modern styling - easier on the eyes
-        player_frame = tk.Frame(parent, bg='#495057', relief='flat', bd=0, cursor='hand2')
+        player_frame = tk.Frame(parent, bg='#16161a', relief='flat', bd=0, cursor='hand2')
         player_frame.pack(fill=tk.X, pady=3, padx=8)
         
         # Darker card with rounded appearance
-        card_inner = tk.Frame(player_frame, bg='#6c757d', relief='flat', bd=0)
+        card_inner = tk.Frame(player_frame, bg='#1e1e24', relief='flat', bd=0)
         card_inner.pack(fill=tk.X, padx=1, pady=1)
 
         # Generated face thumbnail on the left (filled in lazily so the
@@ -10406,36 +10406,36 @@ class CleanEditLinesWindow(tk.Toplevel):
             widget.bind('<ButtonRelease-1>', self.end_drag)
 
         # Player info layout with darker styling
-        info_frame = tk.Frame(card_inner, bg='#6c757d')
+        info_frame = tk.Frame(card_inner, bg='#1e1e24')
         info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12), pady=8)
         
         # Top row - Name and rating with modern typography
-        top_row = tk.Frame(info_frame, bg='#6c757d')
+        top_row = tk.Frame(info_frame, bg='#1e1e24')
         top_row.pack(fill=tk.X)
         
-        name_label = tk.Label(top_row, text=player.full_name, bg='#6c757d', fg='white',
+        name_label = tk.Label(top_row, text=player.full_name, bg='#1e1e24', fg='white',
                              font=(self.parent.FONT_FAMILY, 10, 'bold'), anchor='w')
         name_label.pack(side=tk.LEFT)
         
         # Accent rating badge
-        rating_frame = tk.Frame(top_row, bg='#343a40', relief='flat')
+        rating_frame = tk.Frame(top_row, bg='#16161a', relief='flat')
         rating_frame.pack(side=tk.RIGHT)
         
-        rating_label = tk.Label(rating_frame, text=str(player.overall_rating()), bg='#343a40', fg='white',
+        rating_label = tk.Label(rating_frame, text=str(player.overall_rating()), bg='#16161a', fg='white',
                                font=(self.parent.FONT_FAMILY, 9, 'bold'), padx=6, pady=2)
         rating_label.pack()
         
         # Middle row - Position and condition with darker styling
-        middle_row = tk.Frame(info_frame, bg='#6c757d')
+        middle_row = tk.Frame(info_frame, bg='#1e1e24')
         middle_row.pack(fill=tk.X, pady=(4, 0))
         
-        pos_label = tk.Label(middle_row, text=f"{player.primary_position.name}", bg='#6c757d', fg='#f8f9fa',
+        pos_label = tk.Label(middle_row, text=f"{player.primary_position.name}", bg='#1e1e24', fg='#ffffff',
                             font=(self.parent.FONT_FAMILY, 8))
         pos_label.pack(side=tk.LEFT)
         
         # Darker condition indicator
         condition = getattr(player, 'condition', 100)
-        condition_color = '#343a40'  # Dark gray for all conditions
+        condition_color = '#1e1e24'  # BG_HOVER pill for condition
         condition_text = "" if condition > 85 else "" if condition > 70 else ""
         
         condition_frame = tk.Frame(middle_row, bg=condition_color, relief='flat')
@@ -10447,21 +10447,21 @@ class CleanEditLinesWindow(tk.Toplevel):
         condition_label.pack()
         
         # Bottom row - Archetype and stats
-        bottom_row = tk.Frame(info_frame, bg='#6c757d')
+        bottom_row = tk.Frame(info_frame, bg='#1e1e24')
         bottom_row.pack(fill=tk.X, pady=(2, 0))
 
         try:
             arch = get_archetype(player)
         except Exception:
             arch = "—"
-        arch_label = tk.Label(bottom_row, text=f"Archetype: {arch}", bg='#6c757d', fg='#ffd166',
+        arch_label = tk.Label(bottom_row, text=f"Archetype: {arch}", bg='#1e1e24', fg='#ffd166',
                               font=(self.parent.FONT_FAMILY, 8, 'bold'))
         arch_label.pack(side=tk.LEFT)
 
         if hasattr(player, 'stats'):
             goals = getattr(player.stats, 'goals', 0)
             assists = getattr(player.stats, 'assists', 0)
-            stats_label = tk.Label(bottom_row, text=f"  {goals}G  {assists}A", bg='#6c757d', fg='#f8f9fa',
+            stats_label = tk.Label(bottom_row, text=f"  {goals}G  {assists}A", bg='#1e1e24', fg='#ffffff',
                                   font=(self.parent.FONT_FAMILY, 8))
             stats_label.pack(side=tk.LEFT)
         
@@ -10489,39 +10489,39 @@ class CleanEditLinesWindow(tk.Toplevel):
     def create_clean_interface(self):
         """Create a clean, easy-to-read interface"""
         # Modern header with gradient-like appearance
-        header_frame = tk.Frame(self, bg='#343a40', height=80)
+        header_frame = tk.Frame(self, bg='#16161a', height=80)
         header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
         
         # Header content
-        header_content = tk.Frame(header_frame, bg='#343a40')
+        header_content = tk.Frame(header_frame, bg='#16161a')
         header_content.pack(expand=True, fill='both', padx=20, pady=15)
         
         title_label = tk.Label(header_content, text="Line Editor", 
-                              bg='#343a40', fg='white', 
+                              bg='#16161a', fg='white', 
                               font=(self.parent.FONT_FAMILY, 18, 'bold'))
         title_label.pack(side=tk.LEFT)
         
         # Modern action buttons in header
-        header_buttons = tk.Frame(header_content, bg='#343a40')
+        header_buttons = tk.Frame(header_content, bg='#16161a')
         header_buttons.pack(side=tk.RIGHT)
         
-        # Stylish buttons
-        self.create_modern_button(header_buttons, "Auto Best Lines", self.auto_populate_best_lines, 
-                                 bg='#3fb950', hover_bg='#218838')
-        self.create_modern_button(header_buttons, "Save Lines", self.save_lines_with_feedback, 
-                                 bg='#007bff', hover_bg='#0056b3')
-        self.create_modern_button(header_buttons, "Reset", self.reset_lines, 
-                                 bg='#6c757d', hover_bg='#545b62')
+        # Stylish buttons (teal primary, dark secondary)
+        self.create_modern_button(header_buttons, "Auto Best Lines", self.auto_populate_best_lines,
+                                 bg='#00ceb8', hover_bg='#00a894')
+        self.create_modern_button(header_buttons, "Save Lines", self.save_lines_with_feedback,
+                                 bg='#00ceb8', hover_bg='#00a894')
+        self.create_modern_button(header_buttons, "Reset", self.reset_lines,
+                                 bg='#1e1e24', hover_bg='#2e2e38')
         
         instruction_label = tk.Label(header_content, 
                                    text="Drag players from the roster to positions • Auto-assign or manually build your lines", 
-                                   bg='#343a40', fg='#adb5bd', 
+                                   bg='#16161a', fg='#a1a1aa', 
                                    font=(self.parent.FONT_FAMILY, 10))
         instruction_label.pack(side=tk.LEFT, padx=(20, 0))
         
         # Team overview in a modern card
-        stats_card = tk.Frame(self, bg='#16161a', relief='solid', bd=1)
+        stats_card = tk.Frame(self, bg='#16161a', relief='flat', bd=0)
         stats_card.pack(fill=tk.X, padx=20, pady=10)
         
         self.create_team_overview(stats_card)
@@ -10547,7 +10547,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         self.create_goalies_tab()
         self.create_special_teams_tab()
     
-    def create_modern_button(self, parent, text, command, bg='#007bff', hover_bg='#0056b3'):
+    def create_modern_button(self, parent, text, command, bg='#00ceb8', hover_bg='#00a894'):
         """Create a modern styled button with hover effects"""
         button = tk.Button(parent, text=text, command=command,
                           bg=bg, fg='white', border=0, relief='flat',
@@ -11131,11 +11131,11 @@ class CleanEditLinesWindow(tk.Toplevel):
         player_display.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Subtle assigned player card
-        card_frame = tk.Frame(player_display, bg='#6c757d', relief='flat')
+        card_frame = tk.Frame(player_display, bg='#1e1e24', relief='flat')
         card_frame.pack(fill='both', expand=True)
         
         # Player info with subtle styling
-        info_frame = tk.Frame(card_frame, bg='#6c757d')
+        info_frame = tk.Frame(card_frame, bg='#1e1e24')
         info_frame.pack(expand=True, fill='both', padx=8, pady=6)
 
         # Generated face thumbnail beside the name (single player, cached).
@@ -11148,14 +11148,14 @@ class CleanEditLinesWindow(tk.Toplevel):
             dz_face.image = dz_photo
         dz_face.pack(side=tk.LEFT, padx=(0, 8))
 
-        text_col = tk.Frame(info_frame, bg='#6c757d')
+        text_col = tk.Frame(info_frame, bg='#1e1e24')
         text_col.pack(side=tk.LEFT, expand=True, fill='y')
 
-        name_label = tk.Label(text_col, text=player.full_name, bg='#6c757d', fg='white',
+        name_label = tk.Label(text_col, text=player.full_name, bg='#1e1e24', fg='white',
                              font=(self.parent.FONT_FAMILY, 9, 'bold'), anchor='w')
         name_label.pack(anchor='w')
 
-        rating_label = tk.Label(text_col, text=f"{to_100_scale(player.overall_rating())}", bg='#6c757d', fg='white',
+        rating_label = tk.Label(text_col, text=f"{to_100_scale(player.overall_rating())}", bg='#1e1e24', fg='white',
                                font=(self.parent.FONT_FAMILY, 8), anchor='w')
         rating_label.pack(anchor='w')
 
@@ -11163,7 +11163,7 @@ class CleanEditLinesWindow(tk.Toplevel):
             arch = get_archetype(player)
         except Exception:
             arch = "—"
-        arch_label = tk.Label(info_frame, text=arch, bg='#6c757d', fg='#ffd166',
+        arch_label = tk.Label(info_frame, text=arch, bg='#1e1e24', fg='#ffd166',
                               font=(self.parent.FONT_FAMILY, 7, 'bold'))
         arch_label.pack(side=tk.LEFT, padx=(8, 0))
 
@@ -11172,7 +11172,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                        dz_face, text_col]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, drop_zone.zone_id))
             widget.bind('<Enter>', lambda e: card_frame.config(bg='#00ceb8'))  # Red on hover
-            widget.bind('<Leave>', lambda e: card_frame.config(bg='#6c757d'))  # Back to gray
+            widget.bind('<Leave>', lambda e: card_frame.config(bg='#1e1e24'))  # Back to gray
         
         # Store assignment
         drop_zone.assigned_player = player
@@ -11292,7 +11292,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                  fg=color, font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w", pady=(4, 0))
         tk.Label(header, text="Archetype pairings drive chemistry. "
                  "Complementary styles boost it; duplicate roles clash.",
-                 bg="#16161a", fg="#adb5bd",
+                 bg="#16161a", fg="#a1a1aa",
                  font=(self.parent.FONT_FAMILY, 9), wraplength=420,
                  justify="left").pack(anchor="w", pady=(4, 0))
 
@@ -11301,7 +11301,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         if not drivers:
             tk.Label(body, text="No strong archetype relationships on this unit.\n"
                      "Chemistry is neutral.",
-                     bg="#16161a", fg="#adb5bd",
+                     bg="#16161a", fg="#a1a1aa",
                      font=(self.parent.FONT_FAMILY, 10)).pack(anchor="w")
         for text, value in drivers:
             row = tk.Frame(body, bg="#16161a")
@@ -11319,7 +11319,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         legend = tk.Frame(popup, bg="#16161a")
         legend.pack(fill="x", padx=16, pady=(8, 16))
         tk.Label(legend, text="Archetypes on this unit:", bg="#16161a",
-                 fg="#adb5bd", font=(self.parent.FONT_FAMILY, 9, "bold")).pack(anchor="w")
+                 fg="#a1a1aa", font=(self.parent.FONT_FAMILY, 9, "bold")).pack(anchor="w")
         for p in players:
             arch = get_archetype(p)
             strength = ARCHETYPE_STRENGTHS.get(arch, "")
@@ -11358,7 +11358,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                 widget.config(bg='#14332f', relief='flat')
             else:
                 # Reset to unassigned appearance
-                widget.config(bg='#495057', relief='flat')
+                widget.config(bg='#16161a', relief='flat')
     
     def extract_lineup_from_drop_zones(self):
         """Extract the current lineup from all drop zones"""

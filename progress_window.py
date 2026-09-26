@@ -67,7 +67,7 @@ class ProgressWindow:
         # Title
         title_label = tk.Label(main_frame,
                               text="Generating Hockey Database",
-                              font=("Arial", 16, "bold"),
+                              font=("Segoe UI", 16, "bold"),
                               bg='#1e1e1e',
                               fg='#00ceb8')
         title_label.pack(pady=(0, 20))
@@ -75,7 +75,7 @@ class ProgressWindow:
         # Status label
         self.status_label = tk.Label(main_frame, 
                                    textvariable=self.status_var,
-                                   font=("Arial", 12),
+                                   font=("Segoe UI", 12),
                                    bg='#1e1e1e', 
                                    fg='#ffffff',
                                    wraplength=450)
@@ -102,7 +102,7 @@ class ProgressWindow:
         # Detail label for specific operations
         self.detail_label = tk.Label(main_frame, 
                                     textvariable=self.detail_var,
-                                    font=("Arial", 10),
+                                    font=("Segoe UI", 10),
                                     bg='#1e1e1e', 
                                     fg='#B0B0B0',
                                     wraplength=450)

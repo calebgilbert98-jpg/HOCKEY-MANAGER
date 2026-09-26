@@ -687,9 +687,9 @@ class AdvancedAnalyticsDashboard:
         
         # Team labels
         self.momentum_canvas.create_text(center_x / 2, center_y, text=home_team, 
-                                        font=('Arial', 10, 'bold'))
+                                        font=('Segoe UI', 10, 'bold'))
         self.momentum_canvas.create_text(center_x + center_x / 2, center_y, text=away_team,
-                                        font=('Arial', 10, 'bold'))
+                                        font=('Segoe UI', 10, 'bold'))
     
     def update_advanced_metrics(self):
         """Update advanced metrics display"""
