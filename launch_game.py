@@ -36,7 +36,7 @@ def launch_direct():
         print("Game manager created")
         
         default_settings = {
-            'database_size': 'Medium',
+            'database_size': 'Small',
             'fantasy_draft': False,
             'user_team': 'Carolina Hurricanes'
         }

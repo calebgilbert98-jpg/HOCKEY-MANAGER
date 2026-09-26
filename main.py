@@ -183,7 +183,7 @@ class GameManager:
         print(f"Applying startup settings: {settings}")
         
         # Generate database based on selected size
-        database_size = settings.get('database_size', 'Medium')
+        database_size = settings.get('database_size', 'Small')
         print(f"Generating {database_size} database...")
         
         try:
@@ -272,7 +272,7 @@ class GameManager:
                 from game_classes import League
                 self.league = League("NHL")
                 # Add basic NHL teams
-                from startup_window import NHL_TEAMS
+                from nhl_teams import NHL_TEAMS
                 from game_classes import Team
                 for team_name in NHL_TEAMS:
                     team = Team(team_name=team_name, city=team_name.split()[-1])
@@ -13724,7 +13724,7 @@ def _launch_with_imported_league(config):
         print("Starting Puck Dynasty with imported rosters...")
         settings = {
             'selected_team': config.get('user_team'),
-            'database_size': 'Medium',
+            'database_size': 'Small',
             'user_team': config.get('user_team'),
             'user_league': config.get('user_league', 'NHL'),
             'gm_name': config.get('gm_name', 'General Manager'),

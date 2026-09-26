@@ -14,12 +14,80 @@ import random
 import calendar
 from PIL import Image, ImageTk
 
+from modern_ui import AppColors, AppFonts, AppCard, AppButton, PillBadge
+
+
+class _ThemedButton(tk.Button):
+    """tk.Button with modern dark styling.
+
+    Used where AppButton (canvas-based) can't drop in -- e.g. buttons
+    whose enabled/disabled state is toggled via .configure(state=...).
+    """
+    def __init__(self, parent, style="primary", **kwargs):
+        kwargs.setdefault("relief", "flat")
+        kwargs.setdefault("bd", 0)
+        kwargs.setdefault("cursor", "hand2")
+        if style == "primary":
+            kwargs.setdefault("bg", AppColors.ACCENT)
+            kwargs.setdefault("fg", "#ffffff")
+            kwargs.setdefault("activebackground", AppColors.ACCENT_DIM)
+            kwargs.setdefault("activeforeground", "#ffffff")
+            kwargs.setdefault("font", AppFonts.BODY_BOLD)
+        elif style == "danger":
+            kwargs.setdefault("bg", AppColors.DANGER)
+            kwargs.setdefault("fg", "#ffffff")
+            kwargs.setdefault("activebackground", "#d63a33")
+            kwargs.setdefault("activeforeground", "#ffffff")
+            kwargs.setdefault("font", AppFonts.BODY_BOLD)
+        else:  # secondary
+            kwargs.setdefault("bg", AppColors.BG_ELEVATED)
+            kwargs.setdefault("fg", AppColors.TEXT_PRIMARY)
+            kwargs.setdefault("activebackground", AppColors.BG_HOVER)
+            kwargs.setdefault("activeforeground", AppColors.TEXT_PRIMARY)
+            kwargs.setdefault("font", AppFonts.BODY)
+        # Disabled-state colors (tkinter uses these automatically)
+        kwargs.setdefault("disabledforeground", AppColors.TEXT_TERTIARY)
+        super().__init__(parent, **kwargs)
+        self._style = style
+
+    def set_enabled(self, enabled):
+        """Toggle enabled state with appropriate modern colors."""
+        if enabled:
+            bg = AppColors.ACCENT if self._style == "primary" else \
+                 AppColors.DANGER if self._style == "danger" else AppColors.BG_ELEVATED
+            self.configure(state="normal", bg=bg, fg="#ffffff" if self._style != "secondary" else AppColors.TEXT_PRIMARY)
+        else:
+            self.configure(state="disabled", bg=AppColors.BG_HOVER, fg=AppColors.TEXT_TERTIARY)
+
+
+class SectionCard(tk.Frame):
+    """Modern drop-in replacement for tk.LabelFrame.
+
+    Renders as a charcoal card with a clean title label instead of the
+    dated LabelFrame border. Children pack/grid into it directly, just
+    like a LabelFrame.
+    """
+    def __init__(self, parent, text="", font=None, **kwargs):
+        kwargs.pop("fg", None)  # LabelFrame text color -- not needed
+        kwargs.setdefault("bg", AppColors.BG_ELEVATED)
+        super().__init__(parent, **kwargs)
+        title = text.strip()
+        if title:
+            tk.Label(self, text=title,
+                     font=font or AppFonts.H2,
+                     bg=AppColors.BG_ELEVATED,
+                     fg=AppColors.TEXT_PRIMARY).pack(
+                         anchor="w", padx=16, pady=(14, 6))
+            # Subtle teal underline accent
+            tk.Frame(self, bg=AppColors.ACCENT, height=2).pack(
+                fill="x", padx=16, pady=(0, 10))
+
 
 class EnhancedPuckDynastyLauncher(tk.Tk):
     """Enhanced professional game launcher with comprehensive options"""
     
     def __init__(self):
-        print("🏒 Initializing Enhanced Puck Dynasty Launcher...")
+        print("Initializing Enhanced Puck Dynasty Launcher...")
         super().__init__()
         
         # All NHL teams organized by division
@@ -83,7 +151,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         
         # Game setup variables
         self.setup_options = {
-            'database_size': tk.StringVar(master=self, value="Medium (25K players, 5 leagues)"),
+            'database_size': tk.StringVar(master=self, value="Small (8K players, 32 NHL+AHL teams)"),
             'start_date': tk.StringVar(master=self, value="October 1, 2024"),
             'season_length': tk.StringVar(master=self, value="Full Season (82 Games)"),
             'difficulty': tk.StringVar(master=self, value="Realistic"),
@@ -130,7 +198,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.title("Puck Dynasty - Hockey Management Simulator")
         self.geometry("1400x900")
         self.minsize(1200, 750)
-        self.configure(bg='#0A0A0A')
+        self.configure(bg=AppColors.BG)
         
         # Initialize
         self._setup_window()
@@ -195,13 +263,13 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                 # Composite the overlay
                 self.background_image = Image.alpha_composite(original, overlay)
                 
-                print("✅ Background image loaded successfully")
+                print("Background image loaded successfully")
             else:
-                print("⚠️ Background image not found, using solid background")
+                print("Background image not found, using solid background")
                 self.background_image = None
                 
         except Exception as e:
-            print(f"⚠️ Could not load background image: {e}")
+            print(f"Could not load background image: {e}")
             self.background_image = None
             
     def _center_window(self):
@@ -221,7 +289,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                 # Create a main frame with the background
                 self._create_background_interface()
             except Exception as e:
-                print(f"⚠️ Background image display failed ({e}), using regular interface")
+                print(f"Background image display failed ({e}), using regular interface")
                 self._create_regular_interface()
         else:
             # Fallback to regular interface
@@ -230,38 +298,38 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
     def _create_background_interface(self):
         """Create interface with visible background integration"""
         # Create main container frame
-        main_container = tk.Frame(self, bg='#0A0A0A')
+        main_container = tk.Frame(self, bg=AppColors.BG)
         main_container.pack(fill='both', expand=True)
         
         # Create header with background image section
-        header_frame = tk.Frame(main_container, bg='#0A0A0A', height=120)
+        header_frame = tk.Frame(main_container, bg=AppColors.BG, height=120)
         header_frame.pack(fill='x')
         header_frame.pack_propagate(False)
         
         # Background image display area in header
-        bg_canvas = tk.Canvas(header_frame, height=120, highlightthickness=0, bg='#0A0A0A')
+        bg_canvas = tk.Canvas(header_frame, height=120, highlightthickness=0, bg=AppColors.BG)
         bg_canvas.pack(fill='x', padx=20, pady=10)
         
         # Simple title without background image complications
         try:
             # Add title overlay without problematic background image
-            overlay_frame = tk.Frame(header_frame, bg='#0A0A0A')
+            overlay_frame = tk.Frame(header_frame, bg=AppColors.BG)
             overlay_frame.place(relx=0.5, rely=0.5, anchor='center')
             
             title_label = tk.Label(overlay_frame,
-                                  text="🏒 PUCK DYNASTY",
-                                  font=('Segoe UI', 24, 'bold'),
-                                  bg='#0A0A0A', fg='#F0F6FC')
+                                  text="PUCK DYNASTY",
+                                  font=AppFonts.H1,
+                                  bg=AppColors.BG, fg=AppColors.TEXT_PRIMARY)
             title_label.pack()
             
             subtitle_label = tk.Label(overlay_frame,
                                      text="Professional Hockey Management Simulator",
-                                     font=('Segoe UI', 11),
-                                     bg='#0A0A0A', fg='#8B949E')
+                                     font=AppFonts.SMALL,
+                                     bg=AppColors.BG, fg=AppColors.TEXT_SECONDARY)
             subtitle_label.pack()
             
         except Exception as e:
-            print(f"⚠️ Header creation failed: {e}")
+            print(f"Header creation failed: {e}")
         
         # Create the rest of the interface normally
         self._create_main_interface(main_container)
@@ -269,30 +337,40 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
     def _create_main_interface(self, parent):
         """Create the main tabbed interface"""
         # Status bar at top
-        status_frame = tk.Frame(parent, bg='#2A2A2A', height=30)
+        status_frame = tk.Frame(parent, bg=AppColors.BG_ELEVATED, height=30)
         status_frame.pack(fill='x')
         status_frame.pack_propagate(False)
         
         self.status_label = tk.Label(status_frame,
                                    text="Ready to create your hockey dynasty...",
-                                   font=('Segoe UI', 9),
-                                   bg='#2A2A2A', fg='#8B949E')
+                                   font=AppFonts.CAPTION,
+                                   bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY)
         self.status_label.pack(side='left', padx=20, pady=5)
         
         # Main content area with tabs (subtle hockey theme)
-        content_frame = tk.Frame(parent, bg='#0F0F0F')  # Slightly lighter for contrast
+        content_frame = tk.Frame(parent, bg=AppColors.BG)  # Slightly lighter for contrast
         content_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Add subtle hockey-themed border
         border_frame = tk.Frame(content_frame, bg='#f85149', height=2)
         border_frame.pack(fill='x', pady=(0, 5))
         
-        # Create notebook for tabs
+        # Create notebook for tabs -- modern dark tab bar
         style = ttk.Style()
         style.theme_use('clam')
-        style.configure('TNotebook', background='#1A1A1A', borderwidth=0)
-        style.configure('TNotebook.Tab', background='#2A2A2A', foreground='#FFFFFF', padding=[20, 8])
-        style.map('TNotebook.Tab', background=[('selected', '#3A3A3A')])
+        style.configure('TNotebook', background=AppColors.BG,
+                        borderwidth=0, tabmargins=[8, 8, 8, 0])
+        style.configure('TNotebook.Tab',
+                        background=AppColors.BG_ELEVATED,
+                        foreground=AppColors.TEXT_SECONDARY,
+                        padding=[22, 10],
+                        font=AppFonts.SMALL_BOLD,
+                        borderwidth=0)
+        style.map('TNotebook.Tab',
+                  background=[('selected', AppColors.BG_HOVER),
+                              ('active', AppColors.BG_HOVER)],
+                  foreground=[('selected', AppColors.TEXT_PRIMARY),
+                              ('active', AppColors.TEXT_PRIMARY)])
 
         self.notebook = ttk.Notebook(content_frame, style='TNotebook')
         self.notebook.pack(fill='both', expand=True)
@@ -320,15 +398,15 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                 
     def _create_action_bar(self, parent):
         """Create bottom action bar with start button"""
-        action_frame = tk.Frame(parent, bg='#2A2A2A', height=80)
+        action_frame = tk.Frame(parent, bg=AppColors.BG_ELEVATED, height=80)
         action_frame.pack(fill='x', side='bottom')
         action_frame.pack_propagate(False)
         
         # Start game button
         self.start_button = tk.Button(action_frame,
-                                     text="🚀 START GAME",
-                                     font=('Segoe UI', 16, 'bold'),
-                                     bg='#238636', fg='white',
+                                     text="START GAME",
+                                     font=AppFonts.H2,
+                                     bg=AppColors.ACCENT, fg='white',
                                      relief='flat', bd=0,
                                      pady=15, padx=40,
                                      cursor='hand2',
@@ -338,9 +416,9 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         
         # Import save button
         import_btn = tk.Button(action_frame,
-                              text="📁 Import Save",
-                              font=('Segoe UI', 11),
-                              bg='#6F42C1', fg='white',
+                              text="Import Save",
+                              font=AppFonts.SMALL,
+                              bg=AppColors.ACCENT_DIM, fg='white',
                               relief='flat', bd=0,
                               pady=8, padx=15,
                               cursor='hand2',
@@ -349,23 +427,23 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         
     def _create_regular_interface(self):
         """Create regular interface without background"""
-        self.configure(bg='#0A0A0A')
+        self.configure(bg=AppColors.BG)
         
         # Create a simple header without background
-        header_frame = tk.Frame(self, bg='#2A2A2A', height=80)
+        header_frame = tk.Frame(self, bg=AppColors.BG_ELEVATED, height=80)
         header_frame.pack(fill='x')
         header_frame.pack_propagate(False)
         
         title_label = tk.Label(header_frame,
-                              text="🏒 PUCK DYNASTY",
-                              font=('Segoe UI', 24, 'bold'),
-                              bg='#2A2A2A', fg='#F0F6FC')
+                              text="PUCK DYNASTY",
+                              font=AppFonts.H1,
+                              bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         title_label.pack(expand=True)
         
         subtitle_label = tk.Label(header_frame,
                                  text="Professional Hockey Management Simulator",
-                                 font=('Segoe UI', 11),
-                                 bg='#2A2A2A', fg='#8B949E')
+                                 font=AppFonts.SMALL,
+                                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY)
         subtitle_label.pack()
         
         # Create main interface
@@ -373,13 +451,13 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         
     def _create_gm_profile_tab(self):
         """Create GM profile creation tab"""
-        gm_frame = tk.Frame(self.notebook, bg='#1A1A1A')
-        self.notebook.add(gm_frame, text="👤 Create GM")
+        gm_frame = tk.Frame(self.notebook, bg=AppColors.BG_ELEVATED)
+        self.notebook.add(gm_frame, text="Create GM")
         
         # Create scrollable frame
-        canvas = tk.Canvas(gm_frame, bg='#1A1A1A', highlightthickness=0)
+        canvas = tk.Canvas(gm_frame, bg=AppColors.BG_ELEVATED, highlightthickness=0)
         scrollbar = ttk.Scrollbar(gm_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg='#1A1A1A')
+        scrollable_frame = tk.Frame(canvas, bg=AppColors.BG_ELEVATED)
         
         scrollable_frame.bind(
             "<Configure>",
@@ -400,27 +478,27 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         scrollbar.pack(side="right", fill="y")
         
         # GM Profile Header
-        header_frame = tk.Frame(scrollable_frame, bg='#1A1A1A')
+        header_frame = tk.Frame(scrollable_frame, bg=AppColors.BG_ELEVATED)
         header_frame.pack(fill='x', padx=15, pady=30)
         
         tk.Label(header_frame,
-                text="👤 Create Your General Manager Profile",
-                font=('Segoe UI', 20, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').pack()
+                text="Create Your General Manager Profile",
+                font=AppFonts.H1,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).pack()
         
         tk.Label(header_frame,
                 text="Define your identity as a hockey executive. Your choices will affect team morale, trade negotiations, and media relations.",
-                font=('Segoe UI', 11),
-                bg='#1A1A1A', fg='#8B949E',
+                font=AppFonts.SMALL,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
                 wraplength=800, justify='center').pack(pady=(10, 0))
         
         # Basic Info Section
-        basic_frame = tk.LabelFrame(scrollable_frame, text="  📋 Basic Information  ",
-                                   font=('Segoe UI', 14, 'bold'),
-                                   bg='#1A1A1A', fg='#F0F6FC')
+        basic_frame = SectionCard(scrollable_frame, text="  Basic Information  ",
+                                   font=AppFonts.H3,
+                                   bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         basic_frame.pack(fill='x', padx=15, pady=20)
         
-        basic_grid = tk.Frame(basic_frame, bg='#1A1A1A')
+        basic_grid = tk.Frame(basic_frame, bg=AppColors.BG_ELEVATED)
         basic_grid.pack(fill='x', padx=15, pady=15)
         
         # Configure grid weights for better space utilization
@@ -429,23 +507,23 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         basic_grid.grid_columnconfigure(2, weight=0)  # Button column
         
         # Name
-        tk.Label(basic_grid, text="Full Name:", font=('Segoe UI', 11, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').grid(row=0, column=0, sticky='w', pady=10, padx=(0, 15))
+        tk.Label(basic_grid, text="Full Name:", font=AppFonts.SMALL_BOLD,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).grid(row=0, column=0, sticky='w', pady=10, padx=(0, 15))
         
         self.name_entry = tk.Entry(basic_grid, textvariable=self.gm_profile['name'],
-                             font=('Segoe UI', 11))
+                             font=AppFonts.SMALL)
         self.name_entry.grid(row=0, column=1, sticky='ew', padx=(0, 10), pady=10)
         
         # Generate random name button
-        tk.Button(basic_grid, text="🎲 Random",
-                 font=('Segoe UI', 9),
-                 bg='#6F42C1', fg='white', relief='flat', bd=0,
+        tk.Button(basic_grid, text="Random",
+                 font=AppFonts.CAPTION,
+                 bg=AppColors.ACCENT_DIM, fg='white', relief='flat', bd=0,
                  pady=5, padx=10, cursor='hand2',
                  command=self._generate_random_gm_name).grid(row=0, column=2, pady=10)
         
         # Age
-        tk.Label(basic_grid, text="Age:", font=('Segoe UI', 11, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').grid(row=1, column=0, sticky='w', pady=10, padx=(0, 15))
+        tk.Label(basic_grid, text="Age:", font=AppFonts.SMALL_BOLD,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).grid(row=1, column=0, sticky='w', pady=10, padx=(0, 15))
         
         self.age_combo = ttk.Combobox(basic_grid, textvariable=self.gm_profile['age'],
                                 values=[str(age) for age in range(28, 71)], 
@@ -453,8 +531,8 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.age_combo.grid(row=1, column=1, sticky='ew', padx=(0, 10), pady=10)
         
         # Experience Level
-        tk.Label(basic_grid, text="Experience:", font=('Segoe UI', 11, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').grid(row=2, column=0, sticky='w', pady=10, padx=(0, 15))
+        tk.Label(basic_grid, text="Experience:", font=AppFonts.SMALL_BOLD,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).grid(row=2, column=0, sticky='w', pady=10, padx=(0, 15))
         
         self.exp_combo = ttk.Combobox(basic_grid, textvariable=self.gm_profile['experience'],
                                 values=["First-Time GM", "Assistant GM Experience", "Former GM", "Veteran Executive"], 
@@ -462,12 +540,12 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.exp_combo.grid(row=2, column=1, sticky='ew', padx=(0, 10), pady=10)
         
         # Background Section
-        background_frame = tk.LabelFrame(scrollable_frame, text="  🏒 Hockey Background  ",
-                                        font=('Segoe UI', 14, 'bold'),
-                                        bg='#1A1A1A', fg='#F0F6FC')
+        background_frame = SectionCard(scrollable_frame, text="  Hockey Background  ",
+                                        font=AppFonts.H3,
+                                        bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         background_frame.pack(fill='x', padx=15, pady=20)
         
-        bg_grid = tk.Frame(background_frame, bg='#1A1A1A')
+        bg_grid = tk.Frame(background_frame, bg=AppColors.BG_ELEVATED)
         bg_grid.pack(fill='x', padx=15, pady=15)
         
         # Configure grid weights for better space utilization
@@ -475,8 +553,8 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         bg_grid.grid_columnconfigure(1, weight=1)  # Combo column - expandable
         
         # Background type
-        tk.Label(bg_grid, text="Background:", font=('Segoe UI', 11, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').grid(row=0, column=0, sticky='w', pady=10, padx=(0, 15))
+        tk.Label(bg_grid, text="Background:", font=AppFonts.SMALL_BOLD,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).grid(row=0, column=0, sticky='w', pady=10, padx=(0, 15))
         
         self.bg_combo = ttk.Combobox(bg_grid, textvariable=self.gm_profile['background'],
                                values=["Former Player", "Former Coach", "Former Scout", "Business Executive", "Analytics Expert"], 
@@ -484,8 +562,8 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.bg_combo.grid(row=0, column=1, sticky='ew', pady=10)
         
         # Management Style
-        tk.Label(bg_grid, text="Management Style:", font=('Segoe UI', 11, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').grid(row=1, column=0, sticky='w', pady=10, padx=(0, 15))
+        tk.Label(bg_grid, text="Management Style:", font=AppFonts.SMALL_BOLD,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).grid(row=1, column=0, sticky='w', pady=10, padx=(0, 15))
         
         self.style_combo = ttk.Combobox(bg_grid, textvariable=self.gm_profile['management_style'],
                                   values=["Players' GM", "Strict Disciplinarian", "Analytics-Focused", "Balanced", "Old-School"], 
@@ -493,12 +571,12 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.style_combo.grid(row=1, column=1, sticky='ew', pady=10)
         
         # Contract Section
-        contract_frame = tk.LabelFrame(scrollable_frame, text="  📝 Contract Terms  ",
-                                      font=('Segoe UI', 14, 'bold'),
-                                      bg='#1A1A1A', fg='#F0F6FC')
+        contract_frame = SectionCard(scrollable_frame, text="  Contract Terms  ",
+                                      font=AppFonts.H3,
+                                      bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         contract_frame.pack(fill='x', padx=15, pady=20)
         
-        contract_grid = tk.Frame(contract_frame, bg='#1A1A1A')
+        contract_grid = tk.Frame(contract_frame, bg=AppColors.BG_ELEVATED)
         contract_grid.pack(fill='x', padx=15, pady=15)
         
         # Configure grid weights for better space utilization
@@ -506,8 +584,8 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         contract_grid.grid_columnconfigure(1, weight=1)  # Combo column - expandable
         
         # Contract Length
-        tk.Label(contract_grid, text="Contract Length:", font=('Segoe UI', 11, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').grid(row=0, column=0, sticky='w', pady=10, padx=(0, 15))
+        tk.Label(contract_grid, text="Contract Length:", font=AppFonts.SMALL_BOLD,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).grid(row=0, column=0, sticky='w', pady=10, padx=(0, 15))
         
         self.contract_combo = ttk.Combobox(contract_grid, textvariable=self.gm_profile['contract_length'],
                                      values=["1 Year (Prove It)", "2 Years", "3 Years", "4 Years", "5 Years (Long-term)"], 
@@ -515,8 +593,8 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.contract_combo.grid(row=0, column=1, sticky='ew', pady=10)
         
         # Starting Reputation
-        tk.Label(contract_grid, text="Initial Reputation:", font=('Segoe UI', 11, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').grid(row=1, column=0, sticky='w', pady=10, padx=(0, 15))
+        tk.Label(contract_grid, text="Initial Reputation:", font=AppFonts.SMALL_BOLD,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).grid(row=1, column=0, sticky='w', pady=10, padx=(0, 15))
         
         self.rep_combo = ttk.Combobox(contract_grid, textvariable=self.gm_profile['reputation'],
                                 values=["Unknown", "Rising Star", "Proven Executive", "Legendary"], 
@@ -524,14 +602,14 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.rep_combo.grid(row=1, column=1, sticky='ew', pady=10)
         
         # Profile Preview
-        preview_frame = tk.LabelFrame(scrollable_frame, text="  👀 Profile Preview  ",
-                                     font=('Segoe UI', 14, 'bold'),
-                                     bg='#1A1A1A', fg='#F0F6FC')
+        preview_frame = SectionCard(scrollable_frame, text="  Profile Preview  ",
+                                     font=AppFonts.H3,
+                                     bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         preview_frame.pack(fill='x', padx=15, pady=20)
         
         self.gm_preview_text = tk.Text(preview_frame, height=6, width=70,
-                                      font=('Segoe UI', 10),
-                                      bg='#2A2A2A', fg='#F0F6FC',
+                                      font=AppFonts.SMALL,
+                                      bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY,
                                       relief='flat', bd=0, wrap='word')
         self.gm_preview_text.pack(padx=20, pady=20)
         
@@ -541,9 +619,9 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         
         # Generate profile button
         generate_btn = tk.Button(scrollable_frame,
-                               text="🎲 Generate Random Profile",
-                               font=('Segoe UI', 12, 'bold'),
-                               bg='#6F42C1', fg='white',
+                               text="Generate Random Profile",
+                               font=AppFonts.BODY_BOLD,
+                               bg=AppColors.ACCENT_DIM, fg='white',
                                relief='flat', bd=0, pady=10, padx=20,
                                cursor='hand2',
                                command=self._generate_random_gm_profile)
@@ -564,7 +642,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         
         # Update status and trigger validation
         if hasattr(self, 'status_label'):
-            self.status_label.config(text=f"✅ Random GM name generated: {name}")
+            self.status_label.config(text=f"Random GM name generated: {name}")
         self._check_readiness()
         
     def _generate_random_gm_profile(self):
@@ -579,10 +657,10 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         
         # Update status and trigger validation
         if hasattr(self, 'status_label'):
-            self.status_label.config(text=f"✅ Complete GM profile generated: {self.gm_profile['name'].get()}")
+            self.status_label.config(text=f"Complete GM profile generated: {self.gm_profile['name'].get()}")
         
         # Force widgets to display the new random values
-        print("🔄 Refreshing widgets with new random GM profile...")
+        print("Refreshing widgets with new random GM profile...")
         self._force_initial_widget_display()
         self._force_combobox_initialization()
         
@@ -652,13 +730,13 @@ This profile will influence player relationships, media interactions, and trade 
         
     def _create_new_game_tab(self):
         """Create comprehensive new game setup tab"""
-        new_game_frame = tk.Frame(self.notebook, bg='#1A1A1A')
-        self.notebook.add(new_game_frame, text="� Choose Team")
+        new_game_frame = tk.Frame(self.notebook, bg=AppColors.BG_ELEVATED)
+        self.notebook.add(new_game_frame, text="Choose Team")
         
         # Create scrollable frame for new game content
-        canvas = tk.Canvas(new_game_frame, bg='#1A1A1A', highlightthickness=0)
+        canvas = tk.Canvas(new_game_frame, bg=AppColors.BG_ELEVATED, highlightthickness=0)
         scrollbar = ttk.Scrollbar(new_game_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg='#1A1A1A')
+        scrollable_frame = tk.Frame(canvas, bg=AppColors.BG_ELEVATED)
         
         scrollable_frame.bind(
             "<Configure>",
@@ -686,34 +764,34 @@ This profile will influence player relationships, media interactions, and trade 
         
         # Setup wizard shortcut (Quick Start / Custom Setup with league
         # selection, fog of war, per-league sim detail)
-        wiz_frame = tk.Frame(scrollable_frame, bg='#1A1A1A')
+        wiz_frame = tk.Frame(scrollable_frame, bg=AppColors.BG_ELEVATED)
         wiz_frame.pack(fill='x', pady=(0, 10))
         tk.Button(wiz_frame,
-                  text="🧙 Open Setup Wizard",
-                  font=('Segoe UI', 12, 'bold'),
-                  bg='#1F6FEB', fg='#FFFFFF',
+                  text="Open Setup Wizard",
+                  font=AppFonts.BODY_BOLD,
+                  bg=AppColors.ACCENT, fg=AppColors.TEXT_PRIMARY,
                   relief='flat', bd=0, pady=10, padx=40,
                   cursor='hand2',
                   command=self._open_setup_wizard).pack()
 
         # Ready to Start Check
-        ready_frame = tk.Frame(scrollable_frame, bg='#1A1A1A')
+        ready_frame = tk.Frame(scrollable_frame, bg=AppColors.BG_ELEVATED)
         ready_frame.pack(fill='x', pady=20)
         
         self.ready_status_label = tk.Label(ready_frame,
-                                          text="⚠️ Complete GM Profile and select team to start",
-                                          font=('Segoe UI', 12, 'bold'),
-                                          bg='#1A1A1A', fg='#FFB81C')
+                                          text="Complete GM Profile and select team to start",
+                                          font=AppFonts.BODY_BOLD,
+                                          bg=AppColors.BG_ELEVATED, fg=AppColors.WARNING)
         self.ready_status_label.pack()
         
         # Start Game Button
-        start_frame = tk.Frame(scrollable_frame, bg='#1A1A1A')
+        start_frame = tk.Frame(scrollable_frame, bg=AppColors.BG_ELEVATED)
         start_frame.pack(fill='x', pady=20)
         
         self.start_btn = tk.Button(start_frame,
-                                  text="🚀 START NEW GAME",
-                                  font=('Segoe UI', 16, 'bold'),
-                                  bg='#4A4A4A', fg='#8B949E',
+                                  text="START NEW GAME",
+                                  font=AppFonts.H2,
+                                  bg=AppColors.BG_HOVER, fg=AppColors.TEXT_SECONDARY,
                                   relief='flat', bd=0, pady=15, padx=60,
                                   cursor='hand2', state='disabled',
                                   command=self._start_new_game)
@@ -724,13 +802,13 @@ This profile will influence player relationships, media interactions, and trade 
         
     def _create_advanced_setup_tab(self):
         """Create advanced game setup options tab"""
-        advanced_frame = tk.Frame(self.notebook, bg='#1A1A1A')
-        self.notebook.add(advanced_frame, text="⚙️ Advanced Setup")
+        advanced_frame = tk.Frame(self.notebook, bg=AppColors.BG_ELEVATED)
+        self.notebook.add(advanced_frame, text="Advanced Setup")
         
         # Create scrollable frame
-        canvas = tk.Canvas(advanced_frame, bg='#1A1A1A', highlightthickness=0)
+        canvas = tk.Canvas(advanced_frame, bg=AppColors.BG_ELEVATED, highlightthickness=0)
         scrollbar = ttk.Scrollbar(advanced_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg='#1A1A1A')
+        scrollable_frame = tk.Frame(canvas, bg=AppColors.BG_ELEVATED)
         
         scrollable_frame.bind(
             "<Configure>",
@@ -751,27 +829,27 @@ This profile will influence player relationships, media interactions, and trade 
         scrollbar.pack(side="right", fill="y")
         
         # Advanced Setup Header
-        header_frame = tk.Frame(scrollable_frame, bg='#1A1A1A')
+        header_frame = tk.Frame(scrollable_frame, bg=AppColors.BG_ELEVATED)
         header_frame.pack(fill='x', padx=15, pady=30)
         
         tk.Label(header_frame,
-                text="⚙️ Advanced Game Configuration",
-                font=('Segoe UI', 20, 'bold'),
-                bg='#1A1A1A', fg='#F0F6FC').pack()
+                text="Advanced Game Configuration",
+                font=AppFonts.H1,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY).pack()
         
         tk.Label(header_frame,
                 text="Fine-tune your hockey management experience with comprehensive gameplay options.",
-                font=('Segoe UI', 11),
-                bg='#1A1A1A', fg='#8B949E',
+                font=AppFonts.SMALL,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
                 wraplength=800, justify='center').pack(pady=(10, 0))
         
         # League & Database Options
-        league_frame = tk.LabelFrame(scrollable_frame, text="  🏒 League & Database Options  ",
-                                    font=('Segoe UI', 14, 'bold'),
-                                    bg='#1A1A1A', fg='#F0F6FC')
+        league_frame = SectionCard(scrollable_frame, text="  League & Database Options  ",
+                                    font=AppFonts.H3,
+                                    bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         league_frame.pack(fill='x', padx=15, pady=20)
         
-        league_grid = tk.Frame(league_frame, bg='#1A1A1A')
+        league_grid = tk.Frame(league_frame, bg=AppColors.BG_ELEVATED)
         league_grid.pack(fill='x', padx=15, pady=15)
         
         # Configure grid to expand horizontally
@@ -779,7 +857,7 @@ This profile will influence player relationships, media interactions, and trade 
         league_grid.grid_columnconfigure(1, weight=1)  # Control column - expandable
         league_grid.grid_columnconfigure(2, weight=2)  # Tooltip column - more expandable
         
-        self._create_advanced_option_row(league_grid, 0, "📊 Database Size:",
+        self._create_advanced_option_row(league_grid, 0, "Database Size:",
                                        self.setup_options['database_size'],
                                        ["Small (8K players, 32 NHL+AHL teams)", 
                                         "Medium (25K players, 5 leagues)", 
@@ -787,19 +865,19 @@ This profile will influence player relationships, media interactions, and trade 
                                         "Massive (100K players, 25 leagues)"],
                                        "Determines the number of teams, players, and depth of the hockey world")
         
-        self._create_advanced_option_row(league_grid, 1, "🌍 International Players:",
+        self._create_advanced_option_row(league_grid, 1, "International Players:",
                                        self.setup_options['international_players'],
                                        [True, False], 
                                        "Include players from European leagues, juniors, and international prospects",
                                        is_checkbox=True)
         
         # Season Configuration  
-        season_frame = tk.LabelFrame(scrollable_frame, text="  📅 Season Configuration  ",
-                                    font=('Segoe UI', 14, 'bold'),
-                                    bg='#1A1A1A', fg='#F0F6FC')
+        season_frame = SectionCard(scrollable_frame, text="  Season Configuration  ",
+                                    font=AppFonts.H3,
+                                    bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         season_frame.pack(fill='x', padx=15, pady=20)
         
-        season_grid = tk.Frame(season_frame, bg='#1A1A1A')
+        season_grid = tk.Frame(season_frame, bg=AppColors.BG_ELEVATED)
         season_grid.pack(fill='x', padx=15, pady=15)
         
         # Configure grid to expand horizontally
@@ -807,25 +885,25 @@ This profile will influence player relationships, media interactions, and trade 
         season_grid.grid_columnconfigure(1, weight=1)  # Control column - expandable
         season_grid.grid_columnconfigure(2, weight=2)  # Tooltip column - more expandable
         
-        self._create_advanced_option_row(season_grid, 0, "📅 Season Start Date:",
+        self._create_advanced_option_row(season_grid, 0, "Season Start Date:",
                                        self.setup_options['start_date'],
                                        ["August 1, 2024 (Long Training Camp)", "September 1, 2024 (Extended Preseason)", 
                                         "October 1, 2024 (Regular Start)", "November 1, 2024 (Mid-Season Start)"],
                                        "Earlier start = longer training camp, more player development time")
         
-        self._create_advanced_option_row(season_grid, 1, "🏒 Season Length:",
+        self._create_advanced_option_row(season_grid, 1, "Season Length:",
                                        self.setup_options['season_length'],
                                        ["Short Season (20 Games)", "Half Season (41 Games)", 
                                         "Full Season (82 Games)", "Extended Season (100+ Games)"],
                                        "Number of regular season games per team")
         
         # Realism & Difficulty
-        realism_frame = tk.LabelFrame(scrollable_frame, text="  🎯 Realism & Difficulty  ",
-                                     font=('Segoe UI', 14, 'bold'),
-                                     bg='#1A1A1A', fg='#F0F6FC')
+        realism_frame = SectionCard(scrollable_frame, text="  Realism & Difficulty  ",
+                                     font=AppFonts.H3,
+                                     bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         realism_frame.pack(fill='x', padx=15, pady=20)
         
-        realism_grid = tk.Frame(realism_frame, bg='#1A1A1A')
+        realism_grid = tk.Frame(realism_frame, bg=AppColors.BG_ELEVATED)
         realism_grid.pack(fill='x', padx=15, pady=15)
         
         # Configure grid to expand horizontally
@@ -833,29 +911,29 @@ This profile will influence player relationships, media interactions, and trade 
         realism_grid.grid_columnconfigure(1, weight=1)  # Control column - expandable
         realism_grid.grid_columnconfigure(2, weight=2)  # Tooltip column - more expandable
         
-        self._create_advanced_option_row(realism_grid, 0, "🎯 Overall Difficulty:",
+        self._create_advanced_option_row(realism_grid, 0, "Overall Difficulty:",
                                        self.setup_options['difficulty'],
                                        ["Rookie (Easy)", "Amateur (Moderate)", "Professional (Challenging)", 
                                         "Realistic (Hard)", "Hall of Fame (Expert)"],
                                        "Affects AI intelligence, trade difficulty, and player development rates")
         
-        self._create_advanced_option_row(realism_grid, 1, "🤝 Trade Difficulty:",
+        self._create_advanced_option_row(realism_grid, 1, "Trade Difficulty:",
                                        self.setup_options['trade_difficulty'],
                                        ["Very Easy", "Easy", "Realistic", "Hard", "Nearly Impossible"],
                                        "How difficult it is to complete trades with CPU teams")
         
-        self._create_advanced_option_row(realism_grid, 2, "🧠 CPU GM Intelligence:",
+        self._create_advanced_option_row(realism_grid, 2, "CPU GM Intelligence:",
                                        self.setup_options['cpu_gm_intelligence'],
                                        ["Low (Predictable)", "Medium (Balanced)", "High (Challenging)", "Maximum (Ruthless)"],
                                        "How smart and aggressive CPU general managers are")
         
         # Gameplay Features
-        gameplay_frame = tk.LabelFrame(scrollable_frame, text="  🎮 Gameplay Features  ",
-                                      font=('Segoe UI', 14, 'bold'),
-                                      bg='#1A1A1A', fg='#F0F6FC')
+        gameplay_frame = SectionCard(scrollable_frame, text="  Gameplay Features  ",
+                                      font=AppFonts.H3,
+                                      bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         gameplay_frame.pack(fill='x', padx=15, pady=20)
         
-        gameplay_grid = tk.Frame(gameplay_frame, bg='#1A1A1A')
+        gameplay_grid = tk.Frame(gameplay_frame, bg=AppColors.BG_ELEVATED)
         gameplay_grid.pack(fill='x', padx=15, pady=15)
         
         # Configure grid columns to expand horizontally
@@ -863,60 +941,60 @@ This profile will influence player relationships, media interactions, and trade 
         gameplay_grid.grid_columnconfigure(1, weight=1)  # Right column
         
         # Row 0
-        self._create_advanced_checkbox_option(gameplay_grid, 0, 0, "🎲 Fantasy Draft", 
+        self._create_advanced_checkbox_option(gameplay_grid, 0, 0, "Fantasy Draft", 
                                             self.setup_options['fantasy_draft'],
                                             "Redistribute all players among teams before season start")
         
-        self._create_advanced_checkbox_option(gameplay_grid, 0, 1, "💰 Salary Cap", 
+        self._create_advanced_checkbox_option(gameplay_grid, 0, 1, "Salary Cap", 
                                             self.setup_options['salary_cap'],
                                             "Enable realistic salary cap management ($83.5M limit)")
         
         # Row 1
-        self._create_advanced_checkbox_option(gameplay_grid, 1, 0, "🏥 Injuries & Fatigue", 
+        self._create_advanced_checkbox_option(gameplay_grid, 1, 0, "Injuries & Fatigue", 
                                             self.setup_options['injuries'],
                                             "Enable player injuries, recovery system, and fatigue management")
         
-        self._create_advanced_checkbox_option(gameplay_grid, 1, 1, "😊 Morale & Chemistry", 
+        self._create_advanced_checkbox_option(gameplay_grid, 1, 1, "Morale & Chemistry", 
                                             self.setup_options['morale_system'],
                                             "Enable player morale, team chemistry, and locker room dynamics")
         
         # Row 2
-        self._create_advanced_checkbox_option(gameplay_grid, 2, 0, "📈 Realistic Progression", 
+        self._create_advanced_checkbox_option(gameplay_grid, 2, 0, "Realistic Progression", 
                                             self.setup_options['realistic_progression'],
                                             "Players develop and decline based on realistic age curves and usage")
         
         # Preset configurations
-        presets_frame = tk.LabelFrame(scrollable_frame, text="  🎛️ Configuration Presets  ",
-                                     font=('Segoe UI', 14, 'bold'),
-                                     bg='#1A1A1A', fg='#F0F6FC')
+        presets_frame = SectionCard(scrollable_frame, text="  Configuration Presets  ",
+                                     font=AppFonts.H3,
+                                     bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         presets_frame.pack(fill='x', padx=15, pady=20)
         
-        presets_grid = tk.Frame(presets_frame, bg='#1A1A1A')
+        presets_grid = tk.Frame(presets_frame, bg=AppColors.BG_ELEVATED)
         presets_grid.pack(fill='x', padx=20, pady=20)
         
         preset_buttons = [
-            ("🎮 Arcade Mode", self._apply_arcade_preset, "Fast-paced, simplified gameplay"),
-            ("🏒 Realistic NHL", self._apply_realistic_preset, "Authentic NHL experience"),
-            ("💪 Challenge Mode", self._apply_challenge_preset, "Maximum difficulty and realism"),
-            ("⚡ Quick Season", self._apply_quick_preset, "Short season for faster gameplay")
+            ("Arcade Mode", self._apply_arcade_preset, "Fast-paced, simplified gameplay"),
+            ("Realistic NHL", self._apply_realistic_preset, "Authentic NHL experience"),
+            ("Challenge Mode", self._apply_challenge_preset, "Maximum difficulty and realism"),
+            ("Quick Season", self._apply_quick_preset, "Short season for faster gameplay")
         ]
         
         for i, (text, command, tooltip) in enumerate(preset_buttons):
             row, col = i // 2, i % 2
             
-            btn_frame = tk.Frame(presets_grid, bg='#1A1A1A')
+            btn_frame = tk.Frame(presets_grid, bg=AppColors.BG_ELEVATED)
             btn_frame.grid(row=row, column=col, padx=10, pady=10, sticky='ew')
             
             btn = tk.Button(btn_frame, text=text,
-                           font=('Segoe UI', 10, 'bold'),
-                           bg='#6F42C1', fg='white',
+                           font=AppFonts.LABEL,
+                           bg=AppColors.ACCENT_DIM, fg='white',
                            relief='flat', bd=0, pady=8, padx=15,
                            cursor='hand2', command=command)
             btn.pack()
             
             tk.Label(btn_frame, text=tooltip,
-                    font=('Segoe UI', 8),
-                    bg='#1A1A1A', fg='#8B949E').pack(pady=(5, 0))
+                    font=AppFonts.CAPTION,
+                    bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY).pack(pady=(5, 0))
             
         presets_grid.grid_columnconfigure(0, weight=1)
         presets_grid.grid_columnconfigure(1, weight=1)
@@ -930,15 +1008,15 @@ This profile will influence player relationships, media interactions, and trade 
         
         # Label
         label = tk.Label(parent, text=label_text,
-                        font=('Segoe UI', 11, 'bold'),
-                        bg='#1A1A1A', fg='#F0F6FC')
+                        font=AppFonts.SMALL_BOLD,
+                        bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         label.grid(row=row, column=0, sticky='w', padx=(0, 15), pady=12)
         
         if is_checkbox:
             # Checkbox
             checkbox = tk.Checkbutton(parent, variable=var,
-                                     font=('Segoe UI', 11),
-                                     bg='#1A1A1A', fg='#F0F6FC',
+                                     font=AppFonts.SMALL,
+                                     bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY,
                                      selectcolor='#2A2A2A',
                                      activebackground='#2A2A2A')
             checkbox.grid(row=row, column=1, sticky='w', pady=12)
@@ -946,33 +1024,33 @@ This profile will influence player relationships, media interactions, and trade 
             # Combobox - expand to fill available space
             combo = ttk.Combobox(parent, textvariable=var,
                                values=values, state='readonly',
-                               font=('Segoe UI', 10))
+                               font=AppFonts.SMALL)
             combo.grid(row=row, column=1, sticky='ew', padx=(0, 15), pady=12)
         
         # Tooltip - expand to fill available space
         tooltip_label = tk.Label(parent, text=tooltip,
-                               font=('Segoe UI', 9),
-                               bg='#1A1A1A', fg='#8B949E',
+                               font=AppFonts.CAPTION,
+                               bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
                                wraplength=400, justify='left')
         tooltip_label.grid(row=row, column=2, sticky='ew', padx=(0, 5), pady=12)
         
     def _create_advanced_checkbox_option(self, parent, row, col, text, var, tooltip):
         """Create an advanced checkbox option with enhanced layout"""
-        frame = tk.Frame(parent, bg='#2A2A2A', relief='solid', bd=1)
+        frame = tk.Frame(parent, bg=AppColors.BG_ELEVATED, relief='solid', bd=1)
         frame.grid(row=row, column=col, sticky='ew', padx=5, pady=8)
         
         parent.grid_columnconfigure(col, weight=1)
         
         checkbox = tk.Checkbutton(frame, text=text, variable=var,
-                                 font=('Segoe UI', 10, 'bold'),
-                                 bg='#2A2A2A', fg='#F0F6FC',
+                                 font=AppFonts.LABEL,
+                                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY,
                                  selectcolor='#3A3A3A',
                                  activebackground='#2A2A2A')
         checkbox.pack(anchor='w', padx=12, pady=(12, 5))
         
         tooltip_label = tk.Label(frame, text=tooltip,
-                               font=('Segoe UI', 8),
-                               bg='#2A2A2A', fg='#8B949E',
+                               font=AppFonts.CAPTION,
+                               bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
                                wraplength=300, justify='left')
         tooltip_label.pack(anchor='w', padx=12, pady=(0, 12))
         
@@ -1011,7 +1089,7 @@ This profile will influence player relationships, media interactions, and trade 
         self._select_team(team_name, city)
         
         # COMPREHENSIVE UI REFRESH with all techniques
-        print("🎮 Applying Arcade preset with enhanced refresh...")
+        print("Applying Arcade preset with enhanced refresh...")
         
         # CRITICAL: Force StringVars to trigger widget updates
         self._force_stringvar_refresh()
@@ -1026,10 +1104,10 @@ This profile will influence player relationships, media interactions, and trade 
         
         # Update status and trigger validation
         if hasattr(self, 'status_label'):
-            self.status_label.config(text="✅ Arcade Mode preset applied - Fast, simplified gameplay")
+            self.status_label.config(text="Arcade Mode preset applied - Fast, simplified gameplay")
         self._update_gm_preview()
         
-        print("✅ Arcade preset applied with enhanced refresh")
+        print("Arcade preset applied with enhanced refresh")
         
         # Schedule another UI refresh after a brief moment to ensure all widgets update
         self.after(50, self._force_ui_refresh)
@@ -1070,7 +1148,7 @@ This profile will influence player relationships, media interactions, and trade 
         self._select_team(team_name, city)
         
         # COMPREHENSIVE UI REFRESH with all techniques
-        print("🏒 Applying Realistic preset with enhanced refresh...")
+        print("Applying Realistic preset with enhanced refresh...")
         
         # CRITICAL: Force StringVars to trigger widget updates
         self._force_stringvar_refresh()
@@ -1085,10 +1163,10 @@ This profile will influence player relationships, media interactions, and trade 
         
         # Update status and trigger validation
         if hasattr(self, 'status_label'):
-            self.status_label.config(text="✅ Realistic NHL preset applied - Authentic experience with full features")
+            self.status_label.config(text="Realistic NHL preset applied - Authentic experience with full features")
         self._update_gm_preview()
         
-        print("✅ Realistic preset applied with enhanced refresh")
+        print("Realistic preset applied with enhanced refresh")
         
         # Schedule another UI refresh after a brief moment to ensure all widgets update
         self.after(50, self._force_ui_refresh)
@@ -1129,7 +1207,7 @@ This profile will influence player relationships, media interactions, and trade 
         self._select_team(team_name, city)
         
         # COMPREHENSIVE UI REFRESH with all techniques
-        print("🔥 Applying Challenge preset with enhanced refresh...")
+        print("Applying Challenge preset with enhanced refresh...")
         
         # CRITICAL: Force StringVars to trigger widget updates
         self._force_stringvar_refresh()
@@ -1144,10 +1222,10 @@ This profile will influence player relationships, media interactions, and trade 
         
         # Update status and trigger validation
         if hasattr(self, 'status_label'):
-            self.status_label.config(text="✅ Challenge Mode preset applied - Maximum difficulty and realism")
+            self.status_label.config(text="Challenge Mode preset applied - Maximum difficulty and realism")
         self._update_gm_preview()
         
-        print("✅ Challenge preset applied with enhanced refresh")
+        print("Challenge preset applied with enhanced refresh")
         
         # Schedule another UI refresh after a brief moment to ensure all widgets update
         self.after(50, self._force_ui_refresh)
@@ -1188,7 +1266,7 @@ This profile will influence player relationships, media interactions, and trade 
         self._select_team(team_name, city)
         
         # COMPREHENSIVE UI REFRESH with all techniques
-        print("⚡ Applying Quick preset with enhanced refresh...")
+        print("Applying Quick preset with enhanced refresh...")
         
         # CRITICAL: Force StringVars to trigger widget updates
         self._force_stringvar_refresh()
@@ -1203,10 +1281,10 @@ This profile will influence player relationships, media interactions, and trade 
         
         # Update status and trigger validation
         if hasattr(self, 'status_label'):
-            self.status_label.config(text="✅ Quick Season preset applied - Shorter season for faster gameplay")
+            self.status_label.config(text="Quick Season preset applied - Shorter season for faster gameplay")
         self._update_gm_preview()
         
-        print("✅ Quick preset applied with enhanced refresh")
+        print("Quick preset applied with enhanced refresh")
         
         # Schedule another UI refresh after a brief moment to ensure all widgets update
         self.after(50, self._force_ui_refresh)
@@ -1220,39 +1298,39 @@ This profile will influence player relationships, media interactions, and trade 
         
     def _create_team_selection(self, parent):
         """Create comprehensive NHL team selection"""
-        team_frame = tk.LabelFrame(parent, text="  🏒 Choose Your Team  ",
-                                  font=('Segoe UI', 16, 'bold'),
-                                  bg='#1A1A1A', fg='#F0F6FC')
+        team_frame = SectionCard(parent, text="  Choose Your Team  ",
+                                  font=AppFonts.H2,
+                                  bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         team_frame.pack(fill='x', padx=20, pady=20)
         
         # Team selection info
         info_label = tk.Label(team_frame,
                              text="Select from all 32 NHL teams. Click a team card to select your franchise.",
-                             font=('Segoe UI', 11),
-                             bg='#1A1A1A', fg='#8B949E')
+                             font=AppFonts.SMALL,
+                             bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY)
         info_label.pack(pady=(10, 5))
         
         # Random team button
-        random_frame = tk.Frame(team_frame, bg='#1A1A1A')
+        random_frame = tk.Frame(team_frame, bg=AppColors.BG_ELEVATED)
         random_frame.pack(pady=10)
         
         random_btn = tk.Button(random_frame,
-                              text="🎲 Random Team",
-                              font=('Segoe UI', 11, 'bold'),
-                              bg='#6F42C1', fg='white',
+                              text="Random Team",
+                              font=AppFonts.SMALL_BOLD,
+                              bg=AppColors.ACCENT_DIM, fg='white',
                               relief='flat', bd=0, pady=8, padx=20,
                               cursor='hand2',
                               command=self._select_random_team)
         random_btn.pack()
         
         # Selected team display
-        self.selected_team_frame = tk.Frame(team_frame, bg='#2A2A2A', relief='solid', bd=2)
+        self.selected_team_frame = tk.Frame(team_frame, bg=AppColors.BG_ELEVATED, relief='solid', bd=2)
         self.selected_team_frame.pack(fill='x', padx=20, pady=10)
         
         self.selected_team_label = tk.Label(self.selected_team_frame,
                                            text="No team selected",
-                                           font=('Segoe UI', 14, 'bold'),
-                                           bg='#2A2A2A', fg='#F0F6FC')
+                                           font=AppFonts.H3,
+                                           bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         self.selected_team_label.pack(pady=15)
         
         # Create team grid by conference and division
@@ -1260,19 +1338,19 @@ This profile will influence player relationships, media interactions, and trade 
         
     def _create_team_grid(self, parent):
         """Create organized team selection grid"""
-        grid_container = tk.Frame(parent, bg='#1A1A1A')
+        grid_container = tk.Frame(parent, bg=AppColors.BG_ELEVATED)
         grid_container.pack(fill='both', expand=True, padx=5, pady=10)
         
         # Eastern Conference
-        east_frame = tk.LabelFrame(grid_container, text="  Eastern Conference  ",
-                                  font=('Segoe UI', 12, 'bold'),
-                                  bg='#1A1A1A', fg='#58a6ff')
+        east_frame = SectionCard(grid_container, text="  Eastern Conference  ",
+                                  font=AppFonts.BODY_BOLD,
+                                  bg=AppColors.BG_ELEVATED, fg=AppColors.INFO)
         east_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
         
         # Western Conference
-        west_frame = tk.LabelFrame(grid_container, text="  Western Conference  ",
-                                  font=('Segoe UI', 12, 'bold'),
-                                  bg='#1A1A1A', fg='#FF6B6B')
+        west_frame = SectionCard(grid_container, text="  Western Conference  ",
+                                  font=AppFonts.BODY_BOLD,
+                                  bg=AppColors.BG_ELEVATED, fg='#FF6B6B')
         west_frame.pack(side='right', fill='both', expand=True, padx=(5, 0))
         
         # Create division frames
@@ -1284,13 +1362,13 @@ This profile will influence player relationships, media interactions, and trade 
         }
         
         for division, teams in self.nhl_teams.items():
-            div_frame = tk.LabelFrame(divisions[division], text=f"  {division} Division  ",
-                                     font=('Segoe UI', 10, 'bold'),
-                                     bg='#1A1A1A', fg='#CCCCCC')
+            div_frame = SectionCard(divisions[division], text=f"  {division} Division  ",
+                                     font=AppFonts.LABEL,
+                                     bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY)
             div_frame.pack(fill='x', padx=3, pady=3)
             
             # Create team buttons in a grid (2 columns)
-            team_grid = tk.Frame(div_frame, bg='#1A1A1A')
+            team_grid = tk.Frame(div_frame, bg=AppColors.BG_ELEVATED)
             team_grid.pack(fill='x', padx=3, pady=3)
             
             team_list = list(teams.keys())
@@ -1303,7 +1381,7 @@ This profile will influence player relationships, media interactions, and trade 
                 # Create team button with colors
                 team_btn = tk.Button(team_grid,
                                    text=team_name,
-                                   font=('Segoe UI', 8, 'bold'),
+                                   font=AppFonts.CAPTION,
                                    bg=team_info['colors'][0] if len(team_info['colors']) > 0 else '#3A3A3A',
                                    fg='white',
                                    relief='solid', bd=1,
@@ -1321,63 +1399,63 @@ This profile will influence player relationships, media interactions, and trade 
                 
     def _create_game_options(self, parent):
         """Create comprehensive game setup options"""
-        options_frame = tk.LabelFrame(parent, text="  ⚙️ Game Setup Options  ",
-                                     font=('Segoe UI', 16, 'bold'),
-                                     bg='#1A1A1A', fg='#F0F6FC')
+        options_frame = SectionCard(parent, text="  Game Setup Options  ",
+                                     font=AppFonts.H2,
+                                     bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         options_frame.pack(fill='x', padx=20, pady=20)
         
         # Create options in a grid layout
-        options_grid = tk.Frame(options_frame, bg='#1A1A1A')
+        options_grid = tk.Frame(options_frame, bg=AppColors.BG_ELEVATED)
         options_grid.pack(fill='x', padx=20, pady=20)
         
         # Database Size
-        self._create_option_row(options_grid, 0, "📊 Database Size:",
+        self._create_option_row(options_grid, 0, "Database Size:",
                                self.setup_options['database_size'],
                                ["Minimal (8 Teams)", "Small (16 Teams)", "Full Database (32 Teams)", "Extended (40+ Teams)"],
                                "Choose the number of teams and depth of player database")
         
         # Start Date
-        self._create_option_row(options_grid, 1, "📅 Season Start Date:",
+        self._create_option_row(options_grid, 1, "Season Start Date:",
                                self.setup_options['start_date'],
                                ["August 1, 2024", "September 1, 2024", "October 1, 2024", "November 1, 2024"],
                                "When should the season begin? Earlier start = longer pre-season")
         
         # Season Length
-        self._create_option_row(options_grid, 2, "🏒 Season Length:",
+        self._create_option_row(options_grid, 2, "Season Length:",
                                self.setup_options['season_length'],
                                ["Short Season (20 Games)", "Half Season (41 Games)", "Full Season (82 Games)", "Extended Season (100 Games)"],
                                "How many regular season games per team?")
         
         # Difficulty
-        self._create_option_row(options_grid, 3, "🎯 Difficulty:",
+        self._create_option_row(options_grid, 3, "Difficulty:",
                                self.setup_options['difficulty'],
                                ["Rookie", "Amateur", "Professional", "Realistic", "Hall of Fame"],
                                "Affects AI intelligence, trade difficulty, and player development")
         
         # Advanced Options
-        advanced_frame = tk.LabelFrame(options_frame, text="  🔧 Advanced Options  ",
-                                      font=('Segoe UI', 14, 'bold'),
-                                      bg='#1A1A1A', fg='#FFB81C')
+        advanced_frame = SectionCard(options_frame, text="  Advanced Options  ",
+                                      font=AppFonts.H3,
+                                      bg=AppColors.BG_ELEVATED, fg=AppColors.WARNING)
         advanced_frame.pack(fill='x', padx=20, pady=(0, 20))
         
         # Checkbox options
-        checkbox_frame = tk.Frame(advanced_frame, bg='#1A1A1A')
+        checkbox_frame = tk.Frame(advanced_frame, bg=AppColors.BG_ELEVATED)
         checkbox_frame.pack(fill='x', padx=20, pady=15)
         
         # Create checkboxes in 2 columns
-        self._create_checkbox_option(checkbox_frame, 0, 0, "🎲 Fantasy Draft", 
+        self._create_checkbox_option(checkbox_frame, 0, 0, "Fantasy Draft", 
                                     self.setup_options['fantasy_draft'],
                                     "Redistribute all players among teams before season start")
         
-        self._create_checkbox_option(checkbox_frame, 0, 1, "💰 Salary Cap", 
+        self._create_checkbox_option(checkbox_frame, 0, 1, "Salary Cap", 
                                     self.setup_options['salary_cap'],
                                     "Enable realistic salary cap management ($83.5M)")
         
-        self._create_checkbox_option(checkbox_frame, 1, 0, "🏥 Injuries", 
+        self._create_checkbox_option(checkbox_frame, 1, 0, "Injuries", 
                                     self.setup_options['injuries'],
                                     "Enable player injuries and recovery system")
         
-        self._create_checkbox_option(checkbox_frame, 1, 1, "😊 Morale System", 
+        self._create_checkbox_option(checkbox_frame, 1, 1, "Morale System", 
                                     self.setup_options['morale_system'],
                                     "Enable player morale and team chemistry effects")
         
@@ -1385,54 +1463,54 @@ This profile will influence player relationships, media interactions, and trade 
         """Create an option row with label, combobox, and tooltip"""
         # Label
         label = tk.Label(parent, text=label_text,
-                        font=('Segoe UI', 11, 'bold'),
-                        bg='#1A1A1A', fg='#F0F6FC')
+                        font=AppFonts.SMALL_BOLD,
+                        bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         label.grid(row=row, column=0, sticky='w', padx=(0, 20), pady=10)
         
         # Combobox
         combo = ttk.Combobox(parent, textvariable=var,
                            values=values, state='readonly',
-                           font=('Segoe UI', 10), width=25)
+                           font=AppFonts.SMALL, width=25)
         combo.grid(row=row, column=1, sticky='w', pady=10)
         
         # Tooltip (as small label)
         tooltip_label = tk.Label(parent, text=tooltip,
-                               font=('Segoe UI', 9),
-                               bg='#1A1A1A', fg='#8B949E',
+                               font=AppFonts.CAPTION,
+                               bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
                                wraplength=300, justify='left')
         tooltip_label.grid(row=row, column=2, sticky='w', padx=(20, 0), pady=10)
         
     def _create_checkbox_option(self, parent, row, col, text, var, tooltip):
         """Create a checkbox option with tooltip"""
-        frame = tk.Frame(parent, bg='#1A1A1A')
+        frame = tk.Frame(parent, bg=AppColors.BG_ELEVATED)
         frame.grid(row=row, column=col, sticky='w', padx=(0, 40), pady=5)
         
         checkbox = tk.Checkbutton(frame, text=text, variable=var,
-                                 font=('Segoe UI', 11),
-                                 bg='#1A1A1A', fg='#F0F6FC',
+                                 font=AppFonts.SMALL,
+                                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY,
                                  selectcolor='#2A2A2A',
                                  activebackground='#2A2A2A')
         checkbox.pack(anchor='w')
         
         tooltip_label = tk.Label(frame, text=tooltip,
-                               font=('Segoe UI', 8),
-                               bg='#1A1A1A', fg='#8B949E',
+                               font=AppFonts.CAPTION,
+                               bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
                                wraplength=200, justify='left')
         tooltip_label.pack(anchor='w', padx=(20, 0))
         
     def _create_load_game_tab(self):
         """Create load game tab"""
-        load_frame = tk.Frame(self.notebook, bg='#1A1A1A')
-        self.notebook.add(load_frame, text="📂 Load Game")
+        load_frame = tk.Frame(self.notebook, bg=AppColors.BG_ELEVATED)
+        self.notebook.add(load_frame, text="Load Game")
         
         # Save games list
-        saves_frame = tk.LabelFrame(load_frame, text="  📁 Your Save Games  ",
-                                   font=('Segoe UI', 16, 'bold'),
-                                   bg='#1A1A1A', fg='#F0F6FC')
+        saves_frame = SectionCard(load_frame, text="  Your Save Games  ",
+                                   font=AppFonts.H2,
+                                   bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         saves_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
         # Treeview for saves
-        tree_frame = tk.Frame(saves_frame, bg='#1A1A1A')
+        tree_frame = tk.Frame(saves_frame, bg=AppColors.BG_ELEVATED)
         tree_frame.pack(fill='both', expand=True, padx=15, pady=15)
         
         self.saves_tree = ttk.Treeview(tree_frame,
@@ -1463,67 +1541,67 @@ This profile will influence player relationships, media interactions, and trade 
         self.saves_tree.bind('<Double-1>', self._load_selected_save)
         
         # Load game buttons
-        btn_frame = tk.Frame(saves_frame, bg='#1A1A1A')
+        btn_frame = tk.Frame(saves_frame, bg=AppColors.BG_ELEVATED)
         btn_frame.pack(fill='x', padx=15, pady=(0, 15))
         
-        load_btn = tk.Button(btn_frame, text="📂 Load Selected Game",
-                           bg='#238636', fg='white',
-                           font=('Segoe UI', 12, 'bold'), relief='flat', bd=0,
+        load_btn = tk.Button(btn_frame, text="Load Selected Game",
+                           bg=AppColors.ACCENT, fg='white',
+                           font=AppFonts.BODY_BOLD, relief='flat', bd=0,
                            pady=10, padx=25, cursor='hand2',
                            command=self._load_selected_save)
         load_btn.pack(side='left', padx=(0, 15))
         
-        delete_btn = tk.Button(btn_frame, text="🗑️ Delete",
+        delete_btn = tk.Button(btn_frame, text="Delete",
                              bg='#DA3633', fg='white',
-                             font=('Segoe UI', 11), relief='flat', bd=0,
+                             font=AppFonts.SMALL, relief='flat', bd=0,
                              pady=8, padx=20, cursor='hand2',
                              command=self._delete_selected_save)
         delete_btn.pack(side='left', padx=(0, 15))
         
-        import_btn = tk.Button(btn_frame, text="📥 Import Save",
-                             bg='#6F42C1', fg='white',
-                             font=('Segoe UI', 11), relief='flat', bd=0,
+        import_btn = tk.Button(btn_frame, text="Import Save",
+                             bg=AppColors.ACCENT_DIM, fg='white',
+                             font=AppFonts.SMALL, relief='flat', bd=0,
                              pady=8, padx=20, cursor='hand2',
                              command=self._import_save)
         import_btn.pack(side='left')
         
     def _create_settings_tab(self):
         """Create settings tab"""
-        settings_frame = tk.Frame(self.notebook, bg='#1A1A1A')
-        self.notebook.add(settings_frame, text="⚙️ Settings")
+        settings_frame = tk.Frame(self.notebook, bg=AppColors.BG_ELEVATED)
+        self.notebook.add(settings_frame, text="Settings")
         
         # Settings content
-        settings_content = tk.LabelFrame(settings_frame, text="  ⚙️ Launcher Settings  ",
-                                       font=('Segoe UI', 16, 'bold'),
-                                       bg='#1A1A1A', fg='#F0F6FC')
+        settings_content = SectionCard(settings_frame, text="  Launcher Settings  ",
+                                       font=AppFonts.H2,
+                                       bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         settings_content.pack(fill='x', padx=20, pady=20)
         
         # Placeholder for future settings
         tk.Label(settings_content,
                 text="Launcher settings and preferences will be available here.\nGame settings can be configured in-game.",
-                font=('Segoe UI', 12),
-                bg='#1A1A1A', fg='#8B949E',
+                font=AppFonts.BODY,
+                bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
                 justify='center').pack(pady=40)
         
     def _create_footer(self, parent):
         """Create enhanced footer"""
-        footer_frame = tk.Frame(parent, bg='#161B22', height=50)
+        footer_frame = tk.Frame(parent, bg=AppColors.BG_ELEVATED, height=50)
         footer_frame.pack(fill='x', side='bottom')
         footer_frame.pack_propagate(False)
         
         # Status and info
-        info_frame = tk.Frame(footer_frame, bg='#161B22')
+        info_frame = tk.Frame(footer_frame, bg=AppColors.BG_ELEVATED)
         info_frame.pack(side='left', fill='y', padx=20)
         
         self.status_label = tk.Label(info_frame, text="Ready to manage your hockey dynasty",
-                                   font=('Segoe UI', 10),
-                                   bg='#161B22', 
-                                   fg='#8B949E')
+                                   font=AppFonts.SMALL,
+                                   bg=AppColors.BG_ELEVATED, 
+                                   fg=AppColors.TEXT_SECONDARY)
         self.status_label.pack(anchor='w', pady=15)
         
         # Exit button
-        exit_btn = tk.Button(footer_frame, text="❌ Exit",
-                           font=('Segoe UI', 10, 'bold'),
+        exit_btn = tk.Button(footer_frame, text="Exit",
+                           font=AppFonts.LABEL,
                            bg='#DA3633', fg='white',
                            relief='flat', bd=0, pady=8, padx=20,
                            cursor='hand2',
@@ -1537,10 +1615,10 @@ This profile will influence player relationships, media interactions, and trade 
         
         # Update UI
         self.selected_team_label.config(
-            text=f"✅ {team_name}\n📍 {city}",
-            fg='#4CBB17'
+            text=f"{team_name}\n{city}",
+            fg=AppColors.SUCCESS
         )
-        self.selected_team_frame.config(bg='#1A4A1A', relief='solid', bd=2)
+        self.selected_team_frame.config(bg=AppColors.BG_ELEVATED, relief='solid', bd=2)
         
         # Check readiness
         self._check_readiness()
@@ -1595,16 +1673,16 @@ This profile will influence player relationships, media interactions, and trade 
 
     def _start_new_game(self):
         """Start new game with current settings"""
-        print("🎯 START GAME button clicked!")
+        print("START GAME button clicked!")
         print(f"Selected team: {self.selected_team}")
         
         if not self.selected_team:
-            print("❌ No team selected")
+            print("No team selected")
             messagebox.showwarning("No Team Selected", 
                                  "Please select a team before starting the game.")
             return
         
-        print("✅ Team validation passed")
+        print("Team validation passed")
         
         try:
             # Show starting message with options
@@ -1622,33 +1700,33 @@ This profile will influence player relationships, media interactions, and trade 
             self.update()
             
             # Start the game
-            print("🚀 Calling _start_main_game()...")
+            print("Calling _start_main_game()...")
             self._start_main_game()
             
         except Exception as e:
-            print(f"❌ Exception in _start_new_game: {e}")
+            print(f"Exception in _start_new_game: {e}")
             messagebox.showerror("Error", f"Failed to start game:\n{str(e)}")
             
     def _start_main_game(self):
         """Start the main game application with all configurations"""
         try:
-            print("🚀 Starting main game...")
+            print("Starting main game...")
             
             # Hide launcher but don't quit yet - we need it alive until new root is created
             self.withdraw()
             
-            print("📦 Importing main modules...")
+            print("Importing main modules...")
             from main import GameManager, HockeyManagerGUI
             from game_classes import GMProfile
-            print("✅ Modules imported successfully")
+            print("Modules imported successfully")
             
             # Create game manager with advanced settings
-            print("🎮 Creating GameManager...")
+            print("Creating GameManager...")
             gm = GameManager()
-            print("✅ GameManager created successfully")
+            print("GameManager created successfully")
             
             # Prepare startup settings
-            print("⚙️ Preparing startup settings...")
+            print("Preparing startup settings...")
             startup_settings = {}
             
             # Create GM Profile
@@ -1665,12 +1743,12 @@ This profile will influence player relationships, media interactions, and trade 
                 )
                 
                 startup_settings['gm_profile'] = gm_profile
-                print(f"✅ GM Profile created: {gm_profile.name} ({gm_profile.age} years old)")
+                print(f"GM Profile created: {gm_profile.name} ({gm_profile.age} years old)")
             
             # Set selected team
             if self.selected_team:
                 startup_settings['user_team'] = self.selected_team['name']
-                print(f"✅ Team selected: {self.selected_team['name']}")
+                print(f"Team selected: {self.selected_team['name']}")
             
             # Apply advanced game settings
             # Extract just the size name from display string (e.g. "Small (8K players, 32 NHL+AHL teams)" -> "Small")
@@ -1709,46 +1787,46 @@ This profile will influence player relationships, media interactions, and trade 
                     'fog_of_war': cfg.get('fog_of_war', True),
                     'sim_detail': cfg.get('sim_detail', {}) or {},
                 })
-                print(f"✅ Setup wizard config applied: {cfg['user_team']}")
+                print(f"Setup wizard config applied: {cfg['user_team']}")
 
             # Store settings in game manager
             gm.startup_settings = startup_settings
             
             # User team will be set by apply_all_game_settings using 'selected_team' parameter
             
-            print("✅ Advanced game settings configured:")
+            print("Advanced game settings configured:")
             for setting, value in startup_settings.items():
                 if setting not in ['gm_profile', 'user_team']:
                     print(f"   {setting}: {value}")
             
             # Apply fantasy draft if selected
             if self.setup_options['fantasy_draft'].get():
-                print("🎲 Fantasy draft will be conducted after game initialization...")
+                print("Fantasy draft will be conducted after game initialization...")
             
             # Apply startup settings to game manager
-            print("⚙️ Applying startup settings to GameManager...")
+            print("Applying startup settings to GameManager...")
             gm.apply_startup_settings(startup_settings)
-            print("✅ Startup settings applied successfully")
+            print("Startup settings applied successfully")
             
             # Verify user team was set properly
             if hasattr(gm, 'user_team') and gm.user_team:
-                print(f"✅ User team verified: {gm.user_team.team_name}")
+                print(f"User team verified: {gm.user_team.team_name}")
             else:
-                print("❌ User team not set properly")
+                print("User team not set properly")
             
             # Create and start the main game application
-            print("🏒 Creating HockeyManagerGUI...")
+            print("Creating HockeyManagerGUI...")
             app = HockeyManagerGUI(gm)
             app.startup_settings = startup_settings
             app._update_game_viewer_button_state()
-            print("✅ HockeyManagerGUI created successfully")
+            print("HockeyManagerGUI created successfully")
             
             # Don't destroy the old launcher yet - it can cause Tk root issues
             # Just ensure the new app is in front
-            print("🗑️ Hiding launcher window...")
+            print("Hiding launcher window...")
             # self.destroy()  # Don't destroy - causes "no default root" errors
             
-            print("🎯 Starting main game loop...")
+            print("Starting main game loop...")
             app.mainloop()
             
             # Now destroy the launcher after game exits
@@ -1757,12 +1835,12 @@ This profile will influence player relationships, media interactions, and trade 
             except:
                 pass
             
-            print("✅ Game completed normally")
+            print("Game completed normally")
             # Exit cleanly after game finishes
             sys.exit(0)
             
         except Exception as e:
-            print(f"❌ Game startup error: {e}")
+            print(f"Game startup error: {e}")
             import traceback
             traceback.print_exc()
             messagebox.showerror("Error", f"Failed to start game:\n{str(e)}")
@@ -1779,10 +1857,10 @@ This profile will influence player relationships, media interactions, and trade 
             if hasattr(self, 'team_frame'):
                 self._register_widgets_in_frame(self.team_frame, 'team_selection')
             
-            print(f"📊 Registered {sum(len(cat) for cat in self.ui_widgets.values())} widgets")
+            print(f"Registered {sum(len(cat) for cat in self.ui_widgets.values())} widgets")
             
         except Exception as e:
-            print(f"⚠️ Widget registration error: {e}")
+            print(f"Widget registration error: {e}")
 
     def _register_widgets_in_frame(self, frame, category):
         """Recursively register widgets in a frame"""
@@ -1816,7 +1894,7 @@ This profile will influence player relationships, media interactions, and trade 
     def _force_stringvar_refresh(self):
         """Force StringVars to re-trigger their widget bindings"""
         try:
-            print("🔄 Forcing StringVar refresh to trigger widget updates...")
+            print("Forcing StringVar refresh to trigger widget updates...")
             
             # Force GM profile StringVars to re-trigger their bindings
             for key, var in self.gm_profile.items():
@@ -1847,15 +1925,15 @@ This profile will influence player relationships, media interactions, and trade 
                         self.update_idletasks()
                     print(f"  • Refreshed setup {key}: {current_val}")
             
-            print("✅ StringVar refresh completed")
+            print("StringVar refresh completed")
             
         except Exception as e:
-            print(f"⚠️ StringVar refresh error: {e}")
+            print(f"StringVar refresh error: {e}")
 
     def _force_ui_refresh(self):
         """Comprehensive UI refresh that forces all widgets to update visually"""
         try:
-            print("🔄 Starting comprehensive UI refresh...")
+            print("Starting comprehensive UI refresh...")
             
             # 1. Process all pending UI events first
             self.update_idletasks()
@@ -1893,10 +1971,10 @@ This profile will influence player relationships, media interactions, and trade 
             # 5. Schedule additional refresh to ensure all widgets caught up
             self.after_idle(self._secondary_refresh)
             
-            print("✅ Comprehensive UI refresh completed")
+            print("Comprehensive UI refresh completed")
             
         except Exception as e:
-            print(f"⚠️ UI refresh error: {e}")
+            print(f"UI refresh error: {e}")
 
     def _secondary_refresh(self):
         """Secondary refresh pass to catch any missed updates"""
@@ -1916,15 +1994,15 @@ This profile will influence player relationships, media interactions, and trade 
                     except:
                         pass
             
-            print("🔄 Secondary refresh completed")
+            print("Secondary refresh completed")
             
         except Exception as e:
-            print(f"⚠️ Secondary refresh error: {e}")
+            print(f"Secondary refresh error: {e}")
 
     def _force_widget_updates(self):
         """Directly update all widgets using stored references"""
         try:
-            print("🔄 Starting direct widget updates...")
+            print("Starting direct widget updates...")
             
             # Update GM Profile widgets directly
             gm_widgets = [
@@ -1957,23 +2035,23 @@ This profile will influence player relationships, media interactions, and trade 
                             if success:
                                 print(f"  • Updated {widget_name}: {current_value}")
                             else:
-                                print(f"  ⚠️ Failed to update {widget_name}: {current_value}")
+                                print(f"  Failed to update {widget_name}: {current_value}")
                         
                         # Force widget refresh
                         widget.update_idletasks()
                         widget.update()
                         
                 except Exception as e:
-                    print(f"  ⚠️ Error updating {widget_name}: {e}")
+                    print(f"  Error updating {widget_name}: {e}")
                     continue
             
             # Update game setup checkboxes and comboboxes by finding them
             self._update_setup_widgets()
             
-            print("✅ Direct widget updates completed")
+            print("Direct widget updates completed")
             
         except Exception as e:
-            print(f"⚠️ Widget update error: {e}")
+            print(f"Widget update error: {e}")
             
     def _update_combobox_robust(self, combobox, value, widget_name=""):
         """Robust method to update Combobox widgets, especially readonly ones"""
@@ -2033,7 +2111,7 @@ This profile will influence player relationships, media interactions, and trade 
                         self._update_widgets_in_frame(tab_frame)
                         break
         except Exception as e:
-            print(f"  ⚠️ Error updating setup widgets: {e}")
+            print(f"  Error updating setup widgets: {e}")
             
     def _update_widgets_in_frame(self, frame):
         """Recursively update widgets in a frame"""
@@ -2117,10 +2195,10 @@ This profile will influence player relationships, media interactions, and trade 
                 self.notebook.update_idletasks()
                 self.notebook.update()
             
-            print("🎯 Final refresh pass completed")
+            print("Final refresh pass completed")
             
         except Exception as e:
-            print(f"⚠️ Final refresh error: {e}")
+            print(f"Final refresh error: {e}")
             
     def _cycle_notebook_tabs(self):
         """Cycle through notebook tabs to force visual refresh"""
@@ -2140,15 +2218,15 @@ This profile will influence player relationships, media interactions, and trade 
                     self.notebook.select(current_tab)
                     self.update_idletasks()
                     
-                print("🔄 Notebook tab cycling completed")
+                print("Notebook tab cycling completed")
                 
         except Exception as e:
-            print(f"⚠️ Tab cycling error: {e}")
+            print(f"Tab cycling error: {e}")
             
     def _initialize_default_values(self):
         """Initialize default values and ensure widgets display them properly"""
         try:
-            print("🔧 Forcing widget display of pre-assigned default values...")
+            print("Forcing widget display of pre-assigned default values...")
             
             # All GM profile fields now have proper random defaults from initialization
             # Just force widgets to display their current StringVar values
@@ -2157,10 +2235,10 @@ This profile will influence player relationships, media interactions, and trade 
             # Update GM profile preview
             self._update_gm_preview()
             
-            print("✅ Default values displayed in widgets successfully")
+            print("Default values displayed in widgets successfully")
             
         except Exception as e:
-            print(f"⚠️ Default initialization error: {e}")
+            print(f"Default initialization error: {e}")
             
     def _force_initial_widget_display(self):
         """Force all widgets to display their initial StringVar values"""
@@ -2192,20 +2270,20 @@ This profile will influence player relationships, media interactions, and trade 
                             if success:
                                 print(f"  • Initialized {widget_name}: {current_value}")
                             else:
-                                print(f"  ⚠️ Failed to initialize {widget_name}: {current_value}")
+                                print(f"  Failed to initialize {widget_name}: {current_value}")
                         
                         # Force immediate update
                         widget.update_idletasks()
                         
                 except Exception as e:
-                    print(f"  ⚠️ Error initializing {widget_name}: {e}")
+                    print(f"  Error initializing {widget_name}: {e}")
                     continue
             
             # Force update of setup option widgets too
             self._force_setup_option_display()
             
         except Exception as e:
-            print(f"⚠️ Initial widget display error: {e}")
+            print(f"Initial widget display error: {e}")
     
     def _force_combobox_initialization(self):
         """Force Combobox widgets to display their StringVar values after a delay."""
@@ -2275,7 +2353,7 @@ This profile will influence player relationships, media interactions, and trade 
                         continue
                         
         except Exception as e:
-            print(f"⚠️ Setup option display error: {e}")
+            print(f"Setup option display error: {e}")
             
     def _initialize_widgets_in_frame(self, frame):
         """Recursively initialize widgets in a frame with their StringVar values"""
@@ -2396,19 +2474,19 @@ This profile will influence player relationships, media interactions, and trade 
         for button in start_buttons:
             if ready:
                 try:
-                    button.configure(state='normal', bg='#238636', fg='white')
+                    button.configure(state='normal', bg=AppColors.ACCENT, fg='white')
                 except:
                     pass
             else:
                 try:
-                    button.configure(state='disabled', bg='#4A4A4A', fg='#8B949E')
+                    button.configure(state='disabled', bg=AppColors.BG_HOVER, fg=AppColors.TEXT_SECONDARY)
                 except:
                     pass
         
         # Update status labels if they exist
         status_messages = {
-            'ready': "✅ All requirements complete - Ready to start your dynasty!",
-            'partial': f"⚠️ Missing requirements: {', '.join(reasons[:3])}{'...' if len(reasons) > 3 else ''}",
+            'ready': "All requirements complete - Ready to start your dynasty!",
+            'partial': f"Missing requirements: {', '.join(reasons[:3])}{'...' if len(reasons) > 3 else ''}",
         }
         
         message = status_messages['ready'] if ready else status_messages['partial']
@@ -2426,9 +2504,9 @@ This profile will influence player relationships, media interactions, and trade 
         if not hasattr(self, '_last_validation_state') or self._last_validation_state != current_state:
             self._last_validation_state = current_state
             if ready:
-                print("✅ All setup complete - ready to start game!")
+                print("All setup complete - ready to start game!")
             else:
-                print(f"❌ Setup incomplete: {len(reasons)} issues remaining")
+                print(f"Setup incomplete: {len(reasons)} issues remaining")
             
     # Save Game Methods
     def _load_save_games(self):
@@ -2616,18 +2694,18 @@ This profile will influence player relationships, media interactions, and trade 
         self.default_gm_reputation = random.choice(reputation_options)
         self.default_gm_contract = random.choice(contract_options)
         
-        print(f"🎲 Generated random GM profile:")
-        print(f"   Name: {self.default_gm_name}")
-        print(f"   Age: {self.default_gm_age}")
-        print(f"   Experience: {self.default_gm_experience}")
-        print(f"   Background: {self.default_gm_background}")
-        print(f"   Style: {self.default_gm_style}")
-        print(f"   Reputation: {self.default_gm_reputation}")
-        print(f"   Contract: {self.default_gm_contract}")
+        print(f"Generated random GM profile:")
+        print(f"  Name: {self.default_gm_name}")
+        print(f"  Age: {self.default_gm_age}")
+        print(f"  Experience: {self.default_gm_experience}")
+        print(f"  Background: {self.default_gm_background}")
+        print(f"  Style: {self.default_gm_style}")
+        print(f"  Reputation: {self.default_gm_reputation}")
+        print(f"  Contract: {self.default_gm_contract}")
                 
     def _on_closing(self):
         """Handle window closing"""
-        print("🚪 Enhanced launcher closing...")
+        print("Enhanced launcher closing...")
         try:
             # Stop any running validation checks
             if hasattr(self, 'after_id'):
@@ -2638,7 +2716,7 @@ This profile will influence player relationships, media interactions, and trade 
         # Clean shutdown
         self.quit()
         self.destroy()
-        print("✅ Enhanced launcher closed successfully")
+        print("Enhanced launcher closed successfully")
 
 
 def main():
