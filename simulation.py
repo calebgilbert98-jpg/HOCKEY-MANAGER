@@ -2893,7 +2893,7 @@ class GameSim:
         self.possession_team = wteam
         self.possession_player = winner
         self.possession_time = 0
-        self.puck_pos = [px, py]
+        self.puck_pos = self._clamp_boards(px, py)
 
         self.game_stats[winner.id]['puck_battles_won'] += 1
         if loser is not None and loser.id in self.game_stats:
@@ -2905,10 +2905,10 @@ class GameSim:
                        puck_spot=(round(px, 1), round(py, 1)),
                        winner_team=wteam.team_name)
         self._shape_positions(wteam, (px, py))
-        # keep the battlers at the pile
+        # keep the battlers at the pile (inside the boards)
         for b in (hb, ab):
             if b is not None:
-                self.player_positions[b.id] = [px, py]
+                self.player_positions[b.id] = self._clamp_boards(px, py)
         self._emit_skate()
         # Battles are scrums: the losing side throws a hit at the winner
         if loser is not None:
@@ -2949,11 +2949,32 @@ class GameSim:
     def _ppos_dist(a, b):
         return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
+    @staticmethod
+    def _clamp_boards(x, y, margin=2.0):
+        """Project (x, y) onto the legal ice surface: the 200x85 rink with
+        NHL-regulation 28-ft rounded corners (matching the drawn rink).
+        The boards are impenetrable -- no skater and no puck may leave
+        the ice through them."""
+        R = 28.0
+        x = min(200.0 - margin, max(margin, x))
+        y = min(85.0 - margin, max(margin, y))
+        for cx, cy in ((R, R), (200.0 - R, R),
+                       (R, 85.0 - R), (200.0 - R, 85.0 - R)):
+            in_x = (x < R) if cx == R else (x > 200.0 - R)
+            in_y = (y < R) if cy == R else (y > 85.0 - R)
+            if in_x and in_y:
+                dx, dy = x - cx, y - cy
+                d = math.hypot(dx, dy)
+                lim = R - margin
+                if d > lim:
+                    s = lim / d if d else 0.0
+                    x, y = cx + dx * s, cy + dy * s
+        return [x, y]
+
     def _ppos_place(self, p, x, y, jitter=2.5):
         x += random.uniform(-jitter, jitter)
         y += random.uniform(-jitter, jitter)
-        self.player_positions[p.id] = [min(196.0, max(4.0, x)),
-                                       min(81.0, max(4.0, y))]
+        self.player_positions[p.id] = self._clamp_boards(x, y)
 
     def _on_ice_skaters(self, team):
         return [p for p in self._get_on_ice(team) if self._ppos_role(p) != "G"]
@@ -3211,7 +3232,7 @@ class GameSim:
             if g is not None:
                 own = 11.0 if team == self.home_team else 189.0
                 self._ppos_place(g, own, 42.5, jitter=0.5)
-        self.puck_pos = [dx, dy]
+        self.puck_pos = self._clamp_boards(dx, dy)
         self._emit_skate(force=True)
 
     def _nearest_defender(self, player, defenders):
@@ -3299,7 +3320,7 @@ class GameSim:
                        kind=kind)
         if completed:
             self.possession_player = receiver
-            self.puck_pos = [rx, ry]
+            self.puck_pos = self._clamp_boards(rx, ry)
             self._emit_skate()
             return receiver
         if interceptor is not None:
@@ -3720,7 +3741,7 @@ class GameSim:
         if random.random() < 0.55:
             self._ppos_ensure()
             bx, by = self._ppos_get(blocker)
-            self.puck_pos = [bx, by]
+            self.puck_pos = self._clamp_boards(bx, by)
             self.possession_team = None
             self.possession_player = None
             self.possession_time = 0
@@ -3749,8 +3770,8 @@ class GameSim:
         if random.random() < 0.40:
             self._ppos_ensure()
             nx = 189.0 if attacking_team == self.home_team else 11.0
-            self.puck_pos = [min(196.0, max(4.0, nx + random.uniform(-8, 8))),
-                             min(81.0, max(4.0, 42.5 + random.uniform(-14, 14)))]
+            self.puck_pos = self._clamp_boards(nx + random.uniform(-8, 8),
+                                                 42.5 + random.uniform(-14, 14))
             self.possession_team = None
             self.possession_player = None
             self.possession_time = 0

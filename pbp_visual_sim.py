@@ -150,6 +150,28 @@ except Exception:  # pragma: no cover - fallback if theme widgets unavailable
 # ----------------------------------------------------------------------------
 RINK_L, RINK_W = 200.0, 85.0
 HOME_NET_X, AWAY_NET_X = 11.0, 189.0
+BOARDS_CORNER_R = 28.0  # NHL-regulation rounded corners
+
+
+def clamp_boards(x, y, margin=2.0):
+    """Project (x, y) onto the legal ice surface: the 200x85 rink with
+    28-ft rounded corners. The boards are impenetrable -- dots and the
+    puck stop at them instead of skating through."""
+    R = BOARDS_CORNER_R
+    x = min(RINK_L - margin, max(margin, x))
+    y = min(RINK_W - margin, max(margin, y))
+    for cx, cy in ((R, R), (RINK_L - R, R),
+                   (R, RINK_W - R), (RINK_L - R, RINK_W - R)):
+        in_x = (x < R) if cx == R else (x > RINK_L - R)
+        in_y = (y < R) if cy == R else (y > RINK_W - R)
+        if in_x and in_y:
+            dx, dy = x - cx, y - cy
+            d = math.hypot(dx, dy)
+            lim = R - margin
+            if d > lim:
+                s = lim / d if d else 0.0
+                x, y = cx + dx * s, cy + dy * s
+    return x, y
 
 SHOT_SPOTS = {  # for a team attacking in +x (home); mirrored for away
     "crease": (182, 42.5),
@@ -985,6 +1007,9 @@ class PBPVisualSim(tk.Toplevel):
         return None
 
     def _move_dot(self, d, x, y):
+        # The boards are impenetrable: clamp every dot onto the legal ice
+        # surface so nobody ever skates through them.
+        x, y = clamp_boards(x, y)
         # update facing from movement direction
         dx, dy = x - d["x"], y - d["y"]
         if dx * dx + dy * dy > 0.004:
@@ -3333,8 +3358,9 @@ class PBPVisualSim(tk.Toplevel):
             self._mom_dirty = False
             self._draw_momentum()
 
-        # draw puck (+ glow)
-        px, py = self.X(self.puck["x"]), self.Y(self.puck["y"])
+        # draw puck (+ glow); the boards are impenetrable for the puck too
+        _px, _py = clamp_boards(self.puck["x"], self.puck["y"])
+        px, py = self.X(_px), self.Y(_py)
         self.canvas.coords(self.puck_item, px - 5, py - 5, px + 5, py + 5)
         self.canvas.coords(self.puck_glow, px - 11, py - 11, px + 11, py + 11)
 
