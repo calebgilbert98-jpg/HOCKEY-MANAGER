@@ -101,11 +101,17 @@ class HomeDashboard:
     LEADER_CATS = ["Points", "Goals", "Assists", "+/-", "PIM", "Hits", "Shots"]
     SCHEDULE_VIEWS = ["Upcoming", "Results"]
 
-    def __init__(self, parent, game_manager, user_team, on_continue=None):
+    def __init__(self, parent, game_manager, user_team, on_continue=None,
+                 get_continue_state=None):
         self.parent = parent
         self.game_manager = game_manager
         self.user_team = user_team
         self.on_continue = on_continue
+        # Optional callback -> ("Continue"|"Next Day", [blocker dicts]).
+        # Supplied by the main app so the button label can be smart.
+        self.get_continue_state = get_continue_state
+        self.continue_btn = None
+        self._continue_status = None
         # Preserved across refreshes
         self._standings_scope = "Division"
         self._leaders_cat = "Points"
@@ -155,6 +161,8 @@ class HomeDashboard:
         self._create_stat_strip(content)
         self._create_section_nav(content)
         self._create_main_grid(content)
+        # Apply the smart Continue / Next Day label now the button exists.
+        self.refresh_continue_button()
         return main
 
     def _create_section_nav(self, parent):
@@ -559,8 +567,13 @@ class HomeDashboard:
                  fg=AppColors.TEXT_PRIMARY, bg=AppColors.BG).pack(anchor="e")
         tk.Label(date_frame, text=day_str, font=AppFonts.SMALL,
                  fg=AppColors.ACCENT, bg=AppColors.BG).pack(anchor="e")
-        AppButton(date_frame, text="Continue", command=self._on_continue,
-                  style="primary", width=140, height=40).pack(pady=(12, 0))
+        self.continue_btn = AppButton(date_frame, text="Next Day", command=self._on_continue,
+                                      style="primary", width=140, height=40)
+        self.continue_btn.pack(pady=(12, 0))
+        # Small live status line shown under the button while the day simulates.
+        self._continue_status = tk.Label(date_frame, text="", font=AppFonts.SMALL,
+                                        fg=AppColors.TEXT_SECONDARY, bg=AppColors.BG)
+        self._continue_status.pack(pady=(6, 0))
 
     def _create_stat_strip(self, parent):
         strip = tk.Frame(parent, bg=AppColors.BG)
@@ -1049,3 +1062,54 @@ class HomeDashboard:
             self.on_continue()
         else:
             print("Continue clicked (no handler)")
+
+    # ------------------------------------------------------------------
+    # Smart Continue / Next Day button (Football Manager style)
+    # ------------------------------------------------------------------
+    def refresh_continue_button(self):
+        """Set the button label from the app's continue state.
+
+        "Continue" when pressing tasks block day advancement,
+        "Next Day" when the day can advance freely.
+        """
+        label = "Next Day"
+        try:
+            if self.get_continue_state:
+                label, _reasons = self.get_continue_state()
+        except Exception:
+            label = "Next Day"
+        try:
+            if self.continue_btn is not None:
+                self.continue_btn.set_text(label)
+        except Exception:
+            pass
+
+    def set_continue_busy(self, busy):
+        """Show/hide processing feedback on the Continue button.
+
+        While busy the button reads "Processing..." and ignores clicks;
+        when done the smart label is restored.
+        """
+        try:
+            if self.continue_btn is not None:
+                if busy:
+                    self.continue_btn.set_text("Processing...")
+                    self.continue_btn.set_enabled(False)
+                else:
+                    self.continue_btn.set_enabled(True)
+                    self.refresh_continue_button()
+            if not busy:
+                self.set_continue_status("")
+            # Force a real paint BEFORE the heavy simulation work starts.
+            self.parent.update()
+        except Exception:
+            pass
+
+    def set_continue_status(self, text):
+        """Update the small status line under the Continue button."""
+        try:
+            if self._continue_status is not None:
+                self._continue_status.config(text=text or "")
+                self.parent.update()
+        except Exception:
+            pass

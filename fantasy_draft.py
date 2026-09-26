@@ -3398,6 +3398,15 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Mark fantasy draft as completed in game manager
         if hasattr(self.game_manager, 'pending_fantasy_draft'):
             self.game_manager.pending_fantasy_draft = False
+
+        # Blocker cleared: refresh the dashboard's smart Continue/Next Day label.
+        try:
+            dashboard = getattr(self.parent, 'dashboard', None)
+            refresher = getattr(dashboard, 'refresh_continue_button', None)
+            if callable(refresher):
+                refresher()
+        except Exception:
+            pass
             
         # Add completion message to inbox
         self.add_draft_completion_message()

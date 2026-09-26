@@ -39,8 +39,7 @@ class SplashLauncher(tk.Tk):
         # Variables
         self.continue_clicked = False
         
-        # Load background and create interface
-        self._load_background()
+        # Build the branded splash interface
         self._create_interface()
         
         # Bind keys - any key continues except ESC
@@ -51,62 +50,54 @@ class SplashLauncher(tk.Tk):
         # Focus window
         self.focus_set()
         
-    def _load_background(self):
-        """Load background image"""
-        self.background_image = None
-        
-        bg_files = [
-            "puckdynastybackground.png",
-            "hockey manager background.png",
-            "hockey_bg.png", 
-            "PUCK DYNASTY LOGO.png"
-        ]
-        
-        for bg_file in bg_files:
-            if os.path.exists(bg_file):
-                try:
-                    print(f"🏒 Loading background: {bg_file}")
-                    original = Image.open(bg_file).convert('RGBA')
-                    
-                    # Resize to fit window
-                    resized = original.resize((900, 600), Image.Resampling.LANCZOS)
-                    
-                    # Add dark overlay
-                    overlay = Image.new('RGBA', resized.size, (0, 0, 0, 100))
-                    self.background_image = Image.alpha_composite(resized, overlay)
-                    
-                    print("✅ Background loaded successfully")
-                    break
-                except Exception as e:
-                    print(f"Background load error: {e}")
-    
     def _create_interface(self):
-        """Create simple interface"""
-        # Main frame
-        main_frame = tk.Frame(self, bg='#000000')
-        main_frame.pack(fill='both', expand=True)
-        
-        # Background label
-        if self.background_image:
-            try:
-                self.bg_photo = ImageTk.PhotoImage(self.background_image)
-                bg_label = tk.Label(main_frame, image=self.bg_photo, bg='#000000')
-                bg_label.place(x=0, y=0, relwidth=1, relheight=1)
-            except Exception as e:
-                print(f"Background display error: {e}")
-        
-        # Flashing text overlay - no buttons or frames
-        self.flash_label = tk.Label(main_frame,
-                                   text="Press Any Key to Continue",
-                                   font=('Segoe UI', 16, 'bold'),
-                                   bg=main_frame['bg'], fg='#FFFFFF')
-        self.flash_label.place(relx=0.5, rely=0.85, anchor='center')
-        
+        """Create the branded splash screen.
+
+        Full-window loading_bg.png, centered logo, PUCK DYNASTY title,
+        and the flashing press-any-key prompt -- all drawn on one canvas
+        so the text sits directly on the artwork.
+        """
+        self.configure(bg="#0e0e11")
+        self._canvas = tk.Canvas(self, width=900, height=600,
+                                 highlightthickness=0, bg="#0e0e11")
+        self._canvas.pack(fill="both", expand=True)
+
+        self._bg_photo = None
+        self._logo_photo = None
+        try:
+            from branding import cover_photo, load_logo
+            self._bg_photo = cover_photo("loading_bg.png", 900, 600)
+            if self._bg_photo is not None:
+                self._canvas.create_image(450, 300, image=self._bg_photo)
+            self._logo_photo = load_logo(self, size=190)
+            if self._logo_photo is not None:
+                self._canvas.create_image(450, 205, image=self._logo_photo)
+        except Exception:
+            pass  # Artwork is decorative; the splash must always work
+
+        # Title with a subtle drop shadow for legibility
+        self._canvas.create_text(452, 402, text="PUCK DYNASTY",
+                                 font=("Segoe UI", 38, "bold"), fill="#000000")
+        self._canvas.create_text(450, 400, text="PUCK DYNASTY",
+                                 font=("Segoe UI", 38, "bold"), fill="#ffffff")
+        self._canvas.create_text(450, 448,
+                                 text="Professional Hockey Management Simulator",
+                                 font=("Segoe UI", 12), fill="#00ceb8")
+
+        # Flashing continue prompt
+        self._flash_id = self._canvas.create_text(
+            450, 545, text="Press Any Key to Continue",
+            font=("Segoe UI", 14, "bold"), fill="#ffffff")
+        self._flash_shadow = self._canvas.create_text(
+            451, 546, text="Press Any Key to Continue",
+            font=("Segoe UI", 14, "bold"), fill="#000000")
+        # Keep the shadow behind the text
+        self._canvas.tag_lower(self._flash_shadow, self._flash_id)
+
         # Start flashing animation
         self.flash_visible = True
         self._flash_text()
 
-    
     def _continue_to_launcher(self):
         """Continue to enhanced launcher"""
         if self.continue_clicked:
@@ -215,18 +206,20 @@ class SplashLauncher(tk.Tk):
     
     def _flash_text(self):
         """Flash the continue text"""
-        if hasattr(self, 'flash_label') and self.flash_label.winfo_exists():
-            # Toggle visibility
+        try:
             if self.flash_visible:
-                self.flash_label.configure(fg='#FFFFFF')
+                self._canvas.itemconfig(self._flash_id, fill="#ffffff")
             else:
-                self.flash_label.configure(fg='#888888')
-            
-            self.flash_visible = not self.flash_visible
-            
-            # Schedule next flash
+                self._canvas.itemconfig(self._flash_id, fill="#5a5a64")
+        except Exception:
+            return
+        self.flash_visible = not self.flash_visible
+        # Schedule next flash
+        try:
             self.after(800, self._flash_text)  # Flash every 800ms
-    
+        except Exception:
+            pass
+
     def _on_any_key(self, event):
         """Handle any key press (except ESC)"""
         if event.keysym != 'Escape':

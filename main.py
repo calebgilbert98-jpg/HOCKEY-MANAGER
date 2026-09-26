@@ -3659,7 +3659,8 @@ class HockeyManagerGUI(tk.Tk):
                     parent=self,
                     game_manager=self.game_manager,
                     user_team=self.user_team,
-                    on_continue=self.simulate_day
+                    on_continue=self.simulate_day,
+                    get_continue_state=self.get_continue_state,
                 )
                 
                 # Create the dashboard UI in its own frame
@@ -6255,32 +6256,158 @@ class HockeyManagerGUI(tk.Tk):
             import traceback
             traceback.print_exc()
 
-    def simulate_day(self):
-        """Completely reworked daily simulation that properly handles all scenarios"""
-        # CHECK FOR ACTIVE FANTASY DRAFT - PREVENT DAY ADVANCEMENT
-        if hasattr(self.game_manager, 'pending_fantasy_draft') and self.game_manager.pending_fantasy_draft:
+    def get_continue_state(self):
+        """Football Manager-style continue state.
+
+        Returns (label, blockers):
+          - ("Continue", [blockers]) when pressing tasks must be completed
+            before the day can advance.
+          - ("Next Day", []) when the day can advance freely.
+
+        Each blocker is a dict with 'id', 'title', 'detail' and an optional
+        'action' tuple (button label, callable) that takes the user to the
+        blocking task. Only REAL systems in this codebase are checked --
+        nothing is invented.
+        """
+        blockers = []
+        gm = getattr(self, 'game_manager', None)
+        # The one hard day-advancement blocker in the codebase: an active
+        # fantasy draft must be finished before the calendar can move.
+        if gm is not None and getattr(gm, 'pending_fantasy_draft', False):
+            blockers.append({
+                'id': 'fantasy_draft',
+                'title': 'Fantasy draft in progress',
+                'detail': ('You must complete the fantasy draft before '
+                           'advancing the day.'),
+                'action': ('Open Fantasy Draft', self.open_fantasy_draft_window),
+            })
+        if blockers:
+            return ("Continue", blockers)
+        return ("Next Day", [])
+
+    def _show_continue_blockers(self, blockers):
+        """Tell the user what is blocking day advancement and offer a jump
+        to the first blocking task. Never silently does nothing."""
+        try:
+            from modern_ui import AppColors, AppFonts, AppButton
+        except Exception:
             from tkinter import messagebox
-            messagebox.showwarning("Fantasy Draft Active", 
-                                 "🏒 Fantasy Draft in Progress!\n\n"
-                                 "You must complete the fantasy draft before advancing the day.\n"
-                                 "Go to Tools → Fantasy Draft to continue or complete the draft.")
+            messagebox.showwarning(
+                "Action Required",
+                "\n\n".join(b.get('title', '') + "\n" + b.get('detail', '')
+                            for b in blockers))
             return
-            
-        # Prevent multiple clicks by disabling button during simulation
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Action Required")
+        dlg.configure(bg=AppColors.BG)
+        dlg.transient(self)
+        try:
+            dlg.grab_set()
+        except Exception:
+            pass
+
+        tk.Label(dlg, text="Action Required Before Advancing",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=AppColors.BG).pack(padx=28, pady=(22, 6))
+        tk.Label(dlg, text="The following must be completed first:",
+                 font=AppFonts.BODY, fg=AppColors.TEXT_SECONDARY,
+                 bg=AppColors.BG).pack(padx=28, pady=(0, 12))
+
+        for b in blockers:
+            card = tk.Frame(dlg, bg=AppColors.BG_ELEVATED,
+                            highlightbackground=AppColors.BORDER,
+                            highlightthickness=1)
+            card.pack(fill='x', padx=28, pady=6)
+            tk.Label(card, text=b.get('title', 'Pending task'),
+                     font=AppFonts.BODY_BOLD, fg=AppColors.ACCENT,
+                     bg=AppColors.BG_ELEVATED).pack(anchor='w', padx=14, pady=(10, 2))
+            tk.Label(card, text=b.get('detail', ''),
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=AppColors.BG_ELEVATED,
+                     wraplength=420, justify='left').pack(anchor='w', padx=14, pady=(0, 10))
+
+        btn_row = tk.Frame(dlg, bg=AppColors.BG)
+        btn_row.pack(pady=(14, 22))
+        first = blockers[0] if blockers else {}
+        action = first.get('action')
+
+        def _go():
+            dlg.destroy()
+            if action:
+                try:
+                    action[1]()
+                except Exception as e:
+                    print(f"Blocker action failed: {e}")
+
+        if action:
+            AppButton(btn_row, text=action[0], command=_go,
+                      style="primary", width=180, height=38).pack(side='left', padx=6)
+        AppButton(btn_row, text="Close", command=dlg.destroy,
+                  style="secondary", width=120, height=38).pack(side='left', padx=6)
+
+        dlg.update_idletasks()
+        try:
+            x = self.winfo_x() + (self.winfo_width() - dlg.winfo_reqwidth()) // 2
+            y = self.winfo_y() + (self.winfo_height() - dlg.winfo_reqheight()) // 2
+            dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+
+    def _set_continue_feedback(self, busy, status=""):
+        """Drive the dashboard Continue button's processing feedback.
+
+        Falls back to the legacy button lookup when the modern dashboard
+        helper is unavailable.
+        """
+        dashboard = getattr(self, 'dashboard', None)
+        helper = getattr(dashboard, 'set_continue_busy', None)
+        if callable(helper):
+            if busy:
+                helper(True)
+                if status:
+                    dashboard.set_continue_status(status)
+            else:
+                helper(False)
+            return
+
+        # Legacy fallback: plain tk.Button-style widgets only.
         continue_btn = None
         if hasattr(self, 'continue_btn'):
             continue_btn = self.continue_btn
-        elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'continue_btn'):
+        elif dashboard is not None and hasattr(dashboard, 'continue_btn'):
             continue_btn = self.dashboard.continue_btn
-        elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'widgets') and 'continue_btn' in self.dashboard.widgets:
+        elif (dashboard is not None and hasattr(dashboard, 'widgets')
+              and 'continue_btn' in dashboard.widgets):
             continue_btn = self.dashboard.widgets['continue_btn']
-            
-        if continue_btn and continue_btn['state'] == 'disabled':
+        if continue_btn is not None:
+            try:
+                if busy:
+                    continue_btn.config(state='disabled')
+                else:
+                    continue_btn.config(state='normal')
+                self.update()
+            except Exception:
+                pass
+
+    def simulate_day(self):
+        """Completely reworked daily simulation that properly handles all scenarios"""
+        # BLOCKERS FIRST: pressing tasks (e.g. an active fantasy draft) must
+        # be completed before the day advances. Show what is blocking and
+        # offer a jump to it -- never silently do nothing.
+        _label, blockers = self.get_continue_state()
+        if blockers:
+            self._show_continue_blockers(blockers)
+            return
+
+        # Prevent double-clicks: the dashboard helper also paints
+        # "Processing..." BEFORE the heavy work starts.
+        dashboard = getattr(self, 'dashboard', None)
+        if (dashboard is not None
+                and getattr(getattr(dashboard, 'continue_btn', None), '_enabled', True) is False):
             return  # Already processing, ignore this click
-            
-        if continue_btn:
-            continue_btn.config(state='disabled')
-            
+        self._set_continue_feedback(True, "Starting simulation...")
+
         try:
             # Check for season end by games completed (primary trigger).
             # The date cutoff is only a safety net set AFTER the last scheduled
@@ -6306,6 +6433,7 @@ class HockeyManagerGUI(tk.Tk):
                 return
 
             # Process daily maintenance tasks FIRST (before checking games)
+            self._set_continue_feedback(True, "Processing daily tasks...")
             self._process_daily_maintenance()
             
             # Get today's games - OPTIMIZED with early break and caching
@@ -6371,6 +6499,7 @@ class HockeyManagerGUI(tk.Tk):
                     oldest_key = min(self._schedule_cache.keys())
                     del self._schedule_cache[oldest_key]
             
+            self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
             if todays_games:
                 # Rosters/tactics can change daily (trades, injuries, user tweaks):
@@ -6379,6 +6508,7 @@ class HockeyManagerGUI(tk.Tk):
                     self._strength_cache.clear()
                 self._process_todays_games(todays_games)
             
+            self._set_continue_feedback(True, "Updating injuries...")
             # Process injury recovery: countdown runs in GAMES MISSED, so only
             # teams that played today tick down (and today's new injuries
             # start counting with the next game).
@@ -6396,6 +6526,7 @@ class HockeyManagerGUI(tk.Tk):
             teams_played.discard(None)
             self.game_manager._process_injury_recovery(teams_played or None)
             
+            self._set_continue_feedback(True, "Processing AI decisions...")
             # Process AI team decisions (trades, signings, etc.)
             # Only every 7 days (handled internally by ai_manager)
             try:
@@ -6436,6 +6567,7 @@ class HockeyManagerGUI(tk.Tk):
             # Update game_manager's current_date for dashboard synchronization
             self.game_manager.current_date = self.current_date
             
+            self._set_continue_feedback(True, "Updating dashboard...")
             # Refresh the atmospheric dashboard with updated data
             if hasattr(self, 'dashboard') and hasattr(self.dashboard, 'refresh_dashboard'):
                 self.dashboard.refresh_dashboard()
@@ -6455,17 +6587,10 @@ class HockeyManagerGUI(tk.Tk):
             self.after_idle(self.update_all_views)
             
         finally:
-            # Re-enable continue button after simulation is complete
-            continue_btn = None
-            if hasattr(self, 'continue_btn'):
-                continue_btn = self.continue_btn
-            elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'continue_btn'):
-                continue_btn = self.dashboard.continue_btn
-            elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'widgets') and 'continue_btn' in self.dashboard.widgets:
-                continue_btn = self.dashboard.widgets['continue_btn']
-                
-            if continue_btn:
-                continue_btn.config(state='normal')
+            # Restore the Continue button: re-enable clicks, clear the
+            # "Processing..." state and re-apply the smart Continue/Next Day
+            # label (blockers may have appeared or cleared).
+            self._set_continue_feedback(False)
 
     def _check_season_complete(self):
         """Check if the regular season is complete by counting games played."""

@@ -30,7 +30,17 @@ class ProgressWindow:
             y = (self.root.winfo_screenheight() // 2) - 100
         
         self.root.geometry(f"500x200+{x}+{y}")
-        
+
+        # Stay visible and on top while generation runs (the UI thread is
+        # busy generating, so without this the window can end up hidden
+        # behind other windows and appear frozen).
+        try:
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.focus_force()
+        except Exception:
+            pass
+
         self.progress_var = tk.DoubleVar()
         self.status_var = tk.StringVar(value="Initializing database generation...")
         self.detail_var = tk.StringVar(value="")
@@ -110,10 +120,20 @@ class ProgressWindow:
         self.progress_var.set(percentage)
         self.status_var.set(status)
         self.detail_var.set(detail)
-        self.root.update_idletasks()
-        
+        # Full event-loop pump, not just idle tasks: on Windows
+        # update_idletasks() alone often never actually paints the window,
+        # so the app looks frozen during generation.
+        try:
+            self.root.update()
+        except Exception:
+            pass
+
     def close(self):
         """Close the progress window"""
+        try:
+            self.root.attributes('-topmost', False)
+        except Exception:
+            pass
         try:
             self.root.destroy()
         except:

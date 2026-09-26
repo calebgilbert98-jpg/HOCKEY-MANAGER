@@ -83,6 +83,18 @@ class SectionCard(tk.Frame):
                 fill="x", padx=16, pady=(0, 10))
 
 
+def _lighten_hex(hex_color, factor=1.3):
+    """Lighten a #rrggbb color for hover states. Fail-safe: returns input."""
+    try:
+        h = hex_color.lstrip("#")
+        r = min(255, int(int(h[0:2], 16) * factor))
+        g = min(255, int(int(h[2:4], 16) * factor))
+        b = min(255, int(int(h[4:6], 16) * factor))
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except Exception:
+        return hex_color
+
+
 class EnhancedPuckDynastyLauncher(tk.Tk):
     """Enhanced professional game launcher with comprehensive options"""
     
@@ -301,36 +313,18 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         main_container = tk.Frame(self, bg=AppColors.BG)
         main_container.pack(fill='both', expand=True)
         
-        # Create header with background image section
-        header_frame = tk.Frame(main_container, bg=AppColors.BG, height=120)
-        header_frame.pack(fill='x')
-        header_frame.pack_propagate(False)
-        
-        # Background image display area in header
-        bg_canvas = tk.Canvas(header_frame, height=120, highlightthickness=0, bg=AppColors.BG)
-        bg_canvas.pack(fill='x', padx=20, pady=10)
-        
-        # Simple title without background image complications
+        # Branded hero: arena banner with the logo + title overlaid on it.
         try:
-            # Add title overlay without problematic background image
-            overlay_frame = tk.Frame(header_frame, bg=AppColors.BG)
-            overlay_frame.place(relx=0.5, rely=0.5, anchor='center')
-            
-            title_label = tk.Label(overlay_frame,
-                                  text="PUCK DYNASTY",
-                                  font=AppFonts.H1,
-                                  bg=AppColors.BG, fg=AppColors.TEXT_PRIMARY)
-            title_label.pack()
-            
-            subtitle_label = tk.Label(overlay_frame,
-                                     text="Professional Hockey Management Simulator",
-                                     font=AppFonts.SMALL,
-                                     bg=AppColors.BG, fg=AppColors.TEXT_SECONDARY)
-            subtitle_label.pack()
-            
+            from branding import HeroBanner
+            HeroBanner(main_container, 'launcher_banner.png', height=180,
+                       title="PUCK DYNASTY",
+                       subtitle="Professional Hockey Management Simulator",
+                       logo_size=64,
+                       title_font=("Segoe UI", 32, "bold"),
+                       bg=AppColors.BG).pack(fill='x')
         except Exception as e:
-            print(f"Header creation failed: {e}")
-        
+            print(f"Hero banner failed: {e}")
+
         # Create the rest of the interface normally
         self._create_main_interface(main_container)
     
@@ -352,7 +346,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         content_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Add subtle hockey-themed border
-        border_frame = tk.Frame(content_frame, bg='#f85149', height=2)
+        border_frame = tk.Frame(content_frame, bg=AppColors.ACCENT, height=2)
         border_frame.pack(fill='x', pady=(0, 5))
         
         # Create notebook for tabs -- modern dark tab bar
@@ -429,42 +423,18 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         """Create regular interface without background"""
         self.configure(bg=AppColors.BG)
 
-        # Slim branded hero strip at the very top of the window
+        # Branded hero: arena banner with the logo + title overlaid on it.
+        # Falls back to a plain strip if assets are unavailable.
         try:
-            from branding import SlimBanner
-            SlimBanner(self, 'launcher_banner.png', height=130,
+            from branding import HeroBanner
+            HeroBanner(self, 'launcher_banner.png', height=180,
+                       title="PUCK DYNASTY",
+                       subtitle="Professional Hockey Management Simulator",
+                       logo_size=64,
+                       title_font=("Segoe UI", 32, "bold"),
                        bg=AppColors.BG).pack(fill='x')
         except Exception:
             pass
-
-        # Create a simple header without background
-        header_frame = tk.Frame(self, bg=AppColors.BG_ELEVATED, height=80)
-        header_frame.pack(fill='x')
-        header_frame.pack_propagate(False)
-
-        title_row = tk.Frame(header_frame, bg=AppColors.BG_ELEVATED)
-        title_row.pack(expand=True)
-
-        try:
-            from branding import load_logo
-            self._launcher_logo = load_logo(self, size=48)
-            if self._launcher_logo is not None:
-                tk.Label(title_row, image=self._launcher_logo,
-                         bg=AppColors.BG_ELEVATED).pack(side='left', padx=(0, 12))
-        except Exception:
-            pass
-
-        title_label = tk.Label(title_row,
-                              text="PUCK DYNASTY",
-                              font=AppFonts.H1,
-                              bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
-        title_label.pack(side='left')
-
-        subtitle_label = tk.Label(header_frame,
-                                 text="Professional Hockey Management Simulator",
-                                 font=AppFonts.SMALL,
-                                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY)
-        subtitle_label.pack()
 
         # Create main interface
         self._create_main_interface(self)
@@ -1056,7 +1026,7 @@ This profile will influence player relationships, media interactions, and trade 
         
     def _create_advanced_checkbox_option(self, parent, row, col, text, var, tooltip):
         """Create an advanced checkbox option with enhanced layout"""
-        frame = tk.Frame(parent, bg=AppColors.BG_ELEVATED, relief='solid', bd=1)
+        frame = tk.Frame(parent, bg=AppColors.BG_ELEVATED, relief='flat', bd=0)
         frame.grid(row=row, column=col, sticky='ew', padx=5, pady=8)
         
         parent.grid_columnconfigure(col, weight=1)
@@ -1344,7 +1314,10 @@ This profile will influence player relationships, media interactions, and trade 
         random_btn.pack()
         
         # Selected team display
-        self.selected_team_frame = tk.Frame(team_frame, bg=AppColors.BG_ELEVATED, relief='solid', bd=2)
+        self.selected_team_frame = tk.Frame(team_frame, bg=AppColors.BG_ELEVATED,
+                                                 relief='flat', bd=0,
+                                                 highlightthickness=1,
+                                                 highlightbackground=AppColors.BORDER)
         self.selected_team_frame.pack(fill='x', padx=20, pady=10)
         
         self.selected_team_label = tk.Label(self.selected_team_frame,
@@ -1398,14 +1371,18 @@ This profile will influence player relationships, media interactions, and trade 
                 row = i // 2
                 col = i % 2
                 
-                # Create team button with colors
+                # Create team button with colors (flat, modern)
+                team_bg = team_info['colors'][0] if len(team_info['colors']) > 0 else '#3A3A3A'
                 team_btn = tk.Button(team_grid,
                                    text=team_name,
-                                   font=AppFonts.CAPTION,
-                                   bg=team_info['colors'][0] if len(team_info['colors']) > 0 else '#3A3A3A',
+                                   font=AppFonts.SMALL_BOLD,
+                                   bg=team_bg,
                                    fg='white',
-                                   relief='solid', bd=1,
-                                   pady=6, padx=3,
+                                   activebackground=_lighten_hex(team_bg),
+                                   activeforeground='white',
+                                   relief='flat', bd=0,
+                                   highlightthickness=0,
+                                   pady=8, padx=3,
                                    cursor='hand2',
                                    command=lambda t=team_name, c=team_info['city']: self._select_team(t, c))
                 
@@ -1638,17 +1615,19 @@ This profile will influence player relationships, media interactions, and trade 
             text=f"{team_name}\n{city}",
             fg=AppColors.SUCCESS
         )
-        self.selected_team_frame.config(bg=AppColors.BG_ELEVATED, relief='solid', bd=2)
+        self.selected_team_frame.config(highlightbackground=AppColors.ACCENT)
         
         # Check readiness
         self._check_readiness()
         
-        # Update button states
+        # Update button states (teal ring = selected)
         for name, btn in self.team_cards.items():
             if name == team_name:
-                btn.config(relief='solid', bd=3)
+                btn.config(highlightthickness=3,
+                           highlightbackground=AppColors.ACCENT,
+                           highlightcolor=AppColors.ACCENT)
             else:
-                btn.config(relief='solid', bd=1)
+                btn.config(highlightthickness=0)
         
         self.status_label.config(text=f"Team selected: {team_name}")
         
