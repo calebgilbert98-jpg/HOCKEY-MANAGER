@@ -6403,8 +6403,12 @@ class HockeyManagerGUI(tk.Tk):
                     free_agents = self.league.free_agents
                 else:
                     free_agents = []
+                # Only run AI for NHL teams -- minor league teams don't need
+                # trade/FA/contract AI. This cuts 60 teams -> 32 (Small).
+                nhl_teams = [t for t in self.league.teams
+                             if getattr(t, 'league_name', 'National Hockey League') == 'National Hockey League']
                 decisions = self.game_manager.ai_manager.process_daily_decisions(
-                    self.league.teams, free_agents, self.current_date
+                    nhl_teams, free_agents, self.current_date
                 )
                 # Log significant decisions
                 for d in decisions[:5]:  # Limit spam
