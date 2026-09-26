@@ -189,18 +189,37 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     return result['ok']
 
 
-class RosterWindow(tk.Toplevel):
-    """Enhanced Roster Management window with modern UI, advanced filtering, depth charts, and comprehensive team management."""
-    
+class RosterWindow(ctk.CTkToplevel):
+    """Roster Management (CustomTkinter): dark cards, modern tab bar,
+    pill filters, styled stat tables, depth-chart tiles, cap tab."""
+
+    # Tab keys in display order
+    _TAB_ORDER = ('nhl', 'ahl', 'prospects', 'depth', 'cap')
+
     def __init__(self, parent):
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_HOVER, ROW_SELECTED,
+        )
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN, RED=RED,
+                        BLUE=BLUE, ROW_HOVER=ROW_HOVER, ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title(f"{parent.user_team.team_name} - Roster Management")
-        self.configure(background=parent.BG_COLOR)
+        self.configure(fg_color=BG)
         self.geometry("1600x1000")
         self.minsize(1400, 800)
-        
-        # State variables
+
+        # State variables (unchanged from the ttk version)
         self.selected_players = {'nhl': set(), 'ahl': set(), 'prospects': set()}
         self.roster_filters = {
             'position': tk.StringVar(master=self, value="All"),
@@ -212,60 +231,80 @@ class RosterWindow(tk.Toplevel):
         }
         self.sort_column = None
         self.sort_reverse = False
-        
+
         # Player maps for treeviews
         self.player_maps = {'nhl': {}, 'ahl': {}, 'prospects': {}}
-        
+
+        # Current tab names (counts change -> tabview.rename)
+        self._tab_names = {}
+
         # Initialize context menu manager
         self.context_menu_manager = PlayerContextMenu(self.parent)
-        
-        # Create the enhanced interface
+
+        # Create the interface
         self.create_enhanced_interface()
-        self.setup_styles()
+        self._setup_tree_style()
         self.update_views()
-        
+
         # Track window
         self.parent.open_windows['roster'] = self
-    
+
+    # ------------------------------------------------------------------
+    # Layout construction
+    # ------------------------------------------------------------------
     def create_enhanced_interface(self):
         """Create the comprehensive roster management interface."""
-        # Main container
-        main_container = ttk.Frame(self, style='Panel.TFrame')
-        main_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        ct = self._ct
+        main_container = ctk.CTkFrame(self, fg_color=ct['BG'], corner_radius=0)
+        main_container.pack(fill="both", expand=True, padx=15, pady=15)
 
         # Slim branded banner strip (decorative; never breaks the window)
         try:
             from branding import SlimBanner
             SlimBanner(main_container, 'roster_banner.png', height=84,
-                       bg=self.parent.BG_COLOR).pack(fill='x', pady=(0, 10))
+                       bg=ct['BG']).pack(fill='x', pady=(0, 10))
         except Exception:
             pass
 
         # Header section with team overview
         self.create_header_section(main_container)
-        
-        # Main tabbed interface
-        self.notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
-        
-        # Enhanced NHL Roster tab
+
+        # Modern tab bar (CTkTabview instead of ttk.Notebook)
+        self.tabview = ctk.CTkTabview(
+            main_container,
+            fg_color=ct['PANEL'],
+            corner_radius=12,
+            border_width=1,
+            border_color=ct['BORDER'],
+            segmented_button_fg_color=ct['PANEL'],
+            segmented_button_selected_color=ct['TEAL'],
+            segmented_button_selected_hover_color=ct['TEAL_HOVER'],
+            segmented_button_unselected_color=ct['CARD'],
+            segmented_button_unselected_hover_color=ct['BORDER'],
+            text_color=ct['TEXT'],
+        )
+        self.tabview.pack(fill="both", expand=True, pady=(16, 0))
+
+        self._tab_names = {
+            'nhl': "NHL Roster (23)",
+            'ahl': "AHL Roster (20)",
+            'prospects': "Prospects",
+            'depth': "Depth Chart",
+            'cap': "Salary Cap",
+        }
+        for key in self._TAB_ORDER:
+            self.tabview.add(self._tab_names[key])
+
+        # Build each tab's content
         self.create_enhanced_nhl_tab()
-        
-        # Enhanced AHL Roster tab
         self.create_enhanced_ahl_tab()
-        
-        # Enhanced Prospects tab
         self.create_enhanced_prospects_tab()
-        
-        # Depth Chart tab
         self.create_depth_chart_tab()
-        
-        # Salary Cap Management tab
         self.create_salary_cap_tab()
-        
+
         # Action buttons footer
         self.create_action_footer(main_container)
-    
+
     def _cap_numbers(self):
         """Shared payroll figures for the header and the Salary Cap tab.
 
@@ -283,75 +322,49 @@ class RosterWindow(tk.Toplevel):
 
     def create_header_section(self, parent):
         """Create header with team overview and quick stats."""
-        header_frame = ttk.Frame(parent, style='TitleBar.TFrame', padding=(20, 15))
-        header_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Team name and logo area
-        title_frame = ttk.Frame(header_frame, style='TitleBar.TFrame')
-        title_frame.pack(fill=tk.X)
-        
-        # Team title
-        team_title = ttk.Label(
-            title_frame,
-            text=f"{self.parent.user_team.team_name.upper()} ROSTER",
-            style='Title.TLabel',
-            font=(self.parent.FONT_FAMILY, 18, 'bold')
-        )
-        team_title.pack(side=tk.LEFT)
-        
+        ct = self._ct
+        header = ctk.CTkFrame(parent, fg_color=ct['PANEL'], corner_radius=12)
+        header.pack(fill="x", pady=(0, 4))
+
+        top = ctk.CTkFrame(header, fg_color="transparent")
+        top.pack(fill="x", padx=20, pady=(14, 4))
+
+        self._heading(top, text=f"{self.parent.user_team.team_name.upper()} ROSTER",
+                      size=18).pack(side="left")
+
         # Quick roster stats on the right
-        stats_frame = ttk.Frame(title_frame, style='TitleBar.TFrame')
-        stats_frame.pack(side=tk.RIGHT)
-        
-        # Calculate roster stats
         nhl_count = len(self.parent.user_team.roster)
         ahl_count = len(self.parent.user_team.ahl_roster)
         prospects_count = len(self.parent.user_team.prospects)
-        total_players = nhl_count + ahl_count + prospects_count
-        
-        # Salary cap info (matches the Salary Cap tab: includes buyout dead cap)
         _, _, cap_space, _ = self._cap_numbers()
-        
-        # Stats display
-        stats_text = f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | Prospects: {prospects_count} | Cap Space: ${cap_space:,}"
-        self.stats_label = ttk.Label(
-            stats_frame,
-            text=stats_text,
-            style='Info.TLabel',
-            font=(self.parent.FONT_FAMILY, 11)
-        )
-        self.stats_label.pack()
-        
+        stats_text = (f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | "
+                      f"Prospects: {prospects_count} | Cap Space: ${cap_space:,}")
+        self.stats_label = self._body(top, text=stats_text, size=11)
+        self.stats_label.pack(side="right")
+
         # Subtitle with season info
-        subtitle_frame = ttk.Frame(header_frame, style='TitleBar.TFrame')
-        subtitle_frame.pack(fill=tk.X, pady=(10, 0))
-        
         try:
             season_year = self.parent.league.season_year
             season_str = f"{season_year}-{str(season_year + 1)[-2:]}"
         except Exception:
             season_str = "2026-27"
-        season_info = f"Season: {season_str} | Total Players: {total_players} | Last Updated: Today"
-        ttk.Label(
-            subtitle_frame,
-            text=season_info,
-            style='Subtitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 10)
-        ).pack(side=tk.LEFT)
-    
+        total_players = nhl_count + ahl_count + prospects_count
+        self._body(header,
+                   text=f"Season: {season_str} | Total Players: {total_players}",
+                   size=10, dim=True).pack(anchor="w", padx=20, pady=(0, 12))
+
+    def _roster_tab_frame(self, key):
+        """Return the CTkTabview content frame for a tab key."""
+        return self.tabview.tab(self._tab_names[key])
+
     def create_enhanced_nhl_tab(self):
         """Create enhanced NHL roster tab with filtering and management tools."""
-        nhl_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(nhl_frame, text="NHL Roster (23)")
-        
+        nhl_frame = self._roster_tab_frame('nhl')
+
         # Toolbar for NHL roster
         self.create_roster_toolbar(nhl_frame, 'nhl')
-        
-        # Main content area
-        content_frame = ttk.Frame(nhl_frame, style='Panel.TFrame', padding=10)
-        content_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # NHL roster treeview with enhanced columns
+
+        # NHL roster table with enhanced columns
         nhl_columns = {
             'select': ('☐', 30),
             'jersey': ('#', 40),
@@ -367,25 +380,20 @@ class RosterWindow(tk.Toplevel):
             'toi': ('TOI/GP', 60),
             'performance': ('Performance', 80)
         }
-        
-        self.nhl_tree = self.create_enhanced_treeview(content_frame, nhl_columns, 'nhl')
-        
+
+        self.nhl_tree = self.create_enhanced_treeview(nhl_frame, nhl_columns, 'nhl')
+
         # NHL roster summary
-        self.create_roster_summary(content_frame, 'nhl')
-    
+        self.create_roster_summary(nhl_frame, 'nhl')
+
     def create_enhanced_ahl_tab(self):
         """Create enhanced AHL roster tab."""
-        ahl_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(ahl_frame, text="AHL Roster (20)")
-        
+        ahl_frame = self._roster_tab_frame('ahl')
+
         # Toolbar for AHL roster
         self.create_roster_toolbar(ahl_frame, 'ahl')
-        
-        # Main content area
-        content_frame = ttk.Frame(ahl_frame, style='Panel.TFrame', padding=10)
-        content_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # AHL roster treeview
+
+        # AHL roster table
         ahl_columns = {
             'select': ('☐', 30),
             'jersey': ('#', 40),
@@ -400,25 +408,20 @@ class RosterWindow(tk.Toplevel):
             'readiness': ('NHL Ready', 80),
             'development': ('Development', 80)
         }
-        
-        self.ahl_tree = self.create_enhanced_treeview(content_frame, ahl_columns, 'ahl')
-        
+
+        self.ahl_tree = self.create_enhanced_treeview(ahl_frame, ahl_columns, 'ahl')
+
         # AHL roster summary
-        self.create_roster_summary(content_frame, 'ahl')
-    
+        self.create_roster_summary(ahl_frame, 'ahl')
+
     def create_enhanced_prospects_tab(self):
         """Create enhanced prospects tab."""
-        prospects_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(prospects_frame, text="Prospects")
-        
+        prospects_frame = self._roster_tab_frame('prospects')
+
         # Toolbar for prospects
         self.create_roster_toolbar(prospects_frame, 'prospects')
-        
-        # Main content area
-        content_frame = ttk.Frame(prospects_frame, style='Panel.TFrame', padding=10)
-        content_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Prospects treeview
+
+        # Prospects table
         prospects_columns = {
             'select': ('☐', 30),
             'name': ('Name', 180),
@@ -432,47 +435,35 @@ class RosterWindow(tk.Toplevel):
             'development': ('Development', 80),
             'eta': ('ETA', 60)
         }
-        
-        self.prospects_tree = self.create_enhanced_treeview(content_frame, prospects_columns, 'prospects')
-        
+
+        self.prospects_tree = self.create_enhanced_treeview(prospects_frame, prospects_columns, 'prospects')
+
         # Prospects summary
-        self.create_roster_summary(content_frame, 'prospects')
-    
+        self.create_roster_summary(prospects_frame, 'prospects')
     def create_depth_chart_tab(self):
         """Create interactive depth chart tab."""
-        depth_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(depth_frame, text="Depth Chart")
-        
-        # Depth chart header
-        header_frame = ttk.Frame(depth_frame, style='Panel.TFrame', padding=15)
-        header_frame.pack(fill=tk.X)
-        
-        ttk.Label(
-            header_frame,
-            text="TEAM DEPTH CHART",
-            style='SubTitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 14, 'bold')
-        ).pack()
-        ttk.Label(
-            header_frame,
-            text="Click a player tile to open their profile",
-            style='Subtitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 9, 'italic')
-        ).pack(pady=(4, 0))
+        ct = self._ct
+        depth_frame = self._roster_tab_frame('depth')
 
-        # Main depth chart area: scrollable so every section is reachable.
-        # (plain tk widgets so modern_ui cards blend in)
-        scroll_wrap = ttk.Frame(depth_frame, style='Panel.TFrame')
-        scroll_wrap.pack(fill=tk.BOTH, expand=True)
-        canvas = tk.Canvas(scroll_wrap, bg=self.parent.BG_COLOR,
-                           highlightthickness=0)
+        header = ctk.CTkFrame(depth_frame, fg_color="transparent")
+        header.pack(fill="x", padx=10, pady=(12, 4))
+        self._heading(header, text="TEAM DEPTH CHART", size=14).pack()
+        self._body(header, text="Click a player tile to open their profile",
+                   size=9, dim=True).pack(pady=(2, 0))
+
+        # Scrollable chart area (plain tk canvas per the migration guide --
+        # CTk has no canvas and the canvas blends fine inside CTk frames)
+        scroll_wrap = ctk.CTkFrame(depth_frame, fg_color="transparent")
+        scroll_wrap.pack(fill="both", expand=True, padx=6, pady=(4, 8))
+        canvas = tk.Canvas(scroll_wrap, bg=ct['PANEL'], highlightthickness=0)
         scrollbar = ttk.Scrollbar(scroll_wrap, orient="vertical",
-                                  command=canvas.yview)
+                                  command=canvas.yview,
+                                  style='Roster.Vertical.TScrollbar')
         canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
 
-        chart_frame = tk.Frame(canvas, bg=self.parent.BG_COLOR)
+        chart_frame = tk.Frame(canvas, bg=ct['PANEL'])
         canvas_window = canvas.create_window((0, 0), window=chart_frame,
                                              anchor="nw")
         chart_frame.bind(
@@ -490,6 +481,7 @@ class RosterWindow(tk.Toplevel):
                          ("<Button-5>", lambda _e: canvas.yview_scroll(1, "units"))):
             canvas.bind(seq, cmd)
         self._depth_chart_frame = chart_frame
+        self._depth_chart_bg = ct['PANEL']
 
         # Build the depth chart sections (rebuildable via _build_depth_chart_sections)
         self._build_depth_chart_sections()
@@ -514,255 +506,65 @@ class RosterWindow(tk.Toplevel):
         self._bind_depth_wheel(self._depth_chart_frame)
 
     def _depth_section_card(self, parent, title):
-        """modern card container for one depth-chart section."""
-        card = AppCard(parent, padding=12)
-        card.pack(fill=tk.X, padx=20, pady=6)
-        body = card.get_content_frame()
-        tk.Label(body, text=title,
-                 font=(self.parent.FONT_FAMILY, 12, 'bold'),
-                 fg=AppColors.ACCENT, bg=AppColors.BG_ELEVATED).pack(anchor='w', pady=(0, 8))
-        return body
+        """Rounded card container for one depth-chart section."""
+        ct = self._ct
+        card = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=12)
+        card.pack(fill="x", padx=20, pady=6)
+        ctk.CTkLabel(card, text=title, font=("Segoe UI", 12, "bold"),
+                     text_color=ct['TEAL']).pack(anchor="w", padx=14, pady=(10, 6))
+        return card
 
     def _depth_line_row(self, parent, label):
         """One labelled row (line/pair/role) inside a depth-chart card."""
-        row = tk.Frame(parent, bg=AppColors.BG_ELEVATED)
-        row.pack(fill=tk.X, pady=3)
-        tk.Label(row, text=label, width=10, anchor='w',
-                 font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                 fg=AppColors.TEXT_SECONDARY,
-                 bg=AppColors.BG_ELEVATED).pack(side=tk.LEFT)
+        ct = self._ct
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=3)
+        ctk.CTkLabel(row, text=label, width=80, anchor="w",
+                     font=("Segoe UI", 10, "bold"),
+                     text_color=ct['TEXT_DIM']).pack(side="left")
         return row
 
     def _depth_player_tile(self, parent, player, slot_label):
         """One player slot: filled clickable tile, or a muted open slot."""
+        ct = self._ct
         if player is not None:
-            tile = tk.Frame(parent, bg=AppColors.BG_HOVER,
-                            highlightthickness=1,
-                            highlightbackground=AppColors.BORDER,
-                            cursor="hand2")
-            tile.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
-            tk.Label(tile, text=player.full_name,
-                     font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                     fg=AppColors.TEXT_PRIMARY,
-                     bg=AppColors.BG_HOVER).pack(pady=(6, 0))
-            tk.Label(tile,
-                     text=f"{slot_label}  ·  {to_100_scale(player.overall_rating())} OVR",
-                     font=(self.parent.FONT_FAMILY, 9),
-                     fg=AppColors.ACCENT,
-                     bg=AppColors.BG_HOVER).pack(pady=(0, 6))
+            tile = ctk.CTkFrame(parent, fg_color=ct['BORDER'], corner_radius=8,
+                                cursor="hand2")
+            tile.pack(side="left", padx=4, fill="x", expand=True)
+            name_lbl = ctk.CTkLabel(tile, text=player.full_name,
+                                    font=("Segoe UI", 10, "bold"),
+                                    text_color=ct['TEXT'])
+            name_lbl.pack(pady=(6, 0))
+            sub_lbl = ctk.CTkLabel(
+                tile,
+                text=f"{slot_label}  ·  {to_100_scale(player.overall_rating())} OVR",
+                font=("Segoe UI", 9), text_color=ct['TEAL'])
+            sub_lbl.pack(pady=(0, 6))
 
             def _open(_event, p=player):
                 self.parent.open_player_profile(p)
+
+            def _hover_on(_event, t=tile):
+                t.configure(fg_color=ct['ROW_HOVER'])
+
+            def _hover_off(_event, t=tile):
+                t.configure(fg_color=ct['BORDER'])
+
             tile.bind('<Button-1>', _open)
-            for child in tile.winfo_children():
+            tile.bind('<Enter>', _hover_on)
+            tile.bind('<Leave>', _hover_off)
+            for child in (name_lbl, sub_lbl):
                 child.bind('<Button-1>', _open)
+                child.bind('<Enter>', _hover_on)
+                child.bind('<Leave>', _hover_off)
         else:
-            tile = tk.Frame(parent, bg=AppColors.BG_ELEVATED,
-                            highlightthickness=1,
-                            highlightbackground=AppColors.BORDER)
-            tile.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
-            tk.Label(tile, text=f"Open {slot_label}",
-                     font=(self.parent.FONT_FAMILY, 10),
-                     fg=AppColors.TEXT_TERTIARY,
-                     bg=AppColors.BG_ELEVATED).pack(pady=10)
-    
-    def create_salary_cap_tab(self):
-        """Create salary cap management tab."""
-        cap_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(cap_frame, text="Salary Cap")
-        self._cap_tab = cap_frame
-        self._build_salary_cap_content()
+            tile = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=8,
+                                border_width=1, border_color=ct['BORDER'])
+            tile.pack(side="left", padx=4, fill="x", expand=True)
+            ctk.CTkLabel(tile, text=f"Open {slot_label}",
+                         font=("Segoe UI", 10),
+                         text_color=ct['TEXT_FAINT']).pack(pady=10)
 
-    def _build_salary_cap_content(self):
-        """(Re)build the salary cap tab from current roster data."""
-        for child in self._cap_tab.winfo_children():
-            child.destroy()
-
-        # Cap management header
-        header_frame = ttk.Frame(self._cap_tab, style='Panel.TFrame', padding=15)
-        header_frame.pack(fill=tk.X)
-
-        ttk.Label(
-            header_frame,
-            text="SALARY CAP MANAGEMENT",
-            style='SubTitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 14, 'bold')
-        ).pack()
-
-        # Cap overview
-        self.create_cap_overview(self._cap_tab)
-
-        # Contract details
-        self.create_contract_breakdown(self._cap_tab)
-    
-    def _make_pill_group(self, parent, options, current_value, on_select):
-        """Row of PillButtons; returns dict value -> button. Caller keeps it
-        in a group list so _paint_pill_groups can repaint all copies."""
-        return make_pill_group(parent, options, on_select,
-                               font_family=self.parent.FONT_FAMILY)
-
-    def _paint_pill_groups(self):
-        for groups_attr, current in (
-                ('_pos_pill_groups', self.roster_filters['position'].get()),
-                ('_age_pill_groups', self._age_filter_value()),
-                ('_ovr_pill_groups', self.roster_filters['overall_min'].get() or "All")):
-            for group in getattr(self, groups_attr, []):
-                for value, btn in group.items():
-                    btn.set_selected(value == current)
-
-    def _age_filter_value(self):
-        lo, hi = self.roster_filters['age_min'].get(), self.roster_filters['age_max'].get()
-        if not lo and not hi:
-            return "All"
-        if not lo and hi == "22":
-            return "U23"
-        if lo == "23" and hi == "29":
-            return "23-29"
-        if lo == "30" and not hi:
-            return "30+"
-        return "All"
-
-    def _set_age_filter(self, value):
-        f = self.roster_filters
-        presets = {"All": ("", ""), "U23": ("", "22"),
-                   "23-29": ("23", "29"), "30+": ("30", "")}
-        lo, hi = presets[value]
-        f['age_min'].set(lo)
-        f['age_max'].set(hi)
-        self._paint_pill_groups()
-        self._refresh_all_roster_tabs()
-
-    def _set_ovr_filter(self, value):
-        self.roster_filters['overall_min'].set("" if value == "All" else value)
-        self._paint_pill_groups()
-        self._refresh_all_roster_tabs()
-
-    def _refresh_all_roster_tabs(self):
-        for rt in ('nhl', 'ahl', 'prospects'):
-            try:
-                self.update_roster_tab(rt)
-            except Exception:
-                pass
-
-    def create_roster_toolbar(self, parent, roster_type):
-        """Create filtering and action toolbar for roster tabs."""
-        toolbar_frame = ttk.Frame(parent, style='Panel.TFrame', padding=10)
-        toolbar_frame.pack(fill=tk.X)
-
-        # Filter section
-        filter_frame = ttk.LabelFrame(toolbar_frame, text="Filters", )
-        filter_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-
-        filter_content = ttk.Frame(filter_frame, style='Panel.TFrame', padding=5)
-        filter_content.pack(fill=tk.X)
-
-        # Position filter pills (instant-apply, no dropdown)
-        ttk.Label(filter_content, text="Position:", style='Content.TLabel').pack(side=tk.LEFT)
-        if not hasattr(self, '_pos_pill_groups'):
-            self._pos_pill_groups = []
-        self._pos_pill_groups.append(self._make_pill_group(
-            filter_content, [(o, o) for o in ("All", "F", "D", "G")],
-            self.roster_filters['position'].get(), self._set_position_filter))
-
-        # Age filter pills (instant-apply, no text boxes)
-        ttk.Label(filter_content, text="Age:", style='Content.TLabel').pack(side=tk.LEFT, padx=(10, 5))
-        if not hasattr(self, '_age_pill_groups'):
-            self._age_pill_groups = []
-        self._age_pill_groups.append(self._make_pill_group(
-            filter_content, [("All", "All"), ("U23", "U23"),
-                             ("23-29", "23-29"), ("30+", "30+")],
-            self._age_filter_value(), self._set_age_filter))
-
-        # Overall rating filter pills (instant-apply, no text box)
-        ttk.Label(filter_content, text="Min OVR:", style='Content.TLabel').pack(side=tk.LEFT, padx=(10, 5))
-        if not hasattr(self, '_ovr_pill_groups'):
-            self._ovr_pill_groups = []
-        self._ovr_pill_groups.append(self._make_pill_group(
-            filter_content, [("All", "All"), ("70", "70+"),
-                             ("80", "80+"), ("90", "90+")],
-            self.roster_filters['overall_min'].get() or "All",
-            self._set_ovr_filter))
-        self._paint_pill_groups()
-
-        # Action buttons section
-        actions_frame = ttk.Frame(toolbar_frame, style='Panel.TFrame')
-        actions_frame.pack(side=tk.RIGHT)
-        
-        if roster_type == 'nhl':
-            ttk.Button(actions_frame, text="Send to AHL", 
-                      command=lambda: self.bulk_move_players('nhl', 'ahl'),
-                      style='TButton').pack(side=tk.LEFT, padx=2)
-            ttk.Button(actions_frame, text="Edit Lines", 
-                      command=self.open_lines_editor,
-                      style='Accent.TButton').pack(side=tk.LEFT, padx=2)
-        elif roster_type == 'ahl':
-            ttk.Button(actions_frame, text="Call Up", 
-                      command=lambda: self.bulk_move_players('ahl', 'nhl'),
-                      style='Accent.TButton').pack(side=tk.LEFT, padx=2)
-            ttk.Button(actions_frame, text="Send to Prospects", 
-                      command=lambda: self.bulk_move_players('ahl', 'prospects'),
-                      style='TButton').pack(side=tk.LEFT, padx=2)
-        elif roster_type == 'prospects':
-            ttk.Button(actions_frame, text="Promote to AHL", 
-                      command=lambda: self.bulk_move_players('prospects', 'ahl'),
-                      style='Accent.TButton').pack(side=tk.LEFT, padx=2)
-    
-    def create_enhanced_treeview(self, parent, columns, roster_type):
-        """Create an enhanced treeview with sorting and selection capabilities."""
-        # Treeview frame
-        tree_frame = ttk.Frame(parent, style='Panel.TFrame')
-        tree_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        # Create treeview
-        tree = ttk.Treeview(tree_frame, columns=list(columns.keys()), show='headings', 
-                           style='Enhanced.Treeview', height=20)
-        
-        # Configure columns
-        for col, (text, width) in columns.items():
-            tree.heading(col, text=text, command=lambda c=col: self.sort_treeview(tree, c, roster_type))
-            tree.column(col, width=width, anchor='center' if col not in ['name'] else 'w')
-        
-        # Scrollbars
-        v_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
-        h_scrollbar = ttk.Scrollbar(tree_frame, orient="horizontal", command=tree.xview)
-        tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
-        # Pack treeview and scrollbars
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        # Bind events
-        tree.bind('<Button-1>', lambda e: self.handle_tree_click(e, tree, roster_type))
-        tree.bind('<Double-1>', lambda e: self.handle_double_click(e, tree, roster_type))
-        tree.bind('<Button-3>', lambda e: self.show_context_menu(e, tree, roster_type))
-        
-        return tree
-    
-    def create_roster_summary(self, parent, roster_type):
-        """Create summary section for each roster tab."""
-        summary_frame = ttk.Frame(parent, style='Panel.TFrame', padding=10)
-        summary_frame.pack(fill=tk.X, pady=(10, 0))
-        
-        # Summary label
-        summary_label = ttk.Label(summary_frame, text="", style='Summary.TLabel',
-                                 font=(self.parent.FONT_FAMILY, 10))
-        summary_label.pack(side=tk.LEFT)
-        
-        # Store summary label reference
-        setattr(self, f'{roster_type}_summary_label', summary_label)
-        
-        # Selection actions on the right
-        selection_frame = ttk.Frame(summary_frame, style='Panel.TFrame')
-        selection_frame.pack(side=tk.RIGHT)
-        
-        ttk.Button(selection_frame, text="Select All", 
-                  command=lambda: self.select_all_players(roster_type),
-                  style='TButton').pack(side=tk.LEFT, padx=2)
-        ttk.Button(selection_frame, text="Clear Selection", 
-                  command=lambda: self.clear_selection(roster_type),
-                  style='TButton').pack(side=tk.LEFT, padx=2)
-    
     def create_forwards_depth_chart(self, parent):
         """Create forwards depth chart visualization."""
         body = self._depth_section_card(parent, "FORWARDS")
@@ -810,45 +612,82 @@ class RosterWindow(tk.Toplevel):
             row = self._depth_line_row(body, role)
             player = goalies[i] if i < len(goalies) else None
             self._depth_player_tile(row, player, "G")
-    
+    def create_salary_cap_tab(self):
+        """Create salary cap management tab."""
+        cap_frame = self._roster_tab_frame('cap')
+        self._cap_tab = cap_frame
+        self._build_salary_cap_content()
+
+    def _build_salary_cap_content(self):
+        """(Re)build the salary cap tab from current roster data."""
+        ct = self._ct
+        for child in self._cap_tab.winfo_children():
+            child.destroy()
+
+        header = ctk.CTkFrame(self._cap_tab, fg_color="transparent")
+        header.pack(fill="x", padx=10, pady=(12, 4))
+        self._heading(header, text="SALARY CAP MANAGEMENT", size=14).pack()
+
+        # Cap overview
+        self.create_cap_overview(self._cap_tab)
+
+        # Contract details
+        self.create_contract_breakdown(self._cap_tab)
+
     def create_cap_overview(self, parent):
         """Create salary cap overview section."""
-        overview_frame = ttk.Frame(parent, style='Panel.TFrame', padding=20)
-        overview_frame.pack(fill=tk.X)
-        
-        # Cap info grid
-        info_frame = ttk.Frame(overview_frame, style='Panel.TFrame')
-        info_frame.pack(fill=tk.X)
-        
+        ct = self._ct
+        card = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=12)
+        card.pack(fill="x", padx=10, pady=8)
+
         # Calculate salary cap info (shared with the header via _cap_numbers)
         salary_cap, current_salary, cap_space, dead_cap = self._cap_numbers()
         cap_percentage = (current_salary / salary_cap) * 100
-        
-        # Cap visualization
+
+        # Cap usage bar (pill-shaped progress bar)
+        bar_row = ctk.CTkFrame(card, fg_color="transparent")
+        bar_row.pack(fill="x", padx=18, pady=(14, 6))
+        ctk.CTkLabel(bar_row, text="Cap usage", font=("Segoe UI", 10, "bold"),
+                     text_color=ct['TEXT_DIM']).pack(side="left")
+        ctk.CTkLabel(bar_row, text=f"{cap_percentage:.1f}%",
+                     font=("Segoe UI", 10, "bold"),
+                     text_color=ct['TEAL']).pack(side="right")
+        bar = ctk.CTkProgressBar(card, height=12, corner_radius=6,
+                                 fg_color=ct['BORDER'], progress_color=ct['TEAL'])
+        bar.pack(fill="x", padx=18, pady=(0, 6))
+        bar.set(min(1.0, current_salary / salary_cap))
+
+        # Cap info grid
+        info = ctk.CTkFrame(card, fg_color="transparent")
+        info.pack(fill="x", padx=18, pady=(6, 14))
         cap_labels = [
             ("Salary Cap:", f"${salary_cap:,}"),
             ("Current Payroll:", f"${current_salary:,}"),
             ("Cap Space:", f"${cap_space:,}"),
-            ("Cap Usage:", f"{cap_percentage:.1f}%")
+            ("Cap Usage:", f"{cap_percentage:.1f}%"),
         ]
         if dead_cap:
             cap_labels.append(("Buyout Dead Cap:", f"${dead_cap:,}"))
-        
         for i, (label, value) in enumerate(cap_labels):
-            row = i // 2
-            col = (i % 2) * 2
-            
-            ttk.Label(info_frame, text=label, style='Info.TLabel').grid(row=row, column=col, sticky='w', padx=5, pady=2)
-            value_label = ttk.Label(info_frame, text=value, style='Value.TLabel', 
-                                  font=(self.parent.FONT_FAMILY, 11, 'bold'))
-            value_label.grid(row=row, column=col+1, sticky='w', padx=5, pady=2)
-    
+            row, col = i // 2, (i % 2) * 2
+            ctk.CTkLabel(info, text=label, font=("Segoe UI", 10),
+                         text_color=ct['TEXT_DIM']).grid(row=row, column=col,
+                                                         sticky='w', padx=5, pady=2)
+            ctk.CTkLabel(info, text=value, font=("Segoe UI", 11, "bold"),
+                         text_color=ct['TEXT']).grid(row=row, column=col + 1,
+                                                    sticky='w', padx=5, pady=2)
+
     def create_contract_breakdown(self, parent):
         """Create detailed contract breakdown."""
-        breakdown_frame = ttk.Frame(parent, style='Panel.TFrame', padding=20)
-        breakdown_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Contract treeview
+        ct = self._ct
+        card = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=12)
+        card.pack(fill="both", expand=True, padx=10, pady=8)
+
+        ctk.CTkLabel(card, text="Contracts", font=("Segoe UI", 12, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=18, pady=(12, 6))
+
+        # Contract table (dark styled treeview -- see create_enhanced_treeview
+        # for the design rationale)
         contract_columns = {
             'name': ('Player', 200),
             'pos': ('Pos', 50),
@@ -858,30 +697,35 @@ class RosterWindow(tk.Toplevel):
             'cap_hit': ('Cap Hit', 100),
             'status': ('Status', 100)
         }
-        
-        self.contract_tree = ttk.Treeview(breakdown_frame, columns=list(contract_columns.keys()), 
-                                   show='headings', height=15)
-        
+
+        table_frame = ctk.CTkFrame(card, fg_color="transparent")
+        table_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        self.contract_tree = ttk.Treeview(table_frame, columns=list(contract_columns.keys()),
+                                          show='headings', height=15,
+                                          style='Roster.Treeview')
         for col, (text, width) in contract_columns.items():
             self.contract_tree.heading(col, text=text)
-            self.contract_tree.column(col, width=width, anchor='center' if col != 'name' else 'w')
+            self.contract_tree.column(col, width=width,
+                                      anchor='center' if col != 'name' else 'w')
         make_tree_sortable(self.contract_tree)
-        
-        # Scrollbar for contracts
-        contract_scroll = ttk.Scrollbar(breakdown_frame, orient="vertical", command=self.contract_tree.yview)
+
+        contract_scroll = ttk.Scrollbar(table_frame, orient="vertical",
+                                        command=self.contract_tree.yview,
+                                        style='Roster.Vertical.TScrollbar')
         self.contract_tree.configure(yscrollcommand=contract_scroll.set)
-        
-        self.contract_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        contract_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
+        self.contract_tree.pack(side="left", fill="both", expand=True)
+        contract_scroll.pack(side="right", fill="y")
+
         # Populate contract data
         self.populate_contract_tree()
-    
+
     def populate_contract_tree(self):
-        """Populate the contract breakdown treeview."""
+        """Populate the contract breakdown table."""
         # Clear existing items
         self.contract_tree.delete(*self.contract_tree.get_children())
-        
+
         # Get all NHL roster players
         for player in sorted(self.parent.user_team.roster, key=lambda p: p.overall_rating(), reverse=True):
             # Get contract details
@@ -889,7 +733,7 @@ class RosterWindow(tk.Toplevel):
             years_left = getattr(player, 'contract_years', getattr(player.contract, 'years_remaining', 0))
             total_value = salary * years_left
             cap_hit = salary  # For simplicity, assuming cap hit equals salary
-            
+
             # Determine status
             if years_left <= 1:
                 status = "Expiring"
@@ -897,7 +741,7 @@ class RosterWindow(tk.Toplevel):
                 status = "Short-term"
             else:
                 status = "Long-term"
-            
+
             # Insert into tree
             values = [
                 player.full_name,
@@ -908,56 +752,268 @@ class RosterWindow(tk.Toplevel):
                 f"${cap_hit:,}",
                 status
             ]
-            
+
             self.contract_tree.insert('', 'end', values=values)
-    
+
     def create_action_footer(self, parent):
         """Create action buttons footer."""
-        footer_frame = ttk.Frame(parent, style='Panel.TFrame', padding=(0, 15, 0, 0))
-        footer_frame.pack(fill=tk.X)
-        
-        # Left side actions
-        left_actions = ttk.Frame(footer_frame, style='Panel.TFrame')
-        left_actions.pack(side=tk.LEFT)
-        
-        ttk.Button(left_actions, text="Trade Block", 
-                  command=self.parent.open_trade_block_window,
-                  style='TButton').pack(side=tk.LEFT, padx=5)
-        ttk.Button(left_actions, text="Contract Extensions", 
-                  command=self.parent.open_contract_extensions_window,
-                  style='TButton').pack(side=tk.LEFT, padx=5)
-        
-        # Right side actions
-        right_actions = ttk.Frame(footer_frame, style='Panel.TFrame')
-        right_actions.pack(side=tk.RIGHT)
-        
-        ttk.Button(right_actions, text="Export Roster", 
-                  command=self.export_roster,
-                  style='TButton').pack(side=tk.LEFT, padx=5)
-        ttk.Button(right_actions, text="Refresh", 
-                  command=self.update_views,
-                  style='TButton').pack(side=tk.LEFT, padx=5)
-        ttk.Button(right_actions, text="Close", 
-                  command=self.destroy,
-                  style='TButton').pack(side=tk.LEFT, padx=5)
-    
-    def setup_styles(self):
-        """Setup custom styles for the roster window."""
-        style = ttk.Style()
-        
-        # Enhanced treeview style
-        style.configure('Enhanced.Treeview', 
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.TEXT_COLOR,
-                       fieldbackground=self.parent.CONTENT_BG,
-                       borderwidth=0,
-                       font=(self.parent.FONT_FAMILY, 9))
-        
-        style.configure('Enhanced.Treeview.Heading',
-                       background=self.parent.TITLE_BAR_COLOR,
-                       foreground=self.parent.HEADER_COLOR,
-                       font=(self.parent.FONT_FAMILY, 9, 'bold'))
-    
+        footer = ctk.CTkFrame(parent, fg_color="transparent")
+        footer.pack(fill="x", pady=(12, 0))
+
+        left = ctk.CTkFrame(footer, fg_color="transparent")
+        left.pack(side="left")
+        self._secondary_button(left, text="Trade Block",
+                               command=self.parent.open_trade_block_window).pack(side="left", padx=5)
+        self._secondary_button(left, text="Contract Extensions",
+                               command=self.parent.open_contract_extensions_window).pack(side="left", padx=5)
+
+        right = ctk.CTkFrame(footer, fg_color="transparent")
+        right.pack(side="right")
+        self._secondary_button(right, text="Export Roster",
+                               command=self.export_roster).pack(side="left", padx=5)
+        self._secondary_button(right, text="Refresh",
+                               command=self.update_views).pack(side="left", padx=5)
+        self._secondary_button(right, text="Close",
+                               command=self.destroy).pack(side="left", padx=5)
+
+    def _setup_tree_style(self):
+        """Dark, flat styling for the roster tables.
+
+        Design decision (see migration guide): the roster tables carry
+        11-13 sortable columns plus checkbox multi-select and per-row
+        status tags. Rebuilding that as CTk frames would be a maintenance
+        burden with no readability gain, so the tables stay ttk.Treeview --
+        but styled to not look like a 2000s grid: no borders, no gridlines,
+        generous row height, dark headers, teal-tinted selection.
+        """
+        ct = self._ct
+        style = ttk.Style(self)
+
+        style.configure('Roster.Treeview',
+                        background=ct['CARD'],
+                        fieldbackground=ct['CARD'],
+                        foreground=ct['TEXT'],
+                        borderwidth=0,
+                        relief='flat',
+                        rowheight=30,
+                        font=('Segoe UI', 10))
+        style.configure('Roster.Treeview.Heading',
+                        background=ct['PANEL'],
+                        foreground=ct['TEXT'],
+                        font=('Segoe UI', 10, 'bold'),
+                        relief='flat',
+                        borderwidth=0)
+        style.map('Roster.Treeview',
+                  background=[('selected', ct['ROW_SELECTED'])],
+                  foreground=[('selected', ct['TEXT'])])
+        # Remove the dotted focus border around the tree area
+        style.layout('Roster.Treeview',
+                     [('Treeview.treearea', {'sticky': 'nswe'})])
+
+        # Dark scrollbars to match
+        style.configure('Roster.Vertical.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.configure('Roster.Horizontal.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.map('Roster.Vertical.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+        style.map('Roster.Horizontal.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+    # ------------------------------------------------------------------
+    # Toolbar / filters
+    # ------------------------------------------------------------------
+    def _make_pill_group(self, parent, options, current_value, on_select):
+        """Row of PillButtons; returns dict value -> button. Caller keeps it
+        in a group list so _paint_pill_groups can repaint all copies."""
+        return make_pill_group(parent, options, on_select,
+                               font_family=self.parent.FONT_FAMILY)
+
+    def _paint_pill_groups(self):
+        for groups_attr, current in (
+                ('_pos_pill_groups', self.roster_filters['position'].get()),
+                ('_age_pill_groups', self._age_filter_value()),
+                ('_ovr_pill_groups', self.roster_filters['overall_min'].get() or "All")):
+            for group in getattr(self, groups_attr, []):
+                for value, btn in group.items():
+                    btn.set_selected(value == current)
+
+    def _age_filter_value(self):
+        lo, hi = self.roster_filters['age_min'].get(), self.roster_filters['age_max'].get()
+        if not lo and not hi:
+            return "All"
+        if not lo and hi == "22":
+            return "U23"
+        if lo == "23" and hi == "29":
+            return "23-29"
+        if lo == "30" and not hi:
+            return "30+"
+        return "All"
+
+    def _set_age_filter(self, value):
+        f = self.roster_filters
+        presets = {"All": ("", ""), "U23": ("", "22"),
+                   "23-29": ("23", "29"), "30+": ("30", "")}
+        lo, hi = presets[value]
+        f['age_min'].set(lo)
+        f['age_max'].set(hi)
+        self._paint_pill_groups()
+        self._refresh_all_roster_tabs()
+
+    def _set_ovr_filter(self, value):
+        self.roster_filters['overall_min'].set("" if value == "All" else value)
+        self._paint_pill_groups()
+        self._refresh_all_roster_tabs()
+
+    def _set_position_filter(self, value):
+        """Set the position filter via pill and refresh all roster tabs."""
+        self.roster_filters['position'].set(value)
+        self._paint_pill_groups()
+        self._refresh_all_roster_tabs()
+
+    def _refresh_all_roster_tabs(self):
+        for rt in ('nhl', 'ahl', 'prospects'):
+            try:
+                self.update_roster_tab(rt)
+            except Exception:
+                pass
+
+    def create_roster_toolbar(self, parent, roster_type):
+        """Create filtering and action toolbar for roster tabs."""
+        ct = self._ct
+        toolbar = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=10)
+        toolbar.pack(fill="x", padx=10, pady=(10, 0))
+
+        # Filter pills on the left. PillButton is canvas-drawn and needs a
+        # plain tk parent for its bg lookup, so each group gets a tk.Frame
+        # wrapper tinted to match the card.
+        filters = ctk.CTkFrame(toolbar, fg_color="transparent")
+        filters.pack(side="left", padx=12, pady=8)
+
+        def _pill_row(label_text):
+            row = ctk.CTkFrame(filters, fg_color="transparent")
+            row.pack(side="left", padx=(0, 14))
+            ctk.CTkLabel(row, text=label_text, font=("Segoe UI", 10, "bold"),
+                         text_color=ct['TEXT_DIM']).pack(side="left", padx=(0, 6))
+            wrap = tk.Frame(row, bg=ct['CARD'])
+            wrap.pack(side="left")
+            return wrap
+
+        if not hasattr(self, '_pos_pill_groups'):
+            self._pos_pill_groups = []
+        self._pos_pill_groups.append(self._make_pill_group(
+            _pill_row("Position"), [(o, o) for o in ("All", "F", "D", "G")],
+            self.roster_filters['position'].get(), self._set_position_filter))
+
+        if not hasattr(self, '_age_pill_groups'):
+            self._age_pill_groups = []
+        self._age_pill_groups.append(self._make_pill_group(
+            _pill_row("Age"), [("All", "All"), ("U23", "U23"),
+                               ("23-29", "23-29"), ("30+", "30+")],
+            self._age_filter_value(), self._set_age_filter))
+
+        if not hasattr(self, '_ovr_pill_groups'):
+            self._ovr_pill_groups = []
+        self._ovr_pill_groups.append(self._make_pill_group(
+            _pill_row("Min OVR"), [("All", "All"), ("70", "70+"),
+                                   ("80", "80+"), ("90", "90+")],
+            self.roster_filters['overall_min'].get() or "All",
+            self._set_ovr_filter))
+        self._paint_pill_groups()
+
+        # Action buttons on the right
+        actions = ctk.CTkFrame(toolbar, fg_color="transparent")
+        actions.pack(side="right", padx=12, pady=8)
+
+        if roster_type == 'nhl':
+            self._secondary_button(actions, text="Send to AHL",
+                                   command=lambda: self.bulk_move_players('nhl', 'ahl')).pack(side="left", padx=3)
+            self._primary_button(actions, text="Edit Lines",
+                                 command=self.open_lines_editor).pack(side="left", padx=3)
+        elif roster_type == 'ahl':
+            self._primary_button(actions, text="Call Up",
+                                 command=lambda: self.bulk_move_players('ahl', 'nhl')).pack(side="left", padx=3)
+            self._secondary_button(actions, text="Send to Prospects",
+                                   command=lambda: self.bulk_move_players('ahl', 'prospects')).pack(side="left", padx=3)
+        elif roster_type == 'prospects':
+            self._primary_button(actions, text="Promote to AHL",
+                                 command=lambda: self.bulk_move_players('prospects', 'ahl')).pack(side="left", padx=3)
+
+    # ------------------------------------------------------------------
+    # Tables
+    # ------------------------------------------------------------------
+    def create_enhanced_treeview(self, parent, columns, roster_type):
+        """Create a dark-styled multi-column table with sorting/selection.
+
+        (See _setup_tree_style for why this stays a ttk.Treeview.)
+        """
+        ct = self._ct
+        table_frame = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=10)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        tree = ttk.Treeview(table_frame, columns=list(columns.keys()),
+                            show='headings', style='Roster.Treeview', height=20)
+
+        # Configure columns
+        for col, (text, width) in columns.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col: self.sort_treeview(tree, c, roster_type))
+            tree.column(col, width=width, anchor='center' if col not in ['name'] else 'w')
+
+        # Row status tags -- the old code assigned these tags but never
+        # configured them, so they were invisible. Now they actually style.
+        tree.tag_configure('selected', background=ct['ROW_SELECTED'])
+        tree.tag_configure('injured', foreground=ct['RED'])
+        tree.tag_configure('elite', foreground=ct['GOLD'])
+        tree.tag_configure('star', foreground=ct['TEAL'])
+
+        # Scrollbars
+        v_scrollbar = ttk.Scrollbar(table_frame, orient="vertical",
+                                    command=tree.yview,
+                                    style='Roster.Vertical.TScrollbar')
+        h_scrollbar = ttk.Scrollbar(table_frame, orient="horizontal",
+                                    command=tree.xview,
+                                    style='Roster.Horizontal.TScrollbar')
+        tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+
+        # Pack treeview and scrollbars
+        tree.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
+        v_scrollbar.pack(side="right", fill="y", padx=(0, 6), pady=10)
+        h_scrollbar.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
+
+        # Bind events
+        tree.bind('<Button-1>', lambda e: self.handle_tree_click(e, tree, roster_type))
+        tree.bind('<Double-1>', lambda e: self.handle_double_click(e, tree, roster_type))
+        tree.bind('<Button-3>', lambda e: self.show_context_menu(e, tree, roster_type))
+
+        return tree
+
+    def create_roster_summary(self, parent, roster_type):
+        """Create summary section for each roster tab."""
+        ct = self._ct
+        summary = ctk.CTkFrame(parent, fg_color="transparent")
+        summary.pack(fill="x", padx=10, pady=(0, 10))
+
+        summary_label = ctk.CTkLabel(summary, text="", font=("Segoe UI", 10),
+                                    text_color=ct['TEXT_DIM'])
+        summary_label.pack(side="left")
+        setattr(self, f'{roster_type}_summary_label', summary_label)
+
+        # Selection actions on the right
+        selection = ctk.CTkFrame(summary, fg_color="transparent")
+        selection.pack(side="right")
+        self._secondary_button(selection, text="Select All",
+                               command=lambda: self.select_all_players(roster_type)).pack(side="left", padx=3)
+        self._secondary_button(selection, text="Clear Selection",
+                               command=lambda: self.clear_selection(roster_type)).pack(side="left", padx=3)
+
     def _player_passes_filters(self, player):
         """True when the player matches the roster toolbar filters."""
         f = self.roster_filters
@@ -1000,7 +1056,7 @@ class RosterWindow(tk.Toplevel):
         return False
 
     def populate_roster_tree(self, tree, players, roster_type):
-        """Populate treeview with player data."""
+        """Populate table with player data."""
         # Clear existing items
         tree.delete(*tree.get_children())
         self.player_maps[roster_type] = {}
@@ -1011,7 +1067,7 @@ class RosterWindow(tk.Toplevel):
             # Selection checkbox
             is_selected = player.id in self.selected_players[roster_type]
             checkbox = "☑" if is_selected else "☐"
-            
+
             # Get player info (ratings on the 1-100 display scale, matching
             # the Min OVR filter pills; the sim itself runs on ~50-scale)
             name = player.full_name
@@ -1028,11 +1084,11 @@ class RosterWindow(tk.Toplevel):
             morale_raw = int(getattr(player, 'morale', 7) or 7)
             morale = f"{morale_raw * 10} {morale_label(morale_raw)}"
             injury_status = getattr(player, 'injury_status', 'Healthy')
-            
+
             # Basic values for all roster types
-            values = [checkbox, getattr(player, 'jersey_number', ''), name, position, 
+            values = [checkbox, getattr(player, 'jersey_number', ''), name, position,
                      age, overall, potential, f"${salary:,}", f"{contract_years}y", morale]
-            
+
             # Add roster-specific columns
             if roster_type == 'nhl':
                 toi = getattr(player, 'average_toi', '0:00')
@@ -1049,13 +1105,13 @@ class RosterWindow(tk.Toplevel):
                 development = self.calculate_development_trend(player)
                 eta = self.calculate_eta(player)
                 # Remove salary and contract columns for prospects, add prospect-specific data
-                values = [checkbox, name, position, age, overall, potential, 
+                values = [checkbox, name, position, age, overall, potential,
                          draft_year, draft_round, league, development, eta]
-            
+
             # Insert item
             item_id = tree.insert('', 'end', values=values)
             self.player_maps[roster_type][item_id] = player
-            
+
             # Apply tags for visual styling (thresholds on the 1-100 display
             # scale; identical to the old 47/44 internal-scale cutoffs)
             tags = []
@@ -1067,7 +1123,7 @@ class RosterWindow(tk.Toplevel):
                 tags.append('elite')
             elif overall >= 88:
                 tags.append('star')
-            
+
             if tags:
                 tree.item(item_id, tags=tags)
 
@@ -1076,7 +1132,7 @@ class RosterWindow(tk.Toplevel):
             set_tree_empty_state(tree, "No players match your filters")
         else:
             set_tree_empty_state(tree, "No players on this roster")
-    
+
     def calculate_performance_rating(self, player):
         """Calculate performance rating for NHL players (1-100 display scale)."""
         # Based on season performance; morale (1-10) nudges the rating
@@ -1085,12 +1141,12 @@ class RosterWindow(tk.Toplevel):
         variation = (morale_raw - 10) * 2
         performance = max(1, min(100, base_performance + variation))
         return f"{performance}"
-    
+
     def calculate_nhl_readiness(self, player):
         """Calculate NHL readiness percentage for AHL players."""
         readiness = min(100, max(0, (player.overall_rating() - 35) * 5))
         return f"{readiness:.0f}%"
-    
+
     def calculate_development_trend(self, player):
         """Calculate development trend."""
         if player.age <= 20:
@@ -1101,7 +1157,7 @@ class RosterWindow(tk.Toplevel):
             return "Slow ↗"
         else:
             return "Stable →"
-    
+
     def calculate_eta(self, player):
         """Calculate estimated time of arrival for prospects."""
         if player.overall_rating() >= 40:
@@ -1112,7 +1168,10 @@ class RosterWindow(tk.Toplevel):
             return "2-3 years"
         else:
             return "3+ years"
-    
+
+    # ------------------------------------------------------------------
+    # Table interaction
+    # ------------------------------------------------------------------
     def handle_tree_click(self, event, tree, roster_type):
         """Handle tree click events."""
         region = tree.identify_region(event.x, event.y)
@@ -1122,23 +1181,23 @@ class RosterWindow(tk.Toplevel):
                 item_id = tree.identify_row(event.y)
                 if item_id:
                     self.toggle_player_selection(item_id, tree, roster_type)
-    
+
     def handle_double_click(self, event, tree, roster_type):
         """Handle double-click to open player profile."""
         item_id = tree.identify_row(event.y)
         if item_id and item_id in self.player_maps[roster_type]:
             player = self.player_maps[roster_type][item_id]
             self.parent.open_player_profile(player)
-    
+
     def show_context_menu(self, event, tree, roster_type):
         """Show enhanced context menu for player actions using universal system."""
         item_id = tree.identify_row(event.y)
         if item_id and item_id in self.player_maps[roster_type]:
             player = self.player_maps[roster_type][item_id]
-            
+
             # Create roster-specific additional options
             roster_options = []
-            
+
             if roster_type == 'nhl':
                 roster_options = [
                     ("Send to AHL", lambda: self.move_player(player, 'nhl', 'ahl')),
@@ -1157,43 +1216,46 @@ class RosterWindow(tk.Toplevel):
             # Add contract options
             roster_options.append(("Contract Extension",
                                  lambda: self.parent.open_contract_negotiation_window(player, True)))
-            
+
             # Use universal context menu
             if not hasattr(self, 'context_menu_manager'):
                 self.context_menu_manager = PlayerContextMenu(self.parent)
-            
+
             self.context_menu_manager.show_context_menu(event, player, roster_options)
-    
+
     def toggle_player_selection(self, item_id, tree, roster_type):
         """Toggle player selection state."""
         if item_id in self.player_maps[roster_type]:
             player = self.player_maps[roster_type][item_id]
-            
+
             if player.id in self.selected_players[roster_type]:
                 self.selected_players[roster_type].remove(player.id)
                 checkbox = "☐"
+                # Drop the selected tag, keep status tags
+                tags = [t for t in tree.item(item_id, 'tags') if t != 'selected']
             else:
                 self.selected_players[roster_type].add(player.id)
                 checkbox = "☑"
-            
+                tags = list(tree.item(item_id, 'tags')) + ['selected']
+
             # Update checkbox display
             values = list(tree.item(item_id, 'values'))
             values[0] = checkbox
-            tree.item(item_id, values=values)
-            
+            tree.item(item_id, values=values, tags=tags)
+
             self.update_roster_summary(roster_type)
-    
+
     def sort_treeview(self, tree, col, roster_type):
-        """Sort treeview by column."""
+        """Sort table by column."""
         if self.sort_column == col:
             self.sort_reverse = not self.sort_reverse
         else:
             self.sort_column = col
             self.sort_reverse = False
-        
+
         # Get all items
         items = list(tree.get_children())
-        
+
         # Sort based on column
         def get_sort_key(item_id):
             values = tree.item(item_id, 'values')
@@ -1219,24 +1281,20 @@ class RosterWindow(tk.Toplevel):
                 except:
                     return 0
             return str(value).lower()
-        
+
         items.sort(key=get_sort_key, reverse=self.sort_reverse)
-        
+
         # Reorder items in tree
         for i, item_id in enumerate(items):
             tree.move(item_id, '', i)
-    
-    def _set_position_filter(self, value):
-        """Set the position filter via pill and refresh all roster tabs."""
-        self.roster_filters['position'].set(value)
-        self._paint_pill_groups()
-        self._refresh_all_roster_tabs()
 
+    # ------------------------------------------------------------------
+    # Roster management actions
+    # ------------------------------------------------------------------
     def apply_filters(self, roster_type):
         """Apply filters to roster view."""
-        # This would filter the displayed players based on the filter criteria
         self.update_roster_tab(roster_type)
-    
+
     def update_roster_tab(self, roster_type):
         """Update specific roster tab."""
         if roster_type == 'nhl':
@@ -1245,9 +1303,9 @@ class RosterWindow(tk.Toplevel):
             self.populate_roster_tree(self.ahl_tree, self.parent.user_team.ahl_roster, 'ahl')
         elif roster_type == 'prospects':
             self.populate_roster_tree(self.prospects_tree, self.parent.user_team.prospects, 'prospects')
-        
+
         self.update_roster_summary(roster_type)
-    
+
     def update_roster_summary(self, roster_type):
         """Update roster summary information."""
         if roster_type == 'nhl':
@@ -1256,28 +1314,28 @@ class RosterWindow(tk.Toplevel):
             total_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) for p in players)
             avg_age = sum(p.age for p in players) / len(players) if players else 0
             avg_overall = sum(to_100_scale(p.overall_rating()) for p in players) / len(players) if players else 0
-            
+
             summary = f"Players: {len(players)}/23 | Selected: {selected_count} | Total Salary: ${total_salary:,} | Avg Age: {avg_age:.1f} | Avg OVR: {avg_overall:.1f}"
-            self.nhl_summary_label.config(text=summary)
-        
+            self.nhl_summary_label.configure(text=summary)
+
         elif roster_type == 'ahl':
             players = self.parent.user_team.ahl_roster
             selected_count = len(self.selected_players['ahl'])
             avg_age = sum(p.age for p in players) / len(players) if players else 0
             avg_overall = sum(to_100_scale(p.overall_rating()) for p in players) / len(players) if players else 0
-            
+
             summary = f"Players: {len(players)}/20 | Selected: {selected_count} | Avg Age: {avg_age:.1f} | Avg OVR: {avg_overall:.1f}"
-            self.ahl_summary_label.config(text=summary)
-        
+            self.ahl_summary_label.configure(text=summary)
+
         elif roster_type == 'prospects':
             players = self.parent.user_team.prospects
             selected_count = len(self.selected_players['prospects'])
             avg_age = sum(p.age for p in players) / len(players) if players else 0
             high_potential = len([p for p in players if getattr(p, 'potential_grade', 'C') in ['A+', 'A', 'A-']])
-            
+
             summary = f"Prospects: {len(players)} | Selected: {selected_count} | High Potential: {high_potential} | Avg Age: {avg_age:.1f}"
-            self.prospects_summary_label.config(text=summary)
-    
+            self.prospects_summary_label.configure(text=summary)
+
     def select_all_players(self, roster_type):
         """Select all players in the roster."""
         if roster_type == 'nhl':
@@ -1286,23 +1344,23 @@ class RosterWindow(tk.Toplevel):
             players = self.parent.user_team.ahl_roster
         else:
             players = self.parent.user_team.prospects
-        
+
         self.selected_players[roster_type] = {p.id for p in players}
         self.update_roster_tab(roster_type)
-    
+
     def clear_selection(self, roster_type):
         """Clear all player selections."""
         self.selected_players[roster_type].clear()
         self.update_roster_tab(roster_type)
-    
+
     def bulk_move_players(self, from_roster, to_roster):
         """Move selected players between rosters."""
         selected_ids = self.selected_players[from_roster].copy()
-        
+
         if not selected_ids:
             tk.messagebox.showinfo("No Selection", "Please select players to move.")
             return
-        
+
         # Get source and destination lists
         if from_roster == 'nhl':
             source_list = self.parent.user_team.roster
@@ -1310,17 +1368,17 @@ class RosterWindow(tk.Toplevel):
             source_list = self.parent.user_team.ahl_roster
         else:
             source_list = self.parent.user_team.prospects
-        
+
         # Move players
         players_to_move = [p for p in source_list if p.id in selected_ids]
-        
+
         for player in players_to_move:
             self.move_player(player, from_roster, to_roster)
-        
+
         # Clear selections and update views
         self.selected_players[from_roster].clear()
         self.update_views()
-    
+
     def move_player(self, player, from_roster, to_roster):
         """Move a single player between rosters."""
         # Remove from source
@@ -1330,7 +1388,7 @@ class RosterWindow(tk.Toplevel):
             self.parent.user_team.ahl_roster.remove(player)
         else:
             self.parent.user_team.prospects.remove(player)
-        
+
         # Add to destination
         if to_roster == 'nhl':
             self.parent.user_team.roster.append(player)
@@ -1338,54 +1396,54 @@ class RosterWindow(tk.Toplevel):
             self.parent.user_team.ahl_roster.append(player)
         else:
             self.parent.user_team.prospects.append(player)
-        
+
         # Update any open windows
         self.parent.update_all_views()
-    
+
     def add_to_trade_block(self, player):
         """Add player to trade block."""
         if not hasattr(self.parent, 'trade_block'):
             self.parent.trade_block = []
-        
+
         if player not in self.parent.trade_block:
             self.parent.trade_block.append(player)
             tk.messagebox.showinfo("Trade Block", f"{player.full_name} added to trade block.")
         else:
             tk.messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
-    
+
     def open_lines_editor(self):
         """Open the live lines editor."""
         try:
             self.parent.open_edit_lines_window()
         except Exception:
             pass
-    
+
     def export_roster(self):
         """Export roster to CSV file."""
         try:
             from datetime import datetime
             import csv
             import os
-            
+
             # Create exports directory if it doesn't exist
             exports_dir = "exports"
             if not os.path.exists(exports_dir):
                 os.makedirs(exports_dir)
-            
+
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"roster_export_{self.parent.user_team.team_name.replace(' ', '_')}_{timestamp}.csv"
             filepath = os.path.join(exports_dir, filename)
-            
+
             # Collect all roster data
             roster_data = []
-            
+
             # Add NHL roster
             for player in self.parent.user_team.roster:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
-                
+
                 roster_data.append([
                     "NHL",
                     player.full_name,
@@ -1400,13 +1458,13 @@ class RosterWindow(tk.Toplevel):
                     getattr(player, 'points', 0),
                     getattr(player, 'plus_minus', 0)
                 ])
-            
+
             # Add AHL roster
             for player in self.parent.user_team.ahl_roster:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
-                
+
                 roster_data.append([
                     "AHL",
                     player.full_name,
@@ -1421,13 +1479,13 @@ class RosterWindow(tk.Toplevel):
                     getattr(player, 'points', 0),
                     getattr(player, 'plus_minus', 0)
                 ])
-            
+
             # Add Prospects
             for player in self.parent.user_team.prospects:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
-                
+
                 roster_data.append([
                     "Prospects",
                     player.full_name,
@@ -1442,46 +1500,53 @@ class RosterWindow(tk.Toplevel):
                     getattr(player, 'points', 0),
                     getattr(player, 'plus_minus', 0)
                 ])
-            
+
             # Write to CSV
-            headers = ["Level", "Name", "Position", "Age", "Overall", "Salary", "Years Left", 
+            headers = ["Level", "Name", "Position", "Age", "Overall", "Salary", "Years Left",
                       "GP", "G", "A", "PTS", "+/-"]
-            
+
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(headers)
                 writer.writerows(roster_data)
-            
-            tk.messagebox.showinfo("Export Successful", 
+
+            tk.messagebox.showinfo("Export Successful",
                                  f"Roster exported successfully!\n\n"
                                  f"File: {filename}\n"
                                  f"Location: {exports_dir}\n"
                                  f"Players exported: {len(roster_data)}")
-                                 
+
         except Exception as e:
             print(f"Error exporting roster: {e}")
             tk.messagebox.showerror("Export Error", f"Failed to export roster:\n{str(e)}")
-    
+
     def update_views(self):
         """Update all roster views."""
         self.update_roster_tab('nhl')
         self.update_roster_tab('ahl')
         self.update_roster_tab('prospects')
-        
+
         # Update header stats
         nhl_count = len(self.parent.user_team.roster)
         ahl_count = len(self.parent.user_team.ahl_roster)
         prospects_count = len(self.parent.user_team.prospects)
-        
+
         # Header cap figures (buyout dead cap included, matching the Salary Cap tab)
         _, _, cap_space, _ = self._cap_numbers()
         stats_text = f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | Prospects: {prospects_count} | Cap Space: ${cap_space:,}"
-        self.stats_label.config(text=stats_text)
+        self.stats_label.configure(text=stats_text)
 
-        # Update tab labels with counts
-        self.notebook.tab(0, text=f"NHL Roster ({nhl_count})")
-        self.notebook.tab(1, text=f"AHL Roster ({ahl_count})")
-        self.notebook.tab(2, text=f"Prospects ({prospects_count})")
+        # Update tab labels with counts (CTkTabview.rename keeps tab content)
+        for key, new_name in (('nhl', f"NHL Roster ({nhl_count})"),
+                              ('ahl', f"AHL Roster ({ahl_count})"),
+                              ('prospects', f"Prospects ({prospects_count})")):
+            old_name = self._tab_names[key]
+            if old_name != new_name:
+                try:
+                    self.tabview.rename(old_name, new_name)
+                except Exception:
+                    pass
+                self._tab_names[key] = new_name
 
         # Keep the Depth Chart and Salary Cap tabs in sync too, even when
         # they are not the currently visible tab
@@ -1490,7 +1555,7 @@ class RosterWindow(tk.Toplevel):
             self.refresh_salary_cap()
         except (tk.TclError, AttributeError):
             pass
-    
+
     def refresh_depth_chart(self):
         """Refresh the depth chart with current roster data."""
         try:
