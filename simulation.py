@@ -2218,7 +2218,12 @@ class GameSim:
         if self.current_defensive_system == DefensiveSystem.NEUTRAL_ZONE_TRAP:
             # Neutral zone trap increases chance of turnover
             if random.random() < 0.25:  # 25% chance
-                defender = random.choice(defending_skaters)
+                # the trap's middle-layer forward jumps the lane -- nearest
+                # defender, not a random one across the ice
+                defender, _ = self._nearest_defender(
+                    puck_carrier, defending_skaters)
+                if defender is None:
+                    defender = random.choice(defending_skaters)
                 if self._attempt_defensive_play(defender, puck_carrier, DefensiveAction.PASS_INTERCEPTION):
                     return self._resolve_turnover(puck_carrier, defender, TurnoverType.INTERCEPTION)
         
@@ -2874,7 +2879,7 @@ class GameSim:
 
         attacking_team: team with possession (or pressing). puck: (x, y).
         Shapes: attack (ozone setup), breakout (own end), neutral,
-        dzone (defending), forecheck.
+        dzone (defending), forecheck (2-1-2 with F1/F2/F3 by proximity).
         """
         self._ppos_ensure()
         if puck is None:
@@ -2914,16 +2919,22 @@ class GameSim:
                          "W": [(def_net + 34 * adir, 22.0), (def_net + 34 * adir, 63.0)],
                          "D": [(def_net + 8 * adir, 42.5), (def_net + 28 * adir, 42.5)]}
             elif shape == "dzone":
-                spots = {"C": [(def_net + 26 * adir, 42.5)],
-                         "W": [(def_net + 32 * adir, 24.0), (def_net + 32 * adir, 61.0)],
-                         "D": [(def_net + 14 * adir, 36.0), (def_net + 14 * adir, 49.0)]}
+                # low-zone coverage: D tie up in front of the net, C gives
+                # low support, strong-side W takes the point, weak-side W
+                # collapses to the back door.
+                shy = 24.0 if py < 42.5 else 61.0
+                why = 61.0 if py < 42.5 else 24.0
+                spots = {"C": [(def_net + 24 * adir, 42.5)],
+                         "W": [(def_net + 40 * adir, shy),
+                               (def_net + 30 * adir, why)],
+                         "D": [(def_net + 13 * adir, 36.0),
+                               (def_net + 13 * adir, 49.0)]}
             elif shape == "forecheck":
+                # 2-1-2 with real F1/F2/F3 roles, assigned below by
+                # proximity (nearest forward pressures, not always C).
                 spots = {"C": [(px - 10 * adir, 42.5)],
                          "W": [(px - 10 * adir, 28.0), (px - 10 * adir, 57.0)],
                          "D": [(px - 32 * adir, 32.0), (px - 32 * adir, 53.0)]}
-                # F1 hunts the puck
-                if centers:
-                    spots["C"] = [(px, py)]
             else:  # neutral: lanes stretched through the middle
                 spots = {"C": [(px + 2 * adir, 42.5)],
                          "W": [(px + 10 * adir, 25.0), (px + 10 * adir, 60.0)],
@@ -2939,6 +2950,35 @@ class GameSim:
             extras = centers[1:] + wings[2:] + ds[2:]
             for p in extras:
                 self._ppos_place(p, px - 18 * adir, 42.5)
+            if shape == "forecheck":
+                # 2-1-2 roles by proximity: F1 pressures the carrier from
+                # the middle (steering him to the boards), F2 supports on
+                # the strong side and kills the middle outlet, F3 stays
+                # high as the safety valve; D hold the line with gap.
+                fwds = centers + wings
+                by_dist = sorted(
+                    fwds,
+                    key=lambda p: self._ppos_dist(self._ppos_get(p), (px, py)))
+                strong_y = 24.0 if py < 42.5 else 61.0
+                weak_y = 61.0 if py < 42.5 else 24.0
+                mid_side = -1.0 if py < 42.5 else 1.0  # angle from the middle
+                if by_dist:
+                    self._ppos_place(by_dist[0], px + 2 * adir,
+                                     py + mid_side * 4.0, jitter=1.2)
+                if len(by_dist) > 1:
+                    self._ppos_place(by_dist[1], px - 11 * adir,
+                                     (py + strong_y) / 2.0, jitter=1.5)
+                if len(by_dist) > 2:
+                    self._ppos_place(by_dist[2], px - 20 * adir,
+                                     (py + weak_y) / 2.0, jitter=1.5)
+                ds_sorted = sorted(
+                    ds, key=lambda p: abs(self._ppos_get(p)[1] - py))
+                if ds_sorted:
+                    self._ppos_place(ds_sorted[0], px - 26 * adir,
+                                     strong_y, jitter=1.5)
+                if len(ds_sorted) > 1:
+                    self._ppos_place(ds_sorted[1], px - 30 * adir,
+                                     42.5, jitter=1.5)
             # puck carrier skates with the puck
             if carrier_id and is_att:
                 for p in skaters:
@@ -3130,7 +3170,11 @@ class GameSim:
             return "Turnover", self._resolve_faceoff()
 
         attacker = random.choice(attacking_skaters)
-        defender = random.choice(defending_skaters)
+        # the 1v1 battle is against the nearest checker, not a random
+        # defender across the ice
+        defender, _ = self._nearest_defender(attacker, defending_skaters)
+        if defender is None:
+            defender = random.choice(defending_skaters)
 
         attacker_roll = attacker.skating + attacker.deking + attacker.offensive_awareness + random.randint(-10, 10)
         defender_roll = defender.checking + defender.strength + defender.defensive_awareness + random.randint(-10, 10)
@@ -3258,7 +3302,9 @@ class GameSim:
         
         # Choose the blocker by weighted draw: attributes x archetype block
         # tendency, so defensive D/grinders block most but not exclusively.
-        best_blocker = self._weighted_skater_choice(defending_skaters, "block")
+        # Proximity: only nearby defenders can get in the lane.
+        best_blocker = self._weighted_skater_choice(
+            defending_skaters, "block", near=self._ppos_get(shooter))
         if best_blocker is None:
             return {'blocked': False, 'blocker': None}
         
@@ -3410,17 +3456,30 @@ class GameSim:
             upto += weight
         return items[-1]  # Fallback
 
-    def _weighted_skater_choice(self, skaters, tendency_key):
+    def _weighted_skater_choice(self, skaters, tendency_key, near=None,
+                                near_n=3):
         """Pick a skater weighted by archetype behavioral tendency.
 
         E.g. "shoot" makes snipers the shooter far more often than
         playmakers; "hit" makes power forwards/enforcers throw the hits.
         Trait bonuses (Big Hitter, Sniper, etc.) further weight selection.
         Falls back to uniform choice if anything goes wrong.
+
+        near: optional (x, y) point -- the draw is restricted to the
+        near_n closest skaters first, so hits come from F1 (the checker
+        actually on the puck) and blocks come from nearby defenders,
+        then tendency weights pick among them. Hockey IQ: nobody throws
+        a hit from across the ice.
         """
         if not skaters:
             return None
         try:
+            pool = skaters
+            if near is not None and len(skaters) > near_n:
+                pool = sorted(
+                    skaters,
+                    key=lambda p: self._ppos_dist(near, self._ppos_get(p))
+                )[:near_n]
             # Trait frequency multipliers per tendency
             _TRAIT_FREQ = {
                 "hit": "hit_frequency_mult",
@@ -3431,7 +3490,7 @@ class GameSim:
             recent = getattr(self, "_recent_shooters", None) \
                 if tendency_key == "shoot" else ()
             weights = []
-            for p in skaters:
+            for p in pool:
                 w = max(0.05, get_tendency(p, tendency_key))
                 if freq_key:
                     w *= _trait_bonus(p, freq_key)
@@ -3441,7 +3500,7 @@ class GameSim:
                 if recent and getattr(p, "id", None) in recent:
                     w *= 0.35  # you just shot; the puck moves on
                 weights.append(w)
-            pick = random.choices(skaters, weights=weights, k=1)[0]
+            pick = random.choices(pool, weights=weights, k=1)[0]
             if tendency_key == "shoot" and recent is not None:
                 recent.append(getattr(pick, "id", None))
             return pick
@@ -5266,7 +5325,11 @@ class GameSim:
             return None
         # Archetype tendency: the hitter is usually a power forward,
         # enforcer, grinder or physical defenseman - not a sniper.
-        potential_hitter = self._weighted_skater_choice(defending_skaters, "hit")
+        # Proximity: it's F1 (nearest to the puck), not someone across
+        # the ice.
+        potential_hitter = self._weighted_skater_choice(
+            defending_skaters, "hit",
+            near=self._ppos_get(puck_carrier) if puck_carrier else None)
         if potential_hitter is None:
             return None
         hit_result = self._attempt_hit(potential_hitter, puck_carrier, HitType.BODY_CHECK)
