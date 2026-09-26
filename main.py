@@ -4,6 +4,13 @@
 import random
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
+import customtkinter as ctk
+from ctk_theme import (
+    init_ctk_theme, primary_button, secondary_button, heading,
+    CTkPlayerList,
+    TEAL, BG, PANEL, CARD, TEXT, TEXT_DIM, TEXT_FAINT,
+    GOLD, GREEN, RED,
+)
 from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from game_classes import debug_print
@@ -10124,52 +10131,29 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
         messagebox.showinfo("Lines Updated", "Your team's best lines have been set!")
 
-class CleanEditLinesWindow(tk.Toplevel):
-    """Clean, simple, and intuitive line editor with proper contrast and readability"""
-    
+class CleanEditLinesWindow(ctk.CTkToplevel):
+    """Clean, simple, and intuitive line editor with proper contrast and readability.
+
+    CustomTkinter rebuild: rounded cards, CTkTabview tabs, CTkScrollableFrame
+    roster with rich draggable player cards, pill drop zones. Drag-and-drop,
+    chemistry, best-lines auto-fill, validation, face thumbnails, and saving
+    are all preserved from the ttk version.
+    """
+
+    DROP_BG = '#1c1c21'
+    DROP_HOVER = '#14332f'
+    ASSIGNED_BG = '#14332f'
+    FACE_BG = '#2b2b31'
+
     def __init__(self, parent):
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title("Edit Lines")
         self.geometry("1000x700")
-        self.configure(bg=parent.BG_COLOR)
+        self.configure(fg_color=BG)
         self.resizable(True, True)
-        
-        # Dark-theme field colors (match modern_ui.py AppColors)
-        self.ENTRY_BG = '#16161a'  # BG_ELEVATED for input fields
-        self.ENTRY_FG = '#ffffff'  # White text on dark background
-        self.LABEL_FG = parent.TEXT_COLOR  # Light text on dark background
 
-        # Configure custom style for dark theme
-        self.style = ttk.Style()
-        self.style.configure('Clean.TCombobox',
-                            fieldbackground='#16161a',
-                            background='#16161a',
-                            foreground='#ffffff',
-                            borderwidth=1,
-                            relief='flat',
-                            selectbackground='#00ceb8',
-                            selectforeground='white',
-                            arrowcolor='#a1a1aa',
-                            font=(parent.FONT_FAMILY, 10))
-
-        # Modern styling
-        self.style.configure('Modern.TFrame',
-                            background='#0e0e11',
-                            relief='flat',
-                            borderwidth=0)
-
-        self.style.configure('Card.TFrame',
-                            background='#16161a',
-                            relief='flat',
-                            borderwidth=0)
-
-        self.style.configure('Header.TLabel',
-                            background='#16161a',
-                            foreground='white',
-                            font=(parent.FONT_FAMILY, 12, 'bold'),
-                            padding=10)
-        
         # Drag and drop state
         self.drag_data = {"item": None, "source": None}
         self.player_widgets = {}  # Track all player display widgets
@@ -10179,26 +10163,26 @@ class CleanEditLinesWindow(tk.Toplevel):
         # keeps the editor opening instantly.
         self._face_photos = {}
         self._pending_faces = []
-        
+
         # Initialize lineup data
         self.lineup = getattr(parent.user_team, "lineup", None)
         if not self.lineup:
             self.lineup = best_lines(parent.user_team)
         parent.user_team.lineup = self.lineup
-        
+
         # Get players organized by position
-        self.forwards = [p for p in parent.user_team.roster 
-                        if p.primary_position.name in ['LEFT_WING', 'CENTER', 'RIGHT_WING']]
-        self.defensemen = [p for p in parent.user_team.roster 
-                          if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE', 'DEFENSE']]
-        self.goalies = [p for p in parent.user_team.roster 
-                       if p.primary_position.name == 'GOALIE']
-        
+        self.forwards = [p for p in parent.user_team.roster
+                         if p.primary_position.name in ['LEFT_WING', 'CENTER', 'RIGHT_WING']]
+        self.defensemen = [p for p in parent.user_team.roster
+                           if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE', 'DEFENSE']]
+        self.goalies = [p for p in parent.user_team.roster
+                        if p.primary_position.name == 'GOALIE']
+
         # Sort by overall rating
         self.forwards.sort(key=lambda p: p.overall_rating(), reverse=True)
         self.defensemen.sort(key=lambda p: p.overall_rating(), reverse=True)
         self.goalies.sort(key=lambda p: p.overall_rating(), reverse=True)
-        
+
         # Create the interface
         self.create_clean_interface()
         self.load_current_lineup()
@@ -10206,6 +10190,9 @@ class CleanEditLinesWindow(tk.Toplevel):
         # Fill in face thumbnails lazily so the window opens instantly.
         self.after(60, self._pump_face_queue)
 
+    # ------------------------------------------------------------------
+    # Face thumbnails (unchanged logic)
+    # ------------------------------------------------------------------
     def _face_photo(self, player, size=48):
         """Return a cached PhotoImage face thumbnail for a player.
 
@@ -10250,7 +10237,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                         continue
                     photo = self._face_photo(player, size)
                     if photo is not None:
-                        label.config(image=photo)
+                        label.configure(image=photo)
                         label.image = photo
                 except Exception:
                     pass
@@ -10258,325 +10245,270 @@ class CleanEditLinesWindow(tk.Toplevel):
                 self.after(25, self._pump_face_queue)
         except Exception:
             pass
-    
+
+    @staticmethod
+    def _ovr_color(ovr):
+        return CTkPlayerList._ovr_color(ovr)
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+    def create_clean_interface(self):
+        """Create a clean, easy-to-read interface."""
+        ff = self.parent.FONT_FAMILY
+
+        # Header
+        header_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0, height=80)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
+
+        header_content = ctk.CTkFrame(header_frame, fg_color="transparent")
+        header_content.pack(expand=True, fill='both', padx=20, pady=15)
+
+        ctk.CTkLabel(header_content, text="Line Editor",
+                      font=(ff, 18, 'bold'), text_color=TEXT).pack(side=tk.LEFT)
+
+        header_buttons = ctk.CTkFrame(header_content, fg_color="transparent")
+        header_buttons.pack(side=tk.RIGHT)
+
+        self.create_modern_button(header_buttons, "Auto Best Lines",
+                                  self.auto_populate_best_lines,
+                                  bg='#00ceb8', hover_bg='#00a894')
+        self.create_modern_button(header_buttons, "Save Lines",
+                                  self.save_lines_with_feedback,
+                                  bg='#00ceb8', hover_bg='#00a894')
+        self.create_modern_button(header_buttons, "Reset", self.reset_lines,
+                                  bg='#1e1e24', hover_bg='#2e2e38')
+
+        ctk.CTkLabel(header_content,
+                      text="Drag players from the roster to positions \u2022 Auto-assign or manually build your lines",
+                      font=(ff, 10), text_color=TEXT_DIM).pack(side=tk.LEFT, padx=(20, 0))
+
+        # Team overview card
+        stats_card = ctk.CTkFrame(self, fg_color=BG)
+        stats_card.pack(fill=tk.X, padx=20, pady=10)
+        self.create_team_overview(stats_card)
+
+        # Main content: roster panel | line tabs (grid replaces PanedWindow)
+        content_frame = ctk.CTkFrame(self, fg_color=BG)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        content_frame.grid_columnconfigure(0, weight=1)
+        content_frame.grid_columnconfigure(1, weight=3)
+        content_frame.grid_rowconfigure(0, weight=1)
+
+        # Left side - Player roster panel
+        self.create_roster_panel(content_frame)
+
+        # Right side - Line editing tabs
+        self.notebook = ctk.CTkTabview(content_frame, fg_color=PANEL, corner_radius=10)
+        self.notebook.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        for tab_name in ("Forwards", "Defense", "Goalies", "Special Teams"):
+            self.notebook.add(tab_name)
+
+        # Create tabs
+        self.create_forwards_tab()
+        self.create_defense_tab()
+        self.create_goalies_tab()
+        self.create_special_teams_tab()
+
     def create_team_overview(self, parent_frame):
-        """Create a quick team overview with key stats"""
-        overview_frame = ttk.LabelFrame(parent_frame, text="Team Overview", padding=10, style='TLabelframe')
-        overview_frame.pack(fill=tk.X, pady=5)
-        
+        """Create a quick team overview with key stats."""
+        ff = self.parent.FONT_FAMILY
+        card = ctk.CTkFrame(parent_frame, fg_color=PANEL, corner_radius=10)
+        card.pack(fill=tk.X, pady=5)
+
+        ctk.CTkLabel(card, text="Team Overview", font=(ff, 11, 'bold'),
+                      text_color=TEXT, anchor="w").pack(anchor="w", padx=14, pady=(10, 2))
+
         # Calculate team stats
         total_players = len(self.parent.user_team.roster)
         avg_rating = sum(p.overall_rating() for p in self.parent.user_team.roster) / max(total_players, 1)
-        
+
         # Top line rating
         if self.lineup and 'Forwards' in self.lineup and self.lineup['Forwards']:
             top_line = [p for p in self.lineup['Forwards'][0] if p is not None]
             top_line_rating = sum(p.overall_rating() for p in top_line) / max(len(top_line), 1) if top_line else 0
         else:
             top_line_rating = 0
-        
-        # Create info labels
-        info_frame = ttk.Frame(overview_frame)
-        info_frame.pack(fill=tk.X)
-        
-        ttk.Label(info_frame, text=f"Team Avg: {avg_rating:.1f}", 
-                 style='TLabel', font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Label(info_frame, text=f"Top Line: {top_line_rating:.1f}", 
-                 style='TLabel', font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Label(info_frame, text=f"Roster Size: {total_players}", 
-                 style='TLabel', font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.LEFT)
-    
-    def create_roster_panel(self, parent_paned):
-        """Create the draggable player roster panel"""
-        roster_frame = tk.Frame(parent_paned, bg='#0e0e11', relief='flat', bd=0)
-        parent_paned.add(roster_frame, weight=1)  # Takes less space
-        
-        # Modern header with subtle styling
-        header_frame = tk.Frame(roster_frame, bg='#16161a', height=50)
+
+        info_frame = ctk.CTkFrame(card, fg_color="transparent")
+        info_frame.pack(fill=tk.X, padx=14, pady=(0, 10))
+
+        ctk.CTkLabel(info_frame, text=f"Team Avg: {avg_rating:.1f}",
+                      font=(ff, 9), text_color=TEXT_DIM).pack(side=tk.LEFT, padx=(0, 20))
+        ctk.CTkLabel(info_frame, text=f"Top Line: {top_line_rating:.1f}",
+                      font=(ff, 9), text_color=TEXT_DIM).pack(side=tk.LEFT, padx=(0, 20))
+        ctk.CTkLabel(info_frame, text=f"Roster Size: {total_players}",
+                      font=(ff, 9), text_color=TEXT_DIM).pack(side=tk.LEFT)
+
+    def create_roster_panel(self, parent):
+        """Create the draggable player roster panel (gridded, replaces PanedWindow pane)."""
+        ff = self.parent.FONT_FAMILY
+        roster_frame = ctk.CTkFrame(parent, fg_color=BG)
+        roster_frame.grid(row=0, column=0, sticky="nsew")
+
+        # Header
+        header_frame = ctk.CTkFrame(roster_frame, fg_color=PANEL, corner_radius=10, height=50)
         header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
-        
-        header_content = tk.Frame(header_frame, bg='#16161a')
+
+        header_content = ctk.CTkFrame(header_frame, fg_color="transparent")
         header_content.pack(expand=True, fill='both', padx=15, pady=10)
-        
-        tk.Label(header_content, text="Active Roster", 
-                bg='#16161a', fg='white',
-                font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(side=tk.LEFT)
-        
-        tk.Label(header_content, text="Drag to Assign", 
-                bg='#16161a', fg='#a1a1aa',
-                font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.RIGHT)
-        
-        # Create notebook for different position groups with subtle styling
-        notebook_frame = tk.Frame(roster_frame, bg='#0e0e11')
-        notebook_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        roster_notebook = ttk.Notebook(notebook_frame, style='TNotebook')
-        roster_notebook.pack(fill=tk.BOTH, expand=True)
-        
+
+        ctk.CTkLabel(header_content, text="Active Roster",
+                      font=(ff, 14, 'bold'), text_color=TEXT).pack(side=tk.LEFT)
+        ctk.CTkLabel(header_content, text="Drag to Assign",
+                      font=(ff, 9), text_color=TEXT_DIM).pack(side=tk.RIGHT)
+
         # Position tabs
-        self.create_forwards_roster_tab(roster_notebook)
-        self.create_defense_roster_tab(roster_notebook)
-        self.create_goalies_roster_tab(roster_notebook)
-    
-    def create_forwards_roster_tab(self, notebook):
-        """Create draggable forwards roster"""
-        forwards_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(forwards_frame, text="Forwards")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(forwards_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(forwards_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Add draggable player widgets
-        for i, player in enumerate(self.forwards):
-            self.create_draggable_player_widget(scrollable_frame, player, "forward")
-    
-    def create_defense_roster_tab(self, notebook):
-        """Create draggable defense roster"""
-        defense_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(defense_frame, text="Defense")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(defense_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(defense_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Add draggable player widgets
-        for i, player in enumerate(self.defensemen):
-            self.create_draggable_player_widget(scrollable_frame, player, "defense")
-    
-    def create_goalies_roster_tab(self, notebook):
-        """Create draggable goalies roster"""
-        goalies_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(goalies_frame, text="Goalies")
-        
-        # Add draggable player widgets
-        for i, player in enumerate(self.goalies):
-            self.create_draggable_player_widget(goalies_frame, player, "goalie")
-    
+        roster_tabs = ctk.CTkTabview(roster_frame, fg_color=BG, corner_radius=10)
+        roster_tabs.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        for tab_name in ("Forwards", "Defense", "Goalies"):
+            roster_tabs.add(tab_name)
+
+        self.create_forwards_roster_tab(roster_tabs)
+        self.create_defense_roster_tab(roster_tabs)
+        self.create_goalies_roster_tab(roster_tabs)
+
+    def create_forwards_roster_tab(self, tabview):
+        """Create draggable forwards roster."""
+        scroll = ctk.CTkScrollableFrame(tabview.tab("Forwards"), fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        for player in self.forwards:
+            self.create_draggable_player_widget(scroll, player, "forward")
+
+    def create_defense_roster_tab(self, tabview):
+        """Create draggable defense roster."""
+        scroll = ctk.CTkScrollableFrame(tabview.tab("Defense"), fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        for player in self.defensemen:
+            self.create_draggable_player_widget(scroll, player, "defense")
+
+    def create_goalies_roster_tab(self, tabview):
+        """Create draggable goalies roster."""
+        scroll = ctk.CTkScrollableFrame(tabview.tab("Goalies"), fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        for player in self.goalies:
+            self.create_draggable_player_widget(scroll, player, "goalie")
+
     def create_draggable_player_widget(self, parent, player, position_type):
-        """Create a draggable player widget with comprehensive info"""
-        # Darker player card with modern styling - easier on the eyes
-        player_frame = tk.Frame(parent, bg='#16161a', relief='flat', bd=0, cursor='hand2')
-        player_frame.pack(fill=tk.X, pady=3, padx=8)
-        
-        # Darker card with rounded appearance
-        card_inner = tk.Frame(player_frame, bg='#1e1e24', relief='flat', bd=0)
-        card_inner.pack(fill=tk.X, padx=1, pady=1)
+        """Create a draggable player card with face, name, rating, archetype."""
+        ff = self.parent.FONT_FAMILY
+
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
+        card.pack(fill=tk.X, pady=3, padx=8)
+        try:
+            card.configure(cursor="hand2")
+        except Exception:
+            pass
 
         # Generated face thumbnail on the left (filled in lazily so the
         # editor opens instantly; the blank reserves the exact space).
-        face_label = tk.Label(card_inner, bg='#2b2b31', bd=0,
-                              image=self._face_blank(48))
-        face_label.image = self._face_photos.get(('blank', 48))
+        face_label = ctk.CTkLabel(card, text="", fg_color=self.FACE_BG, corner_radius=6,
+                                  image=self._face_blank(48), width=48, height=48)
         face_label.pack(side=tk.LEFT, padx=(8, 4), pady=8)
         self._pending_faces.append((player, face_label, 48))
 
-        # Bind drag events
-        for widget in [player_frame, card_inner, face_label]:
-            widget.bind('<Button-1>', lambda e: self.start_drag(e, player, player_frame))
+        # Bind drag events on the card + face
+        for widget in [card, face_label]:
+            widget.bind('<Button-1>', lambda e: self.start_drag(e, player, card))
             widget.bind('<B1-Motion>', self.on_drag)
             widget.bind('<ButtonRelease-1>', self.end_drag)
 
-        # Player info layout with darker styling
-        info_frame = tk.Frame(card_inner, bg='#1e1e24')
+        # Player info
+        info_frame = ctk.CTkFrame(card, fg_color="transparent")
         info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12), pady=8)
-        
-        # Top row - Name and rating with modern typography
-        top_row = tk.Frame(info_frame, bg='#1e1e24')
+
+        # Top row - Name and OVR
+        top_row = ctk.CTkFrame(info_frame, fg_color="transparent")
         top_row.pack(fill=tk.X)
-        
-        name_label = tk.Label(top_row, text=player.full_name, bg='#1e1e24', fg='white',
-                             font=(self.parent.FONT_FAMILY, 10, 'bold'), anchor='w')
+
+        name_label = ctk.CTkLabel(top_row, text=player.full_name,
+                                  font=(ff, 10, 'bold'), text_color=TEXT, anchor='w')
         name_label.pack(side=tk.LEFT)
-        
-        # Accent rating badge
-        rating_frame = tk.Frame(top_row, bg='#16161a', relief='flat')
-        rating_frame.pack(side=tk.RIGHT)
-        
-        rating_label = tk.Label(rating_frame, text=str(player.overall_rating()), bg='#16161a', fg='white',
-                               font=(self.parent.FONT_FAMILY, 9, 'bold'), padx=6, pady=2)
-        rating_label.pack()
-        
-        # Middle row - Position and condition with darker styling
-        middle_row = tk.Frame(info_frame, bg='#1e1e24')
+
+        ovr = player.overall_rating()
+        rating_label = ctk.CTkLabel(top_row, text=str(ovr),
+                                    font=(ff, 10, 'bold'),
+                                    text_color=self._ovr_color(ovr), anchor='e')
+        rating_label.pack(side=tk.RIGHT)
+
+        # Middle row - Position and condition
+        middle_row = ctk.CTkFrame(info_frame, fg_color="transparent")
         middle_row.pack(fill=tk.X, pady=(4, 0))
-        
-        pos_label = tk.Label(middle_row, text=f"{player.primary_position.name}", bg='#1e1e24', fg='#ffffff',
-                            font=(self.parent.FONT_FAMILY, 8))
+
+        try:
+            pos_name = player.primary_position.name.replace("_", " ").title()
+        except Exception:
+            pos_name = ""
+        pos_label = ctk.CTkLabel(middle_row, text=pos_name,
+                                 font=(ff, 8), text_color=TEXT_DIM, anchor='w')
         pos_label.pack(side=tk.LEFT)
-        
-        # Darker condition indicator
+
         condition = getattr(player, 'condition', 100)
-        condition_color = '#1e1e24'  # BG_HOVER pill for condition
-        condition_text = "" if condition > 85 else "" if condition > 70 else ""
-        
-        condition_frame = tk.Frame(middle_row, bg=condition_color, relief='flat')
-        condition_frame.pack(side=tk.RIGHT)
-        
-        condition_label = tk.Label(condition_frame, text=f"{condition_text} {condition}%", 
-                                  bg=condition_color, fg='white',
-                                  font=(self.parent.FONT_FAMILY, 8, 'bold'), padx=4, pady=1)
-        condition_label.pack()
-        
+        condition_label = ctk.CTkLabel(middle_row, text=f"{condition}%",
+                                       font=(ff, 8, 'bold'), text_color=TEXT_DIM,
+                                       fg_color=BG, corner_radius=6)
+        condition_label.pack(side=tk.RIGHT, padx=4)
+
         # Bottom row - Archetype and stats
-        bottom_row = tk.Frame(info_frame, bg='#1e1e24')
+        bottom_row = ctk.CTkFrame(info_frame, fg_color="transparent")
         bottom_row.pack(fill=tk.X, pady=(2, 0))
 
         try:
             arch = get_archetype(player)
         except Exception:
-            arch = "—"
-        arch_label = tk.Label(bottom_row, text=f"Archetype: {arch}", bg='#1e1e24', fg='#ffd166',
-                              font=(self.parent.FONT_FAMILY, 8, 'bold'))
+            arch = "\u2014"
+        arch_label = ctk.CTkLabel(bottom_row, text=f"Archetype: {arch}",
+                                 font=(ff, 8, 'bold'), text_color=GOLD, anchor='w')
         arch_label.pack(side=tk.LEFT)
 
+        stats_label = None
         if hasattr(player, 'stats'):
             goals = getattr(player.stats, 'goals', 0)
             assists = getattr(player.stats, 'assists', 0)
-            stats_label = tk.Label(bottom_row, text=f"  {goals}G  {assists}A", bg='#1e1e24', fg='#ffffff',
-                                  font=(self.parent.FONT_FAMILY, 8))
+            stats_label = ctk.CTkLabel(bottom_row, text=f"  {goals}G  {assists}A",
+                                       font=(ff, 8), text_color=TEXT_DIM, anchor='w')
             stats_label.pack(side=tk.LEFT)
-        
+
         # Store reference for tracking
         self.player_widgets[player.id] = {
-            'widget': player_frame,
+            'widget': card,
             'player': player,
             'position_type': position_type,
             'assigned_position': None
         }
-        
+
         # Bind drag events to all child widgets
-        drag_widgets = [info_frame, top_row, middle_row, name_label, rating_frame, rating_label,
-                        pos_label, condition_frame, condition_label,
-                        bottom_row, arch_label, face_label]
-        try:
+        drag_widgets = [info_frame, top_row, middle_row, name_label, rating_label,
+                        pos_label, condition_label, bottom_row, arch_label]
+        if stats_label is not None:
             drag_widgets.append(stats_label)
-        except NameError:
-            pass
         for widget in drag_widgets:
-            widget.bind('<Button-1>', lambda e: self.start_drag(e, player, player_frame))
+            widget.bind('<Button-1>', lambda e: self.start_drag(e, player, card))
             widget.bind('<B1-Motion>', self.on_drag)
             widget.bind('<ButtonRelease-1>', self.end_drag)
-    
-    def create_clean_interface(self):
-        """Create a clean, easy-to-read interface"""
-        # Modern header with gradient-like appearance
-        header_frame = tk.Frame(self, bg='#16161a', height=80)
-        header_frame.pack(fill=tk.X)
-        header_frame.pack_propagate(False)
-        
-        # Header content
-        header_content = tk.Frame(header_frame, bg='#16161a')
-        header_content.pack(expand=True, fill='both', padx=20, pady=15)
-        
-        title_label = tk.Label(header_content, text="Line Editor", 
-                              bg='#16161a', fg='white', 
-                              font=(self.parent.FONT_FAMILY, 18, 'bold'))
-        title_label.pack(side=tk.LEFT)
-        
-        # Modern action buttons in header
-        header_buttons = tk.Frame(header_content, bg='#16161a')
-        header_buttons.pack(side=tk.RIGHT)
-        
-        # Stylish buttons (teal primary, dark secondary)
-        self.create_modern_button(header_buttons, "Auto Best Lines", self.auto_populate_best_lines,
-                                 bg='#00ceb8', hover_bg='#00a894')
-        self.create_modern_button(header_buttons, "Save Lines", self.save_lines_with_feedback,
-                                 bg='#00ceb8', hover_bg='#00a894')
-        self.create_modern_button(header_buttons, "Reset", self.reset_lines,
-                                 bg='#1e1e24', hover_bg='#2e2e38')
-        
-        instruction_label = tk.Label(header_content, 
-                                   text="Drag players from the roster to positions • Auto-assign or manually build your lines", 
-                                   bg='#16161a', fg='#a1a1aa', 
-                                   font=(self.parent.FONT_FAMILY, 10))
-        instruction_label.pack(side=tk.LEFT, padx=(20, 0))
-        
-        # Team overview in a modern card
-        stats_card = tk.Frame(self, bg='#16161a', relief='flat', bd=0)
-        stats_card.pack(fill=tk.X, padx=20, pady=10)
-        
-        self.create_team_overview(stats_card)
-        
-        # Main content with modern styling
-        content_frame = tk.Frame(self, bg='#0e0e11')
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
-        
-        # Create main layout with roster panel and tabs
-        main_paned = ttk.PanedWindow(content_frame, orient=tk.HORIZONTAL)
-        main_paned.pack(fill=tk.BOTH, expand=True)
-        
-        # Left side - Player roster panel
-        self.create_roster_panel(main_paned)
-        
-        # Right side - Line editing tabs
-        self.notebook = ttk.Notebook(main_paned, style='TNotebook')
-        main_paned.add(self.notebook, weight=3)  # Takes more space
-        
-        # Create tabs
-        self.create_forwards_tab()
-        self.create_defense_tab()
-        self.create_goalies_tab()
-        self.create_special_teams_tab()
-    
+
     def create_modern_button(self, parent, text, command, bg='#00ceb8', hover_bg='#00a894'):
-        """Create a modern styled button with hover effects"""
-        button = tk.Button(parent, text=text, command=command,
-                          bg=bg, fg='white', border=0, relief='flat',
-                          font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                          padx=15, pady=8, cursor='hand2')
+        """Create a modern styled button (CTk)."""
+        if bg == '#00ceb8':
+            button = primary_button(parent, text, command=command)
+        else:
+            button = secondary_button(parent, text, command=command)
         button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Hover effects
-        def on_enter(e):
-            button.config(bg=hover_bg)
-        def on_leave(e):
-            button.config(bg=bg)
-        
-        button.bind('<Enter>', on_enter)
-        button.bind('<Leave>', on_leave)
-        
         return button
-    
+
+    # ------------------------------------------------------------------
+    # Best lines / save / notifications
+    # ------------------------------------------------------------------
     def auto_populate_best_lines(self):
         """Automatically populate all lines with the best available players"""
         # Clear all current assignments
         self.clear_all_assignments()
-        
+
         # Get best lineup using the existing algorithm
         best_lineup = best_lines(self.parent.user_team)
-        
+
         # Populate forward lines
         forward_lines = best_lineup.get('Forwards', [])
         for line_idx, line in enumerate(forward_lines[:4]):  # Max 4 lines
@@ -10587,7 +10519,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                         drop_zone = self.find_drop_zone_by_id(zone_id)
                         if drop_zone:
                             self.assign_player_to_zone(player, drop_zone)
-        
+
         # Populate defense pairs
         defense_pairs = best_lineup.get('Defense', [])
         for pair_idx, pair in enumerate(defense_pairs[:3]):  # Max 3 pairs
@@ -10598,7 +10530,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                         drop_zone = self.find_drop_zone_by_id(zone_id)
                         if drop_zone:
                             self.assign_player_to_zone(player, drop_zone)
-        
+
         # Populate goalies
         goalies_list = best_lineup.get('Goalies', [])
         for role_idx, player in enumerate(goalies_list[:2]):  # Max 2 goalies
@@ -10607,12 +10539,12 @@ class CleanEditLinesWindow(tk.Toplevel):
                 drop_zone = self.find_drop_zone_by_id(zone_id)
                 if drop_zone:
                     self.assign_player_to_zone(player, drop_zone)
-        
+
         # Populate Power Play units
         for pp_unit in range(2):  # PP1 and PP2
             pp_key = f'PP{pp_unit + 1}'
             pp_data = best_lineup.get(pp_key, {})
-            
+
             # PP Forwards (LW, C, RW)
             pp_forwards = pp_data.get('Forwards', [])
             position_names = ['LW', 'C', 'RW']
@@ -10622,7 +10554,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                     drop_zone = self.find_drop_zone_by_id(zone_id)
                     if drop_zone:
                         self.assign_player_to_zone(player, drop_zone)
-            
+
             # PP Defense (LD, RD)
             pp_defense = pp_data.get('Defense', [])
             defense_names = ['LD', 'RD']
@@ -10632,12 +10564,12 @@ class CleanEditLinesWindow(tk.Toplevel):
                     drop_zone = self.find_drop_zone_by_id(zone_id)
                     if drop_zone:
                         self.assign_player_to_zone(player, drop_zone)
-        
+
         # Populate Penalty Kill units
         for pk_unit in range(2):  # PK1 and PK2
             pk_key = f'PK{pk_unit + 1}'
             pk_data = best_lineup.get(pk_key, {})
-            
+
             # PK Forwards (LW, RW - only 2 forwards in PK)
             pk_forwards = pk_data.get('Forwards', [])
             forward_names = ['LW', 'RW']
@@ -10647,7 +10579,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                     drop_zone = self.find_drop_zone_by_id(zone_id)
                     if drop_zone:
                         self.assign_player_to_zone(player, drop_zone)
-            
+
             # PK Defense (LD, RD)
             pk_defense = pk_data.get('Defense', [])
             defense_names = ['LD', 'RD']
@@ -10657,100 +10589,90 @@ class CleanEditLinesWindow(tk.Toplevel):
                     drop_zone = self.find_drop_zone_by_id(zone_id)
                     if drop_zone:
                         self.assign_player_to_zone(player, drop_zone)
-        
+
         # Show success message
-        self.show_modern_notification("✅ Best Lines Set", "Your optimal lineup with special teams has been automatically configured!", "success")
-        
+        self.show_modern_notification("Best Lines Set",
+                                      "Your optimal lineup with special teams has been automatically configured!",
+                                      "success")
+
         # Refresh visual indicators
         self.refresh_roster_panel()
-    
+
     def save_lines_with_feedback(self):
         """Save the current lineup with user feedback"""
         try:
             # Extract and save lineup
             self.save_lineup_from_interface()
             self.parent.user_team.lineup = flatten_lineup(self.lineup)
-            
+
             # Show success notification
-            self.show_modern_notification("💾 Lines Saved", "Your lineup has been saved successfully!", "success")
-            
+            self.show_modern_notification("Lines Saved",
+                                          "Your lineup has been saved successfully!",
+                                          "success")
+
         except Exception as e:
             # Show error notification
-            self.show_modern_notification("❌ Save Failed", f"Error saving lineup: {str(e)}", "error")
-    
+            self.show_modern_notification("Save Failed",
+                                          f"Error saving lineup: {str(e)}", "error")
+
     def show_modern_notification(self, title, message, notification_type="info"):
-        """Show a modern notification popup"""
-        # Create notification window
-        notification = tk.Toplevel(self)
+        """Show a modern notification popup (CTk, no emoji)."""
+        ff = self.parent.FONT_FAMILY
+        notification = ctk.CTkToplevel(self)
         notification.title(title)
-        notification.geometry("350x150")
-        notification.configure(bg='#16161a')
+        notification.geometry("360x180")
+        notification.configure(fg_color=PANEL)
         notification.resizable(False, False)
-        
+
         # Center the notification
         notification.transient(self)
         notification.grab_set()
-        
-        # Color scheme based on type (dark theme)
-        colors = {
-            "success": {"bg": "#1d2b22", "border": "#3fb950", "icon": "✅"},
-            "error": {"bg": "#2b1d1f", "border": "#00ceb8", "icon": "❌"},
-            "info": {"bg": "#1b2630", "border": "#17a2b8", "icon": "ℹ️"}
+
+        # Accent color based on type (dark theme)
+        accents = {
+            "success": GREEN,
+            "error": RED,
+            "info": TEAL,
         }
-        
-        color_scheme = colors.get(notification_type, colors["info"])
-        
-        # Header
-        header_frame = tk.Frame(notification, bg=color_scheme["border"], height=40)
-        header_frame.pack(fill=tk.X)
-        header_frame.pack_propagate(False)
-        
-        header_content = tk.Frame(header_frame, bg=color_scheme["border"])
-        header_content.pack(expand=True, fill='both', padx=15, pady=8)
-        
-        tk.Label(header_content, text=f"{color_scheme['icon']} {title}", 
-                bg=color_scheme["border"], fg='white',
-                font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side=tk.LEFT)
-        
-        # Content
-        content_frame = tk.Frame(notification, bg=color_scheme["bg"])
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
-        tk.Label(content_frame, text=message, bg=color_scheme["bg"], fg='#ffffff',
-                font=(self.parent.FONT_FAMILY, 10), wraplength=300).pack()
-        
-        # OK button
-        button_frame = tk.Frame(content_frame, bg=color_scheme["bg"])
-        button_frame.pack(pady=(15, 0))
-        
-        ok_button = tk.Button(button_frame, text="OK", command=notification.destroy,
-                             bg=color_scheme["border"], fg='white', border=0, relief='flat',
-                             font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                             padx=20, pady=5, cursor='hand2')
-        ok_button.pack()
-        
+        accent = accents.get(notification_type, TEAL)
+
+        accent_bar = ctk.CTkFrame(notification, fg_color=accent, corner_radius=0, height=6)
+        accent_bar.pack(fill=tk.X)
+
+        ctk.CTkLabel(notification, text=title, font=(ff, 13, 'bold'),
+                      text_color=TEXT).pack(pady=(16, 6))
+        ctk.CTkLabel(notification, text=message, font=(ff, 10),
+                      text_color=TEXT_DIM, wraplength=300,
+                      justify="center").pack(padx=16)
+
+        secondary_button(notification, "OK",
+                         command=notification.destroy).pack(pady=14)
+
         # Auto-close after 3 seconds
         notification.after(3000, notification.destroy)
-    
+
+    # ------------------------------------------------------------------
+    # Drop-zone plumbing (logic unchanged; widget calls adapted to CTk)
+    # ------------------------------------------------------------------
     def clear_all_assignments(self):
         """Clear all player assignments from all drop zones"""
         for widget in self.winfo_children():
             self.clear_assignments_recursive(widget)
-        
+
         # Reset player widget tracking
         for player_id, widget_info in self.player_widgets.items():
             widget_info['assigned_position'] = None
-    
+
     def clear_assignments_recursive(self, widget):
         """Recursively clear all assignments"""
         if hasattr(widget, 'zone_id') and hasattr(widget, 'assigned_player'):
             if widget.assigned_player:
                 self.clear_drop_zone(widget, widget.zone_id)
-        
+
         # Check children
         for child in widget.winfo_children():
             self.clear_assignments_recursive(child)
-    
+
     def find_drop_zone_by_id(self, zone_id):
         """Find a drop zone by its ID"""
         for widget in self.winfo_children():
@@ -10758,177 +10680,152 @@ class CleanEditLinesWindow(tk.Toplevel):
             if found:
                 return found
         return None
-    
+
     def find_drop_zone_by_id_recursive(self, widget, zone_id):
         """Recursively find a drop zone by ID"""
         if hasattr(widget, 'zone_id') and widget.zone_id == zone_id:
             return widget
-        
+
         # Check children
         for child in widget.winfo_children():
             found = self.find_drop_zone_by_id_recursive(child, zone_id)
             if found:
                 return found
         return None
-    
+
+    # ------------------------------------------------------------------
+    # Line tabs
+    # ------------------------------------------------------------------
+    def _line_tab_scroll(self, tab_name):
+        """Scrollable container inside a line tab."""
+        return ctk.CTkScrollableFrame(self.notebook.tab(tab_name), fg_color="transparent")
+
     def create_forwards_tab(self):
         """Create the forwards tab with horizontal LW-C-RW layout and scrolling"""
-        forwards_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(forwards_frame, text="Forwards")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(forwards_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(forwards_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
+        ff = self.parent.FONT_FAMILY
+        scroll = self._line_tab_scroll("Forwards")
+        scroll.pack(fill="both", expand=True)
+
         self.forward_vars = []
-        
+        ice_times = ["22-25 min", "18-22 min", "12-16 min", "8-12 min"]
+
         for i in range(4):
-            # Line header with clear styling and line stats
-            line_frame = ttk.LabelFrame(scrollable_frame, text=f"Line {i+1} - {self.get_line_type_name(i)}", 
-                                       padding=15, style='TLabelframe')
-            line_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # Line info frame
-            line_info_frame = ttk.Frame(line_frame)
-            line_info_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # Ice time suggestion
-            ice_times = ["22-25 min", "18-22 min", "12-16 min", "8-12 min"]
-            ttk.Label(line_info_frame, text=f"Suggested Ice Time: {ice_times[i]}", 
-                     style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'italic')).pack(side=tk.LEFT)
-            
-            # Line rating display (will be updated when players are selected)
-            rating_label = ttk.Label(line_info_frame, text="Line Rating: --",
-                                   style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
+            # Line card with header
+            line_card = ctk.CTkFrame(scroll, fg_color=CARD, corner_radius=10)
+            line_card.pack(fill=tk.X, pady=(0, 10), padx=4)
+
+            header = ctk.CTkFrame(line_card, fg_color="transparent")
+            header.pack(fill=tk.X, padx=15, pady=(12, 4))
+            ctk.CTkLabel(header, text=f"Line {i+1} - {self.get_line_type_name(i)}",
+                          font=(ff, 12, 'bold'), text_color=TEXT,
+                          anchor="w").pack(side=tk.LEFT)
+
+            # Line rating display (updated when players are selected)
+            rating_label = ctk.CTkLabel(header, text="Line Rating: --",
+                                        font=(ff, 9, 'bold'), text_color=TEXT_DIM,
+                                        anchor="e")
             rating_label.pack(side=tk.RIGHT)
             if not hasattr(self, 'forward_rating_labels'):
                 self.forward_rating_labels = {}
             self.forward_rating_labels[i] = rating_label
-            
+
+            ctk.CTkLabel(line_card, text=f"Suggested Ice Time: {ice_times[i]}",
+                          font=(ff, 9, 'italic'), text_color=TEXT_FAINT,
+                          anchor="w").pack(anchor="w", padx=15, pady=(0, 6))
+
             # Horizontal position layout: LW - C - RW
-            positions_frame = ttk.Frame(line_frame)
-            positions_frame.pack(fill=tk.X, pady=5)
-            
+            positions_frame = ctk.CTkFrame(line_card, fg_color="transparent")
+            positions_frame.pack(fill=tk.X, padx=10, pady=(0, 12))
+
             positions = ["Left Wing", "Center", "Right Wing"]
             line_vars = []
-            
+
             for j, position in enumerate(positions):
                 # Create position column
-                pos_column = ttk.Frame(positions_frame)
+                pos_column = ctk.CTkFrame(positions_frame, fg_color="transparent")
                 pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-                
+
                 # Position label
-                pos_label = ttk.Label(pos_column, text=position, 
-                                     style='TLabel', font=(self.parent.FONT_FAMILY, 10, 'bold'))
-                pos_label.pack(pady=(0, 5))
-                
+                ctk.CTkLabel(pos_column, text=position,
+                              font=(ff, 10, 'bold'), text_color=TEXT_DIM,
+                              anchor="w").pack(anchor="w", pady=(0, 5))
+
                 # Drop zone for player
                 drop_zone = self.create_drop_zone(pos_column, f"forward_line_{i}_pos_{j}")
                 drop_zone.pack(fill=tk.BOTH, expand=True, ipady=20)
-                
+
                 line_vars.append(drop_zone)
-            
+
             self.forward_vars.append(line_vars)
-    
+
     def create_defense_tab(self):
         """Create the defense tab with horizontal LD-RD layout and scrolling"""
-        defense_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(defense_frame, text="Defense")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(defense_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(defense_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
+        ff = self.parent.FONT_FAMILY
+        scroll = self._line_tab_scroll("Defense")
+        scroll.pack(fill="both", expand=True)
+
         self.defense_vars = []
-        
+        ice_times = ["24-28 min", "20-24 min", "16-20 min"]
+
         for i in range(3):
-            # Pair header with clear styling
-            pair_frame = ttk.LabelFrame(scrollable_frame, text=f"Defense Pair {i+1} - {self.get_defense_pair_name(i)}", 
-                                       padding=15, style='TLabelframe')
-            pair_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # Pair info frame
-            pair_info_frame = ttk.Frame(pair_frame)
-            pair_info_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # Ice time suggestion
-            ice_times = ["24-28 min", "20-24 min", "16-20 min"]
-            ttk.Label(pair_info_frame, text=f"Suggested Ice Time: {ice_times[i]}", 
-                     style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'italic')).pack(side=tk.LEFT)
-            
+            # Pair card with header
+            pair_card = ctk.CTkFrame(scroll, fg_color=CARD, corner_radius=10)
+            pair_card.pack(fill=tk.X, pady=(0, 10), padx=4)
+
+            header = ctk.CTkFrame(pair_card, fg_color="transparent")
+            header.pack(fill=tk.X, padx=15, pady=(12, 4))
+            ctk.CTkLabel(header, text=f"Defense Pair {i+1} - {self.get_defense_pair_name(i)}",
+                          font=(ff, 12, 'bold'), text_color=TEXT,
+                          anchor="w").pack(side=tk.LEFT)
+
             # Pair rating display
-            rating_label = ttk.Label(pair_info_frame, text="Pair Rating: --",
-                                   style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
+            rating_label = ctk.CTkLabel(header, text="Pair Rating: --",
+                                        font=(ff, 9, 'bold'), text_color=TEXT_DIM,
+                                        anchor="e")
             rating_label.pack(side=tk.RIGHT)
             if not hasattr(self, 'defense_rating_labels'):
                 self.defense_rating_labels = {}
             self.defense_rating_labels[i] = rating_label
-            
+
+            ctk.CTkLabel(pair_card, text=f"Suggested Ice Time: {ice_times[i]}",
+                          font=(ff, 9, 'italic'), text_color=TEXT_FAINT,
+                          anchor="w").pack(anchor="w", padx=15, pady=(0, 6))
+
             # Horizontal position layout: LD - RD
-            positions_frame = ttk.Frame(pair_frame)
-            positions_frame.pack(fill=tk.X, pady=5)
-            
+            positions_frame = ctk.CTkFrame(pair_card, fg_color="transparent")
+            positions_frame.pack(fill=tk.X, padx=10, pady=(0, 12))
+
             positions = ["Left Defense", "Right Defense"]
             pair_vars = []
-            
+
             for j, position in enumerate(positions):
                 # Create position column
-                pos_column = ttk.Frame(positions_frame)
+                pos_column = ctk.CTkFrame(positions_frame, fg_color="transparent")
                 pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
-                
+
                 # Position label
-                pos_label = ttk.Label(pos_column, text=position, 
-                                     style='TLabel', font=(self.parent.FONT_FAMILY, 10, 'bold'))
-                pos_label.pack(pady=(0, 5))
-                
+                ctk.CTkLabel(pos_column, text=position,
+                              font=(ff, 10, 'bold'), text_color=TEXT_DIM,
+                              anchor="w").pack(anchor="w", pady=(0, 5))
+
                 # Drop zone for player
                 drop_zone = self.create_drop_zone(pos_column, f"defense_pair_{i}_pos_{j}")
                 drop_zone.pack(fill=tk.BOTH, expand=True, ipady=20)
-                
+
                 pair_vars.append(drop_zone)
-            
+
             self.defense_vars.append(pair_vars)
 
     def get_line_type_name(self, line_index):
         """Get descriptive name for each line"""
         line_types = ["Top Line", "Second Line", "Third Line", "Fourth Line"]
         return line_types[line_index] if line_index < len(line_types) else f"Line {line_index + 1}"
-    
+
     def get_defense_pair_name(self, pair_index):
         """Get descriptive name for each defense pair"""
         pair_types = ["Top Pair", "Second Pair", "Third Pair"]
         return pair_types[pair_index] if pair_index < len(pair_types) else f"Pair {pair_index + 1}"
-    
+
     def get_position_role_info(self, position, line_index):
         """Get role information for position based on line"""
         role_info = {
@@ -10938,33 +10835,7 @@ class CleanEditLinesWindow(tk.Toplevel):
             3: {"Left Wing": "Physical", "Center": "Faceoffs", "Right Wing": "Enforcer"}
         }
         return role_info.get(line_index, {}).get(position, "Versatile")
-    
-    def update_line_rating(self, line_index, rating_label):
-        """Update the line rating display when players change"""
-        if line_index >= len(self.forward_vars):
-            return
-            
-        line_vars = self.forward_vars[line_index]
-        players = []
-        
-        for combo, var in line_vars:
-            selection = var.get()
-            if selection and selection != "-- Select Player --":
-                player_name = selection.split(" (")[0]
-                player = next((p for p in self.forwards if p.full_name == player_name), None)
-                if player:
-                    players.append(player)
-        
-        if players:
-            avg_rating = sum(p.overall_rating() for p in players) / len(players)
-            chemistry_bonus = self.calculate_chemistry_bonus(players)
-            final_rating = avg_rating + chemistry_bonus
-            
-            color = "green" if final_rating >= 85 else "orange" if final_rating >= 75 else "red"
-            rating_label.config(text=f"Line Rating: {final_rating:.1f} (+{chemistry_bonus:.1f})")
-        else:
-            rating_label.config(text="Line Rating: --")
-    
+
     def calculate_chemistry_bonus(self, players):
         """Canonical chemistry bonus: archetype complementarity between linemates.
 
@@ -10977,80 +10848,86 @@ class CleanEditLinesWindow(tk.Toplevel):
             return float(line_chemistry_score(players))
         except Exception:
             return 0.0
-    
+
     def create_drop_zone(self, parent, zone_id):
         """Create a drop zone for players"""
-        drop_frame = tk.Frame(parent, bg='#1c1c21', relief='flat', bd=0, height=70)
+        ff = self.parent.FONT_FAMILY
+        drop_frame = ctk.CTkFrame(parent, fg_color=self.DROP_BG, corner_radius=10, height=70)
         drop_frame.pack_propagate(False)  # Maintain size
 
-        # Subtle placeholder with modern styling
-        placeholder_frame = tk.Frame(drop_frame, bg='#1c1c21')
-        placeholder_frame.pack(expand=True, fill='both', padx=10, pady=10)
-
-        text_label = tk.Label(placeholder_frame, text="Drop Player Here", bg='#1c1c21', fg='#8a8f98',
-                             font=(self.parent.FONT_FAMILY, 9))
-        text_label.pack()
+        # Subtle placeholder
+        placeholder = ctk.CTkLabel(drop_frame, text="Drop Player Here",
+                                   font=(ff, 9), text_color=TEXT_FAINT)
+        placeholder.pack(expand=True, fill='both', padx=10, pady=10)
 
         # Bind drop events and hover effects
-        for widget in [drop_frame, placeholder_frame, text_label]:
+        for widget in [drop_frame, placeholder]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_frame, zone_id))
             widget.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_frame))
             widget.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_frame))
-        
+
         # Store zone info
         drop_frame.zone_id = zone_id
         drop_frame.assigned_player = None
-        drop_frame.placeholder_frame = placeholder_frame
-        drop_frame.original_bg = '#1c1c21'
-        
+        drop_frame.placeholder = placeholder
+        drop_frame.original_bg = self.DROP_BG
+
         return drop_frame
-    
+
     def on_drop_zone_enter(self, drop_zone):
         """Handle mouse entering drop zone during drag"""
         if self.drag_data["item"] and not drop_zone.assigned_player:
-            drop_zone.config(bg='#14332f', relief='flat')  # Teal highlight
-    
+            drop_zone.configure(fg_color=self.DROP_HOVER)  # Teal highlight
+
     def on_drop_zone_leave(self, drop_zone):
         """Handle mouse leaving drop zone"""
         if not drop_zone.assigned_player:
-            drop_zone.config(bg=drop_zone.original_bg, relief='flat')
-    
+            drop_zone.configure(fg_color=drop_zone.original_bg)
+
     def start_drag(self, event, player, widget):
         """Start dragging a player"""
         self.drag_data["item"] = player
         self.drag_data["source"] = widget
-        widget.config(relief='raised', bd=3)
-        
-        # Change cursor to indicate dragging
-        widget.config(cursor='plus')
-    
+        widget.configure(border_width=2, border_color=TEAL)
+        try:
+            self.configure(cursor='plus')
+        except Exception:
+            pass
+
     def on_drag(self, event):
         """Handle drag motion"""
         if self.drag_data["item"]:
             # Update cursor position
             pass
-    
+
     def end_drag(self, event):
         """Handle end of drag - check for drop targets"""
         if not self.drag_data["item"]:
             return
-            
+
         # Reset source widget appearance
         if self.drag_data["source"]:
-            self.drag_data["source"].config(relief='raised', bd=1, cursor='hand2')
-        
+            try:
+                self.drag_data["source"].configure(border_width=0)
+            except Exception:
+                pass
+        try:
+            self.configure(cursor='')
+        except Exception:
+            pass
+
         # Find drop target under cursor
         x, y = event.widget.winfo_pointerx(), event.widget.winfo_pointery()
         target = self.winfo_containing(x, y)
-        
+
         if target:
             drop_zone = self.find_drop_zone_parent(target)
             if drop_zone:
                 self.handle_drop(self.drag_data["item"], drop_zone)
-        
+
         # Clear drag data
         self.drag_data = {"item": None, "source": None}
-    
+
     def find_drop_zone_parent(self, widget):
         """Find the drop zone parent of a widget"""
         current = widget
@@ -11059,124 +10936,121 @@ class CleanEditLinesWindow(tk.Toplevel):
                 return current
             current = current.master
         return None
-    
+
     def handle_drop(self, player, drop_zone):
         """Handle dropping a player on a drop zone"""
         if not drop_zone or not hasattr(drop_zone, 'zone_id'):
             return
-            
+
         # Check if player is compatible with this position
         zone_parts = drop_zone.zone_id.split('_')
         if len(zone_parts) >= 2:
             position_type = zone_parts[0]  # 'forward', 'defense', 'goalie'
-            
+
             # Validate position compatibility
             if not self.is_position_compatible(player, position_type):
                 # Show error message
-                tk.messagebox.showwarning("Invalid Position", 
-                                        f"{player.full_name} cannot be assigned to this position type.")
+                messagebox.showwarning("Invalid Position",
+                                       f"{player.full_name} cannot be assigned to this position type.")
                 return
-        
+
         # Clear any existing assignment for this player
         self.clear_player_assignments(player)
-        
+
         # Assign player to this drop zone
         self.assign_player_to_zone(player, drop_zone)
-        
+
         # Update line ratings if it's a forward line
         if 'forward_line' in drop_zone.zone_id:
             line_idx = int(zone_parts[2]) if len(zone_parts) > 2 else 0
             self.update_line_rating_for_drop_zones(line_idx)
-    
+
     def is_position_compatible(self, player, position_type):
         """Check if player can play this position type"""
         player_pos = player.primary_position.name
-        
+
         # Goalies can only play goalie positions
         if player_pos == 'GOALIE':
             return position_type == "goalie"
-        
+
         # Non-goalies can play any non-goalie position
         if position_type == "goalie":
             return False  # Only goalies can play goalie
-        
+
         # Allow forwards and defensemen to play any forward/defense/special teams position
         return position_type in ["forward", "defense", "powerplay", "penalty_kill"]
-    
+
     def clear_player_assignments(self, player):
         """Clear any existing assignments for this player"""
         # Update player widget tracking
         if player.id in self.player_widgets:
             self.player_widgets[player.id]['assigned_position'] = None
-        
+
         # Find and clear any drop zones containing this player
         for widget in self.winfo_children():
             self.clear_player_from_zones_recursive(widget, player)
-    
+
     def clear_player_from_zones_recursive(self, widget, player):
         """Recursively clear player from drop zones"""
         if hasattr(widget, 'zone_id') and hasattr(widget, 'assigned_player'):
             if widget.assigned_player and widget.assigned_player.id == player.id:
                 self.clear_drop_zone(widget, widget.zone_id)
-        
+
         # Check children
         for child in widget.winfo_children():
             self.clear_player_from_zones_recursive(child, player)
-    
+
     def assign_player_to_zone(self, player, drop_zone):
         """Assign a player to a drop zone"""
+        ff = self.parent.FONT_FAMILY
         # Clear the drop zone first
         for widget in drop_zone.winfo_children():
             widget.destroy()
-        
-        # Create subtle player display in drop zone
-        player_display = tk.Frame(drop_zone, bg='#2b2b31', relief='flat', bd=0)
-        player_display.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Subtle assigned player card
-        card_frame = tk.Frame(player_display, bg='#1e1e24', relief='flat')
-        card_frame.pack(fill='both', expand=True)
-        
-        # Player info with subtle styling
-        info_frame = tk.Frame(card_frame, bg='#1e1e24')
+
+        # Assigned player card
+        card_frame = ctk.CTkFrame(drop_zone, fg_color=self.FACE_BG, corner_radius=8)
+        card_frame.pack(fill='both', expand=True, padx=5, pady=5)
+
+        info_frame = ctk.CTkFrame(card_frame, fg_color="transparent")
         info_frame.pack(expand=True, fill='both', padx=8, pady=6)
 
         # Generated face thumbnail beside the name (single player, cached).
-        dz_face = tk.Label(info_frame, bg='#2b2b31', bd=0)
+        dz_face = ctk.CTkLabel(info_frame, text="", fg_color=self.FACE_BG,
+                               width=40, height=40, corner_radius=6)
         dz_photo = self._face_photo(player, 40)
         if dz_photo is None:
             dz_photo = self._face_blank(40)
         if dz_photo is not None:
-            dz_face.config(image=dz_photo)
+            dz_face.configure(image=dz_photo)
             dz_face.image = dz_photo
         dz_face.pack(side=tk.LEFT, padx=(0, 8))
 
-        text_col = tk.Frame(info_frame, bg='#1e1e24')
+        text_col = ctk.CTkFrame(info_frame, fg_color="transparent")
         text_col.pack(side=tk.LEFT, expand=True, fill='y')
 
-        name_label = tk.Label(text_col, text=player.full_name, bg='#1e1e24', fg='white',
-                             font=(self.parent.FONT_FAMILY, 9, 'bold'), anchor='w')
+        name_label = ctk.CTkLabel(text_col, text=player.full_name,
+                                  font=(ff, 9, 'bold'), text_color=TEXT, anchor='w')
         name_label.pack(anchor='w')
 
-        rating_label = tk.Label(text_col, text=f"{to_100_scale(player.overall_rating())}", bg='#1e1e24', fg='white',
-                               font=(self.parent.FONT_FAMILY, 8), anchor='w')
+        rating_label = ctk.CTkLabel(text_col, text=f"{to_100_scale(player.overall_rating())}",
+                                    font=(ff, 8), text_color=TEXT_DIM, anchor='w')
         rating_label.pack(anchor='w')
 
         try:
             arch = get_archetype(player)
         except Exception:
-            arch = "—"
-        arch_label = tk.Label(info_frame, text=arch, bg='#1e1e24', fg='#ffd166',
-                              font=(self.parent.FONT_FAMILY, 7, 'bold'))
+            arch = "\u2014"
+        arch_label = ctk.CTkLabel(info_frame, text=arch,
+                                  font=(ff, 7, 'bold'), text_color=GOLD, anchor='w')
         arch_label.pack(side=tk.LEFT, padx=(8, 0))
 
-        # Bind click to clear with subtle feedback
-        for widget in [player_display, card_frame, info_frame, name_label, rating_label, arch_label,
+        # Bind click to clear with hover feedback
+        for widget in [card_frame, info_frame, name_label, rating_label, arch_label,
                        dz_face, text_col]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, drop_zone.zone_id))
-            widget.bind('<Enter>', lambda e: card_frame.config(bg='#00ceb8'))  # Red on hover
-            widget.bind('<Leave>', lambda e: card_frame.config(bg='#1e1e24'))  # Back to gray
-        
+            widget.bind('<Enter>', lambda e: card_frame.configure(fg_color=TEAL))
+            widget.bind('<Leave>', lambda e: card_frame.configure(fg_color=self.FACE_BG))
+
         # Store assignment
         drop_zone.assigned_player = player
         if player.id in self.player_widgets:
@@ -11185,47 +11059,48 @@ class CleanEditLinesWindow(tk.Toplevel):
             self._refresh_ratings_for_zone(drop_zone.zone_id)
         except AttributeError:
             pass
-    
+
     def clear_drop_zone(self, drop_zone, zone_id):
         """Clear a drop zone"""
+        ff = self.parent.FONT_FAMILY
         # Clear assigned player
         if hasattr(drop_zone, 'assigned_player'):
             player = drop_zone.assigned_player
             if player and player.id in self.player_widgets:
                 self.player_widgets[player.id]['assigned_position'] = None
-        
+
         drop_zone.assigned_player = None
         try:
             self._refresh_ratings_for_zone(zone_id)
         except AttributeError:
             pass
-        
+
         # Clear widgets
         for widget in drop_zone.winfo_children():
             widget.destroy()
-        
-        # Restore subtle placeholder
-        placeholder_frame = tk.Frame(drop_zone, bg='#1c1c21')
-        placeholder_frame.pack(expand=True, fill='both', padx=10, pady=10)
 
-        text_label = tk.Label(placeholder_frame, text="Drop Player Here", bg='#1c1c21', fg='#8a8f98',
-                             font=(self.parent.FONT_FAMILY, 9))
-        text_label.pack()
+        # Restore subtle placeholder
+        placeholder = ctk.CTkLabel(drop_zone, text="Drop Player Here",
+                                   font=(ff, 9), text_color=TEXT_FAINT)
+        placeholder.pack(expand=True, fill='both', padx=10, pady=10)
 
         # Rebind events
-        for widget in [placeholder_frame, text_label]:
+        for widget in [placeholder]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, zone_id))
             widget.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_zone))
             widget.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_zone))
-        
-        drop_zone.placeholder_frame = placeholder_frame
-        
+        drop_zone.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, zone_id))
+        drop_zone.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_zone))
+        drop_zone.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_zone))
+
+        drop_zone.placeholder = placeholder
+
         # Update line ratings if it's a forward line
         if 'forward_line' in zone_id:
             zone_parts = zone_id.split('_')
             line_idx = int(zone_parts[2]) if len(zone_parts) > 2 else 0
             self.update_line_rating_for_drop_zones(line_idx)
-    
+
     def update_line_rating_for_drop_zones(self, line_index):
         """Update line rating for drop zone based lines."""
         if line_index >= len(self.forward_vars):
@@ -11239,16 +11114,22 @@ class CleanEditLinesWindow(tk.Toplevel):
             avg = sum(p.overall_rating() for p in players) / len(players)
             chem = self.calculate_chemistry_bonus(players)
             sign = "+" if chem >= 0 else ""
-            label.config(text=f"Line Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
+            label.configure(text=f"Line Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
             # Store for the breakdown popup; (re)bind click
             label._chem_players = list(players)
             label._chem_title = f"Line {line_index + 1} Chemistry"
             label.bind("<Button-1>", lambda e, l=label: self.show_chemistry_breakdown(l))
-            label.config(cursor="hand2")
+            try:
+                label.configure(cursor="hand2")
+            except Exception:
+                pass
         else:
-            label.config(text="Line Rating: --")
+            label.configure(text="Line Rating: --")
             label.unbind("<Button-1>")
-            label.config(cursor="")
+            try:
+                label.configure(cursor="")
+            except Exception:
+                pass
 
     def update_pair_rating_for_drop_zones(self, pair_index):
         """Update pair rating for drop zone based defense pairs."""
@@ -11263,73 +11144,80 @@ class CleanEditLinesWindow(tk.Toplevel):
             avg = sum(p.overall_rating() for p in players) / len(players)
             chem = self.calculate_chemistry_bonus(players)
             sign = "+" if chem >= 0 else ""
-            label.config(text=f"Pair Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
+            label.configure(text=f"Pair Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
             label._chem_players = list(players)
             label._chem_title = f"Defense Pair {pair_index + 1} Chemistry"
             label.bind("<Button-1>", lambda e, l=label: self.show_chemistry_breakdown(l))
-            label.config(cursor="hand2")
+            try:
+                label.configure(cursor="hand2")
+            except Exception:
+                pass
         else:
-            label.config(text="Pair Rating: --")
+            label.configure(text="Pair Rating: --")
             label.unbind("<Button-1>")
-            label.config(cursor="")
+            try:
+                label.configure(cursor="")
+            except Exception:
+                pass
 
     def show_chemistry_breakdown(self, label):
         """Popup explaining exactly what drives a line/pair's chemistry."""
+        ff = self.parent.FONT_FAMILY
         players = getattr(label, "_chem_players", [])
         title = getattr(label, "_chem_title", "Chemistry")
         total, drivers = line_chemistry_report(players)
 
-        popup = tk.Toplevel(self)
+        popup = ctk.CTkToplevel(self)
         popup.title(title)
-        popup.geometry("460x380")
-        popup.configure(bg="#16161a")
+        popup.geometry("460x400")
+        popup.configure(fg_color=PANEL)
         popup.transient(self)
 
-        header = tk.Frame(popup, bg="#16161a")
+        header = ctk.CTkFrame(popup, fg_color="transparent")
         header.pack(fill="x", padx=16, pady=(16, 8))
-        tk.Label(header, text=title, bg="#16161a", fg="white",
-                 font=(self.parent.FONT_FAMILY, 13, "bold")).pack(anchor="w")
+        ctk.CTkLabel(header, text=title, font=(ff, 13, "bold"),
+                      text_color=TEXT, anchor="w").pack(anchor="w")
         sign = "+" if total >= 0 else ""
-        color = "#3fb950" if total >= 0 else "#00ceb8"
-        tk.Label(header, text=f"Total chemistry: {sign}{total:g}", bg="#16161a",
-                 fg=color, font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w", pady=(4, 0))
-        tk.Label(header, text="Archetype pairings drive chemistry. "
-                 "Complementary styles boost it; duplicate roles clash.",
-                 bg="#16161a", fg="#a1a1aa",
-                 font=(self.parent.FONT_FAMILY, 9), wraplength=420,
-                 justify="left").pack(anchor="w", pady=(4, 0))
+        color = GREEN if total >= 0 else RED
+        ctk.CTkLabel(header, text=f"Total chemistry: {sign}{total:g}",
+                      font=(ff, 11, "bold"), text_color=color,
+                      anchor="w").pack(anchor="w", pady=(4, 0))
+        ctk.CTkLabel(header, text="Archetype pairings drive chemistry. "
+                     "Complementary styles boost it; duplicate roles clash.",
+                     font=(ff, 9), text_color=TEXT_DIM, wraplength=420,
+                     justify="left", anchor="w").pack(anchor="w", pady=(4, 0))
 
-        body = tk.Frame(popup, bg="#16161a")
-        body.pack(fill="both", expand=True, padx=16, pady=8)
+        body_frame = ctk.CTkScrollableFrame(popup, fg_color="transparent")
+        body_frame.pack(fill="both", expand=True, padx=16, pady=8)
         if not drivers:
-            tk.Label(body, text="No strong archetype relationships on this unit.\n"
-                     "Chemistry is neutral.",
-                     bg="#16161a", fg="#a1a1aa",
-                     font=(self.parent.FONT_FAMILY, 10)).pack(anchor="w")
+            ctk.CTkLabel(body_frame, text="No strong archetype relationships on this unit.\n"
+                         "Chemistry is neutral.",
+                         font=(ff, 10), text_color=TEXT_DIM,
+                         anchor="w", justify="left").pack(anchor="w")
         for text, value in drivers:
-            row = tk.Frame(body, bg="#16161a")
+            row = ctk.CTkFrame(body_frame, fg_color="transparent")
             row.pack(fill="x", pady=3)
-            dot_color = "#3fb950" if value > 0 else "#00ceb8"
-            dot = tk.Canvas(row, width=10, height=10, bg="#16161a",
+            dot_color = GREEN if value > 0 else RED
+            dot = tk.Canvas(row, width=10, height=10, bg=PANEL,
                             highlightthickness=0)
             dot.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
             dot.pack(side="left", padx=(0, 8))
-            tk.Label(row, text=text, bg="#16161a", fg="white",
-                     font=(self.parent.FONT_FAMILY, 9), wraplength=400,
-                     justify="left", anchor="w").pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(row, text=text, font=(ff, 9), text_color=TEXT,
+                         wraplength=380, justify="left",
+                         anchor="w").pack(side="left", fill="x", expand=True)
 
         # Archetype legend for the unit's players
-        legend = tk.Frame(popup, bg="#16161a")
+        legend = ctk.CTkFrame(popup, fg_color="transparent")
         legend.pack(fill="x", padx=16, pady=(8, 16))
-        tk.Label(legend, text="Archetypes on this unit:", bg="#16161a",
-                 fg="#a1a1aa", font=(self.parent.FONT_FAMILY, 9, "bold")).pack(anchor="w")
+        ctk.CTkLabel(legend, text="Archetypes on this unit:",
+                      font=(ff, 9, "bold"), text_color=TEXT_DIM,
+                      anchor="w").pack(anchor="w")
         for p in players:
             arch = get_archetype(p)
             strength = ARCHETYPE_STRENGTHS.get(arch, "")
-            tk.Label(legend, text=f"• {p.full_name}: {arch}" + (f" — {strength}" if strength else ""),
-                     bg="#16161a", fg="white",
-                     font=(self.parent.FONT_FAMILY, 9), wraplength=420,
-                     justify="left", anchor="w").pack(anchor="w")
+            ctk.CTkLabel(legend, text=f"\u2022 {p.full_name}: {arch}" + (f" \u2014 {strength}" if strength else ""),
+                         font=(ff, 9), text_color=TEXT, wraplength=420,
+                         justify="left", anchor="w").pack(anchor="w")
 
     def _refresh_ratings_for_zone(self, zone_id):
         """Refresh line/pair rating labels affected by a drop-zone change."""
@@ -11348,21 +11236,21 @@ class CleanEditLinesWindow(tk.Toplevel):
             self.update_line_rating_for_drop_zones(i)
         for i in range(len(getattr(self, 'defense_vars', []))):
             self.update_pair_rating_for_drop_zones(i)
-    
+
     def refresh_roster_panel(self):
         """Refresh the roster panel to show current assignments"""
         # Update visual indicators on player widgets to show assignments
         for player_id, widget_info in self.player_widgets.items():
             widget = widget_info['widget']
             assigned_pos = widget_info['assigned_position']
-            
+
             if assigned_pos:
-                # Change appearance to show assigned
-                widget.config(bg='#14332f', relief='flat')
+                # Tint to show assigned
+                widget.configure(fg_color=self.ASSIGNED_BG)
             else:
                 # Reset to unassigned appearance
-                widget.config(bg='#16161a', relief='flat')
-    
+                widget.configure(fg_color=CARD)
+
     def extract_lineup_from_drop_zones(self):
         """Extract the current lineup from all drop zones"""
         lineup = {
@@ -11372,18 +11260,18 @@ class CleanEditLinesWindow(tk.Toplevel):
             'PowerPlay': [None] * 2,
             'PenaltyKill': [None] * 2
         }
-        
+
         # Walk through all widgets to find drop zones
         self.extract_assignments_recursive(self, lineup)
-        
+
         return lineup
-    
+
     def extract_assignments_recursive(self, widget, lineup):
         """Recursively extract assignments from drop zones"""
         if hasattr(widget, 'zone_id') and hasattr(widget, 'assigned_player'):
             zone_id = widget.zone_id
             player = widget.assigned_player
-            
+
             if player and zone_id:
                 # Parse zone ID and assign to appropriate lineup position
                 if 'forward_line' in zone_id:
@@ -11398,7 +11286,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                                 lineup['Forwards'][line_idx][pos_idx] = player
                         except ValueError:
                             pass  # Skip invalid zone IDs
-                
+
                 elif 'defense_pair' in zone_id:
                     parts = zone_id.split('_')
                     if len(parts) >= 5:
@@ -11411,7 +11299,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                                 lineup['Defense'][pair_idx][pos_idx] = player
                         except ValueError:
                             pass  # Skip invalid zone IDs
-                
+
                 elif 'goalie_role' in zone_id:
                     parts = zone_id.split('_')
                     if len(parts) >= 3:
@@ -11421,7 +11309,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                                 lineup['Goalies'][role_idx] = player
                         except ValueError:
                             pass  # Skip invalid zone IDs
-                
+
                 elif 'powerplay' in zone_id:
                     # Handle powerplay zones: powerplay_0_LW, powerplay_1_C, etc.
                     parts = zone_id.split('_')
@@ -11429,14 +11317,14 @@ class CleanEditLinesWindow(tk.Toplevel):
                         try:
                             pp_unit = int(parts[1])  # 0 or 1
                             position = parts[2]  # LW, C, RW, LD, RD
-                            
+
                             if pp_unit < 2:
                                 if not lineup['PowerPlay'][pp_unit]:
                                     lineup['PowerPlay'][pp_unit] = {}
                                 lineup['PowerPlay'][pp_unit][position] = player
                         except (ValueError, IndexError):
                             pass  # Skip invalid zone IDs
-                
+
                 elif 'penalty_kill' in zone_id:
                     # Handle penalty kill zones: penalty_kill_0_LW, penalty_kill_1_RD, etc.
                     parts = zone_id.split('_')
@@ -11444,134 +11332,126 @@ class CleanEditLinesWindow(tk.Toplevel):
                         try:
                             pk_unit = int(parts[2])  # 0 or 1
                             position = parts[3]  # LW, RW, LD, RD
-                            
+
                             if pk_unit < 2:
                                 if not lineup['PenaltyKill'][pk_unit]:
                                     lineup['PenaltyKill'][pk_unit] = {}
                                 lineup['PenaltyKill'][pk_unit][position] = player
                         except (ValueError, IndexError):
                             pass  # Skip invalid zone IDs
-        
+
         # Check children
         for child in widget.winfo_children():
             self.extract_assignments_recursive(child, lineup)
-    
+
     def create_goalies_tab(self):
         """Create the goalies tab with clean, readable layout"""
-        goalies_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(goalies_frame, text="Goalies")
-        
+        ff = self.parent.FONT_FAMILY
+        tab = self.notebook.tab("Goalies")
+
         self.goalie_vars = []
         roles = ["Starting Goalie", "Backup Goalie"]
-        
+
         for i, role in enumerate(roles):
-            # Goalie frame
-            goalie_frame = ttk.LabelFrame(goalies_frame, text=role, 
-                                         padding=15, style='TLabelframe')
-            goalie_frame.pack(fill=tk.X, pady=(0, 15))
-            
+            # Goalie card
+            goalie_card = ctk.CTkFrame(tab, fg_color=CARD, corner_radius=10)
+            goalie_card.pack(fill=tk.X, pady=(0, 15), padx=4)
+
+            ctk.CTkLabel(goalie_card, text=role, font=(ff, 12, 'bold'),
+                          text_color=TEXT, anchor="w").pack(anchor="w", padx=15, pady=(12, 6))
+
             # Create drop zone instead of combobox
-            drop_zone = self.create_drop_zone(goalie_frame, f"goalie_role_{i}")
-            drop_zone.pack(pady=5, fill=tk.X)
-            
+            drop_zone = self.create_drop_zone(goalie_card, f"goalie_role_{i}")
+            drop_zone.pack(pady=(0, 12), padx=10, fill=tk.X)
+
             self.goalie_vars.append(drop_zone)
-    
+
     def create_special_teams_tab(self):
         """Create the special teams tab with horizontal layouts and scrolling"""
-        special_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(special_frame, text="Special Teams")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(special_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(special_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
+        ff = self.parent.FONT_FAMILY
+        scroll = self._line_tab_scroll("Special Teams")
+        scroll.pack(fill="both", expand=True)
+
         # Power Play section
-        pp_frame = ttk.LabelFrame(scrollable_frame, text="Power Play Units", padding=15, style='TLabelframe')
-        pp_frame.pack(fill=tk.X, pady=(0, 15))
-        
+        pp_card = ctk.CTkFrame(scroll, fg_color=CARD, corner_radius=10)
+        pp_card.pack(fill=tk.X, pady=(0, 15), padx=4)
+        ctk.CTkLabel(pp_card, text="Power Play Units", font=(ff, 12, 'bold'),
+                      text_color=TEXT, anchor="w").pack(anchor="w", padx=15, pady=(12, 6))
+
         self.powerplay_vars = []
-        
+
         for i in range(2):  # PP1 and PP2
-            unit_frame = ttk.LabelFrame(pp_frame, text=f"Power Play {i+1}", padding=10, style='TLabelframe')
-            unit_frame.pack(fill=tk.X, pady=5)
-            
+            unit_card = ctk.CTkFrame(pp_card, fg_color=PANEL, corner_radius=8)
+            unit_card.pack(fill=tk.X, padx=10, pady=5)
+            ctk.CTkLabel(unit_card, text=f"Power Play {i+1}", font=(ff, 10, 'bold'),
+                          text_color=TEXT_DIM, anchor="w").pack(anchor="w", padx=12, pady=(8, 4))
+
             # Horizontal layout: LW - C - RW - LD - RD
-            positions_frame = ttk.Frame(unit_frame)
-            positions_frame.pack(fill=tk.X, pady=5)
-            
+            positions_frame = ctk.CTkFrame(unit_card, fg_color="transparent")
+            positions_frame.pack(fill=tk.X, padx=6, pady=(0, 10))
+
             unit_vars = []
             positions = ["LW", "C", "RW", "LD", "RD"]
             position_names = ["Left Wing", "Center", "Right Wing", "Left Defense", "Right Defense"]
-            
+
             for j, (pos, pos_name) in enumerate(zip(positions, position_names)):
                 # Create position column
-                pos_column = ttk.Frame(positions_frame)
+                pos_column = ctk.CTkFrame(positions_frame, fg_color="transparent")
                 pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-                
+
                 # Position label
-                pos_label = ttk.Label(pos_column, text=pos_name, 
-                                     style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
-                pos_label.pack(pady=(0, 5))
-                
+                ctk.CTkLabel(pos_column, text=pos_name,
+                              font=(ff, 9, 'bold'), text_color=TEXT_DIM,
+                              anchor="w").pack(anchor="w", pady=(0, 5))
+
                 # Drop zone for special teams
                 drop_zone = self.create_drop_zone(pos_column, f"powerplay_{i}_{pos}")
                 drop_zone.pack(fill=tk.BOTH, expand=True, ipady=15)
-                
+
                 unit_vars.append(drop_zone)
-            
+
             self.powerplay_vars.append(unit_vars)
-        
+
         # Penalty Kill section
-        pk_frame = ttk.LabelFrame(scrollable_frame, text="Penalty Kill Units", padding=15, style='TLabelframe')
-        pk_frame.pack(fill=tk.X, pady=(15, 0))
-        
+        pk_card = ctk.CTkFrame(scroll, fg_color=CARD, corner_radius=10)
+        pk_card.pack(fill=tk.X, pady=(0, 10), padx=4)
+        ctk.CTkLabel(pk_card, text="Penalty Kill Units", font=(ff, 12, 'bold'),
+                      text_color=TEXT, anchor="w").pack(anchor="w", padx=15, pady=(12, 6))
+
         self.penalty_kill_vars = []
-        
+
         for i in range(2):  # PK1 and PK2
-            unit_frame = ttk.LabelFrame(pk_frame, text=f"Penalty Kill {i+1}", padding=10, style='TLabelframe')
-            unit_frame.pack(fill=tk.X, pady=5)
-            
+            unit_card = ctk.CTkFrame(pk_card, fg_color=PANEL, corner_radius=8)
+            unit_card.pack(fill=tk.X, padx=10, pady=5)
+            ctk.CTkLabel(unit_card, text=f"Penalty Kill {i+1}", font=(ff, 10, 'bold'),
+                          text_color=TEXT_DIM, anchor="w").pack(anchor="w", padx=12, pady=(8, 4))
+
             # Horizontal layout: LW - RW - LD - RD (4-man PK unit)
-            positions_frame = ttk.Frame(unit_frame)
-            positions_frame.pack(fill=tk.X, pady=5)
-            
+            positions_frame = ctk.CTkFrame(unit_card, fg_color="transparent")
+            positions_frame.pack(fill=tk.X, padx=6, pady=(0, 10))
+
             unit_vars = []
             positions = ["LW", "RW", "LD", "RD"]  # 4-man PK unit
             position_names = ["Left Wing", "Right Wing", "Left Defense", "Right Defense"]
-            
+
             for j, (pos, pos_name) in enumerate(zip(positions, position_names)):
                 # Create position column
-                pos_column = ttk.Frame(positions_frame)
+                pos_column = ctk.CTkFrame(positions_frame, fg_color="transparent")
                 pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-                
+
                 # Position label
-                pos_label = ttk.Label(pos_column, text=pos_name, 
-                                     style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
-                pos_label.pack(pady=(0, 5))
-                
+                ctk.CTkLabel(pos_column, text=pos_name,
+                              font=(ff, 9, 'bold'), text_color=TEXT_DIM,
+                              anchor="w").pack(anchor="w", pady=(0, 5))
+
                 # Create drop zone for penalty kill
                 drop_zone = self.create_drop_zone(pos_column, f"penalty_kill_{i}_{pos}")
                 drop_zone.pack(fill=tk.BOTH, expand=True, ipady=15)
-                
+
                 unit_vars.append(drop_zone)
-            
+
             self.penalty_kill_vars.append(unit_vars)
-    
+
     def load_current_lineup(self):
         """Load the current lineup into the drop zones"""
         # Load forwards
@@ -11583,7 +11463,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                     if j < len(current_line) and current_line[j]:
                         player = current_line[j]
                         self.assign_player_to_zone(player, drop_zone)
-        
+
         # Load defense
         defense_pairs = self.lineup.get('Defense', [[None]*2 for _ in range(3)])
         for i, pair_vars in enumerate(self.defense_vars):
@@ -11593,14 +11473,14 @@ class CleanEditLinesWindow(tk.Toplevel):
                     if j < len(current_pair) and current_pair[j]:
                         player = current_pair[j]
                         self.assign_player_to_zone(player, drop_zone)
-        
+
         # Load goalies
         goalies_list = self.lineup.get('Goalies', [None, None])
         for i, drop_zone in enumerate(self.goalie_vars):
             if i < len(goalies_list) and goalies_list[i]:
                 player = goalies_list[i]
                 self.assign_player_to_zone(player, drop_zone)
-        
+
         # Load special teams
         # Load Power Play units
         for pp_unit in range(2):
@@ -11608,14 +11488,14 @@ class CleanEditLinesWindow(tk.Toplevel):
             pp_data = self.lineup.get(pp_key, {})
             if pp_unit < len(self.powerplay_vars):
                 unit_vars = self.powerplay_vars[pp_unit]
-                
+
                 # Load PP forwards (LW, C, RW)
                 pp_forwards = pp_data.get('Forwards', [])
                 for pos_idx in range(min(3, len(unit_vars))):
                     if pos_idx < len(pp_forwards) and pp_forwards[pos_idx]:
                         player = pp_forwards[pos_idx]
                         self.assign_player_to_zone(player, unit_vars[pos_idx])
-                
+
                 # Load PP defense (LD, RD)
                 pp_defense = pp_data.get('Defense', [])
                 for pos_idx in range(min(2, len(pp_defense))):
@@ -11623,21 +11503,21 @@ class CleanEditLinesWindow(tk.Toplevel):
                     if defense_idx < len(unit_vars) and pp_defense[pos_idx]:
                         player = pp_defense[pos_idx]
                         self.assign_player_to_zone(player, unit_vars[defense_idx])
-        
+
         # Load Penalty Kill units
         for pk_unit in range(2):
             pk_key = f'PK{pk_unit + 1}'
             pk_data = self.lineup.get(pk_key, {})
             if pk_unit < len(self.penalty_kill_vars):
                 unit_vars = self.penalty_kill_vars[pk_unit]
-                
+
                 # Load PK forwards (LW, RW)
                 pk_forwards = pk_data.get('Forwards', [])
                 for pos_idx in range(min(2, len(pk_forwards), len(unit_vars))):
                     if pk_forwards[pos_idx]:
                         player = pk_forwards[pos_idx]
                         self.assign_player_to_zone(player, unit_vars[pos_idx])
-                
+
                 # Load PK defense (LD, RD)
                 pk_defense = pk_data.get('Defense', [])
                 for pos_idx in range(min(2, len(pk_defense))):
@@ -11645,17 +11525,17 @@ class CleanEditLinesWindow(tk.Toplevel):
                     if defense_idx < len(unit_vars) and pk_defense[pos_idx]:
                         player = pk_defense[pos_idx]
                         self.assign_player_to_zone(player, unit_vars[defense_idx])
-    
+
     def auto_set_best(self):
         """Automatically set the best possible lines"""
         self.auto_populate_best_lines()
         messagebox.showinfo("Lines Set", "Your best players have been automatically assigned to lines!")
-    
+
     def reset_lines(self):
         """Reset all lines to empty"""
         self.clear_all_assignments()
         messagebox.showinfo("Reset", "All lines have been cleared!")
-    
+
     def save_and_close(self):
         """Save the current lineup and close the window"""
         # Extract player selections and save to lineup
@@ -11663,30 +11543,30 @@ class CleanEditLinesWindow(tk.Toplevel):
         self.parent.user_team.lineup = self.lineup
         messagebox.showinfo("Saved", "Your lines have been saved!")
         self.destroy()
-    
+
     def save_lineup_from_interface(self):
         """Extract player selections from drop zones and save to lineup structure"""
         # Extract from drop zones instead of comboboxes
         new_lineup = self.extract_lineup_from_drop_zones()
-        
+
         # Convert to the expected format
         forward_lines = []
         for i in range(4):
             line = new_lineup['Forwards'][i] if new_lineup['Forwards'][i] else [None, None, None]
             forward_lines.append(line)
-        
+
         defense_pairs = []
         for i in range(3):
             pair = new_lineup['Defense'][i] if new_lineup['Defense'][i] else [None, None]
             defense_pairs.append(pair)
-        
+
         goalies_list = new_lineup['Goalies']
-        
+
         # Update lineup structure
         self.lineup['Forwards'] = forward_lines
         self.lineup['Defense'] = defense_pairs
         self.lineup['Goalies'] = goalies_list
-        
+
         # Handle special teams
         if 'PowerPlay' in new_lineup and new_lineup['PowerPlay']:
             for i, pp_unit in enumerate(new_lineup['PowerPlay']):
@@ -11694,29 +11574,29 @@ class CleanEditLinesWindow(tk.Toplevel):
                     pp_key = f'PP{i + 1}'
                     if pp_key not in self.lineup:
                         self.lineup[pp_key] = {'Forwards': [], 'Defense': []}
-                    
+
                     # Convert position dict to lists
                     pp_forwards = [
                         pp_unit.get('LW'),
-                        pp_unit.get('C'), 
+                        pp_unit.get('C'),
                         pp_unit.get('RW')
                     ]
                     pp_defense = [
                         pp_unit.get('LD'),
                         pp_unit.get('RD')
                     ]
-                    
+
                     self.lineup[pp_key]['Forwards'] = pp_forwards
                     self.lineup[pp_key]['Defense'] = pp_defense
-        
+
         if 'PenaltyKill' in new_lineup and new_lineup['PenaltyKill']:
             for i, pk_unit in enumerate(new_lineup['PenaltyKill']):
                 if pk_unit:
                     pk_key = f'PK{i + 1}'
                     if pk_key not in self.lineup:
                         self.lineup[pk_key] = {'Forwards': [], 'Defense': []}
-                    
-                    # Convert position dict to lists  
+
+                    # Convert position dict to lists
                     pk_forwards = [
                         pk_unit.get('LW'),
                         pk_unit.get('RW')
@@ -11725,48 +11605,51 @@ class CleanEditLinesWindow(tk.Toplevel):
                         pk_unit.get('LD'),
                         pk_unit.get('RD')
                     ]
-                    
+
                     self.lineup[pk_key]['Forwards'] = pk_forwards
                     self.lineup[pk_key]['Defense'] = pk_defense
-    
+
     def show_line_analytics(self):
         """Show detailed analytics for current line combinations"""
-        analytics_window = tk.Toplevel(self)
+        ff = self.parent.FONT_FAMILY
+        analytics_window = ctk.CTkToplevel(self)
         analytics_window.title("Line Analytics")
         analytics_window.geometry("800x600")
-        analytics_window.configure(bg=self.parent.BG_COLOR)
-        
-        main_frame = ttk.Frame(analytics_window, style='Panel.TFrame', padding=15)
-        main_frame.pack(fill='both', expand=True)
-        
-        # Title
-        ttk.Label(main_frame, text="Line Performance Analytics", 
-                 style='Title.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold')).pack(pady=(0, 15))
-        
-        # Create notebook for different analytics
-        analytics_notebook = ttk.Notebook(main_frame, style='TNotebook')
-        analytics_notebook.pack(fill='both', expand=True)
-        
+        analytics_window.configure(fg_color=BG)
+        analytics_window.transient(self)
+
+        heading(analytics_window, "Line Performance Analytics", size=16).pack(pady=(16, 8))
+
+        # Create tabview for different analytics
+        analytics_tabs = ctk.CTkTabview(analytics_window, fg_color=PANEL, corner_radius=10)
+        analytics_tabs.pack(fill='both', expand=True, padx=16, pady=(0, 16))
+        analytics_tabs.add("Forward Lines")
+        analytics_tabs.add("Team Overview")
+
         # Forward lines analysis
-        forward_frame = ttk.Frame(analytics_notebook, style='Panel.TFrame', padding=10)
-        analytics_notebook.add(forward_frame, text="Forward Lines")
-        
+        forward_tab = analytics_tabs.tab("Forward Lines")
+        forward_scroll = ctk.CTkScrollableFrame(forward_tab, fg_color="transparent")
+        forward_scroll.pack(fill="both", expand=True)
+
         # Analyze each forward line
         for i, line_vars in enumerate(self.forward_vars):
-            line_analysis_frame = ttk.LabelFrame(forward_frame, text=f"Line {i+1} Analysis",
-                                               padding=10, style='TLabelframe')
-            line_analysis_frame.pack(fill='x', pady=5)
+            line_card = ctk.CTkFrame(forward_scroll, fg_color=CARD, corner_radius=10)
+            line_card.pack(fill='x', pady=5, padx=4)
+
+            ctk.CTkLabel(line_card, text=f"Line {i+1} Analysis",
+                          font=(ff, 11, 'bold'), text_color=TEXT,
+                          anchor="w").pack(anchor="w", padx=12, pady=(10, 4))
 
             # Get players in this line (drop zones carry assigned_player)
             players = [getattr(dz, 'assigned_player', None) for dz in line_vars]
             players = [p for p in players if p is not None]
-            
+
             if players:
                 # Calculate analytics
                 avg_rating = sum(p.overall_rating() for p in players) / len(players)
                 avg_age = sum(p.age for p in players) / len(players)
                 chemistry = self.calculate_chemistry_bonus(players)
-                
+
                 # Display analytics
                 analytics_text = (
                     f"Players: {', '.join(p.full_name for p in players)}\n"
@@ -11775,27 +11658,28 @@ class CleanEditLinesWindow(tk.Toplevel):
                     f"Chemistry Bonus: +{chemistry:.1f}\n"
                     f"Final Line Rating: {avg_rating + chemistry:.1f}\n"
                 )
-                
+
                 # Add individual player stats if available
                 if hasattr(players[0], 'stats'):
                     total_goals = sum(getattr(p.stats, 'goals', 0) for p in players)
                     total_assists = sum(getattr(p.stats, 'assists', 0) for p in players)
                     analytics_text += f"Combined: {total_goals}G {total_assists}A"
-                
-                text_widget = tk.Text(line_analysis_frame, height=6, width=70, 
-                                    bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                    font=(self.parent.FONT_FAMILY, 9))
-                text_widget.pack(fill='x')
+
+                text_widget = ctk.CTkTextbox(line_card, height=130,
+                                             fg_color=BG, text_color=TEXT,
+                                             font=(ff, 9), corner_radius=8)
+                text_widget.pack(fill='x', padx=12, pady=(0, 10))
                 text_widget.insert('1.0', analytics_text)
-                text_widget.config(state='disabled')
+                text_widget.configure(state='disabled')
             else:
-                ttk.Label(line_analysis_frame, text="No players assigned to this line", 
-                         style='TLabel').pack()
-        
+                ctk.CTkLabel(line_card, text="No players assigned to this line",
+                              font=(ff, 9), text_color=TEXT_DIM).pack(padx=12, pady=(0, 10))
+
         # Team overview
-        overview_frame = ttk.Frame(analytics_notebook, style='Panel.TFrame', padding=10)
-        analytics_notebook.add(overview_frame, text="Team Overview")
-        
+        overview_tab = analytics_tabs.tab("Team Overview")
+        overview_scroll = ctk.CTkScrollableFrame(overview_tab, fg_color="transparent")
+        overview_scroll.pack(fill="both", expand=True)
+
         # Calculate team-wide stats
         all_assigned_players = []
         for line_vars in self.forward_vars:
@@ -11803,31 +11687,29 @@ class CleanEditLinesWindow(tk.Toplevel):
                 player = getattr(dz, 'assigned_player', None)
                 if player and player not in all_assigned_players:
                     all_assigned_players.append(player)
-        
+
         if all_assigned_players:
             team_avg_rating = sum(p.overall_rating() for p in all_assigned_players) / len(all_assigned_players)
             team_avg_age = sum(p.age for p in all_assigned_players) / len(all_assigned_players)
-            
+
             team_stats = (
                 f"Forwards Assigned: {len(all_assigned_players)}/{len(self.forwards)}\n"
                 f"Average Rating: {team_avg_rating:.1f}\n"
                 f"Average Age: {team_avg_age:.1f}\n"
                 f"Unassigned Players: {len(self.forwards) - len(all_assigned_players)}\n"
             )
-            
+
             if len(self.forwards) - len(all_assigned_players) > 0:
                 unassigned = [p for p in self.forwards if p not in all_assigned_players]
                 unassigned_names = [f"{p.full_name} ({p.overall_rating()})" for p in unassigned[:5]]
                 team_stats += f"Top Unassigned: {', '.join(unassigned_names)}"
-            
-            team_text_widget = tk.Text(overview_frame, height=10, width=70,
-                                     bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                     font=(self.parent.FONT_FAMILY, 10))
-            team_text_widget.pack(fill='both', expand=True)
+
+            team_text_widget = ctk.CTkTextbox(overview_scroll, height=200,
+                                              fg_color=CARD, text_color=TEXT,
+                                              font=(ff, 10), corner_radius=8)
+            team_text_widget.pack(fill='both', expand=True, padx=4, pady=4)
             team_text_widget.insert('1.0', team_stats)
-            team_text_widget.config(state='disabled')
-
-
+            team_text_widget.configure(state='disabled')
 class TacticsWindow(tk.Toplevel):
     """Team tactics editor with pill selectors.
 
