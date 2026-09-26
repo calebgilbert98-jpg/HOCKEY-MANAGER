@@ -5637,12 +5637,15 @@ class GameSim:
             carrier = (random.choice(attacking_skaters)
                        if attacking_skaters else None)
         if carrier is not None:
+            # Hockey sense: OZ time is cycling, not rush-shot. More setup
+            # passes (2-5) work the puck around -- D-to-D, low-to-high,
+            # board battles -- before the chance comes. The cycle grinds.
             if current_situation == SpecialSituation.POWER_PLAY:
-                n_setup = random.choices([1, 2, 3], weights=[0.25, 0.45, 0.30])[0]
+                n_setup = random.choices([2, 3, 4, 5], weights=[0.20, 0.35, 0.30, 0.15])[0]
             elif self._is_team_on_penalty_kill(attacking_team):
                 n_setup = random.choices([0, 1], weights=[0.7, 0.3])[0]
             else:
-                n_setup = random.choices([1, 2, 3], weights=[0.35, 0.40, 0.25])[0]
+                n_setup = random.choices([2, 3, 4, 5], weights=[0.25, 0.35, 0.25, 0.15])[0]
             for _ in range(n_setup):
                 self.possession_player = carrier
                 res = self._attempt_pass(carrier, attacking_team,
