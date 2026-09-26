@@ -1311,7 +1311,10 @@ def best_lines(team):
 
     # Sort by overall rating
     forwards = sorted(forwards, key=lambda p: p.overall_rating(), reverse=True)[:13]  # Changed to 13 to ensure line 4 gets players
-    defensemen = sorted(defensemen, key=lambda p: p.overall_rating(), reverse=True)[:6]  # 6 for 3 pairs (matches sim rotation + editor)
+    # NOTE: do NOT truncate defensemen here. The 3-pair loop below picks
+    # position-aware; truncating to 6 first can cut a natural RD/LD and leave
+    # a pair short. Keep the full healthy pool so the fallback can fill in.
+    defensemen = sorted(defensemen, key=lambda p: p.overall_rating(), reverse=True)
     goalies = sorted(goalies, key=lambda p: p.overall_rating(), reverse=True)[:2]
 
     # Build forward lines
@@ -1371,7 +1374,18 @@ def best_lines(team):
     for _ in range(3):
         ld = next((p for p in defensemen if (p.primary_position == PlayerPosition.LEFT_DEFENSE or p.primary_position == PlayerPosition.DEFENSE) and p not in assigned_defense), None)
         rd = next((p for p in defensemen if (p.primary_position == PlayerPosition.RIGHT_DEFENSE or p.primary_position == PlayerPosition.DEFENSE) and p != ld and p not in assigned_defense), None)
-        
+        # Fallback: fill any unfilled slot with the best available defenseman
+        # (off-side if needed -- better than skating a short pair). Mirrors
+        # the forwards fallback above.
+        if not ld:
+            remaining = [p for p in defensemen if p not in assigned_defense and p != rd]
+            if remaining:
+                ld = remaining[0]
+        if not rd:
+            remaining = [p for p in defensemen if p not in assigned_defense and p != ld]
+            if remaining:
+                rd = remaining[0]
+
         # Mark these players as assigned
         if ld: assigned_defense.append(ld)
         if rd: assigned_defense.append(rd)
