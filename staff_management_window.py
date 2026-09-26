@@ -12,7 +12,12 @@ from game_classes import debug_print
 
 class StaffManagementWindow(tk.Toplevel):
     """Comprehensive staff management interface with EHM-style functionality."""
-    
+
+    # Roles whose attributes are verifiably read by the sim engine (scouting.py)
+    _SCOUT_ROLES = {StaffRole.HEAD_SCOUT, StaffRole.PROFESSIONAL_SCOUT,
+                    StaffRole.AMATEUR_SCOUT, StaffRole.EUROPEAN_SCOUT,
+                    StaffRole.ADVANCE_SCOUT}
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -1012,12 +1017,46 @@ class StaffManagementWindow(tk.Toplevel):
         staff = self.parent.tree_maps['available_staff'][selection[0]]
         self.show_staff_details_window(staff, is_current=False)
     
+    def _staff_impact_lines(self, staff: Staff):
+        """What this staffer's attributes verifiably affect.
+
+        Only effects confirmed by reading the sim code are reported;
+        everything else gets an honest "no direct effect" line.
+        Returns [(text, kind)] where kind is 'ok' | 'warn' | 'info'.
+        """
+        lines = []
+        if staff.role in self._SCOUT_ROLES:
+            ja = getattr(staff, 'judging_player_ability', 0) or 0
+            jp = getattr(staff, 'judging_player_potential', 0) or 0
+            eff = (ja + jp) / 40.0
+            lines.append(
+                (f"Judging Ability {ja} / Judging Potential {jp} drive the scouting engine: "
+                 f"this scout files prospect reports at about {eff:.0%} efficiency, and higher "
+                 "values raise report accuracy and reliability.", 'ok'))
+            mm = getattr(staff, 'man_management', 0) or 0
+            if mm > 12:
+                lines.append(
+                    ("Man Management 13+ unlocks prospect interviews once a report reaches "
+                     "3+ viewings (further boosts report reliability).", 'ok'))
+            else:
+                lines.append(
+                    (f"Man Management is {mm}: reaching 13 unlocks prospect interviews once a "
+                     "report reaches 3+ viewings.", 'info'))
+        else:
+            key = self.get_key_skills_display(staff)
+            if key:
+                lines.append((f"Role focus: {key}.", 'info'))
+            lines.append(
+                ("No direct simulation effect currently: this role's attributes are tracked "
+                 "and displayed, but the sim engine does not read them.", 'warn'))
+        return lines
+
     def show_staff_details_window(self, staff: Staff, is_current: bool):
         """Show detailed staff information window."""
         details_window = tk.Toplevel(self)
         details_window.title(f"Staff Details - {staff.full_name}")
         details_window.configure(background=self.parent.BG_COLOR)
-        details_window.geometry("600x700")
+        details_window.geometry("680x980")
         
         # Main frame
         main_frame = ttk.Frame(details_window, style='Panel.TFrame')
@@ -1051,7 +1090,7 @@ class StaffManagementWindow(tk.Toplevel):
         text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         attr_text = tk.Text(text_frame, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                           font=(self.parent.FONT_FAMILY, 9), wrap=tk.WORD, height=15)
+                           font=(self.parent.FONT_FAMILY, 9), wrap=tk.WORD, height=10)
         attr_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=attr_text.yview)
         attr_text.configure(yscrollcommand=attr_scrollbar.set)
         
@@ -1062,7 +1101,17 @@ class StaffManagementWindow(tk.Toplevel):
         
         attr_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         attr_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
+        # On-Ice Impact - what this staffer's attributes verifiably affect
+        impact_frame = ttk.LabelFrame(main_frame, text="On-Ice Impact", style='Panel.TLabelframe')
+        impact_frame.pack(fill=tk.X, pady=(0, 10))
+
+        for line, kind in self._staff_impact_lines(staff):
+            fg = {'ok': '#3DDC84', 'warn': '#e0a13c', 'info': '#9aa0aa'}.get(kind, '#9aa0aa')
+            tk.Label(impact_frame, text=f"\u2022  {line}", bg=self.parent.CONTENT_BG, fg=fg,
+                     font=(self.parent.FONT_FAMILY, 9), wraplength=540, justify='left',
+                     anchor='w').pack(anchor='w', padx=8, pady=2)
+
         # Role description
         desc_frame = ttk.LabelFrame(main_frame, text="Role Description", style='Panel.TLabelframe')
         desc_frame.pack(fill=tk.X, pady=(0, 10))

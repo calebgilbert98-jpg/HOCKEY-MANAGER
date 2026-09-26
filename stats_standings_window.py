@@ -391,11 +391,141 @@ class StatsStandingsWindow(tk.Toplevel):
         breakout_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
         self.leaders_notebook.add(breakout_frame, text="Breakout Players")
         self.create_enhanced_player_section(breakout_frame, "breakout")
-        
+
+        # Milestone watch - players approaching career milestones
+        milestone_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
+        self.leaders_notebook.add(milestone_frame, text="Milestone Watch")
+        self.create_milestone_watch_section(milestone_frame)
+
         # Records section - accessible from player leaders
         records_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
         self.leaders_notebook.add(records_frame, text="NHL Records")
         self.create_records_section(records_frame)
+
+    # Career milestone definitions: (career attr, season attr, label, milestones, within)
+    MILESTONE_WATCH_SKATERS = [
+        ('career_goals', 'goals', 'Goals', (100, 200, 300, 400, 500, 600, 700), 12),
+        ('career_assists', 'assists', 'Assists', (200, 300, 400, 500, 600, 800, 1000), 12),
+        ('career_points', 'points', 'Points', (500, 750, 1000, 1250, 1500), 18),
+        ('career_games', 'games_played', 'Games Played', (500, 1000, 1500), 25),
+    ]
+    MILESTONE_WATCH_GOALIES = [
+        ('career_wins', 'wins', 'Wins', (100, 200, 300), 8),
+        ('career_shutouts', 'shutouts', 'Shutouts', (25, 50, 75, 100), 4),
+        ('career_games_goalie', 'games_played', 'Games Played', (300, 500), 20),
+    ]
+
+    def create_milestone_watch_section(self, parent_frame):
+        """Milestone Watch sub-tab: players nearing career milestones.
+
+        Uses real career totals from Player (career_goals/assists/points/games,
+        career_wins/shutouts for goalies). Shows an honest empty state when no
+        player is close to a milestone yet.
+        """
+        header_frame = ttk.Frame(parent_frame, style='Panel.TFrame')
+        header_frame.pack(fill='x', pady=(0, 10))
+
+        ttk.Label(header_frame,
+                  text="Players nearing career milestones",
+                  font=(self.parent.FONT_FAMILY, 12, 'bold'),
+                  foreground=self.parent.ACCENT_COLOR,
+                  background=self.parent.BG_COLOR).pack(anchor='w')
+        ttk.Label(header_frame,
+                  text="Real career totals - showing players within striking distance of their next milestone.",
+                  font=(self.parent.FONT_FAMILY, 9),
+                  foreground='#9a9aa3',
+                  background=self.parent.BG_COLOR).pack(anchor='w', pady=(2, 0))
+
+        columns = {
+            'player': ('Player', 190),
+            'team': ('Team', 70),
+            'pos': ('Pos', 60),
+            'milestone': ('Milestone', 150),
+            'current': ('Current', 80),
+            'needed': ('Needed', 80),
+            'season': ('This Season', 100),
+        }
+        self.milestone_tree = self.parent._create_treeview(parent_frame, columns, height=20)
+        self._populate_milestone_watch()
+
+    def _position_abbr(self, player):
+        """Short position label for a player."""
+        pos = getattr(player, 'primary_position', 'F')
+        if hasattr(pos, 'value'):
+            return str(pos.value)
+        name = str(pos).split('.')[-1]
+        mapping = {'CENTER': 'C', 'LEFT_WING': 'LW', 'RIGHT_WING': 'RW',
+                   'DEFENSE': 'D', 'GOALIE': 'G'}
+        return mapping.get(name, name[:2])
+
+    def _season_stat_value(self, player, attr):
+        """Season stat, preferring the live stats object with player fallback."""
+        stats = getattr(player, 'stats', None)
+        if stats is not None and hasattr(stats, attr):
+            return getattr(stats, attr)
+        return getattr(player, attr, 0)
+
+    def _milestone_empty_row(self, message):
+        """Insert the honest empty-state row in the milestone tree."""
+        tree = getattr(self, 'milestone_tree', None)
+        if tree is not None:
+            tree.insert('', 'end', values=(message, '', '', '', '', '', ''))
+
+    def _populate_milestone_watch(self):
+        """Fill the Milestone Watch tree from real career totals."""
+        tree = getattr(self, 'milestone_tree', None)
+        if tree is None:
+            return
+        try:
+            for item in tree.get_children():
+                tree.delete(item)
+
+            league = getattr(self.parent, 'league', None)
+            teams = getattr(league, 'teams', []) if league else []
+            if not teams:
+                self._milestone_empty_row("No league data available.")
+                return
+
+            watch = []
+            for team in teams:
+                roster = getattr(team, 'roster', []) or []
+                team_abbr = self._get_team_abbreviation(getattr(team, 'team_name', ''))
+                for player in roster:
+                    is_goalie = 'G' in str(getattr(player, 'primary_position', ''))
+                    defs = (self.MILESTONE_WATCH_GOALIES if is_goalie
+                            else self.MILESTONE_WATCH_SKATERS)
+                    for career_attr, season_attr, label, marks, within in defs:
+                        current = getattr(player, career_attr, 0) or 0
+                        if current <= 0:
+                            continue
+                        upcoming = [m for m in marks if m > current]
+                        if not upcoming:
+                            continue
+                        target = upcoming[0]
+                        needed = target - current
+                        if needed <= within:
+                            watch.append({
+                                'player': getattr(player, 'full_name', 'Unknown'),
+                                'team': team_abbr,
+                                'pos': self._position_abbr(player),
+                                'milestone': f"{target} {label}",
+                                'current': current,
+                                'needed': needed,
+                                'season': self._season_stat_value(player, season_attr),
+                            })
+
+            if not watch:
+                self._milestone_empty_row(
+                    "No players approaching career milestones yet - check back as the season progresses.")
+                return
+
+            watch.sort(key=lambda w: (w['needed'], -w['current']))
+            for w in watch[:40]:
+                tree.insert('', 'end', values=(
+                    w['player'], w['team'], w['pos'], w['milestone'],
+                    w['current'], w['needed'], w['season']))
+        except Exception as e:
+            print(f"Error populating milestone watch: {e}")
     
     def create_records_section(self, parent_frame):
         """Create records section within player leaders tab"""
@@ -1517,6 +1647,8 @@ class StatsStandingsWindow(tk.Toplevel):
                 self.populate_advanced_team_stats()
             elif current_tab == 2:  # Player Leaders
                 self.update_player_leaders()
+                if hasattr(self, 'milestone_tree'):
+                    self._populate_milestone_watch()
             elif current_tab == 3:  # Analytics
                 self.refresh_analytics_dashboard()
             elif current_tab == 4:  # Trends

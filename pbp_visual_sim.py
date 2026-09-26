@@ -16,6 +16,7 @@ import math
 import random
 import threading
 import tkinter as tk
+from collections import deque
 from tkinter import ttk
 
 from game_classes import PlayerPosition
@@ -41,6 +42,89 @@ CREASE_BLUE = "#BFD9F2"
 RINK_SURROUND = "#0e0e11"
 INK = "#16161a"             # dark text on ice
 FONT = "Segoe UI"
+
+# Event types the "Next Big Moment" button jumps to
+BIG_MOMENTS = ("goal", "penalty", "fight", "penalty_shot")
+
+
+def _abbr(team_name):
+    """3-letter abbreviation for scoreboard-style readouts."""
+    name = (team_name or "").upper().replace(".", "")
+    words = [w for w in name.split() if w not in ("THE",)]
+    if not words:
+        return "???"
+    return words[0][:3].ljust(3)[:3]
+
+
+# ----------------------------------------------------------------------------
+# Play-by-play commentary templates (no emoji; player names always used)
+# ----------------------------------------------------------------------------
+_GOAL_T = [
+    "GOAL! {S} scores{how}{ast}! {score}",
+    "GOAL! {S} buries it{how}{ast}! {score}",
+    "GOAL! {S} wires it home{how}{ast}! {score}",
+    "GOAL! {S} picks the corner{how}{ast}! {score}",
+    "GOAL! {S} finishes it off{how}{ast}! {score}",
+    "GOAL! What a finish by {S}{how}{ast}! {score}",
+]
+_SAVE_T = [
+    "Save! {G} stones {S}{how}.",
+    "{G} flashes the leather on {S}!",
+    "{S} denied by {G}{how}.",
+    "What a stop! {G} robs {S}.",
+    "{G} holds his ground against {S}.",
+]
+_BLOCK_T = [
+    "{B} gets in the lane to block {S}.",
+    "Blocked! {B} sacrifices the body in front of {S}.",
+    "{B} blocks the shot from {S}.",
+]
+_MISS_T = [
+    "{S} misses the net.",
+    "{S} fires wide of the goal.",
+    "{S} rings one off the post!",
+    "{S} can't hit the net{how}.",
+]
+_FACEOFF_T = [
+    "Faceoff ({zone}): {W} wins the draw.",
+    "{W} wins the faceoff cleanly.",
+    "{W} beats his man on the draw ({zone}).",
+    "{W} wins it back for his team.",
+]
+_HIT_T = [
+    "{H} levels {T} with a {ht}.",
+    "Big hit! {H} on {T}.",
+    "{H} finishes the check on {T}.",
+    "{H} sends {T} into the boards.",
+]
+_PASS_T = [
+    "{P} to {R}, tape-to-tape{extra}.",
+    "{P} finds {R} in stride{extra}.",
+    "{P} dishes to {R}{extra}.",
+    "{P} threads one to {R}{extra}.",
+]
+_BATTLE_T = [
+    "{W} digs the puck free along the boards.",
+    "{W} comes out of the scrum with the puck.",
+    "{W} wins the battle and takes possession.",
+]
+_PENALTY_T = [
+    "Penalty: {m} min to {P} ({team}) for {inf}.",
+    "{P} heads to the box — {m} min for {inf} ({team}).",
+    "Whistle: {P} ({team}) gets {m} for {inf}.",
+]
+_FIGHT_T = [
+    "Fight! {P} drops the gloves!",
+    "They're going! {P} in a tilt at center ice.",
+]
+_ICING_T = [
+    "Icing against {team}.",
+    "Icing called on {team}.",
+]
+_OFFSIDE_T = [
+    "Offside — play whistled down.",
+    "Offside against {team}.",
+]
 
 try:
     from modern_widgets import RoundedButton
@@ -143,8 +227,8 @@ class PBPVisualSim(tk.Toplevel):
         super().__init__(parent)
         self.title(f"Live Sim — {home_team.team_name} vs {away_team.team_name}")
         self.configure(bg=BG)
-        self.geometry("1280x570")
-        self.minsize(1100, 540)
+        self.geometry("1280x630")
+        self.minsize(1100, 580)
 
         self.sim = sim
         self.home_team = home_team
@@ -163,6 +247,29 @@ class PBPVisualSim(tk.Toplevel):
         self.sim_done = False
         self.hold_until = 0.0     # real-time hold (goal celebrations)
         self.closed = False
+
+        # -- momentum (recent shots/goals/fights, last ~10 per team) --
+        self._mom = {"home": deque(maxlen=10), "away": deque(maxlen=10)}
+        self._mom_dirty = True
+
+        # -- per-period summary tracking --
+        self._period_stats = {"shots": {"home": 0, "away": 0},
+                              "goals": {"home": 0, "away": 0},
+                              "notes": []}
+
+        # -- live goalie stats: pid -> {name, shots, saves} --
+        self._goalie_stats = {}
+        self._cur_goalie = {"home": None, "away": None}
+        for side, line in (("home", self.home_line), ("away", self.away_line)):
+            g = line.get("G")
+            pid = getattr(g, "id", None)
+            if pid is not None:
+                self._goalie_stats[pid] = {"name": self._gname(g),
+                                           "shots": 0, "saves": 0}
+                self._cur_goalie[side] = pid
+
+        # -- cached units readout text (avoid redundant StringVar writes) --
+        self._units_cache = {"home": None, "away": None}
 
         # -- on-ice state --
         self.dots = {}            # dot_id -> dict(player, team_home, role, x, y, tx, ty, items...)
@@ -232,6 +339,36 @@ class PBPVisualSim(tk.Toplevel):
         tk.Label(top, text="LIVE SIM", bg=ACCENT, fg="white",
                  font=(FONT, 10, "bold"), padx=8, pady=2).pack(side="right", padx=12)
 
+        # Slim bar under the scoreboard: on-ice units, momentum, next moment
+        sub = tk.Frame(self, bg=CONTENT_BG)
+        sub.pack(fill="x", padx=10, pady=(0, 4))
+
+        units = tk.Frame(sub, bg=CONTENT_BG)
+        units.pack(side="left")
+        tk.Label(units, text="ON ICE", bg=CONTENT_BG, fg=MUTED,
+                 font=(FONT, 8, "bold")).pack(anchor="w", padx=4)
+        urow = tk.Frame(sub, bg=CONTENT_BG)
+        urow.pack(side="left", padx=(4, 0))
+        self.units_home_var = tk.StringVar(value="–")
+        self.units_away_var = tk.StringVar(value="–")
+        tk.Label(urow, textvariable=self.units_home_var, bg=CONTENT_BG,
+                 fg=ACCENT, font=(FONT, 10, "bold")).pack(side="left", padx=(0, 14))
+        tk.Label(urow, textvariable=self.units_away_var, bg=CONTENT_BG,
+                 fg=AWAY_COLOR, font=(FONT, 10, "bold")).pack(side="left")
+
+        btnf = tk.Frame(sub, bg=CONTENT_BG)
+        btnf.pack(side="right", padx=4)
+        self._pill(btnf, "Next Big Moment", self._jump_to_next_moment, w=150)
+
+        momf = tk.Frame(sub, bg=CONTENT_BG)
+        momf.pack(side="left", fill="x", expand=True, padx=14)
+        tk.Label(momf, text="MOMENTUM", bg=CONTENT_BG, fg=MUTED,
+                 font=(FONT, 8, "bold")).pack(anchor="w")
+        self.mom_canvas = tk.Canvas(momf, height=22, bg=CONTENT_BG,
+                                    highlightthickness=0, bd=0)
+        self.mom_canvas.pack(fill="x")
+        self.mom_canvas.bind("<Configure>", lambda e: self._draw_momentum())
+
         # Main split
         main = tk.Frame(self, bg=BG)
         main.pack(fill="both", expand=True, padx=10, pady=4)
@@ -266,6 +403,19 @@ class PBPVisualSim(tk.Toplevel):
             tk.Label(cell, textvariable=av, font=(FONT, 13, "bold"),
                      bg=CONTENT_BG, fg=AWAY_COLOR).pack(side="right", padx=(0, 10))
 
+        # Live goalie stats cell: "<last> saves/shots" per side
+        gcell = tk.Frame(strip, bg=CONTENT_BG)
+        gcell.grid(row=0, column=4, sticky="ew", padx=3)
+        strip.grid_columnconfigure(4, weight=1)
+        self._goalie_home_var = tk.StringVar(value="–")
+        self._goalie_away_var = tk.StringVar(value="–")
+        tk.Label(gcell, textvariable=self._goalie_home_var, font=(FONT, 10, "bold"),
+                 bg=CONTENT_BG, fg=ACCENT).pack(side="left", padx=(10, 0))
+        tk.Label(gcell, text="Goalies", font=(FONT, 9),
+                 bg=CONTENT_BG, fg=MUTED).pack(side="left", padx=6)
+        tk.Label(gcell, textvariable=self._goalie_away_var, font=(FONT, 10, "bold"),
+                 bg=CONTENT_BG, fg=AWAY_COLOR).pack(side="right", padx=(0, 10))
+
         # Right panel: feed + controls
         right = tk.Frame(main, bg=CONTENT_BG, width=300)
         right.pack(side="right", fill="y", padx=(6, 0))
@@ -294,8 +444,12 @@ class PBPVisualSim(tk.Toplevel):
         self.feed.tag_config("period", foreground=ACCENT, font=(FONT, 10, "bold"))
         self.feed.tag_config("penalty", foreground="#FFD166")
         self.feed.tag_config("shot", foreground="#9FD8FF")
+        self.feed.tag_config("fight", foreground="#FF8A5C", font=(FONT, 10, "bold"))
+        self.feed.tag_config("summary", foreground=ACCENT, font=(FONT, 11, "bold"))
+        self.feed.tag_config("info", foreground=MUTED)
         self.feed.config(state="disabled")
 
+        self._update_goalie_labels()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------------
@@ -413,6 +567,26 @@ class PBPVisualSim(tk.Toplevel):
 
     def _side_of(self, team_name):
         return "home" if team_name == self.home_team.team_name else "away"
+
+    def _player_side(self, player, ev=None, name_key=None):
+        """Resolve 'home'/'away' for a player object.
+
+        Uses our on-ice dots first (authoritative for the presentation
+        layer), falling back to a team-name comparison. Needed because
+        generated/test players may carry team_name='Free Agent' while the
+        event's team-name fields are reliable.
+        """
+        pid = getattr(player, "id", None)
+        if pid is not None:
+            for d in self.dots.values():
+                if getattr(d["player"], "id", None) == pid:
+                    return "home" if d["is_home"] else "away"
+            for side, cur in self._cur_goalie.items():
+                if cur == pid:
+                    return side
+        if ev is not None and name_key:
+            return self._side_of(ev.get(name_key))
+        return self._side_of(getattr(player, "team_name", None))
 
     # ------------------------------------------------------------------
     # Dots
@@ -600,6 +774,14 @@ class PBPVisualSim(tk.Toplevel):
         last = getattr(p, "last_name", "") or getattr(p, "full_name", "?")
         return f"#{num} {last}"
 
+    @staticmethod
+    def _gname(p):
+        """Short goalie name for the stats strip (last name only)."""
+        if p is None:
+            return "?"
+        last = getattr(p, "last_name", "") or getattr(p, "full_name", "?")
+        return str(last).split()[-1][:12]
+
     # ------------------------------------------------------------------
     # Event application
     # ------------------------------------------------------------------
@@ -611,6 +793,9 @@ class PBPVisualSim(tk.Toplevel):
             self.penalty_box.clear()
             for d in self.dots.values():
                 self.canvas.itemconfig(d["oval"], state="normal")
+            self._period_stats = {"shots": {"home": 0, "away": 0},
+                                  "goals": {"home": 0, "away": 0},
+                                  "notes": []}
             self._feed(f"Start of period {ev.get('period', 1)}.", tag="period", ev=ev)
             self._faceoff_formation(100, 42.5, winner_is_home=True)
             self.possession_home = None
@@ -621,6 +806,7 @@ class PBPVisualSim(tk.Toplevel):
                        f"{self.home_team.team_name} {ev['home_score']} - "
                        f"{ev['away_score']} {self.away_team.team_name}.",
                        tag="period", ev=ev)
+            self._insert_period_summary(ev)
             self._update_scoreboard(ev)
         elif et == "faceoff":
             self._on_faceoff(ev)
@@ -632,6 +818,17 @@ class PBPVisualSim(tk.Toplevel):
             self._on_hit(ev)
         elif et == "penalty":
             self._on_penalty(ev)
+        elif et == "fight":
+            self._on_fight(ev)
+        elif et == "icing":
+            self._feed(random.choice(_ICING_T).format(
+                team=ev.get("team", "")), tag="info", ev=ev)
+        elif et == "offside":
+            self._feed(random.choice(_OFFSIDE_T).format(
+                team=ev.get("team", "")), tag="info", ev=ev)
+        elif et == "penalty_shot":
+            self._feed(f"Penalty shot awarded: {self._pname(ev.get('player'))} "
+                       f"({ev.get('team', '')})…", tag="shot", ev=ev)
         elif et == "skate":
             self._on_skate(ev)
         elif et == "pass":
@@ -702,8 +899,9 @@ class PBPVisualSim(tk.Toplevel):
         self.puck_target = None
         if ev.get("completed"):
             extra = " (got open)" if ev.get("got_open") else ""
-            self._feed(f"Pass: {self._pname(ev.get('passer'))} to "
-                       f"{self._pname(ev.get('receiver'))}{extra}.", ev=ev)
+            self._feed(random.choice(_PASS_T).format(
+                P=self._pname(ev.get("passer")),
+                R=self._pname(ev.get("receiver")), extra=extra), ev=ev)
         else:
             self._feed(f"Pass by {self._pname(ev.get('passer'))} picked off by "
                        f"{self._pname(ev.get('interceptor'))}!", tag="penalty", ev=ev)
@@ -716,7 +914,8 @@ class PBPVisualSim(tk.Toplevel):
             if d:
                 d["nudge"] = (spot[0], spot[1], now + 0.5)
         w = self._dot_by_player(ev.get("winner"))
-        self._feed(f"Puck battle: {self._pname(ev.get('winner'))} digs it free.", ev=ev)
+        self._feed(random.choice(_BATTLE_T).format(
+            W=self._pname(ev.get("winner"))), ev=ev)
         if self._instant:
             self.carrier_id = w["id"] if w else None
             self.puck["x"], self.puck["y"] = spot[0], spot[1]
@@ -732,15 +931,18 @@ class PBPVisualSim(tk.Toplevel):
         self.possession_home = winner_is_home
         w = self._dot_by_player(ev.get("winner_player"))
         self.carrier_id = w["id"] if w else None
-        self._feed(f"Faceoff ({ev.get('zone', '').replace('_', ' ')}): "
-                   f"{self._pname(ev.get('winner_player'))} wins it.",
-                   ev=ev)
+        zone = ev.get("zone", "").replace("_", " ")
+        self._feed(random.choice(_FACEOFF_T).format(
+            zone=zone, W=self._pname(ev.get("winner_player"))), ev=ev)
         self._bump_stat("home" if winner_is_home else "away", "FO")
         self._update_scoreboard(ev)
 
     def _on_shot(self, ev):
         att_home = ev["attacking_team"] == self.home_team.team_name
-        self._bump_stat("home" if att_home else "away", "Shots")
+        side = "home" if att_home else "away"
+        self._bump_stat(side, "Shots")
+        self._period_stats["shots"][side] += 1
+        self._push_momentum(side, 1)
         sx, sy = shot_spot(ev.get("location", "high_slot"), att_home)
         shooter_dot = self._dot_by_player(ev.get("shooter"))
         if shooter_dot:
@@ -783,32 +985,66 @@ class PBPVisualSim(tk.Toplevel):
             att_home = ev["scoring_team"] == self.home_team.team_name
             side = "away" if att_home else "home"
             self._flash_light(side)
-            assists = ", ".join(self._pname(a) for a in ev.get("assists", []))
-            extra = f" (assists: {assists})" if assists else ""
-            self._feed(f"GOAL! {self._pname(ev.get('shooter'))}{extra}. "
-                       f"{ev['home_score']}-{ev['away_score']}",
-                       tag="goal", ev=ev)
+            self._push_momentum("home" if att_home else "away", 3)
+            self._period_stats["goals"]["home" if att_home else "away"] += 1
+            msg = self._goal_text(ev)
+            self._feed(msg, tag="goal", ev=ev)
+            self._note("goal", msg, ev)
+            self._goalie_shot(side, scored=True)
             self.hold_until = self._now() + 1.6
             self.possession_home = None
             self.carrier_id = None
             self._update_scoreboard(ev)
         elif et == "save":
-            self._feed(f"Saved by {self._pname(ev.get('goalie'))} "
-                       f"on {self._pname(ev.get('shooter'))}.", ev=ev)
+            msg = self._save_text(ev)
+            self._feed(msg, ev=ev)
+            side = self._player_side(ev.get("goalie"), ev, "defending_team")
+            self._goalie_shot(side, goalie=ev.get("goalie"), scored=False)
             # goalie covers: defending team keeps it
-            def_home = ev.get("defending_team") == self.home_team.team_name
-            self.possession_home = def_home
+            self.possession_home = (side == "home")
             self.carrier_id = None
             self._update_scoreboard(ev)
         elif et == "blocked_shot":
-            self._feed(f"Shot blocked by {self._pname(ev.get('blocker'))}.", ev=ev)
+            B = self._pname(ev.get("blocker"))
+            S = self._pname(ev.get("shooter"))
+            self._feed(random.choice(_BLOCK_T).format(B=B, S=S), ev=ev)
             def_home = ev.get("defending_team") == self.home_team.team_name
             self.possession_home = def_home
             self.carrier_id = None
         elif et == "missed_shot":
-            self._feed(f"{self._pname(ev.get('shooter'))} misses the net.", ev=ev)
+            S = self._pname(ev.get("shooter"))
+            st = (ev.get("shot_type") or "").replace("_", " ")
+            how = f" {st}" if st else ""
+            self._feed(random.choice(_MISS_T).format(S=S, how=how), ev=ev)
             att_home = ev.get("attacking_team") == self.home_team.team_name
             self.possession_home = att_home
+
+    # -- richer commentary helpers --------------------------------------
+    def _goal_text(self, ev):
+        S = self._pname(ev.get("shooter"))
+        ast = ev.get("assists") or []
+        ast_txt = (" (assists: " + ", ".join(self._pname(a) for a in ast) + ")"
+                   if ast else "")
+        st = (ev.get("shot_type") or "").replace("_", " ")
+        loc = (ev.get("location") or "").replace("_", " ")
+        if st and loc:
+            how = f" on a {st} from the {loc}"
+        elif st:
+            how = f" on a {st}"
+        elif loc:
+            how = f" from the {loc}"
+        else:
+            how = ""
+        score = f"{ev.get('home_score', 0)}-{ev.get('away_score', 0)}"
+        return random.choice(_GOAL_T).format(S=S, how=how, ast=ast_txt,
+                                             score=score)
+
+    def _save_text(self, ev):
+        G = self._pname(ev.get("goalie"))
+        S = self._pname(ev.get("shooter"))
+        st = (ev.get("shot_type") or "").replace("_", " ")
+        how = f" on the {st}" if st else ""
+        return random.choice(_SAVE_T).format(G=G, S=S, how=how)
 
     def _on_hit(self, ev):
         h = self._dot_by_player(ev.get("hitting_player"))
@@ -821,10 +1057,11 @@ class PBPVisualSim(tk.Toplevel):
             self.possession_home = (getattr(th, "team_name", None) == self.home_team.team_name)
             self.carrier_id = h["id"] if h else None
         hp = ev.get("hitting_player")
-        self._bump_stat(self._side_of(getattr(hp, "team_name", None)), "Hits")
-        self._feed(f"{ev.get('hit_type', 'hit').replace('_', ' ').title()} — "
-                   f"{self._pname(ev.get('hitting_player'))} on "
-                   f"{self._pname(ev.get('target_player'))}.", ev=ev)
+        self._bump_stat(self._player_side(hp), "Hits")
+        ht = ev.get("hit_type", "hit").replace("_", " ")
+        self._feed(random.choice(_HIT_T).format(
+            H=self._pname(ev.get("hitting_player")),
+            T=self._pname(ev.get("target_player")), ht=ht), ev=ev)
 
     def _on_penalty(self, ev):
         d = self._dot_by_player(ev.get("player"))
@@ -832,13 +1069,22 @@ class PBPVisualSim(tk.Toplevel):
             self.penalty_box.add(d["id"])
             self.canvas.itemconfig(d["oval"], state="normal")
         self._bump_stat(self._side_of(ev.get("team")), "PIM", ev.get("minutes", 2))
-        self._feed(f"Penalty: {ev.get('minutes', 2)} min — "
-                   f"{self._pname(ev.get('player'))} ({ev.get('team', '')}).",
-                   tag="penalty", ev=ev)
+        msg = random.choice(_PENALTY_T).format(
+            m=ev.get("minutes", 2), P=self._pname(ev.get("player")),
+            team=ev.get("team", ""), inf=ev.get("infraction", "a foul"))
+        self._feed(msg, tag="penalty", ev=ev)
+        self._note("penalty", msg, ev)
+
+    def _on_fight(self, ev):
+        msg = random.choice(_FIGHT_T).format(
+            P=self._pname(ev.get("player")))
+        self._feed(msg, tag="fight", ev=ev)
+        self._push_momentum(self._side_of(ev.get("team")), 2)
+        self._note("fight", msg, ev)
 
     def _on_shootout_attempt(self, ev):
         shooter = ev.get("shooter")
-        att_home = (getattr(shooter, "team_name", None) == self.home_team.team_name)
+        att_home = self._player_side(shooter, ev, "shooting_team") == "home"
         nx = AWAY_NET_X if att_home else HOME_NET_X
         d = self._dot_by_player(shooter)
         sx, sy = (100.0, 42.5)
@@ -857,10 +1103,12 @@ class PBPVisualSim(tk.Toplevel):
             self._scatter_puck(ev)
 
     def _apply_shootout(self, ev):
+        side = self._player_side(ev.get("goalie"))
+        att_home = (side == "away")
+        self._goalie_shot(side, goalie=ev.get("goalie"),
+                          scored=bool(ev.get("scored")))
         if ev.get("scored"):
-            att_home = (getattr(ev.get("shooter"), "team_name", None)
-                        == self.home_team.team_name)
-            self._flash_light("away" if att_home else "home")
+            self._flash_light(side)
             self._feed(f"Shootout: {self._pname(ev.get('shooter'))} scores!",
                        tag="goal", ev=ev)
             self.hold_until = self._now() + 1.2
@@ -898,6 +1146,164 @@ class PBPVisualSim(tk.Toplevel):
         self.canvas.itemconfig(self.lights[side], state="normal")
         self._light_until = self._now() + 1.4
         self._light_side = side
+
+    # ------------------------------------------------------------------
+    # Momentum meter
+    # ------------------------------------------------------------------
+
+    def _push_momentum(self, side, weight):
+        if side in self._mom:
+            self._mom[side].append(weight)
+            self._mom_dirty = True
+
+    def _momentum_net(self):
+        return sum(self._mom["home"]) - sum(self._mom["away"])
+
+    def _draw_momentum(self):
+        c = getattr(self, "mom_canvas", None)
+        if c is None:
+            return
+        try:
+            W = c.winfo_width()
+            H = c.winfo_height()
+        except Exception:
+            return
+        if W < 30 or H < 8:
+            return
+        c.delete("all")
+        net = self._momentum_net()
+        frac = max(-1.0, min(1.0, net / 24.0))
+        mid = W / 2
+        top, bot = H / 2 - 6, H / 2 + 6
+        c.create_rectangle(2, top, W - 2, bot, fill="#23262e", outline="")
+        if frac > 0.01:
+            c.create_rectangle(mid, top, mid + frac * (W / 2 - 2), bot,
+                               fill=ACCENT, outline="")
+        elif frac < -0.01:
+            c.create_rectangle(mid + frac * (W / 2 - 2), top, mid, bot,
+                               fill=AWAY_COLOR, outline="")
+        c.create_line(mid, 2, mid, H - 2, fill="#555A66", width=1)
+        hab = _abbr(self.home_team.team_name)
+        aab = _abbr(self.away_team.team_name)
+        c.create_text(4, H / 2, text=hab, anchor="w",
+                      fill=ACCENT, font=(FONT, 8, "bold"))
+        c.create_text(W - 4, H / 2, text=aab, anchor="e",
+                      fill=AWAY_COLOR, font=(FONT, 8, "bold"))
+
+    # ------------------------------------------------------------------
+    # On-ice units readout (mirrors the sim's line rotation, driven by the
+    # PLAYHEAD clock — the sim thread finishes long before playback does)
+    # ------------------------------------------------------------------
+    def _update_units(self):
+        if not self.events or self.cursor == 0:
+            clk, period = 1200, 1
+        else:
+            last = self.events[self.cursor - 1]
+            clk = max(0, last.get("clock", 0) -
+                      (self.playhead - last.get("t", 0)))
+            period = last.get("period", 1)
+        fl = (int(clk) // 45) % 4 + 1   # same cadence as GameSim line changes
+        dp = (int(clk) // 60) % 3 + 1
+        hm = sum(1 for did in self.penalty_box
+                 if self.dots.get(did, {}).get("is_home"))
+        am = sum(1 for did in self.penalty_box
+                 if did in self.dots and not self.dots[did]["is_home"])
+        hsuf = " PP" if hm < am else (" SH" if hm > am else "")
+        asuf = " PP" if am < hm else (" SH" if am > hm else "")
+        ot = f" OT{period - 3}" if period > 3 else ""
+        hab = _abbr(self.home_team.team_name)
+        aab = _abbr(self.away_team.team_name)
+        htxt = f"{hab}  F{fl} · D{dp}{hsuf}{ot}"
+        atxt = f"{aab}  F{fl} · D{dp}{asuf}{ot}"
+        if htxt != self._units_cache["home"]:
+            self.units_home_var.set(htxt)
+            self._units_cache["home"] = htxt
+        if atxt != self._units_cache["away"]:
+            self.units_away_var.set(atxt)
+            self._units_cache["away"] = atxt
+
+    # ------------------------------------------------------------------
+    # Next big moment jump
+    # ------------------------------------------------------------------
+    def _jump_to_next_moment(self):
+        target = None
+        for i in range(self.cursor, len(self.events)):
+            if self.events[i].get("type") in BIG_MOMENTS:
+                target = i
+                break
+        if target is None:
+            if self.sim_done:
+                self._feed("No more big moments — the game is over.",
+                           tag="info")
+            return
+        self._instant = True
+        try:
+            while self.cursor <= target:
+                ev = self.events[self.cursor]
+                self.cursor += 1
+                self.playhead = max(self.playhead, ev.get("t", self.playhead))
+                self._consume(ev)
+        finally:
+            self._instant = False
+        self.puck_flight = None
+        self.pending_outcome = None
+        self._shootout_pending = None
+        self._pass_arrival = None
+        self._battle_winner = None
+        self._battle_settle_at = 0.0
+        self.hold_until = 0
+        self._update_scoreboard()
+
+    # ------------------------------------------------------------------
+    # Period summary cards
+    # ------------------------------------------------------------------
+    def _note(self, tag, msg, ev):
+        self._period_stats["notes"].append((tag, msg, ev))
+
+    def _insert_period_summary(self, ev):
+        p = ev.get("period", 1)
+        label = f"OT{p - 3}" if p > 3 else f"P{p}"
+        hab = _abbr(self.home_team.team_name)
+        aab = _abbr(self.away_team.team_name)
+        hs, aws = ev.get("home_score", 0), ev.get("away_score", 0)
+        self._feed(f"—— {label} SUMMARY: {hab} {hs} · {aws} {aab} ——",
+                   tag="summary", ev=ev)
+        sh = self._period_stats["shots"]["home"]
+        sa = self._period_stats["shots"]["away"]
+        gh = self._period_stats["goals"]["home"]
+        ga = self._period_stats["goals"]["away"]
+        self._feed(f"Shots: {hab} {sh} · {aab} {sa}    "
+                   f"Goals: {hab} {gh} · {aab} {ga}", tag="info", ev=ev)
+        for tag, msg, nev in self._period_stats["notes"][-8:]:
+            self._feed(f"• {msg}", tag=tag, ev=nev)
+
+    # ------------------------------------------------------------------
+    # Live goalie stats
+    # ------------------------------------------------------------------
+    def _goalie_shot(self, side, goalie=None, scored=False):
+        """Record a shot faced by `side`'s current goalie."""
+        pid = (getattr(goalie, "id", None) if goalie is not None
+               else self._cur_goalie.get(side))
+        if pid is None:
+            return
+        st = self._goalie_stats.get(pid)
+        if st is None:
+            st = {"name": self._gname(goalie), "shots": 0, "saves": 0}
+            self._goalie_stats[pid] = st
+        st["shots"] += 1
+        if not scored:
+            st["saves"] += 1
+        self._cur_goalie[side] = pid
+        self._update_goalie_labels()
+
+    def _update_goalie_labels(self):
+        hv = getattr(self, "_goalie_home_var", None)
+        if hv is None:
+            return
+        for side, var in (("home", self._goalie_home_var),
+                          ("away", self._goalie_away_var)):
+            st = self._goalie_stats.get(self._cur_goalie.get(side))
+            var.set(f"{st['name']} {st['saves']}/{st['shots']}" if st else "–")
 
     # ------------------------------------------------------------------
     # Controls
@@ -1066,6 +1472,12 @@ class PBPVisualSim(tk.Toplevel):
             self._battle_settle_at = 0.0
             self.carrier_id = self._battle_winner
             self._battle_winner = None
+
+        # live readouts: on-ice units + momentum meter
+        self._update_units()
+        if self._mom_dirty:
+            self._mom_dirty = False
+            self._draw_momentum()
 
         # draw puck
         px, py = self.X(self.puck["x"]), self.Y(self.puck["y"])

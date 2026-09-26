@@ -71,6 +71,42 @@ try:
 except ImportError:
     POSITION_SPECIFIC_ATTRIBUTES_AVAILABLE = False
 
+# Hover tooltips (QoL): reuse the shared tooltip helper when available.
+try:
+    from tooltip import create_tooltip
+except Exception:
+    def create_tooltip(widget, text, delay=500):
+        return None
+
+
+def _qol_add_tooltip(widget, text, delay=500):
+    """Attach a tooltip without clobbering the widget's own hover bindings.
+
+    tooltip.ToolTip binds <Enter>/<Leave>/<Motion> without add='+', which
+    would replace PillButton/RoundedButton hover highlights. Snapshot any
+    existing widget-level handlers first, attach the tooltip, then re-add
+    the originals additively so both hover effects and tooltips work.
+    """
+    prior = {}
+    for seq in ('<Enter>', '<Leave>', '<Motion>'):
+        try:
+            script = widget.bind(seq)
+        except Exception:
+            script = ''
+        if script:
+            prior[seq] = script
+    tip = create_tooltip(widget, text, delay=delay)
+    # Re-append the original handlers additively. NOTE: widget.bind(seq,
+    # script, add='+') cannot be used here -- Tkinter ignores add='+' when
+    # func is a raw Tcl script string, which would silently replace (and
+    # kill) the tooltip binding. The Tcl-level '+' prefix appends properly.
+    for seq, script in prior.items():
+        try:
+            widget.tk.call('bind', widget._w, seq, '+' + script)
+        except Exception:
+            pass
+    return tip
+
 # --- Constants for Data Generation ---
 FIRST_NAMES = ["John", "Mike", "David", "Chris", "James", "Robert", "Daniel", "William", "Matt", "Joe", "Alex", "Connor", "Jack", "Ryan", "Nick", "Kyle", "Erik", "Peter", "Paul", "Mark", "Auston", "Sidney", "Nathan", "Leon", "Brad", "David"]
 LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Wilson", "Anderson", "Taylor", "Thomas", "Moore", "Martin", "Lee", "Thompson", "White", "Harris", "Matthews", "Crosby", "MacKinnon", "Draisaitl", "Marchand", "Pastrnak"]
@@ -2891,6 +2927,66 @@ class AdvancedGameSim:
         }
 
 # --- Main GUI Application ---
+def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Cancel"):
+    """Small modern confirm dialog in the charcoal/teal theme.
+
+    Returns True when the user confirms, False otherwise.
+    """
+    result = {'ok': False}
+    dlg = tk.Toplevel(parent)
+    dlg.title(title)
+    dlg.transient(parent)
+    dlg.resizable(False, False)
+    dlg.configure(bg='#0e0e11')
+    try:
+        dlg.grab_set()
+    except tk.TclError:
+        pass
+
+    def _close(ok):
+        result['ok'] = ok
+        try:
+            dlg.grab_release()
+        except tk.TclError:
+            pass
+        dlg.destroy()
+
+    tk.Label(dlg, text=title, bg='#0e0e11', fg='#ffffff',
+             font=('Segoe UI', 12, 'bold')).pack(anchor='w', padx=18, pady=(16, 6))
+    tk.Label(dlg, text=message, bg='#0e0e11', fg='#a1a1aa',
+             font=('Segoe UI', 10), wraplength=380, justify='left'
+             ).pack(anchor='w', padx=18, pady=(0, 14))
+
+    btn_frame = tk.Frame(dlg, bg='#0e0e11')
+    btn_frame.pack(fill='x', padx=18, pady=(0, 16))
+    tk.Button(btn_frame, text=cancel_text, command=lambda: _close(False),
+              bg='#1e1e24', fg='#ffffff', activebackground='#2a2a32',
+              activeforeground='#ffffff', relief='flat', padx=18, pady=8,
+              font=('Segoe UI', 10)).pack(side='right')
+    tk.Button(btn_frame, text=confirm_text, command=lambda: _close(True),
+              bg='#00ceb8', fg='#0e0e11', activebackground='#00a894',
+              activeforeground='#0e0e11', relief='flat', padx=18, pady=8,
+              font=('Segoe UI', 10, 'bold')).pack(side='right', padx=(0, 10))
+
+    dlg.bind('<Escape>', lambda e: _close(False))
+    dlg.bind('<Return>', lambda e: _close(True))
+    dlg._qol_escape_close = lambda: _close(False)
+
+    # Center over the parent window.
+    try:
+        dlg.update_idletasks()
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        dw, dh = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+        x = px + max(0, (pw - dw) // 2)
+        y = py + max(0, (ph - dh) // 3)
+        dlg.geometry(f"+{x}+{y}")
+    except tk.TclError:
+        pass
+    dlg.wait_window()
+    return result['ok']
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
@@ -3571,7 +3667,10 @@ class HockeyManagerGUI(tk.Tk):
         
         # Update dashboard with current data
         self.update_dashboard_data()
-        
+
+        # App-wide keyboard shortcuts (Space / Ctrl+S / Esc / ?).
+        self._setup_keyboard_shortcuts()
+
     def update_dashboard_data(self):
         """Update the dashboard with current game data."""
         if hasattr(self, 'dashboard') and self.dashboard:
@@ -3686,6 +3785,8 @@ class HockeyManagerGUI(tk.Tk):
                                             bg="#00ceb8", radius=10,
                                             font=(self.FONT_FAMILY, 11, "bold"))
         self.season_flow_btn.pack(pady=(2, 5))
+        _qol_add_tooltip(self.season_flow_btn,
+                         "Season Flow: open the automated season-flow panel")
 
         # Continue button with better styling
         self.continue_btn = RoundedButton(season_controls_frame, text="Continue ▶",
@@ -3694,6 +3795,8 @@ class HockeyManagerGUI(tk.Tk):
                                           font=(self.FONT_FAMILY, 12, "bold"),
                                           padx=26, pady=12)
         self.continue_btn.pack(pady=(0, 5))
+        _qol_add_tooltip(self.continue_btn,
+                         "Continue: advance to the next day (shortcut: Space)")
         
     def _create_enhanced_menu_bar(self, parent):
         """Create a streamlined menu bar with dropdown organization."""
@@ -3723,11 +3826,14 @@ class HockeyManagerGUI(tk.Tk):
         
         # Primary action buttons (always visible) - temporarily disable icons
         self.inbox_btn = self._create_nav_pill(left_menu_frame, self._get_inbox_button_text(),
-                                               self.open_inbox_window)
+                                               self.open_inbox_window,
+                                               tooltip="Inbox: messages from your staff, players, and the league office")
 
-        self._create_nav_pill(left_menu_frame, "Roster", self.open_roster_window)
+        self._create_nav_pill(left_menu_frame, "Roster", self.open_roster_window,
+                                       tooltip="Roster: manage your NHL, AHL, and prospect rosters")
         # Schedule & Calendar dropdown
-        self._create_dropdown_menu(left_menu_frame, "Schedule", {
+        self._create_dropdown_menu(left_menu_frame, "Schedule",
+            tooltip="Schedule: league schedule, scores, and the season calendar", menu_items={
             "Schedule": self.open_schedule_window,
             "Calendar": self.open_calendar_window
         })
@@ -3737,7 +3843,7 @@ class HockeyManagerGUI(tk.Tk):
         separator1.pack(side="left", fill="y", padx=8)
         
         # Team Management dropdown
-        self._create_dropdown_menu(left_menu_frame, "Team", {
+        self._create_dropdown_menu(left_menu_frame, "Team", tooltip="Team: lines, tactics, staff, development, and scouting", menu_items={
             "Edit Lines": self.open_edit_lines_window,
             "Tactics": self.open_tactics_window,
             "Staff Management": self.open_staff_management_window,
@@ -3749,13 +3855,15 @@ class HockeyManagerGUI(tk.Tk):
         })
         
         # Finances dropdown
-        self._create_dropdown_menu(left_menu_frame, "Finances", {
+        self._create_dropdown_menu(left_menu_frame, "Finances",
+            tooltip="Finances: budgets, payroll, and contract extensions", menu_items={
             "Team Finances": self.open_finances_window,
             "Negotiate Extensions": self.open_contract_extensions_window
         })
         
         # Transactions dropdown  
-        self._create_dropdown_menu(left_menu_frame, "Transactions", {
+        self._create_dropdown_menu(left_menu_frame, "Transactions",
+            tooltip="Transactions: trades, free agents, waivers, and the draft", menu_items={
             "Fantasy Draft": self.open_fantasy_draft_window,
             "Free Agents": self.open_free_agency_window,
             "Free Agent Frenzy": self.open_free_agency_frenzy,  # Only visible on July 1
@@ -3771,7 +3879,8 @@ class HockeyManagerGUI(tk.Tk):
         right_menu_frame.pack(side="right")
 
         # Save/Load dropdown
-        self._create_dropdown_menu(right_menu_frame, "Save/Load", {
+        self._create_dropdown_menu(right_menu_frame, "Save/Load",
+            tooltip="Save/Load: save your game or load a previous save", menu_items={
             "Save Game": self.open_save_window,
             "Load Game": self.open_load_window,
             "Playoffs": self.open_playoffs_window
@@ -3779,25 +3888,30 @@ class HockeyManagerGUI(tk.Tk):
 
         # Right menu buttons - temporarily back to text
         self._create_nav_pill(right_menu_frame, "News",
-                              self.open_news_window, side="right")
+                              self.open_news_window, side="right",
+                              tooltip="News: the latest stories from around the league")
 
         # Media Center button (optional system)
         self._create_nav_pill(right_menu_frame, "Media",
-                              self.open_media_center, side="right")
+                              self.open_media_center, side="right",
+                              tooltip="Media Center: press conferences and media relations")
 
         # Stats & Standings button
         self._create_nav_pill(right_menu_frame, "Stats",
-                              self.open_stats_standings_window, side="right")
+                              self.open_stats_standings_window, side="right",
+                              tooltip="Stats: standings, scoring leaders, and team analytics")
         
         # GM Options as standalone button
         self._create_nav_pill(right_menu_frame, "GM Options",
-                              self.open_gm_options_window, side="right")
+                              self.open_gm_options_window, side="right",
+                              tooltip="GM Options: trade block, waivers, captains, and extensions")
         
         # Settings as its own button
         self._create_nav_pill(right_menu_frame, "Settings",
-                              self.open_settings_window, side="right")
+                              self.open_settings_window, side="right",
+                              tooltip="Settings: game settings and preferences (? shows keyboard shortcuts)")
     
-    def _create_nav_pill(self, parent, text, command, side="left"):
+    def _create_nav_pill(self, parent, text, command, side="left", tooltip=None):
         """Create a pill-style navigation button for the top menu bar."""
         # Use modern color scheme
         try:
@@ -3817,15 +3931,18 @@ class HockeyManagerGUI(tk.Tk):
                          padx=14, pady=6, bg=bg,
                          fg=fg, hover_bg=hover_bg)
         pill.pack(side=side, padx=4)
+        if tooltip:
+            _qol_add_tooltip(pill, tooltip)
         return pill
 
-    def _create_dropdown_menu(self, parent, button_text, menu_items):
+    def _create_dropdown_menu(self, parent, button_text, menu_items, tooltip=None):
         """Create a dropdown menu button with organized menu items."""
         import tkinter as tk
         
         # Create the main dropdown button as a nav pill.
         # The chevron marks it as a menu, distinct from plain nav pills.
-        dropdown_btn = self._create_nav_pill(parent, button_text + " ▾", None)
+        dropdown_btn = self._create_nav_pill(parent, button_text + " ▾", None,
+                                             tooltip=tooltip)
         
         # Create dropdown menu
         dropdown_menu = tk.Menu(self.master, tearoff=0, font=(self.FONT_FAMILY, 9))
@@ -3856,6 +3973,213 @@ class HockeyManagerGUI(tk.Tk):
         dropdown_btn.command = show_dropdown
         
         return dropdown_btn
+
+    # ------------------------------------------------------------------
+    # Keyboard shortcuts (quality of life)
+    # ------------------------------------------------------------------
+    _QOL_TEXT_ENTRY_CLASSES = ('Entry', 'TEntry', 'Text', 'TCombobox',
+                               'Combobox', 'TSpinbox', 'Spinbox')
+    # Widgets whose own Space/Menu behavior must never be hijacked.
+    _QOL_SPACE_BLOCK_CLASSES = ('Button', 'TButton', 'Checkbutton',
+                                'TCheckbutton', 'Radiobutton', 'TRadiobutton',
+                                'Listbox', 'Menu', 'TScale', 'Scale')
+
+    def _setup_keyboard_shortcuts(self):
+        """Bind app-wide keyboard shortcuts: Space, Ctrl+S, Esc, ?."""
+        if getattr(self, '_qol_shortcuts_bound', False):
+            return
+        self._qol_shortcuts_bound = True
+        self.bind_all('<Key-space>', self._qol_on_space, add='+')
+        self.bind_all('<Control-s>', self._qol_on_quick_save, add='+')
+        self.bind_all('<Control-S>', self._qol_on_quick_save, add='+')
+        self.bind_all('<Escape>', self._qol_on_escape, add='+')
+        self.bind_all('<Key-question>', self._qol_on_cheat_sheet, add='+')
+
+    def _qol_focus_class(self):
+        try:
+            w = self.focus_get()
+        except Exception:
+            return ''
+        if w is None:
+            return ''
+        try:
+            return w.winfo_class()
+        except Exception:
+            return ''
+
+    def _qol_typing_focus(self):
+        """True when the user is typing in a text entry/combobox."""
+        return self._qol_focus_class() in self._QOL_TEXT_ENTRY_CLASSES
+
+    def _qol_modal_open(self):
+        """True when a modal (grabbed) dialog is open."""
+        try:
+            return self.grab_current() is not None
+        except Exception:
+            return False
+
+    def _qol_on_space(self, event=None):
+        """Space: Continue / advance one day (never while typing)."""
+        cls = self._qol_focus_class()
+        if cls in self._QOL_TEXT_ENTRY_CLASSES + self._QOL_SPACE_BLOCK_CLASSES:
+            return None
+        if self._qol_modal_open():
+            return None
+        try:
+            self.simulate_day()
+        except Exception:
+            pass
+        return 'break'
+
+    def _qol_on_quick_save(self, event=None):
+        """Ctrl+S: quick save without opening the save dialog."""
+        if self._qol_typing_focus():
+            return None
+        if self._qol_modal_open():
+            return None
+        self._qol_quick_save()
+        return 'break'
+
+    def _qol_on_escape(self, event=None):
+        """Esc: close the focused dialog (never the main window)."""
+        if self._qol_typing_focus():
+            return None  # don't yank a dialog away mid-typing
+        try:
+            w = self.focus_get()
+        except Exception:
+            return None
+        target = None
+        seen = set()
+        while w is not None and id(w) not in seen:
+            seen.add(id(w))
+            if isinstance(w, tk.Toplevel):
+                target = w
+                break
+            w = getattr(w, 'master', None)
+        if target is None:
+            return None
+        closer = getattr(target, '_qol_escape_close', None)
+        try:
+            if callable(closer):
+                closer()
+            else:
+                target.destroy()
+        except Exception:
+            pass
+        return 'break'
+
+    def _qol_on_cheat_sheet(self, event=None):
+        """'?': show the keyboard-shortcut cheat sheet."""
+        if self._qol_typing_focus():
+            return None
+        self.show_shortcuts_dialog()
+        return 'break'
+
+    def _qol_quick_save(self):
+        """Save immediately via the save manager; toast on success."""
+        mgr = getattr(self, 'save_manager', None)
+        if mgr is None:
+            messagebox.showwarning("Quick Save", "The save system is not ready yet.")
+            return
+        try:
+            ok = mgr.save_game(compress=True)
+        except Exception as e:
+            messagebox.showerror("Quick Save", f"Quick save failed:\n{e}")
+            return
+        if ok:
+            try:
+                self.on_game_saved()
+            except Exception:
+                pass
+            self._qol_flash_status("Game saved")
+        else:
+            messagebox.showwarning(
+                "Quick Save",
+                "Quick save did not complete. "
+                "Use Save/Load > Save Game for full options.")
+
+    def _qol_flash_status(self, text, ms=1600):
+        """Tiny transient toast in the bottom-right of the main window."""
+        try:
+            toast = tk.Toplevel(self)
+        except Exception:
+            return
+        toast.overrideredirect(True)
+        toast.configure(bg='#16161a')
+        tk.Label(toast, text=text, bg='#16161a', fg='#00ceb8',
+                 font=(self.FONT_FAMILY, 10, 'bold'), padx=16, pady=10).pack()
+        try:
+            self.update_idletasks()
+            x = (self.winfo_rootx() + self.winfo_width()
+                 - toast.winfo_reqwidth() - 24)
+            y = (self.winfo_rooty() + self.winfo_height()
+                 - toast.winfo_reqheight() - 24)
+            toast.geometry(f"+{max(0, x)}+{max(0, y)}")
+            toast.attributes('-topmost', True)
+            toast.after(ms, toast.destroy)
+        except Exception:
+            try:
+                toast.destroy()
+            except Exception:
+                pass
+
+    def show_shortcuts_dialog(self):
+        """Cheat-sheet dialog listing every keyboard shortcut."""
+        if getattr(self, '_qol_cheat_open', False):
+            return
+        self._qol_cheat_open = True
+        dlg = tk.Toplevel(self)
+        dlg.title("Keyboard Shortcuts")
+        dlg.transient(self)
+        dlg.resizable(False, False)
+        dlg.configure(bg='#0e0e11')
+
+        def _close():
+            self._qol_cheat_open = False
+            try:
+                dlg.destroy()
+            except Exception:
+                pass
+
+        tk.Label(dlg, text="Keyboard Shortcuts", bg='#0e0e11', fg='#ffffff',
+                 font=(self.FONT_FAMILY, 14, 'bold')).pack(
+                     anchor='w', padx=20, pady=(18, 4))
+        tk.Label(dlg, text="Shortcuts stay quiet while you are typing in a text field.",
+                 bg='#0e0e11', fg='#71717a',
+                 font=(self.FONT_FAMILY, 9, 'italic')).pack(
+                     anchor='w', padx=20, pady=(0, 10))
+
+        rows = [
+            ("Space", "Continue \u2014 advance to the next day"),
+            ("Ctrl+S", "Quick save the game"),
+            ("Esc", "Close the focused window or dialog"),
+            ("?", "Show this cheat sheet"),
+        ]
+        grid = tk.Frame(dlg, bg='#0e0e11')
+        grid.pack(fill='x', padx=20, pady=(0, 8))
+        for i, (key, desc) in enumerate(rows):
+            tk.Label(grid, text=key, bg='#1e1e24', fg='#00ceb8',
+                     font=(self.FONT_FAMILY, 10, 'bold'), padx=10, pady=6,
+                     width=8).grid(row=i, column=0, sticky='w', pady=3)
+            tk.Label(grid, text=desc, bg='#0e0e11', fg='#a1a1aa',
+                     font=(self.FONT_FAMILY, 10)).grid(
+                         row=i, column=1, sticky='w', padx=(12, 0), pady=3)
+
+        tk.Button(dlg, text="Close", command=_close,
+                  bg='#00ceb8', fg='#0e0e11', activebackground='#00a894',
+                  activeforeground='#0e0e11', relief='flat', padx=24, pady=8,
+                  font=(self.FONT_FAMILY, 10, 'bold')).pack(pady=(4, 18))
+        dlg.protocol("WM_DELETE_WINDOW", _close)
+        dlg._qol_escape_close = _close  # Esc runs the graceful close
+        try:
+            dlg.update_idletasks()
+            x = (self.winfo_rootx()
+                 + (self.winfo_width() - dlg.winfo_reqwidth()) // 2)
+            y = (self.winfo_rooty()
+                 + (self.winfo_height() - dlg.winfo_reqheight()) // 3)
+            dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
 
     def _create_panel(self, parent, title, row, col, rowspan=1, colspan=1):
         outer_frame = ttk.Frame(parent, style='Panel.TFrame', padding=1)
@@ -9658,6 +9982,12 @@ class CleanEditLinesWindow(tk.Toplevel):
         # Drag and drop state
         self.drag_data = {"item": None, "source": None}
         self.player_widgets = {}  # Track all player display widgets
+
+        # Generated face thumbnails: window-level cache keeps PhotoImages
+        # alive (avoids Tk garbage-collection blanking) and a lazy queue
+        # keeps the editor opening instantly.
+        self._face_photos = {}
+        self._pending_faces = []
         
         # Initialize lineup data
         self.lineup = getattr(parent.user_team, "lineup", None)
@@ -9682,6 +10012,61 @@ class CleanEditLinesWindow(tk.Toplevel):
         self.create_clean_interface()
         self.load_current_lineup()
         self.refresh_all_line_ratings()
+        # Fill in face thumbnails lazily so the window opens instantly.
+        self.after(60, self._pump_face_queue)
+
+    def _face_photo(self, player, size=48):
+        """Return a cached PhotoImage face thumbnail for a player.
+
+        Returns None when face generation is unavailable; never raises.
+        """
+        try:
+            pid = getattr(player, 'id', None) or id(player)
+        except Exception:
+            pid = id(player)
+        key = (pid, size)
+        if key not in self._face_photos:
+            photo = None
+            try:
+                from player_faces import get_face_photo
+                photo = get_face_photo(player, size=size)
+            except Exception:
+                photo = None
+            self._face_photos[key] = photo
+        return self._face_photos[key]
+
+    def _face_blank(self, size):
+        """Pixel-sized blank placeholder so cards reserve face space."""
+        key = ('blank', size)
+        blank = self._face_photos.get(key)
+        if blank is None:
+            try:
+                blank = tk.PhotoImage(width=size, height=size, master=self)
+            except Exception:
+                blank = None
+            self._face_photos[key] = blank
+        return blank
+
+    def _pump_face_queue(self):
+        """Fill a few pending face thumbnails per tick (lazy load)."""
+        try:
+            for _ in range(4):
+                if not self._pending_faces:
+                    return
+                player, label, size = self._pending_faces.pop(0)
+                try:
+                    if not label.winfo_exists():
+                        continue
+                    photo = self._face_photo(player, size)
+                    if photo is not None:
+                        label.config(image=photo)
+                        label.image = photo
+                except Exception:
+                    pass
+            if self._pending_faces:
+                self.after(25, self._pump_face_queue)
+        except Exception:
+            pass
     
     def create_team_overview(self, parent_frame):
         """Create a quick team overview with key stats"""
@@ -9817,16 +10202,24 @@ class CleanEditLinesWindow(tk.Toplevel):
         # Darker card with rounded appearance
         card_inner = tk.Frame(player_frame, bg='#6c757d', relief='flat', bd=0)
         card_inner.pack(fill=tk.X, padx=1, pady=1)
-        
+
+        # Generated face thumbnail on the left (filled in lazily so the
+        # editor opens instantly; the blank reserves the exact space).
+        face_label = tk.Label(card_inner, bg='#2b2b31', bd=0,
+                              image=self._face_blank(48))
+        face_label.image = self._face_photos.get(('blank', 48))
+        face_label.pack(side=tk.LEFT, padx=(8, 4), pady=8)
+        self._pending_faces.append((player, face_label, 48))
+
         # Bind drag events
-        for widget in [player_frame, card_inner]:
+        for widget in [player_frame, card_inner, face_label]:
             widget.bind('<Button-1>', lambda e: self.start_drag(e, player, player_frame))
             widget.bind('<B1-Motion>', self.on_drag)
             widget.bind('<ButtonRelease-1>', self.end_drag)
-        
+
         # Player info layout with darker styling
         info_frame = tk.Frame(card_inner, bg='#6c757d')
-        info_frame.pack(fill=tk.X, padx=12, pady=8)
+        info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12), pady=8)
         
         # Top row - Name and rating with modern typography
         top_row = tk.Frame(info_frame, bg='#6c757d')
@@ -9895,7 +10288,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         # Bind drag events to all child widgets
         drag_widgets = [info_frame, top_row, middle_row, name_label, rating_frame, rating_label,
                         pos_label, condition_frame, condition_label,
-                        bottom_row, arch_label]
+                        bottom_row, arch_label, face_label]
         try:
             drag_widgets.append(stats_label)
         except NameError:
@@ -10556,14 +10949,27 @@ class CleanEditLinesWindow(tk.Toplevel):
         # Player info with subtle styling
         info_frame = tk.Frame(card_frame, bg='#6c757d')
         info_frame.pack(expand=True, fill='both', padx=8, pady=6)
-        
-        name_label = tk.Label(info_frame, text=player.full_name, bg='#6c757d', fg='white',
-                             font=(self.parent.FONT_FAMILY, 9, 'bold'))
-        name_label.pack()
-        
-        rating_label = tk.Label(info_frame, text=f"{to_100_scale(player.overall_rating())}", bg='#6c757d', fg='white',
-                               font=(self.parent.FONT_FAMILY, 8))
-        rating_label.pack()
+
+        # Generated face thumbnail beside the name (single player, cached).
+        dz_face = tk.Label(info_frame, bg='#2b2b31', bd=0)
+        dz_photo = self._face_photo(player, 40)
+        if dz_photo is None:
+            dz_photo = self._face_blank(40)
+        if dz_photo is not None:
+            dz_face.config(image=dz_photo)
+            dz_face.image = dz_photo
+        dz_face.pack(side=tk.LEFT, padx=(0, 8))
+
+        text_col = tk.Frame(info_frame, bg='#6c757d')
+        text_col.pack(side=tk.LEFT, expand=True, fill='y')
+
+        name_label = tk.Label(text_col, text=player.full_name, bg='#6c757d', fg='white',
+                             font=(self.parent.FONT_FAMILY, 9, 'bold'), anchor='w')
+        name_label.pack(anchor='w')
+
+        rating_label = tk.Label(text_col, text=f"{to_100_scale(player.overall_rating())}", bg='#6c757d', fg='white',
+                               font=(self.parent.FONT_FAMILY, 8), anchor='w')
+        rating_label.pack(anchor='w')
 
         try:
             arch = get_archetype(player)
@@ -10571,10 +10977,11 @@ class CleanEditLinesWindow(tk.Toplevel):
             arch = "—"
         arch_label = tk.Label(info_frame, text=arch, bg='#6c757d', fg='#ffd166',
                               font=(self.parent.FONT_FAMILY, 7, 'bold'))
-        arch_label.pack()
-        
+        arch_label.pack(side=tk.LEFT, padx=(8, 0))
+
         # Bind click to clear with subtle feedback
-        for widget in [player_display, card_frame, info_frame, name_label, rating_label, arch_label]:
+        for widget in [player_display, card_frame, info_frame, name_label, rating_label, arch_label,
+                       dz_face, text_col]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, drop_zone.zone_id))
             widget.bind('<Enter>', lambda e: card_frame.config(bg='#00ceb8'))  # Red on hover
             widget.bind('<Leave>', lambda e: card_frame.config(bg='#6c757d'))  # Back to gray

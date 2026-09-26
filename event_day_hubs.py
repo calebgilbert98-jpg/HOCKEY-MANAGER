@@ -279,15 +279,7 @@ class DraftDayCentral(EventDayHub):
         tk.Label(clock, text=pickinfo, bg=self.CARD, fg=self.MUTED,
                  font=('Segoe UI', 11)).pack(pady=(0, 10))
 
-        self._column_title(self.center_col, "TOP AVAILABLE PROSPECTS")
-        avail = tk.Frame(self.center_col, bg=self.PANEL)
-        avail.pack(fill='both', expand=True, padx=14, pady=(0, 12))
-        for i, line in enumerate(self._top_available()):
-            bg = self.CARD if i % 2 == 0 else self.PANEL
-            row = tk.Frame(avail, bg=bg)
-            row.pack(fill='x', pady=1)
-            tk.Label(row, text=line, bg=bg, fg=self.WHITE,
-                     font=('Segoe UI', 10), anchor='w').pack(fill='x', padx=10, pady=4)
+        self._build_prospect_cards(self.center_col)
 
         # RIGHT: draft-day deals + class snapshot
         self._column_title(self.right_col, "DRAFT-DAY DEALS")
@@ -312,18 +304,102 @@ class DraftDayCentral(EventDayHub):
         except Exception:
             return []
 
-    def _top_available(self, n=8):
+    def _sorted_prospects(self):
+        """Prospects in consensus (draft_ranking) order; falls back to OVR."""
         prosp = self._prospects()
+        def key(p):
+            dr = getattr(p, 'draft_ranking', None)
+            if dr:
+                try:
+                    return (1, float(dr))
+                except Exception:
+                    pass
+            try:
+                return (0, float(p.overall_rating()))
+            except Exception:
+                return (0, 0.0)
+        return sorted(prosp, key=key, reverse=True)
+
+    def _report_for(self, p):
+        """The user's real scouting report on a prospect, or None."""
+        try:
+            ut = self._user_team()
+            reports = getattr(ut, 'scouting_reports', None) or {}
+            pid = getattr(p, 'id', None)
+            if pid is None:
+                return None
+            return reports.get(pid)
+        except Exception:
+            return None
+
+    def _scout_note(self, p):
+        """Honest scout line: real report data, or an unscouted empty state."""
+        r = self._report_for(p)
+        try:
+            viewings = int(getattr(r, 'viewings', 0) or 0)
+        except Exception:
+            viewings = 0
+        if r is None or viewings <= 0:
+            return "Unscouted \u2014 no report filed yet."
+        bits = [f"{viewings} viewing{'s' if viewings != 1 else ''}"]
+        acc = getattr(r, 'accuracy', '') or ''
+        if acc:
+            bits.append(f"{acc} accuracy")
+        strengths = list(getattr(r, 'strengths', None) or [])
+        weaknesses = list(getattr(r, 'weaknesses', None) or [])
+        if strengths:
+            bits.append("Strength: " + str(strengths[0]))
+        if weaknesses:
+            bits.append("Weakness: " + str(weaknesses[0]))
+        proj = getattr(r, 'projected_draft_position', None)
+        if proj:
+            bits.append(f"Proj. pick #{proj}")
+        return " \u00b7 ".join(bits)
+
+    def _build_prospect_cards(self, parent):
+        """Multi-field prospect cards built only from real prospect attributes."""
+        self._column_title(parent, "TOP AVAILABLE PROSPECTS")
+        wrap = tk.Frame(parent, bg=self.PANEL)
+        wrap.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+        ordered = self._sorted_prospects()
+        cards = ordered[:6]
+        if not cards:
+            tk.Label(wrap, text="No draft class generated yet.", bg=self.PANEL,
+                     fg=self.MUTED, font=('Segoe UI', 10)).pack(anchor='w', padx=6, pady=6)
+            return
+        rank_of = {id(p): i + 1 for i, p in enumerate(ordered)}
+        for p in cards:
+            card = tk.Frame(wrap, bg=self.CARD, highlightbackground=self.BORDER,
+                            highlightthickness=1)
+            card.pack(fill='x', pady=3)
+            top = tk.Frame(card, bg=self.CARD)
+            top.pack(fill='x', padx=10, pady=(8, 0))
+            name = getattr(p, 'full_name', str(p))
+            pos = self._pos_code(p)
+            age = getattr(p, 'age', '?')
+            tk.Label(top, text=f"#{rank_of.get(id(p), '?')}  {name}", bg=self.CARD,
+                     fg=self.WHITE, font=('Segoe UI', 11, 'bold')).pack(side='left')
+            tk.Label(top, text=f"{pos}  \u00b7  Age {age}", bg=self.CARD,
+                     fg=self.MUTED, font=('Segoe UI', 10)).pack(side='right')
+            mid = tk.Frame(card, bg=self.CARD)
+            mid.pack(fill='x', padx=10, pady=(2, 0))
+            pot = getattr(p, 'potential_grade', '') or ''
+            tk.Label(mid, text=f"POT {pot}" if pot else "POT \u2014", bg=self.CARD,
+                     fg=self.GOLD, font=('Segoe UI', 10, 'bold')).pack(side='left')
+            nat = str(getattr(p, 'nationality', getattr(p, 'nation', '')) or '')
+            if nat:
+                tk.Label(mid, text=f"  {nat}", bg=self.CARD, fg=self.MUTED,
+                         font=('Segoe UI', 10)).pack(side='left')
+            tk.Label(card, text=self._scout_note(p), bg=self.CARD, fg=self.MUTED,
+                     font=('Segoe UI', 9, 'italic'), anchor='w', justify='left',
+                     wraplength=430).pack(fill='x', padx=10, pady=(2, 8))
+
+    def _top_available(self, n=8):
+        prosp = self._sorted_prospects()[:n]
         if not prosp:
             return ["No draft class generated yet."]
-        def key(p):
-            try:
-                return p.overall_rating()
-            except Exception:
-                return 0
-        top = sorted(prosp, key=key, reverse=True)[:n]
         lines = []
-        for i, p in enumerate(top, 1):
+        for i, p in enumerate(prosp, 1):
             try:
                 name = getattr(p, 'full_name', str(p))
                 pos = self._pos_code(p)
@@ -435,15 +511,7 @@ class FreeAgencyFrenzy(EventDayHub):
         self._feed_write(self.wire_box, self._wire_lines())
 
         # CENTER: top UFAs
-        self._column_title(self.center_col, "TOP AVAILABLE FREE AGENTS")
-        ufa_frame = tk.Frame(self.center_col, bg=self.PANEL)
-        ufa_frame.pack(fill='both', expand=True, padx=14, pady=(0, 12))
-        for i, line in enumerate(self._top_ufas()):
-            bg = self.CARD if i % 2 == 0 else self.PANEL
-            row = tk.Frame(ufa_frame, bg=bg)
-            row.pack(fill='x', pady=1)
-            tk.Label(row, text=line, bg=bg, fg=self.WHITE,
-                     font=('Segoe UI', 10), anchor='w').pack(fill='x', padx=10, pady=4)
+        self._build_ufa_cards(self.center_col)
 
         # RIGHT: done deals + cap snapshot
         self._column_title(self.right_col, "DONE DEALS")
@@ -469,16 +537,73 @@ class FreeAgencyFrenzy(EventDayHub):
         except Exception:
             return []
 
-    def _top_ufas(self, n=10):
+    def _top_ufa_players(self, n=10):
+        """Top free agents as player objects, sorted by OVR."""
         fas = self._ufa_list()
-        if not fas:
-            return ["No free agents on the market."]
         def key(p):
             try:
                 return p.overall_rating()
             except Exception:
                 return 0
-        top = sorted(fas, key=key, reverse=True)[:n]
+        return sorted(fas, key=key, reverse=True)[:n]
+
+    def _season_line(self, p):
+        """Real season stat line; goalies get goalie stats. Honest when empty."""
+        try:
+            gp = int(getattr(p, 'games_played', 0) or 0)
+        except Exception:
+            gp = 0
+        if gp <= 0:
+            return "No games played this season"
+        if self._pos_code(p) == 'G':
+            w = getattr(p, 'wins', 0) or 0
+            sv = getattr(p, 'save_percentage', 0) or 0
+            gaa = getattr(p, 'goals_against_avg', 0) or 0
+            return f"{gp} GP \u00b7 {w} W \u00b7 {sv:.3f} SV% \u00b7 {gaa:.2f} GAA"
+        g = getattr(p, 'goals', 0) or 0
+        a = getattr(p, 'assists', 0) or 0
+        pts = getattr(p, 'points', g + a) or 0
+        return f"{gp} GP \u00b7 {g} G \u00b7 {a} A \u00b7 {pts} P"
+
+    def _build_ufa_cards(self, parent):
+        """Multi-field UFA cards built only from real player attributes."""
+        self._column_title(parent, "TOP AVAILABLE FREE AGENTS")
+        wrap = tk.Frame(parent, bg=self.PANEL)
+        wrap.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+        cards = self._top_ufa_players(8)
+        if not cards:
+            tk.Label(wrap, text="No free agents on the market.", bg=self.PANEL,
+                     fg=self.MUTED, font=('Segoe UI', 10)).pack(anchor='w', padx=6, pady=6)
+            return
+        for i, p in enumerate(cards, 1):
+            card = tk.Frame(wrap, bg=self.CARD, highlightbackground=self.BORDER,
+                            highlightthickness=1)
+            card.pack(fill='x', pady=3)
+            top = tk.Frame(card, bg=self.CARD)
+            top.pack(fill='x', padx=10, pady=(8, 0))
+            name = getattr(p, 'full_name', str(p))
+            pos = self._pos_code(p)
+            age = getattr(p, 'age', '?')
+            tk.Label(top, text=f"#{i}  {name}", bg=self.CARD, fg=self.WHITE,
+                     font=('Segoe UI', 11, 'bold')).pack(side='left')
+            tk.Label(top, text=f"{pos}  \u00b7  Age {age}", bg=self.CARD, fg=self.MUTED,
+                     font=('Segoe UI', 10)).pack(side='right')
+            mid = tk.Frame(card, bg=self.CARD)
+            mid.pack(fill='x', padx=10, pady=(2, 8))
+            try:
+                ovr = p.overall_rating()
+            except Exception:
+                ovr = None
+            tk.Label(mid, text=f"OVR {ovr}" if ovr is not None else "OVR \u2014",
+                     bg=self.CARD, fg=self.GOLD,
+                     font=('Segoe UI', 10, 'bold')).pack(side='left')
+            tk.Label(mid, text=f"  {self._season_line(p)}", bg=self.CARD, fg=self.MUTED,
+                     font=('Segoe UI', 10)).pack(side='left')
+
+    def _top_ufas(self, n=10):
+        top = self._top_ufa_players(n)
+        if not top:
+            return ["No free agents on the market."]
         lines = []
         for i, p in enumerate(top, 1):
             try:

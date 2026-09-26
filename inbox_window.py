@@ -97,12 +97,15 @@ class InboxWindow(tk.Toplevel):
         ]
         
         self._filter_buttons = {}
+        self._filter_base_labels = {}
         for text, filter_type in filters:
             btn = ttk.Button(filter_frame, text=text, style='Secondary.TButton',
                            command=lambda f=filter_type: self._apply_filter(f))
             btn.pack(side='left', padx=2)
             self._filter_buttons[filter_type] = btn
+            self._filter_base_labels[filter_type] = text
         self._filter_buttons["all"].configure(style='TButton')
+        self._current_filter = "all"
             
     def _create_email_list(self, parent):
         """Create the email list with filters."""
@@ -333,12 +336,17 @@ class InboxWindow(tk.Toplevel):
             
     def _apply_filter(self, filter_type: str):
         """Apply filter to email list."""
+        self._current_filter = filter_type
         for ftype, btn in getattr(self, '_filter_buttons', {}).items():
             btn.configure(style='TButton' if ftype == filter_type else 'Secondary.TButton')
         # Clear current view
         for item in self.email_tree.get_children():
             self.email_tree.delete(item)
-            
+
+        # Clear tree maps (messages are re-registered below)
+        if hasattr(self.parent, 'tree_maps') and 'inbox_messages' in self.parent.tree_maps:
+            self.parent.tree_maps['inbox_messages'].clear()
+
         # Filter messages
         filtered_messages = []
         
@@ -356,6 +364,35 @@ class InboxWindow(tk.Toplevel):
         for message in filtered_messages:
             self._add_message_to_tree(message)
         self._select_first_message()
+        self._update_stats()
+
+    def _update_filter_badges(self):
+        """Update per-filter unread count badges on the filter buttons.
+
+        Badges show the number of unread messages visible under each filter,
+        e.g. "Trade (2)". Filters with no unread messages show the plain label.
+        """
+        buttons = getattr(self, '_filter_buttons', {})
+        base_labels = getattr(self, '_filter_base_labels', {})
+        if not buttons:
+            return
+
+        unread = self.inbox.get_unread_messages()
+        urgent_unread = [m for m in self.inbox.get_urgent_messages() if not m.is_read]
+
+        counts = {
+            'all': len(unread),
+            'unread': len(unread),
+            'urgent': len(urgent_unread),
+        }
+        for category in ('Trade', 'Scouting', 'Contracts', 'Injuries', 'Media', 'League'):
+            counts[category] = sum(
+                1 for m in self.inbox.get_messages_by_category(category) if not m.is_read)
+
+        for filter_type, btn in buttons.items():
+            label = base_labels.get(filter_type, filter_type)
+            count = counts.get(filter_type, 0)
+            btn.configure(text=f"{label} ({count})" if count > 0 else label)
         
     def _on_email_select(self, event):
         """Handle email selection."""
@@ -510,8 +547,8 @@ class InboxWindow(tk.Toplevel):
             messagebox.showinfo("Delete Read", "No read messages to delete.")
             
     def _refresh_inbox(self):
-        """Refresh the inbox display."""
-        self._populate_inbox()
+        """Refresh the inbox display, preserving the active filter."""
+        self._apply_filter(getattr(self, '_current_filter', 'all'))
         if hasattr(self.parent, 'update_inbox_notification'):
             self.parent.update_inbox_notification()
             
@@ -541,8 +578,11 @@ class InboxWindow(tk.Toplevel):
             stats_text += f" | Urgent: {urgent}"
         if overdue > 0:
             stats_text += f" | Overdue: {overdue}"
-            
+
         self.stats_label.config(text=stats_text)
+
+        # Refresh per-filter unread badges
+        self._update_filter_badges()
         
     def _on_closing(self):
         """Handle window closing."""

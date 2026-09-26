@@ -85,6 +85,12 @@ class ManagerHubWindow(tk.Toplevel):
                                       font=("Helvetica", 10))
         self.review_label.pack(anchor="w")
 
+        ttk.Label(frame, text="Expectation progress:",
+                  font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(10, 2))
+        self.progress_label = ttk.Label(frame, text="", wraplength=620,
+                                        font=("Helvetica", 10), justify="left")
+        self.progress_label.pack(anchor="w")
+
         def _on_exp_change(_e=None):
             key = exp_var.get()
             self.exp_desc.config(
@@ -102,6 +108,75 @@ class ManagerHubWindow(tk.Toplevel):
             text=f"{board.season_wins}W - {board.season_losses}L - {board.season_otl}OTL")
         self.review_label.config(
             text=board.last_review or "No reviews yet this season.")
+        self.progress_label.config(text=self._expectation_progress_text())
+
+    # Rough full-season point targets per expectation. These are estimates
+    # (the usual NHL ranges), clearly labeled as such — not game data.
+    _EXPECTATION_TARGETS = {
+        "win_cup": (108, "roughly 108+ points — a top seed and a full Cup run"),
+        "contend": (100, "roughly 100+ points — a top-four seed for a deep run"),
+        "playoffs": (94, "roughly 94+ points — the usual playoff cutoff range"),
+        "rebuild": (None, "no points target — player development is the goal"),
+    }
+
+    def _expectation_progress_text(self):
+        board = self.career.board
+        exp = board.expectation or "playoffs"
+        gp = board.season_wins + board.season_losses + board.season_otl
+        pts = board.season_wins * 2 + board.season_otl
+        target, note = self._EXPECTATION_TARGETS.get(exp, (94, ""))
+        lines = []
+
+        if gp == 0:
+            lines.append("The season has not started, so there is no points "
+                         "pace to measure yet.")
+        else:
+            pace = pts / gp * 82
+            lines.append(f"Current pace: {pts} points in {gp} games "
+                         f"({pace:.1f} points per 82 games).")
+            if target is None:
+                lines.append(f"Expectation ({mc.EXPECTATIONS[exp]['label']}): "
+                             f"{note}.")
+            else:
+                gap = pace - target
+                verdict = ("on track" if gap >= -2
+                           else "within reach" if gap >= -8
+                           else "off the pace")
+                lines.append(
+                    f"Expectation ({mc.EXPECTATIONS[exp]['label']}): {note}. "
+                    f"You are {verdict} ({gap:+.1f} vs target pace).")
+
+        cutoff = self._playoff_cutoff_pace()
+        if cutoff is None:
+            lines.append("Playoff picture: league standings are not "
+                         "available yet.")
+        else:
+            lines.append(f"Playoff picture: the current league-wide cutoff "
+                         f"pace is about {cutoff:.0f} points — you sit "
+                         f"{pts - cutoff:+.0f} vs that mark.")
+        return "\n".join(lines)
+
+    def _playoff_cutoff_pace(self):
+        """Approximate 82-game pace of the 16th-place team, or None."""
+        try:
+            gm = getattr(self.parent, "game_manager", None)
+            if gm is None:
+                return None
+            league = getattr(gm, "league", None)
+            standings = (getattr(league, "standings", None)
+                         or getattr(gm, "standings", None))
+            if not standings or len(standings) < 16:
+                return None
+            paces = []
+            for s in standings.values():
+                g = s.get("W", 0) + s.get("L", 0) + s.get("OTL", 0)
+                if g > 0:
+                    paces.append(s.get("Points", 0) / g * 82)
+            if len(paces) < 16:
+                return None
+            return sorted(paces, reverse=True)[15]
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     def _build_squad_tab(self, notebook):

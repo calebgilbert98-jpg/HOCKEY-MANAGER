@@ -36,6 +36,155 @@ def make_pill_group(parent, options, on_select, font_family='Segoe UI'):
     return btns
 
 
+# ---------------------------------------------------------------------------
+# Quality-of-life helpers: sortable treeviews, friendly empty states,
+# and a consistent modern confirm dialog.
+# ---------------------------------------------------------------------------
+
+def _qol_sort_value(val):
+    """Convert a treeview cell value to something sortable (numeric-aware)."""
+    if isinstance(val, str):
+        cleaned = (val.replace('$', '').replace(',', '').replace('#', '')
+                      .replace('%', '').rstrip('yY').strip())
+        try:
+            return int(cleaned)
+        except (ValueError, TypeError):
+            try:
+                return float(cleaned)
+            except (ValueError, TypeError):
+                return val.lower()
+    return val
+
+
+def make_tree_sortable(tree):
+    """Enable click-column-header sorting on a ttk.Treeview.
+
+    Numeric-aware (handles $1,000,000 / "5y" / percentages); toggles
+    ascending/descending and shows an arrow on the sorted column.
+    """
+    state = {'column': None, 'reverse': False}
+
+    def _sort(col):
+        if state['column'] == col:
+            state['reverse'] = not state['reverse']
+        else:
+            state['column'] = col
+            state['reverse'] = False
+        cols = list(tree['columns'])
+        try:
+            idx = cols.index(col)
+        except ValueError:
+            return
+        rows = []
+        for iid in tree.get_children(''):
+            values = tree.item(iid, 'values')
+            rows.append((values, iid))
+        rows.sort(
+            key=lambda r: _qol_sort_value(r[0][idx]) if idx < len(r[0]) else '',
+            reverse=state['reverse'])
+        for n, (_, iid) in enumerate(rows):
+            tree.move(iid, '', n)
+        arrow = ' \u2191' if not state['reverse'] else ' \u2193'
+        for c in cols:
+            base = tree.heading(c, 'text')
+            for suffix in (' \u2191', ' \u2193'):
+                if base.endswith(suffix):
+                    base = base[:-len(suffix)]
+            tree.heading(c, text=base + (arrow if c == col else ''))
+
+    for col in tree['columns']:
+        tree.heading(col, command=lambda c=col: _sort(c))
+    # Keep a reference so the closures are not garbage collected.
+    tree._qol_sort_fn = _sort
+
+
+def set_tree_empty_state(tree, message=None):
+    """Show a friendly overlay message when a treeview has no rows.
+
+    Call after populating a table: with rows present any overlay is hidden;
+    with zero rows the message is shown centered over the table instead of
+    leaving a confusing blank grid.
+    """
+    label = getattr(tree, '_qol_empty_label', None)
+    if tree.get_children():
+        if label is not None:
+            label.place_forget()
+        return
+    if not message:
+        if label is not None:
+            label.place_forget()
+        return
+    if label is None:
+        label = tk.Label(tree, text=message, bg='#16161a', fg='#a1a1aa',
+                         font=('Segoe UI', 11, 'italic'), padx=18, pady=12,
+                         wraplength=380, justify='center')
+        tree._qol_empty_label = label
+    else:
+        label.config(text=message)
+    label.place(relx=0.5, rely=0.5, anchor='center')
+    label.lift()
+
+
+def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Cancel"):
+    """Small modern confirm dialog in the charcoal/teal theme.
+
+    Returns True when the user confirms, False otherwise.
+    """
+    result = {'ok': False}
+    dlg = tk.Toplevel(parent)
+    dlg.title(title)
+    dlg.transient(parent)
+    dlg.resizable(False, False)
+    dlg.configure(bg='#0e0e11')
+    try:
+        dlg.grab_set()
+    except tk.TclError:
+        pass
+
+    def _close(ok):
+        result['ok'] = ok
+        try:
+            dlg.grab_release()
+        except tk.TclError:
+            pass
+        dlg.destroy()
+
+    tk.Label(dlg, text=title, bg='#0e0e11', fg='#ffffff',
+             font=('Segoe UI', 12, 'bold')).pack(anchor='w', padx=18, pady=(16, 6))
+    tk.Label(dlg, text=message, bg='#0e0e11', fg='#a1a1aa',
+             font=('Segoe UI', 10), wraplength=380, justify='left'
+             ).pack(anchor='w', padx=18, pady=(0, 14))
+
+    btn_frame = tk.Frame(dlg, bg='#0e0e11')
+    btn_frame.pack(fill='x', padx=18, pady=(0, 16))
+    tk.Button(btn_frame, text=cancel_text, command=lambda: _close(False),
+              bg='#1e1e24', fg='#ffffff', activebackground='#2a2a32',
+              activeforeground='#ffffff', relief='flat', padx=18, pady=8,
+              font=('Segoe UI', 10)).pack(side='right')
+    tk.Button(btn_frame, text=confirm_text, command=lambda: _close(True),
+              bg='#00ceb8', fg='#0e0e11', activebackground='#00a894',
+              activeforeground='#0e0e11', relief='flat', padx=18, pady=8,
+              font=('Segoe UI', 10, 'bold')).pack(side='right', padx=(0, 10))
+
+    dlg.bind('<Escape>', lambda e: _close(False))
+    dlg.bind('<Return>', lambda e: _close(True))
+    dlg._qol_escape_close = lambda: _close(False)
+
+    # Center over the parent window.
+    try:
+        dlg.update_idletasks()
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        dw, dh = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+        x = px + max(0, (pw - dw) // 2)
+        y = py + max(0, (ph - dh) // 3)
+        dlg.geometry(f"+{x}+{y}")
+    except tk.TclError:
+        pass
+    dlg.wait_window()
+    return result['ok']
+
+
 class RosterWindow(tk.Toplevel):
     """Enhanced Roster Management window with modern UI, advanced filtering, depth charts, and comprehensive team management."""
     
@@ -672,6 +821,7 @@ class RosterWindow(tk.Toplevel):
         for col, (text, width) in contract_columns.items():
             self.contract_tree.heading(col, text=text)
             self.contract_tree.column(col, width=width, anchor='center' if col != 'name' else 'w')
+        make_tree_sortable(self.contract_tree)
         
         # Scrollbar for contracts
         contract_scroll = ttk.Scrollbar(breakdown_frame, orient="vertical", command=self.contract_tree.yview)
@@ -790,6 +940,21 @@ class RosterWindow(tk.Toplevel):
             pass
         return True
 
+    def _roster_filters_active(self):
+        """True when any roster toolbar filter is narrowing the list."""
+        f = getattr(self, 'roster_filters', {}) or {}
+        try:
+            pos = f.get('position')
+            if pos is not None and pos.get() not in ('', 'All'):
+                return True
+            for key in ('age_min', 'age_max', 'overall_min'):
+                entry = f.get(key)
+                if entry is not None and str(entry.get()).strip():
+                    return True
+        except Exception:
+            pass
+        return False
+
     def populate_roster_tree(self, tree, players, roster_type):
         """Populate treeview with player data."""
         # Clear existing items
@@ -858,6 +1023,12 @@ class RosterWindow(tk.Toplevel):
             
             if tags:
                 tree.item(item_id, tags=tags)
+
+        # Friendly empty state instead of a blank table.
+        if self._roster_filters_active():
+            set_tree_empty_state(tree, "No players match your filters")
+        else:
+            set_tree_empty_state(tree, "No players on this roster")
     
     def calculate_performance_rating(self, player):
         """Calculate performance rating for NHL players."""
@@ -1888,6 +2059,7 @@ class FreeAgencyWindow(tk.Toplevel):
         for col, (text, width) in columns.items():
             top_tree.heading(col, text=text)
             top_tree.column(col, width=width, anchor='center' if col != 'name' else 'w')
+        make_tree_sortable(top_tree)
         
         # Populate with top players
         for player in top_players:
@@ -2106,6 +2278,7 @@ class FreeAgencyWindow(tk.Toplevel):
         
         # Update results label
         self.player_results_label.config(text=f"Showing {len(filtered_players)} players")
+        set_tree_empty_state(self.fa_player_tree, "No players match your filters")
     
     def _staff_set_filter(self, var, value):
         """Set a staff pill filter and refresh instantly."""
@@ -2222,6 +2395,7 @@ class FreeAgencyWindow(tk.Toplevel):
         
         # Update results label
         self.staff_results_label.config(text=f"Showing {len(filtered_staff)} staff")
+        set_tree_empty_state(self.fa_staff_tree, "No staff match your filters")
     
     def clear_player_filters(self):
         """Clear all player filters."""
@@ -2938,6 +3112,7 @@ class FreeAgencyWindow(tk.Toplevel):
             for col in columns:
                 tree.heading(col, text=col)
                 tree.column(col, width=120)
+            make_tree_sortable(tree)
             
             for comp_player in comparables:
                 salary = getattr(comp_player.contract, 'salary', 'No Contract') if comp_player.contract else 'Free Agent'
@@ -3385,6 +3560,12 @@ class TradeWindow(tk.Toplevel):
             for a in self.trade_offers[side]:
                 lb.insert(tk.END,
                           f"{self.te.asset_label(a)}  [{self.te.asset_value(a)}]")
+            if not self.trade_offers[side]:
+                lb.insert(tk.END, "No assets added yet")
+                try:
+                    lb.itemconfig(tk.END, fg='#71717a')
+                except tk.TclError:
+                    pass
 
     # ------------------------------------------------------------------
     # Trade meter
@@ -3456,6 +3637,8 @@ class TradeWindow(tk.Toplevel):
         if not sel:
             return
         idx = sel[0]
+        if idx >= len(self.trade_offers[side]):
+            return  # placeholder row ("No assets added yet"), nothing to remove
         del self.trade_offers[side][idx]
         self._refresh_offer_lists()
         self._update_meter()
@@ -5149,6 +5332,9 @@ class ScheduleWindow(tk.Toplevel):
         except Exception:
             pass
 
+        set_tree_empty_state(self.my_schedule_tree, "No games scheduled for your team")
+        set_tree_empty_state(self.league_schedule_tree, "No league games scheduled")
+
 class FinancesWindow(tk.Toplevel):
     """Comprehensive financial management window with detailed breakdown and projections."""
     
@@ -6566,6 +6752,7 @@ class TradeBlockWindow(tk.Toplevel):
                 self.block_tree.column(col, width=120)
             else:
                 self.block_tree.column(col, width=100)
+        make_tree_sortable(self.block_tree)
         
         # Scrollbar for trade block
         block_scrollbar = ttk.Scrollbar(block_frame, orient='vertical', command=self.block_tree.yview)
@@ -6606,6 +6793,7 @@ class TradeBlockWindow(tk.Toplevel):
                 self.other_tree.column(col, width=80)
             else:
                 self.other_tree.column(col, width=100)
+        make_tree_sortable(self.other_tree)
         
         # Double-click to show interest
         self.other_tree.bind('<Double-1>', self.express_interest)
@@ -6635,6 +6823,7 @@ class TradeBlockWindow(tk.Toplevel):
         for col in columns:
             self.interest_tree.heading(col, text=col)
             self.interest_tree.column(col, width=150)
+        make_tree_sortable(self.interest_tree)
         
         # Buttons for interest management
         interest_buttons = ttk.Frame(detail_frame)
@@ -6686,6 +6875,7 @@ class TradeBlockWindow(tk.Toplevel):
         for col in columns:
             player_tree.heading(col, text=col)
             player_tree.column(col, width=120)
+        make_tree_sortable(player_tree)
         
         # Populate with roster players not already on trade block
         current_block = getattr(self.parent.user_team, 'trade_block', [])
@@ -6799,6 +6989,9 @@ class TradeBlockWindow(tk.Toplevel):
                 years_left,
                 interest_level
             ))
+        set_tree_empty_state(
+            self.block_tree,
+            "Your trade block is empty \u2014 add players to start fielding offers")
     
     def update_interest_display(self):
         """Update the interest display."""
@@ -6827,6 +7020,7 @@ class TradeBlockWindow(tk.Toplevel):
                     "Considering",  # Your interest level
                     interest['status']
                 ))
+        set_tree_empty_state(self.interest_tree, "No trade interest yet")
     
     def get_other_teams(self):
         """Get list of other teams."""
@@ -6999,6 +7193,8 @@ class WaiversWindow(tk.Toplevel):
             
         # Configure row click event
         self.eligible_tree.bind('<ButtonRelease-1>', self.on_eligible_click)
+
+        set_tree_empty_state(self.eligible_tree, "No waiver-eligible players on your roster")
         
     def populate_waiver_wire(self):
         """Populate the tree with players currently on the waiver wire."""
@@ -7020,6 +7216,8 @@ class WaiversWindow(tk.Toplevel):
             
         # Configure row click event
         self.waiver_tree.bind('<ButtonRelease-1>', self.on_waiver_click)
+
+        set_tree_empty_state(self.waiver_tree, "The waiver wire is empty")
         
     def on_eligible_click(self, event):
         """Handle click on eligible players tree."""
@@ -7056,8 +7254,10 @@ class WaiversWindow(tk.Toplevel):
         player = next((p for p in self.parent.user_team.roster if p.id == player_id), None)
         
         if player:
-            confirm = messagebox.askyesno("Confirm Waiver", 
-                                         f"Place {player.full_name} on waivers? Other teams will have a chance to claim them.")
+            confirm = qol_confirm(self, "Confirm Waiver",
+                                  f"Place {player.full_name} on waivers? "
+                                  "Other teams will have a chance to claim them.",
+                                  confirm_text="Place on Waivers")
             if confirm:
                 # Add to waiver list
                 player.on_waivers = True
@@ -7099,8 +7299,10 @@ class WaiversWindow(tk.Toplevel):
                                     f"You don't have enough cap space to add this player's ${player.contract.salary:,} salary.")
                 return
                 
-            confirm = messagebox.askyesno("Confirm Claim", 
-                                         f"Claim {player.full_name} from waivers? They will be added to your NHL roster.")
+            confirm = qol_confirm(self, "Confirm Claim",
+                                  f"Claim {player.full_name} from waivers? "
+                                  "They will be added to your NHL roster.",
+                                  confirm_text="Claim Player")
             if confirm:
                 # Remove from previous team
                 old_team = next((t for t in self.parent.league.teams if t.team_name == player.team_name), None)
@@ -8444,12 +8646,14 @@ class BuyoutCalculatorWindow(tk.Toplevel):
         total, annual, byears, rows = buyout_schedule(p)
         if not rows:
             return
-        if not messagebox.askyesno(
+        if not qol_confirm(
+                self,
                 "Confirm Buyout",
                 f"Buy out {p.full_name}?\n\n"
                 f"Cost: ${total:,.0f} spread as ${annual:,.0f}/yr "
                 f"over {byears} years.\n"
-                f"{p.full_name} will become a free agent."):
+                f"{p.full_name} will become a free agent.",
+                confirm_text="Buy Out"):
             return
         team = self.parent.user_team
         league = self.parent.league

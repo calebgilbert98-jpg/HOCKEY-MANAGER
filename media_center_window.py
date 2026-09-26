@@ -148,30 +148,55 @@ class MediaCenterWindow(tk.Toplevel):
         status_frame = self.parent._create_packed_panel(parent, "Media Status")
         
         # Status display area
-        self.status_text = tk.Text(status_frame, height=8, width=40, wrap=tk.WORD,
+        self.status_text = tk.Text(status_frame, height=12, width=40, wrap=tk.WORD,
                                   background=self.parent.CONTENT_BG, foreground=self.parent.TEXT_COLOR,
                                   font=(self.parent.FONT_FAMILY, 9), state=tk.DISABLED,
                                   relief='flat', borderwidth=0, highlightthickness=0)
         self.status_text.pack(fill=tk.BOTH, expand=True)
     
+    @staticmethod
+    def _relationship_descriptor(rel):
+        if rel >= 4:
+            return "Warm"
+        if rel >= 1:
+            return "Cordial"
+        if rel == 0:
+            return "Neutral"
+        if rel >= -3:
+            return "Cool"
+        return "Hostile"
+
+    def _journalist_summary(self):
+        """One-line climate summary from real journalist relationship data."""
+        journalists = self.media_system.journalists
+        if not journalists:
+            return "No journalists covering the team yet."
+        avg = sum(j.relationship for j in journalists) / len(journalists)
+        friendly = max(journalists, key=lambda j: j.relationship)
+        harsh = min(journalists, key=lambda j: j.relationship)
+        climate = ("Warm coverage" if avg > 2 else
+                   "Neutral coverage" if avg > -2 else "Hostile coverage")
+        return (f"Coverage climate: {climate} (avg {avg:+.1f}). "
+                f"Friendliest: {friendly.name} ({friendly.relationship:+d}). "
+                f"Harshest: {harsh.name} ({harsh.relationship:+d}).")
+
     def _create_journalist_panel(self, parent):
         """Create journalist relationship panel"""
         journalist_frame = self.parent._create_packed_panel(parent, "Journalist Relations")
-        
+
+        # Climate summary from real relationship data
+        ttk.Label(journalist_frame, text=self._journalist_summary(),
+                  style='Content.TLabel', wraplength=380).pack(anchor=tk.W, pady=(0, 6))
+
         # Journalist list
-        columns = {'name': ('Name', 120), 'outlet': ('Outlet', 80), 'type': ('Type', 80), 'relationship': ('Relations', 60)}
-        self.journalist_tree = self.parent._create_treeview(journalist_frame, columns, height=6)
-        
+        columns = {'name': ('Name', 120), 'outlet': ('Outlet', 80), 'type': ('Type', 80), 'relationship': ('Relations', 110)}
+        self.journalist_tree = self.parent._create_treeview(journalist_frame, columns, height=5)
+
         # Populate journalists
         for journalist in self.media_system.journalists:
-            relationship_str = f"{journalist.relationship:+d}"
-            if journalist.relationship > 3:
-                relationship_str += " 🟢"
-            elif journalist.relationship < -3:
-                relationship_str += " 🔴"
-            else:
-                relationship_str += " 🟡"
-            
+            relationship_str = (f"{journalist.relationship:+d} "
+                                f"({self._relationship_descriptor(journalist.relationship)})")
+
             self.journalist_tree.insert('', tk.END, values=[
                 journalist.name, journalist.outlet, journalist.type.value, relationship_str
             ])
@@ -205,10 +230,15 @@ class MediaCenterWindow(tk.Toplevel):
     def _create_storylines_panel(self, parent):
         """Create active storylines panel"""
         storylines_frame = self.parent._create_packed_panel(parent, "Active Storylines")
-        
+
         # Storylines list
         columns = {'title': ('Storyline', 200), 'type': ('Type', 100), 'intensity': ('Heat', 60), 'days_left': ('Days Left', 80)}
         self.storylines_tree = self.parent._create_treeview(storylines_frame, columns, height=6)
+
+        # Honest empty state (updated in _populate_storylines)
+        self.storylines_empty = ttk.Label(storylines_frame, text="",
+                                          style='Content.TLabel', wraplength=420)
+        self.storylines_empty.pack(anchor=tk.W, pady=4)
     
     def _populate_events(self):
         """Populate the events scroll area"""
@@ -308,49 +338,67 @@ class MediaCenterWindow(tk.Toplevel):
         """Populate the storylines tree"""
         for item in self.storylines_tree.get_children():
             self.storylines_tree.delete(item)
-        
+
         current_date = self.parent.game_manager.current_date
         active_storylines = [s for s in self.media_system.storylines if s.is_active(current_date)]
-        
+
         for storyline in active_storylines:
             days_left = storyline.duration_days - (current_date - storyline.created_date).days
-            intensity_display = "🔥" * min(3, storyline.intensity // 3)
-            
+            intensity = storyline.intensity
+            heat = "High" if intensity >= 7 else "Medium" if intensity >= 4 else "Low"
+
             self.storylines_tree.insert('', tk.END, values=[
                 storyline.title,
                 storyline.type.value,
-                intensity_display,
+                heat,
                 f"{days_left} days"
             ])
+
+        if not active_storylines:
+            self.storylines_empty.config(
+                text="No active storylines right now. Storylines are generated "
+                     "from trades, streaks and signings when your engagement "
+                     "level is above Minimal.")
+        else:
+            self.storylines_empty.config(text="")
     
     def _update_status_text(self):
         """Update the status text display"""
         self.status_text.config(state=tk.NORMAL)
         self.status_text.delete(1.0, tk.END)
-        
+
         status = self.media_system.get_system_status()
-        
-        status_content = f"""📊 MEDIA SYSTEM STATUS
+        journalists = self.media_system.journalists
 
-🎯 Engagement Level: {status['engagement_level']}
-📺 Pending Events: {status['pending_events']}
-📖 Active Storylines: {status['active_storylines']}
+        rep = status['gm_reputation']
+        rep_label = ("Excellent" if rep >= 80 else "Good" if rep >= 60 else
+                     "Average" if rep >= 40 else "Poor" if rep >= 20 else "Terrible")
+        avg_rel = status['avg_journalist_relationship']
+        rel_label = ("Warm coverage" if avg_rel > 2 else
+                     "Neutral coverage" if avg_rel > -2 else "Hostile coverage")
 
-👤 GM REPUTATION: {status['gm_reputation']}/100
-{"🌟 Excellent" if status['gm_reputation'] >= 80 else 
- "😊 Good" if status['gm_reputation'] >= 60 else
- "😐 Average" if status['gm_reputation'] >= 40 else
- "😕 Poor" if status['gm_reputation'] >= 20 else "💀 Terrible"}
+        extra = ""
+        if journalists:
+            friendly = max(journalists, key=lambda j: j.relationship)
+            harsh = min(journalists, key=lambda j: j.relationship)
+            extra = (f"\nFriendliest voice: {friendly.name} ({friendly.outlet}, "
+                     f"{friendly.relationship:+d})"
+                     f"\nHarshest critic: {harsh.name} ({harsh.outlet}, "
+                     f"{harsh.relationship:+d})")
 
-👥 AVG JOURNALIST RELATIONS: {status['avg_journalist_relationship']:.1f}
-{"🤝 Great relationships" if status['avg_journalist_relationship'] > 2 else
- "📰 Neutral coverage" if status['avg_journalist_relationship'] > -2 else
- "⚡ Hostile media"}
+        status_content = f"""MEDIA SYSTEM STATUS
 
-💡 TIP: {"Higher engagement = more storylines but more interactions" if status['engagement_level'] == 'Disabled' else
+Engagement Level: {status['engagement_level']}
+Pending Events: {status['pending_events']}
+Active Storylines: {status['active_storylines']}
+
+GM REPUTATION: {rep}/100 ({rep_label})
+AVG JOURNALIST RELATIONS: {avg_rel:.1f} ({rel_label}){extra}
+
+TIP: {"Higher engagement = more storylines but more interactions" if status['engagement_level'] == 'Disabled' else
         "Skip interviews to save time, handle them for better control" if status['pending_events'] > 0 else
         "Media interactions affect team morale and reputation"}"""
-        
+
         self.status_text.insert(1.0, status_content)
         self.status_text.config(state=tk.DISABLED)
     
@@ -588,17 +636,17 @@ class InterviewWindow(tk.Toplevel):
         if event_type == 'post_game_interview':
             game_result = self.event.get('game_result', {})
             if game_result.get('won', False):
-                return f"🎉 Post-game interview following your team's victory"
+                return "Post-game interview following your team's victory"
             else:
-                return f"😔 Post-game interview following your team's loss"
+                return "Post-game interview following your team's loss"
         elif event_type == 'trade_announcement':
-            return f"🔄 Press conference to discuss recent trade"
+            return "Press conference to discuss recent trade"
         elif event_type == 'contract_signing':
             player = self.event.get('player')
             if player:
-                return f"📝 Media availability regarding {player.full_name}'s contract"
+                return f"Media availability regarding {player.full_name}'s contract"
         
-        return "📰 Media availability"
+        return "Media availability"
     
     def _preview_responses(self):
         """Show preview of how answers would sound"""

@@ -83,6 +83,8 @@ class TradeDeadlineCenter(tk.Toplevel):
         tk.Label(panel, text="LEAGUE INTELLIGENCE", bg=self.PANEL_COLOR,
                  fg=self.DEADLINE_GOLD, font=('Segoe UI', 13, 'bold')).pack(pady=(10, 6))
 
+        self._create_stance_panel(panel)
+
         tk.Label(panel, text="Latest Rumors", bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
                  font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=12)
         rumors_box = tk.Text(panel, bg=self.DEADLINE_BG, fg=self.TEXT_WHITE, height=9,
@@ -108,6 +110,155 @@ class TradeDeadlineCenter(tk.Toplevel):
         except Exception:
             intel_box.insert('end', "Intel unavailable.")
         intel_box.config(state='disabled')
+
+    # -- your deadline stance ------------------------------------------------
+    def _resolve_user_team(self):
+        """Find the user's team via the deadline manager's game manager."""
+        try:
+            gm = getattr(self.deadline_manager, 'game_manager', None)
+            team = getattr(gm, 'user_team', None)
+            if team:
+                return team
+            league = getattr(gm, 'league', None)
+            teams = getattr(league, 'teams', None) or []
+            for t in teams:
+                try:
+                    if getattr(t, 'is_user_team', False):
+                        return t
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    def _league_teams(self):
+        """Real Team objects from the league, or []."""
+        try:
+            gm = getattr(self.deadline_manager, 'game_manager', None)
+            league = getattr(gm, 'league', None)
+            teams = getattr(league, 'teams', None) or []
+            return [t for t in teams if hasattr(t, 'wins') and hasattr(t, 'team_name')]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _team_points(team):
+        try:
+            return 2 * int(getattr(team, 'wins', 0)) + int(getattr(team, 'ot_losses', 0))
+        except Exception:
+            return 0
+
+    def _compute_stance(self):
+        """Buyer/seller/tweener verdict + positional needs + cap space.
+
+        All from real team data; returns None when no team is available.
+        """
+        team = self._resolve_user_team()
+        if team is None:
+            return None
+        teams = self._league_teams()
+        ordered = sorted(teams, key=self._team_points, reverse=True)
+        rank = None
+        for i, t in enumerate(ordered):
+            if t is team or getattr(t, 'team_name', None) == getattr(team, 'team_name', None):
+                rank = i + 1
+                break
+        n = len(ordered)
+        games = int(getattr(team, 'wins', 0)) + int(getattr(team, 'losses', 0)) + int(getattr(team, 'ot_losses', 0))
+        pts = self._team_points(team)
+
+        if rank is None or n < 2 or games == 0:
+            verdict, reason = "TBD", "Season hasn't started - no standings data yet."
+        elif rank / n <= 1 / 3:
+            verdict, reason = "BUYER", f"{rank} of {n} in the standings - a contender should load up."
+        elif rank / n >= 2 / 3:
+            verdict, reason = "SELLER", f"{rank} of {n} in the standings - sell rentals, stockpile picks."
+        else:
+            verdict, reason = "TWEENER", f"{rank} of {n} in the standings - one move either way."
+
+        # Positional needs: roster groups by weakest average OVR
+        needs = []
+        try:
+            groups = {"Forwards": ("C", "LW", "RW"), "Defense": ("LD", "RD", "D"), "Goalies": ("G",)}
+            roster = list(getattr(team, 'roster', []) or [])
+            avgs = []
+            for gname, codes in groups.items():
+                ovrs = []
+                for pl in roster:
+                    pp = getattr(pl, 'primary_position', None)
+                    code = getattr(pp, 'value', str(pp))
+                    if code in codes:
+                        try:
+                            ovrs.append(pl.overall_rating())
+                        except Exception:
+                            pass
+                if ovrs:
+                    avgs.append((gname, sum(ovrs) / len(ovrs), len(ovrs)))
+            avgs.sort(key=lambda x: x[1])
+            needs = [(g, a, c) for g, a, c in avgs[:2]]
+        except Exception:
+            needs = []
+
+        # Cap space
+        try:
+            cap_space = int(getattr(team, 'cap_space', 0) or 0)
+        except Exception:
+            cap_space = None
+
+        record = ""
+        try:
+            record = str(getattr(team, 'record_string', '')) or ""
+        except Exception:
+            pass
+        return {
+            'team_name': str(getattr(team, 'team_name', 'Your team')),
+            'verdict': verdict, 'reason': reason, 'rank': rank, 'of': n,
+            'record': record, 'points': pts, 'needs': needs, 'cap_space': cap_space,
+        }
+
+    def _create_stance_panel(self, panel):
+        """'Your Deadline Stance' block at the top of the intelligence column."""
+        info = self._compute_stance()
+        box = tk.Frame(panel, bg=self.DEADLINE_BG, highlightbackground=self.BORDER_COLOR,
+                       highlightthickness=1)
+        box.pack(fill='x', padx=12, pady=(4, 12))
+        tk.Label(box, text="YOUR DEADLINE STANCE", bg=self.DEADLINE_BG,
+                 fg=self.DEADLINE_GOLD, font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(8, 2))
+        if info is None:
+            tk.Label(box, text="No team data available.", bg=self.DEADLINE_BG,
+                     fg=self.TEXT_WHITE, font=('Segoe UI', 10)).pack(anchor='w', padx=10, pady=(0, 8))
+            return
+        colors = {'BUYER': '#3DDC84', 'SELLER': '#FF5A5A', 'TWEENER': '#e0a13c', 'TBD': '#9aa0aa'}
+        vcolor = colors.get(info['verdict'], '#9aa0aa')
+        head = tk.Frame(box, bg=self.DEADLINE_BG)
+        head.pack(fill='x', padx=10, pady=(0, 2))
+        tk.Label(head, text=info['verdict'], bg=vcolor, fg='#0e0e11',
+                 font=('Segoe UI', 11, 'bold'), padx=10, pady=2).pack(side='left')
+        sub = f"{info['team_name']}"
+        if info['record']:
+            sub += f"  \u00b7  {info['record']}"
+        if info['rank']:
+            sub += f"  \u00b7  {info['rank']} of {info['of']} ({info['points']} pts)"
+        tk.Label(head, text=sub, bg=self.DEADLINE_BG, fg=self.TEXT_WHITE,
+                 font=('Segoe UI', 10)).pack(side='left', padx=(8, 0))
+        tk.Label(box, text=info['reason'], bg=self.DEADLINE_BG, fg='#9aa0aa',
+                 font=('Segoe UI', 10), wraplength=380, justify='left',
+                 anchor='w').pack(anchor='w', padx=10, pady=(0, 4))
+        if info['needs']:
+            need_txt = "Biggest needs: " + ", ".join(
+                f"{g} (avg {a:.0f}, {c} on roster)" for g, a, c in info['needs'])
+            tk.Label(box, text=need_txt, bg=self.DEADLINE_BG, fg=self.TEXT_WHITE,
+                     font=('Segoe UI', 10), wraplength=380, justify='left',
+                     anchor='w').pack(anchor='w', padx=10, pady=(0, 2))
+        if info['cap_space'] is not None:
+            cs = info['cap_space']
+            cs_txt = f"Cap space: ${cs/1e6:.1f}M"
+            cs_fg = '#3DDC84' if cs > 0 else '#FF5A5A'
+            tk.Label(box, text=cs_txt, bg=self.DEADLINE_BG, fg=cs_fg,
+                     font=('Segoe UI', 10, 'bold')).pack(anchor='w', padx=10, pady=(0, 8))
+        else:
+            tk.Label(box, text="Cap space: --", bg=self.DEADLINE_BG, fg='#9aa0aa',
+                     font=('Segoe UI', 10)).pack(anchor='w', padx=10, pady=(0, 8))
 
     def _create_footer(self, parent):
         """Footer with deadline status and close button"""

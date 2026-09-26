@@ -15,6 +15,13 @@ from modern_ui import (
     PlayerRow, PillBadge, AppButton, apply_app_theme,
 )
 
+try:
+    from manager_career import morale_label
+except Exception:
+    def morale_label(m):  # fallback if career module is unavailable
+        return {9: "Superb", 8: "Superb", 7: "Good", 6: "Good",
+                5: "Okay", 4: "Okay", 3: "Poor", 2: "Poor"}.get(int(m), "Abysmal")
+
 
 class AppDropdown(ttk.Combobox):
     """Themed dropdown (combobox) matching the dark UI.
@@ -158,6 +165,9 @@ class HomeDashboard:
             ("Schedule", "schedule"),
             ("Next Game", "next_game"),
             ("Injuries", "injuries"),
+            ("Morale", "morale"),
+            ("Prospects", "prospects"),
+            ("Milestones", "milestones"),
             ("Inbox", "inbox"),
         ]
         for label, key in sections:
@@ -598,6 +608,9 @@ class HomeDashboard:
 
         self._create_next_game_card(right)
         self._create_injuries_card(right)
+        self._create_morale_card(right)
+        self._create_prospects_card(right)
+        self._create_milestones_card(right)
         self._create_inbox_card(right)
         self._create_quick_actions_card(right)
 
@@ -793,6 +806,144 @@ class HomeDashboard:
                      fg=AppColors.DANGER, bg=bg).pack(side="right")
         self._view_all_button(content, "View roster →",
                               "open_roster_window")
+
+    # ---------------- Team morale ----------------
+    def _create_morale_card(self, parent):
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        self._section_anchors["morale"] = card
+        content = card.get_content_frame()
+        bg = content.cget("bg")
+        self._card_title_row(content, "Team Morale", "Roster →",
+                             "open_roster_window")
+
+        roster = list(getattr(self.user_team, "roster", []) or [])
+        if not roster:
+            tk.Label(content, text="No players on the roster.",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg).pack(anchor="w")
+            return
+
+        mor = [getattr(p, "morale", 7) or 7 for p in roster]
+        avg = sum(mor) / len(mor)
+        label = morale_label(int(round(avg)))
+
+        head = tk.Frame(content, bg=bg)
+        head.pack(fill="x")
+        tk.Label(head, text=f"{avg:.1f} / 10", font=AppFonts.H2,
+                 fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+        tk.Label(head, text=label, font=AppFonts.SMALL_BOLD,
+                 fg=AppColors.TEXT_SECONDARY, bg=bg).pack(
+                     side="left", padx=(10, 0))
+
+        bar = tk.Frame(content, bg=AppColors.BG, height=10)
+        bar.pack(fill="x", pady=(8, 10))
+        bar.pack_propagate(False)
+        color = (AppColors.SUCCESS if avg >= 7
+                 else AppColors.WARNING if avg >= 5
+                 else AppColors.DANGER)
+        fill = tk.Frame(bar, bg=color, height=10)
+        fill.place(relx=0, rely=0, relwidth=max(0.03, min(1.0, avg / 10.0)),
+                   relheight=1.0)
+
+        counts = {}
+        for m in mor:
+            band = morale_label(int(m))
+            counts[band] = counts.get(band, 0) + 1
+        for band in ("Superb", "Good", "Okay", "Poor", "Abysmal"):
+            n = counts.get(band)
+            if n:
+                row = tk.Frame(content, bg=bg)
+                row.pack(fill="x", pady=1)
+                tk.Label(row, text=band, font=AppFonts.SMALL,
+                         fg=AppColors.TEXT_SECONDARY, bg=bg).pack(side="left")
+                tk.Label(row, text=f"{n} players", font=AppFonts.SMALL_BOLD,
+                         fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="right")
+
+    # ---------------- Top prospects ----------------
+    def _create_prospects_card(self, parent):
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        self._section_anchors["prospects"] = card
+        content = card.get_content_frame()
+        bg = content.cget("bg")
+        self._card_title_row(content, "Top Prospects", "Scouting →",
+                             "open_scouting_window")
+
+        team = self.user_team
+        pool = (list(getattr(team, "prospects", []) or [])
+                + list(getattr(team, "ahl_roster", []) or []))
+        if not pool:
+            tk.Label(content, text="No prospects in the system.",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg).pack(anchor="w")
+            return
+
+        ladder = ["F", "D", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
+
+        def pot_rank(p):
+            g = str(getattr(p, "potential_grade", "C") or "C").strip().upper()
+            return ladder.index(g) if g in ladder else 4
+
+        pool.sort(key=lambda p: (pot_rank(p),
+                                 getattr(p, "overall_rating", lambda: 0)()),
+                  reverse=True)
+        for p in pool[:5]:
+            try:
+                pos = p.primary_position.name
+            except Exception:
+                pos = str(getattr(p, "primary_position", "?"))
+            name = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
+            detail = (f"Age {getattr(p, 'age', '?')} · {pos} · "
+                      f"OVR {getattr(p, 'overall_rating', lambda: '?')()} · "
+                      f"POT {getattr(p, 'potential_grade', '?')}")
+            row = tk.Frame(content, bg=bg)
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=name, font=AppFonts.SMALL_BOLD,
+                     fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+            tk.Label(row, text=detail, font=AppFonts.CAPTION,
+                     fg=AppColors.TEXT_TERTIARY, bg=bg).pack(side="right")
+
+    # ---------------- Upcoming milestones ----------------
+    def _create_milestones_card(self, parent):
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        self._section_anchors["milestones"] = card
+        content = card.get_content_frame()
+        bg = content.cget("bg")
+        self._card_title_row(content, "Upcoming Milestones", "Stats →",
+                             "open_stats_standings_window")
+
+        roster = list(getattr(self.user_team, "roster", []) or [])
+        skaters = [p for p in roster
+                   if "GOALIE" not in str(getattr(p, "primary_position", ""))]
+        hits = []
+        for p in skaters:
+            name = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
+            pts = (getattr(p, "goals", 0) or 0) + (getattr(p, "assists", 0) or 0)
+            for m in (25, 50, 75, 100):
+                if pts < m <= pts + 8:
+                    hits.append((m - pts, name, f"{m - pts} PTS from {m}"))
+            cg = getattr(p, "career_games", 0) or 0
+            for m in (500, 1000, 1500):
+                if cg < m <= cg + 10:
+                    hits.append((m - cg, name, f"{m - cg} GP from {m} career"))
+        hits.sort(key=lambda h: h[0])
+        if not hits:
+            tk.Label(content, text="No milestones within reach.",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg).pack(anchor="w")
+            return
+        for _gap, name, text in hits[:6]:
+            row = tk.Frame(content, bg=bg)
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text="●", font=AppFonts.CAPTION,
+                     fg=AppColors.ACCENT, bg=bg).pack(side="left",
+                                                     padx=(0, 6))
+            tk.Label(row, text=name, font=AppFonts.SMALL_BOLD,
+                     fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+            tk.Label(row, text=text, font=AppFonts.SMALL,
+                     fg=AppColors.TEXT_SECONDARY, bg=bg).pack(side="right")
 
     # ---------------- Inbox ----------------
     def _create_inbox_card(self, parent):

@@ -187,14 +187,14 @@ class CalendarWindow(tk.Toplevel):
         legend_frame.pack()
         
         legend_items = [
-            ("🏒 Home Game", "#1565C0"),      # Deep Blue
-            ("✈️ Away Game", "#00BCD4"),      # Bright Cyan  
-            ("🛑 Break Days", "#424242"),     # Dark Grey
-            ("⭐ All-Star Events", "#FFC107"), # Bright Gold
-            ("📈 Trade Deadline", "#E53935"), # Bright Red
-            ("📅 Today", "#E91E63"),          # Hot Pink
-            ("🎯 Draft & Free Agency", "#FF5722"), # Bright Orange
-            ("🎄 Special Events", "#FF5722")  # Bright Orange
+            ("Home Game", "#1565C0"),      # Deep Blue
+            ("Away Game", "#00BCD4"),      # Bright Cyan
+            ("Break Days", "#424242"),     # Dark Grey
+            ("All-Star Events", "#FFC107"), # Bright Gold
+            ("Trade Deadline", "#E53935"), # Bright Red
+            ("Today", "#E91E63"),          # Hot Pink
+            ("Draft & Free Agency", "#FF5722"), # Bright Orange
+            ("Special Events", "#FF5722")  # Bright Orange
         ]
         
         # Create legend items in multiple rows (4 items per row for better spacing)
@@ -507,7 +507,7 @@ class CalendarWindow(tk.Toplevel):
             if not has_main_event:
                 event = {
                     'type': 'break_day',
-                    'title': '🛑 All-Star Break',
+                    'title': 'All-Star Break',
                     'description': 'No regular season games scheduled',
                     'importance': 'medium'
                 }
@@ -525,14 +525,14 @@ class CalendarWindow(tk.Toplevel):
             if current_date.day == 25:  # Christmas Day
                 event = {
                     'type': 'christmas',
-                    'title': '🎄 Christmas Day',
+                    'title': 'Christmas Day',
                     'description': 'Special holiday games may be scheduled',
                     'importance': 'high'
                 }
             else:
                 event = {
                     'type': 'break_day',
-                    'title': '🛑 Christmas Break',
+                    'title': 'Christmas Break',
                     'description': 'Reduced game schedule for holidays',
                     'importance': 'medium'
                 }
@@ -550,13 +550,13 @@ class CalendarWindow(tk.Toplevel):
         season_year = self._get_season_year()
         
         important_dates = [
-            (date(season_year, 10, 8), "🏒 Season Opener", "NHL regular season begins"),
-            (date(season_year + 1, 1, 1), "🎊 New Year's Day", "Winter Classic and New Year games"),
-            (date(season_year + 1, 2, 14), "❤️ Valentine's Day", "Special promotional games"),
-            (date(season_year + 1, 4, 25), "🏁 Regular Season End", "End of regular season"),
-            (date(season_year + 1, 4, 26), "🏆 Playoffs Begin", "Stanley Cup Playoffs start"),
-            (date(season_year + 1, 6, 27), "🏒 Draft Day", "NHL Entry Draft"),
-            (date(season_year + 1, 7, 1), "💰 Free Agency", "Free agency period begins")
+            (date(season_year, 10, 8), "Season Opener", "NHL regular season begins"),
+            (date(season_year + 1, 1, 1), "New Year's Day", "Winter Classic and New Year games"),
+            (date(season_year + 1, 2, 14), "Valentine's Day", "Special promotional games"),
+            (date(season_year + 1, 4, 25), "Regular Season End", "End of regular season"),
+            (date(season_year + 1, 4, 26), "Playoffs Begin", "Stanley Cup Playoffs start"),
+            (date(season_year + 1, 6, 27), "Draft Day", "NHL Entry Draft"),
+            (date(season_year + 1, 7, 1), "Free Agency", "Free agency period begins")
         ]
         
         for event_date, title, description in important_dates:
@@ -607,7 +607,6 @@ class CalendarWindow(tk.Toplevel):
                 # Priority order: Today > Games > All-Star > Trade Deadline > Break Days > Other
                 if button_date == self.parent.current_date:
                     button_style = 'Today.TButton'
-                    button_text += "\n📅"
                 elif events:
                     # Check for games first (highest priority for user)
                     game_events = [e for e in events if e['type'] == 'game']
@@ -624,10 +623,10 @@ class CalendarWindow(tk.Toplevel):
                             game = user_games[0]
                             if game['is_home']:
                                 button_style = 'HomeGame.TButton'
-                                button_text += "\n🏒"
+                                button_text += "\nHOME"
                             else:
                                 button_style = 'AwayGame.TButton'
-                                button_text += "\n✈️"
+                                button_text += "\nAWAY"
                         else:
                             # No user game today - show how many league games
                             num_games = len(game_events)
@@ -635,31 +634,31 @@ class CalendarWindow(tk.Toplevel):
                             button_text += f"\n{num_games} games"
                     elif all_star_events:
                         button_style = 'AllStar.TButton'
-                        button_text += "\n⭐"
+                        button_text += "\nASG"
                     elif trade_deadline_events:
                         button_style = 'TradeDeadline.TButton'
-                        button_text += "\n📈"
+                        button_text += "\nTDL"
                     elif draft_events:
                         # Check specific draft event types
                         free_agency_events = [e for e in draft_events if 'free_agency' in e['type']]
                         if free_agency_events:
                             button_style = 'FreeAgency.TButton'
-                            button_text += "\n💰"
+                            button_text += "\nFA"
                         else:
                             button_style = 'Draft.TButton'
-                            button_text += "\n🎯"
+                            button_text += "\nDRAFT"
                     elif christmas_events:
                         button_style = 'ImportantEvent.TButton'
-                        button_text += "\n🎄"
+                        button_text += "\nXMAS"
                     elif break_events:
                         button_style = 'BreakDay.TButton'
-                        button_text += "\n🛑"
+                        button_text += "\nBREAK"
                     else:
                         # Other important events
                         important_events = [e for e in events if e['importance'] in ['high', 'critical']]
                         if important_events:
                             button_style = 'ImportantEvent.TButton'
-                            button_text += "\n⭐"
+                            button_text += "\n!"
                     
                 # Create button with direct color mapping for better visibility
                 color_map = {
@@ -748,17 +747,12 @@ class CalendarWindow(tk.Toplevel):
                 
                 # Additional details for games
                 if event['type'] == 'game':
-                    location = "Home Ice" if event['is_home'] else f"{event['opponent'].city}"
-                    self.events_text.insert(tk.END, f"Location: {location}\n")
-                    self.events_text.insert(tk.END, f"Opponent: {event['opponent'].team_name}\n")
-                    
-                    # Check if game has been played
-                    game_result = self._get_game_result(self.selected_date, event['opponent'])
-                    if game_result:
-                        self.events_text.insert(tk.END, f"Result: {game_result}\n")
-        
+                    self._insert_game_details(event)
+
         # Configure text tags
         self.events_text.tag_configure('title', font=(self.parent.FONT_FAMILY, 12, 'bold'))
+        self.events_text.tag_configure('section', font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                                       foreground=self.parent.ACCENT_COLOR)
         
         # Update action buttons based on the selected date
         if has_trade_deadline:
@@ -766,6 +760,162 @@ class CalendarWindow(tk.Toplevel):
         else:
             self._create_default_actions()
         
+    def _team_label(self, team):
+        """Display name for a team object (or the raw value for strings)."""
+        if team is None:
+            return "TBD"
+        return getattr(team, 'team_name', str(team))
+
+    def _user_results(self):
+        """Game results involving the user team, oldest first."""
+        user = self.parent.user_team
+        results = []
+        for result in getattr(self.parent, 'game_results', None) or []:
+            try:
+                if user in (result['home_team'], result['away_team']):
+                    results.append(result)
+            except (KeyError, TypeError):
+                continue
+        results.sort(key=lambda r: r.get('date') or date.min)
+        return results
+
+    def _describe_user_result(self, result):
+        """Return (outcome, summary line) for a result from the user's perspective.
+
+        Outcome is 'W', 'L' or 'T'. Returns None when the result is malformed.
+        """
+        try:
+            user = self.parent.user_team
+            home, away = result['home_team'], result['away_team']
+            is_home = (user == home)
+            opponent = away if is_home else home
+            us = result['home_score'] if is_home else result['away_score']
+            them = result['away_score'] if is_home else result['home_score']
+            winner = result.get('winner')
+            if winner is not None:
+                outcome = 'W' if winner == user else 'L'
+            else:
+                outcome = 'W' if us > them else ('L' if us < them else 'T')
+            venue = 'vs' if is_home else '@'
+            when = result['date'].strftime('%b %d') if result.get('date') else ''
+            return outcome, f"{when}: {outcome} {us}-{them} {venue} {self._team_label(opponent)}".strip()
+        except (KeyError, TypeError, AttributeError):
+            return None
+
+    def _recent_form_lines(self):
+        """Last-5 form lines plus record and streak, from real game results."""
+        results = self._user_results()
+        if not results:
+            return ["No games played yet this season."]
+        described = [d for d in (self._describe_user_result(r) for r in results[-5:]) if d]
+        if not described:
+            return ["No games played yet this season."]
+        lines = [f"  {text}" for _outcome, text in described]
+        w = sum(1 for o, _ in described if o == 'W')
+        l = sum(1 for o, _ in described if o == 'L')
+        lines.append(f"  Last 5: {w}-{l}")
+        # Current streak (walk back from the most recent result)
+        streak_outcome, streak_n = None, 0
+        for r in reversed(results):
+            d = self._describe_user_result(r)
+            if not d or d[0] == 'T':
+                break
+            if streak_outcome is None:
+                streak_outcome = d[0]
+            if d[0] == streak_outcome:
+                streak_n += 1
+            else:
+                break
+        if streak_outcome:
+            lines.append(f"  Streak: {streak_outcome}{streak_n}")
+        return lines
+
+    def _iter_schedule_games(self):
+        """Yield (date, home_team, away_team) for real games in the schedule,
+        skipping NHL special-event entries."""
+        league = getattr(self.parent, 'league', None)
+        schedule = getattr(league, 'schedule', None) or []
+        for entry in schedule:
+            try:
+                if isinstance(entry, dict):
+                    game_date = entry.get('date')
+                    home, away = entry.get('home_team'), entry.get('away_team')
+                elif isinstance(entry, (tuple, list)) and len(entry) >= 3:
+                    if entry[1] == 'NHL_EVENT':
+                        continue
+                    game_date, home, away = entry[0], entry[1], entry[2]
+                else:
+                    continue
+                if home == 'NHL_EVENT':
+                    continue
+                yield game_date, home, away
+            except (TypeError, IndexError):
+                continue
+
+    def _season_series_lines(self, opponent):
+        """Season series vs an opponent: played results plus upcoming meetings."""
+        lines = []
+        meetings = [r for r in self._user_results()
+                    if opponent in (r['home_team'], r['away_team'])]
+        described = [d for d in (self._describe_user_result(r) for r in meetings) if d]
+        if not described:
+            lines.append("First meeting this season.")
+        else:
+            w = sum(1 for o, _ in described if o == 'W')
+            l = sum(1 for o, _ in described if o == 'L')
+            lines.append(f"Series record: {w}-{l}")
+            for _outcome, text in described:
+                lines.append(f"  {text}")
+        # Upcoming meetings from the schedule
+        upcoming = []
+        for game_date, home, away in self._iter_schedule_games():
+            if game_date is None or game_date <= self.selected_date:
+                continue
+            if opponent in (home, away) and self.parent.user_team in (home, away):
+                venue = 'vs' if self.parent.user_team == home else '@'
+                upcoming.append(f"{game_date.strftime('%b %d')}: {venue} {self._team_label(opponent)}")
+        if upcoming:
+            lines.append("Upcoming: " + "; ".join(upcoming[:4]))
+        else:
+            lines.append("No further meetings scheduled.")
+        return lines
+
+    def _insert_game_details(self, event):
+        """Insert enriched details for a game event.
+
+        User-team games get matchup info, the result when played, team form
+        (last 5) and the season series vs the opponent - all from real game
+        results and the schedule. League games get a matchup line instead of
+        crashing on the missing opponent reference.
+        """
+        if event.get('is_user_game') and event.get('opponent') is not None:
+            opponent = event['opponent']
+            location = "Home Ice" if event['is_home'] else getattr(opponent, 'city', 'Away')
+            self.events_text.insert(tk.END, f"Location: {location}\n")
+            self.events_text.insert(tk.END, f"Opponent: {self._team_label(opponent)}\n")
+
+            # Check if game has been played
+            game_result = self._get_game_result(self.selected_date, opponent)
+            if game_result:
+                self.events_text.insert(tk.END, f"Result: {game_result}\n")
+
+            # Team form: last 5 results
+            self.events_text.insert(tk.END, "\nTeam Form (Last 5)\n", 'section')
+            for line in self._recent_form_lines():
+                self.events_text.insert(tk.END, line + "\n")
+
+            # Season series vs this opponent
+            self.events_text.insert(tk.END,
+                                    f"\nSeason Series vs {self._team_label(opponent)}\n",
+                                    'section')
+            for line in self._season_series_lines(opponent):
+                self.events_text.insert(tk.END, line + "\n")
+        else:
+            # League game not involving the user team
+            home = self._team_label(event.get('home_team'))
+            away = self._team_label(event.get('away_team'))
+            self.events_text.insert(tk.END, f"Matchup: {away} @ {home}\n")
+
     def _get_game_result(self, game_date, opponent):
         """Get the result of a game if it has been played."""
         for result in self.parent.game_results:
