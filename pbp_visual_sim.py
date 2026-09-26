@@ -320,6 +320,20 @@ class PBPVisualSim(tk.Toplevel):
     # their targets at constant velocity (no exponential rubber-banding), so
     # motion reads as continuous skating instead of choppy teleporting.
     SKATE_SPEED = 30.0   # skaters: brisk but natural on the broadcast view
+    # Puck flights are measured in game-seconds (playhead), not wall seconds,
+    # so the puck always glides between touches no matter the playback speed.
+    # At 1x (8 game-sec per wall-sec) a pass reads as ~0.28s of glide.
+    # --- puck flight durations (game-seconds). Scaled by distance so a 130-ft
+    # breakout and a 20-ft dish both travel at believable speeds instead of
+    # the long pass becoming a rocket. Speeds in ft per game-second at the
+    # 8x playback rate: pass ~64 ft/s real, shot ~96 ft/s real, loose ~24 ft/s.
+    PASS_SPEED_FTGS = 8.0     # pass glide speed
+    SHOT_SPEED_FTGS = 12.0    # shot speed
+    LOOSE_SPEED_FTGS = 3.0    # takeaway / rebound / scatter slide speed
+    MIN_PASS_GS = 0.8
+    MIN_SHOT_GS = 0.5
+    MIN_LOOSE_GS = 0.4
+    SHOOTOUT_FLIGHT_GS = 2.5
     GOALIE_SPEED = 14.0  # goalies shuffle; they rarely leave the crease
     CEREMONY_SPEED = 6.0  # faceoff glide to the dot: slow and deliberate
     # Quick faceoff beats (no ceremony every whistle): brief whistle freeze,
@@ -384,7 +398,12 @@ class PBPVisualSim(tk.Toplevel):
         # -- on-ice state --
         self.dots = {}            # dot_id -> dict(player, team_home, role, x, y, tx, ty, items...)
         self.puck = {"x": 100.0, "y": 42.5}
-        self.puck_flight = None   # (x0,y0,x1,y1, start_real, dur, on_arrive)
+        # (x0,y0,x1,y1, g0,g1, tag): puck flights run on GAME clock (playhead),
+        # not wall clock, so a flight always spans real game time and can never
+        # be preempted by the next event -- the puck glides touch to touch.
+        # New flights always launch from the puck's current rendered spot, so
+        # even an overlap redirects mid-glide instead of snapping (teleport).
+        self.puck_flight = None
         self.pending_outcome = None
         self.possession_home = None   # True/False/None
         self.carrier_id = None
@@ -401,6 +420,8 @@ class PBPVisualSim(tk.Toplevel):
         self._instant = False         # True during sim-to-end: no flights
         self.puck_target = None       # sim-authored puck destination (eased)
         self._pass_arrival = None     # pass event awaiting flight landing
+        self._settle_carrier = None    # carrier to award when a settle glide lands
+        self._takeaway_arrival = None  # carrier dot id awaiting glide landing
         self._shootout_pending = None # shootout attempt awaiting flight landing
         self._battle_winner = None
         self._battle_settle_at = 0.0
@@ -1647,7 +1668,99 @@ class PBPVisualSim(tk.Toplevel):
             # transient sim state (e.g. a line change resolving mid-tick):
             # the puck carrier is always shown, slotted by position
             d = self._force_carrier_dot(cpid)
-        self.carrier_id = d["id"] if d else None
+        new_carrier = d["id"] if d else None
+        if self._instant or self._faceoff_ceremony:
+            self.carrier_id = new_carrier
+        elif new_carrier != self.carrier_id:
+            if self.puck_flight or self._takeaway_arrival == new_carrier:
+                pass  # a glide is already handling this handoff; don't fight it
+            elif new_carrier is None:
+                self.carrier_id = None
+            else:
+                # General no-snap rule: if the puck isn't already with the new
+                # carrier, glide it over instead of teleporting it across the
+                # ice. Covers takeaways, interceptions, and recoveries after
+                # the puck scatters loose.
+                nd = self.dots.get(new_carrier)
+                if (nd is not None and math.hypot(self.puck["x"] - nd["x"],
+                                                  self.puck["y"] - nd["y"]) > 6.0):
+                    self._glide_puck_to(new_carrier,
+                                        self._loose_flight_gs(
+                                            self.puck["x"], self.puck["y"],
+                                            nd["x"], nd["y"]),
+                                        arrival_kind="takeaway")
+                else:
+                    self.carrier_id = new_carrier
+
+    def _flight_gs(self, x0, y0, x1, y1, speed, floor):
+        """Distance-scaled flight duration: believable speed whatever the range."""
+        import math as _m
+        return max(floor, _m.hypot(x1 - x0, y1 - y0) / speed)
+
+    def _pass_flight_gs(self, x0, y0, x1, y1):
+        return self._flight_gs(x0, y0, x1, y1, self.PASS_SPEED_FTGS,
+                               self.MIN_PASS_GS)
+
+    def _shot_flight_gs(self, x0, y0, x1, y1):
+        return self._flight_gs(x0, y0, x1, y1, self.SHOT_SPEED_FTGS,
+                               self.MIN_SHOT_GS)
+
+    def _loose_flight_gs(self, x0, y0, x1, y1):
+        return self._flight_gs(x0, y0, x1, y1, self.LOOSE_SPEED_FTGS,
+                               self.MIN_LOOSE_GS)
+
+    def _award_carrier(self, carrier_dot_id):
+        """Give the puck to a carrier without snapping: if his dot has
+        skated away from the puck's current spot, glide it to his stick
+        via a settle flight instead of teleporting."""
+        d = self.dots.get(carrier_dot_id) if carrier_dot_id else None
+        if d is None:
+            self.carrier_id = carrier_dot_id
+            return
+        gap = math.hypot(d["x"] - self.puck["x"], d["y"] - self.puck["y"])
+        if gap > 6.0 and not self._instant:
+            self._launch_flight(self.puck["x"], self.puck["y"],
+                                d["x"] + 1.5, d["y"] + 1.5,
+                                self._loose_flight_gs(self.puck["x"], self.puck["y"],
+                                                      d["x"], d["y"]),
+                                "settle")
+            self._settle_carrier = d["id"]
+        else:
+            self.carrier_id = d["id"]
+        self.puck_target = None
+
+    def _launch_flight(self, x0, y0, x1, y1, dur_gs, tag):
+        """Start a game-clock puck flight from (x0, y0) to (x1, y1).
+
+        One flight is in the air at a time: a new launch preempts any old
+        one, so the old flight's pending handoff is dropped here. Without
+        this, a preempted flight's stale arrival state could fire when the
+        new flight lands and hand possession to the wrong player.
+        """
+        g0 = self.playhead
+        self.puck_flight = (x0, y0, x1, y1, g0, g0 + dur_gs, tag)
+        if tag != "pass":
+            self._pass_arrival = None
+        if tag != "takeaway":
+            self._takeaway_arrival = None
+        if tag != "shootout":
+            self._shootout_pending = None
+        if tag != "settle":
+            self._settle_carrier = None
+
+    def _glide_puck_to(self, carrier_dot_id, dur_gs, arrival_kind=None):
+        """Start a game-clock puck glide to a dot; the carrier takes over
+        when it lands. Never snaps: launches from the puck's current spot."""
+        d = self.dots.get(carrier_dot_id)
+        if d is None:
+            self.carrier_id = carrier_dot_id
+            return
+        sx, sy = self.puck["x"], self.puck["y"]
+        tag = "takeaway" if arrival_kind == "takeaway" else "glide"
+        self._launch_flight(sx, sy, d["x"] + 1.5, d["y"] + 1.5, dur_gs, tag)
+        if arrival_kind == "takeaway":
+            self._takeaway_arrival = carrier_dot_id
+        self.carrier_id = None  # puck in transit
 
     def _force_carrier_dot(self, cpid):
         """Slot an undotted puck carrier into his position's dot so the
@@ -1760,11 +1873,8 @@ class PBPVisualSim(tk.Toplevel):
                     pass
 
     def _on_pass(self, ev):
-        pp = ev.get("passer_pos") or (100.0, 42.5)
         rp = ev.get("receiver_pos") or (100.0, 42.5)
-        pd = self._dot_by_player(ev.get("passer"))
         rd = self._dot_by_player(ev.get("receiver"))
-        sx, sy = (pd["x"], pd["y"]) if pd else (pp[0], pp[1])
         # The puck flies to the sim's receiver spot -- the patch of ice the
         # receiver actually skated to to get open -- and his dot is sent
         # there now so the pass visibly hits a man in space. On a pickoff
@@ -1787,7 +1897,12 @@ class PBPVisualSim(tk.Toplevel):
             self.carrier_id = d["id"] if d else None
             self.puck["x"], self.puck["y"] = rx, ry
         else:
-            self.puck_flight = (sx, sy, rx, ry, self._now(), 0.45, None)
+            # Launch from the puck's CURRENT spot, not the passer's dot: the
+            # puck was on his stick in the normal case (identical), and in the
+            # rare overlap case this redirects mid-glide instead of snapping.
+            sx, sy = self.puck["x"], self.puck["y"]
+            self._launch_flight(sx, sy, rx, ry,
+                            self._pass_flight_gs(sx, sy, rx, ry), "pass")
             self._pass_arrival = ev
             self.carrier_id = None  # puck in transit
         self.puck_target = None
@@ -1986,9 +2101,10 @@ class PBPVisualSim(tk.Toplevel):
                                   shooter_dot["y"] - sy)
                 if dist > 4.0:
                     # He skates into his lane and lets it go -- no teleport.
-                    # Rush there, release on arrival; capped so the
-                    # broadcast keeps pace. The puck rides his stick meanwhile.
-                    delay = min(0.6, dist / 45.0)
+                    # Rush there, release on arrival. The delay is honest:
+                    # burst speed covers dist/51 ft/s, so he actually arrives
+                    # before fire_at instead of being snapped there.
+                    delay = dist / 40.0
                     fire_at = self._now() + delay
                     shooter_dot["tx"], shooter_dot["ty"] = sx, sy
                     shooter_dot["rush_until"] = fire_at
@@ -2065,7 +2181,11 @@ class PBPVisualSim(tk.Toplevel):
 
     def _fire_shot(self, sx, sy, nx, outcome):
         """Launch the puck flight once the shooter has his lane."""
-        self.puck_flight = (sx, sy, nx, 42.5, self._now(), 0.45, outcome)
+        # Launch from the puck's current spot (on the shooter's stick in the
+        # normal case) so the release never snaps.
+        sx, sy = self.puck["x"], self.puck["y"]
+        self._launch_flight(sx, sy, nx, 42.5,
+                            self._shot_flight_gs(sx, sy, nx, 42.5), "shot")
         self.pending_outcome = outcome
 
     def _step_pending_shot(self, now):
@@ -2073,11 +2193,16 @@ class PBPVisualSim(tk.Toplevel):
         if ps is None:
             return
         if now >= ps["fire_at"] or self._faceoff_ceremony:
-            self._pending_shot = None
             d = self.dots.get(ps["shooter_id"])
             if d is not None:
-                # arrive exactly on the spot; the gap is sub-foot by now
-                self._move_dot(d, ps["sx"], ps["sy"])
+                gap = math.hypot(d["x"] - ps["sx"], d["y"] - ps["sy"])
+                if gap > 3.0 and not self._faceoff_ceremony:
+                    # Not there yet -- keep skating, don't snap him (or the
+                    # puck on his stick) across the ice. Re-check shortly.
+                    ps["fire_at"] = now + 0.1
+                    return
+            self._pending_shot = None
+            if d is not None:
                 d["tx"], d["ty"] = ps["sx"], ps["sy"]
                 d.pop("rush_until", None)
             self._fire_shot(ps["sx"], ps["sy"], ps["nx"], ps["outcome"])
@@ -2730,7 +2855,15 @@ class PBPVisualSim(tk.Toplevel):
         if ev.get("result") == "turnover_caused":
             th = ev.get("hitting_player")
             self.possession_home = (getattr(th, "team_name", None) == self.home_team.team_name)
-            self.carrier_id = h["id"] if h else None
+            if not self._instant and h is not None:
+                hd = self.dots.get(h["id"]) if h else None
+                self._glide_puck_to(h["id"],
+                                    self._loose_flight_gs(
+                                        self.puck["x"], self.puck["y"],
+                                        hd["x"], hd["y"]) if hd else self.MIN_LOOSE_GS,
+                                    arrival_kind="takeaway")
+            else:
+                self.carrier_id = h["id"] if h else None
         hp = ev.get("hitting_player")
         self._bump_stat(self._player_side(hp), "Hits")
         self._pstat(hp, "HIT")
@@ -2862,7 +2995,8 @@ class PBPVisualSim(tk.Toplevel):
             self._move_dot(d, 100.0, 42.5)
             d["tx"], d["ty"] = nx - (30 if att_home else -30), 42.5
         self.puck["x"], self.puck["y"] = sx, sy
-        self.puck_flight = (sx, sy, nx, 42.5, self._now(), 0.9, None)
+        self._launch_flight(sx, sy, nx, 42.5, self.SHOOTOUT_FLIGHT_GS,
+                            "shootout")
         self.pending_outcome = None
         self._shootout_pending = ev
         self.carrier_id = d["id"] if d else None
@@ -3082,6 +3216,7 @@ class PBPVisualSim(tk.Toplevel):
         self.pending_outcome = None
         self._shootout_pending = None
         self._pass_arrival = None
+        self._takeaway_arrival = None
         self._battle_winner = None
         self._battle_settle_at = 0.0
         self._cancel_faceoff_ceremony()
@@ -3176,6 +3311,7 @@ class PBPVisualSim(tk.Toplevel):
         self.pending_outcome = None
         self._shootout_pending = None
         self._pass_arrival = None
+        self._takeaway_arrival = None
         self._battle_winner = None
         self._battle_settle_at = 0.0
         self._cancel_faceoff_ceremony()
@@ -3264,10 +3400,13 @@ class PBPVisualSim(tk.Toplevel):
             dt = self.TICK_DT * eff * self.GAME_RATE
             target = self.playhead + dt
             # don't run past un-simulated events; sim is fast so this rarely binds
-            # (stop immediately if a replay started mid-loop)
+            # (stop immediately if a replay started mid-loop, or a puck flight
+            # launched -- the flight owns the puck until it lands, and the
+            # next event must wait its turn instead of preempting it)
             while (self.cursor < len(self.events)
                    and self.events[self.cursor].get("t", 0) <= target
-                   and not self._replay):
+                   and not self._replay
+                   and self.puck_flight is None):
                 ev = self.events[self.cursor]
                 self.cursor += 1
                 self.playhead = max(self.playhead, ev.get("t", self.playhead))
@@ -3286,10 +3425,11 @@ class PBPVisualSim(tk.Toplevel):
             self.playing = True
             self._refresh_play_btn()
 
-        # puck flight animation
+        # puck flight animation (game-clock: spans real game time, so the
+        # puck glides touch-to-touch and is never preempted by the next event)
         if self.puck_flight:
-            x0, y0, x1, y1, t0, dur, outcome = self.puck_flight
-            k = min(1.0, (now - t0) / dur)
+            x0, y0, x1, y1, g0, g1, tag = self.puck_flight
+            k = min(1.0, (self.playhead - g0) / max(0.001, g1 - g0))
             e = 1 - (1 - k) ** 2  # ease-out
             self.puck["x"] = x0 + (x1 - x0) * e
             self.puck["y"] = y0 + (y1 - y0) * e
@@ -3304,15 +3444,26 @@ class PBPVisualSim(tk.Toplevel):
                 elif getattr(self, "_pass_arrival", None):
                     pa = self._pass_arrival
                     self._pass_arrival = None
-                    d = self._dot_by_player(pa.get("receiver") if pa.get("completed")
-                                            else pa.get("interceptor"))
-                    self.carrier_id = d["id"] if d else None
-                    self.puck_target = None
+                    rd = self._dot_by_player(pa.get("receiver") if pa.get("completed")
+                                             else pa.get("interceptor"))
+                    self._award_carrier(rd["id"] if rd else None)
                 elif getattr(self, "_shootout_pending", None):
                     so = self._shootout_pending
                     self._shootout_pending = None
                     self._apply_shootout(so)
                     self._scatter_puck(so)
+                elif getattr(self, "_takeaway_arrival", None):
+                    # takeaway glide landed: the new carrier has it on his stick
+                    ta = self._takeaway_arrival
+                    self._takeaway_arrival = None
+                    self._award_carrier(ta)
+                elif tag == "settle" and getattr(self, "_settle_carrier", None):
+                    # settle glide landed: puck should be on the receiver's
+                    # stick; if he kept skating, settle again (converges: the
+                    # receiver is skating to the puck, not away from it)
+                    sc = self._settle_carrier
+                    self._settle_carrier = None
+                    self._award_carrier(sc)
 
         # broadcast replay takes over all dot/puck motion
         if self._replay:
@@ -3565,19 +3716,33 @@ class PBPVisualSim(tk.Toplevel):
         if et == "goal":
             nx = AWAY_NET_X if att_home else HOME_NET_X
             self.puck["x"], self.puck["y"] = nx, 42.5
-        elif et == "save":
+            return
+        # Rebounds glide instead of snapping -- a save/block/miss reads as
+        # the puck bouncing loose, not teleporting.
+        if self._instant:
+            glide = None
+        else:
+            glide = (self.puck["x"], self.puck["y"])
+        if et == "save":
             nx = AWAY_NET_X if att_home else HOME_NET_X
-            self.puck["x"] = nx - 14 if att_home else nx + 14
-            self.puck["y"] = random.choice([18, 67])
+            tx, ty = (nx - 14 if att_home else nx + 14), random.choice([18, 67])
         elif et == "blocked_shot":
             d = self._dot_by_player(ev.get("blocker"))
-            if d:
-                self.puck["x"], self.puck["y"] = d["x"], d["y"]
+            tx, ty = (d["x"], d["y"]) if d else (self.puck["x"], self.puck["y"])
         elif et == "missed_shot":
             nx = AWAY_NET_X if att_home else HOME_NET_X
-            self.puck["x"], self.puck["y"] = nx + (8 if att_home else -8), 42.5 + random.uniform(-14, 14)
+            tx, ty = nx + (8 if att_home else -8), 42.5 + random.uniform(-14, 14)
         elif et == "shootout_attempt":
-            self.puck["x"], self.puck["y"] = 100, 42.5
+            tx, ty = 100, 42.5
+        else:
+            return
+        if glide:
+            sx, sy = glide
+            self._launch_flight(sx, sy, tx, ty,
+                                self._loose_flight_gs(sx, sy, tx, ty),
+                                "scatter")
+        else:
+            self.puck["x"], self.puck["y"] = tx, ty
 
 
 # ----------------------------------------------------------------------------
