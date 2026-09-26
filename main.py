@@ -10843,21 +10843,46 @@ class CleanEditLinesWindow(tk.Toplevel):
         self._paint_unit_buttons()
         self._clear_selection()
 
-    def _unit_card(self, parent, kicker):
+    def _unit_card(self, parent, kicker, menu_kind=None):
         """Sleeper card for a line/pair/unit. Returns (body, big, detail, ice).
 
         3D texture: 1px top highlight + 2px bottom shadow make the card
         read as raised above the background, Sleeper-style.
+
+        menu_kind 'F'/'D' turns the header into a real dropdown button
+        (Menubutton) listing Line 1-4 / Pair 1-3 with live ratings.
         """
         card = tk.Frame(parent, bg=self.C_CARD)
         card.pack(fill=tk.X, pady=(0, 12), padx=2)
         tk.Frame(card, bg='#2e2e36', height=1).pack(fill='x', side='top')
         top = tk.Frame(card, bg=self.C_CARD)
         top.pack(fill='x', padx=16, pady=(12, 0))
-        kicker_l = tk.Label(top, text=kicker, bg=self.C_CARD, fg=self.C_TER,
-                            font=(self.parent.FONT_FAMILY, 11, 'bold'))
-        kicker_l.pack(side='left')
-        card._kicker = kicker_l
+        if menu_kind:
+            # Explicit dropdown control: bordered pill + native menu.
+            wrap = tk.Frame(top, bg='#3a3a42')
+            wrap.pack(side='left')
+            mb = tk.Menubutton(
+                wrap, text=kicker, bg=self.C_CARD2, fg=self.C_TEXT,
+                activebackground='#2b2b31', activeforeground=self.C_ACCENT,
+                font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
+                indicatoron=0)
+            mb.pack(padx=1, pady=1)
+            menu = tk.Menu(mb, tearoff=0, bg=self.C_CARD2, fg=self.C_TEXT,
+                           activebackground=self.C_ACCENT,
+                           activeforeground='#06231f',
+                           font=(self.parent.FONT_FAMILY, 10))
+            menu.config(postcommand=lambda m=menu,
+                        k=menu_kind: self._refresh_unit_menu(m, k))
+            mb.config(menu=menu)
+            card._menubutton = mb
+            card._menu_kind = menu_kind
+        else:
+            kicker_l = tk.Label(top, text=kicker, bg=self.C_CARD,
+                                fg=self.C_TER,
+                                font=(self.parent.FONT_FAMILY, 11, 'bold'))
+            kicker_l.pack(side='left')
+            card._kicker = kicker_l
         big = tk.Label(top, text="--", bg=self.C_CARD, fg=self.C_TEXT,
                        font=(self.parent.FONT_FAMILY, 26, 'bold'))
         big.pack(side='right')
@@ -10891,7 +10916,8 @@ class CleanEditLinesWindow(tk.Toplevel):
         for i in range(4):
             body, big, detail, ice = self._unit_card(
                 inner,
-                f"LINE {i+1} \u00b7 {self.get_line_type_name(i).upper()} \u25be")
+                f"LINE {i+1} \u00b7 {self.get_line_type_name(i).upper()} \u25be",
+                menu_kind='F')
             self.forward_rating_big[i] = big
             self.forward_rating_labels[i] = detail
             ice.config(text=f"Suggested ice time: {es_ice[i]}")
@@ -10903,7 +10929,6 @@ class CleanEditLinesWindow(tk.Toplevel):
             self.forward_vars.append(slots)
             card = body.master
             self._fwd_cards.append(card)
-            self._make_header_dropdown(card._kicker, 'F')
             if i != 0:
                 card.pack_forget()
         self._fwd_shown = 0
@@ -10914,7 +10939,8 @@ class CleanEditLinesWindow(tk.Toplevel):
         for i in range(3):
             body, big, detail, ice = self._unit_card(
                 inner,
-                f"PAIR {i+1} \u00b7 {self.get_defense_pair_name(i).upper()} \u25be")
+                f"PAIR {i+1} \u00b7 {self.get_defense_pair_name(i).upper()} \u25be",
+                menu_kind='D')
             self.defense_rating_big[i] = big
             self.defense_rating_labels[i] = detail
             ice.config(text=f"Suggested ice time: {d_ice[i]}")
@@ -10926,7 +10952,6 @@ class CleanEditLinesWindow(tk.Toplevel):
             self.defense_vars.append(slots)
             card = body.master
             self._def_cards.append(card)
-            self._make_header_dropdown(card._kicker, 'D')
             if i != 0:
                 card.pack_forget()
         self._def_shown = 0
@@ -10942,35 +10967,23 @@ class CleanEditLinesWindow(tk.Toplevel):
             self.goalie_vars.append(slot)
         return frame
 
-    def _make_header_dropdown(self, kicker_label, kind):
-        """Turn a card header into a clickable unit-switch dropdown."""
-        kicker_label.config(cursor='hand2')
-        kicker_label.bind('<Button-1>',
-                          lambda e: self._unit_menu_popup(e, kind))
-        kicker_label.bind('<Enter>',
-                          lambda e, k=kicker_label: k.config(fg=self.C_ACCENT))
-        kicker_label.bind('<Leave>',
-                          lambda e, k=kicker_label: k.config(fg=self.C_TER))
-
-    def _unit_menu_popup(self, event, kind):
-        """Dropdown listing Line 1-4 / Pair 1-3 with live ratings."""
+    def _refresh_unit_menu(self, menu, kind):
+        """Rebuild the Line 1-4 / Pair 1-3 dropdown with live ratings."""
         if kind == 'F':
             n, shown = 4, self._fwd_shown
-            title, bigs, switch = 'Line', self.forward_rating_big, self.show_forward_line
+            title, bigs, switch = ('Line', self.forward_rating_big,
+                                   self.show_forward_line)
         else:
             n, shown = 3, self._def_shown
-            title, bigs, switch = 'Pair', self.defense_rating_big, self.show_defense_pair
-        menu = tk.Menu(self, tearoff=0, bg=self.C_CARD2, fg=self.C_TEXT,
-                       activebackground=self.C_ACCENT,
-                       activeforeground='#06231f',
-                       font=(self.parent.FONT_FAMILY, 10))
+            title, bigs, switch = ('Pair', self.defense_rating_big,
+                                   self.show_defense_pair)
+        menu.delete(0, 'end')
         self._menu_var = tk.IntVar(value=shown)
         for i in range(n):
             r = bigs[i].cget('text')
             label = f"{title} {i+1}" + (f"  \u00b7  {r}" if r != '--' else "")
             menu.add_radiobutton(label=label, variable=self._menu_var,
                                  value=i, command=lambda i=i: switch(i))
-        menu.tk_popup(event.x_root, event.y_root)
 
     def show_forward_line(self, i):
         """Swap the visible forward-line card (header dropdown)."""
