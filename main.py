@@ -164,7 +164,28 @@ class GameManager:
             # Initialize strategies for all teams (excluding user team)
             if hasattr(self, 'league') and self.league.teams:
                 self._ai_manager.initialize_team_strategies(self.league.teams)
+            # Attach salary cap system for cap-relative contract demands
+            try:
+                cap_sys = getattr(getattr(self, 'league', None),
+                                  'salary_cap_system', None)
+                if cap_sys:
+                    self._ai_manager.set_cap_system(
+                        cap_sys, league=getattr(self, 'league', None))
+            except Exception:
+                pass
         return self._ai_manager
+
+    def get_live_cap(self) -> int:
+        """Current league salary cap (grows each season). Falls back to
+        the SALARY_CAP constant if no league/cap system is attached."""
+        try:
+            cap_sys = getattr(getattr(self, 'league', None),
+                              'salary_cap_system', None)
+            if cap_sys and getattr(cap_sys, 'current_cap', 0):
+                return int(cap_sys.current_cap)
+        except Exception:
+            pass
+        return SALARY_CAP
         
     @property
     def record_manager(self):
@@ -5016,9 +5037,10 @@ class HockeyManagerGUI(tk.Tk):
             self.standings_tree.insert('', 'end', values=(team.team_name, pts))
 
     def update_finances_panel(self):
+        _live_cap = self.get_live_cap()
         finance_text = (
             f"{'Player Budget:':<18}${PLAYER_BUDGET:,}\n"
-            f"{'Salary Cap:':<18}${SALARY_CAP:,}\n"
+            f"{'Salary Cap:':<18}${_live_cap:,}\n"
             f"{'Total Salaries:':<18}${self.user_team.payroll:,}\n"
             f"{'Cap Space:':<18}${self.user_team.cap_space:,}"
         )
@@ -8655,7 +8677,8 @@ class HockeyManagerGUI(tk.Tk):
         contract_factor = 1.0
         if player.contract.years_remaining > 0:
             # Value cheaper contracts higher
-            salary_cap_percentage = player.contract.salary / SALARY_CAP
+            _lc = self.get_live_cap()
+            salary_cap_percentage = player.contract.salary / _lc if _lc else 0
             if salary_cap_percentage < 0.05:  # Less than 5% of cap
                 contract_factor = 1.3
             elif salary_cap_percentage < 0.1:  # Less than 10% of cap
@@ -9849,9 +9872,12 @@ class HockeyManagerGUI(tk.Tk):
         self.open_windows['contract'].focus_set()
 
     def handle_contract_offer(self, person, extension=False):
-        # NHL contract rules:
+        # NHL contract rules (cap-relative: uses the live league cap):
         min_salary = 750_000
-        max_salary = int(0.20 * SALARY_CAP)
+        _cap_sys = getattr(getattr(self, 'league', None),
+                           'salary_cap_system', None)
+        _live_cap = _cap_sys.current_cap if _cap_sys else SALARY_CAP
+        max_salary = int(0.20 * _live_cap)
         max_years = 8 if extension else 7
 
         # Defensive: ensure salary and contract_years attributes exist
@@ -9893,13 +9919,46 @@ class HockeyManagerGUI(tk.Tk):
                     person.contract.years_remaining = 2
             return accepted
 
-        # Simple AI logic for contract negotiation
-        asking_price = 750000 + (person.overall_rating() * 100000)
+        # Cap-relative asking price: base demand as % of cap, scaled by
+        # the live cap and any market-setter premium (the McDavid effect).
+        _ovr = person.overall_rating()
+        try:
+            from game_classes import to_100_scale
+            _ovr100 = int(to_100_scale(_ovr))
+        except Exception:
+            _ovr100 = int(_ovr * 2)
+        _pos = getattr(person, "primary_position", "")
+        _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
+        _base_pct = (_ovr * 100_000) / 83_500_000  # ~0.12% per OVR point
+        if _cap_sys is not None:
+            _season = getattr(getattr(self, 'league', None), 'season_year', 0)
+            asking_price = _cap_sys.demand_for(
+                _base_pct, _ovr100, _pos_name,
+                getattr(person, "age", 27), _season)
+        else:
+            asking_price = int(_base_pct * _live_cap)
+        asking_price = max(asking_price, 750_000)
         
         if person.salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
             messagebox.showinfo("Contract Accepted", f"{person.full_name} has accepted your contract offer!")
             person.contract.salary = person.salary
             person.contract.years_remaining = person.contract_years
+            # Track market-setting contracts (star + top-5 AAV)
+            try:
+                if _cap_sys is not None:
+                    _season = getattr(getattr(self, 'league', None),
+                                      'season_year', 0)
+                    _set_market = _cap_sys.register_signing(
+                        person.full_name, person.salary, _ovr100,
+                        _pos_name, getattr(person, "age", 27), _season)
+                    if _set_market:
+                        self.news_log.append({
+                            'date': self.current_date,
+                            'story': (f"{person.full_name}'s "
+                                      f"${person.salary:,} deal sets the market "
+                                      f"-- comparable stars will demand more.")})
+            except Exception:
+                pass
             if not extension:
                 self.league.free_agents.remove(person)
                 self.user_team.add_player(person, "roster")
@@ -12366,10 +12425,11 @@ class ContractExtensionsWindow(tk.Toplevel):
         team_frame = ttk.Frame(main_frame, style='Panel.TFrame', padding=10)
         team_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Use the global SALARY_CAP constant
+        # Use the live league cap (grows each season)
         current_payroll = self.get_current_payroll()
         projected_space = self.get_projected_cap_space()
-        cap_info_text = f"Salary Cap: ${SALARY_CAP:,}  |  Current Payroll: ${current_payroll:,}  |  Projected Space: ${projected_space:,}"
+        _live = self.parent.get_live_cap() if hasattr(self.parent, 'get_live_cap') else SALARY_CAP
+        cap_info_text = f"Salary Cap: ${_live:,}  |  Current Payroll: ${current_payroll:,}  |  Projected Space: ${projected_space:,}"
         cap_info = ttk.Label(team_frame, text=cap_info_text, style='Info.TLabel')
         cap_info.pack()
         
@@ -12494,13 +12554,22 @@ class ContractExtensionsWindow(tk.Toplevel):
             for player in self.eligible_players
         )
         
-        # Use the global SALARY_CAP constant
-        return SALARY_CAP - (current_payroll - expiring_salary)
+        # Use the live league cap
+        _live = self.parent.get_live_cap() if hasattr(self.parent, 'get_live_cap') else SALARY_CAP
+        return _live - (current_payroll - expiring_salary)
     
     def calculate_market_value(self, player):
-        """Calculate the market value of a player."""
-        # Base value determined by overall rating
-        base_value = player.overall_rating() * 100000
+        """Calculate the market value of a player.
+
+        Cap-relative: the base (ovr * 100k at the $83.5M baseline) is
+        expressed as a cap % and repriced against the live cap, so market
+        values rise as the cap grows.
+        """
+        from salary_cap_system import DEFAULT_CAP
+        _live = self.parent.get_live_cap() if hasattr(
+            self.parent, 'get_live_cap') else DEFAULT_CAP
+        # Base value determined by overall rating, scaled to live cap
+        base_value = player.overall_rating() * 100000 * (_live / DEFAULT_CAP)
         
         # Age modifier - players in their prime (23-29) get premium
         age_modifier = 1.0

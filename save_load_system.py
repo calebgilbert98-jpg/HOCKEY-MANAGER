@@ -106,6 +106,10 @@ class GameSaveManager:
             'schedule_generated': getattr(league, 'schedule_generated', False),
             'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
             'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
+            # Dynamic salary cap system (growth history + market comps).
+            # Missing key = old save -> defaults to $83.5M.
+            'salary_cap_system': getattr(league, 'salary_cap_system', None).to_dict()
+                if getattr(league, 'salary_cap_system', None) else {},
         }
         
         # Serialize all teams
@@ -602,6 +606,19 @@ class GameSaveManager:
             league.event_day_prompted = [
                 list(p) for p in (league_data.get('event_day_prompted', []) or [])
             ]
+            # Restore salary cap system. Old saves lack the key -> defaults
+            # to $83.5M with empty history (no crash, no data loss).
+            try:
+                from salary_cap_system import SalaryCapSystem
+                league.salary_cap_system = SalaryCapSystem.from_dict(
+                    league_data.get('salary_cap_system') or {})
+                # Sync team caps to the restored league cap
+                _restored_cap = league.salary_cap_system.current_cap
+                for _t in league.teams:
+                    if not getattr(_t, 'salary_cap', 0):
+                        _t.salary_cap = _restored_cap
+            except Exception:
+                pass
             
             # Restore teams (clear existing and restore from save)
             league.teams.clear()

@@ -9,6 +9,7 @@ from typing import List, Dict, Optional, Tuple
 from enum import Enum
 from datetime import date, timedelta
 from game_classes import Player, Team, PlayerPosition, Contract
+from salary_cap_system import SalaryCapSystem, DEFAULT_CAP
 
 
 class ManagementPriority(Enum):
@@ -70,6 +71,7 @@ class AITeamManager:
     def __init__(self):
         self.team_strategies: Dict[str, TeamStrategy] = {}
         self.decision_history: List[AIDecision] = []
+        self._cap_system: Optional[SalaryCapSystem] = None
         self.trade_offers: List[Dict] = []
         self.free_agency_targets: Dict[str, List[Player]] = {}
         
@@ -80,7 +82,13 @@ class AITeamManager:
         # Market analysis cache
         self.player_values: Dict[str, int] = {}
         self.position_demand: Dict[PlayerPosition, float] = {}
-        
+
+    def set_cap_system(self, cap_system: Optional[SalaryCapSystem],
+                       league=None):
+        """Attach the league's salary cap system for cap-relative demands."""
+        self._cap_system = cap_system
+        self._league_ref = league
+
     def initialize_team_strategies(self, teams: List[Team]):
         """Initialize AI strategies for all CPU teams"""
         for team in teams:
@@ -413,22 +421,51 @@ class AITeamManager:
         return decisions
     
     def _estimate_player_salary(self, player: Player) -> int:
-        """Estimate fair market salary for a player"""
-        base_salary = player.overall_rating() * 100_000  # 100k per overall point
-        
-        # Age adjustments
+        """Estimate fair market salary for a player.
+
+        Demands are expressed as a % of the salary cap, so they scale
+        automatically as the cap grows. Market-setter premiums apply.
+        """
+        cap_sys = self._cap_system
+        cap = cap_sys.current_cap if cap_sys else DEFAULT_CAP
+
+        ovr = player.overall_rating()  # internal ~50 scale
+        # Convert to 1-100 display scale for market logic
+        try:
+            from game_classes import to_100_scale
+            ovr100 = int(to_100_scale(ovr))
+        except Exception:
+            ovr100 = int(ovr * 2)
+
+        # Base demand as % of cap: ~100k per OVR point at $83.5M cap
+        # = ovr * 100_000 / 83_500_000 ≈ ovr * 0.0012 (0.12% per point)
+        base_cap_pct = (ovr * 100_000) / DEFAULT_CAP
+
+        # Age adjustments (multiplicative on the cap %)
         if player.age < 25:
-            base_salary *= 0.8  # Youth discount
+            base_cap_pct *= 0.8
         elif player.age > 32:
-            base_salary *= 0.6  # Veteran discount
-        
+            base_cap_pct *= 0.6
+
         # Position adjustments
-        if player.primary_position == PlayerPosition.GOALIE:
-            base_salary *= 1.2
-        elif player.primary_position == PlayerPosition.CENTER:
-            base_salary *= 1.1
-        
-        return max(min(int(base_salary), 12_000_000), 750_000)  # Cap between 750k and 12M
+        pos = player.primary_position
+        pos_name = pos.value if hasattr(pos, "value") else str(pos)
+        if pos == PlayerPosition.GOALIE:
+            base_cap_pct *= 1.2
+        elif pos == PlayerPosition.CENTER:
+            base_cap_pct *= 1.1
+
+        # Convert to dollars at CURRENT cap, apply market premium
+        if cap_sys:
+            league = getattr(self, "_league_ref", None)
+            season = getattr(league, "season_year", 0) if league else 0
+            salary = cap_sys.demand_for(base_cap_pct, ovr100, pos_name,
+                                        player.age, season)
+        else:
+            salary = int(base_cap_pct * cap)
+
+        # Clamp: league min to 20% of cap (NHL max)
+        return max(min(int(salary), int(cap * 0.20)), 750_000)
     
     def _determine_contract_length(self, player: Player, strategy: TeamStrategy) -> int:
         """Determine appropriate contract length"""

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
+from salary_cap_system import SalaryCapSystem
 from datetime import date, timedelta, datetime, time
 
 import os as _os
@@ -24,9 +25,9 @@ def debug_print(*args, **kwargs):
 # --- Constants and Configuration ---
 class GameBalance:
     MIN_ATTRIBUTE = 1
-    MAX_ATTRIBUTE = 50
-    DEFAULT_MIN_ATTRIBUTE = 25
-    DEFAULT_MAX_ATTRIBUTE = 45
+    MAX_ATTRIBUTE = 100
+    DEFAULT_MIN_ATTRIBUTE = 50
+    DEFAULT_MAX_ATTRIBUTE = 90
     
     PEAK_AGE_START = 27
     PEAK_AGE_END = 32
@@ -37,13 +38,15 @@ class GameBalance:
 
 
 def to_100_scale(value):
-    """Convert an internal ~50-scale rating to the 1-100 display scale.
-
-    The sim engine, AI and development all run on the internal scale;
-    everything the user sees (overall, attributes) goes through this.
+    """DEPRECATED: Attributes are now native 100-scale. This is kept for
+    backward compatibility with old saves and external callers.
     """
     try:
-        return max(1, min(100, int(round(float(value) * 2))))
+        v = float(value)
+        # If value looks like old 50-scale (< 55), convert; otherwise passthrough
+        if v < 55:
+            return max(1, min(100, int(round(v * 2))))
+        return max(1, min(100, int(round(v))))
     except (TypeError, ValueError):
         return 50
 
@@ -2082,6 +2085,9 @@ class League:
     # held, and (event, year) pairs the user was already prompted about.
     draft_held_years: List[int] = field(default_factory=list)
     event_day_prompted: List[List] = field(default_factory=list)
+    # Dynamic salary cap system: growth, history, market-setting contracts.
+    # Defaults keep old saves working (from_dict with empty dict).
+    salary_cap_system: object = field(default_factory=SalaryCapSystem)
     
     def set_game_manager(self, game_manager):
         """Set reference to game manager for database access."""
@@ -4317,6 +4323,19 @@ class League:
             player.stats = PlayerStats()
         
         self.season_year += 1
+
+        # Advance the salary cap for the new season (2-4% growth).
+        # Existing contracts are NOT touched; only new demands scale.
+        try:
+            cap_sys = self.salary_cap_system
+            if cap_sys is None:
+                cap_sys = SalaryCapSystem()
+                self.salary_cap_system = cap_sys
+            new_cap = cap_sys.advance_cap_year(self.season_year)
+            for team in self.teams:
+                team.salary_cap = new_cap
+        except Exception:
+            pass
 
         # Expire buyout dead-cap years that are now in the past
         for team in self.teams:
