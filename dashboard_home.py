@@ -376,7 +376,11 @@ class HomeDashboard:
     def _team_name_of(obj):
         if obj is None:
             return ""
-        return getattr(obj, "team_name", str(obj))
+        # NOTE: getattr's default is evaluated eagerly -- str(obj) on a Team
+        # reprs the entire roster (millions of dataclass repr calls across a
+        # full schedule scan). Only stringify as a last resort.
+        name = getattr(obj, "team_name", None)
+        return name if name is not None else str(obj)
 
     def _streak_text(self):
         form = self._recent_form(10)

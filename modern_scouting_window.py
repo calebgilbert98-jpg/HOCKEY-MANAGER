@@ -372,7 +372,9 @@ class ModernScoutingWindow(tk.Toplevel):
 
         for p in self.game_data.get("draft_class", [])[:200]:
             try:
-                pos = getattr(p.primary_position, "value", str(p.primary_position))
+                pos = getattr(p.primary_position, "value", None)
+                if pos is None:
+                    pos = str(p.primary_position)
                 tree.insert("", "end", values=(
                     getattr(p, "full_name", "?"), pos,
                     getattr(p, "age", "?"),

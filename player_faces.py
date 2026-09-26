@@ -76,7 +76,7 @@ FACE_SHAPES = ["oval", "round", "square", "oblong", "heart", "diamond", "pear"]
 
 
 def _seed_for(player):
-    pid = getattr(player, "id", None) or getattr(player, "full_name", str(player))
+    pid = getattr(player, "id", None) or getattr(player, "full_name", None) or str(player)
     h = hashlib.md5(str(pid).encode("utf-8")).hexdigest()
     return int(h[:8], 16)
 
