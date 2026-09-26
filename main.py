@@ -10410,22 +10410,42 @@ class CleanEditLinesWindow(tk.Toplevel):
         self.after(60, self._pump_face_queue)
 
     def _face_photo(self, player, size=48):
-        """Return a cached PhotoImage face thumbnail for a player.
+        """Return a cached circular-masked PhotoImage face thumbnail.
 
-        Returns None when face generation is unavailable; never raises.
+        Sleeper-style round avatars with a soft ring; falls back to the
+        square photo when PIL masking is unavailable. Never raises.
         """
         try:
             pid = getattr(player, 'id', None) or id(player)
         except Exception:
             pid = id(player)
-        key = (pid, size)
+        key = (pid, size, 'circ')
         if key not in self._face_photos:
             photo = None
             try:
-                from player_faces import get_face_photo
-                photo = get_face_photo(player, size=size)
+                from player_faces import generate_face_image
+                from PIL import Image, ImageDraw, ImageTk
+                img = generate_face_image(player, size=size)
+                if img is not None:
+                    img = img.convert('RGBA').resize((size, size), Image.LANCZOS)
+                    mask = Image.new('L', (size, size), 0)
+                    ImageDraw.Draw(mask).ellipse([1, 1, size - 1, size - 1],
+                                                 fill=255)
+                    img.putalpha(mask)
+                    ring = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+                    ImageDraw.Draw(ring).ellipse(
+                        [1, 1, size - 1, size - 1],
+                        outline=(46, 46, 53, 255), width=2)
+                    img = Image.alpha_composite(img, ring)
+                    photo = ImageTk.PhotoImage(img, master=self)
             except Exception:
                 photo = None
+            if photo is None:
+                try:
+                    from player_faces import get_face_photo
+                    photo = get_face_photo(player, size=size)
+                except Exception:
+                    photo = None
             self._face_photos[key] = photo
         return self._face_photos[key]
 
@@ -10469,8 +10489,10 @@ class CleanEditLinesWindow(tk.Toplevel):
         """Slim Sleeper-style stat strip: team avg / top line / roster size."""
         strip = tk.Frame(parent_frame, bg=self.C_CARD)
         strip.pack(fill=tk.X, padx=20, pady=(0, 12))
+        tk.Frame(strip, bg='#2e2e36', height=1).pack(fill='x', side='top')
         inner = tk.Frame(strip, bg=self.C_CARD)
         inner.pack(fill=tk.X, padx=16, pady=10)
+        tk.Frame(strip, bg='#08080a', height=2).pack(fill='x', side='bottom')
 
         total = len(self.parent.user_team.roster)
         avg = (sum(p.overall_rating() for p in self.parent.user_team.roster)
@@ -10535,7 +10557,8 @@ class CleanEditLinesWindow(tk.Toplevel):
                           fg=self.C_TEXT, insertbackground=self.C_TEXT, relief='flat',
                           font=(self.parent.FONT_FAMILY, 10))
         search.pack(fill='x', pady=(0, 8), ipady=7)
-        self._search_var.trace_add('write', lambda *a: self._rebuild_roster_list())
+        self._search_var.trace_add('write', lambda *a: self._debounced_search())
+        self._search_after = None
 
         chips = tk.Frame(panel, bg=self.C_BG)
         chips.pack(fill='x', pady=(0, 8))
@@ -10554,6 +10577,15 @@ class CleanEditLinesWindow(tk.Toplevel):
         list_wrap.pack(fill='both', expand=True)
         self._roster_inner = self._make_scrollable(list_wrap)
         self._rebuild_roster_list()
+
+    def _debounced_search(self):
+        """Rebuild the roster list 180ms after the last keystroke."""
+        if getattr(self, '_search_after', None):
+            try:
+                self.after_cancel(self._search_after)
+            except Exception:
+                pass
+        self._search_after = self.after(180, self._rebuild_roster_list)
 
     def _set_roster_filter(self, key, rebuild=True):
         self._roster_filter = key
@@ -10619,7 +10651,7 @@ class CleanEditLinesWindow(tk.Toplevel):
             blank = self._face_blank(40)
             if blank is not None:
                 self._face_photos[blank_key] = blank
-        face = tk.Label(card, bg='#2b2b31', bd=0, image=blank)
+        face = tk.Label(card, bg=self.C_CARD, bd=0, image=blank)
         face.image = blank
         face.pack(side='left', padx=(8, 4), pady=8)
         self._pending_faces.append((player, face, 40))
@@ -10792,6 +10824,8 @@ class CleanEditLinesWindow(tk.Toplevel):
         self._current_unit = "ES"
         self._unit_frames["ES"].pack(fill='both', expand=True)
         self._apply_view_prefs()
+        # Zones now exist: drop any partial cache built during roster setup.
+        self._zone_cache = None
 
     def _paint_unit_buttons(self):
         for key, b in self._unit_btns.items():
@@ -10810,9 +10844,14 @@ class CleanEditLinesWindow(tk.Toplevel):
         self._clear_selection()
 
     def _unit_card(self, parent, kicker):
-        """Sleeper card for a line/pair/unit. Returns (body, big, detail, ice)."""
+        """Sleeper card for a line/pair/unit. Returns (body, big, detail, ice).
+
+        3D texture: 1px top highlight + 2px bottom shadow make the card
+        read as raised above the background, Sleeper-style.
+        """
         card = tk.Frame(parent, bg=self.C_CARD)
         card.pack(fill=tk.X, pady=(0, 12), padx=2)
+        tk.Frame(card, bg='#2e2e36', height=1).pack(fill='x', side='top')
         top = tk.Frame(card, bg=self.C_CARD)
         top.pack(fill='x', padx=16, pady=(12, 0))
         tk.Label(top, text=kicker, bg=self.C_CARD, fg=self.C_TER,
@@ -10834,6 +10873,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         self._icetime_labels.append(ice)
         body = tk.Frame(card, bg=self.C_CARD)
         body.pack(fill='x', padx=12, pady=(4, 14))
+        tk.Frame(card, bg='#08080a', height=2).pack(fill='x', side='bottom')
         return body, big, detail, ice
 
     def _build_es_view(self, parent):
@@ -11198,6 +11238,10 @@ class CleanEditLinesWindow(tk.Toplevel):
         outer = tk.Frame(parent, bg=self.C_BORDER)
         inner = tk.Frame(outer, bg=self.C_CARD)
         inner.pack(fill='both', expand=True, padx=1, pady=1)
+        # 3D edge: 1px top highlight survives content re-renders.
+        edge = tk.Frame(inner, bg='#2e2e36', height=1)
+        edge.pack(fill='x', side='top')
+        edge._is_edge = True
         outer.zone_id = zone_id
         outer.assigned_player = None
         outer._inner = inner
@@ -11205,10 +11249,16 @@ class CleanEditLinesWindow(tk.Toplevel):
         self._render_slot_empty(outer)
         return outer
 
+    def _clear_slot_inner(self, inner):
+        """Destroy slot content widgets but keep the 3D edge highlight."""
+        for w in inner.winfo_children():
+            if getattr(w, '_is_edge', False):
+                continue
+            w.destroy()
+
     def _render_slot_empty(self, slot):
         inner = slot._inner
-        for w in inner.winfo_children():
-            w.destroy()
+        self._clear_slot_inner(inner)
         ph = tk.Frame(inner, bg=self.C_CARD)
         ph.pack(fill='both', expand=True)
         pos_l = tk.Label(ph, text=slot._pos_label, bg=self.C_CARD, fg=self.C_TER,
@@ -11366,13 +11416,12 @@ class CleanEditLinesWindow(tk.Toplevel):
     def assign_player_to_zone(self, player, drop_zone):
         """Assign a player to a slot (Sleeper-style filled card)."""
         inner = drop_zone._inner
-        for widget in inner.winfo_children():
-            widget.destroy()
+        self._clear_slot_inner(inner)
 
         card = tk.Frame(inner, bg=self.C_CARD2)
         card.pack(fill='both', expand=True, padx=4, pady=4)
 
-        face = tk.Label(card, bg='#2b2b31', bd=0)
+        face = tk.Label(card, bg=self.C_CARD2, bd=0)
         photo = self._face_photo(player, 36)
         if photo is None:
             photo = self._face_blank(36)
@@ -11812,15 +11861,19 @@ class CleanEditLinesWindow(tk.Toplevel):
                 w.pack_forget()
 
     def _all_zones(self):
-        zones = []
-        for group in (getattr(self, 'forward_vars', []),
-                      getattr(self, 'defense_vars', [])):
-            zones.extend(s for row in group for s in row)
-        zones.extend(getattr(self, 'goalie_vars', []))
-        for group in (getattr(self, 'powerplay_vars', []),
-                      getattr(self, 'penalty_kill_vars', [])):
-            zones.extend(s for row in group for s in row)
-        return zones
+        # Zones are built once and never destroyed (only their inner
+        # content re-renders), so the flat list is cached.
+        if getattr(self, '_zone_cache', None) is None:
+            zones = []
+            for group in (getattr(self, 'forward_vars', []),
+                          getattr(self, 'defense_vars', [])):
+                zones.extend(s for row in group for s in row)
+            zones.extend(getattr(self, 'goalie_vars', []))
+            for group in (getattr(self, 'powerplay_vars', []),
+                          getattr(self, 'penalty_kill_vars', [])):
+                zones.extend(s for row in group for s in row)
+            self._zone_cache = zones
+        return self._zone_cache
 
     def _update_footer_warnings(self):
         if not hasattr(self, '_footer_warn'):
