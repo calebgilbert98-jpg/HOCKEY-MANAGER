@@ -1,43 +1,136 @@
 # settings_window.py
-# Comprehensive settings management for Hockey Manager
+# Settings & preferences — modern dark UI matching the rest of Puck Dynasty.
 
 import tkinter as tk
 from tkinter import ttk
 import json
 import os
-from typing import Dict, Any
+
+from modern_ui import AppColors, AppFonts, AppCard, AppButton
+
+
+class ModernCheck(tk.Frame):
+    """Dark checkbox row: custom-drawn box + label, bound to a BooleanVar."""
+
+    def __init__(self, parent, text, variable, command=None, font=None):
+        super().__init__(parent, bg=AppColors.BG_ELEVATED)
+        self.variable = variable
+        self._command = command
+        self.box = tk.Canvas(self, width=18, height=18,
+                             bg=AppColors.BG_ELEVATED,
+                             highlightthickness=0, cursor="hand2")
+        self.box.pack(side="left")
+        self.label = tk.Label(self, text=text, bg=AppColors.BG_ELEVATED,
+                              fg=AppColors.TEXT_PRIMARY,
+                              font=font or AppFonts.SMALL, cursor="hand2")
+        self.label.pack(side="left", padx=(8, 0))
+        self._draw()
+        for w in (self, self.box, self.label):
+            w.bind("<Button-1>", self._toggle)
+        try:
+            self.variable.trace_add("write", lambda *a: self._draw())
+        except Exception:
+            pass
+
+    def _draw(self):
+        self.box.delete("all")
+        on = bool(self.variable.get())
+        fill = AppColors.ACCENT if on else AppColors.BG
+        outline = AppColors.ACCENT if on else AppColors.BORDER_LIGHT
+        self.box.create_rectangle(2, 2, 16, 16, fill=fill,
+                                  outline=outline, width=1)
+        if on:
+            self.box.create_line(5, 9, 8, 12, fill="#ffffff", width=2)
+            self.box.create_line(8, 12, 13, 5, fill="#ffffff", width=2)
+
+    def _toggle(self, _event=None):
+        self.variable.set(not self.variable.get())
+        self._draw()
+        if self._command:
+            self._command()
+
+
+class SettingsDropdown(ttk.Combobox):
+    """Dark dropdown matching the app's modern UI."""
+
+    def __init__(self, parent, textvariable, values, width=16,
+                 on_select=None):
+        super().__init__(parent, textvariable=textvariable,
+                         values=list(values), state="readonly", width=width,
+                         font=AppFonts.SMALL)
+        self._on_select = on_select
+        self.bind("<<ComboboxSelected>>", self._handle_select)
+        self._style()
+
+    def _handle_select(self, event=None):
+        if self._on_select:
+            self._on_select(event)
+
+    def _style(self):
+        style = ttk.Style()
+        name = f"SettingsDropdown_{id(self)}.TCombobox"
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure(name,
+                        fieldbackground=AppColors.BG_ELEVATED,
+                        background=AppColors.BG_ELEVATED,
+                        foreground=AppColors.TEXT_PRIMARY,
+                        arrowcolor=AppColors.ACCENT,
+                        bordercolor=AppColors.BORDER,
+                        lightcolor=AppColors.BORDER,
+                        darkcolor=AppColors.BORDER,
+                        padding=6)
+        style.map(name,
+                  fieldbackground=[("readonly", AppColors.BG_ELEVATED)],
+                  foreground=[("readonly", AppColors.TEXT_PRIMARY)],
+                  background=[("readonly", AppColors.BG_HOVER)],
+                  arrowcolor=[("readonly", AppColors.ACCENT)])
+        self.configure(style=name)
+        try:
+            self.tk.call("ttk::combobox::PopdownWindow", self)
+        except Exception:
+            pass
+        option = f"{self}._popdown.f.l"
+        try:
+            self.tk.call(option, "configure",
+                         "-background", AppColors.BG_ELEVATED,
+                         "-foreground", AppColors.TEXT_PRIMARY,
+                         "-selectbackground", AppColors.ACCENT_BG,
+                         "-selectforeground", AppColors.TEXT_PRIMARY)
+        except Exception:
+            pass
+
 
 class SettingsWindow(tk.Toplevel):
-    """Comprehensive settings window for managing game preferences"""
-    
+    """Settings & preferences window in the modern dark UI."""
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
-        
+
         self.title("Settings - Hockey Manager")
-        self.geometry("800x600")
-        self.configure(background=parent.BG_COLOR)
-        
+        self.geometry("760x620")
+        self.configure(background=AppColors.BG)
+
         # Settings data
         self.settings = self._load_settings()
-        
-        # Track changes
-        self.pending_changes = {}
-        
+
         # Make window modal
         self.transient(parent)
         self.grab_set()
-        
+
         self._create_interface()
         self._load_current_values()
-        
+
         # Center the window
         self._center_window()
-        
+
         # Track window
         if hasattr(parent, 'open_windows'):
             parent.open_windows['settings'] = self
-            
+
     def _center_window(self):
         """Center the window on screen"""
         self.update_idletasks()
@@ -46,517 +139,329 @@ class SettingsWindow(tk.Toplevel):
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
-        
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+
     def _create_interface(self):
-        """Create the main interface"""
-        # Main container
-        main_frame = ttk.Frame(self, style='Panel.TFrame', padding=15)
-        main_frame.pack(fill='both', expand=True)
-        
-        # Header
-        self._create_header(main_frame)
-        
-        # Settings content with tabs
-        self._create_settings_content(main_frame)
-        
-        # Footer with action buttons
-        self._create_footer(main_frame)
-        
+        main = tk.Frame(self, bg=AppColors.BG)
+        main.pack(fill="both", expand=True, padx=20, pady=16)
+
+        self._create_header(main)
+        self._create_tab_bar(main)
+
+        # Content area holding one scrollable frame per tab
+        self._tab_content = tk.Frame(main, bg=AppColors.BG)
+        self._tab_content.pack(fill="both", expand=True, pady=(12, 12))
+
+        self._tab_frames = {}
+        self._tab_holders = {}
+        for key in ("results", "interface", "simulation", "notifications"):
+            holder, content = self._make_scrollable_tab(self._tab_content)
+            self._tab_holders[key] = holder
+            self._tab_frames[key] = content
+
+        self._create_results_tab(self._tab_frames["results"])
+        self._create_interface_tab(self._tab_frames["interface"])
+        self._create_simulation_tab(self._tab_frames["simulation"])
+        self._create_notifications_tab(self._tab_frames["notifications"])
+
+        self._create_footer(main)
+        self._select_tab("results")
+
     def _create_header(self, parent):
-        """Create the header section"""
-        header_frame = ttk.Frame(parent, style='TitleBar.TFrame')
-        header_frame.pack(fill='x', pady=(0, 15))
-        
-        # Title
-        title_label = tk.Label(header_frame, text="⚙️ Settings & Preferences", 
-                              font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                              fg=self.parent.HEADER_COLOR, bg=self.parent.TITLE_BAR_COLOR)
-        title_label.pack(side='left')
-        
-        # Subtitle
-        subtitle_label = tk.Label(header_frame, text="Customize your Hockey Manager experience",
-                                 font=(self.parent.FONT_FAMILY, 10),
-                                 fg=self.parent.TEXT_COLOR, bg=self.parent.TITLE_BAR_COLOR)
-        subtitle_label.pack(side='left', padx=(15, 0))
-        
-    def _create_settings_content(self, parent):
-        """Create the main settings content with tabs"""
-        # Create notebook for different setting categories
-        self.notebook = ttk.Notebook(parent, style='TNotebook')
-        self.notebook.pack(fill='both', expand=True, pady=(0, 15))
-        
-        # Tab 1: Game Results Display
-        self._create_results_display_tab()
-        
-        # Tab 2: User Interface
-        self._create_ui_preferences_tab()
-        
-        # Tab 3: Game Simulation
-        self._create_simulation_preferences_tab()
-        
-        # Tab 4: Notifications
-        self._create_notifications_tab()
-        
-    def _create_results_display_tab(self):
-        """Create tab for game results display preferences"""
-        tab_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(tab_frame, text="📊 Game Results")
-        
-        # Scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(tab_frame, orient='vertical', command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg=self.parent.CONTENT_BG)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        header = tk.Frame(parent, bg=AppColors.BG)
+        header.pack(fill="x", pady=(0, 12))
+        tk.Label(header, text="Settings", bg=AppColors.BG,
+                 fg=AppColors.TEXT_PRIMARY, font=AppFonts.H1).pack(anchor="w")
+        tk.Label(header, text="Customize your Puck Dynasty experience",
+                 bg=AppColors.BG, fg=AppColors.TEXT_SECONDARY,
+                 font=AppFonts.SMALL).pack(anchor="w", pady=(2, 0))
+
+    def _create_tab_bar(self, parent):
+        bar = tk.Frame(parent, bg=AppColors.BG)
+        bar.pack(fill="x")
+        self._tab_buttons = {}
+        tabs = [("results", "Game Results"),
+                ("interface", "Interface"),
+                ("simulation", "Simulation"),
+                ("notifications", "Notifications")]
+        for key, label in tabs:
+            holder = tk.Frame(bar, bg=AppColors.BG)
+            holder.pack(side="left", padx=(0, 6))
+            btn = tk.Button(holder, text=label, relief="flat", bd=0,
+                            highlightthickness=0, cursor="hand2",
+                            font=AppFonts.SMALL_BOLD,
+                            bg=AppColors.BG, activebackground=AppColors.BG,
+                            command=lambda k=key: self._select_tab(k))
+            btn.pack(padx=10, pady=(6, 2))
+            underline = tk.Frame(holder, bg=AppColors.BG, height=2)
+            underline.pack(fill="x")
+            self._tab_buttons[key] = (btn, underline)
+        # Divider under the tab bar
+        tk.Frame(parent, bg=AppColors.BORDER, height=1).pack(fill="x")
+
+    def _select_tab(self, key):
+        for k, holder in self._tab_holders.items():
+            if k == key:
+                holder.pack(fill="both", expand=True)
+            else:
+                holder.pack_forget()
+        for k, (btn, underline) in self._tab_buttons.items():
+            active = (k == key)
+            btn.configure(fg=AppColors.ACCENT if active
+                          else AppColors.TEXT_SECONDARY,
+                          activeforeground=AppColors.ACCENT
+                          if active else AppColors.TEXT_PRIMARY)
+            underline.configure(bg=AppColors.ACCENT if active
+                                else AppColors.BG)
+
+    def _make_scrollable_tab(self, parent):
+        """A tab page with a scrollable content frame.
+        Returns (holder, content frame)."""
+        holder = tk.Frame(parent, bg=AppColors.BG)
+        canvas = tk.Canvas(holder, bg=AppColors.BG, highlightthickness=0)
+        # Dark scrollbar matching the UI
+        sb_style = ttk.Style()
+        try:
+            sb_style.theme_use("clam")
+        except Exception:
+            pass
+        sb_style_name = f"Dark.Vertical.TScrollbar"
+        sb_style.configure(sb_style_name,
+                           background=AppColors.BG_ELEVATED,
+                           troughcolor=AppColors.BG,
+                           bordercolor=AppColors.BG,
+                           arrowcolor=AppColors.TEXT_TERTIARY)
+        sb_style.map(sb_style_name,
+                     background=[("active", AppColors.BG_HOVER),
+                                 ("pressed", AppColors.BORDER_LIGHT)])
+        scrollbar = ttk.Scrollbar(holder, orient="vertical",
+                                  command=canvas.yview,
+                                  style=sb_style_name)
+        content = tk.Frame(canvas, bg=AppColors.BG)
+        content.bind("<Configure>",
+                     lambda e, c=canvas: c.configure(
+                         scrollregion=c.bbox("all")))
+        canvas.create_window((0, 0), window=content, anchor="nw",
+                               tags="content")
         canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Content with padding
-        content_frame = ttk.Frame(scrollable_frame, style='Panel.TFrame', padding=15)
-        content_frame.pack(fill='both', expand=True)
-        
-        # Default View Settings
-        view_frame = ttk.LabelFrame(content_frame, text="Default View Settings", 
-                                   style='PlayerPanel.TLabelframe', padding=15)
-        view_frame.pack(fill='x', pady=(0, 15))
-        
-        # Show user team only by default
+        canvas.bind("<Configure>",
+                    lambda e, c=canvas: c.itemconfigure(
+                        "content", width=e.width))
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        # Mousewheel scrolling
+        canvas.bind("<Enter>", lambda e, c=canvas: c.bind_all(
+            "<MouseWheel>", lambda ev: c.yview_scroll(
+                -1 * (ev.delta // 120), "units")))
+        canvas.bind("<Leave>", lambda e, c=canvas: c.unbind_all(
+            "<MouseWheel>"))
+        return holder, content
+
+    # ------------------------------------------------------------------
+    # Building blocks
+    # ------------------------------------------------------------------
+
+    def _section(self, parent, title):
+        """A titled card section. Returns the inner frame to add rows to."""
+        card = AppCard(parent, padding=14)
+        card.pack(fill="x", pady=(0, 12))
+        inner = card.get_content_frame()
+        tk.Label(inner, text=title, bg=AppColors.BG_ELEVATED,
+                 fg=AppColors.TEXT_PRIMARY,
+                 font=AppFonts.H3).pack(anchor="w", pady=(0, 10))
+        return inner
+
+    def _row(self, parent, label, var, values, width=18, hint=None):
+        """A labeled dropdown row."""
+        row = tk.Frame(parent, bg=AppColors.BG_ELEVATED)
+        row.pack(fill="x", pady=4)
+        tk.Label(row, text=label, bg=AppColors.BG_ELEVATED,
+                 fg=AppColors.TEXT_PRIMARY, font=AppFonts.SMALL).pack(
+                     side="left")
+        SettingsDropdown(row, textvariable=var, values=values, width=width,
+                         on_select=self._mark_changed).pack(
+                             side="left", padx=(10, 0))
+        if hint:
+            tk.Label(row, text=hint, bg=AppColors.BG_ELEVATED,
+                     fg=AppColors.TEXT_TERTIARY,
+                     font=AppFonts.CAPTION).pack(side="left", padx=(10, 0))
+
+    def _check(self, parent, text, var, pady=3):
+        ModernCheck(parent, text=text, variable=var,
+                    command=self._mark_changed,
+                    font=AppFonts.SMALL).pack(anchor="w", pady=pady)
+
+    def _caption(self, parent, text):
+        tk.Label(parent, text=text, bg=AppColors.BG_ELEVATED,
+                 fg=AppColors.TEXT_TERTIARY, font=AppFonts.CAPTION,
+                 wraplength=620, justify="left").pack(anchor="w", pady=(2, 0))
+
+    # ------------------------------------------------------------------
+    # Tabs
+    # ------------------------------------------------------------------
+
+    def _create_results_tab(self, content):
+        """Game results display preferences."""
+        # Default view
+        view = self._section(content, "Default View")
         self.user_team_only_var = tk.BooleanVar()
-        user_team_check = tk.Checkbutton(view_frame, text="Show only my team's games by default", 
-                                       variable=self.user_team_only_var,
-                                       font=(self.parent.FONT_FAMILY, 10),
-                                       fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                       selectcolor=self.parent.CONTENT_BG,
-                                       command=self._mark_changed)
-        user_team_check.pack(anchor='w', pady=2)
-        
-        # Default leagues
-        league_subframe = tk.Frame(view_frame, bg=self.parent.CONTENT_BG)
-        league_subframe.pack(fill='x', pady=(10, 0))
-        
-        tk.Label(league_subframe, text="Default leagues to display:", 
-                font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(anchor='w')
-        
-        # League checkboxes
+        self._check(view, "Show only my team's games by default",
+                    self.user_team_only_var)
+
+        leagues = ['National Hockey League', 'American Hockey League',
+                   'ECHL', 'CHL', 'NCAA', 'International']
+        tk.Label(view, text="Default leagues to display:",
+                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
+                 font=AppFonts.SMALL_BOLD).pack(anchor="w", pady=(10, 4))
         self.league_vars = {}
-        leagues = ['National Hockey League', 'American Hockey League', 'ECHL', 'CHL', 'NCAA', 'International']
-        
         for i, league in enumerate(leagues):
-            if i % 2 == 0:  # Two columns
-                row_frame = tk.Frame(league_subframe, bg=self.parent.CONTENT_BG)
-                row_frame.pack(fill='x', pady=2)
-                
+            if i % 2 == 0:
+                row = tk.Frame(view, bg=AppColors.BG_ELEVATED)
+                row.pack(fill="x")
             var = tk.BooleanVar()
             self.league_vars[league] = var
-            
-            check = tk.Checkbutton(row_frame, text=league,
-                                 variable=var,
-                                 font=(self.parent.FONT_FAMILY, 9),
-                                 fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                 selectcolor=self.parent.CONTENT_BG,
-                                 command=self._mark_changed)
-            check.pack(side='left', anchor='w', padx=(20, 100))
-        
-        # Performance Settings
-        performance_frame = ttk.LabelFrame(content_frame, text="Performance & Display Limits", 
-                                         style='PlayerPanel.TLabelframe', padding=15)
-        performance_frame.pack(fill='x', pady=(0, 15))
-        
-        # Max games to display
-        games_limit_frame = tk.Frame(performance_frame, bg=self.parent.CONTENT_BG)
-        games_limit_frame.pack(fill='x', pady=2)
-        
-        tk.Label(games_limit_frame, text="Maximum games to display:", 
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-        
+            ModernCheck(row, text=league, variable=var,
+                        command=self._mark_changed,
+                        font=AppFonts.SMALL).pack(side="left",
+                                                 padx=(0, 24), pady=2)
+
+        # Performance
+        perf = self._section(content, "Performance & Display Limits")
         self.max_games_var = tk.StringVar()
-        games_values = ['25', '50', '100', '200', 'All']
-        games_dropdown = ttk.Combobox(games_limit_frame, textvariable=self.max_games_var,
-                                    values=games_values, state='readonly', width=8)
-        games_dropdown.pack(side='left', padx=(10, 0))
-        games_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
-        
-        tk.Label(games_limit_frame, text="(Recommended: 50 for performance)", 
-                font=(self.parent.FONT_FAMILY, 8, 'italic'),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left', padx=(10, 0))
-        
-        # Max news items to display
-        news_limit_frame = tk.Frame(performance_frame, bg=self.parent.CONTENT_BG)
-        news_limit_frame.pack(fill='x', pady=(10, 2))
-        
-        tk.Label(news_limit_frame, text="Maximum news items to display:", 
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-        
+        self._row(perf, "Maximum games to display:", self.max_games_var,
+                  ['25', '50', '100', '200', 'All'], width=8,
+                  hint="Recommended: 50 for performance")
         self.max_news_var = tk.StringVar()
-        news_values = ['5', '10', '20', '50', 'All']
-        news_dropdown = ttk.Combobox(news_limit_frame, textvariable=self.max_news_var,
-                                   values=news_values, state='readonly', width=8)
-        news_dropdown.pack(side='left', padx=(10, 0))
-        news_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
-        
-        # News Category Settings
-        news_frame = ttk.LabelFrame(content_frame, text="News Categories", 
-                                   style='PlayerPanel.TLabelframe', padding=15)
-        news_frame.pack(fill='x', pady=(0, 15))
-        
-        tk.Label(news_frame, text="Default news categories to display:", 
-                font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(anchor='w', pady=(0, 5))
-        
-        # News category checkboxes
+        self._row(perf, "Maximum news items to display:", self.max_news_var,
+                  ['5', '10', '20', '50', 'All'], width=8)
+
+        # News categories
+        news = self._section(content, "News Categories")
+        tk.Label(news, text="Default news categories to display:",
+                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
+                 font=AppFonts.SMALL_BOLD).pack(anchor="w", pady=(0, 4))
         self.news_category_vars = {}
-        categories = ['Team News', 'League News', 'Trades', 'Injuries', 'Signings', 'Draft', 'Other']
-        
+        categories = ['Team News', 'League News', 'Trades', 'Injuries',
+                      'Signings', 'Draft', 'Other']
         for i, category in enumerate(categories):
-            if i % 2 == 0:  # Two columns
-                row_frame = tk.Frame(news_frame, bg=self.parent.CONTENT_BG)
-                row_frame.pack(fill='x', pady=2)
-                
+            if i % 2 == 0:
+                row = tk.Frame(news, bg=AppColors.BG_ELEVATED)
+                row.pack(fill="x")
             var = tk.BooleanVar()
             self.news_category_vars[category] = var
-            
-            check = tk.Checkbutton(row_frame, text=category,
-                                 variable=var,
-                                 font=(self.parent.FONT_FAMILY, 9),
-                                 fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                 selectcolor=self.parent.CONTENT_BG,
-                                 command=self._mark_changed)
-            check.pack(side='left', anchor='w', padx=(20, 80))
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-    def _create_ui_preferences_tab(self):
-        """Create tab for user interface preferences"""
-        tab_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(tab_frame, text="🎨 Interface")
-        
-        # Content with padding
-        content_frame = ttk.Frame(tab_frame, style='Panel.TFrame', padding=15)
-        content_frame.pack(fill='both', expand=True)
-        
-        # Theme Settings
-        theme_frame = ttk.LabelFrame(content_frame, text="Visual Theme", 
-                                    style='PlayerPanel.TLabelframe', padding=15)
-        theme_frame.pack(fill='x', pady=(0, 15))
-        
-        # Theme selection
-        theme_row = tk.Frame(theme_frame, bg=self.parent.CONTENT_BG)
-        theme_row.pack(fill='x', pady=2)
-        
-        tk.Label(theme_row, text="Theme:", 
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-        
+            ModernCheck(row, text=category, variable=var,
+                        command=self._mark_changed,
+                        font=AppFonts.SMALL).pack(side="left",
+                                                 padx=(0, 24), pady=2)
+
+    def _create_interface_tab(self, content):
+        """User interface preferences."""
+        theme = self._section(content, "Visual Theme")
         self.theme_var = tk.StringVar()
-        theme_values = ['Dark (Current)', 'Light (Coming Soon)', 'High Contrast (Coming Soon)']
-        theme_dropdown = ttk.Combobox(theme_row, textvariable=self.theme_var,
-                                    values=theme_values, state='readonly', width=20)
-        theme_dropdown.pack(side='left', padx=(10, 0))
-        theme_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
-        
-        # Font size
-        font_row = tk.Frame(theme_frame, bg=self.parent.CONTENT_BG)
-        font_row.pack(fill='x', pady=(10, 2))
-        
-        tk.Label(font_row, text="Font size:", 
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-        
+        self._row(theme, "Theme:", self.theme_var,
+                  ['Dark (Current)', 'Light (Coming Soon)',
+                   'High Contrast (Coming Soon)'], width=24)
         self.font_size_var = tk.StringVar()
-        font_values = ['Small', 'Medium (Current)', 'Large']
-        font_dropdown = ttk.Combobox(font_row, textvariable=self.font_size_var,
-                                   values=font_values, state='readonly', width=15)
-        font_dropdown.pack(side='left', padx=(10, 0))
-        font_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
-        
-        # Window Settings
-        window_frame = ttk.LabelFrame(content_frame, text="Window Behavior", 
-                                     style='PlayerPanel.TLabelframe', padding=15)
-        window_frame.pack(fill='x', pady=(0, 15))
-        
-        # Auto-close settings window after save
+        self._row(theme, "Font size:", self.font_size_var,
+                  ['Small', 'Medium (Current)', 'Large'], width=18)
+
+        window = self._section(content, "Window Behavior")
         self.auto_close_var = tk.BooleanVar()
-        auto_close_check = tk.Checkbutton(window_frame, text="Automatically close settings window after saving", 
-                                        variable=self.auto_close_var,
-                                        font=(self.parent.FONT_FAMILY, 10),
-                                        fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                        selectcolor=self.parent.CONTENT_BG,
-                                        command=self._mark_changed)
-        auto_close_check.pack(anchor='w', pady=2)
-        
-        # Remember window positions
+        self._check(window, "Automatically close settings window after saving",
+                    self.auto_close_var)
         self.remember_windows_var = tk.BooleanVar()
-        remember_check = tk.Checkbutton(window_frame, text="Remember window positions and sizes", 
-                                      variable=self.remember_windows_var,
-                                      font=(self.parent.FONT_FAMILY, 10),
-                                      fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                      selectcolor=self.parent.CONTENT_BG,
-                                      command=self._mark_changed)
-        remember_check.pack(anchor='w', pady=2)
-        
-    def _create_simulation_preferences_tab(self):
-        """Create tab for game simulation preferences"""
-        tab_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(tab_frame, text="🏒 Simulation")
+        self._check(window, "Remember window positions and sizes",
+                    self.remember_windows_var)
 
-        # Scrollable content (rows overflow on smaller windows)
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(tab_frame, orient='vertical', command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg=self.parent.CONTENT_BG)
-
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        # Content with padding
-        content_frame = ttk.Frame(scrollable_frame, style='Panel.TFrame', padding=15)
-        content_frame.pack(fill='both', expand=True)
-        
-        # Simulation Speed
-        speed_frame = ttk.LabelFrame(content_frame, text="Simulation Speed", 
-                                    style='PlayerPanel.TLabelframe', padding=15)
-        speed_frame.pack(fill='x', pady=(0, 15))
-        
-        speed_row = tk.Frame(speed_frame, bg=self.parent.CONTENT_BG)
-        speed_row.pack(fill='x', pady=2)
-        
-        tk.Label(speed_row, text="Game simulation speed:", 
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-        
+    def _create_simulation_tab(self, content):
+        """Game simulation preferences."""
+        speed = self._section(content, "Simulation Speed")
         self.sim_speed_var = tk.StringVar()
-        speed_values = ['Very Fast', 'Fast (Current)', 'Normal', 'Detailed']
-        speed_dropdown = ttk.Combobox(speed_row, textvariable=self.sim_speed_var,
-                                    values=speed_values, state='readonly', width=15)
-        speed_dropdown.pack(side='left', padx=(10, 0))
-        speed_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
-        
-        # Auto-continue options
-        auto_frame = ttk.LabelFrame(content_frame, text="Auto-Continue Settings", 
-                                   style='PlayerPanel.TLabelframe', padding=15)
-        auto_frame.pack(fill='x', pady=(0, 15))
-        
-        # Auto-continue through days
+        self._row(speed, "Game simulation speed:", self.sim_speed_var,
+                  ['Very Fast', 'Fast (Current)', 'Normal', 'Detailed'],
+                  width=16)
+
+        auto = self._section(content, "Auto-Continue")
         self.auto_continue_var = tk.BooleanVar()
-        auto_continue_check = tk.Checkbutton(auto_frame, text="Auto-continue through non-game days", 
-                                           variable=self.auto_continue_var,
-                                           font=(self.parent.FONT_FAMILY, 10),
-                                           fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                           selectcolor=self.parent.CONTENT_BG,
-                                           command=self._mark_changed)
-        auto_continue_check.pack(anchor='w', pady=2)
-        
-        # Show daily results
+        self._check(auto, "Auto-continue through non-game days",
+                    self.auto_continue_var)
         self.show_daily_results_var = tk.BooleanVar()
-        daily_results_check = tk.Checkbutton(auto_frame, text="Always show daily results window", 
-                                            variable=self.show_daily_results_var,
-                                            font=(self.parent.FONT_FAMILY, 10),
-                                            fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                            selectcolor=self.parent.CONTENT_BG,
-                                            command=self._mark_changed)
-        daily_results_check.pack(anchor='w', pady=2)
-        
-        # Game Viewer Settings
-        viewer_frame = ttk.LabelFrame(content_frame, text="Game Viewer", 
-                                     style='PlayerPanel.TLabelframe', padding=15)
-        viewer_frame.pack(fill='x', pady=(0, 15))
-        
-        # Use game viewer for user team games
+        self._check(auto, "Always show daily results window",
+                    self.show_daily_results_var)
+
+        viewer = self._section(content, "Game Viewer")
         self.use_game_viewer_var = tk.BooleanVar()
-        game_viewer_check = tk.Checkbutton(viewer_frame, text="Use visual game viewer for my team's games", 
-                                          variable=self.use_game_viewer_var,
-                                          font=(self.parent.FONT_FAMILY, 10),
-                                          fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                          selectcolor=self.parent.CONTENT_BG,
-                                          command=self._mark_changed)
-        game_viewer_check.pack(anchor='w', pady=2)
-        
-        # Game viewer mode
-        viewer_mode_row = tk.Frame(viewer_frame, bg=self.parent.CONTENT_BG)
-        viewer_mode_row.pack(fill='x', pady=(10, 2))
-        
-        tk.Label(viewer_mode_row, text="Game viewer mode:", 
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-        
+        self._check(viewer, "Use visual game viewer for my team's games",
+                    self.use_game_viewer_var)
         self.game_viewer_mode_var = tk.StringVar()
-        viewer_mode_values = ['Full Game', 'Highlights Only', 'Fast Forward']
-        viewer_mode_dropdown = ttk.Combobox(viewer_mode_row, textvariable=self.game_viewer_mode_var,
-                                          values=viewer_mode_values, state='readonly', width=15)
-        viewer_mode_dropdown.pack(side='left', padx=(10, 0))
-        viewer_mode_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
+        self._row(viewer, "Game viewer mode:", self.game_viewer_mode_var,
+                  ['Full Game', 'Highlights Only', 'Fast Forward'], width=16)
 
-        # Draft class quality
-        draft_quality_row = ttk.Frame(content_frame, style='Panel.TFrame')
-        draft_quality_row.pack(fill='x', pady=(10, 2))
-
-        tk.Label(draft_quality_row, text="Draft class quality:",
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-
+        league = self._section(content, "League & Scoring")
         self.draft_quality_var = tk.StringVar()
-        draft_quality_values = ['Weak', 'Normal', 'Strong', 'Generational']
-        draft_quality_dropdown = ttk.Combobox(draft_quality_row, textvariable=self.draft_quality_var,
-                                            values=draft_quality_values, state='readonly', width=15)
-        draft_quality_dropdown.pack(side='left', padx=(10, 0))
-        draft_quality_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
-
-        tk.Label(draft_quality_row, text="(applies to future draft classes)",
-                font=(self.parent.FONT_FAMILY, 9, 'italic'),
-                fg='#888888', bg=self.parent.CONTENT_BG).pack(side='left', padx=(10, 0))
-
-        # Scoring level
-        scoring_row = ttk.Frame(content_frame, style='Panel.TFrame')
-        scoring_row.pack(fill='x', pady=(10, 2))
-
-        tk.Label(scoring_row, text="Scoring level:",
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-
+        self._row(league, "Draft class quality:", self.draft_quality_var,
+                  ['Weak', 'Normal', 'Strong', 'Generational'], width=14,
+                  hint="applies to future draft classes")
         self.scoring_level_var = tk.StringVar()
-        scoring_values = ['Low (Current)', 'Medium (NHL Baseline)', 'High (Arcade)']
-        scoring_dropdown = ttk.Combobox(scoring_row, textvariable=self.scoring_level_var,
-                                        values=scoring_values, state='readonly', width=22)
-        scoring_dropdown.pack(side='left', padx=(10, 0))
-        scoring_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
+        self._row(league, "Scoring level:", self.scoring_level_var,
+                  ['Low (Current)', 'Medium (NHL Baseline)',
+                   'High (Arcade)'], width=22,
+                  hint="goals per game: ~5.5 / ~6.0 / 7+")
 
-        tk.Label(scoring_row, text="(goals per game: ~5.5 / ~6.0 / 7+)",
-                font=(self.parent.FONT_FAMILY, 9, 'italic'),
-                fg='#888888', bg=self.parent.CONTENT_BG).pack(side='left', padx=(10, 0))
-        
-    def _create_notifications_tab(self):
-        """Create tab for notification preferences"""
-        tab_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(tab_frame, text="🔔 Notifications")
-        
-        # Content with padding
-        content_frame = ttk.Frame(tab_frame, style='Panel.TFrame', padding=15)
-        content_frame.pack(fill='both', expand=True)
-        
-        # Email notifications
-        email_frame = ttk.LabelFrame(content_frame, text="Email Notifications", 
-                                    style='PlayerPanel.TLabelframe', padding=15)
-        email_frame.pack(fill='x', pady=(0, 15))
-        
-        tk.Label(email_frame, text="Receive email notifications for:", 
-                font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(anchor='w', pady=(0, 5))
-        
-        # Notification type checkboxes
+    def _create_notifications_tab(self, content):
+        """Notification preferences."""
+        email = self._section(content, "Email Notifications")
+        tk.Label(email, text="Receive email notifications for:",
+                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
+                 font=AppFonts.SMALL_BOLD).pack(anchor="w", pady=(0, 6))
         self.email_notification_vars = {}
-        email_types = ['Trade Offers', 'Contract Expiring Soon', 'Injury Reports', 
-                      'Player Milestones', 'League News', 'Draft Updates']
-        
-        for email_type in email_types:
+        for email_type in ['Trade Offers', 'Contract Expiring Soon',
+                           'Injury Reports', 'Player Milestones',
+                           'League News', 'Draft Updates']:
             var = tk.BooleanVar()
             self.email_notification_vars[email_type] = var
-            
-            check = tk.Checkbutton(email_frame, text=email_type,
-                                 variable=var,
-                                 font=(self.parent.FONT_FAMILY, 9),
-                                 fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                 selectcolor=self.parent.CONTENT_BG,
-                                 command=self._mark_changed)
-            check.pack(anchor='w', pady=2, padx=(20, 0))
-        
-        # Sound notifications
-        sound_frame = ttk.LabelFrame(content_frame, text="Sound Notifications", 
-                                    style='PlayerPanel.TLabelframe', padding=15)
-        sound_frame.pack(fill='x', pady=(0, 15))
-        
-        # Enable sounds
+            self._check(email, email_type, var)
+
+        sound = self._section(content, "Sound Notifications")
         self.enable_sounds_var = tk.BooleanVar()
-        sounds_check = tk.Checkbutton(sound_frame, text="Enable sound effects", 
-                                    variable=self.enable_sounds_var,
-                                    font=(self.parent.FONT_FAMILY, 10),
-                                    fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG,
-                                    selectcolor=self.parent.CONTENT_BG,
-                                    command=self._mark_changed)
-        sounds_check.pack(anchor='w', pady=2)
-        
-        # Sound volume
-        volume_row = tk.Frame(sound_frame, bg=self.parent.CONTENT_BG)
-        volume_row.pack(fill='x', pady=(10, 2))
-        
-        tk.Label(volume_row, text="Sound volume:", 
-                font=(self.parent.FONT_FAMILY, 10),
-                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
-        
+        self._check(sound, "Enable sound effects", self.enable_sounds_var)
         self.sound_volume_var = tk.StringVar()
-        volume_values = ['Off', 'Low', 'Medium', 'High']
-        volume_dropdown = ttk.Combobox(volume_row, textvariable=self.sound_volume_var,
-                                     values=volume_values, state='readonly', width=10)
-        volume_dropdown.pack(side='left', padx=(10, 0))
-        volume_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
-        
+        self._row(sound, "Sound volume:", self.sound_volume_var,
+                  ['Off', 'Low', 'Medium', 'High'], width=10)
+
     def _create_footer(self, parent):
-        """Create the footer with action buttons"""
-        footer_frame = ttk.Frame(parent, style='Panel.TFrame')
-        footer_frame.pack(fill='x')
-        
-        # Left side - Reset to defaults
-        reset_btn = tk.Button(footer_frame, text="Reset to Defaults", 
-                            font=(self.parent.FONT_FAMILY, 10),
-                            bg=self.parent.CONTENT_BG, 
-                            fg=self.parent.TEXT_COLOR,
-                            activebackground=self.parent.ACCENT_HOVER,
-                            relief='flat', cursor='hand2',
-                            command=self._reset_to_defaults)
-        reset_btn.pack(side='left', pady=10)
-        
-        # Right side - action buttons
-        button_frame = tk.Frame(footer_frame, bg=self.parent.BG_COLOR)
-        button_frame.pack(side='right', pady=10)
-        
-        # Cancel button
-        cancel_btn = tk.Button(button_frame, text="Cancel", 
-                             font=(self.parent.FONT_FAMILY, 10),
-                             bg=self.parent.CONTENT_BG, 
-                             fg=self.parent.TEXT_COLOR,
-                             activebackground=self.parent.ACCENT_HOVER,
-                             relief='flat', cursor='hand2',
-                             command=self._cancel)
-        cancel_btn.pack(side='left', padx=(0, 10))
-        
-        # Apply button
-        apply_btn = tk.Button(button_frame, text="Apply", 
-                            font=(self.parent.FONT_FAMILY, 10),
-                            bg=self.parent.CONTENT_BG, 
-                            fg=self.parent.TEXT_COLOR,
-                            activebackground=self.parent.ACCENT_HOVER,
-                            relief='flat', cursor='hand2',
-                            command=self._apply_settings)
-        apply_btn.pack(side='left', padx=(0, 10))
-        
-        # Save button
-        save_btn = tk.Button(button_frame, text="Save", 
-                           font=(self.parent.FONT_FAMILY, 11, 'bold'),
-                           bg=self.parent.ACCENT_COLOR, 
-                           fg=self.parent.HEADER_COLOR,
-                           activebackground=self.parent.ACCENT_HOVER,
-                           relief='flat', cursor='hand2',
-                           command=self._save_settings)
-        save_btn.pack(side='left')
-        
+        footer = tk.Frame(parent, bg=AppColors.BG)
+        footer.pack(fill="x", pady=(4, 0))
+
+        AppButton(footer, text="Reset to Defaults", style="secondary",
+                  width=150, height=38,
+                  command=self._reset_to_defaults).pack(side="left")
+
+        right = tk.Frame(footer, bg=AppColors.BG)
+        right.pack(side="right")
+        AppButton(right, text="Cancel", style="secondary",
+                  width=100, height=38,
+                  command=self._cancel).pack(side="left", padx=(0, 10))
+        AppButton(right, text="Apply", style="secondary",
+                  width=100, height=38,
+                  command=self._apply_settings).pack(side="left",
+                                                     padx=(0, 10))
+        AppButton(right, text="Save", style="primary",
+                  width=110, height=38,
+                  command=self._save_settings).pack(side="left")
+
+    # ------------------------------------------------------------------
+    # Settings persistence
+    # ------------------------------------------------------------------
+
     def _load_settings(self):
         """Load settings from file or create defaults"""
-        settings_file = os.path.join(os.path.dirname(__file__), 'settings.json')
-        
+        settings_file = os.path.join(os.path.dirname(__file__),
+                                     'settings.json')
+
         # Default settings
         defaults = {
             'game_results': {
@@ -564,7 +469,8 @@ class SettingsWindow(tk.Toplevel):
                 'default_leagues': ['National Hockey League'],
                 'max_games_display': '50',
                 'max_news_display': '10',
-                'default_news_categories': ['Team News', 'League News', 'Trades', 'Injuries']
+                'default_news_categories': ['Team News', 'League News',
+                                            'Trades', 'Injuries']
             },
             'ui_preferences': {
                 'theme': 'Dark (Current)',
@@ -594,7 +500,7 @@ class SettingsWindow(tk.Toplevel):
                 'sound_volume': 'Medium'
             }
         }
-        
+
         try:
             if os.path.exists(settings_file):
                 with open(settings_file, 'r') as f:
@@ -607,173 +513,207 @@ class SettingsWindow(tk.Toplevel):
         except Exception as e:
             print(f"Error loading settings: {e}")
             return defaults
-            
+
     def _merge_settings(self, defaults, loaded):
         """Recursively merge loaded settings into defaults"""
         for key, value in loaded.items():
             if key in defaults:
-                if isinstance(value, dict) and isinstance(defaults[key], dict):
+                if isinstance(value, dict) and isinstance(
+                        defaults[key], dict):
                     self._merge_settings(defaults[key], value)
                 else:
                     defaults[key] = value
-                    
+
     def _load_current_values(self):
         """Load current values into the UI"""
         # Game Results settings
         game_results = self.settings.get('game_results', {})
-        
-        self.user_team_only_var.set(game_results.get('show_user_team_only', True))
-        
-        default_leagues = game_results.get('default_leagues', ['National Hockey League'])
+
+        self.user_team_only_var.set(
+            game_results.get('show_user_team_only', True))
+
+        default_leagues = game_results.get(
+            'default_leagues', ['National Hockey League'])
         for league, var in self.league_vars.items():
             var.set(league in default_leagues)
-            
+
         self.max_games_var.set(game_results.get('max_games_display', '50'))
         self.max_news_var.set(game_results.get('max_news_display', '10'))
-        
-        default_news_cats = game_results.get('default_news_categories', ['Team News', 'League News', 'Trades', 'Injuries'])
+
+        default_news_cats = game_results.get(
+            'default_news_categories',
+            ['Team News', 'League News', 'Trades', 'Injuries'])
         for category, var in self.news_category_vars.items():
             var.set(category in default_news_cats)
-        
+
         # UI Preferences
         ui_prefs = self.settings.get('ui_preferences', {})
-        
+
         self.theme_var.set(ui_prefs.get('theme', 'Dark (Current)'))
-        self.font_size_var.set(ui_prefs.get('font_size', 'Medium (Current)'))
+        self.font_size_var.set(ui_prefs.get('font_size',
+                                            'Medium (Current)'))
         self.auto_close_var.set(ui_prefs.get('auto_close_settings', False))
-        self.remember_windows_var.set(ui_prefs.get('remember_window_positions', True))
-        
+        self.remember_windows_var.set(
+            ui_prefs.get('remember_window_positions', True))
+
         # Simulation
         simulation = self.settings.get('simulation', {})
-        
-        self.sim_speed_var.set(simulation.get('simulation_speed', 'Fast (Current)'))
-        self.auto_continue_var.set(simulation.get('auto_continue_non_game_days', False))
-        self.show_daily_results_var.set(simulation.get('always_show_daily_results', True))
-        self.use_game_viewer_var.set(simulation.get('use_game_viewer', False))
-        self.game_viewer_mode_var.set(simulation.get('game_viewer_mode', 'Full Game'))
-        if hasattr(self, 'draft_quality_var'):
-            self.draft_quality_var.set(simulation.get('draft_class_quality', 'Normal'))
-        if hasattr(self, 'scoring_level_var'):
-            self.scoring_level_var.set(simulation.get('scoring_level', 'Low (Current)'))
-        
+
+        self.sim_speed_var.set(
+            simulation.get('simulation_speed', 'Fast (Current)'))
+        self.auto_continue_var.set(
+            simulation.get('auto_continue_non_game_days', False))
+        self.show_daily_results_var.set(
+            simulation.get('always_show_daily_results', True))
+        self.use_game_viewer_var.set(
+            simulation.get('use_game_viewer', False))
+        self.game_viewer_mode_var.set(
+            simulation.get('game_viewer_mode', 'Full Game'))
+        self.draft_quality_var.set(
+            simulation.get('draft_class_quality', 'Normal'))
+        self.scoring_level_var.set(
+            simulation.get('scoring_level', 'Low (Current)'))
+
         # Notifications
         notifications = self.settings.get('notifications', {})
-        
+
         email_notifications = notifications.get('email_notifications', {})
         for email_type, var in self.email_notification_vars.items():
             var.set(email_notifications.get(email_type, False))
-            
+
         self.enable_sounds_var.set(notifications.get('enable_sounds', True))
-        self.sound_volume_var.set(notifications.get('sound_volume', 'Medium'))
-        
+        self.sound_volume_var.set(
+            notifications.get('sound_volume', 'Medium'))
+
+    def _collect_current_values(self):
+        """Collect current values from UI into settings, preserving any
+        keys this window doesn't manage (e.g. user_game_mode)."""
+        # Game Results
+        self.settings.setdefault('game_results', {}).update({
+            'show_user_team_only': self.user_team_only_var.get(),
+            'default_leagues': [league for league, var
+                                in self.league_vars.items() if var.get()],
+            'max_games_display': self.max_games_var.get(),
+            'max_news_display': self.max_news_var.get(),
+            'default_news_categories': [cat for cat, var
+                                        in self.news_category_vars.items()
+                                        if var.get()]
+        })
+
+        # UI Preferences
+        self.settings.setdefault('ui_preferences', {}).update({
+            'theme': self.theme_var.get(),
+            'font_size': self.font_size_var.get(),
+            'auto_close_settings': self.auto_close_var.get(),
+            'remember_window_positions': self.remember_windows_var.get()
+        })
+
+        # Simulation
+        self.settings.setdefault('simulation', {}).update({
+            'simulation_speed': self.sim_speed_var.get(),
+            'auto_continue_non_game_days': self.auto_continue_var.get(),
+            'always_show_daily_results':
+                self.show_daily_results_var.get(),
+            'use_game_viewer': self.use_game_viewer_var.get(),
+            'game_viewer_mode': self.game_viewer_mode_var.get(),
+            'draft_class_quality': self.draft_quality_var.get(),
+            'scoring_level': self.scoring_level_var.get()
+        })
+
+        # Notifications
+        notif = self.settings.setdefault('notifications', {})
+        notif.update({
+            'email_notifications': {email_type: var.get()
+                                    for email_type, var
+                                    in self.email_notification_vars.items()},
+            'enable_sounds': self.enable_sounds_var.get(),
+            'sound_volume': self.sound_volume_var.get()
+        })
+
+    def _notify_parent_of_changes(self):
+        """Notify parent of setting changes"""
+        if hasattr(self.parent, 'apply_settings'):
+            self.parent.apply_settings(self.settings)
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
     def _mark_changed(self, event=None):
         """Mark that settings have been changed"""
-        # Visual indicator that changes are pending
         self.title("Settings - Hockey Manager *")
-        
+
     def _reset_to_defaults(self):
         """Reset all settings to defaults"""
-        result = tk.messagebox.askyesno("Reset Settings", 
-                                       "Are you sure you want to reset all settings to defaults?\n\nThis cannot be undone.",
-                                       parent=self)
+        result = tk.messagebox.askyesno(
+            "Reset Settings",
+            "Are you sure you want to reset all settings to defaults?\n\n"
+            "This cannot be undone.",
+            parent=self)
         if result:
-            # Load default settings and update UI
-            self.settings = self._load_settings()  # This loads defaults when no file exists
+            self.settings = self._load_settings()
             self._load_current_values()
             self._mark_changed()
-            
+
     def _apply_settings(self):
         """Apply settings without saving to file"""
         self._collect_current_values()
         self._notify_parent_of_changes()
-        tk.messagebox.showinfo("Settings Applied", "Settings have been applied for this session.", parent=self)
-        
+        tk.messagebox.showinfo(
+            "Settings Applied",
+            "Settings have been applied for this session.", parent=self)
+
     def _save_settings(self):
         """Save settings to file and apply them"""
         self._collect_current_values()
-        
+
         # Save to file
-        settings_file = os.path.join(os.path.dirname(__file__), 'settings.json')
+        settings_file = os.path.join(os.path.dirname(__file__),
+                                     'settings.json')
         try:
             with open(settings_file, 'w') as f:
                 json.dump(self.settings, f, indent=2)
-                
+
             self._notify_parent_of_changes()
-            
+
             # Show success message
-            tk.messagebox.showinfo("Settings Saved", "Settings have been saved successfully.", parent=self)
-            
+            tk.messagebox.showinfo(
+                "Settings Saved",
+                "Settings have been saved successfully.", parent=self)
+
             # Auto-close if enabled
             if self.auto_close_var.get():
                 self.destroy()
             else:
                 self.title("Settings - Hockey Manager")  # Remove * indicator
-                
+
         except Exception as e:
-            tk.messagebox.showerror("Error", f"Failed to save settings:\n{e}", parent=self)
-            
-    def _collect_current_values(self):
-        """Collect current values from UI and update settings"""
-        # Game Results
-        self.settings['game_results'] = {
-            'show_user_team_only': self.user_team_only_var.get(),
-            'default_leagues': [league for league, var in self.league_vars.items() if var.get()],
-            'max_games_display': self.max_games_var.get(),
-            'max_news_display': self.max_news_var.get(),
-            'default_news_categories': [cat for cat, var in self.news_category_vars.items() if var.get()]
-        }
-        
-        # UI Preferences
-        self.settings['ui_preferences'] = {
-            'theme': self.theme_var.get(),
-            'font_size': self.font_size_var.get(),
-            'auto_close_settings': self.auto_close_var.get(),
-            'remember_window_positions': self.remember_windows_var.get()
-        }
-        
-        # Simulation
-        self.settings['simulation'] = {
-            'simulation_speed': self.sim_speed_var.get(),
-            'auto_continue_non_game_days': self.auto_continue_var.get(),
-            'always_show_daily_results': self.show_daily_results_var.get(),
-            'use_game_viewer': self.use_game_viewer_var.get(),
-            'game_viewer_mode': self.game_viewer_mode_var.get(),
-            'draft_class_quality': self.draft_quality_var.get() if hasattr(self, 'draft_quality_var') else 'Normal',
-            'scoring_level': self.scoring_level_var.get() if hasattr(self, 'scoring_level_var') else 'Low (Current)'
-        }
-        
-        # Notifications
-        self.settings['notifications'] = {
-            'email_notifications': {email_type: var.get() for email_type, var in self.email_notification_vars.items()},
-            'enable_sounds': self.enable_sounds_var.get(),
-            'sound_volume': self.sound_volume_var.get()
-        }
-        
-    def _notify_parent_of_changes(self):
-        """Notify parent of setting changes"""
-        if hasattr(self.parent, 'apply_settings'):
-            self.parent.apply_settings(self.settings)
-            
+            tk.messagebox.showerror(
+                "Error", f"Failed to save settings:\n{e}", parent=self)
+
     def _cancel(self):
         """Cancel changes and close window"""
         if self.title().endswith('*'):  # Check if there are unsaved changes
-            result = tk.messagebox.askyesnocancel("Unsaved Changes", 
-                                                 "You have unsaved changes. Do you want to save before closing?",
-                                                 parent=self)
+            result = tk.messagebox.askyesnocancel(
+                "Unsaved Changes",
+                "You have unsaved changes. Do you want to save before "
+                "closing?",
+                parent=self)
             if result is True:  # Save
                 self._save_settings()
                 return
             elif result is None:  # Cancel
                 return
-        
+
         self.destroy()
-        
+
     def get_game_results_settings(self):
         """Get current game results settings for external use"""
         return self.settings.get('game_results', {})
-        
+
     def destroy(self):
         """Clean up when window is destroyed"""
-        if hasattr(self.parent, 'open_windows') and 'settings' in self.parent.open_windows:
+        if hasattr(self.parent, 'open_windows') and \
+                'settings' in self.parent.open_windows:
             del self.parent.open_windows['settings']
         super().destroy()
