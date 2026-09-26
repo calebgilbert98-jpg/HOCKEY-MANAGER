@@ -2950,6 +2950,23 @@ class GameSim:
             self.player_positions = {}   # player.id -> [x, y]
             self.puck_pos = [100.0, 42.5]
             self._last_skate_sent = {}
+        if not hasattr(self, "player_jobs"):
+            # player.id -> job code describing the skater's current tactical
+            # intent (e.g. "f1_pressure", "slot", "point", "carrier"). This
+            # is the sim-to-renderer contract: the visualizer is a VIEW of
+            # the sim, so the sim must say what everyone is TRYING to do,
+            # not just where they are.
+            self.player_jobs = {}
+        if not hasattr(self, "team_phases"):
+            # team_name -> phase code (e.g. "oz_attack", "dz_coverage",
+            # "forecheck", "breakout", "pp_setup"). One plan per team per
+            # possession phase; every skater's job serves the plan.
+            self.team_phases = {}
+
+    def _set_job(self, p, job):
+        """Tag a skater's current tactical job for the visualizer."""
+        self._ppos_ensure()
+        self.player_jobs[p.id] = job
 
     @staticmethod
     def _ppos_role(p):
@@ -3036,6 +3053,24 @@ class GameSim:
                 shape = "attack" if deep_off else ("breakout" if deep_def else "neutral")
             else:
                 shape = "dzone" if deep_def else ("forecheck" if deep_off else "neutral")
+            # Team phase: the plan everyone is executing. Special-teams
+            # check: if we have more skaters, it's a power play.
+            n_us = len(self._on_ice_skaters(team))
+            n_them = len(self._on_ice_skaters(attacking_team if not is_att
+                                              else defending_team))
+            is_pp = n_us > n_them
+            is_pk = n_us < n_them
+            if shape == "attack":
+                phase = "pp_setup" if is_pp else "oz_attack"
+            elif shape == "dzone":
+                phase = "pk_coverage" if is_pk else "dz_coverage"
+            elif shape == "breakout":
+                phase = "pp_breakout" if is_pp else "breakout"
+            elif shape == "forecheck":
+                phase = "pk_forecheck" if is_pk else "forecheck"
+            else:
+                phase = "nz_play"
+            self.team_phases[team.team_name] = phase
 
             skaters = self._on_ice_skaters(team)
             by_role = {"C": [], "W": [], "D": []}
@@ -3141,17 +3176,23 @@ class GameSim:
                     if by_dist:
                         self._ppos_place(by_dist[0], px - 6 * adir,
                                          py + mid_side * 4.0, jitter=1.2)
+                        self._set_job(by_dist[0], "f1_contain")
+                    for p in by_dist[1:]:
+                        self._set_job(p, "nz_wall")
                 elif fc == "1-2-2":
                     # F1 pressures, F2/F3 stagger through the middle, D back
                     if by_dist:
                         self._ppos_place(by_dist[0], px + 2 * adir,
                                          py + mid_side * 4.0, jitter=1.2)
+                        self._set_job(by_dist[0], "f1_pressure")
                     if len(by_dist) > 1:
                         self._ppos_place(by_dist[1], px - 18 * adir,
                                          strong_y, jitter=1.5)
+                        self._set_job(by_dist[1], "f2_support")
                     if len(by_dist) > 2:
                         self._ppos_place(by_dist[2], px - 18 * adir,
                                          weak_y, jitter=1.5)
+                        self._set_job(by_dist[2], "f3_high")
                 else:
                     # 2-1-2: F1 pressures the carrier from the middle
                     # (steering him to the boards), F2 supports on the
@@ -3160,12 +3201,15 @@ class GameSim:
                     if by_dist:
                         self._ppos_place(by_dist[0], px + 2 * adir,
                                          py + mid_side * 4.0, jitter=1.2)
+                        self._set_job(by_dist[0], "f1_pressure")
                     if len(by_dist) > 1:
                         self._ppos_place(by_dist[1], px - 11 * adir,
                                          (py + strong_y) / 2.0, jitter=1.5)
+                        self._set_job(by_dist[1], "f2_support")
                     if len(by_dist) > 2:
                         self._ppos_place(by_dist[2], px - 20 * adir,
                                          (py + weak_y) / 2.0, jitter=1.5)
+                        self._set_job(by_dist[2], "f3_high")
                     ds_sorted = sorted(
                         ds, key=lambda p: abs(self._ppos_get(p)[1] - py))
                     if ds_sorted:
@@ -3179,6 +3223,54 @@ class GameSim:
                 for p in skaters:
                     if p.id == carrier_id:
                         self._ppos_place(p, px, py, jitter=1.0)
+            # Tag every skater's tactical job -- the sim-to-renderer
+            # contract. The visualizer reads these to show INTENT
+            # (what each player is trying to do), not just positions.
+            if is_att:
+                if shape == "attack":
+                    off = getattr(team, "tactic_offense", "Spread")
+                    for p in centers[:1]:
+                        self._set_job(p, "net_front" if off == "Crash the Net"
+                                      else "slot")
+                    for i, p in enumerate(wings[:2]):
+                        if off == "Umbrella":
+                            self._set_job(p, "half_boards")
+                        elif off == "Overload":
+                            self._set_job(p, "net_front" if i == 0
+                                          else "half_boards")
+                        elif off == "Crash the Net":
+                            self._set_job(p, "net_front")
+                        else:
+                            self._set_job(p, "half_boards")
+                    for p in ds[:2]:
+                        self._set_job(p, "point")
+                elif shape == "breakout":
+                    for p in skaters:
+                        if p.id != carrier_id:
+                            self._set_job(p, "outlet")
+                else:  # neutral: stretch lanes through the middle
+                    for p in skaters:
+                        if p.id != carrier_id:
+                            self._set_job(p, "lane")
+                if carrier_id:
+                    for p in skaters:
+                        if p.id == carrier_id:
+                            self._set_job(p, "carrier")
+            else:
+                if shape == "dzone":
+                    for p in ds[:2]:
+                        self._set_job(p, "slot_coverage")
+                    for p in centers[:1]:
+                        self._set_job(p, "low_support")
+                    for p in wings[:2]:
+                        self._set_job(p, "point_coverage")
+                elif shape == "forecheck":
+                    for p in ds:
+                        self._set_job(p, "d_gap")
+                    # F1/F2/F3 jobs set by proximity in the block above
+                else:  # neutral: get back through the middle
+                    for p in skaters:
+                        self._set_job(p, "backcheck")
             # goalie holds his net, shuffling with the puck
             g = self._on_ice_goalie(team)
             if g is not None:
@@ -3255,22 +3347,118 @@ class GameSim:
             tx = px + math.cos(gang) * 7.0
             ty = py + math.sin(gang) * 7.0
             slide(pressurer, tx, ty, 9.0)
+            self._set_job(pressurer, "pressure")
             for p in skaters:
                 if p.id == pressurer.id:
                     continue
                 t = targets.get(p.id)
                 if t:
                     slide(p, t[0], t[1], 7.0)
+                    if p.id not in self.player_jobs:
+                        self._set_job(p, "coverage")
         else:  # forecheck
             # F1 hunts the carrier; the rest hold structure relative to
             # the puck so the forecheck breathes with the breakout
             f1 = by_dist[0]
             slide(f1, px + 3 * adir, py, 10.0)
+            self._set_job(f1, "f1_pressure")
             for i, p in enumerate(by_dist[1:], 1):
                 # stagger back through the middle, strong side first
                 sy = (24.0 if py < 42.5 else 61.0) if i % 2 == 1 else \
                      (61.0 if py < 42.5 else 24.0)
                 slide(p, px - (10 + i * 6) * adir, (py + sy) / 2.0, 7.0)
+                self._set_job(p, "f2_support" if i == 1 else "f3_high")
+        self._emit_skate()
+
+    def _offense_tick(self, attacking_team):
+        """Keep the attacking unit alive between whistles.
+
+        The companion to _defense_tick: while the puck cycles, off-puck
+        attackers don't stand at fixed formation slots -- they read and
+        react. Weak-side wingers drift toward the play, points walk the
+        line, net-front battles for inside position. Runs every OZ tick
+        so the attack breathes with the puck (the 4-10 Hz tactical
+        reassessment from the FM/EHM model).
+        """
+        self._ppos_ensure()
+        px, py = self.puck_pos
+        adir = 1 if attacking_team == self.home_team else -1
+        att_net = 189.0 if adir == 1 else 11.0
+        carrier = getattr(self, "possession_player", None)
+        carrier_id = getattr(carrier, "id", None)
+        skaters = self._on_ice_skaters(attacking_team)
+        if not skaters:
+            return
+
+        def slide(p, tx, ty, max_step):
+            x, y = self._ppos_get(p)
+            dx, dy = tx - x, ty - y
+            dist = math.hypot(dx, dy)
+            if dist < 0.5:
+                return
+            step = min(dist, max_step)
+            self.player_positions[p.id] = self._clamp_boards(
+                x + dx / dist * step, y + dy / dist * step)
+
+        # Formation targets follow the coach's tactic, anchored to the
+        # CURRENT puck (not where it was at zone entry).
+        off = getattr(attacking_team, "tactic_offense", "Spread")
+        shy = 22.0 if py < 42.5 else 63.0
+        why = 63.0 if py < 42.5 else 22.0
+        by_role = {"C": [], "W": [], "D": []}
+        for p in skaters:
+            r = self._ppos_role(p)
+            by_role["C" if r == "C" else
+                    "W" if r in ("LW", "RW") else "D"].append(p)
+        targets = {}
+        if off == "Umbrella":
+            spots = {"C": [(att_net - 40 * adir, 42.5)],
+                     "W": [(att_net - 22 * adir, 24.0),
+                           (att_net - 22 * adir, 61.0)],
+                     "D": [(att_net - 54 * adir, 30.0),
+                           (att_net - 54 * adir, 55.0)]}
+        elif off == "Overload":
+            spots = {"C": [(att_net - 26 * adir, 42.5)],
+                     "W": [(att_net - 24 * adir, shy),
+                           (att_net - 44 * adir, why)],
+                     "D": [(att_net - 40 * adir, shy),
+                           (att_net - 54 * adir, 42.5)]}
+        elif off == "Crash the Net":
+            spots = {"C": [(att_net - 14 * adir, 42.5)],
+                     "W": [(att_net - 12 * adir, 38.0),
+                           (att_net - 12 * adir, 47.0)],
+                     "D": [(att_net - 50 * adir, 30.0),
+                           (att_net - 50 * adir, 55.0)]}
+        else:  # Spread
+            spots = {"C": [(att_net - 24 * adir, 42.5)],
+                     "W": [(att_net - 36 * adir, 22.0),
+                           (att_net - 36 * adir, 63.0)],
+                     "D": [(att_net - 54 * adir, 30.0),
+                           (att_net - 54 * adir, 55.0)]}
+        # Nudge the strong-side spots toward the puck so the formation
+        # tilts with the play instead of staying symmetric.
+        for role in ("C", "W", "D"):
+            for i, (sx, sy) in enumerate(spots[role]):
+                # pull 15% toward the puck's y (but keep the net-front
+                # man glued to the crease)
+                if role == "C" and off == "Crash the Net":
+                    continue
+                spots[role][i] = (sx, sy + (py - sy) * 0.15)
+        if by_role["C"]:
+            targets[by_role["C"][0].id] = spots["C"][0]
+        for i, p in enumerate(by_role["W"][:2]):
+            targets[p.id] = spots["W"][i]
+        for i, p in enumerate(by_role["D"][:2]):
+            targets[p.id] = spots["D"][i]
+        for p in skaters:
+            if p.id == carrier_id:
+                continue
+            t = targets.get(p.id)
+            if t:
+                # Points walk the line faster; net-front battles slower.
+                job = self.player_jobs.get(p.id, "")
+                step = 5.0 if job == "net_front" else 8.0
+                slide(p, t[0], t[1], step)
         self._emit_skate()
 
     def _emit_skate(self, force=False):
@@ -3305,7 +3493,9 @@ class GameSim:
                            puck=(round(self.puck_pos[0], 1), round(self.puck_pos[1], 1)),
                            possession_player=getattr(carrier, "id", None),
                            on_ice_home=_skater_ids(self.home_team),
-                           on_ice_away=_skater_ids(self.away_team))
+                           on_ice_away=_skater_ids(self.away_team),
+                           jobs=dict(self.player_jobs),
+                           phases=dict(self.team_phases))
 
     def _faceoff_formation(self, winner, zone, dot=None):
         """Line everyone up for the draw, then tell the visual sim.
@@ -3432,6 +3622,12 @@ class GameSim:
                        receiver_pos=(round(rx, 1), round(ry, 1)),
                        completed=completed, got_open=got_open,
                        interceptor=interceptor,
+                       # Causal intervention: the visualizer shows the
+                       # defender reading THIS lane with THIS much pressure,
+                       # not a random dice failure.
+                       lane_pressure=round(lane_pressure, 1),
+                       intervention_type=("interception" if interceptor is not None
+                                          else "missed"),
                        attacking_team=attacking_team.team_name,
                        kind=kind)
         if completed:
@@ -5259,9 +5455,11 @@ class GameSim:
                 if hit_outcome is not None:
                     return hit_outcome
 
-        # The defending unit reacts to every puck movement -- without this
-        # all five defenders stand frozen while the attack cycles.
+        # Both units react to every puck movement -- without this one
+        # team stands frozen while the other cycles. Defenders track the
+        # puck; attackers read and rotate off it.
         self._defense_tick(defending_team, mode="dzone")
+        self._offense_tick(attacking_team)
 
         # Random events in offensive zone -- but only if the puck is still
         # there. The setup sequence can carry it back out (D-to-D, a

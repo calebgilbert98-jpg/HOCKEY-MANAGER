@@ -394,6 +394,8 @@ class PBPVisualSim(tk.Toplevel):
         # positions (from "skate" snapshots) win over our local formation
         # guess so the picture matches the play being described.
         self._sim_pos = {}            # player_id -> (x, y) in rink coords
+        self._sim_jobs = {}           # player_id -> job code from the sim
+        self._sim_phases = {}         # team_name -> phase code from the sim
         self.shootout_mode = False
         self.shootout_state = None
         self._instant = False         # True during sim-to-end: no flights
@@ -884,6 +886,20 @@ class PBPVisualSim(tk.Toplevel):
         self._replay_text = c.create_text(34, 20, text="REPLAY", anchor="w",
                                           fill="white", font=(FONT, 11, "bold"),
                                           state="hidden")
+
+        # --- tactic phase indicators: subtle, top corners. Shows what each
+        # unit is executing (Forecheck 2-1-2, Umbrella PP, ...) so the GM can
+        # tell if the tactics are working by watching. Updated from the
+        # sim's phase stream; hidden when unknown.
+        # Positioned just below the rink top edge to avoid the score bug.
+        self._phase_home_text = c.create_text(10, 36, anchor="w",
+                                              fill="#8a93a3", font=(FONT, 9),
+                                              state="hidden")
+        self._phase_away_text = c.create_text(self.rink_w - 10, 36, anchor="e",
+                                              fill="#8a93a3", font=(FONT, 9),
+                                              state="hidden")
+        self._last_phase_home = None
+        self._last_phase_away = None
 
         # --- puck trail (single polyline, redrawn each tick) ---
         self._trail_item = c.create_line(0, 0, 0, 0, fill=ACCENT, width=3,
@@ -1610,6 +1626,17 @@ class PBPVisualSim(tk.Toplevel):
         pos = ev.get("positions")
         if pos:
             self._sim_pos = {pid: (p[0], p[1]) for pid, p in pos.items()}
+        # Tactical jobs from the sim: what each skater is TRYING to do
+        # (f1_pressure, slot, point, ...). The visualizer is a view of the
+        # sim, so it reads intent instead of guessing it.
+        jobs = ev.get("jobs")
+        if jobs:
+            self._sim_jobs = dict(jobs)
+        # Team phases: the plan each unit is executing (oz_attack,
+        # dz_coverage, forecheck, ...). Drives the tactic legibility overlay.
+        phases = ev.get("phases")
+        if phases:
+            self._sim_phases = dict(phases)
         for is_home, key in ((True, "on_ice_home"), (False, "on_ice_away")):
             ids = ev.get(key)
             if ids:
@@ -2378,6 +2405,59 @@ class PBPVisualSim(tk.Toplevel):
                 except Exception:
                     pass
             self._banner = None
+
+    def _update_phase_indicators(self):
+        """Subtle top-corner labels showing each unit's current phase."""
+        # Phase codes -> readable labels
+        labels = {
+            "oz_attack": "Attacking",
+            "dz_coverage": "D-Zone Coverage",
+            "forecheck": "Forecheck",
+            "breakout": "Breakout",
+            "nz_play": "Neutral Zone",
+            "pp_setup": "Power Play",
+            "pk_coverage": "Penalty Kill",
+            "pp_breakout": "PP Breakout",
+            "pk_forecheck": "PK Forecheck",
+        }
+        # team_phases is keyed by team_name (Team has no numeric id).
+        home_name = getattr(getattr(self, "home_team", None), "team_name", None)
+        away_name = getattr(getattr(self, "away_team", None), "team_name", None)
+        hp = self._sim_phases.get(home_name) if home_name else None
+        ap = self._sim_phases.get(away_name) if away_name else None
+
+        def fmt(phase):
+            if not phase:
+                return None
+            base = labels.get(phase, phase.replace("_", " ").title())
+            # Append the tactic name for forecheck/attack phases
+            if phase in ("forecheck", "pk_forecheck"):
+                tac = getattr(getattr(self, "home_team", None),
+                              "tactic_forecheck", "")
+                if tac:
+                    base += f" {tac}"
+            elif phase in ("oz_attack", "pp_setup"):
+                tac = getattr(getattr(self, "home_team", None),
+                              "tactic_offense", "")
+                if tac:
+                    base += f" {tac}"
+            return base
+
+        ht, at = fmt(hp), fmt(ap)
+        if ht != self._last_phase_home:
+            self._last_phase_home = ht
+            if ht:
+                self.canvas.itemconfig(self._phase_home_text, text=ht,
+                                       state="normal")
+            else:
+                self.canvas.itemconfig(self._phase_home_text, state="hidden")
+        if at != self._last_phase_away:
+            self._last_phase_away = at
+            if at:
+                self.canvas.itemconfig(self._phase_away_text, text=at,
+                                       state="normal")
+            else:
+                self.canvas.itemconfig(self._phase_away_text, state="hidden")
 
     def _step_banner(self, now):
         b = self._banner
@@ -3160,6 +3240,9 @@ class PBPVisualSim(tk.Toplevel):
 
         # broadcast camera follows the puck (runs even during replays/holds)
         self._update_camera(now)
+
+        # tactic phase indicators: what each unit is executing right now
+        self._update_phase_indicators()
 
         # lower-third banner animation + broadcast card expiry
         self._step_banner(now)
