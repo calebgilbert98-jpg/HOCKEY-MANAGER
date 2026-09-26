@@ -15,6 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "APP_VERSION=$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -33,10 +38,10 @@ jobs:
       - name: Zip the build
         run: |
           cd dist
-          Compress-Archive -Path PuckDynasty -DestinationPath PuckDynasty-Windows.zip
+          Compress-Archive -Path PuckDynasty -DestinationPath "PuckDynasty-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PuckDynasty-Windows
-          path: dist/PuckDynasty-Windows.zip
+          name: PuckDynasty-v${{ steps.version.outputs.APP_VERSION }}-Windows
+          path: dist/PuckDynasty-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip
