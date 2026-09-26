@@ -546,8 +546,7 @@ class Player:
                 self.off_the_puck * 0.05 +
                 self.loose_puck * 0.04
             )
-        return int(rating)
-
+        return max(1, min(99, int(rating)))
     def _potential_cap(self) -> int:
         """Overall-rating ceiling implied by the player's potential grade (50-scale)."""
         g = (self.potential_grade or 'C').strip().upper()
@@ -743,7 +742,7 @@ class Player:
             position_modifier = 1.1
         elif self.primary_position == PlayerPosition.GOALIE:
             # Goalies have different value curve
-            position_modifier = 1.0 if self.overall_rating() >= 50 else 0.9
+            position_modifier = 1.0 if self.overall_rating() >= 75 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0
@@ -970,6 +969,9 @@ class Staff:
     defensive_coaching: int = field(default_factory=lambda: random.randint(8, 18))
     mental_coaching: int = field(default_factory=lambda: random.randint(8, 18))
     technical_coaching: int = field(default_factory=lambda: random.randint(8, 18))
+
+    # Morale (1-20 scale, display-only; the sim engine does not read staff morale)
+    morale: int = field(default_factory=lambda: random.randint(5, 17))
     
     # Contract Information
     salary: int = field(default_factory=lambda: random.randint(75000, 500000))

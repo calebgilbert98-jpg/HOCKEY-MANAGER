@@ -18,15 +18,15 @@ from draft_generator import (
 
 # League and skill tiers for different player categories
 LEAGUE_TIERS = {
-    "NHL_ELITE": {"min_overall": 85, "max_overall": 99, "description": "Elite NHL superstars"},
-    "NHL_STARTER": {"min_overall": 75, "max_overall": 89, "description": "NHL starters and core players"},
-    "NHL_DEPTH": {"min_overall": 65, "max_overall": 79, "description": "NHL depth players and role players"},
-    "AHL_VETERAN": {"min_overall": 60, "max_overall": 74, "description": "AHL veterans with NHL experience"},
-    "AHL_PROSPECT": {"min_overall": 55, "max_overall": 69, "description": "AHL prospects developing"},
-    "JUNIOR_ELITE": {"min_overall": 50, "max_overall": 65, "description": "Elite junior players"},
-    "JUNIOR_PROSPECT": {"min_overall": 40, "max_overall": 59, "description": "Junior prospects"},
-    "INTERNATIONAL": {"min_overall": 55, "max_overall": 82, "description": "International league players"},
-    "COLLEGE": {"min_overall": 45, "max_overall": 68, "description": "College hockey players"}
+    "NHL_ELITE": {"min_overall": 80, "max_overall": 92, "description": "Elite NHL superstars"},
+    "NHL_STARTER": {"min_overall": 70, "max_overall": 82, "description": "NHL starters and core players"},
+    "NHL_DEPTH": {"min_overall": 60, "max_overall": 72, "description": "NHL depth players and role players"},
+    "AHL_VETERAN": {"min_overall": 55, "max_overall": 67, "description": "AHL veterans with NHL experience"},
+    "AHL_PROSPECT": {"min_overall": 52, "max_overall": 66, "description": "AHL prospects developing"},
+    "JUNIOR_ELITE": {"min_overall": 48, "max_overall": 62, "description": "Elite junior players"},
+    "JUNIOR_PROSPECT": {"min_overall": 38, "max_overall": 56, "description": "Junior prospects"},
+    "INTERNATIONAL": {"min_overall": 52, "max_overall": 78, "description": "International league players"},
+    "COLLEGE": {"min_overall": 42, "max_overall": 64, "description": "College hockey players"}
 }
 
 # Age distributions for different player categories
@@ -157,9 +157,9 @@ class PlayerGenerator:
         else:
             age_factor = 0.85  # Noticeable decline
         
-        # Base attribute range (50-point scale derived from tier's overall range)
-        base_min = max(5, int(tier_info["min_overall"] * 0.5 * age_factor))
-        base_max = min(50, int(tier_info["max_overall"] * 0.5 * age_factor))
+        # Base attribute range (100-point scale, straight from tier's overall range)
+        base_min = max(10, int(tier_info["min_overall"] * age_factor))
+        base_max = min(99, int(tier_info["max_overall"] * age_factor))
         
         # Generate base attributes
         attributes = {}
@@ -188,10 +188,10 @@ class PlayerGenerator:
                 'puck_handling', 'glove_hand', 'stick_side', 'breakaway_skill'
             ])
         
-        # Generate attributes with some variation
+        # Generate attributes with some variation (wider for 100-scale spread)
         for attr in core_attributes:
             # Add some randomness to the range
-            variation = random.randint(-2, 3)
+            variation = random.randint(-6, 8)
             attr_min = max(GameBalance.MIN_ATTRIBUTE, base_min + variation)
             attr_max = min(GameBalance.MAX_ATTRIBUTE, base_max + variation)
             
@@ -204,15 +204,19 @@ class PlayerGenerator:
     
     def apply_archetype_modifiers(self, player: Player, archetype_name: str, archetype_data: Dict) -> None:
         """Apply archetype-specific attribute modifiers to a player."""
-        # Apply attribute bonuses from archetype (archetype ranges are 20-scale; convert to 50-scale)
+        # Archetype gives a modest boost to signature attributes (+2 to +7),
+        # not a pull to a fixed range. This preserves tier-based spread.
         for attr, (min_bonus, max_bonus) in archetype_data.get("attributes", {}).items():
             if hasattr(player, attr):
-                min_b = int(min_bonus * 2.5)
-                max_b = int(max_bonus * 2.5)
+                # The tuple values indicate how strongly this archetype favors the attr.
+                # Higher max = stronger signature. Scale to a modest +2/+7 bonus.
+                strength = (min_bonus + max_bonus) / 2  # 40-scale avg, ~28-40
+                # Normalize: 28 -> +2, 40 -> +7
+                bonus_mid = 2 + (strength - 28) / 12 * 5
+                bonus = int(random.gauss(bonus_mid, 1.5))
+                bonus = max(0, min(8, bonus))
                 current_value = getattr(player, attr)
-                bonus = random.randint(min_b - current_value, max_b - current_value)
-                bonus = max(-5, min(8, bonus))  # Limit bonus range
-                new_value = max(GameBalance.MIN_ATTRIBUTE, 
+                new_value = max(GameBalance.MIN_ATTRIBUTE,
                               min(GameBalance.MAX_ATTRIBUTE, current_value + bonus))
                 setattr(player, attr, new_value)
         

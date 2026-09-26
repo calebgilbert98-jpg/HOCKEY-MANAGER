@@ -1172,9 +1172,9 @@ class GameSim:
             winger = player2 if pos1 == PlayerPosition.CENTER else player1
             
             # Playmaking center with skilled winger
-            if center.passing >= 15 and winger.offensive_awareness >= 15:
+            if center.passing >= 30 and winger.offensive_awareness >= 30:
                 return 8
-            elif center.passing >= 12 and winger.offensive_awareness >= 12:
+            elif center.passing >= 24 and winger.offensive_awareness >= 24:
                 return 4
             return 2
         
@@ -1186,7 +1186,7 @@ class GameSim:
             off_defender = player1 if player1.offensive_awareness > player1.defensive_awareness else player2
             def_defender = player2 if player1.offensive_awareness > player1.defensive_awareness else player1
             
-            if (off_defender.offensive_awareness >= 14 and def_defender.defensive_awareness >= 14):
+            if (off_defender.offensive_awareness >= 28 and def_defender.defensive_awareness >= 28):
                 return 6
             return 2
         
@@ -2905,11 +2905,11 @@ class GameSim:
             loser = None
         else:
             hs = (hb.strength * 0.45 + hb.balance * 0.25 + hb.checking * 0.20
-                  + hb.anticipation * 0.10 + random.randint(-6, 6))
+                  + hb.anticipation * 0.10 + random.randint(-12, 12))
             # Trait: Grinders win more puck battles
             hs *= _trait_bonus(hb, "puck_battle_mult")
             aws = (ab.strength * 0.45 + ab.balance * 0.25 + ab.checking * 0.20
-                   + ab.anticipation * 0.10 + random.randint(-6, 6))
+                   + ab.anticipation * 0.10 + random.randint(-12, 12))
             aws *= _trait_bonus(ab, "puck_battle_mult")
             winner, loser = (hb, ab) if hs >= aws else (ab, hb)
         wteam = self.home_team if winner.id in [p.id for p in self._get_on_ice(self.home_team)] \
@@ -3369,8 +3369,8 @@ class GameSim:
             # situation, different defender, different pressure -- this is
             # what the ratings are for.
             diq = (pressurer.defensive_awareness + pressurer.anticipation) / 2.0
-            gap *= 1.45 - (diq / 50.0) * 0.75   # elite ~0.70x, plug ~1.08x
-            close_mult = 0.75 + (diq / 50.0) * 0.55
+            gap *= 1.45 - (diq / 100.0) * 0.75   # elite ~0.70x, plug ~1.08x
+            close_mult = 0.75 + (diq / 100.0) * 0.55
             gx, gy = def_net, 42.5
             gang = math.atan2(gy - py, gx - px)
             tx = px + math.cos(gang) * gap
@@ -3426,7 +3426,7 @@ class GameSim:
             # carrier beats him wide.
             f1 = by_dist[0]
             f1_iq = (f1.defensive_awareness + f1.anticipation) / 2.0
-            f1_speed = 10.0 * (0.75 + (f1_iq / 50.0) * 0.55)
+            f1_speed = 10.0 * (0.75 + (f1_iq / 100.0) * 0.55)
             slide(f1, px + 3 * adir, py, f1_speed)
             self._set_job(f1, "f1_pressure")
             for i, p in enumerate(by_dist[1:], 1):
@@ -3713,7 +3713,7 @@ class GameSim:
                 playmaking += 8.0 * play_mult
             # Smart passers don't force it into coverage; low-IQ passers
             # don't discriminate -- the pass goes where it goes.
-            force_penalty = (pv / 50.0) * 8.0 if not (got_open or scheme_open) else 0.0
+            force_penalty = (pv / 100.0) * 8.0 if not (got_open or scheme_open) else 0.0
             score = ((14 if got_open else 0) + dd * 0.6 + fwd * 0.25 + danger
                      + playmaking - force_penalty + random.uniform(0, 4))
             cands.append((score, m, mx, my, nd, dd, got_open))
@@ -3740,8 +3740,8 @@ class GameSim:
         # tape with a checker in his face; a rattled passer sails it.
         # This is the pressure half of the passing attribute story.
         pressure_bite = lane_pressure * 3.0 * (
-            1.3 - (passer.composure / 50.0) * 0.6)
-        q = (52 + passer.passing * 1.0 + min(dd, 10.0) * 1.2
+            1.3 - (passer.composure / 100.0) * 0.6)
+        q = (27 + passer.passing * 1.0 + min(dd, 10.0) * 1.2
              - pressure_bite)
         if safe:
             q += 14
@@ -4115,7 +4115,7 @@ class GameSim:
         if pressurer is not None and base_rush < 1.0:
             piq = (pressurer.checking + pressurer.defensive_awareness) / 2.0
             rush_depth = ((1.0 - base_rush)
-                          * (0.76 + (piq / 50.0) * 0.48))
+                          * (0.76 + (piq / 100.0) * 0.48))
             pressure_modifier = max(0.5, 1.0 - rush_depth)
         else:
             pressure_modifier = base_rush
@@ -4861,7 +4861,7 @@ class GameSim:
 
     def _calculate_faceoff_skill(self, player, faceoff_zone, team):
         """Calculate faceoff skill with zone and situation modifiers."""
-        base_skill = player.faceoffs * 2
+        base_skill = player.faceoffs * 1.0
         
         # Fatigue affects faceoff performance
         fatigue_factor = self.player_fatigue.get(player.id, 100) / 100
@@ -5303,11 +5303,11 @@ class GameSim:
             on_ice_g = [p for p in self._get_on_ice(defending_team)
                         if p.primary_position == PlayerPosition.GOALIE]
             goalie = on_ice_g[0] if on_ice_g else None
-        shooter_skill = (getattr(shooter, 'shooting', 35) + getattr(shooter, 'deking', 35)
+        shooter_skill = (getattr(shooter, 'shooting', 70) + getattr(shooter, 'deking', 70)
                          + getattr(shooter, 'offensive_awareness', 15))
         goalie_skill = 0
         if goalie is not None:
-            goalie_skill = (getattr(goalie, 'reflexes', 35) + getattr(goalie, 'positioning', 35))
+            goalie_skill = (getattr(goalie, 'reflexes', 70) + getattr(goalie, 'positioning', 70))
         # ~1-in-3 NHL penalty shots score
         score_prob = 0.33 * (shooter_skill / max(goalie_skill, 1)) ** 0.5
         score_prob = max(0.15, min(0.55, score_prob))
@@ -5702,7 +5702,7 @@ class GameSim:
         if _shot_carrier is not None and _shot_carrier in attacking_skaters:
             ciq = (_shot_carrier.offensive_awareness
                    + _shot_carrier.decision_making) / 2.0
-            iq_factor = (ciq - 36.0) / 50.0
+            iq_factor = (ciq - 72.0) / 100.0
             _att_net = 189.0 if attacking_team == self.home_team else 11.0
             _ccx, _ = self._ppos_get(_shot_carrier)
             if abs(_ccx - _att_net) < 35.0:
@@ -7490,7 +7490,7 @@ class GameSim:
             chemistry_change = -1.0  # Penalty for conflict
         
         # Apply personality modifiers
-        if player1.teamwork >= 15 and player2.teamwork >= 15:
+        if player1.teamwork >= 30 and player2.teamwork >= 30:
             chemistry_change *= 1.2  # High teamwork players build chemistry faster
         
         if abs(player1.leadership - player2.leadership) >= 5:
@@ -7723,12 +7723,12 @@ class GameSim:
         
         # Pressure-based adjustments
         if self.pressure_level == PressureLevel.INTENSE:
-            if player.composure >= 16:
+            if player.composure >= 32:
                 multiplier *= 1.1  # High composure players thrive under pressure
             else:
                 multiplier *= 0.9  # Others struggle
         elif self.pressure_level == PressureLevel.MINIMAL:
-            if player.focus >= 16:
+            if player.focus >= 32:
                 multiplier *= 1.05  # High focus maintains performance
             else:
                 multiplier *= 0.95  # Others get complacent
@@ -7736,7 +7736,7 @@ class GameSim:
         # Momentum-based adjustments
         momentum_value = list(GameMomentum).index(self.momentum) - 3
         if abs(momentum_value) >= 2:  # High momentum situations
-            if player.confidence >= 16:
+            if player.confidence >= 32:
                 multiplier *= 1.05  # Confident players ride momentum
             if action_type == 'offensive' and momentum_value > 0:
                 multiplier *= 1.1  # Positive momentum helps offense
@@ -7749,12 +7749,12 @@ class GameSim:
         flow_index = flow_values.index(self.game_flow)
         
         if flow_index >= 4:  # Very fast or frantic
-            if player.speed >= 16 and player.agility >= 16:
+            if player.speed >= 32 and player.agility >= 32:
                 multiplier *= 1.1  # Fast players excel in fast games
             else:
                 multiplier *= 0.95  # Slower players struggle
         elif flow_index <= 1:  # Very slow or slow
-            if player.hockey_iq >= 16:
+            if player.hockey_iq >= 32:
                 multiplier *= 1.05  # Smart players excel in slow games
         
         return multiplier

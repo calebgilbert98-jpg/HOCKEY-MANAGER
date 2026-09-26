@@ -24,89 +24,89 @@ from typing import Dict, List, Tuple
 # ---------------------------------------------------------------------------
 # Archetype definitions: name -> fit profile
 # ---------------------------------------------------------------------------
-# attributes: {attribute_key: minimum on the 50-point scale}
+# attributes: {attribute_key: minimum on the 100-point scale}
 # positions:  position codes this archetype applies to
 
 ARCHETYPE_FIT: Dict[str, dict] = {
     # -- Forwards ----------------------------------------------------------
     "Sniper": {
         "description": "Elite finishing ability. Lives to put the puck in the net.",
-        "attributes": {"shooting": 42, "shooting_accuracy": 42, "offensive_awareness": 18, "skating": 40},
+        "attributes": {"shooting": 84, "shooting_accuracy": 84, "offensive_awareness": 36, "skating": 80},
         "positions": ["C", "LW", "RW"],
     },
     "Playmaker": {
         "description": "Sees plays before they happen. Makes linemates better.",
-        "attributes": {"passing": 42, "vision": 41, "hockey_iq": 41, "offensive_awareness": 18},
+        "attributes": {"passing": 84, "vision": 82, "hockey_iq": 82, "offensive_awareness": 36},
         "positions": ["C", "LW", "RW"],
     },
     "Power Forward": {
         "description": "Size, skill and snarl. Dominates the front of the net.",
-        "attributes": {"strength": 41, "checking": 38, "shooting": 40, "balance": 40, "puck_protection": 39},
+        "attributes": {"strength": 82, "checking": 76, "shooting": 80, "balance": 80, "puck_protection": 78},
         "positions": ["C", "LW", "RW"],
     },
     "Two-Way Forward": {
         "description": "Trusted in all situations. Shuts down top lines, chips in offense.",
-        "attributes": {"defensive_awareness": 18, "checking": 38,
-                       "skating": 38, "discipline": 36},
+        "attributes": {"defensive_awareness": 36, "checking": 76,
+                       "skating": 76, "discipline": 72},
         "positions": ["C", "LW", "RW"],
     },
     "Grinder": {
         "description": "Relentless on the forecheck. Wins board battles, wears teams down.",
-        "attributes": {"determination": 42, "checking": 40, "stamina": 41, "strength": 38, "aggressiveness": 38},
+        "attributes": {"determination": 84, "checking": 80, "stamina": 82, "strength": 76, "aggressiveness": 76},
         "positions": ["C", "LW", "RW"],
     },
     "Enforcer": {
         "description": "The toughest player on the ice. Protects teammates, punishes opponents.",
-        "attributes": {"toughness": 40, "strength": 39, "aggressiveness": 41, "checking": 38, "durability": 39},
+        "attributes": {"toughness": 80, "strength": 78, "aggressiveness": 82, "checking": 76, "durability": 78},
         "positions": ["C", "LW", "RW"],
     },
     # -- Defensemen --------------------------------------------------------
     "Offensive Defenseman": {
         "description": "A fourth forward. Runs the power play from the point.",
-        "attributes": {"skating": 40, "passing": 39, "offensive_awareness": 17, "shooting": 39, "vision": 39},
+        "attributes": {"skating": 80, "passing": 78, "offensive_awareness": 34, "shooting": 78, "vision": 78},
         "positions": ["LD", "RD"],
     },
     "Defensive Defenseman": {
         "description": "Stay-at-home rock. Erases the other team's best players.",
-        "attributes": {"checking": 40, "strength": 38, "defensive_awareness": 19,
-                       "shot_blocking": 40, "discipline": 36},
+        "attributes": {"checking": 80, "strength": 76, "defensive_awareness": 38,
+                       "shot_blocking": 80, "discipline": 72},
         "positions": ["LD", "RD"],
     },
     "Two-Way Defenseman": {
         "description": "Steady in his own end, joins the rush at the right time.",
-        "attributes": {"defensive_awareness": 18, "skating": 38, "passing": 38, "checking": 39, "hockey_iq": 40},
+        "attributes": {"defensive_awareness": 36, "skating": 76, "passing": 76, "checking": 78, "hockey_iq": 80},
         "positions": ["LD", "RD"],
     },
     "Physical Defenseman": {
         "description": "Punishing hitter. Forwards hear footsteps in his corner.",
-        "attributes": {"strength": 40, "checking": 40, "toughness": 40, "aggressiveness": 40, "shot_blocking": 39},
+        "attributes": {"strength": 80, "checking": 80, "toughness": 80, "aggressiveness": 80, "shot_blocking": 78},
         "positions": ["LD", "RD"],
     },
     "Puck-Moving Defenseman": {
         "description": "Clean first pass, skates it out. Starts the breakout.",
-        "attributes": {"passing": 40, "vision": 40, "skating": 40, "hockey_iq": 39, "defensive_awareness": 16},
+        "attributes": {"passing": 80, "vision": 80, "skating": 80, "hockey_iq": 78, "defensive_awareness": 32},
         "positions": ["LD", "RD"],
     },
     # -- Goalies -----------------------------------------------------------
     "Butterfly Goalie": {
         "description": "Technical butterfly. Seals the ice, swallows rebounds.",
-        "attributes": {"goaltending": 38, "positioning": 40,
-                       "rebound_control": 36},
+        "attributes": {"goaltending": 76, "positioning": 80,
+                       "rebound_control": 72},
         "positions": ["G"],
     },
     "Hybrid Goalie": {
         "description": "Reads the play and reacts. Balanced, adaptable style.",
-        "attributes": {"goaltending": 38, "reflexes": 38, "positioning": 37},
+        "attributes": {"goaltending": 76, "reflexes": 76, "positioning": 74},
         "positions": ["G"],
     },
     "Athletic Goalie": {
         "description": "Spectacular saves. Steals games pure athleticism.",
-        "attributes": {"reflexes": 40, "goaltending": 36, "composure": 39},
+        "attributes": {"reflexes": 80, "goaltending": 72, "composure": 78},
         "positions": ["G"],
     },
     "Puck-Handling Goalie": {
         "description": "A third defenseman. Kills forechecks with his stick.",
-        "attributes": {"puck_handling": 39, "goaltending": 36, "composure": 40},
+        "attributes": {"puck_handling": 78, "goaltending": 72, "composure": 80},
         "positions": ["G"],
     },
 }

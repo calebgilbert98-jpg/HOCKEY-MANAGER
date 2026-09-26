@@ -69,77 +69,77 @@ ARCHETYPES = {
         "Sniper": {
             "description": "An elite goal-scorer with exceptional shooting skills",
             "attributes": {
-                "shooting": (14, 20), 
-                "offensive_awareness": (12, 18), 
-                "deking": (11, 17),
-                "shooting_accuracy": (14, 20),
-                "vision": (10, 16)
+                "shooting": (28, 40), 
+                "offensive_awareness": (24, 36), 
+                "deking": (22, 34),
+                "shooting_accuracy": (28, 40),
+                "vision": (20, 32)
             },
             "tendency": {"shooting_tendency": (70, 90), "hitting_tendency": (20, 50)}
         },
         "Playmaker": {
             "description": "A creative passer who excels at setting up teammates",
             "attributes": {
-                "passing": (14, 20), 
-                "vision": (13, 19), 
-                "offensive_awareness": (12, 17),
-                "puck_control": (12, 17),
-                "deking": (11, 16)
+                "passing": (28, 40), 
+                "vision": (26, 38), 
+                "offensive_awareness": (24, 34),
+                "puck_control": (24, 34),
+                "deking": (22, 32)
             },
             "tendency": {"shooting_tendency": (20, 40), "hitting_tendency": (10, 40)}
         },
         "Power Forward": {
             "description": "A physical forward who combines size with scoring ability",
             "attributes": {
-                "strength": (14, 19), 
-                "checking": (13, 18), 
-                "shooting": (11, 16),
-                "stamina": (12, 17),
-                "puck_protection": (12, 17)
+                "strength": (28, 38), 
+                "checking": (26, 36), 
+                "shooting": (22, 32),
+                "stamina": (24, 34),
+                "puck_protection": (24, 34)
             },
             "tendency": {"shooting_tendency": (50, 70), "hitting_tendency": (70, 90)}
         },
         "Two-Way Forward": {
             "description": "A balanced player who contributes at both ends of the ice",
             "attributes": {
-                "defensive_awareness": (13, 17), 
-                "teamwork": (12, 17), 
-                "faceoffs": (10, 16),
-                "skating": (11, 16),
-                "discipline": (12, 16)
+                "defensive_awareness": (26, 34), 
+                "teamwork": (24, 34), 
+                "faceoffs": (20, 32),
+                "skating": (22, 32),
+                "discipline": (24, 32)
             },
             "tendency": {"shooting_tendency": (40, 60), "hitting_tendency": (40, 60)}
         },
         "Grinder": {
             "description": "A hard-working, physical player who excels along the boards",
             "attributes": {
-                "determination": (13, 18), 
-                "strength": (12, 17), 
-                "checking": (12, 17),
-                "puck_protection": (11, 16),
-                "stamina": (13, 17)
+                "determination": (26, 36), 
+                "strength": (24, 34), 
+                "checking": (24, 34),
+                "puck_protection": (22, 32),
+                "stamina": (26, 34)
             },
             "tendency": {"shooting_tendency": (30, 50), "hitting_tendency": (60, 90)}
         },
         "Skilled Finesse": {
             "description": "A highly skilled player with exceptional stickhandling",
             "attributes": {
-                "deking": (14, 19), 
-                "puck_control": (13, 18), 
-                "flair": (13, 18),
-                "skating": (12, 17),
-                "vision": (11, 16)
+                "deking": (28, 38), 
+                "puck_control": (26, 36), 
+                "flair": (26, 36),
+                "skating": (24, 34),
+                "vision": (22, 32)
             },
             "tendency": {"shooting_tendency": (40, 70), "hitting_tendency": (10, 30)}
         },
         "Enforcer": {
             "description": "The toughest player on the ice. Protects teammates, punishes opponents",
             "attributes": {
-                "strength": (14, 19), \
-                "aggressiveness": (13, 18), \
-                "checking": (12, 17),
-                "durability": (12, 17), \
-                "discipline": (5, 10)
+                "strength": (28, 38), \
+                "aggressiveness": (26, 36), \
+                "checking": (24, 34),
+                "durability": (24, 34), \
+                "discipline": (10, 20)
             },
             "tendency": {"shooting_tendency": (20, 40), "hitting_tendency": (80, 100)}
         }
@@ -148,55 +148,55 @@ ARCHETYPES = {
         "Offensive Defenseman": {
             "description": "A mobile defenseman who contributes offensively",
             "attributes": {
-                "skating": (13, 18), 
-                "passing": (12, 17), 
-                "offensive_awareness": (12, 16),
-                "shooting": (11, 16),
-                "vision": (10, 16)
+                "skating": (26, 36), 
+                "passing": (24, 34), 
+                "offensive_awareness": (24, 32),
+                "shooting": (22, 32),
+                "vision": (20, 32)
             },
             "tendency": {"shooting_tendency": (50, 70), "hitting_tendency": (30, 60)}
         },
         "Defensive Defenseman": {
             "description": "A stay-at-home defender who excels in his own zone",
             "attributes": {
-                "checking": (13, 18), 
-                "strength": (12, 17), 
-                "defensive_awareness": (13, 18),
-                "discipline": (11, 16),
-                "shot_blocking": (12, 17)
+                "checking": (26, 36), 
+                "strength": (24, 34), 
+                "defensive_awareness": (26, 36),
+                "discipline": (22, 32),
+                "shot_blocking": (24, 34)
             },
             "tendency": {"shooting_tendency": (20, 40), "hitting_tendency": (60, 80)}
         },
         "Two-Way Defenseman": {
             "description": "A balanced defender who contributes at both ends",
             "attributes": {
-                "defensive_awareness": (12, 16), 
-                "skating": (11, 16), 
-                "passing": (10, 15),
-                "checking": (11, 16),
-                "shot_blocking": (11, 16)
+                "defensive_awareness": (24, 32), 
+                "skating": (22, 32), 
+                "passing": (20, 30),
+                "checking": (22, 32),
+                "shot_blocking": (22, 32)
             },
             "tendency": {"shooting_tendency": (30, 60), "hitting_tendency": (40, 70)}
         },
         "Physical Defenseman": {
             "description": "An intimidating defender who plays a punishing style",
             "attributes": {
-                "strength": (14, 19), 
-                "checking": (13, 18), 
-                "shot_blocking": (12, 17),
-                "stamina": (11, 16),
-                "discipline": (8, 13)
+                "strength": (28, 38), 
+                "checking": (26, 36), 
+                "shot_blocking": (24, 34),
+                "stamina": (22, 32),
+                "discipline": (16, 26)
             },
             "tendency": {"shooting_tendency": (20, 40), "hitting_tendency": (70, 90)}
         },
         "Puck-Moving Defenseman": {
             "description": "A defender who excels at transitioning the puck",
             "attributes": {
-                "passing": (13, 18), 
-                "puck_control": (12, 17), 
-                "vision": (12, 17),
-                "skating": (12, 17),
-                "defensive_awareness": (10, 15)
+                "passing": (26, 36), 
+                "puck_control": (24, 34), 
+                "vision": (24, 34),
+                "skating": (24, 34),
+                "defensive_awareness": (20, 30)
             },
             "tendency": {"shooting_tendency": (30, 50), "hitting_tendency": (20, 50)}
         }
@@ -205,41 +205,41 @@ ARCHETYPES = {
         "Butterfly Goalie": {
             "description": "A technical goalie who excels at covering the lower net",
             "attributes": {
-                "goaltending": (12, 18), 
-                "reflexes": (11, 17),
-                "positioning": (12, 18),
-                "rebound_control": (10, 16),
-                "puck_handling": (7, 14)
+                "goaltending": (24, 36), 
+                "reflexes": (22, 34),
+                "positioning": (24, 36),
+                "rebound_control": (20, 32),
+                "puck_handling": (14, 28)
             }
         },
         "Hybrid Goalie": {
             "description": "A versatile goalie who combines different styles",
             "attributes": {
-                "goaltending": (12, 17), 
-                "reflexes": (12, 17),
-                "positioning": (11, 16),
-                "rebound_control": (11, 16),
-                "puck_handling": (10, 15)
+                "goaltending": (24, 34), 
+                "reflexes": (24, 34),
+                "positioning": (22, 32),
+                "rebound_control": (22, 32),
+                "puck_handling": (20, 30)
             }
         },
         "Athletic Goalie": {
             "description": "A dynamic goalie who relies on athleticism and reflexes",
             "attributes": {
-                "goaltending": (11, 16), 
-                "reflexes": (14, 19),
-                "positioning": (10, 15),
-                "rebound_control": (9, 14),
-                "puck_handling": (9, 15)
+                "goaltending": (22, 32), 
+                "reflexes": (28, 38),
+                "positioning": (20, 30),
+                "rebound_control": (18, 28),
+                "puck_handling": (18, 30)
             }
         },
         "Puck-Handling Goalie": {
             "description": "A goalie who excels at playing the puck",
             "attributes": {
-                "goaltending": (11, 16), 
-                "reflexes": (10, 16),
-                "positioning": (11, 16),
-                "rebound_control": (10, 15),
-                "puck_handling": (14, 19)
+                "goaltending": (22, 32), 
+                "reflexes": (20, 32),
+                "positioning": (22, 32),
+                "rebound_control": (20, 30),
+                "puck_handling": (28, 38)
             }
         }
     }
@@ -376,11 +376,11 @@ def get_archetype_for_position(position: PlayerPosition) -> Tuple[str, dict]:
     archetype_name = random.choice(list(ARCHETYPES[category].keys()))
     return archetype_name, ARCHETYPES[category][archetype_name]
 
-def get_base_attribute_value(min_val: int = 5, max_val: int = 15) -> int:
+def get_base_attribute_value(min_val: int = 10, max_val: int = 30) -> int:
     """
     Generate a base attribute value following a normal distribution.
     Most values will be around the middle of the range.
-    """
+    (100-scale: callers pass doubled ranges)"""
     mean = (min_val + max_val) / 2
     std_dev = (max_val - min_val) / 4  # This gives a reasonable spread
     value = int(random.normalvariate(mean, std_dev))
@@ -390,10 +390,10 @@ def calculate_draft_ranking(player: Player) -> float:
     """Calculate a draft ranking score for a player based on attributes and potential."""
     # Convert potential grade to numeric value
     potential_values = {
-        "A+": 50, "A": 48, "A-": 46,
-        "B+": 44, "B": 42, "B-": 40,
-        "C+": 38, "C": 36, "C-": 34,
-        "D": 30, "F": 25
+        "A+": 99, "A": 96, "A-": 92,
+        "B+": 88, "B": 84, "B-": 80,
+        "C+": 76, "C": 72, "C-": 68,
+        "D": 60, "F": 50
     }
     potential_value = potential_values.get(player.potential_grade, 65)
     
@@ -542,20 +542,20 @@ def create_prospect(age: int = 18,
         player.plus_minus = 0
         player.avg_toi = "0:00"
     
-    # Set common attributes (every player gets these) - 50-point scale
+    # Set common attributes (every player gets these) - 100-point scale
     for attr in ['skating', 'shooting', 'passing', 'checking', 'faceoffs',
                 'determination', 'teamwork', 'leadership', 'discipline', 'flair',
                 'offensive_awareness', 'defensive_awareness', 'deking', 'strength']:
-        setattr(player, attr, get_base_attribute_value(12, 30))
+        setattr(player, attr, get_base_attribute_value(24, 60))
 
     # Set goalie-specific attributes
     if position == PlayerPosition.GOALIE:
         for attr in ['goaltending', 'reflexes', 'positioning', 'rebound_control', 'puck_handling']:
-            setattr(player, attr, get_base_attribute_value(12, 30))
+            setattr(player, attr, get_base_attribute_value(24, 60))
 
     # Set advanced attributes
     for attr in ['vision', 'puck_control', 'shooting_accuracy', 'puck_protection', 'stamina', 'shot_blocking']:
-        setattr(player, attr, get_base_attribute_value(12, 30))
+        setattr(player, attr, get_base_attribute_value(24, 60))
     
     # Set tendencies with defaults
     player.shooting_tendency = random.randint(30, 70)
