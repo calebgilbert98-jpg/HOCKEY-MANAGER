@@ -2553,6 +2553,12 @@ class GameSim:
         # offensive sequence from the wrong end of the rink.
         self._refresh_zone_state(new_team)
 
+        # A turnover kills any backdoor cut -- the play is dead.
+        try:
+            self._lost_coverage_ids.clear()
+        except Exception:
+            pass
+
         return "TURNOVER"
 
     def _refresh_zone_state(self, attacking_team):
@@ -2962,6 +2968,11 @@ class GameSim:
             # "forecheck", "breakout", "pp_setup"). One plan per team per
             # possession phase; every skater's job serves the plan.
             self.team_phases = {}
+        if not hasattr(self, "_lost_coverage_ids"):
+            # player.id set: give-and-go cutters whose checker lost them
+            # (backdoor). The next pass read treats them as open;
+            # consumed on that read, cleared on turnovers.
+            self._lost_coverage_ids = set()
 
     def _set_job(self, p, job):
         """Tag a skater's current tactical job for the visualizer."""
@@ -3352,31 +3363,55 @@ class GameSim:
                 gap = 5.5  # medium danger: close the gap
             else:
                 gap = 7.0  # perimeter: contain
+            # Attribute IQ: a smart defender (high defensive awareness +
+            # anticipation) takes a tighter gap and closes faster; a low-IQ
+            # defender gives the carrier room and reacts late. Same
+            # situation, different defender, different pressure -- this is
+            # what the ratings are for.
+            diq = (pressurer.defensive_awareness + pressurer.anticipation) / 2.0
+            gap *= 1.45 - (diq / 50.0) * 0.75   # elite ~0.70x, plug ~1.08x
+            close_mult = 0.75 + (diq / 50.0) * 0.55
             gx, gy = def_net, 42.5
             gang = math.atan2(gy - py, gx - px)
             tx = px + math.cos(gang) * gap
             ty = py + math.sin(gang) * gap
             # Faster close when dangerous -- the defender sprints to
             # engage, doesn't glide.
-            close_speed = 12.0 if puck_danger < 30.0 else 9.0
+            close_speed = (12.0 if puck_danger < 30.0 else 9.0) * close_mult
             slide(pressurer, tx, ty, close_speed)
             self._set_job(pressurer, "pressure")
             # Shooting lane denial: the second-nearest defender gets
             # between the puck and the net -- actually in the lane, not
             # at a static landmark. This is the help that keeps point
             # shots and slot feeds from being clean looks.
+            # Attribute IQ: reading the lane is a skill, and it's
+            # graduated, not binary. A smart defender (awareness +
+            # anticipation) gets all the way into the lane; an average
+            # defender gets halfway there, late; a low-IQ defender
+            # ball-watches and drifts to his landmark, leaving the lane
+            # open.
             lane_defender = by_dist[1] if len(by_dist) > 1 else None
+            read_q = 0.0
+            if lane_defender is not None:
+                liq = (lane_defender.defensive_awareness
+                       + lane_defender.anticipation + random.randint(-6, 6))
+                read_q = max(0.0, min(1.0, (liq - 58.0) / 28.0))
             for p in skaters:
                 if p.id == pressurer.id:
                     continue
                 if lane_defender is not None and p.id == lane_defender.id:
-                    # Position on the puck-to-net line, ~40% from puck
-                    # toward net -- in the shooting lane.
+                    # Lane spot: on the puck-to-net line, ~40% from puck
+                    # toward net. Blend from his landmark by read quality.
                     gx, gy = def_net, 42.5
                     lx = px + (gx - px) * 0.4
                     ly = py + (gy - py) * 0.4
+                    t = targets.get(p.id)
+                    if t is not None and read_q < 1.0:
+                        lx = t[0] + (lx - t[0]) * read_q
+                        ly = t[1] + (ly - t[1]) * read_q
                     slide(p, lx, ly, 8.0)
-                    self._set_job(p, "slot_coverage")
+                    self._set_job(p, "slot_coverage"
+                                  if read_q >= 0.5 else "coverage")
                     continue
                 t = targets.get(p.id)
                 if t:
@@ -3385,9 +3420,14 @@ class GameSim:
                         self._set_job(p, "coverage")
         else:  # forecheck
             # F1 hunts the carrier; the rest hold structure relative to
-            # the puck so the forecheck breathes with the breakout
+            # the puck so the forecheck breathes with the breakout.
+            # Attribute IQ: a smart F1 (anticipation + defensive awareness)
+            # takes a direct line at speed; a low-IQ F1 glides and the
+            # carrier beats him wide.
             f1 = by_dist[0]
-            slide(f1, px + 3 * adir, py, 10.0)
+            f1_iq = (f1.defensive_awareness + f1.anticipation) / 2.0
+            f1_speed = 10.0 * (0.75 + (f1_iq / 50.0) * 0.55)
+            slide(f1, px + 3 * adir, py, f1_speed)
             self._set_job(f1, "f1_pressure")
             for i, p in enumerate(by_dist[1:], 1):
                 # stagger back through the middle, strong side first
@@ -3614,6 +3654,10 @@ class GameSim:
         # he's committed to the carrier, his man is open by scheme -- the
         # fundamental draw-and-dish of hockey offense.
         pressurer, press_dist = self._nearest_defender(passer, defenders)
+        # Backdoor cuts: consumed on this read -- the return feed is now
+        # or never. A cut older than one pass is stale.
+        backdoor_ids = set(self._lost_coverage_ids)
+        self._lost_coverage_ids.clear()
         cands = []
         for m in mates:
             mx, my = self._ppos_get(m)
@@ -3625,7 +3669,9 @@ class GameSim:
             # to hunt the puck), you're open without beating anyone.
             scheme_open = (nd is not None and pressurer is not None
                            and nd.id == pressurer.id and press_dist < 8.0)
-            if scheme_open:
+            # Backdoor: this cutter lost his checker on the give-and-go.
+            backdoor = m.id in backdoor_ids
+            if scheme_open or backdoor:
                 # The checker committed -- you're wide open.
                 got_open = True
             else:
@@ -3642,24 +3688,47 @@ class GameSim:
             fwd = (mx - px) * adir
             danger = -abs(mx - att_net) / 10.0
             # Playmaking bonuses: reward the hockey play, not just the safe one.
+            # Attribute IQ: the PASSER's vision and offensive awareness gate
+            # whether he even sees the play. A 48-vision playmaker hits the
+            # seam and the draw-and-dish; a 23-vision plug doesn't register
+            # the open man and dishes to the safe perimeter option. Same
+            # ice, different brain, different pass.
+            pv = (passer.vision + passer.offensive_awareness) / 2.0
+            play_mult = max(0.5, min(1.4, pv / 36.0))
             playmaking = 0.0
             if scheme_open:
                 # Draw-and-dish: hit the man whose checker committed.
-                playmaking += 12.0
+                playmaking += 12.0 * play_mult
+            if backdoor:
+                # Backdoor cut: his checker lost him -- the return feed.
+                playmaking += 8.0 * play_mult
             # Seam pass: cross the middle (royal road) to danger.
             crosses_middle = (py - 42.5) * (my - 42.5) < 0
             receiver_danger = abs(mx - att_net)
             if crosses_middle and receiver_danger < 35.0:
-                playmaking += 10.0
+                playmaking += 10.0 * play_mult
             # Weak-side exploit: puck on one side, open man on the other.
             weak_side = (py < 42.5) != (my < 42.5)
             if weak_side and dd > 10.0 and receiver_danger < 40.0:
-                playmaking += 8.0
+                playmaking += 8.0 * play_mult
+            # Smart passers don't force it into coverage; low-IQ passers
+            # don't discriminate -- the pass goes where it goes.
+            force_penalty = (pv / 50.0) * 8.0 if not (got_open or scheme_open) else 0.0
             score = ((14 if got_open else 0) + dd * 0.6 + fwd * 0.25 + danger
-                     + playmaking + random.uniform(0, 4))
+                     + playmaking - force_penalty + random.uniform(0, 4))
             cands.append((score, m, mx, my, nd, dd, got_open))
         cands.sort(key=lambda t: -t[0])
-        _, receiver, rx, ry, nd, dd, got_open = cands[0]
+        # decision_making, previously unused anywhere in the sim: low-IQ
+        # passers sometimes just make the wrong read and throw it into
+        # coverage -- the forced pass that gets picked.
+        dm = getattr(passer, "decision_making", 30)
+        force_prob = max(0.0, (36.0 - dm) / 36.0) * 0.20
+        covered = [c for c in cands[1:] if not c[6]]
+        if covered and random.random() < force_prob:
+            _, receiver, rx, ry, nd, dd, got_open = max(
+                covered, key=lambda t: t[0])
+        else:
+            _, receiver, rx, ry, nd, dd, got_open = cands[0]
 
         # --- pass execution ---
         # NHL-authentic: the passer's job is to put it on the tape. Routine
@@ -3667,8 +3736,13 @@ class GameSim:
         # is completed at a very high rate -- failures come from defenders
         # reading the lane and making a play, not from random incompetence.
         lane_pressure = max(0.0, 10.0 - dd) if nd is not None else 0.0
+        # Composure: a calm passer (high composure) still puts it on the
+        # tape with a checker in his face; a rattled passer sails it.
+        # This is the pressure half of the passing attribute story.
+        pressure_bite = lane_pressure * 3.0 * (
+            1.3 - (passer.composure / 50.0) * 0.6)
         q = (52 + passer.passing * 1.0 + min(dd, 10.0) * 1.2
-             - lane_pressure * 3.0)
+             - pressure_bite)
         if safe:
             q += 14
         # Trait: Playmakers complete more passes
@@ -3703,6 +3777,20 @@ class GameSim:
             # recognizable playmaking movement in hockey.
             if kind in ("attack", "cycle"):
                 self._set_job(passer, "give_and_go")
+                # Attribute IQ: does his checker pick up the cut? The
+                # checker's defensive awareness + anticipation against the
+                # cutter's offensive awareness + agility. A smart checker
+                # stays with the cutter; a low-IQ checker ball-watches the
+                # puck and the cutter gets a step -- the backdoor. The
+                # next pass read will treat a lost cutter as open.
+                cut = (passer.offensive_awareness + passer.agility
+                       + random.randint(-6, 6))
+                cov = -99
+                if pressurer is not None:
+                    cov = (pressurer.defensive_awareness
+                           + pressurer.anticipation + random.randint(-6, 6))
+                if cut > cov + 4:
+                    self._lost_coverage_ids.add(passer.id)
             self._emit_skate()
             return receiver
         if interceptor is not None:
@@ -3814,12 +3902,15 @@ class GameSim:
         # looks get the full quality.
         sx, sy = self._ppos_get(shooter)
         defenders = self._on_ice_skaters(defending_team)
-        pressure_dist = min(
-            (self._ppos_dist((sx, sy), self._ppos_get(d)) for d in defenders),
-            default=30.0)
+        pressurer = min(
+            defenders,
+            key=lambda d: self._ppos_dist((sx, sy), self._ppos_get(d)),
+            default=None)
+        pressure_dist = (self._ppos_dist((sx, sy), self._ppos_get(pressurer))
+                         if pressurer is not None else 30.0)
         shot_quality = self._calculate_shot_quality(
             shot_location, distance, shot_type, attacking_team, shooter,
-            pressure_dist=pressure_dist)
+            pressure_dist=pressure_dist, pressurer=pressurer)
         
         # Check if shot misses the net
         if self._check_shot_miss(shooter, shot_quality, distance):
@@ -3974,12 +4065,14 @@ class GameSim:
         return self._weighted_random_choice(type_weights)
 
     def _calculate_shot_quality(self, location, distance, shot_type, attacking_team, shooter=None,
-                                pressure_dist=30.0):
+                                pressure_dist=30.0, pressurer=None):
         """Calculate shot quality (high/medium/low danger) and return quality score.
-        
+
         pressure_dist: distance (ft) of the nearest defender at release.
         Tight pressure (<6 ft) rushes the shot; open looks (>15 ft) get
         full quality.
+        pressurer: the nearest defender, if known -- his checking and
+        defensive awareness scale how rushed the release is.
         """
         base_quality = {
             ShotLocation.CREASE: 0.9,
@@ -4010,12 +4103,22 @@ class GameSim:
         # Defensive pressure: a defender in your kitchen (<6 ft) forces
         # a rushed release; the quality drops. Open ice (>15 ft) is
         # full value. Linear between.
+        # Attribute IQ: WHO is pressuring matters, not just how close.
+        # An elite shutdown defender draped on you rushes the release
+        # far more than a plug standing in the same spot.
         if pressure_dist < 6.0:
-            pressure_modifier = 0.65
+            base_rush = 0.65
         elif pressure_dist > 15.0:
-            pressure_modifier = 1.0
+            base_rush = 1.0
         else:
-            pressure_modifier = 0.65 + (pressure_dist - 6.0) / 9.0 * 0.35
+            base_rush = 0.65 + (pressure_dist - 6.0) / 9.0 * 0.35
+        if pressurer is not None and base_rush < 1.0:
+            piq = (pressurer.checking + pressurer.defensive_awareness) / 2.0
+            rush_depth = ((1.0 - base_rush)
+                          * (0.76 + (piq / 50.0) * 0.48))
+            pressure_modifier = max(0.5, 1.0 - rush_depth)
+        else:
+            pressure_modifier = base_rush
         
         quality_score = (base_quality * type_modifier * distance_modifier
                          * pressure_modifier)
@@ -5572,6 +5675,24 @@ class GameSim:
         self._refresh_zone_state(attacking_team)
         if self.current_zone != Zone.OFFENSIVE_ZONE:
             return "ZONE_EXIT"
+        # Attribute IQ: smart carriers are selective about when they
+        # shoot. High offensive awareness + decision making in a
+        # dangerous spot means take it; the same brain on the perimeter
+        # means keep working it, don't fling a prayer. A low-IQ carrier
+        # doesn't discriminate -- he forces bad ones and passes up good
+        # ones at the same flat rate.
+        _shot_carrier = getattr(self, "possession_player", None)
+        if _shot_carrier is not None and _shot_carrier in attacking_skaters:
+            ciq = (_shot_carrier.offensive_awareness
+                   + _shot_carrier.decision_making) / 2.0
+            iq_factor = (ciq - 36.0) / 50.0
+            _att_net = 189.0 if attacking_team == self.home_team else 11.0
+            _ccx, _ = self._ppos_get(_shot_carrier)
+            if abs(_ccx - _att_net) < 35.0:
+                shot_chance *= 1.0 + iq_factor * 1.2
+            else:
+                shot_chance *= 1.0 - iq_factor * 0.8
+            shot_chance = max(0.2, min(0.85, shot_chance))
         event_roll = random.random()
         
         if event_roll < shot_chance:
