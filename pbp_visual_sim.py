@@ -1621,6 +1621,17 @@ class PBPVisualSim(tk.Toplevel):
             self._feed(f"Shootout over — {ev['winner']} wins "
                        f"{ev['home_score']}-{ev['away_score']}.", tag="goal", ev=ev)
             self._update_scoreboard(ev)
+            if getattr(self, "_shootout_hidden", False):
+                for od in self.dots.values():
+                    try:
+                        self.canvas.itemconfig(od["oval"], state="normal")
+                        self.canvas.itemconfig(od["text"], state="normal")
+                        self.canvas.itemconfig(od["tick"], state="normal")
+                        self.canvas.itemconfig(od["shadow"], state="normal")
+                    except Exception:
+                        pass
+                self._shootout_hidden = False
+            self.shootout_mode = False
         elif et == "game_end":
             self._feed(f"Final: {self.home_team.team_name} {ev['home_score']} - "
                        f"{ev['away_score']} {self.away_team.team_name}. "
@@ -2993,6 +3004,19 @@ class PBPVisualSim(tk.Toplevel):
         att_home = self._player_side(shooter, ev, "shooting_team") == "home"
         nx = AWAY_NET_X if att_home else HOME_NET_X
         d = self._dot_by_player(shooter)
+        # Clear the ice: only shooter, goalies, and puck stay visible.
+        shooter_id = d["id"] if d else None
+        for od in self.dots.values():
+            if od["role"] == "G" or od["id"] == shooter_id:
+                continue
+            try:
+                self.canvas.itemconfig(od["oval"], state="hidden")
+                self.canvas.itemconfig(od["text"], state="hidden")
+                self.canvas.itemconfig(od["tick"], state="hidden")
+                self.canvas.itemconfig(od["shadow"], state="hidden")
+            except Exception:
+                pass
+        self._shootout_hidden = True
         sx, sy = (100.0, 42.5)
         if d:
             self._move_dot(d, 100.0, 42.5)
