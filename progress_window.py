@@ -11,7 +11,7 @@ class ProgressWindow:
     
     def __init__(self, parent=None):
         self.root = tk.Toplevel(parent) if parent else tk.Tk()
-        self.root.title("🏒 Hockey Manager - Database Generation")
+        self.root.title("Puck Dynasty - Database Generation")
         self.root.geometry("500x200")
         self.root.configure(bg='#1e1e1e')
         self.root.resizable(False, False)
@@ -39,16 +39,27 @@ class ProgressWindow:
         
     def _create_ui(self):
         """Create the progress dialog UI"""
+        # Full-bleed branded background behind the progress content
+        try:
+            from branding import cover_photo
+            bg_canvas = tk.Canvas(self.root, highlightthickness=0, bg='#1e1e1e')
+            bg_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
+            self._bg_photo = cover_photo('loading_bg.png', 500, 200)
+            if self._bg_photo is not None:
+                bg_canvas.create_image(250, 100, image=self._bg_photo)
+        except Exception:
+            pass  # Background is decorative; never break the progress dialog
+
         # Main frame with professional styling
         main_frame = tk.Frame(self.root, bg='#1e1e1e', bd=0)
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
-        
+
         # Title
-        title_label = tk.Label(main_frame, 
-                              text="Generating Hockey Database", 
+        title_label = tk.Label(main_frame,
+                              text="Generating Hockey Database",
                               font=("Arial", 16, "bold"),
-                              bg='#1e1e1e', 
-                              fg='#FFD700')
+                              bg='#1e1e1e',
+                              fg='#00ceb8')
         title_label.pack(pady=(0, 20))
         
         # Status label
@@ -64,11 +75,11 @@ class ProgressWindow:
         style = ttk.Style()
         style.theme_use('clam')
         style.configure("Professional.Horizontal.TProgressbar",
-                       background='#D13438',
+                       background='#00ceb8',
                        troughcolor='#404040',
                        borderwidth=0,
-                       lightcolor='#D13438',
-                       darkcolor='#D13438')
+                       lightcolor='#00ceb8',
+                       darkcolor='#00ceb8')
         
         self.progress_bar = ttk.Progressbar(main_frame,
                                           variable=self.progress_var,

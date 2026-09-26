@@ -231,7 +231,15 @@ class RosterWindow(tk.Toplevel):
         # Main container
         main_container = ttk.Frame(self, style='Panel.TFrame')
         main_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
+
+        # Slim branded banner strip (decorative; never breaks the window)
+        try:
+            from branding import SlimBanner
+            SlimBanner(main_container, 'roster_banner.png', height=84,
+                       bg=self.parent.BG_COLOR).pack(fill='x', pady=(0, 10))
+        except Exception:
+            pass
+
         # Header section with team overview
         self.create_header_section(main_container)
         
@@ -3396,6 +3404,14 @@ class TradeWindow(tk.Toplevel):
         self.trade_offers = {'user': [], 'partner': []}
         self._history_visible = False
 
+        # Slim branded banner strip (decorative; never breaks the window)
+        try:
+            from branding import SlimBanner
+            SlimBanner(self, 'trade_banner.png', height=84,
+                       bg=parent.BG_COLOR).pack(fill='x', padx=10, pady=(10, 0))
+        except Exception:
+            pass
+
         import trade_engine as te
         self.te = te
         gm = getattr(parent, 'game_manager', None)
@@ -4275,6 +4291,15 @@ class DraftWindow(tk.Toplevel):
         self.title("NHL Entry Draft")
         self.geometry("1280x800")
         self.configure(background=parent.BG_COLOR)
+
+        # Slim branded banner strip (decorative; never breaks the window)
+        try:
+            from branding import SlimBanner
+            SlimBanner(self, 'draft_banner.png', height=84,
+                       bg=parent.BG_COLOR).pack(fill='x', padx=10, pady=(10, 0))
+        except Exception:
+            pass
+
         import draft_night as dn
         import scouting as scmod
         import trade_engine as te

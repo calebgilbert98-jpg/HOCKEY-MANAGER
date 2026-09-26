@@ -428,24 +428,44 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
     def _create_regular_interface(self):
         """Create regular interface without background"""
         self.configure(bg=AppColors.BG)
-        
+
+        # Slim branded hero strip at the very top of the window
+        try:
+            from branding import SlimBanner
+            SlimBanner(self, 'launcher_banner.png', height=130,
+                       bg=AppColors.BG).pack(fill='x')
+        except Exception:
+            pass
+
         # Create a simple header without background
         header_frame = tk.Frame(self, bg=AppColors.BG_ELEVATED, height=80)
         header_frame.pack(fill='x')
         header_frame.pack_propagate(False)
-        
-        title_label = tk.Label(header_frame,
+
+        title_row = tk.Frame(header_frame, bg=AppColors.BG_ELEVATED)
+        title_row.pack(expand=True)
+
+        try:
+            from branding import load_logo
+            self._launcher_logo = load_logo(self, size=48)
+            if self._launcher_logo is not None:
+                tk.Label(title_row, image=self._launcher_logo,
+                         bg=AppColors.BG_ELEVATED).pack(side='left', padx=(0, 12))
+        except Exception:
+            pass
+
+        title_label = tk.Label(title_row,
                               text="PUCK DYNASTY",
                               font=AppFonts.H1,
                               bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
-        title_label.pack(expand=True)
-        
+        title_label.pack(side='left')
+
         subtitle_label = tk.Label(header_frame,
                                  text="Professional Hockey Management Simulator",
                                  font=AppFonts.SMALL,
                                  bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY)
         subtitle_label.pack()
-        
+
         # Create main interface
         self._create_main_interface(self)
         
