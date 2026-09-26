@@ -241,6 +241,56 @@ class HomeDashboard:
         lbl.bind("<Button-1>", lambda _e: self._nav(method_name))
         return lbl
 
+    def make_clickable_label(self, parent, text, command, font=None, fg=None, **kwargs):
+        """Label that looks and behaves like a link: hand cursor + underline on hover.
+
+        Used for player names (-> profile) and team names (-> standings/info).
+        """
+        bg = parent.cget("bg") if self._has_bg(parent) else AppColors.BG_ELEVATED
+        lbl = tk.Label(parent, text=text,
+                       font=font or AppFonts.SMALL_BOLD,
+                       fg=fg or AppColors.TEXT_PRIMARY,
+                       bg=kwargs.pop("bg", bg),
+                       cursor="hand2", **kwargs)
+        base_font = lbl.cget("font")
+        # Underline on hover to signal clickability
+        def _on_enter(_e):
+            try:
+                f = tk.font.Font(font=base_font)
+                f.configure(underline=True)
+                lbl.configure(font=f, fg=AppColors.ACCENT)
+            except Exception:
+                pass
+        def _on_leave(_e):
+            try:
+                lbl.configure(font=base_font, fg=fg or AppColors.TEXT_PRIMARY)
+            except Exception:
+                pass
+        lbl.bind("<Enter>", _on_enter)
+        lbl.bind("<Leave>", _on_leave)
+        lbl.bind("<Button-1>", lambda _e: command())
+        return lbl
+
+    def _open_player_profile(self, player):
+        """Open the full player profile window for a player object."""
+        try:
+            from ui_components import PlayerProfileWindow
+            PlayerProfileWindow(self.parent, player)
+        except Exception as e:
+            print(f"Could not open player profile: {e}")
+
+    def _open_team_info(self, team):
+        """Open team info: roster window for the user's team, standings for others."""
+        try:
+            me_name = getattr(self.user_team, "team_name", "")
+            team_name = getattr(team, "team_name", str(team))
+            if team_name == me_name:
+                self._nav("open_roster_window")
+            else:
+                self._nav("open_stats_standings_window")
+        except Exception as e:
+            print(f"Could not open team info: {e}")
+
     @staticmethod
     def _has_bg(widget):
         try:
@@ -688,8 +738,9 @@ class HomeDashboard:
             row = tk.Frame(table, bg=row_bg)
             row.pack(fill="x", pady=1)
             fg = AppColors.TEXT_PRIMARY
-            tk.Label(row, text=f"{i}. {tm.team_name}", font=AppFonts.SMALL_BOLD,
-                     fg=fg, bg=row_bg, width=26, anchor="w").pack(side="left")
+            self.make_clickable_label(row, text=f"{i}. {tm.team_name}", font=AppFonts.SMALL_BOLD,
+                                      fg=fg, bg=row_bg, width=26, anchor="w",
+                                      command=lambda t=tm: self._open_team_info(t)).pack(side="left")
             for val, w in [(tm.games_played, 4), (tm.wins, 4), (tm.losses, 4),
                            (tm.ot_losses, 5), (self._team_points(tm), 5)]:
                 tk.Label(row, text=str(val), font=AppFonts.SMALL,
@@ -727,8 +778,9 @@ class HomeDashboard:
                      fg=AppColors.TEXT_TERTIARY, bg=bg, width=3).pack(side="left")
             name = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip() or "Player"
             pos = str(getattr(p, "primary_position", "")).split(".")[-1]
-            tk.Label(row, text=f"{name} ({pos})", font=AppFonts.SMALL_BOLD,
-                     fg=AppColors.TEXT_PRIMARY, bg=bg, anchor="w").pack(side="left", fill="x", expand=True)
+            self.make_clickable_label(row, text=f"{name} ({pos})", font=AppFonts.SMALL_BOLD,
+                                      fg=AppColors.TEXT_PRIMARY, bg=bg, anchor="w",
+                                      command=lambda pl=p: self._open_player_profile(pl)).pack(side="left", fill="x", expand=True)
             tk.Label(row, text=str(self._leader_value(p, self._leaders_cat)),
                      font=AppFonts.STAT_SMALL, fg=AppColors.ACCENT,
                      bg=bg).pack(side="right")
@@ -842,8 +894,9 @@ class HomeDashboard:
             row = tk.Frame(content, bg=bg)
             row.pack(fill="x", pady=2)
             name = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
-            tk.Label(row, text=name, font=AppFonts.SMALL_BOLD,
-                     fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+            self.make_clickable_label(row, text=name, font=AppFonts.SMALL_BOLD,
+                                      fg=AppColors.TEXT_PRIMARY, bg=bg,
+                                      command=lambda pl=p: self._open_player_profile(pl)).pack(side="left")
             tk.Label(row, text=f"{desc} ({games})", font=AppFonts.SMALL,
                      fg=AppColors.DANGER, bg=bg).pack(side="right")
         self._view_all_button(content, "View roster →",
@@ -941,8 +994,9 @@ class HomeDashboard:
                       f"POT {getattr(p, 'potential_grade', '?')}")
             row = tk.Frame(content, bg=bg)
             row.pack(fill="x", pady=2)
-            tk.Label(row, text=name, font=AppFonts.SMALL_BOLD,
-                     fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+            self.make_clickable_label(row, text=name, font=AppFonts.SMALL_BOLD,
+                                      fg=AppColors.TEXT_PRIMARY, bg=bg,
+                                      command=lambda pl=p: self._open_player_profile(pl)).pack(side="left")
             tk.Label(row, text=detail, font=AppFonts.CAPTION,
                      fg=AppColors.TEXT_TERTIARY, bg=bg).pack(side="right")
 
@@ -965,25 +1019,26 @@ class HomeDashboard:
             pts = (getattr(p, "goals", 0) or 0) + (getattr(p, "assists", 0) or 0)
             for m in (25, 50, 75, 100):
                 if pts < m <= pts + 8:
-                    hits.append((m - pts, name, f"{m - pts} PTS from {m}"))
+                    hits.append((m - pts, name, f"{m - pts} PTS from {m}", p))
             cg = getattr(p, "career_games", 0) or 0
             for m in (500, 1000, 1500):
                 if cg < m <= cg + 10:
-                    hits.append((m - cg, name, f"{m - cg} GP from {m} career"))
+                    hits.append((m - cg, name, f"{m - cg} GP from {m} career", p))
         hits.sort(key=lambda h: h[0])
         if not hits:
             tk.Label(content, text="No milestones within reach.",
                      font=AppFonts.SMALL, fg=AppColors.TEXT_TERTIARY,
                      bg=bg).pack(anchor="w")
             return
-        for _gap, name, text in hits[:6]:
+        for _gap, name, text, pl in hits[:6]:
             row = tk.Frame(content, bg=bg)
             row.pack(fill="x", pady=2)
             tk.Label(row, text="●", font=AppFonts.CAPTION,
                      fg=AppColors.ACCENT, bg=bg).pack(side="left",
                                                      padx=(0, 6))
-            tk.Label(row, text=name, font=AppFonts.SMALL_BOLD,
-                     fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+            self.make_clickable_label(row, text=name, font=AppFonts.SMALL_BOLD,
+                                      fg=AppColors.TEXT_PRIMARY, bg=bg,
+                                      command=lambda p=pl: self._open_player_profile(p)).pack(side="left")
             tk.Label(row, text=text, font=AppFonts.SMALL,
                      fg=AppColors.TEXT_SECONDARY, bg=bg).pack(side="right")
 

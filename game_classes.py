@@ -415,26 +415,26 @@ class Player:
         return self.id == other.id
 
     def get_role(self) -> PlayerRole:
-        """Dynamically determines the player's role based on their attributes."""
+        """Dynamically determines the player's role based on their attributes (native 1-100 scale)."""
         if self.primary_position == PlayerPosition.GOALIE:
             return PlayerRole.GOALIE
         
-        if self.primary_position == PlayerPosition.DEFENSE:  # <-- FIXED HERE
-            if self.offensive_awareness > 15 and self.shooting > 13:
+        if self.primary_position in (PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE):
+            if self.offensive_awareness > 70 and self.shooting > 65:
                 return PlayerRole.OFFENSIVE_DEFENSEMAN
-            if self.defensive_awareness > 15 and self.checking > 13:
+            if self.defensive_awareness > 70 and self.checking > 65:
                 return PlayerRole.DEFENSIVE_DEFENSEMAN
             return PlayerRole.TWO_WAY_DEFENSEMAN
             
-        if self.shooting > 16 and self.offensive_awareness > 15:
+        if self.shooting > 75 and self.offensive_awareness > 70:
             return PlayerRole.SNIPER
-        if self.passing > 16 and self.flair > 15:
+        if self.passing > 75 and self.flair > 70:
             return PlayerRole.PLAYMAKER
-        if self.strength > 15 and self.checking > 14 and self.hitting_tendency > 60:
+        if self.strength > 70 and self.checking > 68 and self.hitting_tendency > 60:
             return PlayerRole.POWER_FORWARD
-        if self.strength > 16 and self.checking > 16 and self.discipline < 8:
+        if self.strength > 75 and self.checking > 75 and self.discipline < 35:
             return PlayerRole.ENFORCER
-        if self.determination > 14 and self.teamwork > 14 and self.defensive_awareness > 12:
+        if self.determination > 68 and self.teamwork > 68 and self.defensive_awareness > 60:
             return PlayerRole.GRINDER
         return PlayerRole.TWO_WAY_FORWARD
 

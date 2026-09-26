@@ -14,8 +14,15 @@ def _to_20_scale(value, default=10):
 
 
 def _to_100_scale(value):
-    """Display-scale alias for the canonical 1-100 converter."""
-    return to_100_scale(value)
+    """Attributes are native 1-100 since the 100-scale conversion.
+
+    The old converter doubled values < 55, which corrupts legitimate
+    native sub-55 attributes. Display clamps the native value instead.
+    """
+    try:
+        return max(1, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return 50
 
 
 class PlayerProfileWindow(tk.Toplevel):
@@ -28,9 +35,22 @@ class PlayerProfileWindow(tk.Toplevel):
         self.report = report
         
         self.title(f"Profile: {player.full_name}")
-        self.geometry("1400x1000")  # Larger to better utilize modern screen space
         self.configure(background=parent.BG_COLOR)
         self.resizable(True, True)
+        # Fill the screen: maximized window for a true FM-style player hub
+        try:
+            self.state('zoomed')  # Windows / Linux maximize
+        except Exception:
+            pass
+        try:
+            # Fallback: size to 95% of screen if zoomed isn't supported (macOS)
+            self.update_idletasks()
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            if self.winfo_width() < sw * 0.9:
+                self.geometry(f"{int(sw * 0.95)}x{int(sh * 0.92)}+{int(sw * 0.025)}+{int(sh * 0.04)}")
+        except Exception:
+            self.geometry("1400x1000")
 
         self.style = parent.style
         self._setup_local_styles()
@@ -80,17 +100,17 @@ class PlayerProfileWindow(tk.Toplevel):
         self.style.configure('Poor.TLabel', background="#F44336", foreground='white', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
 
     def _get_attribute_style_and_text(self, value):
-        """Returns a style name and descriptive text based on the attribute value."""
+        """Returns a style name and descriptive text based on the attribute value (native 1-100)."""
         disp = _to_100_scale(value)
-        if value >= 45:
+        if value >= 85:
             return "Excellent.TLabel", f"{disp} (Excellent)"
-        elif value >= 40:
+        elif value >= 75:
             return "VeryGood.TLabel", f"{disp} (Very Good)"
-        elif value >= 35:
+        elif value >= 65:
             return "Good.TLabel", f"{disp} (Good)"
-        elif value >= 30:
+        elif value >= 55:
             return "Average.TLabel", f"{disp} (Average)"
-        elif value >= 25:
+        elif value >= 40:
             return "BelowAverage.TLabel", f"{disp} (Below Avg)"
         else:
             return "Poor.TLabel", f"{disp} (Poor)"
@@ -340,16 +360,16 @@ class PlayerProfileWindow(tk.Toplevel):
             ttk.Label(contract_frame, text="No Contract", style='PlayerInfo.TLabel').pack(pady=(5, 0))
     
     def _get_rating_color(self, rating):
-        """Returns a color based on the rating value (50-scale)."""
-        if rating >= 45:
+        """Returns a color based on the rating value (native 1-100 scale)."""
+        if rating >= 85:
             return "#4CAF50"  # Green for excellent
-        elif rating >= 40:
+        elif rating >= 75:
             return "#8BC34A"  # Light green for very good
-        elif rating >= 35:
+        elif rating >= 65:
             return "#A3D65C"  # Yellow-green for good
-        elif rating >= 30:
+        elif rating >= 55:
             return "#FFC107"  # Yellow for average
-        elif rating >= 25:
+        elif rating >= 40:
             return "#FF9800"  # Orange for below average
         else:
             return "#F44336"  # Red for poor
@@ -1220,9 +1240,9 @@ class PlayerProfileWindow(tk.Toplevel):
         
         # Insert sample scouting note
         sample_note = f"Talented {self.player.primary_position.value} with strong fundamentals. "
-        if self.player.overall_rating() >= 15:
+        if self.player.overall_rating() >= 85:
             sample_note += "Elite-level player with exceptional skills."
-        elif self.player.overall_rating() >= 12:
+        elif self.player.overall_rating() >= 75:
             sample_note += "Solid NHL player with good all-around abilities."
         else:
             sample_note += "Developing player with potential."
@@ -1392,18 +1412,20 @@ class PlayerProfileWindow(tk.Toplevel):
         comp_grid = ttk.Frame(comparison_frame, style='PlayerTab.TFrame')
         comp_grid.pack(fill='x')
         
-        # Calculate estimated market value based on overall rating
+        # Calculate estimated market value based on overall rating (native 1-100)
         overall = self.player.overall_rating()
-        if overall >= 18:
-            market_value = 8000000 + (overall - 18) * 1000000  # Elite players
-        elif overall >= 15:
-            market_value = 4000000 + (overall - 15) * 1333333  # Top players
-        elif overall >= 12:
-            market_value = 1000000 + (overall - 12) * 1000000  # Solid players
-        elif overall >= 9:
-            market_value = 750000 + (overall - 9) * 83333     # Role players
+        if overall >= 90:
+            market_value = 10000000 + (overall - 90) * 500000   # Superstar
+        elif overall >= 85:
+            market_value = 7000000 + (overall - 85) * 600000    # Elite
+        elif overall >= 80:
+            market_value = 4500000 + (overall - 80) * 500000    # Top-line
+        elif overall >= 75:
+            market_value = 2500000 + (overall - 75) * 400000    # Solid NHLer
+        elif overall >= 70:
+            market_value = 1000000 + (overall - 70) * 300000    # Roster player
         else:
-            market_value = 750000  # Minimum salary
+            market_value = 750000  # Depth / minimum salary
         
         # Age adjustment
         if self.player.age < 23:
@@ -1861,7 +1883,7 @@ class PlayerProfileWindow(tk.Toplevel):
             bar_canvas.pack(fill='x')
             
             # Draw attribute bar
-            bar_width = int((min(value, 50) / 50) * 110)
+            bar_width = int((min(value, 100) / 100) * 110)
             bar_color = self._get_rating_color(value)
             bar_canvas.create_rectangle(5, 3, 5+bar_width, 13, fill=bar_color, outline=bar_color)
             bar_canvas.create_rectangle(3, 1, 117, 15, outline=self.parent.TEXT_COLOR, width=1)
@@ -1982,7 +2004,7 @@ class PlayerProfileWindow(tk.Toplevel):
             bar_canvas.pack(fill='x')
             
             # Draw enhanced attribute bar with gradient effect
-            bar_width = int((min(value, 50) / 50) * 110)
+            bar_width = int((min(value, 100) / 100) * 110)
             bar_color = self._get_rating_color(value)
             bar_canvas.create_rectangle(5, 4, 5+bar_width, 16, fill=bar_color, outline=bar_color)
             bar_canvas.create_rectangle(3, 2, 117, 18, outline=self.parent.TEXT_COLOR, width=1)
@@ -2239,7 +2261,7 @@ class PlayerProfileWindow(tk.Toplevel):
         else:
             if self.player.skating < 12:
                 return "Skating & Mobility"
-            elif self.player.hockey_iq < 12:
+            elif self.player.hockey_iq < 60:
                 return "Hockey IQ & Vision"
             else:
                 return "Skill Refinement"
@@ -2263,11 +2285,11 @@ class PlayerProfileWindow(tk.Toplevel):
     def _get_locker_room_presence(self):
         """Determines locker room presence."""
         leadership = getattr(self.player, 'leadership', 10)
-        if leadership >= 16:
+        if leadership >= 75:
             return "Team Leader"
-        elif leadership >= 12:
+        elif leadership >= 60:
             return "Positive Influence"
-        elif leadership >= 8:
+        elif leadership >= 45:
             return "Neutral"
         else:
             return "Needs Guidance"
