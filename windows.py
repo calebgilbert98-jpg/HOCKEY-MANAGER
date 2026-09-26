@@ -451,13 +451,49 @@ class RosterWindow(tk.Toplevel):
             font=(self.parent.FONT_FAMILY, 9, 'italic')
         ).pack(pady=(4, 0))
 
-        # Main depth chart area (plain tk frame so modern_ui cards blend in)
-        chart_frame = tk.Frame(depth_frame, bg=self.parent.BG_COLOR)
-        chart_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        # Main depth chart area: scrollable so every section is reachable.
+        # (plain tk widgets so modern_ui cards blend in)
+        scroll_wrap = ttk.Frame(depth_frame, style='Panel.TFrame')
+        scroll_wrap.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(scroll_wrap, bg=self.parent.BG_COLOR,
+                           highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_wrap, orient="vertical",
+                                  command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        chart_frame = tk.Frame(canvas, bg=self.parent.BG_COLOR)
+        canvas_window = canvas.create_window((0, 0), window=chart_frame,
+                                             anchor="nw")
+        chart_frame.bind(
+            "<Configure>",
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfig(canvas_window, width=e.width))
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self._depth_scroll = (_on_mousewheel, canvas)
+        for seq, cmd in (("<MouseWheel>", _on_mousewheel),
+                         ("<Button-4>", lambda _e: canvas.yview_scroll(-1, "units")),
+                         ("<Button-5>", lambda _e: canvas.yview_scroll(1, "units"))):
+            canvas.bind(seq, cmd)
         self._depth_chart_frame = chart_frame
 
         # Build the depth chart sections (rebuildable via _build_depth_chart_sections)
         self._build_depth_chart_sections()
+
+    def _bind_depth_wheel(self, widget):
+        """Route mousewheel events over depth-chart widgets to the canvas."""
+        _on_mousewheel, _canvas = self._depth_scroll
+        for seq, cmd in (("<MouseWheel>", _on_mousewheel),
+                         ("<Button-4>", lambda _e: _canvas.yview_scroll(-1, "units")),
+                         ("<Button-5>", lambda _e: _canvas.yview_scroll(1, "units"))):
+            widget.bind(seq, cmd, add="+")
+        for child in widget.winfo_children():
+            self._bind_depth_wheel(child)
 
     def _build_depth_chart_sections(self):
         """(Re)build the depth chart cards from current roster data."""
@@ -466,11 +502,12 @@ class RosterWindow(tk.Toplevel):
         self.create_forwards_depth_chart(self._depth_chart_frame)
         self.create_defense_depth_chart(self._depth_chart_frame)
         self.create_goalies_depth_chart(self._depth_chart_frame)
+        self._bind_depth_wheel(self._depth_chart_frame)
 
     def _depth_section_card(self, parent, title):
         """modern card container for one depth-chart section."""
         card = AppCard(parent, padding=12)
-        card.pack(fill=tk.X, pady=6)
+        card.pack(fill=tk.X, padx=20, pady=6)
         body = card.get_content_frame()
         tk.Label(body, text=title,
                  font=(self.parent.FONT_FAMILY, 12, 'bold'),
