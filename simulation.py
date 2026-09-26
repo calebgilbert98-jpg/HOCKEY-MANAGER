@@ -3341,15 +3341,42 @@ class GameSim:
             pressurer = by_dist[0]
             px_, py_ = self._ppos_get(pressurer)
             ang = math.atan2(py_ - py, px_ - px)  # from puck to defender
-            # goal-side point: 7 feet from the puck toward the defender's net
+            # Gap control: the tighter the danger, the tighter the gap.
+            # A carrier in the slot gets stick-on-puck pressure (4 ft);
+            # a perimeter carrier gets contained (7 ft). This is what
+            # keeps shooters from walking in uncontested.
+            puck_danger = abs(px - def_net)
+            if puck_danger < 30.0:
+                gap = 4.0  # high danger: stick on puck
+            elif puck_danger < 50.0:
+                gap = 5.5  # medium danger: close the gap
+            else:
+                gap = 7.0  # perimeter: contain
             gx, gy = def_net, 42.5
             gang = math.atan2(gy - py, gx - px)
-            tx = px + math.cos(gang) * 7.0
-            ty = py + math.sin(gang) * 7.0
-            slide(pressurer, tx, ty, 9.0)
+            tx = px + math.cos(gang) * gap
+            ty = py + math.sin(gang) * gap
+            # Faster close when dangerous -- the defender sprints to
+            # engage, doesn't glide.
+            close_speed = 12.0 if puck_danger < 30.0 else 9.0
+            slide(pressurer, tx, ty, close_speed)
             self._set_job(pressurer, "pressure")
+            # Shooting lane denial: the second-nearest defender gets
+            # between the puck and the net -- actually in the lane, not
+            # at a static landmark. This is the help that keeps point
+            # shots and slot feeds from being clean looks.
+            lane_defender = by_dist[1] if len(by_dist) > 1 else None
             for p in skaters:
                 if p.id == pressurer.id:
+                    continue
+                if lane_defender is not None and p.id == lane_defender.id:
+                    # Position on the puck-to-net line, ~40% from puck
+                    # toward net -- in the shooting lane.
+                    gx, gy = def_net, 42.5
+                    lx = px + (gx - px) * 0.4
+                    ly = py + (gy - py) * 0.4
+                    slide(p, lx, ly, 8.0)
+                    self._set_job(p, "slot_coverage")
                     continue
                 t = targets.get(p.id)
                 if t:
@@ -3453,10 +3480,22 @@ class GameSim:
         for p in skaters:
             if p.id == carrier_id:
                 continue
+            # Give-and-go: the passer cuts hard to the net, not to his
+            # formation spot. This is the return-feed option.
+            job = self.player_jobs.get(p.id, "")
+            if job == "give_and_go":
+                # Cut to the net: 12 ft out, toward the puck side.
+                gx = att_net - 12 * adir
+                gy = 42.5 + (py - 42.5) * 0.3
+                slide(p, gx, gy, 10.0)
+                # Clear the job once he's arrived (within 5 ft).
+                px_, py_ = self._ppos_get(p)
+                if math.hypot(px_ - gx, py_ - gy) < 5.0:
+                    self.player_jobs.pop(p.id, None)
+                continue
             t = targets.get(p.id)
             if t:
                 # Points walk the line faster; net-front battles slower.
-                job = self.player_jobs.get(p.id, "")
                 step = 5.0 if job == "net_front" else 8.0
                 slide(p, t[0], t[1], step)
         self._emit_skate()
@@ -3571,6 +3610,10 @@ class GameSim:
         px, py = self._ppos_get(passer)
 
         # --- off-puck battle: get open ---
+        # Playmaking: identify the pressurer (defender on the puck). If
+        # he's committed to the carrier, his man is open by scheme -- the
+        # fundamental draw-and-dish of hockey offense.
+        pressurer, press_dist = self._nearest_defender(passer, defenders)
         cands = []
         for m in mates:
             mx, my = self._ppos_get(m)
@@ -3578,7 +3621,15 @@ class GameSim:
             off = m.offensive_awareness + m.agility + random.randint(-8, 8)
             dfn = (nd.defensive_awareness + nd.anticipation + random.randint(-8, 8)) \
                 if nd is not None else -99
-            got_open = off > dfn
+            # Scheme-open: if your checker is the pressurer (he left you
+            # to hunt the puck), you're open without beating anyone.
+            scheme_open = (nd is not None and pressurer is not None
+                           and nd.id == pressurer.id and press_dist < 8.0)
+            if scheme_open:
+                # The checker committed -- you're wide open.
+                got_open = True
+            else:
+                got_open = off > dfn
             if got_open and nd is not None:
                 # shake the checker: step away into space, drift dangerous
                 nx_, ny_ = self._ppos_get(nd)
@@ -3590,8 +3641,22 @@ class GameSim:
                 dd = self._ppos_dist((mx, my), self._ppos_get(nd))
             fwd = (mx - px) * adir
             danger = -abs(mx - att_net) / 10.0
+            # Playmaking bonuses: reward the hockey play, not just the safe one.
+            playmaking = 0.0
+            if scheme_open:
+                # Draw-and-dish: hit the man whose checker committed.
+                playmaking += 12.0
+            # Seam pass: cross the middle (royal road) to danger.
+            crosses_middle = (py - 42.5) * (my - 42.5) < 0
+            receiver_danger = abs(mx - att_net)
+            if crosses_middle and receiver_danger < 35.0:
+                playmaking += 10.0
+            # Weak-side exploit: puck on one side, open man on the other.
+            weak_side = (py < 42.5) != (my < 42.5)
+            if weak_side and dd > 10.0 and receiver_danger < 40.0:
+                playmaking += 8.0
             score = ((14 if got_open else 0) + dd * 0.6 + fwd * 0.25 + danger
-                     + random.uniform(0, 4))
+                     + playmaking + random.uniform(0, 4))
             cands.append((score, m, mx, my, nd, dd, got_open))
         cands.sort(key=lambda t: -t[0])
         _, receiver, rx, ry, nd, dd, got_open = cands[0]
@@ -3633,6 +3698,11 @@ class GameSim:
         if completed:
             self.possession_player = receiver
             self.puck_pos = self._clamp_boards(rx, ry)
+            # Give-and-go: the passer cuts to the net after dishing.
+            # This creates the return-feed option and is the most
+            # recognizable playmaking movement in hockey.
+            if kind in ("attack", "cycle"):
+                self._set_job(passer, "give_and_go")
             self._emit_skate()
             return receiver
         if interceptor is not None:
@@ -3739,7 +3809,17 @@ class GameSim:
                 return
 
         # Calculate shot quality (high/medium/low danger)
-        shot_quality = self._calculate_shot_quality(shot_location, distance, shot_type, attacking_team, shooter)
+        # Defensive pressure matters: a defender in your face (within
+        # 6 ft) rushes the release and cuts the quality. Wide open
+        # looks get the full quality.
+        sx, sy = self._ppos_get(shooter)
+        defenders = self._on_ice_skaters(defending_team)
+        pressure_dist = min(
+            (self._ppos_dist((sx, sy), self._ppos_get(d)) for d in defenders),
+            default=30.0)
+        shot_quality = self._calculate_shot_quality(
+            shot_location, distance, shot_type, attacking_team, shooter,
+            pressure_dist=pressure_dist)
         
         # Check if shot misses the net
         if self._check_shot_miss(shooter, shot_quality, distance):
@@ -3893,8 +3973,14 @@ class GameSim:
         
         return self._weighted_random_choice(type_weights)
 
-    def _calculate_shot_quality(self, location, distance, shot_type, attacking_team, shooter=None):
-        """Calculate shot quality (high/medium/low danger) and return quality score."""
+    def _calculate_shot_quality(self, location, distance, shot_type, attacking_team, shooter=None,
+                                pressure_dist=30.0):
+        """Calculate shot quality (high/medium/low danger) and return quality score.
+        
+        pressure_dist: distance (ft) of the nearest defender at release.
+        Tight pressure (<6 ft) rushes the shot; open looks (>15 ft) get
+        full quality.
+        """
         base_quality = {
             ShotLocation.CREASE: 0.9,
             ShotLocation.LOW_SLOT: 0.8,
@@ -3921,7 +4007,18 @@ class GameSim:
         # Distance penalty
         distance_modifier = max(0.3, 1.0 - (distance - 10) * 0.02)
         
-        quality_score = base_quality * type_modifier * distance_modifier
+        # Defensive pressure: a defender in your kitchen (<6 ft) forces
+        # a rushed release; the quality drops. Open ice (>15 ft) is
+        # full value. Linear between.
+        if pressure_dist < 6.0:
+            pressure_modifier = 0.65
+        elif pressure_dist > 15.0:
+            pressure_modifier = 1.0
+        else:
+            pressure_modifier = 0.65 + (pressure_dist - 6.0) / 9.0 * 0.35
+        
+        quality_score = (base_quality * type_modifier * distance_modifier
+                         * pressure_modifier)
 
         # Trait: Sniper / Two-Way / One-Timer Specialist elevate shot quality
         if shooter is not None:
@@ -5404,8 +5501,11 @@ class GameSim:
         # the possession-sequence rework so the extra setup passes don't
         # starve the shot count; raised again after the zone-state honesty
         # fix (turnovers now recompute the zone) removed phantom
-        # defensive-zone "shots" that had been inflating scoring)
-        shot_chance = 0.585
+        # defensive-zone "shots" that had been inflating scoring.
+        # Tuned for the hockey-IQ update: the playmaking (draw-and-dish,
+        # seam passes) creates better chances, so we need fewer of them
+        # to hit the scoring target.
+        shot_chance = 0.54
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
@@ -5448,6 +5548,11 @@ class GameSim:
                 if res is not None and self.possession_team != attacking_team:
                     return "TURNOVER"
                 carrier = getattr(self, "possession_player", None) or carrier
+                # The defense tracks every puck movement -- not just once
+                # after the sequence. Without this the pressurer is always
+                # chasing and shots go off with defenders 20+ feet away.
+                self._defense_tick(defending_team, mode="dzone")
+                self._offense_tick(attacking_team)
                 # Contact on the touch: rub-outs along the wall happen all
                 # game in real hockey, not just on highlight hits.
                 hit_outcome = self._maybe_throw_hit(
