@@ -18,7 +18,7 @@ class GameResultsWindow(tk.Toplevel):
         
         self.title(f"Daily Results - {self.date_str}")
         self.geometry("1000x700")
-        self.configure(bg='#181818')
+        self.configure(bg=self.parent.BG_COLOR)
         
         # Center the window
         self._center_window()
@@ -41,18 +41,18 @@ class GameResultsWindow(tk.Toplevel):
     def _create_interface(self):
         """Create clean, simple interface"""
         # Main frame
-        main_frame = tk.Frame(self, bg='#181818')
+        main_frame = tk.Frame(self, bg=self.parent.BG_COLOR)
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
         # Header
-        header_frame = tk.Frame(main_frame, bg='#181818')
+        header_frame = tk.Frame(main_frame, bg=self.parent.BG_COLOR)
         header_frame.pack(fill='x', pady=(0, 20))
         
         title_label = tk.Label(header_frame, 
                               text=f"Daily Results - {self.date_str}",
                               font=('Segoe UI', 18, 'bold'),
                               fg='#FFFFFF',
-                              bg='#181818')
+                              bg=self.parent.BG_COLOR)
         title_label.pack()
         
         # Content notebook for tabs
@@ -69,19 +69,19 @@ class GameResultsWindow(tk.Toplevel):
         self._create_news_tab()
         
         # Close button
-        close_frame = tk.Frame(main_frame, bg='#181818')
+        close_frame = tk.Frame(main_frame, bg=self.parent.BG_COLOR)
         close_frame.pack(fill='x', pady=(20, 0))
         
         close_btn = tk.Button(close_frame,
                              text="Close",
                              command=self.destroy,
                              font=('Segoe UI', 10),
-                             bg='#D13438',
+                             bg='#00ceb8',
                              fg='white',
                              padx=30,
                              pady=8,
                              border=0,
-                             activebackground='#A1272A')
+                             activebackground='#00a894')
         close_btn.pack(side='right')
     
     def _create_games_tab(self):
@@ -148,7 +148,7 @@ class GameResultsWindow(tk.Toplevel):
                                 bg='#2A2A2A',
                                 fg='#E0E0E0',
                                 insertbackground='#E0E0E0',
-                                selectbackground='#D13438',
+                                selectbackground='#00ceb8',
                                 wrap='word')
         
         # Scrollbar for news

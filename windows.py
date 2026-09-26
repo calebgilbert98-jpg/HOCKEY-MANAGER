@@ -3487,7 +3487,8 @@ class TradeWindow(tk.Toplevel):
         ttk.Label(dlg, text=f"Select a {team.team_name} pick:",
                   style='TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(pady=10)
         lb = tk.Listbox(dlg, height=12, bg='#232a3a', fg='#ffffff',
-                        selectbackground='#0d2b28', relief='flat')
+                        selectbackground='#0d2b28', relief='flat',
+                        highlightthickness=1, highlightbackground='#2e2e38')
         lb.pack(fill='both', expand=True, padx=12)
         for pk in picks:
             lb.insert(tk.END, f"{self.te.asset_label(pk)}  [{self.te.asset_value(pk)}]")
@@ -3610,7 +3611,8 @@ class TradeWindow(tk.Toplevel):
                       style='Secondary.TLabel').pack(anchor='w', pady=4)
         else:
             lb = tk.Listbox(self.history_frame, height=5, bg='#232a3a',
-                            fg='#ffffff', relief='flat')
+                            fg='#ffffff', relief='flat',
+                            highlightthickness=1, highlightbackground='#2e2e38')
             lb.pack(fill='x', pady=4)
             for t in reversed(history[-20:]):
                 lb.insert(tk.END, f"{t.date} — {t.summary}")
@@ -4521,7 +4523,8 @@ class DraftWindow(tk.Toplevel):
         combo.pack(pady=4)
 
         lb = tk.Listbox(dlg, height=10, bg='#232a3a', fg='#ffffff',
-                        selectbackground='#0d2b28', relief='flat')
+                        selectbackground='#0d2b28', relief='flat',
+                        highlightthickness=1, highlightbackground='#2e2e38')
         lb.pack(fill='both', expand=True, padx=14, pady=6)
 
         def _partner_picks(name):
@@ -4667,7 +4670,9 @@ class DraftWindow(tk.Toplevel):
                   font=(self.parent.FONT_FAMILY, 16, 'bold'),
                   style='Heading.TLabel').pack(pady=12)
         lb = tk.Listbox(dlg, bg='#232a3a', fg='#ffffff', relief='flat',
-                        font=(self.parent.FONT_FAMILY, 11))
+                        font=(self.parent.FONT_FAMILY, 11),
+                        selectbackground='#0d2b28', highlightthickness=1,
+                        highlightbackground='#2e2e38')
         lb.pack(fill='both', expand=True, padx=14, pady=6)
         user_grade = None
         for team, grade, ratio in grades:
@@ -4705,18 +4710,18 @@ class ScheduleWindow(tk.Toplevel):
         self.parent = parent
         self.title("League Schedule")
         self.geometry("900x700")
-        self.configure(background='#1E1E1E')
+        self.configure(background=parent.BG_COLOR)
 
         # Main container
-        main_container = ttk.Frame(self)
+        main_container = ttk.Frame(self, style='Panel.TFrame')
         main_container.pack(fill='both', expand=True, padx=10, pady=10)
 
-        schedule_notebook = ttk.Notebook(main_container)
+        schedule_notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
         schedule_notebook.pack(fill='both', expand=True, pady=(0, 10))
         
         columns = {'date': ('Date', 100), 'away': ('Away Team', 200), 'score': ('Score', 100), 'home': ('Home Team', 200), 'status': ('Status', 100)}
         
-        my_team_frame = ttk.Frame(schedule_notebook)
+        my_team_frame = ttk.Frame(schedule_notebook, style='Panel.TFrame')
         self.my_sched_header = ttk.Label(my_team_frame, text="", style='CardTitle.TLabel')
         self.my_sched_header.pack(anchor='w', padx=8, pady=(8, 2))
         self.my_schedule_tree = parent._create_treeview(my_team_frame, columns, 25)
@@ -4728,7 +4733,7 @@ class ScheduleWindow(tk.Toplevel):
         
         schedule_notebook.add(my_team_frame, text='My Team Schedule')
         
-        league_frame = ttk.Frame(schedule_notebook)
+        league_frame = ttk.Frame(schedule_notebook, style='Panel.TFrame')
         self.league_schedule_tree = parent._create_treeview(league_frame, columns, 25)
         self.league_schedule_tree.pack(fill='both', expand=True, padx=5, pady=5)
         
@@ -6309,14 +6314,33 @@ class NewsWindow(tk.Toplevel):
         self.parent = parent
         self.title("League News")
         self.geometry("800x600")
-        self.configure(background='#1E1E1E')
+        self.configure(background=parent.BG_COLOR)
 
-        news_text = tk.Text(self, wrap='word', bg='#2D2D30', fg='#CCCCCC', font=('Segoe UI', 10), borderwidth=0)
-        news_text.pack(fill='both', expand=True, padx=10, pady=10)
-        
+        header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
+        header.pack(fill='x', padx=10, pady=(10, 0))
+        ttk.Label(header, text="LEAGUE NEWS",
+                  font=(parent.FONT_FAMILY, 16, 'bold'),
+                  style='Heading.TLabel').pack(side='left')
+
+        text_frame = ttk.Frame(self, style='Panel.TFrame', padding=2)
+        text_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        news_text = tk.Text(text_frame, wrap='word',
+                            bg=parent.CONTENT_BG, fg=parent.TEXT_COLOR,
+                            font=(parent.FONT_FAMILY, 10), borderwidth=0,
+                            selectbackground='#0d2b28',
+                            insertbackground=parent.TEXT_COLOR,
+                            highlightthickness=1, highlightbackground='#2e2e38',
+                            padx=10, pady=10)
+        v_scroll = ttk.Scrollbar(text_frame, orient='vertical',
+                                 command=news_text.yview)
+        news_text.configure(yscrollcommand=v_scroll.set)
+        news_text.pack(side='left', fill='both', expand=True)
+        v_scroll.pack(side='right', fill='y')
+
         for item in reversed(parent.news_log):
             news_text.insert('1.0', f"({item['date'].strftime('%b %d')}) {item['story']}\n\n")
-            
+
         news_text.config(state='disabled')
 
 class GMOptionsWindow(tk.Toplevel):
@@ -6325,23 +6349,29 @@ class GMOptionsWindow(tk.Toplevel):
         self.parent = parent
         self.title("General Manager Options")
         self.geometry("600x450")
-        self.configure(background='#1E1E1E')
-        
+        self.configure(background=parent.BG_COLOR)
+
+        header = ttk.Frame(self, style='Panel.TFrame', padding=(20, 14))
+        header.pack(fill='x', padx=10, pady=(10, 0))
+        ttk.Label(header, text="GM OPTIONS",
+                  font=(parent.FONT_FAMILY, 16, 'bold'),
+                  style='Heading.TLabel').pack(side='left')
+
         # GM Management Options
         management_frame = ttk.LabelFrame(self, text="Team Management", padding=15)
         management_frame.pack(fill='x', padx=20, pady=10)
-        
+
         ttk.Button(management_frame, text="Manage Trade Block", command=self.parent.open_trade_block_window).pack(pady=5, fill='x')
         ttk.Button(management_frame, text="Handle Waivers", command=self.parent.open_waivers_window).pack(pady=5, fill='x')
         ttk.Button(management_frame, text="Set Captains", command=self.parent.open_set_captains_window).pack(pady=5, fill='x')
-        ttk.Button(management_frame, text="Negotiate Extensions", command=self.negotiate_extensions).pack(pady=5, fill='x')
-        
+        ttk.Button(management_frame, text="Negotiate Extensions", command=self.negotiate_extensions, style='Accent.TButton').pack(pady=5, fill='x')
+
         # Game Settings & Preferences
         settings_frame = ttk.LabelFrame(self, text="Game Settings & Preferences", padding=15)
         settings_frame.pack(fill='x', padx=20, pady=10)
-        
+
         ttk.Button(settings_frame, text="Settings & Preferences", command=self.parent.open_settings_window).pack(pady=5, fill='x')
-        
+
         # Close button
         ttk.Button(self, text="Close", command=self.destroy).pack(pady=20)
 
@@ -6888,20 +6918,20 @@ class WaiversWindow(tk.Toplevel):
         instruction_frame.pack(fill='x', padx=5, pady=5)
         
         ttk.Label(instruction_frame, text="Waiver Wire Management", font=(parent.FONT_FAMILY, 16, 'bold'), 
-                 style='Header.TLabel').pack(anchor='w', padx=10, pady=5)
+                 style='Heading.TLabel').pack(anchor='w', padx=10, pady=5)
         
         ttk.Label(instruction_frame, text="Players must clear waivers when being sent down to the AHL if they have played " 
                                          "more than 160 NHL games, or are older than 25 years. "
                                          "Players on waivers can be claimed by other teams (starting with the lowest ranked team).", 
-                 wraplength=900, style='Info.TLabel').pack(anchor='w', padx=10, pady=5)
+                 wraplength=900, style='Muted.TLabel').pack(anchor='w', padx=10, pady=5)
         
         # Create notebook with tabs
-        self.notebook = ttk.Notebook(main_frame)
+        self.notebook = ttk.Notebook(main_frame, style='Modern.TNotebook')
         self.notebook.pack(fill='both', expand=True, padx=5, pady=10)
         
         # Create tabs
-        my_players_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        waiver_wire_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
+        my_players_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
+        waiver_wire_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
         
         self.notebook.add(my_players_frame, text="Waiver-Eligible Players")
         self.notebook.add(waiver_wire_frame, text="Waiver Wire")
@@ -7660,7 +7690,7 @@ class SetCaptainsWindow(tk.Toplevel):
         self.parent = parent
         self.title("Set Captains")
         self.geometry("400x300")
-        self.configure(background='#1E1E1E')
+        self.configure(background=parent.BG_COLOR)
 
         self.captain_var = tk.StringVar(master=self)
         self.alternate1_var = tk.StringVar(master=self)
@@ -7726,7 +7756,7 @@ class GMDashboardWindow(tk.Toplevel):
         self.parent = parent
         self.title("GM Dashboard")
         self.configure(background=parent.BG_COLOR)
-        self.geometry("860x640")
+        self.geometry("860x720")
         self._build()
 
     # ---------- helpers ----------
@@ -7771,8 +7801,8 @@ class GMDashboardWindow(tk.Toplevel):
         self.grid_host.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
         for i in range(2):
             self.grid_host.columnconfigure(i, weight=1)
-        for i in range(3):
-            self.grid_host.rowconfigure(i, weight=1)
+        # NOTE: rows intentionally have no weight so each row sizes to its
+        # tallest card; equal row weights clipped card content (labels cut off)
         self._fill_cards(team, league, st, w, l, otl, pts, gp)
 
     def _fill_cards(self, team, league, st, w, l, otl, pts, gp):
@@ -8322,6 +8352,8 @@ class BuyoutCalculatorWindow(tk.Toplevel):
         self.lb = tk.Listbox(left, height=22, activestyle='none',
                              bg='#232a3a', fg='#ffffff',
                              selectbackground='#0d2b28', relief='flat',
+                             highlightthickness=1,
+                             highlightbackground='#2e2e38',
                              font=(self.parent.FONT_FAMILY, 10))
         self.lb.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.lb.bind('<<ListboxSelect>>', self._on_select)

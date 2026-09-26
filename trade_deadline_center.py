@@ -60,7 +60,7 @@ class TradeDeadlineCenter(tk.Toplevel):
     def _setup_window(self):
         """Configure the main window with immersive design"""
         self.title("NHL TRADE DEADLINE CENTER")
-        self.configure(bg='#0D1421')  # Deep navy background
+        self.configure(bg='#0e0e11')  # Charcoal background
         try:
             self.state('zoomed')  # Full screen on Windows
         except Exception:
@@ -160,15 +160,15 @@ class TradeDeadlineCenter(tk.Toplevel):
         style = ttk.Style()
         
         # Deadline theme colors
-        self.DEADLINE_BG = '#0D1421'      # Deep navy
-        self.URGENT_RED = '#FF1744'       # Bright red for urgency
-        self.DEADLINE_RED = '#FF1744'     # Alias for urgency red
-        self.DEADLINE_GOLD = '#FFD600'    # Gold for highlights
-        self.NEUTRAL_GRAY = '#37474F'     # Gray for inactive elements
+        self.DEADLINE_BG = '#0e0e11'      # Charcoal background
+        self.URGENT_RED = '#00ceb8'       # Teal accent
+        self.DEADLINE_RED = '#00ceb8'     # Alias for accent
+        self.DEADLINE_GOLD = '#00ceb8'    # Teal for highlights
+        self.NEUTRAL_GRAY = '#1e1e24'     # Card surface for inactive elements
         self.TEXT_WHITE = '#FFFFFF'       # White text
-        self.SUCCESS_GREEN = '#00E676'    # Green for completed trades
-        self.PANEL_COLOR = '#16202F'      # Panel background
-        self.BORDER_COLOR = '#2A3A52'     # Borders
+        self.SUCCESS_GREEN = '#3DDC84'    # Green for completed trades
+        self.PANEL_COLOR = '#16161a'      # Panel background
+        self.BORDER_COLOR = '#2a2a30'     # Borders
         
         # Custom styles
         style.configure('Deadline.TFrame', background=self.DEADLINE_BG)
@@ -356,7 +356,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         # Quick Trade Proposal button
         quick_trade_btn = tk.Button(
             buttons_frame,
-            text="� QUICK TRADE",
+            text="QUICK TRADE",
             command=self._open_quick_trade_interface,
             bg=self.URGENT_RED,
             fg=self.TEXT_WHITE,
@@ -386,7 +386,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         # Market Browser button
         market_btn = tk.Button(
             buttons_frame,
-            text="� BROWSE MARKET",
+            text="BROWSE MARKET",
             command=self._open_market_browser,
             bg=self.DEADLINE_GOLD,
             fg='black',
@@ -564,19 +564,19 @@ class TradeDeadlineCenter(tk.Toplevel):
         self.notification_active = True
         
         # Create breaking news overlay
-        news_overlay = tk.Frame(self, bg='#DC2626', relief='raised', bd=3)
+        news_overlay = tk.Frame(self, bg='#00ceb8', relief='raised', bd=3)
         news_overlay.place(relx=0.5, rely=0.1, anchor='center', 
                           relwidth=0.8, height=60)
         
         # Breaking news label
         breaking_label = tk.Label(news_overlay, text="BREAKING NEWS",
-                                 bg='#DC2626', fg='white',
+                                 bg='#00ceb8', fg='white',
                                  font=('Segoe UI', 12, 'bold'))
         breaking_label.pack(pady=2)
         
         # News content
         news_label = tk.Label(news_overlay, text=news_item,
-                             bg='#DC2626', fg='white',
+                             bg='#00ceb8', fg='white',
                              font=('Segoe UI', 10),
                              wraplength=600)
         news_label.pack(pady=2)
@@ -591,7 +591,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         # Flash effect
         def flash_news():
             current_bg = news_overlay.cget('bg')
-            new_bg = '#EF4444' if current_bg == '#DC2626' else '#DC2626'
+            new_bg = '#00a894' if current_bg == '#00ceb8' else '#00ceb8'
             news_overlay.configure(bg=new_bg)
             breaking_label.configure(bg=new_bg)
             news_label.configure(bg=new_bg)
@@ -1127,7 +1127,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         stats_frame = tk.Frame(parent, bg=self.PANEL_COLOR, relief='raised', bd=2)
         stats_frame.pack(fill='both', expand=True)
         
-        tk.Label(stats_frame, text="� Market Statistics",
+        tk.Label(stats_frame, text="Market Statistics",
                 bg=self.PANEL_COLOR, fg=self.DEADLINE_GOLD,
                 font=('Segoe UI', 14, 'bold')).pack(pady=10)
         
@@ -1666,7 +1666,7 @@ def create_trade_deadline_button(parent_frame, parent_app):
     deadline_btn = tk.Button(
         parent_frame,
         text="TRADE DEADLINE CENTER",
-        bg='#FF1744',
+        bg='#00ceb8',
         fg='white',
         font=('Segoe UI', 14, 'bold'),
         relief='raised',

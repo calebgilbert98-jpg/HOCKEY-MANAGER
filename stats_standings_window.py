@@ -175,6 +175,7 @@ class StatsStandingsWindow(tk.Toplevel):
         self.create_enhanced_player_leaders_tab()
         self.create_comprehensive_analytics_tab()  # Combines analytics, trends, and insights
         self.create_division_analysis_tab()
+        self.create_divisions_grid_tab()
         
         # Enhanced status bar
         status_frame = ttk.Frame(main_frame, style='Panel.TFrame')
@@ -221,7 +222,7 @@ class StatsStandingsWindow(tk.Toplevel):
                     if hasattr(team, 'roster'):
                         total_players += len(team.roster)
                 
-                summary = f"📊 {team_count} teams • {total_players:,} players • Analytics: {'✅ Active' if self.analytics_engine else '❌ Unavailable'}"
+                summary = f"{team_count} teams • {total_players:,} players • Analytics: {'Active' if self.analytics_engine else 'Unavailable'}"
                 self.data_summary_label.config(text=summary)
             else:
                 self.data_summary_label.config(text="No league data available")
@@ -466,7 +467,7 @@ class StatsStandingsWindow(tk.Toplevel):
             total_records = len(record_manager.nhl_records.season_records) + len(record_manager.nhl_records.career_records)
             stats_text = f"{total_records} Official NHL Records"
             if hasattr(record_manager, 'achievements') and record_manager.achievements:
-                stats_text += f" • 🎯 {len(record_manager.achievements)} Achievements"
+                stats_text += f" • {len(record_manager.achievements)} Achievements"
         except:
             stats_text = "Official NHL Records Database"
             
@@ -732,9 +733,12 @@ class StatsStandingsWindow(tk.Toplevel):
         self.division_container.pack(fill='both', expand=True)
         
         self.populate_division_analysis()
+
+    def create_divisions_grid_tab(self):
+        """Create 2x2 grid tab showing all 4 divisions"""
         division_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
         self.notebook.add(division_frame, text="Divisions")
-        
+
         # Create a grid layout for all 4 divisions
         self.create_division_grid(division_frame)
     
@@ -924,13 +928,16 @@ class StatsStandingsWindow(tk.Toplevel):
         try:
             # Try to get data from the atmospheric dashboard
             if hasattr(self.parent, 'atmospheric_dashboard'):
-                return self.parent.atmospheric_dashboard._get_standings_data()
-            else:
-                # Fallback: get data directly from league
-                return self.get_league_standings()
+                data = self.parent.atmospheric_dashboard._get_standings_data()
+                if isinstance(data, dict):
+                    return data
+            # Fallback: get data directly from league
+            data = self.get_league_standings()
+            if isinstance(data, dict):
+                return data
         except Exception as e:
             print(f"Error getting standings data: {e}")
-            return self.get_fallback_standings()
+        return self.get_fallback_standings()
     
     def get_league_standings(self):
         """Get standings directly from league data"""
@@ -1683,12 +1690,12 @@ class StatsStandingsWindow(tk.Toplevel):
             self.populate_advanced_team_stats()
         elif tab_index == 2:  # Player Leaders
             self.update_player_leaders()
-        elif tab_index == 3:  # Analytics
+        elif tab_index == 3:  # Analytics & Trends
             self.refresh_analytics_dashboard()
-        elif tab_index == 4:  # Trends
-            self.populate_trends_analysis()
-        elif tab_index == 5:  # Divisions
+        elif tab_index == 4:  # Division Analysis
             self.populate_division_analysis()
+        elif tab_index == 5:  # Divisions (static grid, populated once at creation)
+            pass
     
     # Enhanced populate methods
     def populate_enhanced_standings(self):
@@ -1904,7 +1911,7 @@ class StatsStandingsWindow(tk.Toplevel):
                      "Buffalo Sabres", "Ottawa Senators", "Montreal Canadiens", "Detroit Red Wings"]
         
         for i, name in enumerate(team_names):
-            team = Team(name)
+            team = Team(team_name=name, city=name, division="Atlantic", conference="Eastern")
             # Set all stats to 0 for season start
             team.wins = 0
             team.losses = 0
@@ -2673,14 +2680,14 @@ Current League Statistics:
 • Season progress: Early season analysis
 
 Team Performance Leaders:
-🔥 Top Performing Teams:"""
+Top Performing Teams:"""
             
             for i, team in enumerate(hot_teams, 1):
                 points = team.wins * 2 + getattr(team, 'ot_losses', 0)
                 goal_diff = getattr(team, 'goals_for', 0) - getattr(team, 'goals_against', 0)
                 content += f"\n   {i}. {team.team_name} ({team.wins}-{team.losses}-{getattr(team, 'ot_losses', 0)}, {points} pts, {goal_diff:+d} goal diff)"
             
-            content += f"\n\n❄️ Teams Needing Improvement:"
+            content += f"\n\nTeams Needing Improvement:"
             for i, team in enumerate(cold_teams, 1):
                 points = team.wins * 2 + getattr(team, 'ot_losses', 0)
                 goal_diff = getattr(team, 'goals_for', 0) - getattr(team, 'goals_against', 0)
@@ -3172,8 +3179,8 @@ Analysis will be updated as the season progresses.
             
             # Season record categories
             season_categories = [
-                ("🥅 Scoring Records", ["single_season_goals", "single_season_assists", "single_season_points"]),
-                ("🏒 Goaltending Records", ["single_season_wins", "single_season_shutouts"]),
+                ("Scoring Records", ["single_season_goals", "single_season_assists", "single_season_points"]),
+                ("Goaltending Records", ["single_season_wins", "single_season_shutouts"]),
             ]
             
             row = 0
@@ -3273,8 +3280,8 @@ Analysis will be updated as the season progresses.
             
             # Career record categories
             career_categories = [
-                ("🎯 Career Scoring", ["career_goals", "career_assists", "career_points"]),
-                ("🥅 Career Goaltending", ["career_wins", "career_shutouts"]),
+                ("Career Scoring", ["career_goals", "career_assists", "career_points"]),
+                ("Career Goaltending", ["career_wins", "career_shutouts"]),
             ]
             
             row = 0
@@ -3587,33 +3594,34 @@ Analysis will be updated as the season progresses.
         
         trends_text = tk.Text(trends_frame, height=20, wrap='word', 
                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                             font=(self.parent.FONT_FAMILY, 10), relief='flat')
+                             font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                             highlightthickness=0)
         trends_text.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Sample trends content
-        trends_content = """📈 LEAGUE TRENDS ANALYSIS
+        trends_content = """LEAGUE TRENDS ANALYSIS
 
-🏒 Scoring Trends:
+Scoring Trends:
 • Goals per game trending upward
 • Power play efficiency improving league-wide
 • Goaltending save percentages stabilizing
 
-👥 Player Development:
+Player Development:
 • Younger players getting more ice time
 • Rookie impact players emerging
 • Veteran leadership maintaining importance
 
-📊 Team Performance:
+Team Performance:
 • Balanced scoring becoming more valuable
 • Special teams playing decisive role
 • Home ice advantage factors
 
-🎯 Emerging Patterns:
+Emerging Patterns:
 • Speed and skill emphasis increasing
 • Analytics-driven decisions growing
 • Player versatility highly valued
 
-📋 Key Insights:
+Key Insights:
 • Draft picks showing faster development
 • Contract values adjusting to market
 • International player influence growing"""
@@ -3641,7 +3649,8 @@ Analysis will be updated as the season progresses.
         
         team_text = tk.Text(team_insights_frame, height=15, wrap='word',
                            bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                           font=(self.parent.FONT_FAMILY, 10), relief='flat')
+                           font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                           highlightthickness=0)
         team_text.pack(fill='both', expand=True)
         
         # Player insights
@@ -3650,11 +3659,12 @@ Analysis will be updated as the season progresses.
         
         player_text = tk.Text(player_insights_frame, height=15, wrap='word',
                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                             font=(self.parent.FONT_FAMILY, 10), relief='flat')
+                             font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                             highlightthickness=0)
         player_text.pack(fill='both', expand=True)
         
         # Sample insights
-        team_content = """🏒 TEAM PERFORMANCE INSIGHTS
+        team_content = """TEAM PERFORMANCE INSIGHTS
 
 Top Performing Teams:
 • Strong defensive core correlation with success
@@ -3671,7 +3681,7 @@ Competitive Balance:
 • Draft system promoting equality
 • Coaching strategies evolving"""
         
-        player_content = """⭐ PLAYER PERFORMANCE INSIGHTS
+        player_content = """PLAYER PERFORMANCE INSIGHTS
 
 Standout Performers:
 • Young players exceeding expectations

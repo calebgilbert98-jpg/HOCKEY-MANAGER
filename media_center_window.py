@@ -100,7 +100,7 @@ class MediaCenterWindow(tk.Toplevel):
     
     def _create_settings_panel(self, parent):
         """Create media engagement settings"""
-        settings_frame = self.parent._create_packed_panel(parent, "🔧 Media Settings")
+        settings_frame = self.parent._create_packed_panel(parent, "Media Settings")
         
         # Engagement level selection
         ttk.Label(settings_frame, text="Choose your media engagement level:", style='Content.TLabel').pack(anchor=tk.W, pady=(0, 5))
@@ -109,10 +109,10 @@ class MediaCenterWindow(tk.Toplevel):
         
         # Radio buttons for engagement levels
         levels = [
-            (MediaEngagementLevel.DISABLED, "🚫 Disabled", "No media interactions - pure hockey management"),
-            (MediaEngagementLevel.MINIMAL, "📰 Minimal", "Major events only (trades, big signings)"),
-            (MediaEngagementLevel.STANDARD, "🎙️ Standard", "Pre/post-game + major events"),
-            (MediaEngagementLevel.FULL, "📺 Full Immersion", "Complete storylines & all interactions")
+            (MediaEngagementLevel.DISABLED, "Disabled", "No media interactions - pure hockey management"),
+            (MediaEngagementLevel.MINIMAL, "Minimal", "Major events only (trades, big signings)"),
+            (MediaEngagementLevel.STANDARD, "Standard", "Pre/post-game + major events"),
+            (MediaEngagementLevel.FULL, "Full Immersion", "Complete storylines & all interactions")
         ]
         
         for level, display_text, description in levels:
@@ -145,17 +145,18 @@ class MediaCenterWindow(tk.Toplevel):
     
     def _create_status_panel(self, parent):
         """Create status overview panel"""
-        status_frame = self.parent._create_packed_panel(parent, "📊 Media Status")
+        status_frame = self.parent._create_packed_panel(parent, "Media Status")
         
         # Status display area
         self.status_text = tk.Text(status_frame, height=8, width=40, wrap=tk.WORD,
                                   background=self.parent.CONTENT_BG, foreground=self.parent.TEXT_COLOR,
-                                  font=(self.parent.FONT_FAMILY, 9), state=tk.DISABLED)
+                                  font=(self.parent.FONT_FAMILY, 9), state=tk.DISABLED,
+                                  relief='flat', borderwidth=0, highlightthickness=0)
         self.status_text.pack(fill=tk.BOTH, expand=True)
     
     def _create_journalist_panel(self, parent):
         """Create journalist relationship panel"""
-        journalist_frame = self.parent._create_packed_panel(parent, "👥 Journalist Relations")
+        journalist_frame = self.parent._create_packed_panel(parent, "Journalist Relations")
         
         # Journalist list
         columns = {'name': ('Name', 120), 'outlet': ('Outlet', 80), 'type': ('Type', 80), 'relationship': ('Relations', 60)}
@@ -177,7 +178,7 @@ class MediaCenterWindow(tk.Toplevel):
     
     def _create_events_panel(self, parent):
         """Create pending media events panel"""
-        events_frame = self.parent._create_packed_panel(parent, "📺 Pending Media Events")
+        events_frame = self.parent._create_packed_panel(parent, "Pending Media Events")
         
         # Events container with scrollbar
         events_container = ttk.Frame(events_frame, style='Panel.TFrame')
@@ -203,7 +204,7 @@ class MediaCenterWindow(tk.Toplevel):
     
     def _create_storylines_panel(self, parent):
         """Create active storylines panel"""
-        storylines_frame = self.parent._create_packed_panel(parent, "📖 Active Storylines")
+        storylines_frame = self.parent._create_packed_panel(parent, "Active Storylines")
         
         # Storylines list
         columns = {'title': ('Storyline', 200), 'type': ('Type', 100), 'intensity': ('Heat', 60), 'days_left': ('Days Left', 80)}
@@ -248,9 +249,7 @@ class MediaCenterWindow(tk.Toplevel):
         
         # Event type and status
         event_type = event['type'].replace('_', ' ').title()
-        type_color = {'post_game_interview': '🎙️', 'trade_announcement': '🔄', 'contract_signing': '📝'}.get(event['type'], '📰')
-        
-        ttk.Label(header_frame, text=f"{type_color} {event_type}", style='MediaTitle.TLabel').pack(side=tk.LEFT)
+        ttk.Label(header_frame, text=event_type, style='MediaTitle.TLabel').pack(side=tk.LEFT)
         
         optional_text = "OPTIONAL" if event.get('optional', False) else "REQUIRED"
         optional_color = 'green' if event.get('optional', False) else '#FF5722'
@@ -524,12 +523,12 @@ class InterviewWindow(tk.Toplevel):
         self.response_var = tk.StringVar(value="professional")
         
         responses = [
-            ("professional", "🤝 Professional", "Balanced, diplomatic responses"),
-            ("supportive", "💪 Supportive", "Back your players and organization"),
-            ("confident", "⭐ Confident", "Express strong confidence in team direction"),
-            ("diplomatic", "🧠 Diplomatic", "Avoid controversy, redirect questions"),
-            ("honest", "💯 Brutally Honest", "Tell it like it is, consequences be damned"),
-            ("dismissive", "🙄 Dismissive", "Short answers, show irritation")
+            ("professional", "Professional", "Balanced, diplomatic responses"),
+            ("supportive", "Supportive", "Back your players and organization"),
+            ("confident", "Confident", "Express strong confidence in team direction"),
+            ("diplomatic", "Diplomatic", "Avoid controversy, redirect questions"),
+            ("honest", "Brutally Honest", "Tell it like it is, consequences be damned"),
+            ("dismissive", "Dismissive", "Short answers, show irritation")
         ]
         
         response_frame = ttk.Frame(parent, style='Panel.TFrame')

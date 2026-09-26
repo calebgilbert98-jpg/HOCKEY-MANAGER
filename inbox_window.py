@@ -184,7 +184,8 @@ class InboxWindow(tk.Toplevel):
                                   font=(self.parent.FONT_FAMILY, 10),
                                   state='disabled',
                                   relief='flat',
-                                  borderwidth=0)
+                                  borderwidth=0,
+                                  highlightthickness=0)
         
         content_scrollbar = ttk.Scrollbar(content_frame, orient='vertical', command=self.content_text.yview)
         self.content_text.configure(yscrollcommand=content_scrollbar.set)
@@ -396,7 +397,7 @@ class InboxWindow(tk.Toplevel):
             if message.response_deadline:
                 self.content_text.insert(tk.END, f"\nDeadline: {message.response_deadline.strftime('%B %d, %Y')}")
             if message.is_overdue():
-                self.content_text.insert(tk.END, f"\n⚠️  OVERDUE")
+                self.content_text.insert(tk.END, f"\nOVERDUE")
                 
         self.content_text.config(state='disabled')
         

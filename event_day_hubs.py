@@ -68,15 +68,16 @@ def days_until_event(d=None):
 class EventDayHub(tk.Toplevel):
     """Shared immersive shell: header, 3-column content, scrolling wire ticker."""
 
-    BG = '#0B1220'
-    PANEL = '#141D31'
-    CARD = '#1B2740'
-    GOLD = '#FFD54A'
+    BG = '#0e0e11'
+    PANEL = '#16161a'
+    CARD = '#1e1e24'
+    GOLD = '#00ceb8'
     WHITE = '#F2F5FA'
-    MUTED = '#8FA0B8'
+    MUTED = '#9aa0aa'
     GREEN = '#3DDC84'
     RED = '#FF5A5A'
-    ACCENT = '#4DA3FF'
+    ACCENT = '#00ceb8'
+    BORDER = '#2a2a30'
 
     EVENT_TITLE = "EVENT DAY"
     EVENT_TAGLINE = ""
@@ -110,7 +111,7 @@ class EventDayHub(tk.Toplevel):
 
         title_row = tk.Frame(header, bg=self.BG)
         title_row.pack(fill='x')
-        tk.Label(title_row, text=f"{self.EVENT_EMOJI}  {self.EVENT_TITLE}  {self.EVENT_EMOJI}",
+        tk.Label(title_row, text=self.EVENT_TITLE,
                  bg=self.BG, fg=self.GOLD, font=('Segoe UI', 30, 'bold')).pack(side='left')
         try:
             datestr = self.gm.current_date.strftime("%B %d, %Y") if hasattr(self.gm, 'current_date') else ""
@@ -137,7 +138,7 @@ class EventDayHub(tk.Toplevel):
 
     def _make_column(self, parent, side):
         frame = tk.Frame(parent, bg=self.PANEL, relief='flat', bd=0,
-                         highlightbackground='#26334F', highlightthickness=1)
+                         highlightbackground=self.BORDER, highlightthickness=1)
         if side == 'left':
             frame.pack(side='left', fill='both', expand=True, padx=(0, 8))
         elif side == 'right':
@@ -180,10 +181,10 @@ class EventDayHub(tk.Toplevel):
 
     # -- ticker ------------------------------------------------------------
     def _build_ticker(self):
-        tick = tk.Frame(self, bg='#101827', height=36)
+        tick = tk.Frame(self, bg=self.PANEL, height=36)
         tick.pack(fill='x', side='bottom')
         tick.pack_propagate(False)
-        self._ticker_label = tk.Label(tick, text="", bg='#101827', fg=self.GOLD,
+        self._ticker_label = tk.Label(tick, text="", bg=self.PANEL, fg=self.GOLD,
                                       font=('Segoe UI', 11, 'bold'), anchor='w')
         self._ticker_label.place(x=0, y=8)
         self._ticker_text = self._ticker_content()
@@ -253,7 +254,6 @@ class EventDayHub(tk.Toplevel):
 class DraftDayCentral(EventDayHub):
     EVENT_TITLE = "DRAFT DAY CENTRAL"
     EVENT_TAGLINE = "Seven rounds. 224 picks. One future. Follow every selection live."
-    EVENT_EMOJI = "\U0001F3D2"  # hockey stick+puck approx
 
     def _build_actions(self, bar):
         self._action_button("Open Draft Board", self._open_draft, accent=True)
@@ -270,7 +270,7 @@ class DraftDayCentral(EventDayHub):
 
         # CENTER: on the clock + top available
         self._column_title(self.center_col, "ON THE CLOCK")
-        clock = tk.Frame(self.center_col, bg=self.CARD, highlightbackground='#26334F',
+        clock = tk.Frame(self.center_col, bg=self.CARD, highlightbackground=self.BORDER,
                          highlightthickness=1)
         clock.pack(fill='x', padx=14, pady=(0, 10))
         team, pickinfo = self._on_the_clock()
@@ -294,7 +294,7 @@ class DraftDayCentral(EventDayHub):
         self.deals_box = self._feed_box(self.right_col, height=12)
         self._feed_write(self.deals_box, self._deals_lines())
         self._column_title(self.right_col, "CLASS SNAPSHOT")
-        snap = tk.Frame(self.right_col, bg=self.CARD, highlightbackground='#26334F',
+        snap = tk.Frame(self.right_col, bg=self.CARD, highlightbackground=self.BORDER,
                         highlightthickness=1)
         snap.pack(fill='x', padx=14, pady=(0, 12))
         for label, value in self._class_snapshot():
@@ -420,7 +420,6 @@ class DraftDayCentral(EventDayHub):
 class FreeAgencyFrenzy(EventDayHub):
     EVENT_TITLE = "FREE AGENT FRENZY"
     EVENT_TAGLINE = "The market is open. Every contender is on the phone. Don't get left behind."
-    EVENT_EMOJI = "\U0001F4B0"  # money bag
 
     def _build_actions(self, bar):
         self._action_button("Open FA Market", self._open_fa, accent=True)
@@ -452,7 +451,7 @@ class FreeAgencyFrenzy(EventDayHub):
         self._feed_write(self.deals_box, ["No signings yet today.",
                                           "Done deals will be tracked here with terms."])
         self._column_title(self.right_col, "YOUR CAP PICTURE")
-        cap = tk.Frame(self.right_col, bg=self.CARD, highlightbackground='#26334F',
+        cap = tk.Frame(self.right_col, bg=self.CARD, highlightbackground=self.BORDER,
                        highlightthickness=1)
         cap.pack(fill='x', padx=14, pady=(0, 12))
         for label, value in self._cap_snapshot():

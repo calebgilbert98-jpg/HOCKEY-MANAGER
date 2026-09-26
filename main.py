@@ -4887,7 +4887,7 @@ class HockeyManagerGUI(tk.Tk):
         settings = self.get_settings()
         use_game_viewer = settings.get('simulation', {}).get('use_game_viewer', False)
         if use_game_viewer and 'event_log' in game_result and game_result['event_log']:
-            viewer_btn = tk.Button(action_frame, text="� Launch EHM Game Viewer", 
+            viewer_btn = tk.Button(action_frame, text="Launch EHM Game Viewer", 
                                   font=('Segoe UI', 10, 'bold'), bg=self.ACCENT_COLOR, fg='white',
                                   activebackground=self.ACCENT_ACTIVE, relief='flat', padx=20, pady=8,
                                   command=lambda: self._launch_ehm_replay_viewer(game_result))
@@ -9712,7 +9712,7 @@ class CleanEditLinesWindow(tk.Toplevel):
     
     def create_roster_panel(self, parent_paned):
         """Create the draggable player roster panel"""
-        roster_frame = tk.Frame(parent_paned, bg='#f8f9fa', relief='flat', bd=0)
+        roster_frame = tk.Frame(parent_paned, bg='#0e0e11', relief='flat', bd=0)
         parent_paned.add(roster_frame, weight=1)  # Takes less space
         
         # Modern header with subtle styling
@@ -9940,13 +9940,13 @@ class CleanEditLinesWindow(tk.Toplevel):
         instruction_label.pack(side=tk.LEFT, padx=(20, 0))
         
         # Team overview in a modern card
-        stats_card = tk.Frame(self, bg='white', relief='solid', bd=1)
+        stats_card = tk.Frame(self, bg='#16161a', relief='solid', bd=1)
         stats_card.pack(fill=tk.X, padx=20, pady=10)
         
         self.create_team_overview(stats_card)
         
         # Main content with modern styling
-        content_frame = tk.Frame(self, bg='#f8f9fa')
+        content_frame = tk.Frame(self, bg='#0e0e11')
         content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
         # Create main layout with roster panel and tabs
@@ -10100,7 +10100,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         notification = tk.Toplevel(self)
         notification.title(title)
         notification.geometry("350x150")
-        notification.configure(bg='#1a2030')
+        notification.configure(bg='#16161a')
         notification.resizable(False, False)
         
         # Center the notification
@@ -10396,24 +10396,19 @@ class CleanEditLinesWindow(tk.Toplevel):
     
     def create_drop_zone(self, parent, zone_id):
         """Create a drop zone for players"""
-        drop_frame = tk.Frame(parent, bg='#e9ecef', relief='flat', bd=0, height=70)
+        drop_frame = tk.Frame(parent, bg='#1c1c21', relief='flat', bd=0, height=70)
         drop_frame.pack_propagate(False)  # Maintain size
-        
+
         # Subtle placeholder with modern styling
-        placeholder_frame = tk.Frame(drop_frame, bg='#e9ecef')
+        placeholder_frame = tk.Frame(drop_frame, bg='#1c1c21')
         placeholder_frame.pack(expand=True, fill='both', padx=10, pady=10)
-        
-        # Subtle icon and text
-        icon_label = tk.Label(placeholder_frame, text="", bg='#e9ecef', fg='#adb5bd',
-                             font=(self.parent.FONT_FAMILY, 18))
-        icon_label.pack()
-        
-        text_label = tk.Label(placeholder_frame, text="Drop Player Here", bg='#e9ecef', fg='#6c757d',
+
+        text_label = tk.Label(placeholder_frame, text="Drop Player Here", bg='#1c1c21', fg='#8a8f98',
                              font=(self.parent.FONT_FAMILY, 9))
         text_label.pack()
-        
+
         # Bind drop events and hover effects
-        for widget in [drop_frame, placeholder_frame, icon_label, text_label]:
+        for widget in [drop_frame, placeholder_frame, text_label]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_frame, zone_id))
             widget.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_frame))
             widget.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_frame))
@@ -10422,14 +10417,14 @@ class CleanEditLinesWindow(tk.Toplevel):
         drop_frame.zone_id = zone_id
         drop_frame.assigned_player = None
         drop_frame.placeholder_frame = placeholder_frame
-        drop_frame.original_bg = '#e9ecef'
+        drop_frame.original_bg = '#1c1c21'
         
         return drop_frame
     
     def on_drop_zone_enter(self, drop_zone):
         """Handle mouse entering drop zone during drag"""
         if self.drag_data["item"] and not drop_zone.assigned_player:
-            drop_zone.config(bg='#d1ecf1', relief='flat')  # Subtle blue highlight
+            drop_zone.config(bg='#14332f', relief='flat')  # Teal highlight
     
     def on_drop_zone_leave(self, drop_zone):
         """Handle mouse leaving drop zone"""
@@ -10551,7 +10546,7 @@ class CleanEditLinesWindow(tk.Toplevel):
             widget.destroy()
         
         # Create subtle player display in drop zone
-        player_display = tk.Frame(drop_zone, bg='#dee2e6', relief='flat', bd=0)
+        player_display = tk.Frame(drop_zone, bg='#2b2b31', relief='flat', bd=0)
         player_display.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Subtle assigned player card
@@ -10612,19 +10607,15 @@ class CleanEditLinesWindow(tk.Toplevel):
             widget.destroy()
         
         # Restore subtle placeholder
-        placeholder_frame = tk.Frame(drop_zone, bg='#e9ecef')
+        placeholder_frame = tk.Frame(drop_zone, bg='#1c1c21')
         placeholder_frame.pack(expand=True, fill='both', padx=10, pady=10)
-        
-        icon_label = tk.Label(placeholder_frame, text="", bg='#e9ecef', fg='#adb5bd',
-                             font=(self.parent.FONT_FAMILY, 20))
-        icon_label.pack()
-        
-        text_label = tk.Label(placeholder_frame, text="Drop Player Here", bg='#e9ecef', fg='#6c757d',
+
+        text_label = tk.Label(placeholder_frame, text="Drop Player Here", bg='#1c1c21', fg='#8a8f98',
                              font=(self.parent.FONT_FAMILY, 9))
         text_label.pack()
-        
+
         # Rebind events
-        for widget in [placeholder_frame, icon_label, text_label]:
+        for widget in [placeholder_frame, text_label]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, zone_id))
             widget.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_zone))
             widget.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_zone))
@@ -10693,52 +10684,52 @@ class CleanEditLinesWindow(tk.Toplevel):
         popup = tk.Toplevel(self)
         popup.title(title)
         popup.geometry("460x380")
-        popup.configure(bg="#1a2030")
+        popup.configure(bg="#16161a")
         popup.transient(self)
 
-        header = tk.Frame(popup, bg="#1a2030")
+        header = tk.Frame(popup, bg="#16161a")
         header.pack(fill="x", padx=16, pady=(16, 8))
-        tk.Label(header, text=title, bg="#1a2030", fg="white",
+        tk.Label(header, text=title, bg="#16161a", fg="white",
                  font=(self.parent.FONT_FAMILY, 13, "bold")).pack(anchor="w")
         sign = "+" if total >= 0 else ""
         color = "#3fb950" if total >= 0 else "#00ceb8"
-        tk.Label(header, text=f"Total chemistry: {sign}{total:g}", bg="#1a2030",
+        tk.Label(header, text=f"Total chemistry: {sign}{total:g}", bg="#16161a",
                  fg=color, font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w", pady=(4, 0))
         tk.Label(header, text="Archetype pairings drive chemistry. "
                  "Complementary styles boost it; duplicate roles clash.",
-                 bg="#1a2030", fg="#adb5bd",
+                 bg="#16161a", fg="#adb5bd",
                  font=(self.parent.FONT_FAMILY, 9), wraplength=420,
                  justify="left").pack(anchor="w", pady=(4, 0))
 
-        body = tk.Frame(popup, bg="#1a2030")
+        body = tk.Frame(popup, bg="#16161a")
         body.pack(fill="both", expand=True, padx=16, pady=8)
         if not drivers:
             tk.Label(body, text="No strong archetype relationships on this unit.\n"
                      "Chemistry is neutral.",
-                     bg="#1a2030", fg="#adb5bd",
+                     bg="#16161a", fg="#adb5bd",
                      font=(self.parent.FONT_FAMILY, 10)).pack(anchor="w")
         for text, value in drivers:
-            row = tk.Frame(body, bg="#1a2030")
+            row = tk.Frame(body, bg="#16161a")
             row.pack(fill="x", pady=3)
             dot_color = "#3fb950" if value > 0 else "#00ceb8"
-            dot = tk.Canvas(row, width=10, height=10, bg="#1a2030",
+            dot = tk.Canvas(row, width=10, height=10, bg="#16161a",
                             highlightthickness=0)
             dot.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
             dot.pack(side="left", padx=(0, 8))
-            tk.Label(row, text=text, bg="#1a2030", fg="white",
+            tk.Label(row, text=text, bg="#16161a", fg="white",
                      font=(self.parent.FONT_FAMILY, 9), wraplength=400,
                      justify="left", anchor="w").pack(side="left", fill="x", expand=True)
 
         # Archetype legend for the unit's players
-        legend = tk.Frame(popup, bg="#1a2030")
+        legend = tk.Frame(popup, bg="#16161a")
         legend.pack(fill="x", padx=16, pady=(8, 16))
-        tk.Label(legend, text="Archetypes on this unit:", bg="#1a2030",
+        tk.Label(legend, text="Archetypes on this unit:", bg="#16161a",
                  fg="#adb5bd", font=(self.parent.FONT_FAMILY, 9, "bold")).pack(anchor="w")
         for p in players:
             arch = get_archetype(p)
             strength = ARCHETYPE_STRENGTHS.get(arch, "")
             tk.Label(legend, text=f"• {p.full_name}: {arch}" + (f" — {strength}" if strength else ""),
-                     bg="#1a2030", fg="white",
+                     bg="#16161a", fg="white",
                      font=(self.parent.FONT_FAMILY, 9), wraplength=420,
                      justify="left", anchor="w").pack(anchor="w")
 
@@ -10769,10 +10760,10 @@ class CleanEditLinesWindow(tk.Toplevel):
             
             if assigned_pos:
                 # Change appearance to show assigned
-                widget.config(bg='#e8f5e8', relief='solid')
+                widget.config(bg='#14332f', relief='flat')
             else:
                 # Reset to unassigned appearance
-                widget.config(bg='white', relief='raised')
+                widget.config(bg='#495057', relief='flat')
     
     def extract_lineup_from_drop_zones(self):
         """Extract the current lineup from all drop zones"""
@@ -11164,19 +11155,13 @@ class CleanEditLinesWindow(tk.Toplevel):
         
         # Analyze each forward line
         for i, line_vars in enumerate(self.forward_vars):
-            line_analysis_frame = ttk.LabelFrame(forward_frame, text=f"Line {i+1} Analysis", 
+            line_analysis_frame = ttk.LabelFrame(forward_frame, text=f"Line {i+1} Analysis",
                                                padding=10, style='TLabelframe')
             line_analysis_frame.pack(fill='x', pady=5)
-            
-            # Get players in this line
-            players = []
-            for combo, var in line_vars:
-                selection = var.get()
-                if selection and selection != "-- Select Player --":
-                    player_name = selection.split(" (")[0]
-                    player = next((p for p in self.forwards if p.full_name == player_name), None)
-                    if player:
-                        players.append(player)
+
+            # Get players in this line (drop zones carry assigned_player)
+            players = [getattr(dz, 'assigned_player', None) for dz in line_vars]
+            players = [p for p in players if p is not None]
             
             if players:
                 # Calculate analytics
@@ -11216,13 +11201,10 @@ class CleanEditLinesWindow(tk.Toplevel):
         # Calculate team-wide stats
         all_assigned_players = []
         for line_vars in self.forward_vars:
-            for combo, var in line_vars:
-                selection = var.get()
-                if selection and selection != "-- Select Player --":
-                    player_name = selection.split(" (")[0]
-                    player = next((p for p in self.forwards if p.full_name == player_name), None)
-                    if player and player not in all_assigned_players:
-                        all_assigned_players.append(player)
+            for dz in line_vars:
+                player = getattr(dz, 'assigned_player', None)
+                if player and player not in all_assigned_players:
+                    all_assigned_players.append(player)
         
         if all_assigned_players:
             team_avg_rating = sum(p.overall_rating() for p in all_assigned_players) / len(all_assigned_players)
@@ -12636,7 +12618,6 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         # Rules info
         rules_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
         rules_frame.pack(fill=tk.X, pady=10)
-        rules_frame.configure(background="#2A2A2A")
         
         ttk.Label(
             rules_frame, 
@@ -12771,7 +12752,6 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         # Total contract value
         total_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
         total_frame.pack(fill=tk.X, pady=10)
-        total_frame.configure(background="#2A2A2A")
         
         self.total_value_label = ttk.Label(
             total_frame, 

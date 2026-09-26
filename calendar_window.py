@@ -675,16 +675,35 @@ class CalendarWindow(tk.Toplevel):
                     'FreeAgency.TButton': '#388E3C',    # Forest Green
                     'Menu.TButton': self.parent.CONTENT_BG  # Default
                 }
+
+                # Hover colors mirror the ttk 'active' mappings in
+                # _configure_calendar_styles (tk.Button defaults to white)
+                hover_map = {
+                    'HomeGame.TButton': '#0D47A1',
+                    'AwayGame.TButton': '#0097A7',
+                    'LeagueGames.TButton': '#37474F',
+                    'BreakDay.TButton': '#212121',
+                    'AllStar.TButton': '#FFB300',
+                    'TradeDeadline.TButton': '#C62828',
+                    'Today.TButton': '#AD1457',
+                    'ImportantEvent.TButton': '#D84315',
+                    'Draft.TButton': '#6A1B9A',
+                    'FreeAgency.TButton': '#2E7D32',
+                    'Menu.TButton': '#2a2a30',
+                }
                 
                 # Use tk.Button for more reliable color display
                 button_bg = color_map.get(button_style, self.parent.CONTENT_BG)
                 button_fg = 'white' if button_style != 'AllStar.TButton' else 'black'
+                button_hover_bg = hover_map.get(button_style, '#2a2a30')
                 
                 if button_style == 'Menu.TButton':
                     button_fg = self.parent.TEXT_COLOR
                 
                 btn = tk.Button(self.calendar_frame, text=button_text, 
                               bg=button_bg, fg=button_fg,
+                              activebackground=button_hover_bg,
+                              activeforeground=button_fg,
                               font=(self.parent.FONT_FAMILY, 8, 'bold' if 'Game' in button_style or 'Star' in button_style else 'normal'),
                               relief='raised', borderwidth=1,
                               command=lambda d=button_date: self._select_date(d))

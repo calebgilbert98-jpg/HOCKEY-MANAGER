@@ -958,7 +958,7 @@ class SaveLoadWindow(tk.Toplevel):
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
         # Title
-        title_text = f"{' Save Game' if self.mode == 'save' else ' Load Game'}"
+        title_text = f"{'Save Game' if self.mode == 'save' else 'Load Game'}"
         title_label = ttk.Label(main_frame, text=title_text, style='Title.TLabel',
                                font=(self.parent.FONT_FAMILY, 20, 'bold'))
         title_label.pack(pady=(0, 20))
