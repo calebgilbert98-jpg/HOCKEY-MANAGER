@@ -292,7 +292,14 @@ def _build_lines(team):
 # The visualizer window
 # ----------------------------------------------------------------------------
 class PBPVisualSim(tk.Toplevel):
-    GAME_RATE = 12.0  # game-seconds per real second at 1x
+    GAME_RATE = 8.0  # game-seconds per real second at 1x
+    # faceoff ceremony beats (real seconds): whistle freeze -> skate to the
+    # dot -> set formation -> puck drop. Makes every stoppage a visible break.
+    _FO_WHISTLE = 0.7
+    _FO_LINEUP = 2.2
+    _FO_SET = 0.8
+    _FO_DROP = 0.5
+    _FO_TOTAL = _FO_WHISTLE + _FO_LINEUP + _FO_SET + _FO_DROP
 
     def __init__(self, parent, sim, home_team, away_team,
                  home_line=None, away_line=None, on_complete=None):
@@ -408,6 +415,9 @@ class PBPVisualSim(tk.Toplevel):
         self._card_until = 0.0
         self._card_items = []
 
+        # -- faceoff ceremony: dict(el, phase, dx, dy, winner_is_home, ev,
+        #    puck_from) while a stoppage break is playing out --
+        self._faceoff_ceremony = None
         # -- goal celebration state --
         self._celly = None          # {"dot", "until", "cx", "cy", "t0"}
         self._celly_pending = None  # (shooter, att_home) waiting on replay
@@ -976,8 +986,8 @@ class PBPVisualSim(tk.Toplevel):
     # ------------------------------------------------------------------
     # Formations & targets
     # ------------------------------------------------------------------
-    def _faceoff_formation(self, dx, dy, winner_is_home, teleport=False):
-        """Line dots up at a faceoff dot. dir = winner's attack direction."""
+    def _faceoff_spots(self, dx, dy, winner_is_home):
+        """Faceoff formation targets: dot_id -> (x, y). No side effects."""
         wdir = 1 if winner_is_home else -1
         spots = {}  # dot_id -> (x, y)
         for d in self.dots.values():
@@ -996,6 +1006,11 @@ class PBPVisualSim(tk.Toplevel):
             else:  # D1, D2
                 side = -1 if role == "D1" else 1
                 spots[d["id"]] = (dx - 17 * s * wdir, dy + 12 * side)
+        return spots
+
+    def _faceoff_formation(self, dx, dy, winner_is_home, teleport=False):
+        """Line dots up at a faceoff dot. dir = winner's attack direction."""
+        spots = self._faceoff_spots(dx, dy, winner_is_home)
         for did, (x, y) in spots.items():
             d = self.dots[did]
             x = min(max(x, 6), 194)
@@ -1042,6 +1057,8 @@ class PBPVisualSim(tk.Toplevel):
         """Fallback hockey sense for dots the sim isn't positioning (e.g.
         benched lines); sim-authored dots keep their sim targets. Goalies
         always shuffle with the puck."""
+        if self._faceoff_ceremony:
+            return  # ceremony owns every dot's targets until the puck drops
         px, py = self.puck["x"], self.puck["y"]
         pp = self._pp_team()
         # penalized skaters sit in the drawn penalty boxes (hidden on ice)
@@ -1336,10 +1353,122 @@ class PBPVisualSim(tk.Toplevel):
     def _on_faceoff(self, ev):
         winner_is_home = ev["winner_team"] == self.home_team.team_name
         dx, dy = faceoff_dot(ev.get("zone", "neutral_zone"), winner_is_home)
-        self._faceoff_formation(dx, dy, winner_is_home, teleport=False)
+        if self._instant:
+            # fast path (sim-to-end / big-moment jump): no ceremony
+            self._faceoff_formation(dx, dy, winner_is_home, teleport=False)
+            self.possession_home = winner_is_home
+            w = self._dot_by_player(ev.get("winner_player"))
+            self.carrier_id = w["id"] if w else None
+            zone = ev.get("zone", "").replace("_", " ")
+            self._feed(random.choice(_FACEOFF_T).format(
+                zone=zone, W=self._pname(ev.get("winner_player"))), ev=ev)
+            self._bump_stat("home" if winner_is_home else "away", "FO")
+            self._pstat(ev.get("winner_player"), "FO")
+            self._update_scoreboard(ev)
+            return
+        # Broadcast faceoff ceremony: whistle freeze -> skate to the dot ->
+        # set formation -> puck drop. Every stoppage becomes a visible break.
+        self._cancel_faceoff_ceremony()
+        # a goal celebration still running is over; everyone lines up
+        self._celly = None
+        self._celly_pending = None
+        for d in self.dots.values():
+            d["converge"] = None
+            d["glunge"] = None
+            d["ceremony_glide"] = False
+            d["tx"], d["ty"] = d["x"], d["y"]  # freeze on the whistle
+        # flush any in-flight shot outcome: a faceoff always follows a goal,
+        # and silently discarding the pending outcome would lose goals
+        if self.pending_outcome is not None:
+            oc = self.pending_outcome
+            self.pending_outcome = None
+            self.puck_flight = None
+            self._apply_outcome(oc)
+        else:
+            self.puck_flight = None
+            self.pending_outcome = None
+        self.carrier_id = None
+        self.possession_home = None
+        if self._sound_on and self._sfx is not None:
+            try:
+                self._sfx.whistle()
+            except Exception:
+                pass
+        self._faceoff_ceremony = {
+            "el": 0.0, "phase": "whistle",
+            "dx": dx, "dy": dy,
+            "winner_is_home": winner_is_home,
+            "ev": ev,
+            "puck_from": (self.puck["x"], self.puck["y"]),
+        }
+        self.hold_until = max(self.hold_until,
+                              self._now() + self._FO_TOTAL + 0.2)
+
+    def _cancel_faceoff_ceremony(self):
+        """Drop ceremony state (jump/sim-to-end); dots keep current targets."""
+        if self._faceoff_ceremony is None:
+            return
+        self._faceoff_ceremony = None
+        for d in self.dots.values():
+            d["ceremony_glide"] = False
+
+    def _step_faceoff_ceremony(self):
+        """Advance the faceoff ceremony one tick (only while playing)."""
+        c = self._faceoff_ceremony
+        if c is None or not self.playing:
+            return
+        c["el"] += 0.05
+        el = c["el"]
+        if el < self._FO_WHISTLE:
+            return  # whistle freeze: everyone stopped
+        if c["phase"] == "whistle":
+            # skate to the dot with a slow deliberate glide
+            spots = self._faceoff_spots(c["dx"], c["dy"],
+                                        c["winner_is_home"])
+            for did, (x, y) in spots.items():
+                d = self.dots.get(did)
+                if d:
+                    d["tx"] = min(max(x, 6), 194)
+                    d["ty"] = min(max(y, 6), 79)
+                    d["ceremony_glide"] = True
+            c["phase"] = "lineup"
+        elif c["phase"] == "lineup":
+            # linesman carries the puck to the dot
+            k = min(1.0, (el - self._FO_WHISTLE) / self._FO_LINEUP)
+            fx, fy = c["puck_from"]
+            self.puck["x"] = fx + (c["dx"] - fx) * k
+            self.puck["y"] = fy + (c["dy"] - fy) * k
+            if el >= self._FO_WHISTLE + self._FO_LINEUP:
+                c["phase"] = "set"
+                for d in self.dots.values():
+                    d["ceremony_glide"] = False
+        elif c["phase"] == "set":
+            if el >= self._FO_WHISTLE + self._FO_LINEUP + self._FO_SET:
+                c["phase"] = "drop"
+        elif c["phase"] == "drop":
+            # puck-drop hop, then the winner takes possession
+            k = ((el - self._FO_WHISTLE - self._FO_LINEUP - self._FO_SET)
+                 / self._FO_DROP)
+            if k < 1.0:
+                self.puck["x"] = c["dx"]
+                self.puck["y"] = c["dy"] - math.sin(k * math.pi) * 2.5
+            else:
+                self._finalize_faceoff()
+
+    def _finalize_faceoff(self):
+        """Puck is down: award possession, announce the draw winner."""
+        c = self._faceoff_ceremony
+        self._faceoff_ceremony = None
+        if c is None:
+            return
+        ev = c["ev"]
+        winner_is_home = c["winner_is_home"]
+        self.puck["x"], self.puck["y"] = c["dx"], c["dy"]
         self.possession_home = winner_is_home
         w = self._dot_by_player(ev.get("winner_player"))
         self.carrier_id = w["id"] if w else None
+        if w:
+            w["tx"], w["ty"] = self.puck["x"], self.puck["y"]
         zone = ev.get("zone", "").replace("_", " ")
         self._feed(random.choice(_FACEOFF_T).format(
             zone=zone, W=self._pname(ev.get("winner_player"))), ev=ev)
@@ -2288,7 +2417,8 @@ class PBPVisualSim(tk.Toplevel):
 
     def _check_line_change(self, now):
         """Start a bench-swap animation when the rotation cadence advances."""
-        if now < self.hold_until or self._shootout_pending:
+        if (now < self.hold_until or self._shootout_pending
+                or self._faceoff_ceremony):
             return
         f_idx, d_idx = self._line_indices()
         for side in ("home", "away"):
@@ -2337,6 +2467,7 @@ class PBPVisualSim(tk.Toplevel):
     # ------------------------------------------------------------------
     def _jump_to_next_moment(self):
         self._cancel_replay()
+        self._cancel_faceoff_ceremony()
         target = None
         for i in range(self.cursor, len(self.events)):
             if self.events[i].get("type") in BIG_MOMENTS:
@@ -2362,6 +2493,7 @@ class PBPVisualSim(tk.Toplevel):
         self._pass_arrival = None
         self._battle_winner = None
         self._battle_settle_at = 0.0
+        self._cancel_faceoff_ceremony()
         self.hold_until = 0
         self._update_scoreboard()
 
@@ -2455,6 +2587,7 @@ class PBPVisualSim(tk.Toplevel):
         self._pass_arrival = None
         self._battle_winner = None
         self._battle_settle_at = 0.0
+        self._cancel_faceoff_ceremony()
         self.hold_until = 0
         for d in self.dots.values():
             self._move_dot(d, d["tx"], d["ty"])
@@ -2522,8 +2655,14 @@ class PBPVisualSim(tk.Toplevel):
         if self._card_until and now >= self._card_until:
             self._card_hide()
 
+        # faceoff ceremony: whistle -> skate to the dot -> set -> puck drop
+        self._step_faceoff_ceremony()
+
         # advance playback (auto-pace overrides manual speed)
-        if self.playing and now >= self.hold_until and self.events:
+        # (a faceoff ceremony blocks consumption even if its hold expired
+        #  during a pause — the break in play must finish first)
+        if (self.playing and now >= self.hold_until and self.events
+                and not self._faceoff_ceremony):
             eff = self._auto_speed() if self.auto_pace else self.speed
             dt = 0.05 * eff * self.GAME_RATE
             target = self.playhead + dt
@@ -2633,8 +2772,10 @@ class PBPVisualSim(tk.Toplevel):
                             self.canvas.delete(old_it)
                         except Exception:
                             pass
-                d["x"] = x + (d["tx"] - x) * 0.14
-                d["y"] = y + (d["ty"] - y) * 0.14
+                # faceoff ceremony: slow deliberate glide to the dot
+                lerp = 0.05 if d.get("ceremony_glide") else 0.14
+                d["x"] = x + (d["tx"] - x) * lerp
+                d["y"] = y + (d["ty"] - y) * lerp
                 self._move_dot(d, d["x"], d["y"])
             # goal celly: scorer skates a little victory circle
             if celly_dot is not None:
