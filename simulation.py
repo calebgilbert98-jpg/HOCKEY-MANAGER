@@ -2543,7 +2543,26 @@ class GameSim:
         except Exception:
             pass
 
+        # Zone state is team-relative: the same ice is one team's
+        # offensive zone and the other's defensive zone. Recompute it on
+        # every possession change so the tick dispatch never runs an
+        # offensive sequence from the wrong end of the rink.
+        self._refresh_zone_state(new_team)
+
         return "TURNOVER"
+
+    def _refresh_zone_state(self, attacking_team):
+        """Recompute current_zone from the puck and who's attacking."""
+        self._ppos_ensure()
+        px = self.puck_pos[0]
+        adir = 1 if attacking_team == self.home_team else -1
+        if (adir == 1 and px >= 125.0) or (adir == -1 and px <= 75.0):
+            self.current_zone = Zone.OFFENSIVE_ZONE
+        elif (adir == 1 and px <= 75.0) or (adir == -1 and px >= 125.0):
+            self.current_zone = Zone.DEFENSIVE_ZONE
+        else:
+            self.current_zone = Zone.NEUTRAL_ZONE
+        self.zone_time = 0
 
     def _maybe_icing(self, clearing_team, clearer):
         """NHL icing: no icing while shorthanded; tired/pressured clears get iced."""
@@ -3170,7 +3189,12 @@ class GameSim:
         snap, changed = {}, force
         for team in (self.home_team, self.away_team):
             for p in self._get_on_ice(team):
-                x, y = self.player_positions.get(p.id, (100.0, 42.5))
+                if p.id not in self.player_positions:
+                    # No stale center-ice fallback: a skater with no
+                    # formation spot yet (e.g. just hopped over the boards)
+                    # waits by the bench until the next shape places him.
+                    self._ppos_place(p, 100.0, 8.0, jitter=4.0)
+                x, y = self.player_positions[p.id]
                 snap[p.id] = (round(x, 1), round(y, 1))
                 old = self._last_skate_sent.get(p.id)
                 if old is None or abs(old[0] - x) > 6 or abs(old[1] - y) > 6:
@@ -3381,8 +3405,29 @@ class GameSim:
         Stage 1 Enhancement: Resolves a shot attempt with detailed tracking.
         Determines shot type, location, quality, and whether it's blocked, missed, or on goal.
         """
+        # IQ: shots come from inside the blue line, basically always. A
+        # shooter caught outside the offensive zone makes a hockey play --
+        # moves the puck -- instead of firing a prayer from distance.
+        _px, _py = self._ppos_get(shooter)
+        _in_zone = (_px >= 124.0) if attacking_team == self.home_team \
+            else (_px <= 76.0)
+        if not _in_zone:
+            self._attempt_pass(shooter, attacking_team, defending_team,
+                               kind="cycle", safe=True)
+            return
+
         # Determine shot location based on player position and situation
         shot_location = self._determine_shot_location(shooter, attacking_team)
+
+        # Positional honesty: the shooter has the puck at his spot when he
+        # lets it go -- he skated there as the chance developed.
+        _sx, _sy = self._shot_spot_coords(shot_location, attacking_team)
+        self._ppos_place(shooter, _sx, _sy, jitter=2.0)
+        _sx, _sy = self._ppos_get(shooter)
+        self.possession_player = shooter
+        self.possession_team = attacking_team
+        self.puck_pos = self._clamp_boards(_sx, _sy)
+        self._emit_skate()
         
         # Calculate distance from goal (affects shot quality)
         distance = self._calculate_shot_distance(shot_location)
@@ -3732,11 +3777,14 @@ class GameSim:
         self.team_stats[def_team_name]['corsi_against'] += 1
         
         self._log_event(f"Shot by {shooter.full_name} blocked by {blocker.full_name}!", "BLOCKED_SHOT")
+        self._ppos_ensure()
+        _bsx, _bsy = self._ppos_get(shooter)
         self._emit_pbp("blocked_shot",
                        shooter=shooter,
                        blocker=blocker,
                        attacking_team=attacking_team.team_name,
-                       defending_team=defending_team.team_name)
+                       defending_team=defending_team.team_name,
+                       shooter_pos=(round(_bsx, 1), round(_bsy, 1)))
         # Loose puck off the block -- both teams scramble for it
         if random.random() < 0.55:
             self._ppos_ensure()
@@ -3761,11 +3809,14 @@ class GameSim:
         self.team_stats[att_team_name]['corsi_for'] += 1
         
         self._log_event(f"Shot by {shooter.full_name} misses the net!", "MISSED_SHOT")
+        self._ppos_ensure()
+        _msx, _msy = self._ppos_get(shooter)
         self._emit_pbp("missed_shot",
                        shooter=shooter,
                        attacking_team=attacking_team.team_name,
                        shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
-                       location=location.value if hasattr(location, "value") else str(location))
+                       location=location.value if hasattr(location, "value") else str(location),
+                       shooter_pos=(round(_msx, 1), round(_msy, 1)))
         # Missed shot rims around -- loose puck battle behind the net
         if random.random() < 0.40:
             self._ppos_ensure()
@@ -3797,6 +3848,28 @@ class GameSim:
         except Exception:
             return quality
 
+    # ShotLocation -> rink coords (for a team attacking in +x; mirrored
+    # for the other way). The shooter skates to his spot before shooting,
+    # so the sim's positions stay honest about where the shot came from.
+    _SHOT_SPOTS = {
+        "high_slot": (160, 42.5),
+        "low_slot": (172, 42.5),
+        "left_circle": (166, 27),
+        "right_circle": (166, 58),
+        "point": (145, 42.5),
+        "left_wing": (170, 20),
+        "right_wing": (170, 65),
+        "behind_net": (195, 42.5),
+        "crease": (182, 42.5),
+    }
+
+    def _shot_spot_coords(self, location, attacking_team):
+        key = location.value if hasattr(location, "value") else str(location)
+        x, y = self._SHOT_SPOTS.get(key, (160, 42.5))
+        if attacking_team != self.home_team:
+            x = 200.0 - x
+        return x, y
+
     def _resolve_shot_on_goal(self, shooter, attacking_team, defending_team, shot_type, location, quality, distance):
         """
         Stage 5: Enhanced shot resolution with advanced goaltending excellence.
@@ -3817,6 +3890,14 @@ class GameSim:
             if teammates and random.random() < 0.3:  # 30% chance of pass play
                 passer = shooter
                 shooter = random.choice(teammates)
+                # The one-timer man arrives at the same spot and takes it;
+                # place him so his position is honest too.
+                _sx, _sy = self._shot_spot_coords(location, attacking_team)
+                self._ppos_place(shooter, _sx, _sy, jitter=2.0)
+                self.possession_player = shooter
+                self.possession_team = attacking_team
+                self.puck_pos = self._clamp_boards(_sx, _sy)
+                self._emit_skate()
                 self._log_event(f"Pass from {passer.full_name} to {shooter.full_name}...", "PASS")
         
         # Calculate expected goal value (xG)
@@ -3840,6 +3921,9 @@ class GameSim:
         self.expected_goals[attacking_team.team_name] = \
             self.expected_goals.get(attacking_team.team_name, 0.0) + expected_goal
 
+        # Positional honesty: the shooter was already placed at his shot
+        # location when the chance developed; report the authoritative spot.
+        sx, sy = self._ppos_get(shooter)
         self._emit_pbp("shot",
                        shooter=shooter,
                        passer=passer,
@@ -3848,7 +3932,8 @@ class GameSim:
                        shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
                        location=location.value if hasattr(location, "value") else str(location),
                        quality=self._pbp_num(quality),
-                       distance=self._pbp_num(distance))
+                       distance=self._pbp_num(distance),
+                       shooter_pos=(round(sx, 1), round(sy, 1)))
         # Positional: the shot heads for the net
         self._ppos_ensure()
         self.puck_pos = [189.0 if attacking_team == self.home_team else 11.0, 42.5]
@@ -5029,8 +5114,10 @@ class GameSim:
         # nudged up 2026-09-26 to offset the honest scoring loss from
         # goalie freezes breaking up sustained pressure; raised again for
         # the possession-sequence rework so the extra setup passes don't
-        # starve the shot count)
-        shot_chance = 0.50
+        # starve the shot count; raised again after the zone-state honesty
+        # fix (turnovers now recompute the zone) removed phantom
+        # defensive-zone "shots" that had been inflating scoring)
+        shot_chance = 0.59
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
@@ -5080,7 +5167,12 @@ class GameSim:
                 if hit_outcome is not None:
                     return hit_outcome
 
-        # Random events in offensive zone
+        # Random events in offensive zone -- but only if the puck is still
+        # there. The setup sequence can carry it back out (D-to-D, a
+        # broken play); shooting from the neutral zone isn't hockey IQ.
+        self._refresh_zone_state(attacking_team)
+        if self.current_zone != Zone.OFFENSIVE_ZONE:
+            return "ZONE_EXIT"
         event_roll = random.random()
         
         if event_roll < shot_chance:
@@ -6122,6 +6214,9 @@ class GameSim:
         self.puck_pos = self._ppos_get(player_gaining_puck)[:]
         self._shape_positions(gaining_team, self.puck_pos)
         self._emit_skate()
+
+        # Zone state follows the new attacking team (see _refresh_zone_state)
+        self._refresh_zone_state(gaining_team)
 
         # Log event
         self._log_event(f"{turnover_type.value.title()}: {player_gaining_puck.full_name} strips puck from {player_losing_puck.full_name}", "TURNOVER")

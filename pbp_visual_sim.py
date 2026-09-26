@@ -424,6 +424,7 @@ class PBPVisualSim(tk.Toplevel):
         self._shotmap = []
         self._shotmap_on = False
         self._last_shot = None        # (x, y, side) awaiting outcome
+        self._pending_shot = None     # delayed release while shooter skates in
 
         # -- per-player live game stats: pid -> dict(G,A,SOG,HIT,PIM,FO) --
         self._pstats = {}
@@ -983,6 +984,8 @@ class PBPVisualSim(tk.Toplevel):
             "nudge": None,  # (dx, dy, until) hit animation
             "jx": random.uniform(-2.5, 2.5),  # fixed personal jitter
             "jy": random.uniform(-2.5, 2.5),
+            "drift_phase": random.uniform(0, 6.283),  # idle life-drift
+            "drift_amp": random.uniform(1.0, 2.2),  # feet of drift
         }
 
     def _set_dot_visible(self, d, visible):
@@ -1019,14 +1022,37 @@ class PBPVisualSim(tk.Toplevel):
         d["x"], d["y"] = x, y
         c = self.canvas
         r = d["r"]
-        c.coords(d["oval"], self.X(x) - r, self.Y(y) - r,
-                 self.X(x) + r, self.Y(y) + r)
-        c.coords(d["text"], self.X(x), self.Y(y))
-        c.coords(d["shadow"], self.X(x) - r + 2.5, self.Y(y) - r + 3.5,
-                 self.X(x) + r + 2.5, self.Y(y) + r + 3.5)
+        px, py = self.X(x), self.Y(y)
+        # On-ice life: settled skaters never stand statuesque -- a slow,
+        # small drift around their spot so the whole rink breathes even
+        # between sim events. Render-time only; logical position untouched.
+        if self._drift_on(d):
+            t = self._now()
+            amp = d["drift_amp"] * self.scale * self._cam_z()
+            px += amp * math.sin(t * 0.9 + d["drift_phase"])
+            py += amp * 0.7 * math.cos(t * 0.65 + d["drift_phase"] * 1.3)
+        c.coords(d["oval"], px - r, py - r, px + r, py + r)
+        c.coords(d["text"], px, py)
+        c.coords(d["shadow"], px - r + 2.5, py - r + 3.5,
+                 px + r + 2.5, py + r + 3.5)
         fx, fy = d["fx"], d["fy"]
-        c.coords(d["tick"], self.X(x) + fx * (r + 1), self.Y(y) + fy * (r + 1),
-                 self.X(x) + fx * (r + 7), self.Y(y) + fy * (r + 7))
+        c.coords(d["tick"], px + fx * (r + 1), py + fy * (r + 1),
+                 px + fx * (r + 7), py + fy * (r + 7))
+
+    def _drift_on(self, d):
+        """Whether this dot gets idle life-drift right now."""
+        if d["role"] == "G":
+            return False
+        if d["id"] == self.carrier_id:
+            return False
+        if d.get("ceremony_glide"):
+            return False
+        if d["id"] in self.penalty_box:
+            return False
+        # only when settled near its target (gliding dots already move)
+        if math.hypot(d["tx"] - d["x"], d["ty"] - d["y"]) > 3.0:
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Formations & targets
@@ -1195,6 +1221,8 @@ class PBPVisualSim(tk.Toplevel):
             adir, anx, onx = st["adir"], st["anx"], st["onx"]
             has = st["has"]
             if d["id"] == self.carrier_id:
+                if self._now() < d.get("rush_until", 0):
+                    continue  # shot rush: his lane, not the puck, owns his feet
                 d["tx"], d["ty"] = px, py
                 continue
             jx, jy = d["jx"], d["jy"]
@@ -1918,10 +1946,40 @@ class PBPVisualSim(tk.Toplevel):
         self._push_momentum(side, 1)
         self._pstat(ev.get("shooter"), "SOG")
         self._trail_color = ACCENT if att_home else AWAY_COLOR
-        sx, sy = shot_spot(ev.get("location", "high_slot"), att_home)
         shooter_dot = self._dot_by_player(ev.get("shooter"))
-        if shooter_dot:
+        sp = ev.get("shooter_pos")
+        rush = False
+        if sp is not None:
+            # Authoritative: the sim put the shooter at his shooting spot
+            # as the chance developed. Trust it over the dot's lagging
+            # visual position so shots never start from the wrong ice.
+            sx, sy = sp[0], sp[1]
+            if shooter_dot and not self._instant:
+                dist = math.hypot(shooter_dot["x"] - sx,
+                                  shooter_dot["y"] - sy)
+                if dist > 4.0:
+                    # He skates into his lane and lets it go -- no teleport.
+                    # Rush there, release on arrival; capped so the
+                    # broadcast keeps pace. The puck rides his stick meanwhile.
+                    delay = min(0.6, dist / 45.0)
+                    fire_at = self._now() + delay
+                    shooter_dot["tx"], shooter_dot["ty"] = sx, sy
+                    shooter_dot["rush_until"] = fire_at
+                    self._pending_shot = {
+                        "sx": sx, "sy": sy, "side": side,
+                        "att_home": att_home,
+                        "shooter_id": shooter_dot["id"],
+                        "fire_at": fire_at,
+                    }
+                    self.hold_until = max(self.hold_until, fire_at + 0.05)
+                    rush = True
+            if not rush and shooter_dot:
+                self._move_dot(shooter_dot, sx, sy)
+                shooter_dot["tx"], shooter_dot["ty"] = sx, sy
+        elif shooter_dot:
             sx, sy = shooter_dot["x"], shooter_dot["y"]
+        else:
+            sx, sy = shot_spot(ev.get("location", "high_slot"), att_home)
         self._last_shot = (sx, sy, side)
         nx = AWAY_NET_X if att_home else HOME_NET_X
         self.possession_home = att_home
@@ -1946,20 +2004,26 @@ class PBPVisualSim(tk.Toplevel):
                 outcome = nxt
                 self.cursor += 1
                 self.playhead = max(self.playhead, outcome.get("t", self.playhead))
-        self.puck_flight = (sx, sy, nx, 42.5, self._now(), 0.45, outcome)
-        self.pending_outcome = outcome
+        self.puck_flight = None
         if self._instant:
             # sim-to-end: apply immediately, no animation
-            self.puck_flight = None
             self.pending_outcome = None
             if outcome:
                 self._apply_outcome(outcome)
                 self._scatter_puck(outcome)
+        elif rush:
+            # the flight launches from _step once the shooter skates in
+            self._pending_shot["nx"] = nx
+            self._pending_shot["outcome"] = outcome
+            self.pending_outcome = outcome
+        else:
+            self._fire_shot(sx, sy, nx, outcome)
         st = ev.get("shot_type", "").replace("_", " ")
         self._feed(f"{st.title()} by {self._pname(ev.get('shooter'))} "
                    f"from {ev.get('location', '').replace('_', ' ')}…",
                    tag="shot", ev=ev)
         # goalie reaction: exaggerated lunge toward the shot line
+        # (on a rush, he reads the wind-up and is set for the release)
         if not self._instant:
             gpid = self._cur_goalie.get("away" if att_home else "home")
             gd = self._dot_by_id(gpid) if gpid else None
@@ -1967,7 +2031,29 @@ class PBPVisualSim(tk.Toplevel):
                 gx = AWAY_NET_X if att_home else HOME_NET_X
                 lx = gx + (-4.0 if att_home else 4.0)
                 ly = 42.5 + (sy - 42.5) * 0.35
-                gd["glunge"] = (lx, ly, self._now() + 0.5)
+                lunge_t = self._now() + 0.5
+                if rush and self._pending_shot is not None:
+                    lunge_t = self._pending_shot["fire_at"] + 0.5
+                gd["glunge"] = (lx, ly, lunge_t)
+
+    def _fire_shot(self, sx, sy, nx, outcome):
+        """Launch the puck flight once the shooter has his lane."""
+        self.puck_flight = (sx, sy, nx, 42.5, self._now(), 0.45, outcome)
+        self.pending_outcome = outcome
+
+    def _step_pending_shot(self, now):
+        ps = self._pending_shot
+        if ps is None:
+            return
+        if now >= ps["fire_at"] or self._faceoff_ceremony:
+            self._pending_shot = None
+            d = self.dots.get(ps["shooter_id"])
+            if d is not None:
+                # arrive exactly on the spot; the gap is sub-foot by now
+                self._move_dot(d, ps["sx"], ps["sy"])
+                d["tx"], d["ty"] = ps["sx"], ps["sy"]
+                d.pop("rush_until", None)
+            self._fire_shot(ps["sx"], ps["sy"], ps["nx"], ps["outcome"])
 
     def _stage_outcome(self, ev):
         # applied when the puck flight lands (see _tick)
@@ -3083,6 +3169,9 @@ class PBPVisualSim(tk.Toplevel):
         # faceoff ceremony: whistle -> skate to the dot -> set -> puck drop
         self._step_faceoff_ceremony()
 
+        # delayed shot release: the shooter skates into his lane, then fires
+        self._step_pending_shot(now)
+
         # advance playback (auto-pace overrides manual speed)
         # (a faceoff ceremony blocks consumption even if its hold expired
         #  during a pause — the break in play must finish first)
@@ -3204,6 +3293,8 @@ class PBPVisualSim(tk.Toplevel):
                     spd = self.CEREMONY_SPEED
                 elif d["role"] == "G":
                     spd = self.GOALIE_SPEED
+                elif now < d.get("rush_until", 0):
+                    spd = self.SKATE_SPEED * 1.7  # bursting into the shot lane
                 else:
                     spd = self.SKATE_SPEED
                 step = spd * self.TICK_DT
