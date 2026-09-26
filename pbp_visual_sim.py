@@ -1320,10 +1320,13 @@ class PBPVisualSim(tk.Toplevel):
                         tx, ty = (anx - 52 * adir, 30.0) if role == "D1" \
                             else (anx - 52 * adir, 55.0)
                 else:
-                    # Spread: slot + wide wingers + active points
+                    # Spread: slot + wide wingers + active points. Weak-side
+                    # skaters drift toward the puck for one-timer lanes;
+                    # points walk the line with puck movement.
+                    puck_drift = (py - 42.5) * 0.12
                     if role == "C":
                         tx, ty = (anx - 13 * adir, 42.5) if behind else \
-                            (anx - 27 * adir, 42.5)
+                            (anx - 27 * adir, 42.5 + puck_drift)
                     elif role in ("LW", "RW"):
                         mine = ((role == "LW") == (py < 42.5))
                         if behind and mine:
@@ -1331,10 +1334,13 @@ class PBPVisualSim(tk.Toplevel):
                         elif mine:
                             tx, ty = anx - 37 * adir, strong_y
                         else:
-                            tx, ty = anx - 45 * adir, weak_y  # stay wide
+                            tx, ty = anx - 45 * adir, weak_y + puck_drift
                     else:
-                        tx, ty = (anx - 57 * adir, 30.0) if role == "D1" \
-                            else (anx - 57 * adir, 55.0)
+                        # points walk the blue line as the puck moves
+                        px_shift = max(-6, min(6, (px - (anx - 40 * adir)) * 0.1))
+                        tx, ty = (anx - 57 * adir + px_shift, 30.0 + puck_drift) \
+                            if role == "D1" else \
+                            (anx - 57 * adir + px_shift, 55.0 + puck_drift)
             elif has:
                 # breakout / regroup through the middle
                 if role == "C":
@@ -1361,21 +1367,25 @@ class PBPVisualSim(tk.Toplevel):
                         tx, ty = onx + 25 * adir, 31.0 if role != "RW" else 54.0
             elif st["dz"]:
                 # wedge + 1: D own the house, C the slot, wingers contain;
-                # one checker pressures, nobody else dives in
+                # one checker pressures, nobody else dives in. Landmarks
+                # shuffle with the puck (weak-side rotation) so defenders
+                # never stand statuesque -- EHM-style constant adjustment.
+                puck_y_pull = (py - 42.5) * 0.18
                 if d["id"] in st["check1"]:
                     tx, ty = px - 4 * adir, py
                 elif role in ("D1", "D2"):
                     behind = ((adir == 1 and px < onx + 6) or
                               (adir == -1 and px > onx - 6))
                     s = 35.0 if role == "D1" else 50.0
-                    tx, ty = (onx + 8 * adir, s) if behind else \
-                        (onx + 13 * adir, s)
+                    base_x = (onx + 8 * adir) if behind else (onx + 13 * adir)
+                    tx, ty = base_x, s + puck_y_pull
                 elif role == "C":
-                    tx, ty = onx + 22 * adir, 42.5
+                    tx, ty = onx + 22 * adir, 42.5 + puck_y_pull * 1.2
                 else:
                     mine = ((role == "LW") == (py < 42.5))
-                    tx, ty = (onx + 30 * adir, strong_y) if mine else \
-                        (onx + 33 * adir, weak_y)
+                    bx = (onx + 30 * adir) if mine else (onx + 33 * adir)
+                    by = strong_y if mine else weak_y
+                    tx, ty = bx, by + puck_y_pull * 0.7
             elif st["oz"]:
                 # Forecheck follows the coach's tactic: 2-1-2 sends two
                 # hunters, 1-2-2 staggers F2/F3, 1-4 drops everyone back.
