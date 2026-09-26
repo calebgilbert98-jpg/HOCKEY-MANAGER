@@ -17,6 +17,7 @@ a = Analysis(
     hiddenimports=[
         'PIL', 'PIL.Image', 'PIL.ImageTk', 'PIL.ImageDraw',
         'PIL.ImageFont', 'PIL.ImageOps',
+        'customtkinter',
     ],
     hookspath=[],
     hooksconfig={},
