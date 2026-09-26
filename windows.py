@@ -7,8 +7,11 @@ from game_classes import StaffRole, PlayerPosition, ScoutingReport, to_100_scale
 from datetime import timedelta
 import random
 import os
+import re
 from player_context_menu import PlayerContextMenu, add_player_context_menu
 from ui_widgets import PillButton
+from modern_ui import AppColors, AppCard
+from manager_career import morale_label
 
 
 def make_pill_group(parent, options, on_select, font_family='Segoe UI'):
@@ -254,6 +257,21 @@ class RosterWindow(tk.Toplevel):
         # Action buttons footer
         self.create_action_footer(main_container)
     
+    def _cap_numbers(self):
+        """Shared payroll figures for the header and the Salary Cap tab.
+
+        Includes buyout dead cap so the header always agrees with the
+        Salary Cap tab. Display only -- cap rules themselves live in the sim.
+        Returns (salary_cap, current_payroll, cap_space, dead_cap).
+        """
+        salary_cap = 83500000
+        current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000))
+                             for p in self.parent.user_team.roster)
+        season = getattr(getattr(self.parent, 'league', None), 'season_year', 2026)
+        dead_cap = (getattr(self.parent.user_team, 'buyout_cap_hits', {}) or {}).get(season, 0)
+        current_salary += dead_cap
+        return salary_cap, current_salary, salary_cap - current_salary, dead_cap
+
     def create_header_section(self, parent):
         """Create header with team overview and quick stats."""
         header_frame = ttk.Frame(parent, style='TitleBar.TFrame', padding=(20, 15))
@@ -282,9 +300,8 @@ class RosterWindow(tk.Toplevel):
         prospects_count = len(self.parent.user_team.prospects)
         total_players = nhl_count + ahl_count + prospects_count
         
-        # Salary cap info
-        current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) for p in self.parent.user_team.roster)
-        cap_space = 83500000 - current_salary  # NHL salary cap
+        # Salary cap info (matches the Salary Cap tab: includes buyout dead cap)
+        _, _, cap_space, _ = self._cap_numbers()
         
         # Stats display
         stats_text = f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | Prospects: {prospects_count} | Cap Space: ${cap_space:,}"
@@ -336,7 +353,7 @@ class RosterWindow(tk.Toplevel):
             'pot': ('Pot', 45),
             'salary': ('Salary', 100),
             'contract': ('Contract', 80),
-            'morale': ('Morale', 70),
+            'morale': ('Morale', 115),
             'injury': ('Health', 80),
             'toi': ('TOI/GP', 60),
             'performance': ('Performance', 80)
@@ -427,37 +444,110 @@ class RosterWindow(tk.Toplevel):
             style='SubTitle.TLabel',
             font=(self.parent.FONT_FAMILY, 14, 'bold')
         ).pack()
-        
-        # Main depth chart area
-        chart_frame = ttk.Frame(depth_frame, style='Panel.TFrame', padding=20)
-        chart_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Create depth chart sections
-        self.create_forwards_depth_chart(chart_frame)
-        self.create_defense_depth_chart(chart_frame)
-        self.create_goalies_depth_chart(chart_frame)
+        ttk.Label(
+            header_frame,
+            text="Click a player tile to open their profile",
+            style='Subtitle.TLabel',
+            font=(self.parent.FONT_FAMILY, 9, 'italic')
+        ).pack(pady=(4, 0))
+
+        # Main depth chart area (plain tk frame so modern_ui cards blend in)
+        chart_frame = tk.Frame(depth_frame, bg=self.parent.BG_COLOR)
+        chart_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        self._depth_chart_frame = chart_frame
+
+        # Build the depth chart sections (rebuildable via _build_depth_chart_sections)
+        self._build_depth_chart_sections()
+
+    def _build_depth_chart_sections(self):
+        """(Re)build the depth chart cards from current roster data."""
+        for child in self._depth_chart_frame.winfo_children():
+            child.destroy()
+        self.create_forwards_depth_chart(self._depth_chart_frame)
+        self.create_defense_depth_chart(self._depth_chart_frame)
+        self.create_goalies_depth_chart(self._depth_chart_frame)
+
+    def _depth_section_card(self, parent, title):
+        """modern card container for one depth-chart section."""
+        card = AppCard(parent, padding=12)
+        card.pack(fill=tk.X, pady=6)
+        body = card.get_content_frame()
+        tk.Label(body, text=title,
+                 font=(self.parent.FONT_FAMILY, 12, 'bold'),
+                 fg=AppColors.ACCENT, bg=AppColors.BG_ELEVATED).pack(anchor='w', pady=(0, 8))
+        return body
+
+    def _depth_line_row(self, parent, label):
+        """One labelled row (line/pair/role) inside a depth-chart card."""
+        row = tk.Frame(parent, bg=AppColors.BG_ELEVATED)
+        row.pack(fill=tk.X, pady=3)
+        tk.Label(row, text=label, width=10, anchor='w',
+                 font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                 fg=AppColors.TEXT_SECONDARY,
+                 bg=AppColors.BG_ELEVATED).pack(side=tk.LEFT)
+        return row
+
+    def _depth_player_tile(self, parent, player, slot_label):
+        """One player slot: filled clickable tile, or a muted open slot."""
+        if player is not None:
+            tile = tk.Frame(parent, bg=AppColors.BG_HOVER,
+                            highlightthickness=1,
+                            highlightbackground=AppColors.BORDER,
+                            cursor="hand2")
+            tile.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
+            tk.Label(tile, text=player.full_name,
+                     font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                     fg=AppColors.TEXT_PRIMARY,
+                     bg=AppColors.BG_HOVER).pack(pady=(6, 0))
+            tk.Label(tile,
+                     text=f"{slot_label}  ·  {to_100_scale(player.overall_rating())} OVR",
+                     font=(self.parent.FONT_FAMILY, 9),
+                     fg=AppColors.ACCENT,
+                     bg=AppColors.BG_HOVER).pack(pady=(0, 6))
+
+            def _open(_event, p=player):
+                self.parent.open_player_profile(p)
+            tile.bind('<Button-1>', _open)
+            for child in tile.winfo_children():
+                child.bind('<Button-1>', _open)
+        else:
+            tile = tk.Frame(parent, bg=AppColors.BG_ELEVATED,
+                            highlightthickness=1,
+                            highlightbackground=AppColors.BORDER)
+            tile.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
+            tk.Label(tile, text=f"Open {slot_label}",
+                     font=(self.parent.FONT_FAMILY, 10),
+                     fg=AppColors.TEXT_TERTIARY,
+                     bg=AppColors.BG_ELEVATED).pack(pady=10)
     
     def create_salary_cap_tab(self):
         """Create salary cap management tab."""
         cap_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
         self.notebook.add(cap_frame, text="Salary Cap")
-        
+        self._cap_tab = cap_frame
+        self._build_salary_cap_content()
+
+    def _build_salary_cap_content(self):
+        """(Re)build the salary cap tab from current roster data."""
+        for child in self._cap_tab.winfo_children():
+            child.destroy()
+
         # Cap management header
-        header_frame = ttk.Frame(cap_frame, style='Panel.TFrame', padding=15)
+        header_frame = ttk.Frame(self._cap_tab, style='Panel.TFrame', padding=15)
         header_frame.pack(fill=tk.X)
-        
+
         ttk.Label(
             header_frame,
             text="SALARY CAP MANAGEMENT",
             style='SubTitle.TLabel',
             font=(self.parent.FONT_FAMILY, 14, 'bold')
         ).pack()
-        
+
         # Cap overview
-        self.create_cap_overview(cap_frame)
-        
+        self.create_cap_overview(self._cap_tab)
+
         # Contract details
-        self.create_contract_breakdown(cap_frame)
+        self.create_contract_breakdown(self._cap_tab)
     
     def _make_pill_group(self, parent, options, current_value, on_select):
         """Row of PillButtons; returns dict value -> button. Caller keeps it
@@ -629,136 +719,51 @@ class RosterWindow(tk.Toplevel):
     
     def create_forwards_depth_chart(self, parent):
         """Create forwards depth chart visualization."""
-        forwards_frame = ttk.LabelFrame(parent, text="Forwards", )
-        forwards_frame.pack(fill=tk.X, pady=5)
-        
-        content_frame = ttk.Frame(forwards_frame, style='Panel.TFrame', padding=10)
-        content_frame.pack(fill=tk.X)
-        
-        # Get forwards from roster sorted by overall rating
-        forwards = [p for p in self.parent.user_team.roster 
-                   if p.primary_position.value in ['C', 'LW', 'RW']]
+        body = self._depth_section_card(parent, "FORWARDS")
+
+        # Top 12 forwards by overall, dealt onto 4 lines of LW-C-RW
+        forwards = [p for p in self.parent.user_team.roster
+                    if p.primary_position.value in ('C', 'LW', 'RW')]
         forwards.sort(key=lambda p: p.overall_rating(), reverse=True)
-        
-        # Line structure
+
         lines = ["1st Line", "2nd Line", "3rd Line", "4th Line"]
         positions = ["LW", "C", "RW"]
-        
-        # Assign forwards to lines (top 12 forwards)
-        line_assignments = {}
-        for i in range(min(12, len(forwards))):
-            line_num = i // 3
-            pos_index = i % 3
-            if line_num < 4:
-                line_assignments[(line_num, pos_index)] = forwards[i]
-        
         for i, line in enumerate(lines):
-            line_frame = ttk.Frame(content_frame, style='Panel.TFrame')
-            line_frame.pack(fill=tk.X, pady=2)
-            
-            # Line label
-            ttk.Label(line_frame, text=line, style='Content.TLabel', width=10).pack(side=tk.LEFT)
-            
-            # Player positions
+            row = self._depth_line_row(body, line)
             for j, pos in enumerate(positions):
-                player_frame = ttk.Frame(line_frame, style='Panel.TFrame', 
-                                       relief='solid', borderwidth=1)
-                player_frame.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-                
-                # Get assigned player or show open slot
-                assigned_player = line_assignments.get((i, j))
-                if assigned_player:
-                    player_text = f"{assigned_player.last_name} ({assigned_player.overall_rating()})"
-                    player_label = ttk.Label(player_frame, text=player_text, 
-                                           style='Content.TLabel', padding=5)
-                else:
-                    player_label = ttk.Label(player_frame, text=f"Open {pos}", 
-                                           style='Content.TLabel', padding=5)
-                player_label.pack()
-    
+                idx = i * 3 + j
+                player = forwards[idx] if idx < len(forwards) else None
+                self._depth_player_tile(row, player, pos)
+
     def create_defense_depth_chart(self, parent):
         """Create defense depth chart visualization."""
-        defense_frame = ttk.LabelFrame(parent, text="Defense", )
-        defense_frame.pack(fill=tk.X, pady=5)
-        
-        content_frame = ttk.Frame(defense_frame, style='Panel.TFrame', padding=10)
-        content_frame.pack(fill=tk.X)
-        
-        # Get defensemen from roster sorted by overall rating
-        defensemen = [p for p in self.parent.user_team.roster 
-                     if p.primary_position.value in ['LD', 'RD', 'D']]
+        body = self._depth_section_card(parent, "DEFENSE")
+
+        # Top 6 defensemen by overall, dealt onto 3 pairs of LD-RD
+        defensemen = [p for p in self.parent.user_team.roster
+                      if p.primary_position.value in ('LD', 'RD', 'D')]
         defensemen.sort(key=lambda p: p.overall_rating(), reverse=True)
-        
-        # Defense pairs
+
         pairs = ["1st Pair", "2nd Pair", "3rd Pair"]
-        
-        # Assign defensemen to pairs (top 6 defensemen)
-        pair_assignments = {}
-        for i in range(min(6, len(defensemen))):
-            pair_num = i // 2
-            side = i % 2
-            if pair_num < 3:
-                pair_assignments[(pair_num, side)] = defensemen[i]
-        
         for i, pair in enumerate(pairs):
-            pair_frame = ttk.Frame(content_frame, style='Panel.TFrame')
-            pair_frame.pack(fill=tk.X, pady=2)
-            
-            # Pair label
-            ttk.Label(pair_frame, text=pair, style='Content.TLabel', width=10).pack(side=tk.LEFT)
-            
-            # Defense positions
+            row = self._depth_line_row(body, pair)
             for j, pos in enumerate(["LD", "RD"]):
-                player_frame = ttk.Frame(pair_frame, style='Panel.TFrame', 
-                                       relief='solid', borderwidth=1)
-                player_frame.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-                
-                # Get assigned player or show open slot
-                assigned_player = pair_assignments.get((i, j))
-                if assigned_player:
-                    player_text = f"{assigned_player.last_name} ({assigned_player.overall_rating()})"
-                    player_label = ttk.Label(player_frame, text=player_text, 
-                                           style='Content.TLabel', padding=5)
-                else:
-                    player_label = ttk.Label(player_frame, text=f"Open {pos}", 
-                                           style='Content.TLabel', padding=5)
-                player_label.pack()
-    
+                idx = i * 2 + j
+                player = defensemen[idx] if idx < len(defensemen) else None
+                self._depth_player_tile(row, player, pos)
+
     def create_goalies_depth_chart(self, parent):
         """Create goalies depth chart visualization."""
-        goalies_frame = ttk.LabelFrame(parent, text="Goalies", )
-        goalies_frame.pack(fill=tk.X, pady=5)
-        
-        content_frame = ttk.Frame(goalies_frame, style='Panel.TFrame', padding=10)
-        content_frame.pack(fill=tk.X)
-        
-        # Get goalies from roster sorted by overall rating
-        goalies = [p for p in self.parent.user_team.roster 
-                  if p.primary_position.value == 'G']
+        body = self._depth_section_card(parent, "GOALIES")
+
+        goalies = [p for p in self.parent.user_team.roster
+                   if p.primary_position.value == 'G']
         goalies.sort(key=lambda p: p.overall_rating(), reverse=True)
-        
+
         for i, role in enumerate(["Starter", "Backup"]):
-            goalie_frame = ttk.Frame(content_frame, style='Panel.TFrame')
-            goalie_frame.pack(fill=tk.X, pady=2)
-            
-            # Role label
-            ttk.Label(goalie_frame, text=role, style='Content.TLabel', width=10).pack(side=tk.LEFT)
-            
-            # Goalie slot
-            player_frame = ttk.Frame(goalie_frame, style='Panel.TFrame', 
-                                   relief='solid', borderwidth=1)
-            player_frame.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-            
-            # Get assigned goalie or show open slot
-            if i < len(goalies):
-                goalie = goalies[i]
-                player_text = f"{goalie.last_name} ({goalie.overall_rating()})"
-                player_label = ttk.Label(player_frame, text=player_text, 
-                                       style='Content.TLabel', padding=5)
-            else:
-                player_label = ttk.Label(player_frame, text="Open G", 
-                                       style='Content.TLabel', padding=5)
-            player_label.pack()
+            row = self._depth_line_row(body, role)
+            player = goalies[i] if i < len(goalies) else None
+            self._depth_player_tile(row, player, "G")
     
     def create_cap_overview(self, parent):
         """Create salary cap overview section."""
@@ -769,15 +774,8 @@ class RosterWindow(tk.Toplevel):
         info_frame = ttk.Frame(overview_frame, style='Panel.TFrame')
         info_frame.pack(fill=tk.X)
         
-        # Calculate salary cap info
-        salary_cap = 83500000
-        current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) 
-                           for p in self.parent.user_team.roster)
-        # Buyout dead cap counts against this season's payroll
-        season = getattr(getattr(self.parent, 'league', None), 'season_year', 2026)
-        dead_cap = (getattr(self.parent.user_team, 'buyout_cap_hits', {}) or {}).get(season, 0)
-        current_salary += dead_cap
-        cap_space = salary_cap - current_salary
+        # Calculate salary cap info (shared with the header via _cap_numbers)
+        salary_cap, current_salary, cap_space, dead_cap = self._cap_numbers()
         cap_percentage = (current_salary / salary_cap) * 100
         
         # Cap visualization
@@ -968,19 +966,21 @@ class RosterWindow(tk.Toplevel):
             is_selected = player.id in self.selected_players[roster_type]
             checkbox = "☑" if is_selected else "☐"
             
-            # Get player info
+            # Get player info (ratings on the 1-100 display scale, matching
+            # the Min OVR filter pills; the sim itself runs on ~50-scale)
             name = player.full_name
             position = player.primary_position.value
             age = player.age
-            overall = player.overall_rating()
+            overall = to_100_scale(player.overall_rating())
             potential = getattr(player, 'potential_grade', 'C')
-            
+
             # Contract info
             salary = getattr(player, 'salary', getattr(player.contract, 'salary', 750000))
             contract_years = getattr(player, 'contract_years', getattr(player.contract, 'years_remaining', 0))
-            
-            # Morale and health
-            morale = f"{player.morale}/20"
+
+            # Morale is stored 1-10: show on the 1-100 scale with its descriptor
+            morale_raw = int(getattr(player, 'morale', 7) or 7)
+            morale = f"{morale_raw * 10} {morale_label(morale_raw)}"
             injury_status = getattr(player, 'injury_status', 'Healthy')
             
             # Basic values for all roster types
@@ -1010,15 +1010,16 @@ class RosterWindow(tk.Toplevel):
             item_id = tree.insert('', 'end', values=values)
             self.player_maps[roster_type][item_id] = player
             
-            # Apply tags for visual styling
+            # Apply tags for visual styling (thresholds on the 1-100 display
+            # scale; identical to the old 47/44 internal-scale cutoffs)
             tags = []
             if is_selected:
                 tags.append('selected')
             if injury_status != 'Healthy':
                 tags.append('injured')
-            if overall >= 47:
+            if overall >= 94:
                 tags.append('elite')
-            elif overall >= 44:
+            elif overall >= 88:
                 tags.append('star')
             
             if tags:
@@ -1031,12 +1032,12 @@ class RosterWindow(tk.Toplevel):
             set_tree_empty_state(tree, "No players on this roster")
     
     def calculate_performance_rating(self, player):
-        """Calculate performance rating for NHL players."""
-        # This would be based on season stats
-        base_performance = player.overall_rating()
-        # Add some variation based on morale and recent play
-        variation = (player.morale - 10) * 2
-        performance = max(0, min(100, base_performance + variation))
+        """Calculate performance rating for NHL players (1-100 display scale)."""
+        # Based on season performance; morale (1-10) nudges the rating
+        base_performance = to_100_scale(player.overall_rating())
+        morale_raw = int(getattr(player, 'morale', 7) or 7)
+        variation = (morale_raw - 10) * 2
+        performance = max(1, min(100, base_performance + variation))
         return f"{performance}"
     
     def calculate_nhl_readiness(self, player):
@@ -1094,21 +1095,21 @@ class RosterWindow(tk.Toplevel):
             
             if roster_type == 'nhl':
                 roster_options = [
-                    ("📉 Send to AHL", lambda: self.move_player(player, 'nhl', 'ahl')),
-                    ("🔄 Add to Trade Block", lambda: self.add_to_trade_block(player))
+                    ("Send to AHL", lambda: self.move_player(player, 'nhl', 'ahl')),
+                    ("Add to Trade Block", lambda: self.add_to_trade_block(player))
                 ]
             elif roster_type == 'ahl':
                 roster_options = [
-                    ("📈 Call up to NHL", lambda: self.move_player(player, 'ahl', 'nhl')),
-                    ("📉 Send to Prospects", lambda: self.move_player(player, 'ahl', 'prospects'))
+                    ("Call Up to NHL", lambda: self.move_player(player, 'ahl', 'nhl')),
+                    ("Send to Prospects", lambda: self.move_player(player, 'ahl', 'prospects'))
                 ]
             elif roster_type == 'prospects':
                 roster_options = [
-                    ("📈 Promote to AHL", lambda: self.move_player(player, 'prospects', 'ahl'))
+                    ("Promote to AHL", lambda: self.move_player(player, 'prospects', 'ahl'))
                 ]
-            
+
             # Add contract options
-            roster_options.append(("📝 Contract Extension", 
+            roster_options.append(("Contract Extension",
                                  lambda: self.parent.open_contract_negotiation_window(player, True)))
             
             # Use universal context menu
@@ -1152,9 +1153,16 @@ class RosterWindow(tk.Toplevel):
             values = tree.item(item_id, 'values')
             col_index = list(tree['columns']).index(col)
             value = values[col_index] if col_index < len(values) else ''
-            
+
+            # Potential grades are letters: map to a numeric order
+            if col == 'pot':
+                order = {'A+': 12, 'A': 11, 'A-': 10, 'B+': 9, 'B': 8,
+                         'B-': 7, 'C+': 6, 'C': 5, 'C-': 4,
+                         'D+': 3, 'D': 2, 'D-': 1, 'F': 0}
+                return order.get(str(value).strip().upper(), -1)
+
             # Handle numeric columns
-            if col in ['age', 'ovr', 'pot']:
+            if col in ['age', 'ovr']:
                 try:
                     return int(value)
                 except:
@@ -1201,7 +1209,7 @@ class RosterWindow(tk.Toplevel):
             selected_count = len(self.selected_players['nhl'])
             total_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) for p in players)
             avg_age = sum(p.age for p in players) / len(players) if players else 0
-            avg_overall = sum(p.overall_rating() for p in players) / len(players) if players else 0
+            avg_overall = sum(to_100_scale(p.overall_rating()) for p in players) / len(players) if players else 0
             
             summary = f"Players: {len(players)}/23 | Selected: {selected_count} | Total Salary: ${total_salary:,} | Avg Age: {avg_age:.1f} | Avg OVR: {avg_overall:.1f}"
             self.nhl_summary_label.config(text=summary)
@@ -1210,7 +1218,7 @@ class RosterWindow(tk.Toplevel):
             players = self.parent.user_team.ahl_roster
             selected_count = len(self.selected_players['ahl'])
             avg_age = sum(p.age for p in players) / len(players) if players else 0
-            avg_overall = sum(p.overall_rating() for p in players) / len(players) if players else 0
+            avg_overall = sum(to_100_scale(p.overall_rating()) for p in players) / len(players) if players else 0
             
             summary = f"Players: {len(players)}/20 | Selected: {selected_count} | Avg Age: {avg_age:.1f} | Avg OVR: {avg_overall:.1f}"
             self.ahl_summary_label.config(text=summary)
@@ -1337,7 +1345,7 @@ class RosterWindow(tk.Toplevel):
                     player.full_name,
                     str(player.primary_position),
                     player.age,
-                    player.overall_rating(),
+                    to_100_scale(player.overall_rating()),
                     f"${salary:,}",
                     years_remaining,
                     getattr(player, 'games_played', 0),
@@ -1358,7 +1366,7 @@ class RosterWindow(tk.Toplevel):
                     player.full_name,
                     str(player.primary_position),
                     player.age,
-                    player.overall_rating(),
+                    to_100_scale(player.overall_rating()),
                     f"${salary:,}",
                     years_remaining,
                     getattr(player, 'games_played', 0),
@@ -1379,7 +1387,7 @@ class RosterWindow(tk.Toplevel):
                     player.full_name,
                     str(player.primary_position),
                     player.age,
-                    player.overall_rating(),
+                    to_100_scale(player.overall_rating()),
                     f"${salary:,}",
                     years_remaining,
                     getattr(player, 'games_played', 0),
@@ -1419,61 +1427,35 @@ class RosterWindow(tk.Toplevel):
         ahl_count = len(self.parent.user_team.ahl_roster)
         prospects_count = len(self.parent.user_team.prospects)
         
-        current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) 
-                           for p in self.parent.user_team.roster)
-        cap_space = 83500000 - current_salary
-        
+        # Header cap figures (buyout dead cap included, matching the Salary Cap tab)
+        _, _, cap_space, _ = self._cap_numbers()
         stats_text = f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | Prospects: {prospects_count} | Cap Space: ${cap_space:,}"
         self.stats_label.config(text=stats_text)
-        
+
         # Update tab labels with counts
         self.notebook.tab(0, text=f"NHL Roster ({nhl_count})")
         self.notebook.tab(1, text=f"AHL Roster ({ahl_count})")
         self.notebook.tab(2, text=f"Prospects ({prospects_count})")
-        
-        # Update depth chart and salary cap if those tabs exist
+
+        # Keep the Depth Chart and Salary Cap tabs in sync too, even when
+        # they are not the currently visible tab
         try:
-            # Refresh depth chart by recreating the sections
-            current_tab = self.notebook.index(self.notebook.select())
-            if current_tab == 3:  # Depth Chart tab
-                self.refresh_depth_chart()
-            elif current_tab == 4:  # Salary Cap tab
-                self.refresh_salary_cap()
+            self.refresh_depth_chart()
+            self.refresh_salary_cap()
         except (tk.TclError, AttributeError):
-            # Tab might not exist or be selected
             pass
     
     def refresh_depth_chart(self):
         """Refresh the depth chart with current roster data."""
-        # Find the depth chart tab content and refresh it
         try:
-            depth_tab = self.notebook.nametowidget(self.notebook.tabs()[3])
-            # Clear and recreate the depth chart sections
-            for widget in depth_tab.winfo_children():
-                if hasattr(widget, 'winfo_children'):
-                    for child in widget.winfo_children():
-                        if isinstance(child, ttk.Frame) and hasattr(child, 'winfo_children'):
-                            for grandchild in child.winfo_children():
-                                if isinstance(grandchild, ttk.LabelFrame):
-                                    grandchild.destroy()
-            
-            # Find the main chart frame and recreate content
-            for widget in depth_tab.winfo_children():
-                if isinstance(widget, ttk.Frame):
-                    # Recreate depth chart sections
-                    self.create_forwards_depth_chart(widget)
-                    self.create_defense_depth_chart(widget)
-                    self.create_goalies_depth_chart(widget)
-                    break
-        except (IndexError, tk.TclError):
+            self._build_depth_chart_sections()
+        except (AttributeError, tk.TclError):
             pass
-    
+
     def refresh_salary_cap(self):
         """Refresh the salary cap information."""
         try:
-            # Update contract tree if it exists
-            if hasattr(self, 'contract_tree'):
-                self.populate_contract_tree()
+            self._build_salary_cap_content()
         except (AttributeError, tk.TclError):
             pass
 
@@ -1957,7 +1939,7 @@ class FreeAgencyWindow(tk.Toplevel):
         stats_text = [
             f"Total Available: {total_players}",
             f"Average Age: {avg_age:.1f}",
-            f"Average Rating: {avg_rating:.1f}",
+            f"Average Rating: {to_100_scale(avg_rating):.1f}",
             f"Avg. Market Value: ${avg_salary:,.0f}"
         ]
         
@@ -2065,7 +2047,7 @@ class FreeAgencyWindow(tk.Toplevel):
         for player in top_players:
             values = [
                 player.full_name,
-                player.overall_rating(),
+                to_100_scale(player.overall_rating()),
                 player.age
             ]
             top_tree.insert('', 'end', values=values)
@@ -2083,7 +2065,7 @@ class FreeAgencyWindow(tk.Toplevel):
             player_name = tree.item(item_id, 'values')[0]
             
             # Find the actual player object
-            for player in self.parent.game_manager.available_players:
+            for player in self.parent.game_manager.free_agents:
                 if player.full_name == player_name:
                     self.parent.open_contract_negotiation_window(player)
                     break
@@ -2700,21 +2682,6 @@ class FreeAgencyWindow(tk.Toplevel):
         """Negotiate with a staff member (double-click handler)."""
         self.hire_selected_staff()
     
-    def _show_free_agency_context_menu(self, event):
-        """Show context menu for free agency-specific options"""
-        if hasattr(self, 'fa_player_tree'):
-            selection = self.fa_player_tree.selection()
-            if selection:
-                player = self.parent.tree_maps.get(self.fa_player_tree, {}).get(selection[0])
-                if player:
-                    # Create context menu with free agency options
-                    context_menu = PlayerContextMenu(self)
-                    context_menu.add_separator()
-                    context_menu.add_command(f"Sign {player.full_name}", lambda p=player: self.sign_selected_player())
-                    context_menu.add_command("Market Analysis", lambda p=player: self.show_player_market_analysis())
-                    context_menu.add_command("Compare Offers", lambda p=player: self._compare_offers(p))
-                    context_menu.show_context_menu(event, player)
-    
     def show_staff_context_menu(self, event):
         """Show context menu for staff."""
         item_id = self.fa_staff_tree.identify_row(event.y)
@@ -2768,7 +2735,7 @@ class FreeAgencyWindow(tk.Toplevel):
         comparison_window.geometry("1000x700")
         
         # Main container
-        main_frame = ttk.Frame(comparison_window)
+        main_frame = ttk.Frame(comparison_window, style='Panel.TFrame')
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Title
@@ -2779,7 +2746,7 @@ class FreeAgencyWindow(tk.Toplevel):
         # Create scrollable frame
         canvas = tk.Canvas(main_frame, background=self.parent.BG_COLOR)
         scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
+        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
         scrollable_frame.bind(
             "<Configure>",
@@ -2796,14 +2763,15 @@ class FreeAgencyWindow(tk.Toplevel):
         scrollbar.pack(side="right", fill="y")
         
         # Close button
-        close_btn = ttk.Button(main_frame, text="Close", 
+        close_btn = ttk.Button(main_frame, text="Close",
+                              style='Secondary.TButton',
                               command=comparison_window.destroy)
         close_btn.pack(pady=10)
     
     def create_comparison_table(self, parent, players):
         """Create the detailed comparison table."""
         # Headers
-        header_frame = ttk.Frame(parent)
+        header_frame = ttk.Frame(parent, style='Panel.TFrame')
         header_frame.pack(fill='x', pady=5)
         
         ttk.Label(header_frame, text="Attribute", style='Header.TLabel', 
@@ -2816,8 +2784,8 @@ class FreeAgencyWindow(tk.Toplevel):
         # Basic Info Section
         self.add_comparison_section(parent, "Basic Information", [
             ("Age", lambda p: str(p.age)),
-            ("Position", lambda p: str(p.primary_position)),
-            ("Overall Rating", lambda p: str(p.overall_rating())),
+            ("Position", lambda p: p.primary_position.value),
+            ("Overall Rating", lambda p: str(to_100_scale(p.overall_rating()))),
             ("Team", lambda p: getattr(p, 'team_name', 'Free Agent')),
         ], players)
         
@@ -2850,7 +2818,7 @@ class FreeAgencyWindow(tk.Toplevel):
     def add_comparison_section(self, parent, section_title, attributes, players):
         """Add a section to the comparison table."""
         # Section header
-        section_frame = ttk.Frame(parent)
+        section_frame = ttk.Frame(parent, style='Panel.TFrame')
         section_frame.pack(fill='x', pady=10)
         
         ttk.Label(section_frame, text=section_title, style='Title.TLabel').pack(anchor='w')
@@ -3036,7 +3004,7 @@ class FreeAgencyWindow(tk.Toplevel):
         analysis_window.geometry("800x600")
         
         # Main container
-        main_frame = ttk.Frame(analysis_window)
+        main_frame = ttk.Frame(analysis_window, style='Panel.TFrame')
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Title
@@ -3045,26 +3013,27 @@ class FreeAgencyWindow(tk.Toplevel):
         title_label.pack(pady=(0, 20))
         
         # Create notebook for different analysis tabs
-        notebook = ttk.Notebook(main_frame)
+        notebook = ttk.Notebook(main_frame, style='Modern.TNotebook')
         notebook.pack(fill='both', expand=True)
         
         # Market Value Tab
-        value_frame = ttk.Frame(notebook)
+        value_frame = ttk.Frame(notebook, style='Panel.TFrame')
         notebook.add(value_frame, text="Market Value")
         self.create_value_analysis(value_frame, player)
         
         # Comparable Players Tab
-        comp_frame = ttk.Frame(notebook)
+        comp_frame = ttk.Frame(notebook, style='Panel.TFrame')
         notebook.add(comp_frame, text="Comparable Players")
         self.create_comparable_analysis(comp_frame, player)
         
         # Contract Projection Tab
-        contract_frame = ttk.Frame(notebook)
+        contract_frame = ttk.Frame(notebook, style='Panel.TFrame')
         notebook.add(contract_frame, text="Contract Projection")
         self.create_contract_projection(contract_frame, player)
         
         # Close button
         close_btn = ttk.Button(main_frame, text="Close", 
+                              style='Secondary.TButton',
                               command=analysis_window.destroy)
         close_btn.pack(pady=10)
     
@@ -3075,7 +3044,7 @@ class FreeAgencyWindow(tk.Toplevel):
         info_frame.pack(fill='x', padx=10, pady=10)
         
         ttk.Label(info_frame, text=f"Age: {player.age}").pack(anchor='w', padx=10, pady=2)
-        ttk.Label(info_frame, text=f"Position: {player.primary_position}").pack(anchor='w', padx=10, pady=2)
+        ttk.Label(info_frame, text=f"Position: {player.primary_position.value}").pack(anchor='w', padx=10, pady=2)
         ttk.Label(info_frame, text=f"Overall Rating: {to_100_scale(player.overall_rating())}").pack(anchor='w', padx=10, pady=2)
         
         # Market value calculation
@@ -3124,8 +3093,8 @@ class FreeAgencyWindow(tk.Toplevel):
                 tree.insert('', 'end', values=(
                     comp_player.full_name,
                     comp_player.age,
-                    str(comp_player.primary_position),
-                    comp_player.overall_rating(),
+                    comp_player.primary_position.value,
+                    to_100_scale(comp_player.overall_rating()),
                     getattr(comp_player, 'team_name', 'Free Agent'),
                     salary_str
                 ))
@@ -3143,19 +3112,19 @@ class FreeAgencyWindow(tk.Toplevel):
         market_value = self.calculate_market_value(player)
         
         # Short-term deal
-        short_term = ttk.Frame(proj_frame)
+        short_term = ttk.Frame(proj_frame, style='Panel.TFrame')
         short_term.pack(fill='x', padx=10, pady=5)
         ttk.Label(short_term, text="Short-term (1-2 years):", font=('Segoe UI', 10, 'bold')).pack(anchor='w')
         ttk.Label(short_term, text=f"  ${market_value * 1.1:,.0f} AAV - Prove-it deal").pack(anchor='w')
         
         # Medium-term deal
-        medium_term = ttk.Frame(proj_frame)
+        medium_term = ttk.Frame(proj_frame, style='Panel.TFrame')
         medium_term.pack(fill='x', padx=10, pady=5)
         ttk.Label(medium_term, text="Medium-term (3-4 years):", font=('Segoe UI', 10, 'bold')).pack(anchor='w')
         ttk.Label(medium_term, text=f"  ${market_value:,.0f} AAV - Fair market value").pack(anchor='w')
         
         # Long-term deal
-        long_term = ttk.Frame(proj_frame)
+        long_term = ttk.Frame(proj_frame, style='Panel.TFrame')
         long_term.pack(fill='x', padx=10, pady=5)
         ttk.Label(long_term, text="Long-term (5+ years):", font=('Segoe UI', 10, 'bold')).pack(anchor='w')
         ttk.Label(long_term, text=f"  ${market_value * 0.9:,.0f} AAV - Security discount").pack(anchor='w')
@@ -3375,14 +3344,6 @@ The Market Overview tab provides analytics and top available talent.
         """
         tk.messagebox.showinfo("Free Agency Help", help_text)
     
-    def _compare_offers(self, player):
-        """Compare contract offers for the player"""
-        messagebox.showinfo("Contract Offers", 
-                          f"Contract comparison for {player.full_name}\n"
-                          f"Your offer: Not submitted\n"
-                          f"Competing offers: 2 other teams\n"
-                          f"Recommended: Increase offer by 10%")
-
 class TradeWindow(tk.Toplevel):
     """Modern Trade Center: live value meter, picks, AI counter-offers, history."""
 
@@ -4439,8 +4400,10 @@ class DraftWindow(tk.Toplevel):
                 pass
             self.draft_order.append([draft_pick.round, team, draft_pick])
         if not self.draft_order:
-            sorted_teams = sorted(self.parent.league.teams,
-                                  key=lambda t: self.parent.league.standings[t.team_name]['Points'])
+            standings = getattr(self.parent.league, 'standings', None) or {}
+            sorted_teams = sorted(
+                self.parent.league.teams,
+                key=lambda t: standings.get(t.team_name, {}).get('Points', 0))
             for round_num in range(1, self.total_rounds + 1):
                 for team in sorted_teams:
                     self.draft_order.append([round_num, team, None])
@@ -4901,6 +4864,17 @@ class ScheduleWindow(tk.Toplevel):
 
         schedule_notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
         schedule_notebook.pack(fill='both', expand=True, pady=(0, 10))
+        self.schedule_notebook = schedule_notebook
+
+        # Month filter row (lets the user jump to any month of the season)
+        filter_frame = ttk.Frame(main_container, style='Panel.TFrame')
+        filter_frame.pack(fill='x', pady=(0, 8))
+        ttk.Label(filter_frame, text="Month:", style='Info.TLabel').pack(side='left', padx=(2, 6))
+        self.month_filter = tk.StringVar(master=self, value='All')
+        self.month_combo = ttk.Combobox(filter_frame, textvariable=self.month_filter,
+                                        state='readonly', width=14)
+        self.month_combo.pack(side='left')
+        self.month_combo.bind('<<ComboboxSelected>>', lambda e: self.update_views())
         
         columns = {'date': ('Date', 100), 'away': ('Away Team', 200), 'score': ('Score', 100), 'home': ('Home Team', 200), 'status': ('Status', 100)}
         
@@ -4914,7 +4888,7 @@ class ScheduleWindow(tk.Toplevel):
         self.my_schedule_tree.bind('<Double-1>', self.on_game_double_click)
         self.my_schedule_tree.bind('<Button-3>', self.show_game_context_menu)
         
-        schedule_notebook.add(my_team_frame, text='My Team Schedule')
+        self.schedule_notebook.add(my_team_frame, text='My Team Schedule')
         
         league_frame = ttk.Frame(schedule_notebook, style='Panel.TFrame')
         self.league_schedule_tree = parent._create_treeview(league_frame, columns, 25)
@@ -4924,7 +4898,7 @@ class ScheduleWindow(tk.Toplevel):
         self.league_schedule_tree.bind('<Double-1>', self.on_game_double_click)
         self.league_schedule_tree.bind('<Button-3>', self.show_game_context_menu)
         
-        schedule_notebook.add(league_frame, text='League Schedule')
+        self.schedule_notebook.add(league_frame, text='League Schedule')
         
         # Action buttons
         self.create_action_buttons(main_container)
@@ -4986,46 +4960,47 @@ class ScheduleWindow(tk.Toplevel):
         menu.tk_popup(event.x_root, event.y_root)
         
     def get_selected_game_data(self):
-        """Get data for the currently selected game."""
-        # Try to get selection from current tab
-        current_tab = None
+        """Get data for the currently selected game.
+
+        Looks the game up in self.schedule_data (built by update_views) using
+        the selected row's date/team names, so it works regardless of the
+        underlying schedule entry format (dict, tuple, or special events).
+        """
+        # Pick the treeview from the currently visible tab
         try:
-            notebook_widget = self.children['!frame']['!notebook']
-            current_tab_index = notebook_widget.index(notebook_widget.select())
-            if current_tab_index == 0:  # My Team Schedule
-                tree = self.my_schedule_tree
-            else:  # League Schedule
+            if self.schedule_notebook.index(self.schedule_notebook.select()) == 1:
                 tree = self.league_schedule_tree
-        except:
+            else:
+                tree = self.my_schedule_tree
+        except Exception:
             # Fallback to my team schedule
             tree = self.my_schedule_tree
-            
+
         selection = tree.selection()
         if not selection:
             return None
-            
+
         item = selection[0]
         values = tree.item(item, 'values')
         if not values or len(values) < 4:
             return None
-            
+
         # Parse the selected game data
         date_str, away_team_name, score, home_team_name = values[:4]
-        
-        # Find the actual game in the schedule
-        for game_date, home_team, away_team in self.parent.league.schedule:
-            if (home_team.team_name == home_team_name and 
-                away_team.team_name == away_team_name and
-                game_date.strftime("%b %d, %Y") == date_str):
-                
-                return {
-                    'date': game_date,
-                    'home_team': home_team,
-                    'away_team': away_team,
-                    'score': score,
-                    'has_been_played': score != "- : -"
-                }
-        return None
+
+        game_key = f"{date_str}_{home_team_name}_{away_team_name}"
+        entry = self.schedule_data.get(game_key)
+        if not entry:
+            return None
+
+        return {
+            'date': entry['date'],
+            'home_team': entry['home'],
+            'away_team': entry['away'],
+            'score': entry['score'],
+            'status': entry['status'],
+            'has_been_played': entry['status'] == "Final",
+        }
         
     def watch_selected_game(self):
         """Launch the game viewer for the selected game."""
@@ -5033,174 +5008,221 @@ class ScheduleWindow(tk.Toplevel):
         if not game_data:
             tk.messagebox.showwarning("No Game Selected", "Please select a game to watch.")
             return
-            
-        if not game_data['has_been_played']:
-            # Game hasn't been played yet - simulate it first
-            response = tk.messagebox.askyesno("Game Not Played", 
-                                           f"This game hasn't been played yet.\n\n"
-                                           f"Would you like to simulate and watch it?")
+
+        if game_data['has_been_played']:
+            # Already played - watch the recorded result
+            self._launch_game_viewer(game_data, commit=False)
+            return
+
+        # Game hasn't been played yet. Only past games can be simulated into
+        # the season record; future games would be re-simmed by the season
+        # engine on day advance (double-counting stats), so they are only
+        # offered as a non-committing preview.
+        try:
+            is_past_game = game_data['date'] < self.parent.current_date
+        except TypeError:
+            is_past_game = False
+
+        if is_past_game:
+            response = tk.messagebox.askyesno(
+                "Game Not Played",
+                "This game hasn't been played yet.\n\n"
+                "Would you like to simulate and watch it?\n"
+                "(The result will be recorded in your season.)")
             if not response:
                 return
-                
-        self._launch_game_viewer(game_data)
+            self._launch_game_viewer(game_data, commit=True)
+        else:
+            response = tk.messagebox.askyesno(
+                "Future Game",
+                "This game is scheduled for today or the future.\n\n"
+                "Watch a preview simulation? It will not affect your season.")
+            if not response:
+                return
+            self._launch_game_viewer(game_data, commit=False)
         
     def simulate_selected_game(self):
-        """Simulate the selected game without watching."""
+        """Simulate the selected game without watching.
+
+        Only past games with no recorded result can be simulated here.
+        Today's and future games are handled by the season simulation when
+        advancing days; simulating them here would double-count results.
+        """
         game_data = self.get_selected_game_data()
         if not game_data:
             tk.messagebox.showwarning("No Game Selected", "Please select a game to simulate.")
             return
-            
+
         if game_data['has_been_played']:
             tk.messagebox.showinfo("Game Already Played", "This game has already been played.")
             return
-            
+
+        try:
+            is_past_game = game_data['date'] < self.parent.current_date
+        except TypeError:
+            is_past_game = False
+
+        if not is_past_game:
+            tk.messagebox.showinfo(
+                "Future Game",
+                "This game is scheduled for today or the future.\n"
+                "It will be played automatically when you advance the season.\n\n"
+                "Manual simulation is only available for past games that "
+                "were never played.")
+            return
+
         # Simulate the game
         self._simulate_game(game_data)
         self.update_views()
         
-    def _launch_game_viewer(self, game_data):
-        """Launch the enhanced game viewer for a specific game."""
+    def _launch_game_viewer(self, game_data, commit=True):
+        """Launch the game viewer for a specific game.
+
+        Args:
+            game_data: dict from get_selected_game_data()
+            commit: if True and the game hasn't been played, the simulated
+                result is recorded in the season (game_results + team stats).
+                If False, the sim is a throwaway preview and nothing is stored.
+        """
         try:
             from GAME_VIEWER import launch_game_viewer
             from simulation import GameSim
-            
+
             home_team = game_data['home_team']
             away_team = game_data['away_team']
-            
-            # Create or retrieve game simulation
-            if not game_data['has_been_played']:
-                # Simulate the game for viewing
+
+            if commit and not game_data['has_been_played']:
+                # Simulate the game for viewing and record the result
                 sim = GameSim(home_team, away_team)
                 sim.run()
-                
-                # Store the result
-                game_result = {
-                    'date': game_data['date'],
-                    'home_team': home_team,
-                    'away_team': away_team,
-                    'home_score': sim.home_score,
-                    'away_score': sim.away_score
-                }
-                
+
+                game_result = self._build_game_result(game_data, sim)
+
                 # Add to game results if not already there
-                if not any(r['date'] == game_data['date'] and 
-                          r['home_team'] == home_team and 
-                          r['away_team'] == away_team 
-                          for r in self.parent.game_results):
+                if not self._find_game_result(game_data):
                     self.parent.game_results.append(game_result)
-                    
-                # Update team stats
-                self._update_team_stats_from_game(game_result)
-                
+                    self._update_team_stats_from_game(game_result)
+                    self.update_views()
+
+                event_log = game_result['event_log']
             else:
-                # Find existing game result and create simulation from it
-                sim = None
-                for result in self.parent.game_results:
-                    if (result['date'] == game_data['date'] and
-                        result['home_team'] == home_team and
-                        result['away_team'] == away_team):
-                        # Create a simulation with the known result
-                        sim = GameSim(home_team, away_team)
-                        sim.home_score = result['home_score']
-                        sim.away_score = result['away_score']
-                        # Generate some sample events for viewing
-                        sim.run()
-                        break
-                
-                if not sim:
-                    # Create new simulation as fallback
+                # Watch the recorded game (or a throwaway preview sim for an
+                # unplayed game) - never re-sim a played game's score.
+                result = self._find_game_result(game_data)
+                event_log = (result.get('event_log') if result else None) or []
+                if not event_log:
                     sim = GameSim(home_team, away_team)
                     sim.run()
-            
-            # Launch the game viewer with simulation data
-            event_log = getattr(sim, 'event_log', [])
-            duration = 3600  # 60 minutes total game time
-            
-            launch_game_viewer(
-                events=event_log,
-                duration=duration,
-                home_team_name=home_team.team_name,
-                away_team_name=away_team.team_name
-            )
-            
+                    event_log = sim.event_log
+
+            # launch_game_viewer(event_log, duration, home_team, away_team, parent)
+            launch_game_viewer(event_log, 3600,
+                               home_team.team_name, away_team.team_name,
+                               parent=self)
+
         except Exception as e:
-            tk.messagebox.showerror("Game Viewer Error", 
-                                   f"Failed to launch game viewer:\n{str(e)}")
+            tk.messagebox.showerror("Game Viewer Error",
+                                    f"Failed to launch game viewer:\n{str(e)}")
             print(f"Game viewer launch error: {e}")
+
+    def _build_game_result(self, game_data, sim):
+        """Build a game_results-compatible result dict from a GameSim run.
+
+        Includes the keys the rest of the app expects ('winner',
+        'event_log', 'overtime', 'shootout', ...).
+        """
+        home_team = game_data['home_team']
+        away_team = game_data['away_team']
+        home_score = sim.home_score
+        away_score = sim.away_score
+
+        winner = home_team if home_score > away_score else away_team
+        notable_events = getattr(sim, 'notable_events', []) or []
+        went_ot = any(e.get('period', 0) > 3 for e in notable_events
+                      if isinstance(e, dict))
+        went_so = any(e.get('period', 0) == 5 for e in notable_events
+                      if isinstance(e, dict))
+
+        return {
+            'date': game_data['date'],
+            'home_team': home_team,
+            'away_team': away_team,
+            'home_score': home_score,
+            'away_score': away_score,
+            'winner': winner,
+            'events': getattr(sim, 'game_log', []) or [],
+            'notable_events': notable_events,
+            'player_ratings': {},
+            'event_log': getattr(sim, 'event_log', []) or [],
+            'overtime': went_ot,
+            'shootout': went_so,
+        }
             
     def _simulate_game(self, game_data):
         """Simulate a game and store the results."""
         try:
             from simulation import GameSim
-            
+
             home_team = game_data['home_team']
             away_team = game_data['away_team']
-            
+
             # Create and run simulation
             sim = GameSim(home_team, away_team)
             sim.run()
-            
-            # Store the result
-            game_result = {
-                'date': game_data['date'],
-                'home_team': home_team,
-                'away_team': away_team,
-                'home_score': sim.home_score,
-                'away_score': sim.away_score
-            }
-            
+
+            # Don't store a duplicate if one was recorded meanwhile
+            if self._find_game_result(game_data):
+                tk.messagebox.showinfo("Already Recorded",
+                                       "A result for this game is already recorded.")
+                self.update_views()
+                return
+
+            game_result = self._build_game_result(game_data, sim)
+
             # Add to game results
             self.parent.game_results.append(game_result)
-            
+
             # Update team stats
             self._update_team_stats_from_game(game_result)
-            
+
             # Show result
-            tk.messagebox.showinfo("Game Simulated", 
-                                 f"Game Result:\n\n"
-                                 f"{away_team.team_name} {sim.away_score} - {sim.home_score} {home_team.team_name}")
-                                 
+            tk.messagebox.showinfo("Game Simulated",
+                                   f"Game Result:\n\n"
+                                   f"{away_team.team_name} {sim.away_score} - {sim.home_score} {home_team.team_name}")
+
         except Exception as e:
-            tk.messagebox.showerror("Simulation Error", 
-                                   f"Failed to simulate game:\n{str(e)}")
-                                   
+            tk.messagebox.showerror("Simulation Error",
+                                    f"Failed to simulate game:\n{str(e)}")
+
     def _update_team_stats_from_game(self, game_result):
-        """Update team statistics from game result."""
+        """Update team statistics from game result.
+
+        Uses the canonical Team.update_record() (points is a computed
+        property on Team, so it must never be assigned directly).
+        """
         home_team = game_result['home_team']
         away_team = game_result['away_team']
         home_score = game_result['home_score']
         away_score = game_result['away_score']
-        
-        # Update games played
-        home_team.games_played += 1
-        away_team.games_played += 1
-        
-        # Update goals
-        home_team.goals_for += home_score
-        home_team.goals_against += away_score
-        away_team.goals_for += away_score
-        away_team.goals_against += home_score
-        
-        # Update wins/losses
+
+        # Update goals for/against (guarded: not all Team objects carry these)
+        home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
+        home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
+        away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
+        away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
+
+        # Update wins/losses (OT losers still earn a point via ot_losses)
+        went_ot = bool(game_result.get('overtime') or game_result.get('shootout'))
         if home_score > away_score:
-            home_team.wins += 1
-            home_team.points += 2
-            away_team.losses += 1
+            home_team.update_record("WIN")
+            away_team.update_record("LOSS", overtime=went_ot)
         elif away_score > home_score:
-            away_team.wins += 1
-            away_team.points += 2
-            home_team.losses += 1
+            away_team.update_record("WIN")
+            home_team.update_record("LOSS", overtime=went_ot)
         else:
-            # Tie - handle overtime/shootout later
-            home_team.overtimes += 1
-            away_team.overtimes += 1
-            home_team.points += 1
-            away_team.points += 1
-            
-        # Update goal differential
-        home_team.goal_differential = home_team.goals_for - home_team.goals_against
-        away_team.goal_differential = away_team.goals_for - away_team.goals_against
+            # Ties shouldn't happen (GameSim resolves OT/shootout), but stay safe
+            home_team.update_record("TIE")
+            away_team.update_record("TIE")
         
     def _find_game_result(self, game_data):
         """Find the stored result matching the selected game."""
@@ -5243,29 +5265,75 @@ class ScheduleWindow(tk.Toplevel):
             return
         GameDetailWindow(self.parent, result, initial_tab="recap")
 
+    @staticmethod
+    def _parse_schedule_entry(game_entry):
+        """Normalize one league.schedule entry to (date, home_team, away_team).
+
+        Returns None for malformed entries and non-game special events
+        (e.g. All-Star / NHL_EVENT entries).
+        """
+        game_date = home = away = None
+        if isinstance(game_entry, dict):
+            # New format: dictionary with date, home_team, away_team, etc.
+            game_date = game_entry.get('date')
+            home = game_entry.get('home_team')
+            away = game_entry.get('away_team')
+        elif isinstance(game_entry, (tuple, list)) and len(game_entry) >= 3:
+            # Old format: tuple/list with (date, home_team, away_team)
+            game_date, home, away = game_entry[0], game_entry[1], game_entry[2]
+        else:
+            return None
+
+        # Skip special events (All-Star, outdoor games, etc.) - not real games
+        if (game_date is None or not hasattr(game_date, 'strftime')
+                or not (hasattr(home, 'team_name') and hasattr(away, 'team_name'))):
+            return None
+        return game_date, home, away
+
+    def _schedule_months(self):
+        """Month labels present in the schedule, in chronological order."""
+        months = []
+        seen = set()
+        for game_entry in self.parent.league.schedule:
+            parsed = self._parse_schedule_entry(game_entry)
+            if not parsed:
+                continue
+            game_date = parsed[0]
+            try:
+                label = game_date.strftime("%b %Y")
+            except (AttributeError, ValueError):
+                continue
+            if label not in seen:
+                seen.add(label)
+                months.append(label)
+        return months
+
     def update_views(self):
         self.my_schedule_tree.delete(*self.my_schedule_tree.get_children())
         self.league_schedule_tree.delete(*self.league_schedule_tree.get_children())
-        
+
         self.schedule_data.clear()
         self._first_upcoming = None
-        
-        for game_entry in self.parent.league.schedule:
-            # Handle different schedule formats
-            if isinstance(game_entry, dict):
-                # New format: dictionary with date, home_team, away_team, etc.
-                game_date = game_entry['date']
-                home = game_entry['home_team']
-                away = game_entry['away_team']
-            elif isinstance(game_entry, (tuple, list)) and len(game_entry) >= 3:
-                # Old format: tuple/list with (date, home_team, away_team)
-                game_date, home, away = game_entry[0], game_entry[1], game_entry[2]
-            else:
-                continue  # Skip malformed entries
 
-            # Skip special events (All-Star, outdoor games, etc.) - not real games
-            if not (hasattr(home, 'team_name') and hasattr(away, 'team_name')):
+        # Month filter options
+        month_values = ['All'] + self._schedule_months()
+        self.month_combo.configure(values=month_values)
+        if self.month_filter.get() not in month_values:
+            self.month_filter.set('All')
+        selected_month = self.month_filter.get()
+
+        for game_entry in self.parent.league.schedule:
+            parsed = self._parse_schedule_entry(game_entry)
+            if not parsed:
                 continue
+            game_date, home, away = parsed
+
+            # Month filter
+            try:
+                if selected_month != 'All' and game_date.strftime("%b %Y") != selected_month:
+                    continue
+            except (AttributeError, ValueError):
+                pass
             
             # Determine game status and score
             status = "Scheduled"
@@ -5406,7 +5474,7 @@ class FinancesWindow(tk.Toplevel):
         
         # Calculate current financials
         current_payroll = self.calculate_current_payroll()
-        salary_cap = 83_500_000  # Current NHL salary cap
+        salary_cap = self._salary_cap()
         cap_space = salary_cap - current_payroll
         
         self.header_stats_label = ttk.Label(
@@ -5438,7 +5506,7 @@ class FinancesWindow(tk.Toplevel):
         current_payroll = self.calculate_current_payroll()
         ahl_payroll = self.calculate_ahl_payroll()
         buried_salary = self.calculate_buried_salary()
-        salary_cap = 83_500_000
+        salary_cap = self._salary_cap()
         cap_space = salary_cap - current_payroll
         
         self.create_stat_box(overview_grid, "Current Payroll", f"${current_payroll:,}", 0, 0)
@@ -5527,9 +5595,10 @@ class FinancesWindow(tk.Toplevel):
         
         self.contracts_tree = self.parent._create_treeview(contracts_frame, contract_columns, 20)
         self.contracts_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Add universal player context menu
-        add_player_context_menu(self.contracts_tree, self)
+
+        # Right-click menu with finance actions (replaces the default binding
+        # from _create_treeview so Negotiate Extension / Trade are one click away)
+        self.contracts_tree.bind('<Button-3>', self._show_contracts_context_menu)
 
     def create_projections_tab(self):
         """Create future salary projections tab."""
@@ -5751,6 +5820,10 @@ class FinancesWindow(tk.Toplevel):
         # For now, return 0 as this requires more complex contract tracking
         return 0
 
+    def _salary_cap(self):
+        """The team's salary cap (falls back to the default NHL cap)."""
+        return getattr(self.parent.user_team, 'salary_cap', 83_500_000)
+
     # Update methods
     def update_views(self):
         """Update all views in the finances window."""
@@ -5764,7 +5837,7 @@ class FinancesWindow(tk.Toplevel):
         """Update the salary cap overview."""
         # Update header stats
         current_payroll = self.calculate_current_payroll()
-        salary_cap = 83_500_000
+        salary_cap = self._salary_cap()
         cap_space = salary_cap - current_payroll
         
         self.header_stats_label.config(
@@ -5831,7 +5904,9 @@ class FinancesWindow(tk.Toplevel):
     def update_contracts_view(self):
         """Update the contracts view with filtering."""
         self.contracts_tree.delete(*self.contracts_tree.get_children())
-        self.parent.tree_maps.setdefault('contracts', {}).clear()
+        # Keyed by the treeview widget, matching the app-wide tree_maps
+        # convention (see main._create_treeview / _show_player_context_menu).
+        self.parent.tree_maps[self.contracts_tree] = {}
         
         # Get all players based on roster filter
         roster_filter = self.roster_filter.get()
@@ -5896,7 +5971,7 @@ class FinancesWindow(tk.Toplevel):
             )
             
             item = self.contracts_tree.insert('', 'end', values=values)
-            self.parent.tree_maps.setdefault('contracts', {})[item] = player
+            self.parent.tree_maps[self.contracts_tree][item] = player
 
     def determine_contract_status(self, player, years_remaining):
         """Determine the contract status of a player."""
@@ -5914,7 +5989,11 @@ class FinancesWindow(tk.Toplevel):
 
     def update_projections_view(self):
         """Update the projections view."""
-        selected_year = int(self.selected_projection_year.get())
+        try:
+            selected_year = int(self.selected_projection_year.get())
+        except (TypeError, ValueError):
+            selected_year = self.current_season
+            self.selected_projection_year.set(str(selected_year))
         years_ahead = selected_year - self.current_season
         
         # Calculate projected payroll
@@ -5931,7 +6010,7 @@ class FinancesWindow(tk.Toplevel):
                 expiring_players.append(player)
         
         # Update summary
-        salary_cap = 83_500_000  # Assume static for projection
+        salary_cap = self._salary_cap()
         projected_space = salary_cap - projected_payroll
         
         summary_text = f"""
@@ -6014,7 +6093,7 @@ Expiring Contracts:   {len(expiring_players)} players
         recommendations = []
         
         current_payroll = self.calculate_current_payroll()
-        salary_cap = 83_500_000
+        salary_cap = self._salary_cap()
         cap_space = salary_cap - current_payroll
         cap_percentage = (current_payroll / salary_cap) * 100
         
@@ -6083,7 +6162,10 @@ Expiring Contracts:   {len(expiring_players)} players
     def generate_salary_breakdown_report(self):
         """Generate detailed salary breakdown report."""
         current_payroll = self.calculate_current_payroll()
-        
+        salary_cap = self._salary_cap()
+        cap_space = salary_cap - current_payroll
+        cap_pct = (current_payroll / salary_cap) * 100 if salary_cap else 0
+
         report = f"""
 SALARY BREAKDOWN REPORT
 {self.parent.user_team.team_name} - {self.current_season} Season
@@ -6092,9 +6174,9 @@ SALARY BREAKDOWN REPORT
 SUMMARY
 -------
 Total Payroll:    ${current_payroll:,}
-Salary Cap:       ${83_500_000:,}
-Cap Space:        ${83_500_000 - current_payroll:,}
-Cap Utilization:  {(current_payroll / 83_500_000) * 100:.1f}%
+Salary Cap:       ${salary_cap:,}
+Cap Space:        ${cap_space:,}
+Cap Utilization:  {cap_pct:.1f}%
 
 TOP 10 SALARIES
 ---------------
@@ -6303,32 +6385,35 @@ VALUE ANALYSIS
 
     # Event handlers
     def _show_contracts_context_menu(self, event):
-        """Show context menu for contract-specific options"""
-        if hasattr(self, 'contracts_tree'):
-            selection = self.contracts_tree.selection()
-            if selection:
-                player = self.parent.tree_maps.get(self.contracts_tree, {}).get(selection[0])
-                if player:
-                    # Create context menu with contract options
-                    context_menu = PlayerContextMenu(self)
-                    context_menu.add_separator()
-                    context_menu.add_command("Negotiate Extension", lambda p=player: self.negotiate_extension())
-                    context_menu.add_command("Trade Player", lambda p=player: self.trade_player())
-                    context_menu.add_command("Contract Details", lambda p=player: self._view_contract_details(p))
-                    context_menu.show_context_menu(event, player)
+        """Right-click menu for the contracts list, with finance actions."""
+        item_id = self.contracts_tree.identify_row(event.y)
+        if not item_id:
+            return
+        self.contracts_tree.selection_set(item_id)
+        player = self.parent.tree_maps.get(self.contracts_tree, {}).get(item_id)
+        if not player:
+            return
+        PlayerContextMenu(self).show_context_menu(
+            event, player,
+            additional_options=[
+                ("Negotiate Extension", self.negotiate_extension),
+                ("Trade Player", self.trade_player),
+                ("Contract Details",
+                 lambda p=player: self._view_contract_details(p)),
+            ])
 
     def view_contract_player_profile(self):
         """View the selected player's profile."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.setdefault('contracts', {}):
-            player = self.parent.tree_maps.setdefault('contracts', {})[selection[0]]
+        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
+            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
             self.parent.open_player_profile(player)
 
     def negotiate_extension(self):
         """Open contract negotiation for selected player."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.setdefault('contracts', {}):
-            player = self.parent.tree_maps.setdefault('contracts', {})[selection[0]]
+        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
+            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
             # Open contract negotiation window
             if 'contract_negotiation' not in self.parent.open_windows or not self.parent.open_windows['contract_negotiation'].winfo_exists():
                 self.parent.open_windows['contract_negotiation'] = ContractNegotiationWindow(self.parent, player, is_extension=True)
@@ -6337,8 +6422,8 @@ VALUE ANALYSIS
     def trade_player(self):
         """Open trade window for selected player."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.setdefault('contracts', {}):
-            player = self.parent.tree_maps.setdefault('contracts', {})[selection[0]]
+        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
+            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
             # Open trade window with this player pre-selected
             self.parent.open_trade_window()
 
@@ -6364,7 +6449,7 @@ VALUE ANALYSIS
     def check_cap_compliance(self):
         """Check salary cap compliance."""
         current_payroll = self.calculate_current_payroll()
-        salary_cap = 83_500_000
+        salary_cap = self._salary_cap()
         
         if current_payroll > salary_cap:
             over_amount = current_payroll - salary_cap
@@ -6378,9 +6463,9 @@ VALUE ANALYSIS
         try:
             from datetime import datetime
             import os
-            
-            # Create exports directory if it doesn't exist
-            exports_dir = "exports"
+
+            # Create exports directory next to the app (not the process cwd)
+            exports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports")
             if not os.path.exists(exports_dir):
                 os.makedirs(exports_dir)
             
@@ -6388,13 +6473,13 @@ VALUE ANALYSIS
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"financial_report_{self.parent.user_team.team_name.replace(' ', '_')}_{timestamp}.txt"
             filepath = os.path.join(exports_dir, filename)
-            
+
             # Calculate financial data
             current_payroll = sum(getattr(p.contract, 'salary', getattr(p, 'salary', 750000)) 
                                 for p in self.parent.user_team.roster 
                                 if hasattr(p, 'contract') or hasattr(p, 'salary'))
             
-            salary_cap = 83_500_000
+            salary_cap = self._salary_cap()
             cap_space = salary_cap - current_payroll
             
             # Generate detailed report
@@ -6495,6 +6580,20 @@ ROSTER BREAKDOWN
             messagebox.showinfo("Contract Details", f"No contract information available for {player.full_name}")
 
 class NewsWindow(tk.Toplevel):
+    # Emoji ranges stripped from story text before display (stories are
+    # written by the sim in main.py and may contain emoji).
+    _EMOJI_RE = re.compile(
+        "["
+        "\U0001F000-\U0001FAFF"  # emoticons, transport, supplemental symbols
+        "\U00002600-\U000027BF"  # misc symbols & dingbats
+        "\U00002B00-\U00002BFF"  # misc symbols and arrows
+        "\u2190-\u21FF"          # arrows
+        "\u2300-\u23FF"          # misc technical
+        "\u2C60-\u2C7F"
+        "\uFE0F\u200D"
+        "]+"
+    )
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -6507,27 +6606,50 @@ class NewsWindow(tk.Toplevel):
         ttk.Label(header, text="LEAGUE NEWS",
                   font=(parent.FONT_FAMILY, 16, 'bold'),
                   style='Heading.TLabel').pack(side='left')
+        ttk.Button(header, text="Refresh",
+                   command=self.refresh_news).pack(side='right')
 
         text_frame = ttk.Frame(self, style='Panel.TFrame', padding=2)
         text_frame.pack(fill='both', expand=True, padx=10, pady=10)
 
-        news_text = tk.Text(text_frame, wrap='word',
-                            bg=parent.CONTENT_BG, fg=parent.TEXT_COLOR,
-                            font=(parent.FONT_FAMILY, 10), borderwidth=0,
-                            selectbackground='#0d2b28',
-                            insertbackground=parent.TEXT_COLOR,
-                            highlightthickness=1, highlightbackground='#2e2e38',
-                            padx=10, pady=10)
+        self.news_text = tk.Text(text_frame, wrap='word',
+                                 bg=parent.CONTENT_BG, fg=parent.TEXT_COLOR,
+                                 font=(parent.FONT_FAMILY, 10), borderwidth=0,
+                                 selectbackground='#0d2b28',
+                                 insertbackground=parent.TEXT_COLOR,
+                                 highlightthickness=1, highlightbackground='#2e2e38',
+                                 padx=10, pady=10)
         v_scroll = ttk.Scrollbar(text_frame, orient='vertical',
-                                 command=news_text.yview)
-        news_text.configure(yscrollcommand=v_scroll.set)
-        news_text.pack(side='left', fill='both', expand=True)
+                                 command=self.news_text.yview)
+        self.news_text.configure(yscrollcommand=v_scroll.set)
+        self.news_text.pack(side='left', fill='both', expand=True)
         v_scroll.pack(side='right', fill='y')
 
-        for item in reversed(parent.news_log):
-            news_text.insert('1.0', f"({item['date'].strftime('%b %d')}) {item['story']}\n\n")
+        self.refresh_news()
 
-        news_text.config(state='disabled')
+    @classmethod
+    def _clean_story(cls, story):
+        """Strip emoji and tidy whitespace for display."""
+        text = cls._EMOJI_RE.sub("", str(story or ""))
+        return " ".join(text.split())
+
+    def refresh_news(self):
+        """Re-render the news feed from the current news_log."""
+        self.news_text.config(state='normal')
+        self.news_text.delete('1.0', tk.END)
+
+        news_log = getattr(self.parent, 'news_log', None) or []
+        if not news_log:
+            self.news_text.insert('1.0', "No news yet. Advance the season to generate league news.")
+        else:
+            for item in reversed(news_log):
+                date = item.get('date') if isinstance(item, dict) else None
+                date_str = date.strftime('%b %d') if hasattr(date, 'strftime') else ""
+                story = self._clean_story(item.get('story') if isinstance(item, dict) else item)
+                prefix = f"({date_str}) " if date_str else ""
+                self.news_text.insert('1.0', f"{prefix}{story}\n\n")
+
+        self.news_text.config(state='disabled')
 
 class GMOptionsWindow(tk.Toplevel):
     def __init__(self, parent):

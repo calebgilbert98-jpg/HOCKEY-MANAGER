@@ -17,6 +17,15 @@ except ImportError:
     ANALYTICS_AVAILABLE = False
     print("Warning: Advanced analytics system not available, using fallback data")
 
+try:
+    from game_classes import to_100_scale
+except ImportError:
+    def to_100_scale(v):
+        try:
+            return max(1, min(100, int(round(float(v)))))
+        except (TypeError, ValueError):
+            return 50
+
 class StatsStandingsWindow(tk.Toplevel):
     """Advanced Stats and Standings window with deep analytics and multiple view modes"""
     
@@ -254,7 +263,7 @@ class StatsStandingsWindow(tk.Toplevel):
         
         self.standings_sort = tk.StringVar(value="Points")
         sort_combo = ttk.Combobox(controls_frame, textvariable=self.standings_sort,
-                                 values=["Points", "Wins", "Goal Differential", "Recent Form", "Home Record", "Road Record"],
+                                 values=["Points", "Wins", "Goal Differential"],
                                  state="readonly", width=15)
         sort_combo.pack(side='left', padx=(0, 15))
         sort_combo.bind('<<ComboboxSelected>>', self.update_standings_view)
@@ -301,9 +310,8 @@ class StatsStandingsWindow(tk.Toplevel):
         
         self.stats_category = tk.StringVar(value="Overall Performance")
         category_combo = ttk.Combobox(controls_frame, textvariable=self.stats_category,
-                                     values=["Overall Performance", "Offensive Stats", "Defensive Stats", 
-                                            "Special Teams", "Goaltending", "Advanced Analytics", 
-                                            "Situational Stats", "Home vs Road"],
+                                     values=["Overall Performance", "Offensive Stats", "Defensive Stats",
+                                            "Goaltending", "Advanced Analytics"],
                                      state="readonly", width=20)
         category_combo.pack(side='left', padx=(0, 15))
         category_combo.bind('<<ComboboxSelected>>', self.update_team_stats_view)
@@ -313,7 +321,7 @@ class StatsStandingsWindow(tk.Toplevel):
         
         self.stats_mode = tk.StringVar(value="League Rankings")
         mode_combo = ttk.Combobox(controls_frame, textvariable=self.stats_mode,
-                                 values=["League Rankings", "vs League Average", "Trend Analysis", "Head-to-Head"],
+                                 values=["League Rankings", "vs League Average"],
                                  state="readonly", width=15)
         mode_combo.pack(side='left', padx=(0, 15))
         mode_combo.bind('<<ComboboxSelected>>', self.update_team_stats_view)
@@ -491,7 +499,7 @@ class StatsStandingsWindow(tk.Toplevel):
                 roster = getattr(team, 'roster', []) or []
                 team_abbr = self._get_team_abbreviation(getattr(team, 'team_name', ''))
                 for player in roster:
-                    is_goalie = 'G' in str(getattr(player, 'primary_position', ''))
+                    is_goalie = self._is_goalie(player)
                     defs = (self.MILESTONE_WATCH_GOALIES if is_goalie
                             else self.MILESTONE_WATCH_SKATERS)
                     for career_attr, season_attr, label, marks, within in defs:
@@ -1226,7 +1234,7 @@ class StatsStandingsWindow(tk.Toplevel):
                     games_played = getattr(team, 'games_played', 0)
                     wins = getattr(team, 'wins', 0)
                     losses = getattr(team, 'losses', 0) 
-                    overtime_losses = getattr(team, 'overtime_losses', 0)
+                    overtime_losses = getattr(team, 'ot_losses', 0)
                     points = wins * 2 + overtime_losses
                     goals_for = getattr(team, 'goals_for', 0)
                     goals_against = getattr(team, 'goals_against', 0)
@@ -1335,30 +1343,18 @@ class StatsStandingsWindow(tk.Toplevel):
         # Sort and display based on category
         if category == "scoring":
             # Sort by points (goals + assists) from real player stats
-            all_players.sort(key=lambda p: (getattr(p['player'], 'stats', None) and 
-                                          (getattr(p['player'].stats, 'goals', 0) + getattr(p['player'].stats, 'assists', 0))) or 0, 
-                           reverse=True)
+            all_players.sort(key=lambda p: getattr(p['player'], 'goals', 0)
+                           + getattr(p['player'], 'assists', 0), reverse=True)
             
             for i, player_data in enumerate(all_players[:20], 1):  # Top 20
                 player = player_data['player']
                 team_abbr = self._get_team_abbreviation(player_data['team_name'])
                 
-                # Get real stats if available
-                stats = getattr(player, 'stats', None)
-                if stats:
-                    goals = getattr(stats, 'goals', 0)
-                    assists = getattr(stats, 'assists', 0)
-                    points = goals + assists
-                    games_played = getattr(stats, 'games_played', 0)
-                else:
-                    # Generate realistic stats based on player attributes if no real stats
-                    skill_rating = (getattr(player, 'shooting', 10) + 
-                                  getattr(player, 'passing', 10) + 
-                                  getattr(player, 'offensive_awareness', 10)) / 3
-                    games_played = 0  # Start at 0 for new season
-                    goals = max(0, int((skill_rating - 8) * games_played / 20))
-                    assists = max(0, int((skill_rating - 7) * games_played / 18))
-                    points = goals + assists
+                # Real season stats live directly on the player object.
+                goals = getattr(player, 'goals', 0)
+                assists = getattr(player, 'assists', 0)
+                points = goals + assists
+                games_played = getattr(player, 'games_played', 0)
                 
                 # Show all players, including those with 0 stats at season start
                 position_str = str(getattr(player, 'primary_position', 'C'))
@@ -1378,31 +1374,25 @@ class StatsStandingsWindow(tk.Toplevel):
                     
         elif category == "goaltending":
             # Filter for goalies and sort by wins
-            goalies = [p for p in all_players if str(getattr(p['player'], 'primary_position', '')).endswith('GOALIE')]
-            goalies.sort(key=lambda p: (getattr(p['player'], 'stats', None) and 
-                                      getattr(p['player'].stats, 'wins', 0)) or 
-                                     getattr(p['player'], 'goaltending', 0), reverse=True)
+            goalies = [p for p in all_players if self._is_goalie(p['player'])]
+            goalies.sort(key=lambda p: (getattr(p['player'], 'wins', 0),
+                                        getattr(p['player'], 'save_percentage', 0)),
+                         reverse=True)
             
             for i, player_data in enumerate(goalies[:15], 1):  # Top 15 goalies
                 player = player_data['player']
                 team_abbr = self._get_team_abbreviation(player_data['team_name'])
                 
                 # Get real stats if available
-                stats = getattr(player, 'stats', None)
-                if stats:
-                    games_played = getattr(stats, 'games_played', 0)
-                    wins = getattr(stats, 'wins', 0)
-                    losses = getattr(stats, 'losses', 0)
-                    gaa = getattr(stats, 'goals_against_avg', 2.50)
-                    save_pct = f".{getattr(stats, 'save_percentage', 915):03d}"
-                else:
-                    # Show 0 stats for goalies at season start
-                    games_played = 0
-                    wins = 0
-                    losses = 0
-                    gaa = 0.00
-                    save_pct = ".000"
-                
+                # Real season stats live directly on the player object.
+                games_played = getattr(player, 'games_played', 0)
+                wins = getattr(player, 'wins', 0)
+                losses = getattr(player, 'losses', 0)
+                gaa = getattr(player, 'goals_against_avg', 0.0)
+                sv = getattr(player, 'save_percentage', 0.0)
+                sa = getattr(player, 'shots_against', 0)
+                save_pct = f"{sv:.3f}"[1:] if sa > 0 else ".000"
+
                 # Show all goalies, including those with 0 games at season start
                 tree.insert('', 'end', values=(
                     i,
@@ -1411,26 +1401,8 @@ class StatsStandingsWindow(tk.Toplevel):
                     games_played,
                     wins,
                     losses,
-                    gaa,
+                    f"{gaa:.2f}" if games_played > 0 else "0.00",
                     save_pct
-                ))
-                goals_against = getattr(player, 'goals_against', 0)
-                saves = getattr(player, 'saves', 0)
-                shots_against = saves + goals_against
-                
-                gaa = (goals_against / max(1, games_played)) * 82 if games_played > 0 else 0.0  # Normalized to 82-game season
-                save_pct = (saves / max(1, shots_against)) if shots_against > 0 else 0.0
-                
-                # Show all goalies, including those with 0 games at season start
-                tree.insert('', 'end', values=(
-                    i,
-                    getattr(player, 'full_name', 'Unknown'),
-                    team_abbr,
-                    games_played,
-                    wins,
-                    losses,
-                    f"{gaa:.2f}",
-                    f"{save_pct:.3f}"
                 ))
                     
         else:  # rookies
@@ -1626,11 +1598,11 @@ class StatsStandingsWindow(tk.Toplevel):
                                 # Base games on player skill and team performance
     def update_standings_view(self, event=None):
         """Update standings view when selection changes"""
-        self.populate_standings()
+        self.populate_enhanced_standings()
     
     def update_team_stats_view(self, event=None):
         """Update team stats view when category changes"""
-        self.populate_team_stats()
+        self.populate_advanced_team_stats()
     
     def refresh_all_data(self):
         """Refresh all data in the window"""
@@ -1843,38 +1815,34 @@ class StatsStandingsWindow(tk.Toplevel):
     
     def create_enhanced_standings_table(self, parent, view_type):
         """Create enhanced standings table with advanced metrics"""
-        # Column definitions based on view type and advanced metrics setting
+        # Column definitions based on advanced metrics setting.
+        # Every column is backed by real tracked data (no estimates).
         if self.show_advanced.get():
             columns = {
                 'rank': ('Rank', 50),
-                'team': ('Team', 150),
+                'team': ('Team', 170),
                 'gp': ('GP', 40),
                 'w': ('W', 35),
                 'l': ('L', 35),
                 'otl': ('OTL', 40),
                 'pts': ('PTS', 45),
-                'pt_pct': ('PT%', 50),
-                'gf': ('GF', 40),
-                'ga': ('GA', 40),
-                'diff': ('+/-', 45),
-                'home': ('Home', 60),
-                'road': ('Road', 60),
-                'l10': ('L10', 50),
-                'streak': ('Streak', 60),
+                'pt_pct': ('PT%', 55),
+                'gf': ('GF', 45),
+                'ga': ('GA', 45),
+                'diff': ('+/-', 50),
                 'playoff': ('Playoff', 70)
             }
         else:
             columns = {
                 'rank': ('Rank', 50),
-                'team': ('Team', 150),
+                'team': ('Team', 170),
                 'gp': ('GP', 40),
                 'w': ('W', 35),
                 'l': ('L', 35),
                 'otl': ('OTL', 40),
                 'pts': ('PTS', 45),
-                'pt_pct': ('PT%', 50),
-                'diff': ('+/-', 45),
-                'l10': ('L10', 50)
+                'pt_pct': ('PT%', 55),
+                'diff': ('+/-', 50),
             }
         
         # Create treeview
@@ -1896,119 +1864,141 @@ class StatsStandingsWindow(tk.Toplevel):
         tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
     
-    def add_enhanced_standings_data(self, tree, view_type, show_advanced):
-        """Add enhanced standings data with real team information"""
-        # Get teams from parent application
+    def _standings_teams(self):
+        """NHL teams for standings, with real-team fallback."""
         teams = []
-        if hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'league'):
-            # Check if league has teams directly or nested leagues
-            if hasattr(self.parent.game_manager.league, 'teams'):
-                teams = self.parent.game_manager.league.teams
-            elif hasattr(self.parent.game_manager.league, 'leagues'):
-                # Look for NHL in nested leagues
-                for league in self.parent.game_manager.league.leagues:
-                    if hasattr(league, 'name') and "National Hockey League" in league.name:
-                        teams = league.teams
-                        break
-            
-        # If no teams found, try alternative data sources
+        gm = getattr(self.parent, 'game_manager', None)
+        league = getattr(gm, 'league', None) if gm else None
+        if league is None:
+            league = getattr(self.parent, 'league', None)
+        if league is not None and hasattr(league, 'teams'):
+            teams = [t for t in league.teams
+                     if getattr(t, 'league_name', 'National Hockey League')
+                     == 'National Hockey League']
+            if not teams:
+                teams = list(league.teams)
         if not teams:
             teams = self.get_fallback_teams()
-        
-        # Sort teams by points
-        sorted_teams = sorted(teams, key=lambda t: (t.wins * 2 + getattr(t, 'ot_losses', 0)), reverse=True)
-        
-        for rank, team in enumerate(sorted_teams[:30], 1):  # Show top 30 teams
+        return teams
+
+    @staticmethod
+    def _team_points(team):
+        pts = getattr(team, 'points', None)
+        if isinstance(pts, (int, float)):
+            return pts
+        return team.wins * 2 + getattr(team, 'ot_losses', 0)
+
+    def _apply_standings_view(self, teams, view):
+        """Filter teams for the selected standings view."""
+        by_points = sorted(teams, key=self._team_points, reverse=True)
+        if view == "Eastern Conference":
+            return [t for t in by_points
+                    if getattr(t, 'conference', '') == 'Eastern']
+        if view == "Western Conference":
+            return [t for t in by_points
+                    if getattr(t, 'conference', '') == 'Western']
+        if view == "Wild Card Race":
+            out = []
+            for conf in ('Eastern', 'Western'):
+                conf_teams = [t for t in by_points
+                              if getattr(t, 'conference', '') == conf]
+                out.extend(conf_teams[3:8])  # wild-card bubble: 4th-8th
+            return out
+        if view == "Division Leaders":
+            seen = {}
+            for t in by_points:
+                div = getattr(t, 'division', '') or 'Unknown'
+                if div not in seen:
+                    seen[div] = t
+            return [seen[d] for d in sorted(seen)]
+        if view == "Playoff Picture":
+            out = []
+            for conf in ('Eastern', 'Western'):
+                conf_teams = [t for t in by_points
+                              if getattr(t, 'conference', '') == conf]
+                out.extend(conf_teams[:8])
+            return out
+        return by_points  # League Overview
+
+    def _apply_standings_sort(self, teams, sort):
+        if sort == "Wins":
+            return sorted(teams, key=lambda t: (t.wins, self._team_points(t)),
+                          reverse=True)
+        if sort == "Goal Differential":
+            return sorted(
+                teams,
+                key=lambda t: (getattr(t, 'goals_for', 0)
+                               - getattr(t, 'goals_against', 0),
+                               self._team_points(t)),
+                reverse=True)
+        return sorted(teams, key=lambda t: (self._team_points(t), t.wins),
+                      reverse=True)  # Points
+
+    def add_enhanced_standings_data(self, tree, view_type, show_advanced):
+        """Add enhanced standings data with real team information"""
+        teams = self._standings_teams()
+
+        # League-wide playoff cut (top 16 by points) for the Playoff column
+        league_rank = sorted(teams, key=lambda t: (self._team_points(t), t.wins),
+                             reverse=True)
+        playoff_names = {t.team_name for t in league_rank[:16]}
+
+        view = self.standings_view.get() if hasattr(self, 'standings_view') else view_type
+        sort = self.standings_sort.get() if hasattr(self, 'standings_sort') else "Points"
+        teams = self._apply_standings_view(teams, view)
+        teams = self._apply_standings_sort(teams, sort)
+
+        for rank, team in enumerate(teams, 1):  # Show all teams in view
             try:
-                gp = team.wins + team.losses + getattr(team, 'ot_losses', 0)
-                points = team.wins * 2 + getattr(team, 'ot_losses', 0)
-                pt_pct = (points / max(1, gp) * 100) if gp > 0 else 0.0
-                
+                otl = getattr(team, 'ot_losses', 0)
+                gp = team.wins + team.losses + otl
+                points = self._team_points(team)
+                pt_pct = (points / (gp * 2) * 100) if gp > 0 else 0.0
+                goals_for = getattr(team, 'goals_for', 0)
+                goals_against = getattr(team, 'goals_against', 0)
+                goal_diff = goals_for - goals_against
+                playoff = "In" if team.team_name in playoff_names else "Out"
+
                 if show_advanced:
-                    # Get real team statistics instead of random data
-                    goals_for = getattr(team, 'goals_for', 0)
-                    goals_against = getattr(team, 'goals_against', 0) 
-                    goal_diff = goals_for - goals_against
-                    
-                    # Calculate home/away records from actual data if available
-                    home_record = f"{getattr(team, 'home_wins', 0)}-{getattr(team, 'home_losses', 0)}-{getattr(team, 'home_ot_losses', 0)}"
-                    road_record = f"{getattr(team, 'away_wins', 0)}-{getattr(team, 'away_losses', 0)}-{getattr(team, 'away_ot_losses', 0)}"
-                    
-                    # Last 10 games record (would need game history - using simplified calculation)
-                    recent_games = min(10, gp)
-                    if recent_games > 0:
-                        # Estimate recent performance based on overall record
-                        recent_wins = min(recent_games, max(1, int(team.wins * recent_games / gp))) if gp > 0 else 0
-                        recent_losses = recent_games - recent_wins
-                        l10_record = f"{recent_wins}-{recent_losses}-0"
-                    else:
-                        l10_record = "0-0-0"
-                    
-                    # Calculate streak (simplified - would need game history)
-                    if team.wins > team.losses:
-                        streak = f"W{min(3, team.wins)}"
-                    elif team.losses > team.wins:
-                        streak = f"L{min(3, team.losses)}"
-                    else:
-                        streak = "T1"
-                    
                     values = (
                         rank,
                         team.team_name,
                         gp,  # GP
                         team.wins,
                         team.losses,
-                        getattr(team, 'ot_losses', 0),
+                        otl,
                         points,  # Points
                         f"{pt_pct:.1f}%",  # PT%
                         goals_for,  # GF (real data)
                         goals_against,  # GA (real data)
-                        goal_diff,  # +/- (calculated)
-                        home_record,  # Home record (real data)
-                        road_record,  # Road record (real data)
-                        l10_record,  # L10 (calculated)
-                        streak,  # Streak (calculated)
-                        "In" if rank <= 16 else "Out"  # Playoff position
+                        f"{goal_diff:+d}",  # +/- (calculated)
+                        playoff,
                     )
                 else:
-                    goal_diff = getattr(team, 'goals_for', 0) - getattr(team, 'goals_against', 0)
-                    # Calculate last 10 for basic view
-                    recent_games = min(10, gp)
-                    if recent_games > 0:
-                        recent_wins = min(recent_games, max(1, int(team.wins * recent_games / gp))) if gp > 0 else 0
-                        recent_losses = recent_games - recent_wins
-                        l10_record = f"{recent_wins}-{recent_losses}-0"
-                    else:
-                        l10_record = "0-0-0"
-                    
                     values = (
                         rank,
                         team.team_name,
                         gp,  # GP
                         team.wins,
                         team.losses,
-                        getattr(team, 'ot_losses', 0),
+                        otl,
                         points,  # Points
                         f"{pt_pct:.1f}%",  # PT%
-                        goal_diff,  # +/- (calculated from real data)
-                        l10_record  # L10 (calculated)
+                        f"{goal_diff:+d}",  # +/- (calculated from real data)
                     )
-                
+
                 # Color coding for playoff positions
-                if rank <= 8:
+                if team.team_name in playoff_names:
                     tree.insert('', 'end', values=values, tags=('playoff',))
-                elif rank <= 16:
-                    tree.insert('', 'end', values=values, tags=('wildcard',))
                 else:
                     tree.insert('', 'end', values=values)
-                    
+
             except Exception as e:
                 print(f"Error processing team {team.team_name}: {e}")
                 continue
-        
+
         # Configure tag colors
         tree.tag_configure('playoff', background='#166534', foreground='#FFFFFF')  # Dark green with white text
-        tree.tag_configure('wildcard', background='#CA8A04', foreground='#FFFFFF')  # Dark yellow with white text
     
     def get_fallback_teams(self):
         """Get teams from alternative data sources if main source fails"""
@@ -2089,191 +2079,199 @@ class StatsStandingsWindow(tk.Toplevel):
         scrollbar.pack(side="right", fill="y")
     
     def get_advanced_stats_columns(self, category):
-        """Get column definitions for advanced stats"""
+        """Get column definitions for advanced stats (all backed by real data)"""
         if category == "Overall Performance":
             return {
-                'team': ('Team', 150),
-                'pts_pct': ('Points %', 80),
-                'expected_pts': ('xPTS', 60),
-                'pdo': ('PDO', 60),
-                'corsi_for': ('CF%', 60),
-                'fenwick_for': ('FF%', 60),
-                'shot_attempt_diff': ('SA Diff', 80),
-                'quality_starts': ('QS%', 60)
+                'team': ('Team', 170),
+                'gp': ('GP', 50),
+                'w': ('W', 45),
+                'l': ('L', 45),
+                'otl': ('OTL', 50),
+                'pts': ('PTS', 55),
+                'pt_pct': ('PT%', 65),
+                'gf': ('GF', 55),
+                'ga': ('GA', 55),
+                'diff': ('+/-', 60),
             }
-        elif category == "Advanced Analytics":
+        elif category == "Offensive Stats":
             return {
-                'team': ('Team', 150),
-                'expected_goals_for': ('xGF', 60),
-                'expected_goals_against': ('xGA', 60),
-                'shooting_pct': ('SH%', 60),
-                'save_pct': ('SV%', 60),
-                'pdo': ('PDO', 60),
-                'zone_start_pct': ('ZS%', 60),
-                'high_danger_for': ('HD CF%', 80)
+                'team': ('Team', 170),
+                'gp': ('GP', 50),
+                'gf': ('GF', 60),
+                'gf_gp': ('GF/GP', 70),
+                'shots': ('Shots', 70),
+                'sh_pct': ('SH%', 65),
             }
-        else:
+        elif category == "Defensive Stats":
             return {
-                'team': ('Team', 150),
-                'stat1': ('Stat 1', 80),
-                'stat2': ('Stat 2', 80),
-                'stat3': ('Stat 3', 80),
-                'stat4': ('Stat 4', 80)
+                'team': ('Team', 170),
+                'gp': ('GP', 50),
+                'ga': ('GA', 60),
+                'ga_gp': ('GA/GP', 70),
+                'sa': ('Shots Against', 100),
+                'sv_pct': ('Team SV%', 80),
+            }
+        elif category == "Goaltending":
+            return {
+                'team': ('Team', 170),
+                'gp': ('GP', 50),
+                'w': ('W', 45),
+                'l': ('L', 45),
+                'gaa': ('GAA', 60),
+                'sv_pct': ('SV%', 65),
+                'so': ('SO', 45),
+            }
+        else:  # Advanced Analytics
+            return {
+                'team': ('Team', 170),
+                'pt_pct': ('PT%', 65),
+                'gf_gp': ('GF/GP', 70),
+                'ga_gp': ('GA/GP', 70),
+                'diff_gp': ('Diff/GP', 70),
+                'pdo': ('PDO', 65),
             }
     
+    def _filtered_analytics_teams(self):
+        """Teams for the Team Analytics tab, honoring the Teams filter."""
+        teams = self._standings_teams()
+        filt = self.team_filter.get() if hasattr(self, 'team_filter') else "All Teams"
+        if filt == "Eastern Conference":
+            teams = [t for t in teams if getattr(t, 'conference', '') == 'Eastern']
+        elif filt == "Western Conference":
+            teams = [t for t in teams if getattr(t, 'conference', '') == 'Western']
+        elif filt == "Division Rivals":
+            user_div = getattr(getattr(self.parent, 'user_team', None), 'division', '')
+            if user_div:
+                teams = [t for t in teams if getattr(t, 'division', '') == user_div]
+        elif filt == "Playoff Teams":
+            teams = sorted(teams, key=self._team_points, reverse=True)[:16]
+        return teams
+
+    @staticmethod
+    def _team_goalie_totals(team):
+        """Aggregate real goalie stats from a team's roster goalies."""
+        gp = w = l = ga = sv = sa = so = 0
+        for p in getattr(team, 'roster', []) or []:
+            try:
+                is_g = (p.primary_position.value == 'G')
+            except Exception:
+                is_g = 'GOALIE' in str(getattr(p, 'primary_position', '')).upper()
+            if not is_g:
+                continue
+            gp += getattr(p, 'games_played', 0)
+            w += getattr(p, 'wins', 0)
+            l += getattr(p, 'losses', 0)
+            ga += getattr(p, 'goals_against', 0)
+            sv += getattr(p, 'saves', 0)
+            sa += getattr(p, 'shots_against', 0)
+            so += getattr(p, 'shutouts', 0)
+        return {'gp': gp, 'w': w, 'l': l, 'ga': ga, 'sv': sv, 'sa': sa, 'so': so}
+
     def add_advanced_stats_data(self, tree, category, mode):
-        """Add advanced statistics data"""
+        """Add advanced statistics data (all from real tracked stats)"""
         try:
-            # Get real teams
-            league = getattr(self.parent.game_manager, 'league', None)
-            if league and hasattr(league, 'teams'):
-                teams = league.teams
-            else:
-                teams = []
-                
+            teams = self._filtered_analytics_teams()
             if not teams:
                 teams = self.get_fallback_teams()
-            
-            # Extract and calculate advanced stats from real data
+
+            rows = []
             for team in teams:
-                team_name = getattr(team, 'name', getattr(team, 'team_name', 'Unknown Team'))
-                
+                team_name = getattr(team, 'team_name',
+                                    getattr(team, 'name', 'Unknown Team'))
+                gp = getattr(team, 'games_played', 0)
+                w = getattr(team, 'wins', 0)
+                l = getattr(team, 'losses', 0)
+                otl = getattr(team, 'ot_losses', 0)
+                pts = self._team_points(team)
+                pt_pct = (pts / (gp * 2) * 100) if gp > 0 else 0.0
+                gf = getattr(team, 'goals_for', 0)
+                ga = getattr(team, 'goals_against', 0)
+                diff = gf - ga
+
+                roster = getattr(team, 'roster', []) or []
+                shots_for = sum(getattr(p, 'shots', 0) for p in roster)
+                gt = self._team_goalie_totals(team)
+                sh_pct = (gf / shots_for * 100) if shots_for > 0 else 0.0
+                team_sv = (gt['sv'] / gt['sa'] * 100) if gt['sa'] > 0 else 0.0
+                gaa = (gt['ga'] / gt['gp']) if gt['gp'] > 0 else 0.0
+                pdo = sh_pct + team_sv  # classic PDO scale
+
                 if category == "Overall Performance":
-                    # Calculate real advanced stats where possible
-                    games_played = getattr(team, 'games_played', 0)
-                    wins = getattr(team, 'wins', 0)
-                    ot_losses = getattr(team, 'overtime_losses', getattr(team, 'ot_losses', 0))
-                    points = wins * 2 + ot_losses
-                    points_pct = points / (games_played * 2) if games_played > 0 else 0.0
-                    
-                    goals_for = getattr(team, 'goals_for', 0)
-                    goals_against = getattr(team, 'goals_against', 0)
-                    
-                    # Calculate advanced metrics with real data where available
-                    expected_points = int(points_pct * 82 * 2)  # Projected over full season
-                    pdo = 100.0  # Default PDO (normally shooting% + save%)
-                    
-                    # Use analytics engine if available
-                    if hasattr(self, 'analytics_engine') and self.analytics_engine:
-                        # Look up team stats from our analytics engine
-                        team_analytics = self.analytics_engine.team_stats.get(team_name)
-                        if team_analytics:
-                            # Use possession_percentage if available, otherwise default
-                            possession_pct = getattr(team_analytics, 'possession_percentage', 50.0)
-                            corsi_for_pct = f"{possession_pct:.1f}%"
-                            fenwick_for_pct = corsi_for_pct  # Simplified
-                        else:
-                            corsi_for_pct = "50.0%"
-                            fenwick_for_pct = "50.0%"
-                    else:
-                        corsi_for_pct = "50.0%"
-                        fenwick_for_pct = "50.0%"
-                    
-                    shot_diff = goals_for - goals_against  # Simplified shot differential
-                    quality_start_pct = f"{min(65.0, 45.0 + (points_pct * 20)):.1f}%"
-                    
-                    values = (
-                        team_name,
-                        f"{points_pct:.3f}",
-                        expected_points,
-                        f"{pdo:.1f}",
-                        corsi_for_pct,
-                        fenwick_for_pct,
-                        shot_diff,
-                        quality_start_pct
-                    )
-                elif category == "Advanced Analytics":
-                    # Calculate expected goals and advanced metrics
-                    goals_for = getattr(team, 'goals_for', 0)
-                    goals_against = getattr(team, 'goals_against', 0)
-                    games_played = getattr(team, 'games_played', 0)
-                    
-                    xgf = goals_for / max(1, games_played)  # Expected goals for per game
-                    xga = goals_against / max(1, games_played)  # Expected goals against per game
-                    
-                    # Estimate shooting percentage (simplified)
-                    shooting_pct = f"{min(15.0, max(8.0, (goals_for / max(1, games_played * 30)) * 100)):.1f}%"
-                    save_pct = f"{max(0.885, min(0.925, 1 - (goals_against / max(1, games_played * 30)))):.3f}"
-                    
-                    pdo = 100.0  # Default PDO
-                    zone_start_pct = "50.0%"  # Default zone start percentage
-                    hd_corsi_pct = "50.0%"   # Default high danger Corsi
-                    
-                    values = (
-                        team_name,
-                        f"{xgf:.2f}",
-                        f"{xga:.2f}",
-                        shooting_pct,
-                        save_pct,
-                        f"{pdo:.1f}",
-                        zone_start_pct,
-                        hd_corsi_pct
-                    )
-                else:
-                    values = (team_name, "0.0", "0.0", "0.0", "0.0")
-                
+                    values = (team_name, gp, w, l, otl, pts, f"{pt_pct:.1f}%",
+                              gf, ga, f"{diff:+d}")
+                elif category == "Offensive Stats":
+                    values = (team_name, gp, gf,
+                              f"{gf / gp:.2f}" if gp > 0 else "0.00",
+                              shots_for, f"{sh_pct:.1f}%")
+                elif category == "Defensive Stats":
+                    values = (team_name, gp, ga,
+                              f"{ga / gp:.2f}" if gp > 0 else "0.00",
+                              gt['sa'], f"{team_sv:.1f}%" if gt['sa'] > 0 else "—")
+                elif category == "Goaltending":
+                    values = (team_name, gt['gp'], gt['w'], gt['l'],
+                              f"{gaa:.2f}" if gt['gp'] > 0 else "—",
+                              f"{team_sv / 100:.3f}"[1:] if gt['sa'] > 0 else "—",
+                              gt['so'])
+                else:  # Advanced Analytics
+                    values = (team_name, f"{pt_pct:.1f}%",
+                              f"{gf / gp:.2f}" if gp > 0 else "0.00",
+                              f"{ga / gp:.2f}" if gp > 0 else "0.00",
+                              f"{diff / gp:+.2f}" if gp > 0 else "+0.00",
+                              f"{pdo:.1f}" if shots_for > 0 and gt['sa'] > 0 else "—")
+                rows.append((team_name, values))
+
+            # Sort: most informative first per category
+            if category in ("Offensive Stats",):
+                rows.sort(key=lambda r: r[1][2], reverse=True)
+            elif category in ("Defensive Stats", "Goaltending"):
+                rows.sort(key=lambda r: r[1][2])
+            else:
+                team_by_name = {t.team_name: t for t in teams}
+                rows.sort(key=lambda r: self._team_points(team_by_name[r[0]])
+                          if r[0] in team_by_name else 0, reverse=True)
+
+            for _name, values in rows:
                 tree.insert('', 'end', values=values)
-                
+
+            if mode == "vs League Average" and rows:
+                cols = len(rows[0][1])
+                avgs = []
+                for c in range(1, cols):
+                    nums = []
+                    for _n, vals in rows:
+                        try:
+                            v = str(vals[c]).replace('%', '').replace('+', '')
+                            nums.append(float(v))
+                        except (ValueError, TypeError):
+                            pass
+                    avgs.append(f"{sum(nums) / len(nums):.2f}" if nums else "—")
+                tree.insert('', 'end',
+                            values=("LEAGUE AVG",) + tuple(avgs),
+                            tags=('avg',))
+                tree.tag_configure('avg', background='#1f2937',
+                                   foreground='#9CA3AF')
+
         except Exception as e:
             print(f"Error adding advanced stats data: {e}")
             # Fallback to basic calculated data
             self._add_calculated_advanced_stats(tree, category)
     
     def _add_calculated_advanced_stats(self, tree, category):
-        """Fallback method for calculated advanced stats using available team data"""
-        # Get real teams and calculate stats from their basic data
-        teams = []
-        try:
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'teams'):
-                teams = [team for team in self.parent.league.teams 
-                        if hasattr(team, 'league_name') and team.league_name == "National Hockey League"][:8]
-        except:
-            pass
-        
-        if not teams:
-            teams = self.get_fallback_teams()[:8]
-        
+        """Fallback: basic real team data if the main loader fails."""
+        teams = self._standings_teams()[:8]
         for team in teams:
             try:
-                # Calculate advanced metrics from basic team stats
+                otl = getattr(team, 'ot_losses', 0)
+                gp = team.wins + team.losses + otl
+                pts = self._team_points(team)
                 gf = getattr(team, 'goals_for', 0)
-                ga = getattr(team, 'goals_against', 0) 
-                gp = getattr(team, 'games_played', 1)
-                
-                if category == "Expected Goals":
-                    # Estimate xG based on goals and game performance
-                    xgf = gf * 0.95  # Slightly lower than actual goals
-                    xga = ga * 1.05  # Slightly higher than actual goals against
-                    shooting_pct = f"{(gf / max(1, gp * 30)) * 100:.1f}%"  # Estimated shots
-                    save_pct = f"{(1 - (ga / max(1, gp * 30))) * 100:.1f}%"  # Estimated saves
-                    
-                    values = (
-                        team.team_name,
-                        f"{xgf:.2f}",
-                        f"{xga:.2f}",
-                        shooting_pct,
-                        save_pct,
-                        f"{100.0:.1f}",  # PDO
-                        "50.0%",  # Zone start %
-                        "50.0%"   # HD Corsi %
-                    )
-                else:
-                    # Basic fallback values
-                    values = (team.team_name, "0.0", "0.0", "0.0", "0.0")
-                
-                tree.insert('', 'end', values=values)
-                
+                ga = getattr(team, 'goals_against', 0)
+                tree.insert('', 'end', values=(
+                    team.team_name, gp, team.wins, team.losses, otl, pts,
+                    gf, ga, f"{gf - ga:+d}"))
             except Exception as e:
                 print(f"Error calculating stats for {team.team_name}: {e}")
                 continue
-            if category == "Overall Performance":
-                values = (team, "0.600", "98", "100.0", "52.0%", "51.5%", "25", "58.0%")
-            elif category == "Advanced Analytics":
-                values = (team, "3.20", "2.95", "10.5%", "0.910", "100.5", "52.0%", "51.0%")
-            else:
-                values = (team, "0.0", "0.0", "0.0", "0.0")
-            
-            tree.insert('', 'end', values=values)
     
     def create_enhanced_player_section(self, parent, category):
         """Create enhanced player leaders section with pagination"""
@@ -2353,13 +2351,13 @@ class StatsStandingsWindow(tk.Toplevel):
         nav_frame.pack(side="left", expand=True)
         
         # First page button
-        first_btn = ttk.Button(nav_frame, text="⏮ First", 
+        first_btn = ttk.Button(nav_frame, text="First",
                               command=lambda: self.go_to_page(category, 1))
         first_btn.pack(side="left", padx=2)
-        
+
         # Previous page button
-        prev_btn = ttk.Button(nav_frame, text="◀ Previous", 
-                             command=lambda: self.go_to_page(category, 
+        prev_btn = ttk.Button(nav_frame, text="Previous",
+                             command=lambda: self.go_to_page(category,
                              self.pagination_data[category]['current_page'] - 1))
         prev_btn.pack(side="left", padx=2)
         
@@ -2375,13 +2373,13 @@ class StatsStandingsWindow(tk.Toplevel):
         self.pagination_data[category]['page_entry'] = page_entry
         
         # Next page button
-        next_btn = ttk.Button(nav_frame, text="Next ▶", 
-                             command=lambda: self.go_to_page(category, 
+        next_btn = ttk.Button(nav_frame, text="Next",
+                             command=lambda: self.go_to_page(category,
                              self.pagination_data[category]['current_page'] + 1))
         next_btn.pack(side="left", padx=2)
-        
+
         # Last page button
-        last_btn = ttk.Button(nav_frame, text="Last ⏭", 
+        last_btn = ttk.Button(nav_frame, text="Last",
                              command=lambda: self.go_to_last_page(category))
         last_btn.pack(side="left", padx=2)
         
@@ -2432,11 +2430,11 @@ class StatsStandingsWindow(tk.Toplevel):
                 'team': ('Team', 60),
                 'pos': ('Pos', 50),
                 'gp': ('GP', 40),
-                'corsi_for': ('CF%', 60),
-                'expected_goals': ('xG', 50),
-                'shooting_pct': ('SH%', 50),
-                'pdo': ('PDO', 60),
-                'zone_starts': ('ZS%', 60)
+                'sh_pct': ('SH%', 55),
+                'ppg': ('PPG', 55),
+                'plus_minus': ('+/-', 50),
+                'pim': ('PIM', 45),
+                'shots': ('SOG', 55)
             }
         elif category == "breakout":
             return {
@@ -2459,151 +2457,114 @@ class StatsStandingsWindow(tk.Toplevel):
                 'gaa': ('GAA', 50),
                 'sv_pct': ('SV%', 60),
                 'so': ('SO', 40),
-                'gsaa': ('GSAA', 60)
+                'sa': ('SA', 55)
             }
     
+    def _player_position_str(self, player):
+        pos = getattr(player, 'primary_position', 'F')
+        if hasattr(pos, 'value'):
+            return str(pos.value)
+        return str(pos).split('.')[-1]
+
+    def _enhanced_player_row(self, category, rank, player, team):
+        """Build one paginated player-leader row from REAL player stats.
+
+        Player season stats live directly on the player object
+        (goals, assists, games_played, ...); there is no `.stats` sub-object.
+        """
+        team_abbr = self._get_team_abbreviation(getattr(team, 'team_name', ''))
+        position = self._player_position_str(player)
+        name = getattr(player, 'full_name', 'Unknown')
+
+        if category == "scoring":
+            goals = getattr(player, 'goals', 0)
+            assists = getattr(player, 'assists', 0)
+            games = getattr(player, 'games_played', 0)
+            points = goals + assists
+            ppg = round(points / max(games, 1), 2)
+            plus_minus = getattr(player, 'plus_minus', 0)
+            pim = getattr(player, 'penalty_minutes', 0)
+            shots = getattr(player, 'shots', 0)
+            return (rank, name, team_abbr, position,
+                    games, goals, assists, points, ppg, plus_minus, pim, shots)
+
+        elif category == "advanced":
+            goals = getattr(player, 'goals', 0)
+            assists = getattr(player, 'assists', 0)
+            games = getattr(player, 'games_played', 0)
+            points = goals + assists
+            shots = getattr(player, 'shots', 0)
+            sh_pct = f"{goals / shots * 100:.1f}%" if shots > 0 else "—"
+            ppg = round(points / max(games, 1), 2)
+            plus_minus = getattr(player, 'plus_minus', 0)
+            pim = getattr(player, 'penalty_minutes', 0)
+            return (rank, name, team_abbr, position,
+                    games, sh_pct, ppg, plus_minus, pim, shots)
+
+        elif category == "breakout":
+            age = getattr(player, 'age', 22)
+            current = getattr(player, 'overall_rating', lambda: 70)
+            current = current() if callable(current) else current
+            grade = getattr(player, 'potential_grade', 'C') or 'C'
+            improvement = f"{grade}-grade potential"
+            current_pace = f"{to_100_scale(current)} OVR"
+            projection = f"{grade} ceiling"
+            return (rank, name, team_abbr, age,
+                    improvement, current_pace, projection)
+
+        else:  # goaltending
+            games = getattr(player, 'games_played', 0)
+            wins = getattr(player, 'wins', 0)
+            losses = getattr(player, 'losses', 0)
+            gaa = getattr(player, 'goals_against_avg', 0.0)
+            sv = getattr(player, 'save_percentage', 0.0)
+            shutouts = getattr(player, 'shutouts', 0)
+            sa = getattr(player, 'shots_against', 0)
+            sv_pct = f"{sv:.3f}"[1:] if sa > 0 else "—"
+            return (rank, name, team_abbr, games, wins, losses,
+                    f"{gaa:.2f}" if games > 0 else "—", sv_pct,
+                    shutouts, sa)
+
     def add_enhanced_player_data(self, tree, category):
-        """Add enhanced player data from real game data"""
+        """Add enhanced player data from real game data (top 20, no pagination)."""
         try:
             all_players = []
-            
-            # Collect all players from all teams
             for team in self.parent.league.teams:
                 if hasattr(team, 'roster') and team.roster:
                     for player in team.roster:
+                        try:
+                            is_g = (player.primary_position.value == 'G')
+                        except Exception:
+                            is_g = 'GOALIE' in str(
+                                getattr(player, 'primary_position', '')).upper()
                         if category == "goaltending":
-                            # Only include goalies for goaltending stats
-                            if hasattr(player, 'primary_position') and 'G' in str(player.primary_position):
+                            if is_g:
                                 all_players.append((player, team))
-                        else:
-                            # Include all non-goalies for other categories
-                            if not (hasattr(player, 'primary_position') and 'G' in str(player.primary_position)):
-                                all_players.append((player, team))
-            
-            if category == "scoring":
-                # Sort by points (goals + assists)
-                def get_points(player_team):
-                    player, team = player_team
-                    goals = getattr(player.stats, 'goals', 0) if hasattr(player, 'stats') else getattr(player, 'goals', 0)
-                    assists = getattr(player.stats, 'assists', 0) if hasattr(player, 'stats') else getattr(player, 'assists', 0)
-                    return goals + assists
-                
-                sorted_players = sorted(all_players, key=get_points, reverse=True)[:20]  # Top 20
-                
-                for rank, (player, team) in enumerate(sorted_players, 1):
-                    goals = getattr(player.stats, 'goals', 0) if hasattr(player, 'stats') else getattr(player, 'goals', 0)
-                    assists = getattr(player.stats, 'assists', 0) if hasattr(player, 'stats') else getattr(player, 'assists', 0)
-                    games = getattr(player.stats, 'games_played', 0) if hasattr(player, 'stats') else 0
-                    points = goals + assists
-                    ppg = round(points / max(games, 1), 2)
-                    plus_minus = getattr(player.stats, 'plus_minus', 0) if hasattr(player, 'stats') else 0
-                    pim = getattr(player.stats, 'pim', 0) if hasattr(player, 'stats') else 0
-                    shots = getattr(player.stats, 'shots', 0) if hasattr(player, 'stats') else 0
-                    
-                    position = str(getattr(player, 'primary_position', 'F'))
-                    if hasattr(player, 'primary_position') and hasattr(player.primary_position, 'value'):
-                        position = player.primary_position.value
-                    
-                    player_data = (
-                        rank, player.full_name, self._get_team_abbreviation(team.team_name), position,
-                        games, goals, assists, points, ppg, plus_minus, pim, shots
-                    )
-                    tree.insert('', 'end', values=player_data)
-                    
-            elif category == "advanced":
-                # Sort by a combination of advanced stats (use shooting percentage as primary)
-                def get_advanced_score(player_team):
-                    player, team = player_team
-                    # Use shooting and overall rating as advanced metric
-                    shooting = getattr(player, 'shooting', 10)
-                    overall = getattr(player, 'overall_rating', lambda: 75)() if callable(getattr(player, 'overall_rating', None)) else 75
-                    return shooting + (overall * 0.1)
-                
-                sorted_players = sorted(all_players, key=get_advanced_score, reverse=True)[:15]  # Top 15
-                
-                for rank, (player, team) in enumerate(sorted_players, 1):
-                    games = getattr(player.stats, 'games_played', 0) if hasattr(player, 'stats') else 0
-                    
-                    # Calculate advanced stats from player attributes
-                    corsi_for = f"{round(50 + getattr(player, 'offensive_awareness', 10) * 0.5, 1)}%"
-                    expected_goals = round(getattr(player, 'shooting', 10) * 0.8, 1)
-                    shooting_pct = f"{round(getattr(player, 'shooting_accuracy', 10) * 0.8, 1)}%"
-                    pdo = round(100 + getattr(player, 'luck', 0) * 2, 1) if hasattr(player, 'luck') else 100.0
-                    zone_starts = f"{round(50 + getattr(player, 'positioning', 10) * 0.3, 1)}%"
-                    
-                    position = str(getattr(player, 'primary_position', 'F'))
-                    if hasattr(player, 'primary_position') and hasattr(player.primary_position, 'value'):
-                        position = player.primary_position.value
-                    
-                    player_data = (
-                        rank, player.full_name, self._get_team_abbreviation(team.team_name), position,
-                        games, corsi_for, expected_goals, shooting_pct, pdo, zone_starts
-                    )
-                    tree.insert('', 'end', values=player_data)
-                    
-            elif category == "breakout":
-                # Focus on younger players with high potential
-                young_players = [(p, t) for p, t in all_players if getattr(p, 'age', 25) <= 23]
-                
-                def get_breakout_potential(player_team):
-                    player, team = player_team
-                    age_factor = 25 - getattr(player, 'age', 25)  # Younger = higher potential
-                    potential = getattr(player, 'potential', 75)
-                    current_rating = getattr(player, 'overall_rating', lambda: 70)() if callable(getattr(player, 'overall_rating', None)) else 70
-                    return age_factor * 2 + potential + current_rating * 0.5
-                
-                sorted_players = sorted(young_players, key=get_breakout_potential, reverse=True)[:10]  # Top 10
-                
-                for rank, (player, team) in enumerate(sorted_players, 1):
-                    age = getattr(player, 'age', 22)
-                    potential = getattr(player, 'potential', 75)
-                    current_rating = getattr(player, 'overall_rating', lambda: 70)() if callable(getattr(player, 'overall_rating', None)) else 70
-                    
-                    improvement = f"+{potential - current_rating} potential growth"
-                    current_pace = f"{current_rating} overall rating"
-                    projection = f"{min(potential, current_rating + 10)}-{potential} ceiling"
-                    
-                    player_data = (
-                        rank, player.full_name, self._get_team_abbreviation(team.team_name), age,
-                        improvement, current_pace, projection
-                    )
-                    tree.insert('', 'end', values=player_data)
-                    
-            else:  # goaltending
-                # Sort goalies by save percentage approximation
-                def get_goalie_score(player_team):
-                    player, team = player_team
-                    goaltending = getattr(player, 'goaltending', 10)
-                    reflexes = getattr(player, 'reflexes', 10)
-                    positioning = getattr(player, 'positioning', 10)
-                    return goaltending + reflexes + positioning
-                
-                sorted_players = sorted(all_players, key=get_goalie_score, reverse=True)[:10]  # Top 10
-                
-                for rank, (player, team) in enumerate(sorted_players, 1):
-                    games = getattr(player.stats, 'games_played', 15) if hasattr(player, 'stats') else 15
-                    wins = getattr(player.stats, 'wins', 0) if hasattr(player, 'stats') else max(0, games - 8)
-                    losses = getattr(player.stats, 'losses', 0) if hasattr(player, 'stats') else min(games - wins, 8)
-                    
-                    # Calculate goalie stats from attributes
-                    goaltending = getattr(player, 'goaltending', 15)
-                    gaa = round(max(1.5, 4.0 - (goaltending * 0.15)), 2)
-                    sv_pct = f".{min(950, 850 + goaltending * 5)}"
-                    shutouts = max(0, (goaltending - 15) // 3)
-                    gsaa = round((goaltending - 15) * 0.8, 1)
-                    
-                    player_data = (
-                        rank, player.full_name, self._get_team_abbreviation(team.team_name), games,
-                        wins, losses, gaa, sv_pct, shutouts, gsaa
-                    )
-                    tree.insert('', 'end', values=player_data)
-                    
+                        elif not is_g:
+                            all_players.append((player, team))
+
+            def sort_key(pt):
+                player, _team = pt
+                if category == "goaltending":
+                    return (getattr(player, 'save_percentage', 0),
+                            getattr(player, 'wins', 0))
+                if category == "advanced":
+                    shots = getattr(player, 'shots', 0)
+                    shp = (getattr(player, 'goals', 0) / shots) if shots else 0
+                    return (getattr(player, 'goals', 0)
+                            + getattr(player, 'assists', 0), shp)
+                if category == "breakout":
+                    return getattr(player, 'potential', 50)
+                return getattr(player, 'goals', 0) + getattr(player, 'assists', 0)
+
+            for rank, (player, team) in enumerate(
+                    sorted(all_players, key=sort_key, reverse=True)[:20], 1):
+                tree.insert('', 'end',
+                            values=self._enhanced_player_row(
+                                category, rank, player, team))
         except Exception as e:
-            # Fallback to show at least some data if there's an error
             print(f"Error loading player data for {category}: {e}")
-            fallback_data = [(1, "Loading...", "---", "---", 0, 0, 0, 0, 0.0, 0, 0, 0)]
-            for player_data in fallback_data:
-                tree.insert('', 'end', values=player_data)
+            tree.insert('', 'end', values=("Error loading data",))
     
     def create_analytics_panel(self, parent, title, row, col):
         """Create an analytics panel"""
@@ -2986,23 +2947,28 @@ Analysis will be updated as the season progresses.
             ttk.Label(parent, text="Head-to-head analysis initializing...", 
                      style='TLabel').pack(expand=True)
     
+    def _is_goalie(self, player):
+        """True if the player is a goalie (value-based, no substring matching)."""
+        try:
+            return player.primary_position.value == 'G'
+        except Exception:
+            return str(getattr(player, 'primary_position', '')).upper().endswith('GOALIE')
+
     def load_all_players_data(self, category):
         """Load all players data for pagination"""
         try:
             all_players = []
-            
+
             # Collect all players from all teams
             for team in self.parent.league.teams:
                 if hasattr(team, 'roster') and team.roster:
                     for player in team.roster:
+                        is_g = self._is_goalie(player)
                         if category == "goaltending":
-                            # Only include goalies for goaltending stats
-                            if hasattr(player, 'primary_position') and 'G' in str(player.primary_position):
+                            if is_g:
                                 all_players.append((player, team))
-                        else:
-                            # Include all non-goalies for other categories
-                            if not (hasattr(player, 'primary_position') and 'G' in str(player.primary_position)):
-                                all_players.append((player, team))
+                        elif not is_g:
+                            all_players.append((player, team))
             
             # Sort players based on category
             if category == "scoring":
@@ -3016,9 +2982,10 @@ Analysis will be updated as the season progresses.
             elif category == "advanced":
                 def get_advanced_score(player_team):
                     player, team = player_team
-                    shooting = getattr(player, 'shooting', 10)
-                    overall = getattr(player, 'overall_rating', lambda: 75)() if callable(getattr(player, 'overall_rating', None)) else 75
-                    return shooting + (overall * 0.1)
+                    shots = getattr(player, 'shots', 0)
+                    shp = (getattr(player, 'goals', 0) / shots) if shots else 0
+                    return (getattr(player, 'goals', 0)
+                            + getattr(player, 'assists', 0), shp)
                 sorted_players = sorted(all_players, key=get_advanced_score, reverse=True)
                 
             elif category == "breakout":
@@ -3034,10 +3001,8 @@ Analysis will be updated as the season progresses.
             else:  # goaltending
                 def get_goalie_score(player_team):
                     player, team = player_team
-                    goaltending = getattr(player, 'goaltending', 10)
-                    reflexes = getattr(player, 'reflexes', 10)
-                    positioning = getattr(player, 'positioning', 10)
-                    return goaltending + reflexes + positioning
+                    return (getattr(player, 'save_percentage', 0),
+                            getattr(player, 'wins', 0))
                 sorted_players = sorted(all_players, key=get_goalie_score, reverse=True)
             
             # Store sorted players
@@ -3096,78 +3061,11 @@ Analysis will be updated as the season progresses.
         
         page_players = data['all_players'][start_idx:end_idx]
         
-        # Add players to tree with proper ranking
+        # Add players to tree with proper ranking (real stats via shared helper)
         for i, (player, team) in enumerate(page_players):
             rank = start_idx + i + 1
-            
-            if category == "scoring":
-                goals = getattr(player.stats, 'goals', 0) if hasattr(player, 'stats') else getattr(player, 'goals', 0)
-                assists = getattr(player.stats, 'assists', 0) if hasattr(player, 'stats') else getattr(player, 'assists', 0)
-                games = getattr(player.stats, 'games_played', 0) if hasattr(player, 'stats') else 0
-                points = goals + assists
-                ppg = round(points / max(games, 1), 2)
-                plus_minus = getattr(player.stats, 'plus_minus', 0) if hasattr(player, 'stats') else 0
-                pim = getattr(player.stats, 'pim', 0) if hasattr(player, 'stats') else 0
-                shots = getattr(player.stats, 'shots', 0) if hasattr(player, 'stats') else 0
-                
-                position = str(getattr(player, 'primary_position', 'F'))
-                if hasattr(player, 'primary_position') and hasattr(player.primary_position, 'value'):
-                    position = player.primary_position.value
-                
-                player_data = (
-                    rank, player.full_name, self._get_team_abbreviation(team.team_name), position,
-                    games, goals, assists, points, ppg, plus_minus, pim, shots
-                )
-                
-            elif category == "advanced":
-                games = getattr(player.stats, 'games_played', 0) if hasattr(player, 'stats') else 0
-                
-                corsi_for = f"{round(50 + getattr(player, 'offensive_awareness', 10) * 0.5, 1)}%"
-                expected_goals = round(getattr(player, 'shooting', 10) * 0.8, 1)
-                shooting_pct = f"{round(getattr(player, 'shooting_accuracy', 10) * 0.8, 1)}%"
-                pdo = round(100 + getattr(player, 'luck', 0) * 2, 1) if hasattr(player, 'luck') else 100.0
-                zone_starts = f"{round(50 + getattr(player, 'positioning', 10) * 0.3, 1)}%"
-                
-                position = str(getattr(player, 'primary_position', 'F'))
-                if hasattr(player, 'primary_position') and hasattr(player.primary_position, 'value'):
-                    position = player.primary_position.value
-                
-                player_data = (
-                    rank, player.full_name, self._get_team_abbreviation(team.team_name), position,
-                    games, corsi_for, expected_goals, shooting_pct, pdo, zone_starts
-                )
-                
-            elif category == "breakout":
-                age = getattr(player, 'age', 22)
-                potential = getattr(player, 'potential', 75)
-                current_rating = getattr(player, 'overall_rating', lambda: 70)() if callable(getattr(player, 'overall_rating', None)) else 70
-                
-                improvement = f"+{potential - current_rating} potential growth"
-                current_pace = f"{current_rating} overall rating"
-                projection = f"{min(potential, current_rating + 10)}-{potential} ceiling"
-                
-                player_data = (
-                    rank, player.full_name, self._get_team_abbreviation(team.team_name), age,
-                    improvement, current_pace, projection
-                )
-                
-            else:  # goaltending
-                games = getattr(player.stats, 'games_played', 15) if hasattr(player, 'stats') else 15
-                wins = getattr(player.stats, 'wins', 0) if hasattr(player, 'stats') else max(0, games - 8)
-                losses = getattr(player.stats, 'losses', 0) if hasattr(player, 'stats') else min(games - wins, 8)
-                
-                goaltending = getattr(player, 'goaltending', 15)
-                gaa = round(max(1.5, 4.0 - (goaltending * 0.15)), 2)
-                sv_pct = f".{min(950, 850 + goaltending * 5)}"
-                shutouts = max(0, (goaltending - 15) // 3)
-                gsaa = round((goaltending - 15) * 0.8, 1)
-                
-                player_data = (
-                    rank, player.full_name, self._get_team_abbreviation(team.team_name), games,
-                    wins, losses, gaa, sv_pct, shutouts, gsaa
-                )
-            
-            tree.insert('', 'end', values=player_data)
+            tree.insert('', 'end', values=self._enhanced_player_row(
+                category, rank, player, team))
     
     def go_to_page(self, category, page):
         """Navigate to specific page"""
@@ -3678,37 +3576,42 @@ Analysis will be updated as the season progresses.
         # Key metrics frame
         metrics_frame = ttk.Frame(parent_frame, style='Panel.TFrame')
         metrics_frame.pack(fill='x', pady=(0, 15))
-        
+        self._metrics_frame = metrics_frame
+
         # Calculate league-wide statistics
+        self._fill_metric_cards(metrics_frame)
+
+        # Charts placeholder
+        charts_frame = ttk.LabelFrame(parent_frame, text="Performance Charts", style='Panel.TLabelframe')
+        charts_frame.pack(fill='both', expand=True, pady=(10, 0))
+
+        chart_label = ttk.Label(charts_frame, text="Advanced charts and visualizations would appear here",
+                               style='Content.TLabel')
+        chart_label.pack(pady=50)
+
+    def _fill_metric_cards(self, metrics_frame):
+        """Fill the analytics metric cards from real league data."""
         if hasattr(self.parent, 'game_manager') and self.parent.game_manager.league:
             league = self.parent.game_manager.league
-            
+
             # Total goals scored across league
             total_goals = 0
             total_games = 0
             avg_attendance = 0
-            
+
             for team in league.teams:
                 team_goals = sum(getattr(p, 'goals', 0) for p in team.roster + team.ahl_roster)
                 total_goals += team_goals
                 total_games += team.games_played if hasattr(team, 'games_played') else 0
                 avg_attendance += getattr(team, 'avg_attendance', 15000)
-            
+
             avg_attendance = avg_attendance / len(league.teams) if league.teams else 0
-            
+
             # Create metric cards
             self._create_metric_card(metrics_frame, "Total Goals", f"{total_goals:,}", "#4CAF50")
             self._create_metric_card(metrics_frame, "Games Played", f"{total_games:,}", "#2196F3")
             self._create_metric_card(metrics_frame, "Avg Attendance", f"{avg_attendance:,.0f}", "#FF9800")
             self._create_metric_card(metrics_frame, "Active Teams", f"{len(league.teams)}", "#9C27B0")
-        
-        # Charts placeholder
-        charts_frame = ttk.LabelFrame(parent_frame, text="Performance Charts", style='Panel.TLabelframe')
-        charts_frame.pack(fill='both', expand=True, pady=(10, 0))
-        
-        chart_label = ttk.Label(charts_frame, text="Advanced charts and visualizations would appear here", 
-                               style='Content.TLabel')
-        chart_label.pack(pady=50)
     
     def create_trends_analysis_content(self, parent_frame):
         """Create trends analysis content"""
@@ -3729,37 +3632,11 @@ Analysis will be updated as the season progresses.
                              font=(self.parent.FONT_FAMILY, 10), relief='flat',
                              highlightthickness=0)
         trends_text.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Sample trends content
-        trends_content = """LEAGUE TRENDS ANALYSIS
 
-Scoring Trends:
-• Goals per game trending upward
-• Power play efficiency improving league-wide
-• Goaltending save percentages stabilizing
-
-Player Development:
-• Younger players getting more ice time
-• Rookie impact players emerging
-• Veteran leadership maintaining importance
-
-Team Performance:
-• Balanced scoring becoming more valuable
-• Special teams playing decisive role
-• Home ice advantage factors
-
-Emerging Patterns:
-• Speed and skill emphasis increasing
-• Analytics-driven decisions growing
-• Player versatility highly valued
-
-Key Insights:
-• Draft picks showing faster development
-• Contract values adjusting to market
-• International player influence growing"""
-        
-        trends_text.insert('1.0', trends_content)
+        # Real trends content from league data
+        trends_text.insert('1.0', self.generate_real_trends_analysis())
         trends_text.config(state='disabled')
+        self._trends_text = trends_text
     
     def create_performance_insights_content(self, parent_frame):
         """Create performance insights content"""
@@ -3784,57 +3661,100 @@ Key Insights:
                            font=(self.parent.FONT_FAMILY, 10), relief='flat',
                            highlightthickness=0)
         team_text.pack(fill='both', expand=True)
-        
+
         # Player insights
         player_insights_frame = ttk.Frame(insights_notebook, style='Panel.TFrame', padding=10)
         insights_notebook.add(player_insights_frame, text="Player Analysis")
-        
+
         player_text = tk.Text(player_insights_frame, height=15, wrap='word',
                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
                              font=(self.parent.FONT_FAMILY, 10), relief='flat',
                              highlightthickness=0)
         player_text.pack(fill='both', expand=True)
-        
-        # Sample insights
-        team_content = """TEAM PERFORMANCE INSIGHTS
 
-Top Performing Teams:
-• Strong defensive core correlation with success
-• Balanced scoring depth showing sustainability
-• Special teams efficiency as differentiator
+        # Real insights from league data
+        team_content, player_content = self._generate_real_insights()
 
-Areas for Improvement:
-• Power play conversions below league average
-• Penalty kill struggling against top units
-• Goaltending consistency key factor
-
-Competitive Balance:
-• Salary cap creating parity
-• Draft system promoting equality
-• Coaching strategies evolving"""
-        
-        player_content = """PLAYER PERFORMANCE INSIGHTS
-
-Standout Performers:
-• Young players exceeding expectations
-• Veterans maintaining elite production
-• Goalies showing improved consistency
-
-Development Patterns:
-• Skill-based players adapting faster
-• Physical development taking longer
-• Mental game crucial for success
-
-Market Trends:
-• Two-way players in high demand
-• Specialists finding niche roles
-• Leadership qualities valued"""
-        
         team_text.insert('1.0', team_content)
         team_text.config(state='disabled')
-        
+
         player_text.insert('1.0', player_content)
         player_text.config(state='disabled')
+        self._team_insights_text = team_text
+        self._player_insights_text = player_text
+
+    def _generate_real_insights(self):
+        """Build team/player insight text from real league data."""
+        try:
+            teams = self._standings_teams()
+            by_pts = sorted(teams, key=self._team_points, reverse=True)
+
+            team_lines = ["TEAM PERFORMANCE INSIGHTS", ""]
+            team_lines.append("Top Performing Teams:")
+            for t in by_pts[:5]:
+                otl = getattr(t, 'ot_losses', 0)
+                diff = getattr(t, 'goals_for', 0) - getattr(t, 'goals_against', 0)
+                team_lines.append(
+                    f"• {t.team_name}: {t.wins}-{t.losses}-{otl} "
+                    f"({self._team_points(t)} pts, {diff:+d} differential)")
+            if len(by_pts) > 5:
+                team_lines.append("")
+                team_lines.append("Needs Improvement:")
+                for t in by_pts[-3:]:
+                    otl = getattr(t, 'ot_losses', 0)
+                    team_lines.append(
+                        f"• {t.team_name}: {t.wins}-{t.losses}-{otl} "
+                        f"({self._team_points(t)} pts)")
+
+            players = []
+            for t in teams:
+                for p in getattr(t, 'roster', []) or []:
+                    players.append((p, t.team_name))
+            skaters = [x for x in players if not self._is_goalie(x[0])]
+            goalies = [x for x in players if self._is_goalie(x[0])
+                       and getattr(x[0], 'games_played', 0) >= 3]
+
+            player_lines = ["PLAYER PERFORMANCE INSIGHTS", ""]
+            if skaters:
+                pts_king = max(skaters, key=lambda x: getattr(x[0], 'goals', 0)
+                              + getattr(x[0], 'assists', 0))
+                g_king = max(skaters, key=lambda x: getattr(x[0], 'goals', 0))
+                pm_king = max(skaters, key=lambda x: getattr(x[0], 'plus_minus', 0))
+                player_lines.append("Standout Performers:")
+                player_lines.append(
+                    f"• Points leader: {pts_king[0].full_name} ({pts_king[1]}) - "
+                    f"{getattr(pts_king[0], 'goals', 0)}G, "
+                    f"{getattr(pts_king[0], 'assists', 0)}A")
+                player_lines.append(
+                    f"• Goals leader: {g_king[0].full_name} ({g_king[1]}) - "
+                    f"{getattr(g_king[0], 'goals', 0)} goals")
+                player_lines.append(
+                    f"• Best +/-: {pm_king[0].full_name} ({pm_king[1]}) - "
+                    f"{getattr(pm_king[0], 'plus_minus', 0):+d}")
+            if goalies:
+                sv_king = max(goalies,
+                              key=lambda x: getattr(x[0], 'save_percentage', 0))
+                sv = getattr(sv_king[0], 'save_percentage', 0)
+                player_lines.append(
+                    f"• Top goalie: {sv_king[0].full_name} ({sv_king[1]}) - "
+                    f".{sv * 1000:03.0f} SV%, "
+                    f"{getattr(sv_king[0], 'goals_against_avg', 0):.2f} GAA")
+            young = [x for x in skaters if getattr(x[0], 'age', 30) <= 23]
+            if young:
+                y_star = max(young, key=lambda x: getattr(x[0], 'goals', 0)
+                            + getattr(x[0], 'assists', 0))
+                player_lines.append("")
+                player_lines.append("Development Watch:")
+                player_lines.append(
+                    f"• {y_star[0].full_name} ({y_star[1]}, age "
+                    f"{getattr(y_star[0], 'age', '?')}) leads U24 scorers with "
+                    f"{getattr(y_star[0], 'goals', 0) + getattr(y_star[0], 'assists', 0)} points")
+
+            return "\n".join(team_lines), "\n".join(player_lines)
+        except Exception as e:
+            print(f"Error generating insights: {e}")
+            return ("TEAM PERFORMANCE INSIGHTS\n\nData loading...",
+                    "PLAYER PERFORMANCE INSIGHTS\n\nData loading...")
     
     def _create_metric_card(self, parent, title, value, color):
         """Create a metric card widget"""
