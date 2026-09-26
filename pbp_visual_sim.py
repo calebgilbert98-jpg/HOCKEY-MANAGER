@@ -51,6 +51,14 @@ REPLAY_RATE = 0.5
 # History kept for instant replays: snapshots recorded every tick while playing
 HISTORY_MAX = 1400
 
+# Broadcast camera: follows the puck with easing (game-coord units)
+CAM_ZOOM = 1.22
+
+try:
+    from pbp_sound import SoundEngine
+except Exception:
+    SoundEngine = None
+
 
 def _abbr(team_name):
     """3-letter abbreviation for scoreboard-style readouts."""
@@ -387,6 +395,35 @@ class PBPVisualSim(tk.Toplevel):
         # -- penalty release timers: dot_id -> release playhead (game-sec) --
         self._penalty_timers = {}
 
+        # -- broadcast camera (puck-follow pan; zoom fixed at CAM_ZOOM) --
+        self._cam = {"x": 100.0, "on": True, "shake_until": 0.0,
+                     "shake_mag": 0.0}
+        self._pan_applied = 0.0
+
+        # -- lower-third banner: dict(state, t0, kind, title, sub, color) --
+        self._banner = None
+        self._banner_items = []
+
+        # -- full-rink broadcast cards (period intros etc.) --
+        self._card_until = 0.0
+        self._card_items = []
+
+        # -- goal celebration state --
+        self._celly = None          # {"dot", "until", "cx", "cy", "t0"}
+        self._celly_pending = None  # (shooter, att_home) waiting on replay
+        self._flash_until = 0.0
+
+        # -- on-ice effects --
+        self._marks = deque()             # (canvas_item, birth_real); cap 140
+        self._bursts = []                 # (items, t0, cx, cy)
+
+        # -- win probability (home perspective) --
+        self._winprob = 0.5
+
+        # -- arena sound (silent-safe: no backend -> no-ops) --
+        self._sfx = SoundEngine(enabled=True) if SoundEngine else None
+        self._sound_on = bool(self._sfx and self._sfx.available)
+
         self._build_widgets()
         self._draw_rink()
         self._create_dots()
@@ -436,15 +473,38 @@ class PBPVisualSim(tk.Toplevel):
         return b
 
     def _build_widgets(self):
-        # Scoreboard bar
-        top = tk.Frame(self, bg=CONTENT_BG)
+        # Broadcast score bug: [BOS][1 – 2][BUF][P3 04:32]  WIN PROB  LIVE
+        top = tk.Frame(self, bg=BG)
         top.pack(fill="x", padx=10, pady=(10, 6))
-        self.score_var = tk.StringVar(value="–  –")
-        tk.Label(top, textvariable=self.score_var, bg=CONTENT_BG, fg=TEXT,
-                 font=(FONT, 18, "bold")).pack(side="left", padx=12, pady=8)
+        bug = tk.Frame(top, bg="#16161a")
+        bug.pack(side="left")
+        tk.Label(bug, text=_abbr(self.home_team.team_name), bg=ACCENT,
+                 fg="#0e0e11", font=(FONT, 13, "bold"),
+                 padx=10, pady=6).pack(side="left")
+        self.score_var = tk.StringVar(value="0 – 0")
+        tk.Label(bug, textvariable=self.score_var, bg="#16161a", fg="white",
+                 font=(FONT, 16, "bold"), padx=10).pack(side="left")
+        tk.Label(bug, text=_abbr(self.away_team.team_name), bg=AWAY_COLOR,
+                 fg="#0e0e11", font=(FONT, 13, "bold"),
+                 padx=10, pady=6).pack(side="left")
         self.clock_var = tk.StringVar(value="P1 20:00")
-        tk.Label(top, textvariable=self.clock_var, bg=CONTENT_BG, fg=ACCENT,
-                 font=(FONT, 16, "bold")).pack(side="left", padx=12)
+        tk.Label(bug, textvariable=self.clock_var, bg="#23262e", fg=ACCENT,
+                 font=(FONT, 13, "bold"), padx=10, pady=6).pack(side="left")
+
+        # Win probability (home perspective), next to the bug
+        probf = tk.Frame(top, bg=BG)
+        probf.pack(side="left", padx=(18, 0))
+        tk.Label(probf, text="WIN PROB", bg=BG, fg=MUTED,
+                 font=(FONT, 8, "bold")).pack(anchor="w")
+        prow = tk.Frame(probf, bg=BG)
+        prow.pack()
+        self.prob_canvas = tk.Canvas(prow, width=150, height=14, bg="#23262e",
+                                     highlightthickness=0, bd=0)
+        self.prob_canvas.pack(side="left")
+        self.prob_var = tk.StringVar(value="50%")
+        tk.Label(prow, textvariable=self.prob_var, bg=BG, fg=TEXT,
+                 font=(FONT, 10, "bold"), width=5).pack(side="left", padx=(6, 0))
+
         tk.Label(top, text="LIVE SIM", bg=ACCENT, fg="white",
                  font=(FONT, 10, "bold"), padx=8, pady=2).pack(side="right", padx=12)
 
@@ -547,6 +607,10 @@ class PBPVisualSim(tk.Toplevel):
         self.auto_btn = self._pill(ctl, "Auto", self._toggle_auto, w=56)
         self._pill(ctl, "End", self._sim_to_end, w=56)
         self.shotmap_btn = self._pill(ctl, "Shot Map", self._toggle_shotmap, w=84)
+        self.cam_btn = self._pill(ctl, "Cam", self._toggle_cam, w=56)
+        self._refresh_toggle_btn(self.cam_btn, True)
+        self.sound_btn = self._pill(ctl, "Sound", self._toggle_sound, w=68)
+        self._refresh_toggle_btn(self.sound_btn, self._sound_on)
 
         self.feed = tk.Text(right, bg="#0D1420", fg=TEXT, font=(FONT, 10),
                             wrap="word", relief="flat", highlightthickness=0,
@@ -564,14 +628,91 @@ class PBPVisualSim(tk.Toplevel):
         self._update_goalie_labels()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _toggle_cam(self):
+        self._set_camera(not self._cam["on"])
+
+    def _toggle_sound(self):
+        self._sound_on = not self._sound_on
+        if self._sfx is not None:
+            self._sfx.enabled = self._sound_on
+        self._refresh_toggle_btn(self.sound_btn, self._sound_on)
+
     # ------------------------------------------------------------------
     # Rink drawing (square corners)
     # ------------------------------------------------------------------
-    def X(self, x):
+    def _RX(self, x):
+        """Raw pixel x at neutral camera (used when drawing the rink)."""
         return x * self.scale
 
-    def Y(self, y):
+    def _RY(self, y):
+        """Raw pixel y at neutral camera (used when drawing the rink)."""
         return y * self.scale
+
+    def _cam_z(self):
+        return CAM_ZOOM if self._cam["on"] else 1.0
+
+    def X(self, x):
+        z = self._cam_z()
+        return (x - self._cam["x"]) * self.scale * z + self.rink_w / 2
+
+    def Y(self, y):
+        z = self._cam_z()
+        return (y - 42.5) * self.scale * z + self.rink_h / 2
+
+    # ------------------------------------------------------------------
+    # Broadcast camera: puck-following pan (+ optional screen shake)
+    # ------------------------------------------------------------------
+    def _set_camera(self, on):
+        """Toggle the puck-following broadcast camera."""
+        if on == self._cam["on"]:
+            return
+        c = self.canvas
+        cx, cy = self.rink_w / 2, self.rink_h / 2
+        if self._cam["on"]:
+            # turning OFF: undo pan first, then un-zoom
+            c.move("rink", -self._pan_applied, 0)
+            c.move("fx", -self._pan_applied, 0)
+            k = 1.0 / CAM_ZOOM
+        else:
+            k = CAM_ZOOM
+        c.scale("rink", cx, cy, k, k)
+        c.scale("fx", cx, cy, k, k)
+        self._cam["on"] = on
+        self._cam["x"] = 100.0
+        self._pan_applied = 0.0
+        self._refresh_toggle_btn(self.cam_btn, on)
+
+    def _update_camera(self, now):
+        cam = self._cam
+        if not cam["on"]:
+            return
+        z = CAM_ZOOM
+        vw = self.rink_w / (self.scale * z)
+        # lookahead toward the attacking end
+        if self.possession_home is True:
+            look = 12.0
+        elif self.possession_home is False:
+            look = -12.0
+        else:
+            look = 0.0
+        want = min(max(self.puck["x"] + look,
+                       vw / 2 - 10), 200.0 - vw / 2 + 10)
+        cam["x"] += (want - cam["x"]) * 0.07
+        # screen shake: decaying random offset while celebrating / big hits
+        shake = 0.0
+        if now < cam["shake_until"]:
+            k = (cam["shake_until"] - now) / 0.6
+            shake = random.uniform(-1, 1) * cam["shake_mag"] * max(0.0, k)
+        target_px = -(cam["x"] - 100.0) * self.scale * z + shake
+        dx = target_px - self._pan_applied
+        if abs(dx) > 0.05:
+            self.canvas.move("rink", dx, 0)
+            self.canvas.move("fx", dx, 0)
+            self._pan_applied = target_px
+
+    def _shake(self, mag=5.0, dur=0.6):
+        self._cam["shake_until"] = self._now() + dur
+        self._cam["shake_mag"] = mag
 
     def _rr_points(self, x0, y0, x1, y1, r, steps=10):
         """Point list for a rounded rectangle (for boards / ice outline)."""
@@ -602,14 +743,14 @@ class PBPVisualSim(tk.Toplevel):
                          fill="#EFF6FD", outline="")
 
         # --- lines ---
-        c.create_line(self.X(100), 12, self.X(100), H - 12, fill=LINE_RED, width=3)
+        c.create_line(self._RX(100), 12, self._RX(100), H - 12, fill=LINE_RED, width=3)
         for bx in (75, 125):
-            c.create_line(self.X(bx), 12, self.X(bx), H - 12, fill=LINE_BLUE, width=9)
+            c.create_line(self._RX(bx), 12, self._RX(bx), H - 12, fill=LINE_BLUE, width=9)
         for gx in (HOME_NET_X, AWAY_NET_X):
-            c.create_line(self.X(gx), 12, self.X(gx), H - 12, fill=LINE_RED, width=2)
+            c.create_line(self._RX(gx), 12, self._RX(gx), H - 12, fill=LINE_RED, width=2)
 
         # --- center: blue circle + dot ---
-        cx, cy = self.X(100), self.Y(42.5)
+        cx, cy = self._RX(100), self._RY(42.5)
         c.create_oval(cx - 66, cy - 66, cx + 66, cy + 66,
                       outline=LINE_BLUE, width=3)
         c.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill=LINE_BLUE)
@@ -618,7 +759,7 @@ class PBPVisualSim(tk.Toplevel):
         for gx in (HOME_NET_X, AWAY_NET_X):
             sgn = 1 if gx == HOME_NET_X else -1
             for dy in (20.5, 64.5):
-                ex, ey = self.X(gx + 20 * sgn), self.Y(dy)
+                ex, ey = self._RX(gx + 20 * sgn), self._RY(dy)
                 c.create_oval(ex - 66, ey - 66, ex + 66, ey + 66,
                               outline=FACEOFF_RED, width=3)
                 # dot with white stripe
@@ -633,13 +774,13 @@ class PBPVisualSim(tk.Toplevel):
 
         # --- neutral-zone dots ---
         for dx, dy in ((80, 20.5), (80, 64.5), (120, 20.5), (120, 64.5)):
-            ex, ey = self.X(dx), self.Y(dy)
+            ex, ey = self._RX(dx), self._RY(dy)
             c.create_oval(ex - 5, ey - 5, ex + 5, ey + 5, fill=FACEOFF_RED)
 
         # --- creases (light blue) ---
         for nx, flip in ((HOME_NET_X, 1), (AWAY_NET_X, -1)):
-            c.create_arc(self.X(nx) - 28 * flip, self.Y(42.5) - 28,
-                         self.X(nx) + 28 * flip, self.Y(42.5) + 28,
+            c.create_arc(self._RX(nx) - 28 * flip, self._RY(42.5) - 28,
+                         self._RX(nx) + 28 * flip, self._RY(42.5) + 28,
                          start=270 if flip > 0 else 90, extent=180,
                          fill=CREASE_BLUE, outline=LINE_RED, width=2)
 
@@ -647,8 +788,8 @@ class PBPVisualSim(tk.Toplevel):
         self.goal_items = {}
         for nx, side in ((HOME_NET_X, "home"), (AWAY_NET_X, "away")):
             d = 10 if side == "away" else -10
-            x0, x1 = self.X(nx) - 5, self.X(nx) + d
-            y0, y1 = self.Y(42.5) - 14, self.Y(42.5) + 14
+            x0, x1 = self._RX(nx) - 5, self._RX(nx) + d
+            y0, y1 = self._RY(42.5) - 14, self._RY(42.5) + 14
             items = [c.create_rectangle(min(x0, x1), y0, max(x0, x1), y1,
                                         fill="white", outline=LINE_RED, width=3)]
             for i in range(1, 3):
@@ -660,8 +801,8 @@ class PBPVisualSim(tk.Toplevel):
         # --- goal lights (hidden until a goal) ---
         self.lights = {}
         for nx, side in ((HOME_NET_X, "home"), (AWAY_NET_X, "away")):
-            lx = self.X(nx) - 26 if side == "home" else self.X(nx) + 26
-            it = c.create_oval(lx - 10, self.Y(30) - 10, lx + 10, self.Y(30) + 10,
+            lx = self._RX(nx) - 26 if side == "home" else self._RX(nx) + 26
+            it = c.create_oval(lx - 10, self._RY(30) - 10, lx + 10, self._RY(30) + 10,
                                fill="#FF2E3E", outline="white", width=2,
                                state="hidden")
             self.lights[side] = it
@@ -680,7 +821,7 @@ class PBPVisualSim(tk.Toplevel):
             self._penalty_boxes[side] = (bx0, bx1)
 
         # --- benches (center ice, top/bottom boards) ---
-        cxm = self.X(100)
+        cxm = self._RX(100)
         for y0 in (2, H - 24):
             c.create_rectangle(cxm - 70, y0, cxm + 70, y0 + 22,
                                outline="#3A4152", width=1)
@@ -697,6 +838,16 @@ class PBPVisualSim(tk.Toplevel):
         # --- puck trail (single polyline, redrawn each tick) ---
         self._trail_item = c.create_line(0, 0, 0, 0, fill=ACCENT, width=3,
                                          smooth=True, state="hidden")
+
+        # --- broadcast camera: tag static art; per-tick items (dots, puck,
+        # trail) are repositioned through X()/Y() so they follow automatically.
+        # The REPLAY bug lives in viewport space and never pans.
+        c.addtag_all("rink")
+        for it in (self._trail_item, self._replay_dot, self._replay_text):
+            c.dtag(it, "rink")
+        if self._cam["on"]:
+            z = CAM_ZOOM
+            c.scale("rink", self.rink_w / 2, self.rink_h / 2, z, z)
 
     def _bump_stat(self, side, key, amount=1):
         """Increment a team stat ('home'/'away', 'Shots'/'Hits'/'FO'/'PIM')."""
@@ -760,21 +911,22 @@ class PBPVisualSim(tk.Toplevel):
         x, y = (100.0, 42.5)
         sx, sy = self.X(x) + 2.5, self.Y(y) + 3.5
         shadow = c.create_oval(sx - r, sy - r, sx + r, sy + r,
-                               fill="#8fa3b8", outline="")
+                               fill="#8fa3b8", outline="", tags=("dot",))
         oval = c.create_oval(self.X(x) - r, self.Y(y) - r,
                              self.X(x) + r, self.Y(y) + r,
-                             fill=color, outline="white", width=2)
+                             fill=color, outline="white", width=2,
+                             tags=("dot",))
         fg = "white" if is_home else "#0e0e11"
         txt = c.create_text(self.X(x), self.Y(y), text=str(num),
-                            fill=fg, font=(FONT, 9, "bold"))
+                            fill=fg, font=(FONT, 9, "bold"), tags=("dot",))
         # facing tick: short line showing skate direction (updated per tick)
         tick = c.create_line(self.X(x), self.Y(y), self.X(x), self.Y(y),
-                             fill="white", width=2)
+                             fill="white", width=2, tags=("dot",))
         self.dots[dot_id] = {
             "id": dot_id, "player": player, "is_home": is_home,
             "role": role, "x": x, "y": y, "tx": x, "ty": y,
             "oval": oval, "text": txt, "shadow": shadow, "tick": tick,
-            "r": r, "fx": 1.0, "fy": 0.0,
+            "r": r, "fx": 1.0, "fy": 0.0, "color": color,
             "nudge": None,  # (dx, dy, until) hit animation
             "jx": random.uniform(-2.5, 2.5),  # fixed personal jitter
             "jy": random.uniform(-2.5, 2.5),
@@ -1021,6 +1173,10 @@ class PBPVisualSim(tk.Toplevel):
         et = ev["type"]
         if et == "game_start":
             self._update_scoreboard(ev)
+            if not self._instant:
+                hab = _abbr(self.home_team.team_name)
+                aab = _abbr(self.away_team.team_name)
+                self._card_show("PUCK DYNASTY", f"{hab}  vs  {aab}", hold=2.8)
         elif et == "period_start":
             self.penalty_box.clear()
             self._penalty_timers.clear()
@@ -1037,6 +1193,14 @@ class PBPVisualSim(tk.Toplevel):
             self.possession_home = None
             self.carrier_id = None
             self._update_scoreboard(ev)
+            p = ev.get("period", 1)
+            if p > 1 and not self._instant:
+                ords = {2: "2ND", 3: "3RD"}
+                pl = ords.get(p, f"{p}TH")
+                hs, aws = self._cur_score
+                self._card_show(f"{pl} PERIOD",
+                                f"{_abbr(self.home_team.team_name)} {hs} – "
+                                f"{aws} {_abbr(self.away_team.team_name)}")
         elif et == "period_end":
             self._feed(f"End of period {ev.get('period', 1)}. "
                        f"{self.home_team.team_name} {ev['home_score']} - "
@@ -1044,6 +1208,14 @@ class PBPVisualSim(tk.Toplevel):
                        tag="period", ev=ev)
             self._insert_period_summary(ev)
             self._update_scoreboard(ev)
+            if not self._instant:
+                p = ev.get("period", 1)
+                ords = {1: "1ST", 2: "2ND", 3: "3RD"}
+                pl = ords.get(p, f"{p}TH")
+                self._card_show(f"END OF {pl}",
+                                f"{_abbr(self.home_team.team_name)} "
+                                f"{ev['home_score']} – {ev['away_score']} "
+                                f"{_abbr(self.away_team.team_name)}")
         elif et == "faceoff":
             self._on_faceoff(ev)
         elif et == "shot":
@@ -1224,6 +1396,15 @@ class PBPVisualSim(tk.Toplevel):
         self._feed(f"{st.title()} by {self._pname(ev.get('shooter'))} "
                    f"from {ev.get('location', '').replace('_', ' ')}…",
                    tag="shot", ev=ev)
+        # goalie reaction: exaggerated lunge toward the shot line
+        if not self._instant:
+            gpid = self._cur_goalie.get("away" if att_home else "home")
+            gd = self._dot_by_id(gpid) if gpid else None
+            if gd:
+                gx = AWAY_NET_X if att_home else HOME_NET_X
+                lx = gx + (-4.0 if att_home else 4.0)
+                ly = 42.5 + (sy - 42.5) * 0.35
+                gd["glunge"] = (lx, ly, self._now() + 0.5)
 
     def _stage_outcome(self, ev):
         # applied when the puck flight lands (see _tick)
@@ -1250,6 +1431,7 @@ class PBPVisualSim(tk.Toplevel):
             self._record_shotmap("goal")
             self._save_highlight(ev, "goal")
             self._maybe_start_goal_replay(ev)
+            self._celebrate_goal(ev, att_home)
             self.hold_until = max(self.hold_until, self._now() + 1.6)
             self.possession_home = None
             self.carrier_id = None
@@ -1284,6 +1466,63 @@ class PBPVisualSim(tk.Toplevel):
     # ------------------------------------------------------------------
     # Broadcast replays & highlights
     # ------------------------------------------------------------------
+    def _celebrate_goal(self, ev, att_home):
+        """Goal sequence: lower-third, horn, flash, shake, celly, converge."""
+        if self._instant:
+            return
+        now = self._now()
+        color = ACCENT if att_home else AWAY_COLOR
+        S = self._pname(ev.get("shooter"))
+        ast = ev.get("assists") or []
+        sub = S
+        if ast:
+            sub += "  (assists: " + ", ".join(self._pname(a) for a in ast) + ")"
+        sub += f"   {ev.get('home_score', 0)}-{ev.get('away_score', 0)}"
+        self._banner_show("goal", "GOAL!", sub, color=color)
+        if self._sound_on and self._sfx is not None:
+            try:
+                self._sfx.goal_horn()
+            except Exception:
+                pass
+        self._shake(mag=6.0, dur=0.7)
+        self._flash_until = now + 0.14
+        # beaten goalie flashes red
+        gpid = self._cur_goalie.get("away" if att_home else "home")
+        gd = self._dot_by_id(gpid) if gpid else None
+        if gd:
+            gd["beaten_until"] = now + 0.9
+        # the on-ice celly waits for the slow-mo replay to finish so the
+        # lap and the mob are actually visible
+        if self._replay:
+            self._celly_pending = (ev.get("shooter"), att_home)
+        else:
+            self._start_celly(ev.get("shooter"), att_home)
+
+    def _start_celly(self, shooter, att_home):
+        """Scorer's victory lap + teammates mobbing him."""
+        now = self._now()
+        sd = self._dot_by_player(shooter)
+        if not sd:
+            return
+        self._celly = {"dot": sd, "until": now + 2.0,
+                       "cx": sd["x"], "cy": sd["y"], "t0": now}
+        # nearby teammates converge on the scorer (per-tick override,
+        # applied after _update_targets so formations don't undo it)
+        for d in self.dots.values():
+            if d is sd or d["is_home"] != att_home:
+                continue
+            if (d["x"] - sd["x"]) ** 2 + (d["y"] - sd["y"]) ** 2 > 45 ** 2:
+                continue
+            try:
+                if self.canvas.itemcget(d["oval"], "state") == "hidden":
+                    continue
+            except Exception:
+                pass
+            ang = random.uniform(0, 6.28)
+            d["converge"] = (sd["x"] + math.cos(ang) * 6,
+                             sd["y"] + math.sin(ang) * 6,
+                             now + 2.2)
+
     def _recent_frames(self, n=90):
         """Last n recorded snapshots (~n*50ms of viewed action).
 
@@ -1344,9 +1583,7 @@ class PBPVisualSim(tk.Toplevel):
                 if d:
                     self._move_dot(d, x, y)
             self.puck["x"], self.puck["y"] = px, py
-            self.score_var.set(
-                f"{self.home_team.team_name} {hs} — {aws} "
-                f"{self.away_team.team_name}")
+            self.score_var.set(f"{hs} – {aws}")
         if rp["rt"] >= rp["dur"]:
             self._end_replay()
 
@@ -1361,6 +1598,11 @@ class PBPVisualSim(tk.Toplevel):
             self._move_dot(d, d["tx"], d["ty"])
         self.hold_until = 0
         self._update_scoreboard()
+        # a goal's on-ice celebration was waiting for the replay
+        if getattr(self, "_celly_pending", None):
+            shooter, att_home = self._celly_pending
+            self._celly_pending = None
+            self._start_celly(shooter, att_home)
 
     def _cancel_replay(self):
         self._end_replay()
@@ -1427,29 +1669,114 @@ class PBPVisualSim(tk.Toplevel):
                 col = "#00ff9d"
                 r = 7
                 c.create_line(px - r, py, px + r, py, fill=col, width=2,
-                              tags="shotmap")
+                              tags=("shotmap", "fx"))
                 c.create_line(px, py - r, px, py + r, fill=col, width=2,
-                              tags="shotmap")
+                              tags=("shotmap", "fx"))
                 c.create_line(px - r * 0.7, py - r * 0.7, px + r * 0.7,
-                              py + r * 0.7, fill=col, width=2, tags="shotmap")
+                              py + r * 0.7, fill=col, width=2, tags=("shotmap", "fx"))
                 c.create_line(px - r * 0.7, py + r * 0.7, px + r * 0.7,
-                              py - r * 0.7, fill=col, width=2, tags="shotmap")
+                              py - r * 0.7, fill=col, width=2, tags=("shotmap", "fx"))
             elif result == "save":
                 col = ACCENT if side == "home" else AWAY_COLOR
                 c.create_oval(px - 4, py - 4, px + 4, py + 4, fill=col,
-                              outline="white", width=1, tags="shotmap")
+                              outline="white", width=1, tags=("shotmap", "fx"))
             elif result == "block":
                 c.create_rectangle(px - 4, py - 4, px + 4, py + 4,
-                                   fill="#8a8f9c", outline="", tags="shotmap")
+                                   fill="#8a8f9c", outline="", tags=("shotmap", "fx"))
             else:  # miss
                 c.create_text(px, py, text="x", fill="#c9ced8",
-                              font=(FONT, 10, "bold"), tags="shotmap")
+                              font=(FONT, 10, "bold"), tags=("shotmap", "fx"))
         # keep markers under the player dots
         try:
             first = next(iter(self.dots.values()))
             c.tag_lower("shotmap", first["shadow"])
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Lower-third banners & full-rink broadcast cards (viewport space)
+    # ------------------------------------------------------------------
+    def _banner_show(self, kind, title, sub="", color=ACCENT):
+        """Slide-in lower third; replaces any live banner."""
+        self._banner_hide()
+        c = self.canvas
+        W, H = self.rink_w, self.rink_h
+        bw, bh = 470, 66
+        x0 = (W - bw) / 2
+        y_hide, y_show = H + 10, H - bh - 14
+        items = [
+            c.create_rectangle(x0, y_hide, x0 + bw, y_hide + bh,
+                               fill="#101014", outline=""),
+            c.create_rectangle(x0, y_hide, x0 + 6, y_hide + bh,
+                               fill=color, outline=""),
+            c.create_text(x0 + 24, y_hide + 24, text=title, anchor="w",
+                          fill="white", font=(FONT, 17, "bold")),
+            c.create_text(x0 + 24, y_hide + 48, text=sub, anchor="w",
+                          fill=MUTED, font=(FONT, 11)),
+        ]
+        for it in items:
+            c.tag_raise(it)
+        self._banner = {"items": items, "t0": self._now(),
+                        "y_hide": y_hide, "y_show": y_show,
+                        "y_cur": y_hide}
+
+    def _banner_hide(self):
+        if self._banner:
+            for it in self._banner["items"]:
+                try:
+                    self.canvas.delete(it)
+                except Exception:
+                    pass
+            self._banner = None
+
+    def _step_banner(self, now):
+        b = self._banner
+        if not b:
+            return
+        el = now - b["t0"]
+        if el < 0.35:
+            k = el / 0.35
+            y = b["y_hide"] + (b["y_show"] - b["y_hide"]) * (1 - (1 - k) ** 2)
+        elif el < 3.4:
+            y = b["y_show"]
+        elif el < 3.75:
+            k = (el - 3.4) / 0.35
+            y = b["y_show"] + (b["y_hide"] - b["y_show"]) * k * k
+        else:
+            self._banner_hide()
+            return
+        dy = y - b["y_cur"]
+        b["y_cur"] = y
+        if abs(dy) > 0.01:
+            for it in b["items"]:
+                self.canvas.move(it, 0, dy)
+
+    def _card_show(self, title, sub="", hold=2.6):
+        """Full-rink broadcast card (period intros, intermissions)."""
+        self._card_hide()
+        c = self.canvas
+        W, H = self.rink_w, self.rink_h
+        items = [
+            c.create_rectangle(0, 0, W, H, fill="#0b0b0e", stipple="gray50"),
+            c.create_text(W / 2, H / 2 - 26, text=title, fill="white",
+                          font=(FONT, 46, "bold")),
+        ]
+        if sub:
+            items.append(c.create_text(W / 2, H / 2 + 32, text=sub,
+                                       fill=ACCENT, font=(FONT, 18, "bold")))
+        for it in items:
+            c.tag_raise(it)
+        self._card_items = items
+        self._card_until = self._now() + hold
+
+    def _card_hide(self):
+        for it in self._card_items:
+            try:
+                self.canvas.delete(it)
+            except Exception:
+                pass
+        self._card_items = []
+        self._card_until = 0.0
 
     # ------------------------------------------------------------------
     # Smart broadcast pacing
@@ -1679,6 +2006,28 @@ class PBPVisualSim(tk.Toplevel):
         self._feed(random.choice(_HIT_T).format(
             H=self._pname(ev.get("hitting_player")),
             T=self._pname(ev.get("target_player")), ht=ht), ev=ev)
+        # impact burst at the target; bigger hits shake the camera
+        if t and not self._instant:
+            self._spawn_burst(t["x"], t["y"])
+            if ev.get("hit_type", "hit") != "hit" or \
+                    ev.get("result") == "turnover_caused":
+                self._shake(mag=2.5, dur=0.3)
+
+    def _spawn_burst(self, x, y, color="#ffd166"):
+        items = []
+        for i in range(8):
+            ang = i * math.pi / 4 + random.uniform(-0.2, 0.2)
+            it = self.canvas.create_line(self.X(x), self.Y(y),
+                                         self.X(x), self.Y(y),
+                                         fill=color, width=3,
+                                         tags=("fxburst",))
+            items.append((it, ang))
+        try:
+            self.canvas.tag_raise("fxburst")
+        except Exception:
+            pass
+        self._bursts.append({"items": items, "t0": self._now(),
+                             "x": x, "y": y})
 
     def _pstat(self, player, key, amount=1):
         """Accumulate a live per-player game stat (for cards + 3 stars)."""
@@ -1707,6 +2056,13 @@ class PBPVisualSim(tk.Toplevel):
             team=ev.get("team", ""), inf=ev.get("infraction", "a foul"))
         self._feed(msg, tag="penalty", ev=ev)
         self._note("penalty", msg, ev)
+        if not self._instant:
+            home = self._side_of(ev.get("team")) == "home"
+            self._banner_show(
+                "penalty", "PENALTY",
+                f"{self._pname(ev.get('player'))} — {mins} min for "
+                f"{ev.get('infraction', 'a foul')}",
+                color=ACCENT if home else AWAY_COLOR)
 
     def _release_penalties(self):
         """Unhide dots whose penalties expired on the game clock."""
@@ -1726,6 +2082,10 @@ class PBPVisualSim(tk.Toplevel):
         self._push_momentum(self._side_of(ev.get("team")), 2)
         self._note("fight", msg, ev)
         self._save_highlight(ev, "fight", msg)
+        if not self._instant:
+            self._banner_show("fight", "FIGHT!",
+                              self._pname(ev.get("player")), color="#ff8a5c")
+            self._shake(mag=4.0, dur=0.5)
 
     def _on_shootout_attempt(self, ev):
         shooter = ev.get("shooter")
@@ -1781,12 +2141,55 @@ class PBPVisualSim(tk.Toplevel):
         hn = self.home_team.team_name
         an = self.away_team.team_name
         self._cur_score = (hs, aws)
-        self.score_var.set(f"{hn} {hs} — {aws} {an}")
+        self.score_var.set(f"{hs} – {aws}")
         if ev:
             clk = ev.get("clock", 0)
             p = ev.get("period", 1)
             label = f"OT{p - 3}" if p > 3 else f"P{p}"
             self.clock_var.set(f"{label} {int(clk // 60):02d}:{int(clk % 60):02d}")
+        self._winprob = self._calc_winprob(hs, aws)
+        self.prob_var.set(f"{int(round(self._winprob * 100))}%")
+        self._draw_winprob()
+
+    def _calc_winprob(self, hs, aws):
+        """Home win probability: score lead + shot tilt, time-weighted."""
+        lead = hs - aws
+        t_rem = 3600.0
+        try:
+            if self.events and self.cursor > 0:
+                last = self.events[self.cursor - 1]
+                p = last.get("period", 1)
+                clk = last.get("clock", 0)
+                t_rem = max(0.0, clk + max(0, 3 - p) * 1200)
+        except Exception:
+            pass
+        x = lead * 1.7 / (1.0 + t_rem / 750.0)
+        try:
+            x += (self.team_stats["home"]["Shots"]
+                  - self.team_stats["away"]["Shots"]) * 0.015
+        except Exception:
+            pass
+        p = 1.0 / (1.0 + math.exp(-x))
+        return min(0.98, max(0.02, p))
+
+    def _draw_winprob(self):
+        c = getattr(self, "prob_canvas", None)
+        if c is None:
+            return
+        try:
+            W, H = int(c["width"]), int(c["height"])
+        except Exception:
+            return
+        c.delete("all")
+        p = self._winprob
+        c.create_rectangle(0, 0, W * p, H, fill=ACCENT, outline="")
+        c.create_rectangle(W * p, 0, W, H, fill=AWAY_COLOR, outline="")
+        hab = _abbr(self.home_team.team_name)
+        aab = _abbr(self.away_team.team_name)
+        c.create_text(4, H / 2, text=hab, anchor="w", fill="#0e0e11",
+                      font=(FONT, 8, "bold"))
+        c.create_text(W - 4, H / 2, text=aab, anchor="e", fill="#0e0e11",
+                      font=(FONT, 8, "bold"))
 
     def _flash_light(self, side):
         self.canvas.itemconfig(self.lights[side], state="normal")
@@ -2111,6 +2514,14 @@ class PBPVisualSim(tk.Toplevel):
                     state="hidden" if cur == "normal" else "normal")
                 self._light_toggle = now + 0.22
 
+        # broadcast camera follows the puck (runs even during replays/holds)
+        self._update_camera(now)
+
+        # lower-third banner animation + broadcast card expiry
+        self._step_banner(now)
+        if self._card_until and now >= self._card_until:
+            self._card_hide()
+
         # advance playback (auto-pace overrides manual speed)
         if self.playing and now >= self.hold_until and self.events:
             eff = self._auto_speed() if self.auto_pace else self.speed
@@ -2182,11 +2593,104 @@ class PBPVisualSim(tk.Toplevel):
 
             # drift dots toward targets (kept live even during puck flights)
             self._update_targets()
+            # goalie lunge: exaggerated reaction to a shot, then recover
+            # converge: teammates mobbing the scorer hold their mob spots
             for d in self.dots.values():
+                gl = d.get("glunge")
+                if gl:
+                    lx, ly, until = gl
+                    if now < until:
+                        d["tx"], d["ty"] = lx, ly
+                    else:
+                        d["glunge"] = None
+                cv = d.get("converge")
+                if cv:
+                    cx, cy, until = cv
+                    if now < until:
+                        d["tx"], d["ty"] = cx, cy
+                    else:
+                        d["converge"] = None
+            celly_dot = (self._celly["dot"] if self._celly
+                         and now < self._celly["until"] else None)
+            if self._celly and now >= self._celly["until"]:
+                self._celly = None
+            for d in self.dots.values():
+                if d is celly_dot:
+                    continue  # scorer does his victory lap below
                 x, y = d["x"], d["y"]
+                # skate marks: fast dots carve fading trails into the ice
+                dx, dy = x - d.get("_px", x), y - d.get("_py", y)
+                d["_px"], d["_py"] = x, y
+                if dx * dx + dy * dy > 1.1 and random.random() < 0.45:
+                    it = self.canvas.create_line(
+                        self.X(x - dx), self.Y(y - dy),
+                        self.X(x), self.Y(y),
+                        fill="#a9c6e8", width=2, tags=("fx", "fxmarks"))
+                    self._marks.append((it, now))
+                    if len(self._marks) > 140:
+                        old_it, _ = self._marks.popleft()
+                        try:
+                            self.canvas.delete(old_it)
+                        except Exception:
+                            pass
                 d["x"] = x + (d["tx"] - x) * 0.14
                 d["y"] = y + (d["ty"] - y) * 0.14
                 self._move_dot(d, d["x"], d["y"])
+            # goal celly: scorer skates a little victory circle
+            if celly_dot is not None:
+                cl = self._celly
+                k = (now - cl["t0"]) / max(0.01, cl["until"] - cl["t0"])
+                ang = k * 4.6
+                d = celly_dot
+                d["x"] = cl["cx"] + math.cos(ang) * 3.2
+                d["y"] = cl["cy"] + math.sin(ang) * 3.2
+                d["_px"], d["_py"] = d["x"], d["y"]
+                self._move_dot(d, d["x"], d["y"])
+            # beaten goalie flashes red briefly
+            for d in self.dots.values():
+                if d["role"] == "G":
+                    beaten = now < d.get("beaten_until", 0)
+                    want = "#ff5c5c" if beaten else d.get("color", "")
+                    if want and d.get("_beat_col") != want:
+                        d["_beat_col"] = want
+                        try:
+                            self.canvas.itemconfig(d["oval"], fill=want)
+                        except Exception:
+                            pass
+            # fade old skate marks
+            while self._marks and now - self._marks[0][1] > 3.2:
+                it, _ = self._marks.popleft()
+                try:
+                    self.canvas.delete(it)
+                except Exception:
+                    pass
+            if self._marks:
+                try:
+                    self.canvas.tag_lower("fxmarks", "dot")
+                except Exception:
+                    pass
+            # hit bursts: expand + fade over 0.45s
+            if self._bursts:
+                keep = []
+                for b in self._bursts:
+                    k = (now - b["t0"]) / 0.45
+                    if k >= 1:
+                        for it, _ in b["items"]:
+                            try:
+                                self.canvas.delete(it)
+                            except Exception:
+                                pass
+                        continue
+                    r = 4 + 30 * k
+                    bx, by = self.X(b["x"]), self.Y(b["y"])
+                    for it, ang in b["items"]:
+                        self.canvas.coords(it, bx, by,
+                                           bx + math.cos(ang) * r,
+                                           by + math.sin(ang) * r)
+                        self.canvas.itemconfig(it,
+                                               width=max(1, int(3 * (1 - k))))
+                    keep.append(b)
+                self._bursts = keep
 
             # puck eases toward carrier (or sim puck target) when not flying
             if not self.puck_flight:
@@ -2262,6 +2766,17 @@ class PBPVisualSim(tk.Toplevel):
         px, py = self.X(self.puck["x"]), self.Y(self.puck["y"])
         self.canvas.coords(self.puck_item, px - 5, py - 5, px + 5, py + 5)
         self.canvas.coords(self.puck_glow, px - 11, py - 11, px + 11, py + 11)
+
+        # goal flash: full-rink white pop on a goal
+        if now < self._flash_until:
+            if not getattr(self, "_flash_item", None):
+                self._flash_item = self.canvas.create_rectangle(
+                    0, 0, self.rink_w, self.rink_h, fill="white", outline="")
+                self.canvas.tag_raise(self._flash_item)
+            self.canvas.itemconfig(self._flash_item, state="normal")
+            self.canvas.tag_raise(self._flash_item)
+        elif getattr(self, "_flash_item", None):
+            self.canvas.itemconfig(self._flash_item, state="hidden")
 
         # live clock interpolation between events
         if self.events and self.cursor > 0:
