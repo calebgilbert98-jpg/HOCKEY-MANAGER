@@ -1570,116 +1570,146 @@ class RosterWindow(ctk.CTkToplevel):
         except (AttributeError, tk.TclError):
             pass
 
-class FreeAgencyWindow(tk.Toplevel):
-    """Enhanced Free Agency window with modern UI, advanced filtering, and comprehensive management tools."""
-    
+class FreeAgencyWindow(ctk.CTkToplevel):
+    """Free Agency Market (CustomTkinter): dark cards, pill filters,
+    styled stat tables, CTk dialogs for contracts/comparison/analysis."""
+
     def __init__(self, parent):
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_HOVER, ROW_SELECTED,
+        )
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
+                        RED=RED, BLUE=BLUE, ROW_HOVER=ROW_HOVER,
+                        ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
-        self.title("Free Agency Market - Hockey Manager")
-        self.configure(background=parent.BG_COLOR)
+        self.title("Free Agency Market")
+        self.configure(fg_color=BG)
         self.geometry("1400x900")
         self.minsize(1200, 700)
-        
-        # State variables
+
+        # State variables (unchanged from the ttk version)
         self.selected_players = []
         self.selected_staff = []
         self.player_filters = {}
         self.staff_filters = {}
-        
-        # Create the enhanced interface
+        self._fa_pill_groups = []
+        self._staff_pill_groups = []
+
+        # Create the interface
         self.create_enhanced_interface()
-        self.setup_styles()
+        self._setup_tree_style()
         self.update_views()
-        
+
         # Track window
         self.parent.open_windows['free_agency'] = self
-    
+
+    # ------------------------------------------------------------------
+    # Layout construction
+    # ------------------------------------------------------------------
     def create_enhanced_interface(self):
-        """Create the modern, comprehensive free agency interface."""
-        # Main container with professional styling
-        main_container = ttk.Frame(self, style='Panel.TFrame')
-        main_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
+        """Create the modern free agency interface."""
+        ct = self._ct
+        main_container = ctk.CTkFrame(self, fg_color=ct['BG'], corner_radius=0)
+        main_container.pack(fill="both", expand=True, padx=15, pady=15)
+
         # Header section with market overview
         self.create_header_section(main_container)
-        
-        # Main tabbed interface
-        self.notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
-        
-        # Enhanced Player tab
+
+        # Modern tab bar (CTkTabview instead of ttk.Notebook)
+        self.tabview = ctk.CTkTabview(
+            main_container,
+            fg_color=ct['PANEL'],
+            corner_radius=12,
+            border_width=1,
+            border_color=ct['BORDER'],
+            segmented_button_fg_color=ct['PANEL'],
+            segmented_button_selected_color=ct['TEAL'],
+            segmented_button_selected_hover_color=ct['TEAL_HOVER'],
+            segmented_button_unselected_color=ct['CARD'],
+            segmented_button_unselected_hover_color=ct['BORDER'],
+            text_color=ct['TEXT'],
+        )
+        self.tabview.pack(fill="both", expand=True, pady=(16, 0))
+        for name in ("Free Agent Players", "Free Agent Staff", "Market Overview"):
+            self.tabview.add(name)
+
         self.create_enhanced_player_tab()
-        
-        # Enhanced Staff tab  
         self.create_enhanced_staff_tab()
-        
-        # Market Overview tab
         self.create_market_overview_tab()
-        
+
         # Action buttons footer
         self.create_action_footer(main_container)
-    
+
     def create_header_section(self, parent):
         """Create the header with market overview and quick stats."""
-        header_frame = ttk.Frame(parent, style='TitleBar.TFrame', padding=(20, 15))
-        header_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Title and subtitle
-        title_frame = ttk.Frame(header_frame, style='TitleBar.TFrame')
-        title_frame.pack(fill=tk.X)
-        
-        ttk.Label(
-            title_frame,
-            text="FREE AGENCY MARKET",
-            style='Title.TLabel',
-            font=(self.parent.FONT_FAMILY, 18, 'bold')
-        ).pack(side=tk.LEFT)
-        
+        ct = self._ct
+        header = ctk.CTkFrame(parent, fg_color=ct['PANEL'], corner_radius=12)
+        header.pack(fill="x", pady=(0, 4))
+
+        top = ctk.CTkFrame(header, fg_color="transparent")
+        top.pack(fill="x", padx=20, pady=(14, 4))
+
+        self._heading(top, text="FREE AGENCY MARKET", size=18).pack(side="left")
+
         # Quick stats on the right
-        stats_frame = ttk.Frame(title_frame, style='TitleBar.TFrame')
-        stats_frame.pack(side=tk.RIGHT)
-        
-        # Market stats
         player_count = len(self.parent.game_manager.free_agents)
         staff_count = len(self.parent.league.free_agent_staff)
-        
-        stats_text = f"Available: {player_count} Players • {staff_count} Staff"
-        ttk.Label(
-            stats_frame,
-            text=stats_text,
-            style='Subtitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 12)
-        ).pack(side=tk.RIGHT)
-        
-        # Subtitle with current date/season info
-        subtitle_frame = ttk.Frame(header_frame, style='TitleBar.TFrame')
-        subtitle_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        season_info = f"Season 2024-25 • Free Agency Period"
-        ttk.Label(
-            subtitle_frame,
-            text=season_info,
-            style='Info.TLabel',
-            font=(self.parent.FONT_FAMILY, 11)
-        ).pack(side=tk.LEFT)
-        
+        self._body(top, text=f"Available: {player_count} Players \u2022 {staff_count} Staff",
+                   dim=True, size=12).pack(side="right")
+
+        # Subtitle row
+        sub = ctk.CTkFrame(header, fg_color="transparent")
+        sub.pack(fill="x", padx=20, pady=(4, 14))
+        self._body(sub, text="Season 2024-25 \u2022 Free Agency Period",
+                   dim=True, size=11).pack(side="left")
+
         # Team cap space on the right
         user_team = self.parent.game_manager.user_team
         current_salary = sum(getattr(p, "salary", getattr(p.contract, "salary", 750000)) for p in user_team.roster)
         cap_space = 83500000 - current_salary  # NHL salary cap
-        
-        cap_text = f"Available Cap Space: ${cap_space:,}"
-        cap_color = self.parent.ACCENT_COLOR if cap_space > 10000000 else "#d29922" if cap_space > 0 else "#f85149"
-        
-        cap_label = ttk.Label(
-            subtitle_frame,
-            text=cap_text,
-            font=(self.parent.FONT_FAMILY, 11, 'bold'),
-            foreground=cap_color
-        )
-        cap_label.pack(side=tk.RIGHT)
-    
+        if cap_space > 10000000:
+            cap_color = ct['TEAL']
+        elif cap_space > 0:
+            cap_color = ct['GOLD']
+        else:
+            cap_color = ct['RED']
+        ctk.CTkLabel(sub, text=f"Available Cap Space: ${cap_space:,}",
+                     font=("Segoe UI", 11, "bold"),
+                     text_color=cap_color).pack(side="right")
+
+    # ------------------------------------------------------------------
+    # Pill filter helpers
+    # ------------------------------------------------------------------
+    def _pill_row(self, parent, label, options, var, on_change, groups):
+        """One labeled row of PillButtons. PillButton is canvas-drawn and
+        needs a plain tk parent for its bg lookup, so the group gets a
+        tk.Frame wrapper tinted to match the card."""
+        ct = self._ct
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        ctk.CTkLabel(row, text=label, font=("Segoe UI", 10, "bold"),
+                     text_color=ct['TEXT_DIM'], width=80,
+                     anchor="w").pack(side="left", padx=(0, 6))
+        wrap = tk.Frame(row, bg=ct['CARD'])
+        wrap.pack(side="left")
+        btns = make_pill_group(wrap, options, lambda v: on_change(var, v))
+        groups.append((var, btns))
+        # Paint initial selection state
+        current = var.get()
+        for value, btn in btns.items():
+            btn.set_selected(value == current)
+
     def _fa_set_filter(self, var, value):
         """Set a free-agency pill filter and refresh instantly."""
         var.set(value)
@@ -1687,97 +1717,182 @@ class FreeAgencyWindow(tk.Toplevel):
         self.populate_filtered_players()
 
     def _fa_paint_pills(self):
-        for var, btns in getattr(self, '_fa_pill_groups', []):
+        for var, btns in self._fa_pill_groups:
             current = var.get()
             for value, btn in btns.items():
                 btn.set_selected(value == current)
 
+    def _staff_set_filter(self, var, value):
+        """Set a staff pill filter and refresh instantly."""
+        var.set(value)
+        self._staff_paint_pills()
+        self.populate_filtered_staff()
+
+    def _staff_paint_pills(self):
+        for var, btns in self._staff_pill_groups:
+            current = var.get()
+            for value, btn in btns.items():
+                btn.set_selected(value == current)
+
+    def _setup_tree_style(self):
+        """Dark, flat styling for the FA tables (styled ttk.Treeview, per
+        the migration guide -- the tables carry 9-11 sortable columns)."""
+        ct = self._ct
+        style = ttk.Style(self)
+        style.configure('FA.Treeview',
+                        background=ct['CARD'],
+                        fieldbackground=ct['CARD'],
+                        foreground=ct['TEXT'],
+                        borderwidth=0,
+                        relief='flat',
+                        rowheight=30,
+                        font=('Segoe UI', 10))
+        style.configure('FA.Treeview.Heading',
+                        background=ct['PANEL'],
+                        foreground=ct['TEXT'],
+                        font=('Segoe UI', 10, 'bold'),
+                        relief='flat',
+                        borderwidth=0)
+        style.map('FA.Treeview',
+                  background=[('selected', ct['ROW_SELECTED'])],
+                  foreground=[('selected', ct['TEXT'])])
+        style.layout('FA.Treeview',
+                     [('Treeview.treearea', {'sticky': 'nswe'})])
+        style.configure('FA.Vertical.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.configure('FA.Horizontal.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.map('FA.Vertical.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+        style.map('FA.Horizontal.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+
+    def _create_fa_treeview(self, parent, columns, height=20, sort_cmd=None):
+        """Dark-styled multi-column table inside a rounded card."""
+        ct = self._ct
+        table_frame = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=10)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        tree = ttk.Treeview(table_frame, columns=list(columns.keys()),
+                            show='headings', style='FA.Treeview', height=height)
+        for col, (text, width) in columns.items():
+            if sort_cmd is not None:
+                tree.heading(col, text=text,
+                             command=lambda c=col: sort_cmd(tree, c))
+            else:
+                tree.heading(col, text=text)
+            tree.column(col, width=width,
+                        anchor='w' if col == 'name' else 'center')
+
+        # OVR tier tags -- match the Trade Center / CTkPlayerList color scale
+        tree.tag_configure('tier_elite', foreground=ct['GREEN'])  # 85+
+        tree.tag_configure('tier_top', foreground=ct['TEAL'])     # 78-84
+        tree.tag_configure('tier_mid', foreground=ct['GOLD'])     # 70-77
+
+        v_scroll = ttk.Scrollbar(table_frame, orient="vertical",
+                                 command=tree.yview,
+                                 style='FA.Vertical.TScrollbar')
+        h_scroll = ttk.Scrollbar(table_frame, orient="horizontal",
+                                 command=tree.xview,
+                                 style='FA.Horizontal.TScrollbar')
+        tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+        tree.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
+        v_scroll.pack(side="right", fill="y", padx=(0, 6), pady=10)
+        h_scroll.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
+        return tree
+
+    @staticmethod
+    def _ovr_tag(ovr):
+        """Tier tag for OVR color-coding (matches CTkPlayerList scale)."""
+        if ovr >= 85:
+            return 'tier_elite'
+        if ovr >= 78:
+            return 'tier_top'
+        if ovr >= 70:
+            return 'tier_mid'
+        return ''
+
+    # ------------------------------------------------------------------
+    # Player tab
+    # ------------------------------------------------------------------
     def create_enhanced_player_tab(self):
-        """Create the enhanced player free agency tab with advanced features."""
-        player_tab = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(player_tab, text="Free Agent Players")
-        
-        # Filter section
-        filter_frame = ttk.LabelFrame(player_tab, text="Player Filters & Search", padding=15)
-        filter_frame.pack(fill=tk.X, padx=10, pady=10)
+        """Player free agency tab with filters, table, and actions."""
+        ct = self._ct
+        player_tab = self.tabview.tab("Free Agent Players")
+
+        # Filter card
+        filter_frame = ctk.CTkFrame(player_tab, fg_color=ct['CARD'], corner_radius=10)
+        filter_frame.pack(fill="x", padx=10, pady=10)
+        self._heading(filter_frame, text="Player Filters & Search", size=12).pack(
+            anchor="w", padx=14, pady=(10, 6))
 
         # Name search (text search keeps a text box; everything else is pills)
-        search_row = ttk.Frame(filter_frame, style='Panel.TFrame')
-        search_row.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(search_row, text="Name:", style='Content.TLabel').pack(side=tk.LEFT, padx=(0, 5))
-        self.player_name_search = ttk.Entry(search_row, width=22, font=(self.parent.FONT_FAMILY, 10))
-        self.player_name_search.pack(side=tk.LEFT, padx=(0, 15))
+        search_row = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        search_row.pack(fill="x", padx=14, pady=(0, 6))
+        self._body(search_row, text="Name:", dim=True).pack(side="left", padx=(0, 8))
+        self.player_name_search = ctk.CTkEntry(
+            search_row, width=220, placeholder_text="Search by name...",
+            fg_color=ct['BG'], border_color=ct['BORDER'])
+        self.player_name_search.pack(side="left", padx=(0, 12))
         self.player_name_search.bind('<KeyRelease>', self.filter_players)
-        ttk.Button(search_row, text="Clear Filters", style='Secondary.TButton',
-                   command=self.clear_player_filters).pack(side=tk.RIGHT)
+        self._secondary_button(search_row, text="Clear Filters",
+                               command=self.clear_player_filters).pack(side="right")
 
         # Pill filter rows (instant-apply, no dropdowns)
-        self._fa_filter_vars = {}
-        self._fa_pill_groups = []
+        pills = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        pills.pack(fill="x", padx=14, pady=(0, 10))
+        self.player_position_filter = tk.StringVar(master=self, value='All')
+        self.player_age_filter = tk.StringVar(master=self, value='All')
+        self.player_rating_filter = tk.StringVar(master=self, value='All')
+        self.player_salary_filter = tk.StringVar(master=self, value='All')
+        self.player_contract_filter = tk.StringVar(master=self, value='All')
+        self.player_sort_filter = tk.StringVar(master=self, value='Overall')
 
-        def _pill_row(label, attr, default, options):
-            var = tk.StringVar(master=self, value=default)
-            setattr(self, attr, var)
-            self._fa_filter_vars[attr] = (var, default)
-            row = ttk.Frame(filter_frame, style='Panel.TFrame')
-            row.pack(fill=tk.X, pady=2)
-            ttk.Label(row, text=label, style='Content.TLabel', width=9).pack(side=tk.LEFT)
-            btns = {}
-            try:
-                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#0e0e11'
-            except Exception:
-                canvas_bg = '#0e0e11'
-            for value, text in options:
-                b = PillButton(row, text=text, bg=canvas_bg,
-                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
-                               padx=11, pady=4,
-                               command=lambda v=value, vv=var: self._fa_set_filter(vv, v))
-                b.pack(side=tk.LEFT, padx=2)
-                btns[value] = b
-            self._fa_pill_groups.append((var, btns))
-            self._fa_paint_pills()
-
-        _pill_row("Position:", 'player_position_filter', 'All',
-                  [(v, v) for v in ('All', 'C', 'LW', 'RW', 'LD', 'RD', 'G')])
-        _pill_row("Age:", 'player_age_filter', 'All',
-                  [(v, v) for v in ('All', '18-22', '23-26', '27-30', '31-35', '36+')])
-        _pill_row("Rating:", 'player_rating_filter', 'All',
-                  [('All', 'All'), ('90+', '90+'), ('85-89', '85-89'),
-                   ('80-84', '80-84'), ('75-79', '75-79'), ('70-74', '70-74'),
-                   ('<70', '<70')])
-        _pill_row("Salary:", 'player_salary_filter', 'All',
-                  [(v, v) for v in ('All', 'Under $1M', '$1M-$3M', '$3M-$5M',
-                                    '$5M-$8M', 'Over $8M')])
-        _pill_row("Contract:", 'player_contract_filter', 'All',
-                  [(v, v) for v in ('All', '1 Year', '2 Years', '3-4 Years', '5+ Years')])
-        _pill_row("Sort by:", 'player_sort_filter', 'Overall',
-                  [(v, v) for v in ('Overall', 'Age', 'Name', 'Position',
-                                    'Salary', 'Potential')])
+        self._pill_row(pills, "Position:", [(v, v) for v in
+                       ('All', 'C', 'LW', 'RW', 'LD', 'RD', 'G')],
+                       self.player_position_filter, self._fa_set_filter,
+                       self._fa_pill_groups)
+        self._pill_row(pills, "Age:", [(v, v) for v in
+                       ('All', '18-22', '23-26', '27-30', '31-35', '36+')],
+                       self.player_age_filter, self._fa_set_filter,
+                       self._fa_pill_groups)
+        self._pill_row(pills, "Rating:", [('All', 'All'), ('90+', '90+'),
+                       ('85-89', '85-89'), ('80-84', '80-84'), ('75-79', '75-79'),
+                       ('70-74', '70-74'), ('<70', '<70')],
+                       self.player_rating_filter, self._fa_set_filter,
+                       self._fa_pill_groups)
+        self._pill_row(pills, "Salary:", [(v, v) for v in
+                       ('All', 'Under $1M', '$1M-$3M', '$3M-$5M', '$5M-$8M', 'Over $8M')],
+                       self.player_salary_filter, self._fa_set_filter,
+                       self._fa_pill_groups)
+        self._pill_row(pills, "Contract:", [(v, v) for v in
+                       ('All', '1 Year', '2 Years', '3-4 Years', '5+ Years')],
+                       self.player_contract_filter, self._fa_set_filter,
+                       self._fa_pill_groups)
+        self._pill_row(pills, "Sort by:", [(v, v) for v in
+                       ('Overall', 'Age', 'Name', 'Position', 'Salary', 'Potential')],
+                       self.player_sort_filter, self._fa_set_filter,
+                       self._fa_pill_groups)
 
         # Results and selection info
-        info_frame = ttk.Frame(player_tab, style='Panel.TFrame')
-        info_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
-        
-        self.player_results_label = ttk.Label(
-            info_frame,
-            text="Showing 0 players",
-            style='Info.TLabel',
-            font=(self.parent.FONT_FAMILY, 10)
-        )
-        self.player_results_label.pack(side=tk.LEFT)
-        
-        self.player_selection_label = ttk.Label(
-            info_frame,
-            text="",
-            style='Info.TLabel',
-            font=(self.parent.FONT_FAMILY, 10)
-        )
-        self.player_selection_label.pack(side=tk.RIGHT)
-        
-        # Enhanced player list with more columns
-        list_frame = ttk.Frame(player_tab, style='Panel.TFrame')
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        
+        info_frame = ctk.CTkFrame(player_tab, fg_color="transparent")
+        info_frame.pack(fill="x", padx=14, pady=(0, 2))
+        self.player_results_label = self._body(info_frame, text="Showing 0 players",
+                                               dim=True, size=11)
+        self.player_results_label.pack(side="left")
+        self.player_selection_label = self._body(info_frame, text="",
+                                                dim=True, size=11)
+        self.player_selection_label.pack(side="right")
+
+        # Player table
         player_columns = {
             'name': ('Name', 180),
             'pos': ('Pos', 50),
@@ -1791,135 +1906,106 @@ class FreeAgencyWindow(tk.Toplevel):
             'height': ('Height', 60),
             'weight': ('Weight', 60)
         }
-        
-        self.fa_player_tree = self.parent._create_treeview(list_frame, player_columns, height=25)
-        self.fa_player_tree.pack(fill=tk.BOTH, expand=True)
-        
+        self.fa_player_tree = self._create_fa_treeview(
+            player_tab, player_columns, height=22,
+            sort_cmd=self.parent._sort_treeview_generic)
+
         # Bind events
         add_player_context_menu(self.fa_player_tree, self)
         self.fa_player_tree.bind('<Double-1>', self.negotiate_with_player)
         self.fa_player_tree.bind('<<TreeviewSelect>>', self.on_player_selection_changed)
-        
-        # Action buttons for players
-        player_actions = ttk.Frame(player_tab, style='Panel.TFrame')
-        player_actions.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Button(
-            player_actions,
-            text="Sign Selected Player",
-            style='Accent.TButton',
-            command=self.sign_selected_player
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            player_actions,
-            text="View Player Profile",
-            style='TButton',
-            command=self.view_selected_player_profile
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            player_actions,
-            text="Compare Players",
-            style='TButton',
-            command=self.compare_selected_players
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            player_actions,
-            text="Market Analysis",
-            style='TButton',
-            command=self.show_player_market_analysis
-        ).pack(side=tk.LEFT, padx=(0, 10))
-    
+
+        # Action buttons
+        actions = ctk.CTkFrame(player_tab, fg_color="transparent")
+        actions.pack(fill="x", padx=10, pady=10)
+        self._primary_button(actions, text="Sign Selected Player",
+                             command=self.sign_selected_player).pack(
+            side="left", padx=(0, 10))
+        self._secondary_button(actions, text="View Player Profile",
+                               command=self.view_selected_player_profile).pack(
+            side="left", padx=(0, 10))
+        self._secondary_button(actions, text="Compare Players",
+                               command=self.compare_selected_players).pack(
+            side="left", padx=(0, 10))
+        self._secondary_button(actions, text="Market Analysis",
+                               command=self.show_player_market_analysis).pack(
+            side="left")
+
+    # ------------------------------------------------------------------
+    # Staff tab
+    # ------------------------------------------------------------------
     def create_enhanced_staff_tab(self):
-        """Create the enhanced staff free agency tab with advanced features."""
-        staff_tab = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(staff_tab, text="Free Agent Staff")
-        
-        # Filter section for staff
-        filter_frame = ttk.LabelFrame(staff_tab, text="Staff Filters & Search", padding=15)
-        filter_frame.pack(fill=tk.X, padx=10, pady=10)
+        """Staff free agency tab with filters, table, and actions."""
+        ct = self._ct
+        staff_tab = self.tabview.tab("Free Agent Staff")
+
+        # Filter card
+        filter_frame = ctk.CTkFrame(staff_tab, fg_color=ct['CARD'], corner_radius=10)
+        filter_frame.pack(fill="x", padx=10, pady=10)
+        self._heading(filter_frame, text="Staff Filters & Search", size=12).pack(
+            anchor="w", padx=14, pady=(10, 6))
 
         # Name search + role dropdown (23 roles is too many for pills) + clear
-        top_row = ttk.Frame(filter_frame, style='Panel.TFrame')
-        top_row.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(top_row, text="Name:", style='Content.TLabel').pack(side=tk.LEFT, padx=(0, 5))
-        self.staff_name_search = ttk.Entry(top_row, width=22, font=(self.parent.FONT_FAMILY, 10))
-        self.staff_name_search.pack(side=tk.LEFT, padx=(0, 15))
+        top_row = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        top_row.pack(fill="x", padx=14, pady=(0, 6))
+        self._body(top_row, text="Name:", dim=True).pack(side="left", padx=(0, 8))
+        self.staff_name_search = ctk.CTkEntry(
+            top_row, width=220, placeholder_text="Search by name...",
+            fg_color=ct['BG'], border_color=ct['BORDER'])
+        self.staff_name_search.pack(side="left", padx=(0, 16))
         self.staff_name_search.bind('<KeyRelease>', self.filter_staff)
-        ttk.Label(top_row, text="Role:", style='Content.TLabel').pack(side=tk.LEFT, padx=(0, 5))
+        self._body(top_row, text="Role:", dim=True).pack(side="left", padx=(0, 8))
         from game_classes import StaffRole
         roles = ['All'] + [role.value for role in StaffRole]
-        self.staff_role_var = tk.StringVar(master=self, value='All')
-        self.staff_role_filter = ttk.Combobox(top_row, textvariable=self.staff_role_var,
-                                              values=roles, state='readonly', width=22)
-        self.staff_role_filter.pack(side=tk.LEFT, padx=(0, 15))
-        self.staff_role_filter.bind('<<ComboboxSelected>>', self.filter_staff)
-        ttk.Button(top_row, text="Clear Filters", style='Secondary.TButton',
-                   command=self.clear_staff_filters).pack(side=tk.RIGHT)
+        self.staff_role_combo = ctk.CTkComboBox(
+            top_row, values=roles, width=220,
+            command=lambda _v: self.filter_staff(),
+            fg_color=ct['BG'], border_color=ct['BORDER'],
+            button_color=ct['CARD'], button_hover_color=ct['BORDER'])
+        self.staff_role_combo.set('All')
+        self.staff_role_combo.pack(side="left", padx=(0, 16))
+        self._secondary_button(top_row, text="Clear Filters",
+                               command=self.clear_staff_filters).pack(side="right")
 
         # Pill filter rows (instant-apply)
-        self._staff_pill_groups = []
+        pills = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        pills.pack(fill="x", padx=14, pady=(0, 10))
+        self.staff_department_filter = tk.StringVar(master=self, value='All')
+        self.staff_experience_filter = tk.StringVar(master=self, value='All')
+        self.staff_salary_filter = tk.StringVar(master=self, value='All')
+        self.staff_sort_filter = tk.StringVar(master=self, value='Overall')
 
-        def _spill_row(label, attr, default, options):
-            var = tk.StringVar(master=self, value=default)
-            setattr(self, attr, var)
-            row = ttk.Frame(filter_frame, style='Panel.TFrame')
-            row.pack(fill=tk.X, pady=2)
-            ttk.Label(row, text=label, style='Content.TLabel', width=11).pack(side=tk.LEFT)
-            btns = {}
-            try:
-                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#0e0e11'
-            except Exception:
-                canvas_bg = '#0e0e11'
-            for value, text in options:
-                b = PillButton(row, text=text, bg=canvas_bg,
-                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
-                               padx=11, pady=4,
-                               command=lambda v=value, vv=var: self._staff_set_filter(vv, v))
-                b.pack(side=tk.LEFT, padx=2)
-                btns[value] = b
-            self._staff_pill_groups.append((var, btns))
-            self._staff_paint_pills()
+        self._pill_row(pills, "Department:", [(v, v) for v in
+                       ('All', 'Management', 'Coaching', 'Development',
+                        'Scouting', 'Medical', 'Analytics')],
+                       self.staff_department_filter, self._staff_set_filter,
+                       self._staff_pill_groups)
+        self._pill_row(pills, "Experience:", [(v, v) for v in
+                       ('All', '0-2 Years', '3-5 Years', '6-10 Years',
+                        '11-15 Years', '16+ Years')],
+                       self.staff_experience_filter, self._staff_set_filter,
+                       self._staff_pill_groups)
+        self._pill_row(pills, "Salary:", [(v, v) for v in
+                       ('All', 'Under $100k', '$100k-$250k',
+                        '$250k-$500k', '$500k-$1M', 'Over $1M')],
+                       self.staff_salary_filter, self._staff_set_filter,
+                       self._staff_pill_groups)
+        self._pill_row(pills, "Sort by:", [(v, v) for v in
+                       ('Overall', 'Name', 'Role', 'Experience', 'Salary', 'Age')],
+                       self.staff_sort_filter, self._staff_set_filter,
+                       self._staff_pill_groups)
 
-        _spill_row("Department:", 'staff_department_filter', 'All',
-                   [(v, v) for v in ('All', 'Management', 'Coaching', 'Development',
-                                     'Scouting', 'Medical', 'Analytics')])
-        _spill_row("Experience:", 'staff_experience_filter', 'All',
-                   [(v, v) for v in ('All', '0-2 Years', '3-5 Years', '6-10 Years',
-                                     '11-15 Years', '16+ Years')])
-        _spill_row("Salary:", 'staff_salary_filter', 'All',
-                   [(v, v) for v in ('All', 'Under $100k', '$100k-$250k',
-                                     '$250k-$500k', '$500k-$1M', 'Over $1M')])
-        _spill_row("Sort by:", 'staff_sort_filter', 'Overall',
-                   [(v, v) for v in ('Overall', 'Name', 'Role', 'Experience',
-                                    'Salary', 'Age')])
+        # Results and selection info
+        info_frame = ctk.CTkFrame(staff_tab, fg_color="transparent")
+        info_frame.pack(fill="x", padx=14, pady=(0, 2))
+        self.staff_results_label = self._body(info_frame, text="Showing 0 staff",
+                                              dim=True, size=11)
+        self.staff_results_label.pack(side="left")
+        self.staff_selection_label = self._body(info_frame, text="",
+                                                dim=True, size=11)
+        self.staff_selection_label.pack(side="right")
 
-        # Results and selection info for staff
-        info_frame = ttk.Frame(staff_tab, style='Panel.TFrame')
-        info_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
-        
-        self.staff_results_label = ttk.Label(
-            info_frame,
-            text="Showing 0 staff",
-            style='Info.TLabel',
-            font=(self.parent.FONT_FAMILY, 10)
-        )
-        self.staff_results_label.pack(side=tk.LEFT)
-        
-        self.staff_selection_label = ttk.Label(
-            info_frame,
-            text="",
-            style='Info.TLabel',
-            font=(self.parent.FONT_FAMILY, 10)
-        )
-        self.staff_selection_label.pack(side=tk.RIGHT)
-        
-        # Enhanced staff list
-        list_frame = ttk.Frame(staff_tab, style='Panel.TFrame')
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        
+        # Staff table
         staff_columns = {
             'name': ('Name', 180),
             'role': ('Role', 200),
@@ -1931,155 +2017,126 @@ class FreeAgencyWindow(tk.Toplevel):
             'age': ('Age', 50),
             'nationality': ('Country', 80)
         }
-        
-        self.fa_staff_tree = self.parent._create_treeview(list_frame, staff_columns, height=25)
-        self.fa_staff_tree.pack(fill=tk.BOTH, expand=True)
-        
+        self.fa_staff_tree = self._create_fa_treeview(
+            staff_tab, staff_columns, height=22,
+            sort_cmd=self.parent._sort_treeview_generic)
+
         # Bind events
         self.fa_staff_tree.bind('<Button-3>', self.show_staff_context_menu)
         self.fa_staff_tree.bind('<Double-1>', self.negotiate_with_staff)
         self.fa_staff_tree.bind('<<TreeviewSelect>>', self.on_staff_selection_changed)
-        
-        # Action buttons for staff
-        staff_actions = ttk.Frame(staff_tab, style='Panel.TFrame')
-        staff_actions.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Button(
-            staff_actions,
-            text="Hire Selected Staff",
-            style='Accent.TButton',
-            command=self.hire_selected_staff
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            staff_actions,
-            text="View Staff Profile",
-            style='TButton',
-            command=self.view_selected_staff_profile
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            staff_actions,
-            text="Compare Staff",
-            style='TButton',
-            command=self.compare_selected_staff
-        ).pack(side=tk.LEFT, padx=(0, 10))
-    
+
+        # Action buttons
+        actions = ctk.CTkFrame(staff_tab, fg_color="transparent")
+        actions.pack(fill="x", padx=10, pady=10)
+        self._primary_button(actions, text="Hire Selected Staff",
+                             command=self.hire_selected_staff).pack(
+            side="left", padx=(0, 10))
+        self._secondary_button(actions, text="View Staff Profile",
+                               command=self.view_selected_staff_profile).pack(
+            side="left", padx=(0, 10))
+        self._secondary_button(actions, text="Compare Staff",
+                               command=self.compare_selected_staff).pack(side="left")
+
+    # ------------------------------------------------------------------
+    # Market overview tab
+    # ------------------------------------------------------------------
     def create_market_overview_tab(self):
-        """Create a market overview tab with analytics and trends."""
-        overview_tab = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(overview_tab, text="Market Overview")
-        
-        # Market summary section
-        summary_frame = ttk.LabelFrame(overview_tab, text="Market Summary", padding=15)
-        summary_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Create grid for market stats
-        stats_grid = ttk.Frame(summary_frame, style='Panel.TFrame')
-        stats_grid.pack(fill=tk.X)
-        
-        # Player market stats
-        player_stats_frame = ttk.Frame(stats_grid, style='Panel.TFrame', padding=10)
-        player_stats_frame.grid(row=0, column=0, sticky='ew', padx=5)
-        stats_grid.columnconfigure(0, weight=1)
-        
-        ttk.Label(player_stats_frame, text="PLAYER MARKET", style='SubTitle.TLabel', 
-                 font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(anchor='w')
-        
-        # Calculate and display player market stats
-        self.populate_player_market_stats(player_stats_frame)
-        
-        # Staff market stats
-        staff_stats_frame = ttk.Frame(stats_grid, style='Panel.TFrame', padding=10)
-        staff_stats_frame.grid(row=0, column=1, sticky='ew', padx=5)
-        stats_grid.columnconfigure(1, weight=1)
-        
-        ttk.Label(staff_stats_frame, text="STAFF MARKET", style='SubTitle.TLabel',
-                 font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(anchor='w')
-        
-        # Calculate and display staff market stats
-        self.populate_staff_market_stats(staff_stats_frame)
-        
-        # Top players section
-        top_players_frame = ttk.LabelFrame(overview_tab, text="Top Available Players", padding=15)
-        top_players_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Create columns for top players by position
-        positions_frame = ttk.Frame(top_players_frame, style='Panel.TFrame')
-        positions_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Add position-specific top player lists
-        positions = [('Forwards', ['C', 'LW', 'RW']), ('Defense', ['LD', 'RD', 'D']), ('Goalies', ['G'])]
-        
+        """Market overview tab with analytics and trends."""
+        self._build_market_overview(self.tabview.tab("Market Overview"))
+
+    def _build_market_overview(self, overview_tab):
+        """Build (or rebuild) the market overview content."""
+        ct = self._ct
+        # Market summary card
+        summary = ctk.CTkFrame(overview_tab, fg_color=ct['CARD'], corner_radius=10)
+        summary.pack(fill="x", padx=10, pady=10)
+        self._heading(summary, text="Market Summary", size=12).pack(
+            anchor="w", padx=14, pady=(10, 6))
+
+        stats_grid = ctk.CTkFrame(summary, fg_color="transparent")
+        stats_grid.pack(fill="x", padx=14, pady=(0, 10))
+        stats_grid.grid_columnconfigure(0, weight=1)
+        stats_grid.grid_columnconfigure(1, weight=1)
+
+        player_stats = ctk.CTkFrame(stats_grid, fg_color=ct['PANEL'], corner_radius=8)
+        player_stats.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        self._heading(player_stats, text="PLAYER MARKET", size=11).pack(
+            anchor="w", padx=12, pady=(10, 4))
+        self.populate_player_market_stats(player_stats)
+
+        staff_stats = ctk.CTkFrame(stats_grid, fg_color=ct['PANEL'], corner_radius=8)
+        staff_stats.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        self._heading(staff_stats, text="STAFF MARKET", size=11).pack(
+            anchor="w", padx=12, pady=(10, 4))
+        self.populate_staff_market_stats(staff_stats)
+
+        # Top players card
+        top_card = ctk.CTkFrame(overview_tab, fg_color=ct['CARD'], corner_radius=10)
+        top_card.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._heading(top_card, text="Top Available Players", size=12).pack(
+            anchor="w", padx=14, pady=(10, 6))
+
+        positions_frame = ctk.CTkFrame(top_card, fg_color="transparent")
+        positions_frame.pack(fill="both", expand=True, padx=14, pady=(0, 10))
+
+        positions = [('Forwards', ['C', 'LW', 'RW']),
+                     ('Defense', ['LD', 'RD', 'D']),
+                     ('Goalies', ['G'])]
         for i, (pos_name, pos_types) in enumerate(positions):
-            pos_frame = ttk.Frame(positions_frame, style='Panel.TFrame', padding=10)
-            pos_frame.grid(row=0, column=i, sticky='nsew', padx=5)
+            pos_frame = ctk.CTkFrame(positions_frame, fg_color=ct['PANEL'],
+                                     corner_radius=8)
+            pos_frame.grid(row=0, column=i, sticky="nsew", padx=5)
             positions_frame.columnconfigure(i, weight=1)
-            
-            ttk.Label(pos_frame, text=pos_name.upper(), style='SubTitle.TLabel',
-                     font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
-            
-            # Populate top players for this position group
+            self._heading(pos_frame, text=pos_name.upper(), size=11).pack(
+                anchor="w", padx=10, pady=(8, 4))
             self.populate_top_players_by_position(pos_frame, pos_types)
-    
+
     def populate_player_market_stats(self, parent_frame):
         """Populate player market statistics."""
-        # Get free agent players
         free_agents = self.parent.game_manager.free_agents
-        
         if not free_agents:
-            ttk.Label(parent_frame, text="No free agents available", 
-                     style='Info.TLabel').pack(anchor='w', pady=5)
+            self._body(parent_frame, text="No free agents available",
+                       dim=True).pack(anchor="w", padx=12, pady=5)
             return
-        
-        # Calculate stats
+
         total_players = len(free_agents)
         avg_age = sum(p.age for p in free_agents) / total_players
         avg_rating = sum(p.overall_rating() for p in free_agents) / total_players
-        
-        # Position breakdown
+
         pos_counts = {}
         for player in free_agents:
             pos = player.primary_position.value
             pos_counts[pos] = pos_counts.get(pos, 0) + 1
-        
-        # Salary expectations (simplified calculation)
+
         avg_salary = sum(self.calculate_market_value(p) for p in free_agents) / total_players
-        
-        # Display stats
-        stats_text = [
-            f"Total Available: {total_players}",
-            f"Average Age: {avg_age:.1f}",
-            f"Average Rating: {to_100_scale(avg_rating):.1f}",
-            f"Avg. Market Value: ${avg_salary:,.0f}"
-        ]
-        
-        for stat in stats_text:
-            ttk.Label(parent_frame, text=stat, style='Info.TLabel').pack(anchor='w', pady=2)
-        
-        # Position breakdown
-        ttk.Label(parent_frame, text="By Position:", style='Info.TLabel',
-                 font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(10, 5))
-        
+
+        for stat in (f"Total Available: {total_players}",
+                     f"Average Age: {avg_age:.1f}",
+                     f"Average Rating: {to_100_scale(avg_rating):.1f}",
+                     f"Avg. Market Value: ${avg_salary:,.0f}"):
+            self._body(parent_frame, text=stat, dim=True, size=11).pack(
+                anchor="w", padx=12, pady=1)
+
+        self._body(parent_frame, text="By Position:", size=10).pack(
+            anchor="w", padx=12, pady=(8, 2))
         for pos, count in sorted(pos_counts.items()):
-            ttk.Label(parent_frame, text=f"  {pos}: {count}",
-                     style='Info.TLabel').pack(anchor='w', pady=1)
-    
+            self._body(parent_frame, text=f"  {pos}: {count}",
+                       dim=True, size=11).pack(anchor="w", padx=12)
+        # bottom padding
+        ctk.CTkFrame(parent_frame, fg_color="transparent", height=8).pack()
+
     def populate_staff_market_stats(self, parent_frame):
         """Populate staff market statistics."""
-        # Get available staff
         available_staff = self.parent.game_manager.league.free_agent_staff
-        
         if not available_staff:
-            ttk.Label(parent_frame, text="No staff available", 
-                     style='Info.TLabel').pack(anchor='w', pady=5)
+            self._body(parent_frame, text="No staff available",
+                       dim=True).pack(anchor="w", padx=12, pady=5)
             return
-        
-        # Calculate stats
+
         total_staff = len(available_staff)
         avg_age = sum(s.age for s in available_staff) / total_staff
-        
-        # Handle overall rating more defensively
+
         staff_ratings = []
         for s in available_staff:
             try:
@@ -2088,168 +2145,118 @@ class FreeAgencyWindow(tk.Toplevel):
                 elif hasattr(s, 'overall_rating'):
                     staff_ratings.append(s.overall_rating)
                 else:
-                    # Fallback to a simple average of key attributes
                     attrs = ['tactical_knowledge', 'man_management', 'motivating']
                     available_attrs = [getattr(s, attr, 10) for attr in attrs if hasattr(s, attr)]
-                    if available_attrs:
-                        staff_ratings.append(sum(available_attrs) / len(available_attrs))
-                    else:
-                        staff_ratings.append(10)  # Default rating
-            except:
-                staff_ratings.append(10)  # Default if calculation fails
-        
+                    staff_ratings.append(sum(available_attrs) / len(available_attrs) if available_attrs else 10)
+            except Exception:
+                staff_ratings.append(10)
         avg_rating = sum(staff_ratings) / len(staff_ratings) if staff_ratings else 10
-        
-        # Role breakdown
+
         role_counts = {}
         for staff in available_staff:
             role = staff.role.value
             role_counts[role] = role_counts.get(role, 0) + 1
-        
-        # Salary expectations
+
         avg_salary = sum(getattr(s, 'salary', 100000) for s in available_staff) / total_staff
-        
-        # Display stats
-        stats_text = [
-            f"Total Available: {total_staff}",
-            f"Average Age: {avg_age:.1f}",
-            f"Average Rating: {avg_rating:.1f}",
-            f"Avg. Salary: ${avg_salary:,.0f}"
-        ]
-        
-        for stat in stats_text:
-            ttk.Label(parent_frame, text=stat, style='Info.TLabel').pack(anchor='w', pady=2)
-        
-        # Role breakdown
-        ttk.Label(parent_frame, text="By Role:", style='Info.TLabel',
-                 font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(10, 5))
-        
+
+        for stat in (f"Total Available: {total_staff}",
+                     f"Average Age: {avg_age:.1f}",
+                     f"Average Rating: {avg_rating:.1f}",
+                     f"Avg. Salary: ${avg_salary:,.0f}"):
+            self._body(parent_frame, text=stat, dim=True, size=11).pack(
+                anchor="w", padx=12, pady=1)
+
+        self._body(parent_frame, text="By Role:", size=10).pack(
+            anchor="w", padx=12, pady=(8, 2))
         for role, count in sorted(role_counts.items()):
-            role_display = role.replace('_', ' ').title()
-            ttk.Label(parent_frame, text=f"  {role_display}: {count}",
-                     style='Info.TLabel').pack(anchor='w', pady=1)
-    
+            self._body(parent_frame,
+                       text=f"  {role.replace('_', ' ').title()}: {count}",
+                       dim=True, size=11).pack(anchor="w", padx=12)
+        ctk.CTkFrame(parent_frame, fg_color="transparent", height=8).pack()
+
     def populate_top_players_by_position(self, parent_frame, positions):
         """Populate top players for specific positions."""
-        # Get players for these positions
-        position_players = [p for p in self.parent.game_manager.free_agents 
-                          if p.primary_position.value in positions]
-        
+        ct = self._ct
+        position_players = [p for p in self.parent.game_manager.free_agents
+                            if p.primary_position.value in positions]
         if not position_players:
-            ttk.Label(parent_frame, text="No players available", 
-                     style='Info.TLabel').pack(anchor='w', pady=5)
+            self._body(parent_frame, text="No players available",
+                       dim=True).pack(anchor="w", padx=10, pady=5)
             return
-        
-        # Sort by overall rating and take top 5
-        top_players = sorted(position_players, key=lambda p: p.overall_rating(), reverse=True)[:5]
-        
-        # Create a small treeview for top players
-        columns = {'name': ('Player', 120), 'ovr': ('OVR', 40), 'age': ('Age', 40)}
-        
-        top_tree = ttk.Treeview(parent_frame, columns=list(columns.keys()), 
-                               show='headings', height=6)
-        
+
+        top_players = sorted(position_players,
+                             key=lambda p: p.overall_rating(), reverse=True)[:5]
+
+        columns = {'name': ('Player', 130), 'ovr': ('OVR', 44), 'age': ('Age', 44)}
+        top_tree = ttk.Treeview(parent_frame, columns=list(columns.keys()),
+                                show='headings', height=6, style='FA.Treeview')
         for col, (text, width) in columns.items():
             top_tree.heading(col, text=text)
-            top_tree.column(col, width=width, anchor='center' if col != 'name' else 'w')
+            top_tree.column(col, width=width,
+                            anchor='w' if col == 'name' else 'center')
         make_tree_sortable(top_tree)
-        
-        # Populate with top players
+
         for player in top_players:
-            values = [
-                player.full_name,
-                to_100_scale(player.overall_rating()),
-                player.age
-            ]
-            top_tree.insert('', 'end', values=values)
-        
-        top_tree.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Bind double-click to open negotiations
-        top_tree.bind('<Double-1>', lambda e: self.handle_market_overview_double_click(e, top_tree))
-    
+            ovr = to_100_scale(player.overall_rating())
+            tag = self._ovr_tag(ovr)
+            top_tree.insert('', 'end',
+                            values=[player.full_name, ovr, player.age],
+                            tags=(tag,) if tag else ())
+
+        top_tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        top_tree.bind('<Double-1>',
+                      lambda e: self.handle_market_overview_double_click(e, top_tree))
+
     def handle_market_overview_double_click(self, event, tree):
         """Handle double-click on market overview player."""
         item_id = tree.identify_row(event.y)
         if item_id:
-            # Get player name from the tree
             player_name = tree.item(item_id, 'values')[0]
-            
-            # Find the actual player object
             for player in self.parent.game_manager.free_agents:
                 if player.full_name == player_name:
                     self.parent.open_contract_negotiation_window(player)
                     break
-    
-    
+
+    # ------------------------------------------------------------------
+    # Action footer
+    # ------------------------------------------------------------------
     def create_action_footer(self, parent):
         """Create the action buttons footer."""
-        footer_frame = ttk.Frame(parent, style='Panel.TFrame', padding=(0, 15, 0, 0))
-        footer_frame.pack(fill=tk.X)
-        
-        # Left side - bulk actions
-        bulk_frame = ttk.Frame(footer_frame, style='Panel.TFrame')
-        bulk_frame.pack(side=tk.LEFT)
-        
-        ttk.Button(
-            bulk_frame,
-            text="Refresh Market",
-            style='TButton',
-            command=self.refresh_market
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            bulk_frame,
-            text="Export List",
-            style='TButton',
-            command=self.export_free_agents
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Right side - window controls
-        control_frame = ttk.Frame(footer_frame, style='Panel.TFrame')
-        control_frame.pack(side=tk.RIGHT)
-        
-        ttk.Button(
-            control_frame,
-            text="Help",
-            style='Secondary.TButton',
-            command=self.show_help
-        ).pack(side=tk.RIGHT, padx=(10, 0))
-        
-        ttk.Button(
-            control_frame,
-            text="Close",
-            style='Secondary.TButton',
-            command=self.destroy
-        ).pack(side=tk.RIGHT, padx=(10, 0))
-    
-    def setup_styles(self):
-        """Setup custom styles for the free agency window."""
-        style = ttk.Style()
-        
-        # Modern notebook style
-        style.configure('Modern.TNotebook', 
-                       tabposition='n',
-                       background=self.parent.BG_COLOR)
-        style.configure('Modern.TNotebook.Tab',
-                       padding=[20, 10],
-                       font=(self.parent.FONT_FAMILY, 11, 'bold'))
-    
+        ct = self._ct
+        footer = ctk.CTkFrame(parent, fg_color="transparent")
+        footer.pack(fill="x", pady=(12, 0))
+
+        bulk = ctk.CTkFrame(footer, fg_color="transparent")
+        bulk.pack(side="left")
+        self._secondary_button(bulk, text="Refresh Market",
+                               command=self.refresh_market).pack(
+            side="left", padx=(0, 10))
+        self._secondary_button(bulk, text="Export List",
+                               command=self.export_free_agents).pack(side="left")
+
+        controls = ctk.CTkFrame(footer, fg_color="transparent")
+        controls.pack(side="right")
+        self._secondary_button(controls, text="Close",
+                               command=self.destroy).pack(side="right", padx=(10, 0))
+        self._secondary_button(controls, text="Help",
+                               command=self.show_help).pack(side="right")
+
+    # ------------------------------------------------------------------
+    # Filtering / population (logic unchanged from the ttk version)
+    # ------------------------------------------------------------------
     def filter_players(self, event=None):
         """Filter the player list based on current filter settings."""
         self.populate_filtered_players()
-    
+
     def filter_staff(self, event=None):
-        """Filter the staff list based on current filter settings.""" 
+        """Filter the staff list based on current filter settings."""
         self.populate_filtered_staff()
-    
+
     def populate_filtered_players(self):
         """Populate the player tree with filtered results."""
-        # Clear existing items
         for item in self.fa_player_tree.get_children():
             self.fa_player_tree.delete(item)
-        
-        # Get filter values
+
         name_filter = self.player_name_search.get().lower()
         position_filter = self.player_position_filter.get()
         age_filter = self.player_age_filter.get()
@@ -2257,19 +2264,14 @@ class FreeAgencyWindow(tk.Toplevel):
         salary_filter = self.player_salary_filter.get()
         contract_filter = self.player_contract_filter.get()
         sort_by = self.player_sort_filter.get()
-        
-        # Filter players
+
         filtered_players = []
         for player in self.parent.game_manager.free_agents:
-            # Name filter
             if name_filter and name_filter not in player.full_name.lower():
                 continue
-            
-            # Position filter
             if position_filter != 'All' and player.primary_position.value != position_filter:
                 continue
-            
-            # Age filter
+
             if age_filter != 'All':
                 age = player.age
                 if age_filter == '18-22' and not (18 <= age <= 22):
@@ -2282,7 +2284,7 @@ class FreeAgencyWindow(tk.Toplevel):
                     continue
                 elif age_filter == '36+' and age < 36:
                     continue
-            
+
             # Rating filter (1-100 display scale, matching the OVR column)
             if rating_filter != 'All':
                 rating = to_100_scale(player.overall_rating())
@@ -2299,7 +2301,6 @@ class FreeAgencyWindow(tk.Toplevel):
                 elif rating_filter == '<70' and rating >= 70:
                     continue
 
-            # Salary filter (was read but never applied)
             if salary_filter != 'All':
                 salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
                 if salary_filter == 'Under $1M' and salary >= 1_000_000:
@@ -2313,7 +2314,6 @@ class FreeAgencyWindow(tk.Toplevel):
                 elif salary_filter == 'Over $8M' and salary <= 8_000_000:
                     continue
 
-            # Contract filter (was read but never applied)
             if contract_filter != 'All':
                 years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
                 if contract_filter == '1 Year' and years != 1:
@@ -2327,7 +2327,6 @@ class FreeAgencyWindow(tk.Toplevel):
 
             filtered_players.append(player)
 
-        # Sort players
         if sort_by == 'Overall':
             filtered_players.sort(key=lambda p: p.overall_rating(), reverse=True)
         elif sort_by == 'Age':
@@ -2342,17 +2341,17 @@ class FreeAgencyWindow(tk.Toplevel):
                 reverse=True)
         elif sort_by == 'Potential':
             filtered_players.sort(key=lambda p: p.potential_grade or '')
-        
-        # Populate tree
+
         for player in filtered_players:
             salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
             contract_years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
-            
+            ovr = to_100_scale(player.overall_rating())
+
             values = [
                 player.full_name,
                 player.primary_position.value,
                 player.age,
-                to_100_scale(player.overall_rating()),
+                ovr,
                 player.potential_grade,
                 f"${salary:,}",
                 f"{contract_years}y",
@@ -2361,63 +2360,43 @@ class FreeAgencyWindow(tk.Toplevel):
                 f"{getattr(player, 'height_feet', 6)}'{getattr(player, 'height_inches', 0)}\"",
                 f"{getattr(player, 'weight', 180)} lbs"
             ]
-            
-            item_id = self.fa_player_tree.insert('', 'end', values=values)
-            
-            # Store player reference
+
+            tag = self._ovr_tag(ovr)
+            item_id = self.fa_player_tree.insert('', 'end', values=values,
+                                                 tags=(tag,) if tag else ())
+
             if 'fa_players' not in self.parent.tree_maps:
                 self.parent.tree_maps['fa_players'] = {}
             self.parent.tree_maps['fa_players'][item_id] = player
-        
-        # Update results label
-        self.player_results_label.config(text=f"Showing {len(filtered_players)} players")
-        set_tree_empty_state(self.fa_player_tree, "No players match your filters")
-    
-    def _staff_set_filter(self, var, value):
-        """Set a staff pill filter and refresh instantly."""
-        var.set(value)
-        self._staff_paint_pills()
-        self.populate_filtered_staff()
 
-    def _staff_paint_pills(self):
-        for var, btns in getattr(self, '_staff_pill_groups', []):
-            current = var.get()
-            for value, btn in btns.items():
-                btn.set_selected(value == current)
+        self.player_results_label.configure(text=f"Showing {len(filtered_players)} players")
+        set_tree_empty_state(self.fa_player_tree, "No players match your filters")
 
     def populate_filtered_staff(self):
         """Populate the staff tree with filtered results."""
-        # Clear existing items
         for item in self.fa_staff_tree.get_children():
             self.fa_staff_tree.delete(item)
-        
-        # Get filter values
+
         name_filter = self.staff_name_search.get().lower()
-        role_filter = self.staff_role_filter.get()
+        role_filter = self.staff_role_combo.get()
         department_filter = self.staff_department_filter.get()
         experience_filter = self.staff_experience_filter.get()
         salary_filter = self.staff_salary_filter.get()
         sort_by = self.staff_sort_filter.get()
-        
-        # Filter staff
+
         filtered_staff = []
         for staff in self.parent.league.free_agent_staff:
-            # Name filter
             if name_filter and name_filter not in staff.full_name.lower():
                 continue
-            
-            # Role filter
             if role_filter != 'All' and staff.role.value != role_filter:
                 continue
-            
-            # Department filter
+
             if department_filter != 'All':
                 from game_classes import Staff as StaffClass
                 staff_dept = StaffClass.get_role_department(staff.role)
                 if staff_dept != department_filter:
                     continue
 
-            # Experience filter (was read but never applied)
             if experience_filter != 'All':
                 exp = max(0, staff.age - 25)
                 if experience_filter == '0-2 Years' and not (0 <= exp <= 2):
@@ -2431,7 +2410,6 @@ class FreeAgencyWindow(tk.Toplevel):
                 elif experience_filter == '16+ Years' and exp < 16:
                     continue
 
-            # Salary filter (was read but never applied)
             if salary_filter != 'All':
                 sal = staff.salary
                 if salary_filter == 'Under $100k' and sal >= 100_000:
@@ -2447,7 +2425,6 @@ class FreeAgencyWindow(tk.Toplevel):
 
             filtered_staff.append(staff)
 
-        # Sort staff
         if sort_by == 'Overall':
             filtered_staff.sort(key=lambda s: s.overall_rating, reverse=True)
         elif sort_by == 'Name':
@@ -2460,36 +2437,36 @@ class FreeAgencyWindow(tk.Toplevel):
             filtered_staff.sort(key=lambda s: s.salary, reverse=True)
         elif sort_by == 'Age':
             filtered_staff.sort(key=lambda s: s.age)
-        
-        # Populate tree
+
         for staff in filtered_staff:
             from game_classes import Staff as StaffClass
             department = StaffClass.get_role_department(staff.role)
             experience = max(0, staff.age - 25)
-            
+            rating = to_100_scale(staff.overall_rating)
+
             values = [
                 staff.full_name,
                 staff.role.value,
                 department,
-                to_100_scale(staff.overall_rating),
+                rating,
                 f"{experience}y",
                 f"${staff.salary:,}",
                 f"{staff.contract_years}y",
                 staff.age,
                 staff.nationality
             ]
-            
-            item_id = self.fa_staff_tree.insert('', 'end', values=values)
-            
-            # Store staff reference
+
+            tag = self._ovr_tag(rating)
+            item_id = self.fa_staff_tree.insert('', 'end', values=values,
+                                                tags=(tag,) if tag else ())
+
             if 'fa_staff' not in self.parent.tree_maps:
                 self.parent.tree_maps['fa_staff'] = {}
             self.parent.tree_maps['fa_staff'][item_id] = staff
-        
-        # Update results label
-        self.staff_results_label.config(text=f"Showing {len(filtered_staff)} staff")
+
+        self.staff_results_label.configure(text=f"Showing {len(filtered_staff)} staff")
         set_tree_empty_state(self.fa_staff_tree, "No staff match your filters")
-    
+
     def clear_player_filters(self):
         """Clear all player filters."""
         self.player_name_search.delete(0, tk.END)
@@ -2501,45 +2478,41 @@ class FreeAgencyWindow(tk.Toplevel):
         self.player_sort_filter.set('Overall')
         self._fa_paint_pills()
         self.populate_filtered_players()
-    
+
     def clear_staff_filters(self):
         """Clear all staff filters."""
         self.staff_name_search.delete(0, tk.END)
-        self.staff_role_var.set('All')
+        self.staff_role_combo.set('All')
         self.staff_department_filter.set('All')
         self.staff_experience_filter.set('All')
         self.staff_salary_filter.set('All')
         self.staff_sort_filter.set('Overall')
         self._staff_paint_pills()
         self.populate_filtered_staff()
-    
+
     def on_player_selection_changed(self, event=None):
         """Handle player selection changes."""
         selection = self.fa_player_tree.selection()
-        if selection:
-            self.player_selection_label.config(text=f"{len(selection)} player(s) selected")
-        else:
-            self.player_selection_label.config(text="")
-    
+        self.player_selection_label.configure(
+            text=f"{len(selection)} player(s) selected" if selection else "")
+
     def on_staff_selection_changed(self, event=None):
         """Handle staff selection changes."""
         selection = self.fa_staff_tree.selection()
-        if selection:
-            self.staff_selection_label.config(text=f"{len(selection)} staff selected")
-        else:
-            self.staff_selection_label.config(text="")
-    
+        self.staff_selection_label.configure(
+            text=f"{len(selection)} staff selected" if selection else "")
+
     def sign_selected_player(self):
         """Sign the selected player."""
         selection = self.fa_player_tree.selection()
         if not selection:
             tk.messagebox.showwarning("No Selection", "Please select a player to sign.")
             return
-        
+
         player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
             self.parent.open_contract_negotiation_window(player)
-    
+
     def hire_selected_staff(self):
         """Hire the selected staff member via a real contract offer."""
         selection = self.fa_staff_tree.selection()
@@ -2551,165 +2524,42 @@ class FreeAgencyWindow(tk.Toplevel):
         if staff:
             self._open_staff_contract_dialog(staff)
 
-    def _open_staff_contract_dialog(self, staff):
-        """Contract offer dialog: years + salary pills, live acceptance odds."""
-        from game_classes import StaffRole
-        dlg = tk.Toplevel(self)
-        dlg.title(f"Offer Contract — {staff.full_name}")
-        dlg.configure(background=self.parent.BG_COLOR)
-        dlg.geometry("460x480")
-        dlg.transient(self)
-        dlg.grab_set()
+    def negotiate_with_player(self, event=None):
+        """Negotiate with a player (double-click handler)."""
+        self.sign_selected_player()
 
-        asking = max(50_000, int(staff.salary or 50_000))
-        dept = ""
-        try:
-            from game_classes import Staff as StaffClass
-            dept = StaffClass.get_role_department(staff.role)
-        except Exception:
-            pass
+    def negotiate_with_staff(self, event=None):
+        """Negotiate with a staff member (double-click handler)."""
+        self.hire_selected_staff()
 
-        header = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
-        header.pack(fill=tk.X, padx=12, pady=(12, 6))
-        ttk.Label(header, text=staff.full_name,
-                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
-                  style='TLabel').pack(anchor='w')
-        ttk.Label(header,
-                  text=f"{staff.role.value}  •  {dept}  •  Age {staff.age}  •  {staff.nationality}",
-                  style='Secondary.TLabel').pack(anchor='w')
-        ttk.Label(header,
-                  text=f"Rating: {to_100_scale(staff.overall_rating)}   •   Asking: ${asking:,} / yr",
-                  style='TLabel').pack(anchor='w', pady=(4, 0))
-
-        # Unique-role replacement warning
-        incumbent = None
-        if staff.role in (StaffRole.GENERAL_MANAGER, StaffRole.HEAD_COACH):
-            for s in getattr(self.parent.user_team, 'staff', []):
-                if s.role == staff.role:
-                    incumbent = s
-                    break
-        if incumbent:
-            warn = ttk.Frame(dlg, style='Panel.TFrame', padding=10)
-            warn.pack(fill=tk.X, padx=12, pady=4)
-            ttk.Label(warn,
-                      text=f"You already employ {incumbent.full_name} as {staff.role.value}.\n"
-                           f"Hiring {staff.full_name} will replace them "
-                           f"({incumbent.full_name} becomes a free agent).",
-                      style='Secondary.TLabel', wraplength=400,
-                      justify='left').pack(anchor='w')
-
-        years_var = tk.StringVar(master=dlg, value="2")
-        salary_mult_var = tk.StringVar(master=dlg, value="1.0")
-
-        def _chance():
-            mult = float(salary_mult_var.get())
-            if mult >= 1.0:
-                return 100
-            return max(5, int(100 * mult) - 10)
-
-        def _offer():
-            return int(asking * float(salary_mult_var.get()))
-
-        body = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
-        body.pack(fill=tk.X, padx=12, pady=4)
-
-        ttk.Label(body, text="Contract length:", style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
-        years_row = ttk.Frame(body, style='Panel.TFrame')
-        years_row.pack(fill=tk.X, pady=(4, 10))
-        year_btns = {}
-        for y in ("1", "2", "3", "4", "5"):
-            b = PillButton(years_row, text=f"{y} yr", bg='#0e0e11',
-                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
-                           padx=12, pady=5,
-                           command=lambda v=y: (years_var.set(v), _paint()))
-            b.pack(side=tk.LEFT, padx=3)
-            year_btns[y] = b
-
-        ttk.Label(body, text="Salary offer:", style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
-        sal_row = ttk.Frame(body, style='Panel.TFrame')
-        sal_row.pack(fill=tk.X, pady=(4, 6))
-        sal_btns = {}
-        for mult, label in (("0.8", "80%"), ("1.0", "Asking"), ("1.2", "120%")):
-            b = PillButton(sal_row, text=label, bg='#0e0e11',
-                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
-                           padx=12, pady=5,
-                           command=lambda v=mult: (salary_mult_var.set(v), _paint()))
-            b.pack(side=tk.LEFT, padx=3)
-            sal_btns[mult] = b
-
-        offer_label = ttk.Label(body, text="", style='TLabel',
-                                font=(self.parent.FONT_FAMILY, 11))
-        offer_label.pack(anchor='w', pady=(2, 0))
-        chance_label = ttk.Label(body, text="", style='Secondary.TLabel',
-                                 font=(self.parent.FONT_FAMILY, 10, 'italic'))
-        chance_label.pack(anchor='w')
-
-        def _paint():
-            for y, b in year_btns.items():
-                b.set_selected(y == years_var.get())
-            for m, b in sal_btns.items():
-                b.set_selected(m == salary_mult_var.get())
-            offer_label.config(
-                text=f"Offer: ${_offer():,} / yr  ×  {years_var.get()} yr")
-            chance_label.config(
-                text=f"Estimated acceptance chance: {_chance()}%")
-        _paint()
-
-        footer = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
-        footer.pack(fill=tk.X, padx=12, pady=(4, 12))
-        PillButton(footer, text="Make Offer", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                   padx=16, pady=7,
-                   command=lambda: self._resolve_staff_offer(
-                       dlg, staff, incumbent, int(years_var.get()),
-                       _offer(), _chance())).pack(side=tk.LEFT, padx=(0, 8))
-        PillButton(footer, text="Cancel", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                   padx=16, pady=7,
-                   command=dlg.destroy).pack(side=tk.LEFT)
-
-    def _resolve_staff_offer(self, dlg, staff, incumbent, years, offer, chance):
-        """Roll the acceptance dice and apply a successful hire."""
-        import random
-        if random.randint(1, 100) > chance:
-            tk.messagebox.showinfo(
-                "Offer Rejected",
-                f"{staff.full_name} rejected your offer of ${offer:,}/yr.\n"
-                f"Try matching or beating their asking price.")
+    def show_staff_context_menu(self, event):
+        """Show context menu for staff."""
+        item_id = self.fa_staff_tree.identify_row(event.y)
+        if not item_id:
             return
-        league = self.parent.league
-        user_team = self.parent.user_team
-        if staff in league.free_agent_staff:
-            league.free_agent_staff.remove(staff)
-        if incumbent is not None and incumbent in user_team.staff:
-            user_team.staff.remove(incumbent)
-            league.free_agent_staff.append(incumbent)
-        staff.salary = offer
-        staff.contract_years = years
-        if staff not in user_team.staff:
-            user_team.staff.append(staff)
-        dlg.destroy()
-        self.populate_filtered_staff()
-        note = (f"\n{incumbent.full_name} was released to free agency."
-                if incumbent else "")
-        tk.messagebox.showinfo(
-            "Staff Hired",
-            f"{staff.full_name} has signed as {staff.role.value}!\n"
-            f"${offer:,}/yr for {years} year(s).{note}")
-    
+
+        self.fa_staff_tree.selection_set(item_id)
+        staff = self.parent.tree_maps.get('fa_staff', {}).get(item_id)
+        if not staff:
+            return
+
+        menu = tk.Menu(self, tearoff=0, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        menu.add_command(label=f"Hire {staff.full_name}", command=self.hire_selected_staff)
+        menu.add_command(label="View Staff Profile", command=self.view_selected_staff_profile)
+
+        menu.tk_popup(event.x_root, event.y_root)
+
     def view_selected_player_profile(self):
         """View the selected player's profile."""
         selection = self.fa_player_tree.selection()
         if not selection:
             tk.messagebox.showwarning("No Selection", "Please select a player to view.")
             return
-        
+
         player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
             self.parent.open_player_profile(player)
-    
+
     def view_selected_staff_profile(self):
         """View the selected staff member's profile."""
         selection = self.fa_staff_tree.selection()
@@ -2721,740 +2571,778 @@ class FreeAgencyWindow(tk.Toplevel):
         if staff:
             self._open_staff_profile_dialog(staff)
 
+    # ------------------------------------------------------------------
+    # Staff contract dialog (CTk rebuild of the old ttk dialog)
+    # ------------------------------------------------------------------
+    def _open_staff_contract_dialog(self, staff):
+        """Negotiate a real contract offer with a free-agent staff member."""
+        ct = self._ct
+        dlg = ctk.CTkToplevel(self)
+        dlg.title(f"Contract Offer - {staff.full_name}")
+        dlg.configure(fg_color=ct['BG'])
+        dlg.geometry("480x420")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        card = ctk.CTkFrame(dlg, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=20, pady=16)
+
+        self._heading(body, text=f"{staff.full_name}", size=15).pack(anchor="w")
+        self._body(body, text=f"{staff.role.value} \u2022 {staff.nationality} \u2022 Age {staff.age}",
+                   dim=True, size=11).pack(anchor="w", pady=(2, 10))
+
+        # Asking terms banner
+        asking = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        asking.pack(fill="x", pady=(0, 12))
+        self._body(asking, text=f"Asking: ${staff.salary:,} / year  \u2022  {staff.contract_years} years",
+                   size=12).pack(anchor="w", padx=12, pady=10)
+
+        offer_info = {'years': 2, 'salary_mult': 1.0}
+
+        self._body(body, text="Contract length:", dim=True, size=11).pack(anchor="w", pady=(0, 4))
+        years_seg = ctk.CTkSegmentedButton(
+            body, values=["1", "2", "3", "4", "5"],
+            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
+            command=lambda _v: _paint())
+        years_seg.set("2")
+        years_seg.pack(anchor="w", pady=(0, 10))
+
+        self._body(body, text="Salary offer:", dim=True, size=11).pack(anchor="w", pady=(0, 4))
+        sal_seg = ctk.CTkSegmentedButton(
+            body, values=["80%", "Asking", "120%"],
+            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
+            command=lambda _v: _paint())
+        sal_seg.set("Asking")
+        sal_seg.pack(anchor="w", pady=(0, 12))
+
+        offer_label = self._body(body, text="", size=12)
+        offer_label.pack(anchor="w", pady=(0, 2))
+        chance_label = self._body(body, text="", size=11)
+        chance_label.pack(anchor="w", pady=(0, 12))
+
+        mult_map = {"80%": 0.8, "Asking": 1.0, "120%": 1.2}
+
+        def _paint():
+            offer_info['years'] = int(years_seg.get())
+            offer_info['salary_mult'] = mult_map[sal_seg.get()]
+            salary = int(staff.salary * offer_info['salary_mult'])
+            offer_label.configure(
+                text=f"Your offer: ${salary:,} / year  x  {offer_info['years']} "
+                     f"year{'s' if offer_info['years'] > 1 else ''}")
+            chance = self._staff_offer_accept_chance(staff, offer_info['salary_mult'])
+            if chance >= 0.75:
+                color = ct['GREEN']
+            elif chance >= 0.45:
+                color = ct['GOLD']
+            else:
+                color = ct['RED']
+            chance_label.configure(text=f"Estimated acceptance chance: {chance:.0%}",
+                                   text_color=color)
+
+        _paint()
+
+        btns = ctk.CTkFrame(body, fg_color="transparent")
+        btns.pack(fill="x", pady=(4, 0))
+        self._secondary_button(btns, text="Cancel",
+                               command=dlg.destroy).pack(side="right", padx=(10, 0))
+        self._primary_button(btns, text="Make Offer",
+                             command=lambda: self._resolve_staff_offer(
+                                 staff, offer_info['years'],
+                                 int(staff.salary * offer_info['salary_mult']),
+                                 dlg)).pack(side="right")
+
+    def _staff_offer_accept_chance(self, staff, salary_mult):
+        """Rough acceptance chance for a staff offer (display only)."""
+        rating = to_100_scale(staff.overall_rating)
+        prestige = getattr(self.parent.game_manager.user_team, 'prestige', 50)
+        base = 0.45 + (salary_mult - 1.0) * 1.4 + (prestige - 50) / 400 - (rating - 60) / 600
+        return max(0.05, min(0.98, base))
+
+    def _resolve_staff_offer(self, staff, years, salary, dlg):
+        """Resolve a staff contract offer (original acceptance logic)."""
+        chance = self._staff_offer_accept_chance(staff, salary / max(1, staff.salary))
+
+        if self.parent.game_manager.sign_free_agent_staff(staff, salary, years):
+            import random
+            if random.random() < chance:
+                tk.messagebox.showinfo("Offer Accepted",
+                                       f"{staff.full_name} has accepted your offer!")
+                self.populate_filtered_staff()
+                self.refresh_market_overview_data()
+                dlg.destroy()
+            else:
+                tk.messagebox.showinfo("Offer Declined",
+                                       f"{staff.full_name} has declined your offer. "
+                                       f"Consider offering a better salary.")
+        else:
+            tk.messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
+
     def _open_staff_profile_dialog(self, staff):
-        """Compact staff profile: bio, key attributes, contract."""
-        from game_classes import Staff as StaffClass
-        dlg = tk.Toplevel(self)
-        dlg.title(f"Staff Profile — {staff.full_name}")
-        dlg.configure(background=self.parent.BG_COLOR)
-        dlg.geometry("420x520")
+        """View a free-agent staff member's profile (CTk)."""
+        ct = self._ct
+        dlg = ctk.CTkToplevel(self)
+        dlg.title(f"Staff Profile - {staff.full_name}")
+        dlg.configure(fg_color=ct['BG'])
+        dlg.geometry("460x500")
         dlg.transient(self)
 
-        try:
-            dept = StaffClass.get_role_department(staff.role)
-        except Exception:
-            dept = ""
-        header = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
-        header.pack(fill=tk.X, padx=12, pady=(12, 6))
-        ttk.Label(header, text=staff.full_name,
-                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
-                  style='TLabel').pack(anchor='w')
-        ttk.Label(header, text=f"{staff.role.value}  •  {dept}",
-                  style='Secondary.TLabel').pack(anchor='w')
-        ttk.Label(header,
-                  text=f"Age {staff.age}  •  {staff.nationality}  •  "
-                       f"Overall {to_100_scale(staff.overall_rating)}",
-                  style='TLabel').pack(anchor='w', pady=(4, 0))
+        card = ctk.CTkFrame(dlg, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
 
-        attrs = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
-        attrs.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
-        ttk.Label(attrs, text="Attributes", style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w', pady=(0, 6))
-        rows = [
-            ("Tactical Knowledge", 'tactical_knowledge'),
-            ("Man Management", 'man_management'),
-            ("Motivating", 'motivating'),
-            ("Working with Youngsters", 'working_with_youngsters'),
-            ("Player Development", 'player_development'),
-            ("Judging Ability", 'judging_player_ability'),
-            ("Judging Potential", 'judging_player_potential'),
-            ("Determination", 'determination'),
-            ("Adaptability", 'adaptability'),
-            ("Discipline", 'discipline'),
-        ]
-        for label, attr in rows:
-            val = getattr(staff, attr, None)
-            if val is None:
-                continue
-            r = ttk.Frame(attrs, style='Panel.TFrame')
-            r.pack(fill=tk.X, pady=1)
-            ttk.Label(r, text=label, style='Secondary.TLabel',
-                      width=24).pack(side=tk.LEFT)
-            ttk.Label(r, text=str(to_100_scale(val)), style='TLabel',
-                      font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(side=tk.LEFT)
+        scroll = ctk.CTkScrollableFrame(card, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=16, pady=14)
 
-        footer = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
-        footer.pack(fill=tk.X, padx=12, pady=(4, 12))
-        ttk.Label(footer,
-                  text=f"Salary: ${staff.salary:,}/yr  •  Contract: {staff.contract_years} yr",
-                  style='Secondary.TLabel').pack(anchor='w')
-        PillButton(footer, text="Offer Contract", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                   padx=16, pady=7,
-                   command=lambda: (dlg.destroy(),
-                                    self._open_staff_contract_dialog(staff))
-                   ).pack(anchor='w', pady=(8, 0))
-    
-    def negotiate_with_player(self, event=None):
-        """Negotiate with a player (double-click handler)."""
-        self.sign_selected_player()
-    
-    def negotiate_with_staff(self, event=None):
-        """Negotiate with a staff member (double-click handler)."""
-        self.hire_selected_staff()
-    
-    def show_staff_context_menu(self, event):
-        """Show context menu for staff."""
-        item_id = self.fa_staff_tree.identify_row(event.y)
-        if not item_id:
-            return
-        
-        self.fa_staff_tree.selection_set(item_id)
-        staff = self.parent.tree_maps.get('fa_staff', {}).get(item_id)
-        if not staff:
-            return
-        
-        menu = tk.Menu(self, tearoff=0, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
-        menu.add_command(label=f"Hire {staff.full_name}", command=self.hire_selected_staff)
-        menu.add_command(label="View Staff Profile", command=self.view_selected_staff_profile)
-        
-        menu.tk_popup(event.x_root, event.y_root)
-    
+        rating = to_100_scale(staff.overall_rating)
+        tier_color = (ct['GREEN'] if rating >= 85 else ct['TEAL'] if rating >= 78
+                      else ct['GOLD'] if rating >= 70 else ct['TEXT_DIM'])
+
+        self._heading(scroll, text=staff.full_name, size=16).pack(anchor="w")
+        self._body(scroll, text=staff.role.value, dim=True, size=12).pack(anchor="w")
+        ctk.CTkLabel(scroll, text=f"{rating:.0f}", font=("Segoe UI", 28, "bold"),
+                     text_color=tier_color).pack(anchor="w", pady=(6, 2))
+
+        attrs = staff.get_attributes_for_role() if hasattr(staff, 'get_attributes_for_role') else {}
+        for attr_name, attr_value in attrs.items():
+            self._fa_attr_row(scroll, attr_name, attr_value)
+
+        ctk.CTkFrame(scroll, fg_color=ct['BORDER'], height=1).pack(fill="x", pady=10)
+
+        exp = max(0, staff.age - 25)
+        for text in (f"Age: {staff.age}",
+                     f"Nationality: {staff.nationality}",
+                     f"Experience: {exp} years",
+                     f"Asking: ${staff.salary:,} / year",
+                     f"Contract: {staff.contract_years} years"):
+            self._body(scroll, text=text, dim=True, size=11).pack(anchor="w", pady=1)
+
+        self._primary_button(scroll, text=f"Hire {staff.full_name}",
+                             command=lambda: (dlg.destroy(),
+                                              self._open_staff_contract_dialog(staff))
+                             ).pack(anchor="w", pady=(14, 0))
+
+    def _fa_attr_row(self, parent, name, value):
+        """One attribute row with a meter (used by staff profiles)."""
+        ct = self._ct
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        ctk.CTkLabel(row, text=name.replace('_', ' ').title(),
+                     font=("Segoe UI", 10), text_color=ct['TEXT_DIM'],
+                     width=150, anchor="w").pack(side="left")
+        meter = ctk.CTkProgressBar(row, width=140, height=8,
+                                   progress_color=ct['TEAL'],
+                                   fg_color=ct['BORDER'])
+        meter.set(max(0.0, min(1.0, value / 100)))
+        meter.pack(side="left", padx=8)
+        ctk.CTkLabel(row, text=f"{value:.0f}", font=("Segoe UI", 10, "bold"),
+                     text_color=ct['TEXT'], width=36).pack(side="left")
+
+    # ------------------------------------------------------------------
+    # Player comparison (CTk)
+    # ------------------------------------------------------------------
     def compare_selected_players(self):
-        """Compare selected players."""
+        """Compare multiple selected players."""
         selection = self.fa_player_tree.selection()
         if len(selection) < 2:
-            tk.messagebox.showwarning("Selection Required", 
-                                    "Please select 2-4 players to compare.")
+            tk.messagebox.showwarning("Selection Required",
+                                       "Please select at least 2 players to compare.")
             return
-        
-        if len(selection) > 4:
-            tk.messagebox.showwarning("Too Many Selected", 
-                                    "Please select no more than 4 players to compare.")
-            return
-        
-        # Get selected players
-        selected_players = []
+
+        players = []
         for item_id in selection:
-            if item_id in self.parent.tree_maps.get('fa_players', {}):
-                player = self.parent.tree_maps['fa_players'][item_id]
-                selected_players.append(player)
-        
-        if len(selected_players) < 2:
-            tk.messagebox.showwarning("Invalid Selection", 
-                                    "Could not find selected players for comparison.")
+            player = self.parent.tree_maps.get('fa_players', {}).get(item_id)
+            if player:
+                players.append(player)
+
+        if len(players) < 2:
+            tk.messagebox.showwarning("Error", "Could not find selected players.")
             return
-        
-        # Create comparison window
-        self.create_player_comparison_window(selected_players)
-    
+
+        self.create_player_comparison_window(players)
+
     def create_player_comparison_window(self, players):
-        """Create a detailed player comparison window."""
-        comparison_window = tk.Toplevel(self)
-        comparison_window.title("Player Comparison")
-        comparison_window.configure(background=self.parent.BG_COLOR)
-        comparison_window.geometry("1000x700")
-        
-        # Main container
-        main_frame = ttk.Frame(comparison_window, style='Panel.TFrame')
-        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Title
-        title_label = ttk.Label(main_frame, text="Player Comparison", 
-                               style='Title.TLabel')
-        title_label.pack(pady=(0, 20))
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(main_frame, background=self.parent.BG_COLOR)
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Comparison table
-        self.create_comparison_table(scrollable_frame, players)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Close button
-        close_btn = ttk.Button(main_frame, text="Close",
-                              style='Secondary.TButton',
-                              command=comparison_window.destroy)
-        close_btn.pack(pady=10)
-    
-    def create_comparison_table(self, parent, players):
-        """Create the detailed comparison table."""
-        # Headers
-        header_frame = ttk.Frame(parent, style='Panel.TFrame')
-        header_frame.pack(fill='x', pady=5)
-        
-        ttk.Label(header_frame, text="Attribute", style='Header.TLabel', 
-                 width=20).grid(row=0, column=0, padx=5, sticky='w')
-        
-        for i, player in enumerate(players):
-            ttk.Label(header_frame, text=player.full_name, style='Header.TLabel',
-                     width=15).grid(row=0, column=i+1, padx=5)
-        
-        # Basic Info Section
-        self.add_comparison_section(parent, "Basic Information", [
-            ("Age", lambda p: str(p.age)),
-            ("Position", lambda p: p.primary_position.value),
-            ("Overall Rating", lambda p: str(to_100_scale(p.overall_rating()))),
-            ("Team", lambda p: getattr(p, 'team_name', 'Free Agent')),
-        ], players)
-        
-        # Contract Info Section
-        self.add_comparison_section(parent, "Contract Information", [
-            ("Salary", lambda p: f"${getattr(p.contract, 'salary', 750000):,}" if p.contract else "No Contract"),
-            ("Years Left", lambda p: str(getattr(p.contract, 'years_remaining', 0)) if p.contract else "0"),
-            ("Contract Type", lambda p: getattr(p.contract, 'contract_type', 'None') if p.contract else "None"),
-        ], players)
-        
-        # Performance Stats Section
-        self.add_comparison_section(parent, "Performance Stats", [
-            ("Games Played", lambda p: str(getattr(p, 'games_played', 0))),
-            ("Goals", lambda p: str(getattr(p, 'goals', 0))),
-            ("Assists", lambda p: str(getattr(p, 'assists', 0))),
-            ("Points", lambda p: str(getattr(p, 'points', 0))),
-            ("+/-", lambda p: f"+{getattr(p, 'plus_minus', 0)}" if getattr(p, 'plus_minus', 0) >= 0 else str(getattr(p, 'plus_minus', 0))),
-        ], players)
-        
-        # Key Attributes Section  
-        self.add_comparison_section(parent, "Key Attributes", [
-            ("Skating", lambda p: str(getattr(p, 'skating', 10))),
-            ("Shooting", lambda p: str(getattr(p, 'shooting', 10))),
-            ("Passing", lambda p: str(getattr(p, 'passing', 10))),
-            ("Checking", lambda p: str(getattr(p, 'checking', 10))),
-            ("Hockey IQ", lambda p: str(getattr(p, 'hockey_iq', 10))),
-            ("Determination", lambda p: str(getattr(p, 'determination', 10))),
-        ], players)
-    
-    def add_comparison_section(self, parent, section_title, attributes, players):
-        """Add a section to the comparison table."""
-        # Section header
-        section_frame = ttk.Frame(parent, style='Panel.TFrame')
-        section_frame.pack(fill='x', pady=10)
-        
-        ttk.Label(section_frame, text=section_title, style='Title.TLabel').pack(anchor='w')
-        
-        # Attribute rows
-        for row_idx, (attr_name, attr_func) in enumerate(attributes):
-            row_frame = ttk.Frame(section_frame)
-            row_frame.pack(fill='x', pady=2)
-            
-            # Attribute name
-            ttk.Label(row_frame, text=attr_name, width=20).grid(row=0, column=0, padx=5, sticky='w')
-            
-            # Player values
+        """Create a window comparing multiple players (CTk)."""
+        ct = self._ct
+        compare_window = ctk.CTkToplevel(self)
+        compare_window.title(f"Player Comparison ({len(players)} players)")
+        compare_window.configure(fg_color=ct['BG'])
+        compare_window.geometry("900x700")
+        compare_window.transient(self)
+
+        card = ctk.CTkFrame(compare_window, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+        self._heading(card, text=f"Player Comparison ({len(players)} players)",
+                      size=14).pack(anchor="w", padx=16, pady=(12, 4))
+
+        scroll = ctk.CTkScrollableFrame(card, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        # Header row
+        header = ctk.CTkFrame(scroll, fg_color=ct['CARD'], corner_radius=8)
+        header.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(header, text="Attribute", font=("Segoe UI", 10, "bold"),
+                     text_color=ct['TEXT_DIM'], width=180, anchor="w").pack(
+            side="left", padx=10, pady=8)
+        for player in players:
+            ctk.CTkLabel(header, text=player.full_name,
+                         font=("Segoe UI", 10, "bold"), text_color=ct['TEXT'],
+                         width=130).pack(side="left", padx=4, pady=8)
+
+        # Comparison sections
+        self.add_comparison_section(scroll, "Basic Info", players,
+                                    [('Position', lambda p: p.primary_position.value),
+                                     ('Age', lambda p: str(p.age)),
+                                     ('Height', lambda p: f"{getattr(p, 'height_feet', 6)}'{getattr(p, 'height_inches', 0)}\""),
+                                     ('Weight', lambda p: f"{getattr(p, 'weight', 180)} lbs"),
+                                     ('Shoots', lambda p: getattr(p, 'shoots', 'R')),
+                                     ('Nationality', lambda p: getattr(p, 'nationality', 'Unknown'))],
+                                    compare_numeric=False)
+
+        self.add_comparison_section(scroll, "Ratings", players,
+                                    [('Overall', lambda p: to_100_scale(p.overall_rating())),
+                                     ('Potential', lambda p: p.potential_grade)],
+                                    compare_numeric=True)
+
+        skill_attrs = self.get_skill_attributes()
+        if skill_attrs:
+            self.add_comparison_section(scroll, "Skills", players,
+                                        [(name.replace('_', ' ').title(),
+                                          lambda p, attr=name: to_100_scale(getattr(p, attr, 10)))
+                                         for name in skill_attrs[:12]],
+                                        compare_numeric=True)
+
+        personality_attrs = self.get_personality_attributes()
+        if personality_attrs:
+            self.add_comparison_section(scroll, "Personality", players,
+                                        [(name.replace('_', ' ').title(),
+                                          lambda p, attr=name: to_100_scale(getattr(p, attr, 10)))
+                                         for name in personality_attrs[:8]],
+                                        compare_numeric=True)
+
+        self.add_comparison_section(scroll, "Contract", players,
+                                    [('Salary', lambda p: f"${getattr(p, 'salary', getattr(p.contract, 'salary', 750000)):,}"),
+                                     ('Years', lambda p: f"{getattr(p, 'contract_years', getattr(p.contract, 'years_remaining', 1))}y")],
+                                    compare_numeric=False)
+
+    def get_skill_attributes(self):
+        """Get list of skill attribute names."""
+        return [
+            'skating', 'shooting', 'passing', 'puck_handling', 'checking',
+            'positioning', 'hitting', 'shot_blocking', 'faceoffs', 'stickhandling',
+            'offensive_awareness', 'defensive_awareness', 'speed', 'strength',
+            'endurance', 'durability'
+        ]
+
+    def get_personality_attributes(self):
+        """Get list of personality attribute names."""
+        return [
+            'leadership', 'work_ethic', 'determination', 'team_player',
+            'consistency', 'clutch', 'discipline', 'aggression'
+        ]
+
+    def add_comparison_section(self, parent, title, players, attributes, compare_numeric=True):
+        """Add a comparison section to the comparison window."""
+        ct = self._ct
+        section = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=8)
+        section.pack(fill="x", pady=(0, 8))
+
+        self._heading(section, text=title, size=11).pack(anchor="w", padx=10, pady=(8, 2))
+
+        for attr_name, attr_func in attributes:
+            row = ctk.CTkFrame(section, fg_color="transparent")
+            row.pack(fill="x", padx=4, pady=1)
+            ctk.CTkLabel(row, text=attr_name, font=("Segoe UI", 10),
+                         text_color=ct['TEXT_DIM'], width=180,
+                         anchor="w").pack(side="left", padx=10)
+
             values = []
             for player in players:
                 try:
                     value = attr_func(player)
                     values.append(value)
-                except:
+                except Exception:
                     values.append("N/A")
-            
-            # Highlight best/worst values for numeric attributes
-            if attr_name in ["Overall Rating", "Age", "Goals", "Assists", "Points", "Skating", "Shooting", "Passing", "Checking", "Hockey IQ", "Determination"]:
-                try:
-                    numeric_values = [int(v) for v in values if v != "N/A" and v.replace('-', '').replace('+', '').isdigit()]
-                    if numeric_values:
-                        best_val = max(numeric_values) if attr_name != "Age" else min(numeric_values)
-                        worst_val = min(numeric_values) if attr_name != "Age" else max(numeric_values)
-                        
-                        for i, value in enumerate(values):
-                            try:
-                                val_int = int(value.replace('-', '').replace('+', ''))
-                                if val_int == best_val:
-                                    label = ttk.Label(row_frame, text=value, foreground='green', width=15)
-                                elif val_int == worst_val and len(set(numeric_values)) > 1:
-                                    label = ttk.Label(row_frame, text=value, foreground='red', width=15)
-                                else:
-                                    label = ttk.Label(row_frame, text=value, width=15)
-                            except:
-                                label = ttk.Label(row_frame, text=value, width=15)
-                            label.grid(row=0, column=i+1, padx=5)
-                    else:
-                        for i, value in enumerate(values):
-                            ttk.Label(row_frame, text=value, width=15).grid(row=0, column=i+1, padx=5)
-                except:
-                    for i, value in enumerate(values):
-                        ttk.Label(row_frame, text=value, width=15).grid(row=0, column=i+1, padx=5)
-            else:
-                for i, value in enumerate(values):
-                    ttk.Label(row_frame, text=value, width=15).grid(row=0, column=i+1, padx=5)
-    
+
+            # Determine best/worst for numeric values
+            best_idx = worst_idx = None
+            if compare_numeric:
+                numeric_values = []
+                for i, v in enumerate(values):
+                    try:
+                        numeric_values.append((i, float(v)))
+                    except (ValueError, TypeError):
+                        pass
+                if numeric_values:
+                    best_idx = max(numeric_values, key=lambda x: x[1])[0]
+                    worst_idx = min(numeric_values, key=lambda x: x[1])[0]
+
+            for i, value in enumerate(values):
+                color = ct['TEXT']
+                if i == best_idx:
+                    color = ct['GREEN']
+                elif i == worst_idx:
+                    color = ct['RED']
+                ctk.CTkLabel(row, text=str(value), font=("Segoe UI", 10),
+                             text_color=color, width=130).pack(side="left", padx=4)
+
+    # ------------------------------------------------------------------
+    # Staff comparison (CTk)
+    # ------------------------------------------------------------------
     def compare_selected_staff(self):
-        """Compare selected staff (2-4) side by side."""
+        """Compare multiple selected staff members."""
         selection = self.fa_staff_tree.selection()
         if len(selection) < 2:
             tk.messagebox.showwarning("Selection Required",
-                                      "Please select 2-4 staff members to compare.")
+                                       "Please select at least 2 staff members to compare.")
             return
-        if len(selection) > 4:
-            tk.messagebox.showwarning("Too Many Selected",
-                                      "Please select no more than 4 staff members to compare.")
+
+        staff_list = []
+        for item_id in selection:
+            staff = self.parent.tree_maps.get('fa_staff', {}).get(item_id)
+            if staff:
+                staff_list.append(staff)
+
+        if len(staff_list) < 2:
+            tk.messagebox.showwarning("Error", "Could not find selected staff members.")
             return
-        selected = [self.parent.tree_maps.get('fa_staff', {}).get(i)
-                    for i in selection]
-        selected = [s for s in selected if s]
-        if len(selected) < 2:
-            tk.messagebox.showwarning("Invalid Selection",
-                                      "Could not find selected staff for comparison.")
-            return
-        self.create_staff_comparison_window(selected)
+
+        self.create_staff_comparison_window(staff_list)
 
     def create_staff_comparison_window(self, staff_list):
-        """Side-by-side staff comparison with best-value highlighting."""
+        """Create a window comparing multiple staff members (CTk)."""
+        ct = self._ct
+        compare_window = ctk.CTkToplevel(self)
+        compare_window.title(f"Staff Comparison ({len(staff_list)} staff)")
+        compare_window.configure(fg_color=ct['BG'])
+        compare_window.geometry("800x600")
+        compare_window.transient(self)
+
+        card = ctk.CTkFrame(compare_window, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+        self._heading(card, text=f"Staff Comparison ({len(staff_list)} staff)",
+                      size=14).pack(anchor="w", padx=16, pady=(12, 4))
+
+        scroll = ctk.CTkScrollableFrame(card, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        header = ctk.CTkFrame(scroll, fg_color=ct['CARD'], corner_radius=8)
+        header.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(header, text="Attribute", font=("Segoe UI", 10, "bold"),
+                     text_color=ct['TEXT_DIM'], width=180, anchor="w").pack(
+            side="left", padx=10, pady=8)
+        for staff in staff_list:
+            ctk.CTkLabel(header, text=staff.full_name,
+                         font=("Segoe UI", 10, "bold"), text_color=ct['TEXT'],
+                         width=130).pack(side="left", padx=4, pady=8)
+
+        self.add_comparison_section(scroll, "Basic Info", staff_list,
+                                    [('Role', lambda s: s.role.value),
+                                     ('Department', lambda s: self._staff_dept(s)),
+                                     ('Age', lambda s: str(s.age)),
+                                     ('Nationality', lambda s: s.nationality),
+                                     ('Experience', lambda s: f"{max(0, s.age - 25)}y")],
+                                    compare_numeric=False)
+
+        self.add_comparison_section(scroll, "Ratings", staff_list,
+                                    [('Overall', lambda s: to_100_scale(s.overall_rating))],
+                                    compare_numeric=True)
+
+        all_attrs = set()
+        for staff in staff_list:
+            if hasattr(staff, 'get_attributes_for_role'):
+                attrs = staff.get_attributes_for_role()
+                all_attrs.update(attrs.keys())
+
+        if all_attrs:
+            self.add_comparison_section(scroll, "Attributes", staff_list,
+                                        [(name.replace('_', ' ').title(),
+                                          lambda s, attr=name: to_100_scale(
+                                              s.get_attributes_for_role().get(attr, 10)
+                                              if hasattr(s, 'get_attributes_for_role') else 10))
+                                         for name in sorted(all_attrs)[:12]],
+                                        compare_numeric=True)
+
+        self.add_comparison_section(scroll, "Contract", staff_list,
+                                    [('Salary', lambda s: f"${s.salary:,}"),
+                                     ('Years', lambda s: f"{s.contract_years}y")],
+                                    compare_numeric=False)
+
+    def _staff_dept(self, staff):
         from game_classes import Staff as StaffClass
-        win = tk.Toplevel(self)
-        win.title("Staff Comparison")
-        win.configure(background=self.parent.BG_COLOR)
-        win.geometry("900x640")
+        return StaffClass.get_role_department(staff.role)
 
-        main = ttk.Frame(win, style='Panel.TFrame', padding=12)
-        main.pack(fill='both', expand=True)
-        ttk.Label(main, text="Staff Comparison", style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(anchor='w', pady=(0, 8))
-
-        canvas = tk.Canvas(main, background=self.parent.BG_COLOR,
-                           highlightthickness=0)
-        scroll = ttk.Scrollbar(main, orient="vertical", command=canvas.yview)
-        inner = ttk.Frame(canvas, style='Panel.TFrame')
-        inner.bind("<Configure>",
-                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-
-        n = len(staff_list)
-        # header row
-        ttk.Label(inner, text="Attribute", style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                  width=24).grid(row=0, column=0, padx=6, pady=4, sticky='w')
-        for c, s in enumerate(staff_list, 1):
-            ttk.Label(inner, text=s.full_name, style='TLabel',
-                      font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                      width=20).grid(row=0, column=c, padx=6, pady=4, sticky='w')
-
-        rows = [
-            ("Role", lambda s: s.role.value, False),
-            ("Department", lambda s: self._staff_dept(s), False),
-            ("Age", lambda s: s.age, False),
-            ("Nationality", lambda s: s.nationality, False),
-            ("Overall", lambda s: to_100_scale(s.overall_rating), True),
-            ("Salary", lambda s: f"${s.salary:,}", False),
-            ("Contract", lambda s: f"{s.contract_years} yr", False),
-            ("Tactical Knowledge", lambda s: to_100_scale(s.tactical_knowledge), True),
-            ("Man Management", lambda s: to_100_scale(s.man_management), True),
-            ("Motivating", lambda s: to_100_scale(s.motivating), True),
-            ("Working w/ Youngsters", lambda s: to_100_scale(s.working_with_youngsters), True),
-            ("Player Development", lambda s: to_100_scale(s.player_development), True),
-            ("Judging Ability", lambda s: to_100_scale(s.judging_player_ability), True),
-            ("Judging Potential", lambda s: to_100_scale(s.judging_player_potential), True),
-            ("Determination", lambda s: to_100_scale(s.determination), True),
-            ("Adaptability", lambda s: to_100_scale(s.adaptability), True),
-            ("Discipline", lambda s: to_100_scale(s.discipline), True),
-        ]
-        for r, (label, func, higher_better) in enumerate(rows, 1):
-            ttk.Label(inner, text=label, style='Secondary.TLabel',
-                      width=24).grid(row=r, column=0, padx=6, pady=2, sticky='w')
-            vals = []
-            for s in staff_list:
-                try:
-                    vals.append(func(s))
-                except Exception:
-                    vals.append("—")
-            best_idx = -1
-            if higher_better:
-                nums = [v for v in vals if isinstance(v, (int, float))]
-                if nums:
-                    best = max(nums)
-                    best_idx = next(i for i, v in enumerate(vals) if v == best)
-            for c, v in enumerate(vals, 1):
-                style = 'TLabel'
-                font = (self.parent.FONT_FAMILY, 10,
-                        'bold' if c - 1 == best_idx else 'normal')
-                fg = '#7ee787' if c - 1 == best_idx else None
-                lbl = ttk.Label(inner, text=str(v), style=style, font=font,
-                                width=20)
-                if fg:
-                    lbl.configure(foreground=fg)
-                lbl.grid(row=r, column=c, padx=6, pady=2, sticky='w')
-
-        ttk.Label(main, text="Best value in each attribute is highlighted.",
-                  style='Secondary.TLabel',
-                  font=(self.parent.FONT_FAMILY, 9, 'italic')).pack(anchor='w', pady=(8, 0))
-
-    def _staff_dept(self, s):
-        from game_classes import Staff as StaffClass
-        try:
-            return StaffClass.get_role_department(s.role)
-        except Exception:
-            return "—"
-    
+    # ------------------------------------------------------------------
+    # Market analysis (CTk)
+    # ------------------------------------------------------------------
     def show_player_market_analysis(self):
         """Show market analysis for the selected player."""
         selection = self.fa_player_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a player to analyze.")
+            tk.messagebox.showwarning("No Selection",
+                                       "Please select a player for market analysis.")
             return
-        
-        # Get selected player
-        item_id = selection[0]
-        if item_id not in self.parent.tree_maps.get('fa_players', {}):
-            tk.messagebox.showerror("Error", "Could not find selected player.")
-            return
-        
-        player = self.parent.tree_maps['fa_players'][item_id]
-        self.create_market_analysis_window(player)
-    
+
+        player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
+        if player:
+            self.create_market_analysis_window(player)
+
     def create_market_analysis_window(self, player):
-        """Create market analysis window for a player."""
-        analysis_window = tk.Toplevel(self)
+        """Create a market analysis window for a player (CTk)."""
+        ct = self._ct
+        analysis_window = ctk.CTkToplevel(self)
         analysis_window.title(f"Market Analysis - {player.full_name}")
-        analysis_window.configure(background=self.parent.BG_COLOR)
-        analysis_window.geometry("800x600")
-        
-        # Main container
-        main_frame = ttk.Frame(analysis_window, style='Panel.TFrame')
-        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Title
-        title_label = ttk.Label(main_frame, text=f"Market Analysis: {player.full_name}", 
-                               style='Title.TLabel')
-        title_label.pack(pady=(0, 20))
-        
-        # Create notebook for different analysis tabs
-        notebook = ttk.Notebook(main_frame, style='Modern.TNotebook')
-        notebook.pack(fill='both', expand=True)
-        
-        # Market Value Tab
-        value_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(value_frame, text="Market Value")
-        self.create_value_analysis(value_frame, player)
-        
-        # Comparable Players Tab
-        comp_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(comp_frame, text="Comparable Players")
-        self.create_comparable_analysis(comp_frame, player)
-        
-        # Contract Projection Tab
-        contract_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(contract_frame, text="Contract Projection")
-        self.create_contract_projection(contract_frame, player)
-        
-        # Close button
-        close_btn = ttk.Button(main_frame, text="Close", 
-                              style='Secondary.TButton',
-                              command=analysis_window.destroy)
-        close_btn.pack(pady=10)
-    
+        analysis_window.configure(fg_color=ct['BG'])
+        analysis_window.geometry("700x600")
+        analysis_window.transient(self)
+
+        card = ctk.CTkFrame(analysis_window, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+        self._heading(card, text=f"Market Analysis - {player.full_name}",
+                      size=14).pack(anchor="w", padx=16, pady=(12, 4))
+        self._body(card, text=f"{player.primary_position.value} \u2022 Age {player.age} \u2022 "
+                              f"OVR {to_100_scale(player.overall_rating())}",
+                   dim=True, size=11).pack(anchor="w", padx=16, pady=(0, 8))
+
+        tabview = ctk.CTkTabview(card, fg_color=ct['CARD'], corner_radius=10,
+                                 border_width=0,
+                                 segmented_button_fg_color=ct['CARD'],
+                                 segmented_button_selected_color=ct['TEAL'],
+                                 segmented_button_selected_hover_color=ct['TEAL_HOVER'],
+                                 segmented_button_unselected_color=ct['PANEL'],
+                                 segmented_button_unselected_hover_color=ct['BORDER'],
+                                 text_color=ct['TEXT'])
+        tabview.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        for name in ("Value Analysis", "Comparable Players", "Contract Projection"):
+            tabview.add(name)
+
+        self.create_value_analysis(tabview.tab("Value Analysis"), player)
+        self.create_comparable_analysis(tabview.tab("Comparable Players"), player)
+        self.create_contract_projection(tabview.tab("Contract Projection"), player)
+
     def create_value_analysis(self, parent, player):
-        """Create market value analysis."""
-        # Player info section
-        info_frame = ttk.LabelFrame(parent, text="Player Information")
-        info_frame.pack(fill='x', padx=10, pady=10)
-        
-        ttk.Label(info_frame, text=f"Age: {player.age}").pack(anchor='w', padx=10, pady=2)
-        ttk.Label(info_frame, text=f"Position: {player.primary_position.value}").pack(anchor='w', padx=10, pady=2)
-        ttk.Label(info_frame, text=f"Overall Rating: {to_100_scale(player.overall_rating())}").pack(anchor='w', padx=10, pady=2)
-        
-        # Market value calculation
-        value_frame = ttk.LabelFrame(parent, text="Estimated Market Value")
-        value_frame.pack(fill='x', padx=10, pady=10)
-        
-        # Calculate estimated market value based on overall rating and age
-        base_value = self.calculate_market_value(player)
-        
-        ttk.Label(value_frame, text=f"Estimated Annual Value: ${base_value:,}").pack(anchor='w', padx=10, pady=2)
-        ttk.Label(value_frame, text=f"Suggested Contract Length: {self.suggest_contract_length(player)} years").pack(anchor='w', padx=10, pady=2)
-        
-        # Value factors
-        factors_frame = ttk.LabelFrame(parent, text="Value Factors")
-        factors_frame.pack(fill='x', padx=10, pady=10)
-        
-        factors = self.get_value_factors(player)
-        for factor in factors:
-            ttk.Label(factors_frame, text=f"• {factor}").pack(anchor='w', padx=10, pady=1)
-    
-    def create_comparable_analysis(self, parent, player):
-        """Create comparable players analysis."""
-        comp_frame = ttk.LabelFrame(parent, text="Similar Players")
-        comp_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Find comparable players
-        comparables = self.find_comparable_players(player)
-        
-        if comparables:
-            # Create treeview for comparables
-            columns = ('Name', 'Age', 'Position', 'Overall', 'Team', 'Salary')
-            tree = ttk.Treeview(comp_frame, columns=columns, show='headings', height=10)
-            
-            for col in columns:
-                tree.heading(col, text=col)
-                tree.column(col, width=120)
-            make_tree_sortable(tree)
-            
-            for comp_player in comparables:
-                salary = getattr(comp_player.contract, 'salary', 'No Contract') if comp_player.contract else 'Free Agent'
-                if isinstance(salary, int):
-                    salary_str = f"${salary:,}"
-                else:
-                    salary_str = str(salary)
-                    
-                tree.insert('', 'end', values=(
-                    comp_player.full_name,
-                    comp_player.age,
-                    comp_player.primary_position.value,
-                    to_100_scale(comp_player.overall_rating()),
-                    getattr(comp_player, 'team_name', 'Free Agent'),
-                    salary_str
-                ))
-            
-            tree.pack(fill='both', expand=True, padx=10, pady=10)
-        else:
-            ttk.Label(comp_frame, text="No comparable players found.").pack(pady=20)
-    
-    def create_contract_projection(self, parent, player):
-        """Create contract projection analysis."""
-        proj_frame = ttk.LabelFrame(parent, text="Contract Recommendations")
-        proj_frame.pack(fill='x', padx=10, pady=10)
-        
-        # Calculate different contract scenarios
+        """Create the value analysis section."""
+        ct = self._ct
+        info = ctk.CTkFrame(parent, fg_color=ct['PANEL'], corner_radius=8)
+        info.pack(fill="x", padx=10, pady=10)
+        self._heading(info, text="Value Assessment", size=12).pack(
+            anchor="w", padx=12, pady=(10, 4))
+
         market_value = self.calculate_market_value(player)
-        
-        # Short-term deal
-        short_term = ttk.Frame(proj_frame, style='Panel.TFrame')
-        short_term.pack(fill='x', padx=10, pady=5)
-        ttk.Label(short_term, text="Short-term (1-2 years):", font=('Segoe UI', 10, 'bold')).pack(anchor='w')
-        ttk.Label(short_term, text=f"  ${market_value * 1.1:,.0f} AAV - Prove-it deal").pack(anchor='w')
-        
-        # Medium-term deal
-        medium_term = ttk.Frame(proj_frame, style='Panel.TFrame')
-        medium_term.pack(fill='x', padx=10, pady=5)
-        ttk.Label(medium_term, text="Medium-term (3-4 years):", font=('Segoe UI', 10, 'bold')).pack(anchor='w')
-        ttk.Label(medium_term, text=f"  ${market_value:,.0f} AAV - Fair market value").pack(anchor='w')
-        
-        # Long-term deal
-        long_term = ttk.Frame(proj_frame, style='Panel.TFrame')
-        long_term.pack(fill='x', padx=10, pady=5)
-        ttk.Label(long_term, text="Long-term (5+ years):", font=('Segoe UI', 10, 'bold')).pack(anchor='w')
-        ttk.Label(long_term, text=f"  ${market_value * 0.9:,.0f} AAV - Security discount").pack(anchor='w')
-    
-    def calculate_market_value(self, player):
-        """Calculate estimated market value for a player."""
-        base_value = 750000  # League minimum
-        
-        # Overall rating multiplier
-        rating_multiplier = max(1.0, player.overall_rating() / 75.0)
-        base_value *= rating_multiplier
-        
-        # Age adjustments
-        if player.age < 25:  # Young player premium
-            base_value *= 1.2
-        elif player.age > 32:  # Veteran discount
-            base_value *= 0.8
-        
-        # Position adjustments
-        position_str = str(player.primary_position).upper()
-        if 'GOALIE' in position_str:
-            base_value *= 1.5  # Goalies typically earn more
-        elif 'CENTER' in position_str or 'DEFENCE' in position_str:
-            base_value *= 1.1  # Premium positions
-        
-        # Performance bonuses
-        goals = getattr(player, 'goals', 0)
-        assists = getattr(player, 'assists', 0)
-        if goals + assists > 50:
-            base_value *= 1.3
-        elif goals + assists > 30:
-            base_value *= 1.15
-        
-        return int(base_value)
-    
-    def suggest_contract_length(self, player):
-        """Suggest appropriate contract length."""
-        if player.age < 25:
-            return 3  # Bridge deal for young players
-        elif player.age < 30:
-            return 5  # Prime years
-        elif player.age < 35:
-            return 2  # Short term for aging players
+        current_salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
+
+        value_diff = market_value - current_salary
+        if value_diff > 500000:
+            value_text = f"UNDERVALUED by ${value_diff:,.0f}"
+            value_color = ct['GREEN']
+        elif value_diff < -500000:
+            value_text = f"OVERVALUED by ${abs(value_diff):,.0f}"
+            value_color = ct['RED']
         else:
-            return 1  # Year by year for veterans
-    
+            value_text = "FAIRLY VALUED"
+            value_color = ct['TEAL']
+
+        self._body(info, text=f"Market Value: ${market_value:,.0f}", size=11).pack(
+            anchor="w", padx=12, pady=1)
+        self._body(info, text=f"Current Salary: ${current_salary:,.0f}", size=11).pack(
+            anchor="w", padx=12, pady=1)
+        ctk.CTkLabel(info, text=f"Assessment: {value_text}",
+                     font=("Segoe UI", 11, "bold"),
+                     text_color=value_color).pack(anchor="w", padx=12, pady=(4, 10))
+
+        factors = ctk.CTkFrame(parent, fg_color=ct['PANEL'], corner_radius=8)
+        factors.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._heading(factors, text="Value Factors", size=12).pack(
+            anchor="w", padx=12, pady=(10, 4))
+
+        value_factors = self.get_value_factors(player)
+        for factor, impact in value_factors:
+            row = ctk.CTkFrame(factors, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=1)
+            self._body(row, text=factor, size=11).pack(side="left")
+            ctk.CTkLabel(row, text=impact, font=("Segoe UI", 11),
+                         text_color=ct['GREEN'] if '+' in impact else ct['RED']
+                         ).pack(side="right")
+
+    def create_comparable_analysis(self, parent, player):
+        """Create the comparable players analysis."""
+        self._heading(parent, text="Comparable Players", size=12).pack(
+            anchor="w", padx=14, pady=(10, 4))
+
+        comparable = self.find_comparable_players(player)
+
+        columns = {'name': ('Player', 150), 'age': ('Age', 50),
+                   'ovr': ('OVR', 50), 'salary': ('Salary', 100),
+                   'value': ('Value Score', 100)}
+        comp_tree = ttk.Treeview(parent, columns=list(columns.keys()),
+                                 show='headings', height=10, style='FA.Treeview')
+        for col, (text, width) in columns.items():
+            comp_tree.heading(col, text=text)
+            comp_tree.column(col, width=width,
+                             anchor='w' if col == 'name' else 'center')
+        make_tree_sortable(comp_tree)
+
+        for comp_player, score in comparable[:10]:
+            salary = getattr(comp_player, "salary", getattr(comp_player.contract, "salary", 750000))
+            ovr = to_100_scale(comp_player.overall_rating())
+            tag = self._ovr_tag(ovr)
+            comp_tree.insert('', 'end',
+                             values=[comp_player.full_name, comp_player.age, ovr,
+                                     f"${salary:,}", f"{score:.1f}"],
+                             tags=(tag,) if tag else ())
+
+        comp_tree.pack(fill="both", expand=True, padx=14, pady=(0, 10))
+
+    def create_contract_projection(self, parent, player):
+        """Create the contract projection section."""
+        ct = self._ct
+        info = ctk.CTkFrame(parent, fg_color=ct['PANEL'], corner_radius=8)
+        info.pack(fill="x", padx=10, pady=10)
+        self._heading(info, text="Contract Projection", size=12).pack(
+            anchor="w", padx=12, pady=(10, 4))
+
+        market_value = self.calculate_market_value(player)
+        age = player.age
+        suggested_length = self.suggest_contract_length(player)
+
+        term_mult = 1.0
+        if suggested_length >= 5:
+            term_mult = 0.95  # Slight discount for long term
+        elif suggested_length <= 2:
+            term_mult = 1.05  # Premium for short term
+
+        projected_salary = market_value * term_mult
+        total_value = projected_salary * suggested_length
+
+        for text in (f"Projected Annual Salary: ${projected_salary:,.0f}",
+                     f"Suggested Length: {suggested_length} years",
+                     f"Total Contract Value: ${total_value:,.0f}"):
+            self._body(info, text=text, size=11).pack(anchor="w", padx=12, pady=1)
+
+        self._body(info, text=f"Rationale: {'Prime years, lock in long term' if age < 28 else 'Veteran, shorter term preferred' if age < 32 else 'Aging player, minimal term'}",
+                   dim=True, size=11).pack(anchor="w", padx=12, pady=(6, 10))
+
+    # ------------------------------------------------------------------
+    # Contract/value calculations (logic unchanged)
+    # ------------------------------------------------------------------
+    def calculate_market_value(self, player):
+        """Calculate the market value of a player."""
+        base_value = 750000  # Minimum NHL salary
+
+        # Rating-based value
+        rating = player.overall_rating()
+        rating_multiplier = (rating / 50) ** 2  # Exponential scaling
+
+        # Age factor
+        age = player.age
+        if age < 25:
+            age_factor = 1.2  # Young players get premium
+        elif age < 30:
+            age_factor = 1.0  # Prime years
+        elif age < 35:
+            age_factor = 0.8  # Declining
+        else:
+            age_factor = 0.6  # Veteran minimum
+
+        # Position factor
+        position = player.primary_position.value
+        if position == 'G':
+            position_factor = 1.1  # Goalies are valuable
+        elif position in ['C']:
+            position_factor = 1.15  # Centers are premium
+        else:
+            position_factor = 1.0
+
+        market_value = base_value * rating_multiplier * age_factor * position_factor
+        return max(market_value, base_value)
+
+    def suggest_contract_length(self, player):
+        """Suggest optimal contract length for a player."""
+        age = player.age
+        rating = player.overall_rating()
+
+        if age < 25 and rating > 40:
+            return 6  # Young star, long term
+        elif age < 28:
+            return 5  # Prime player
+        elif age < 30:
+            return 4  # Established
+        elif age < 33:
+            return 3  # Veteran
+        elif age < 35:
+            return 2  # Aging
+        else:
+            return 1  # Old veteran
+
     def get_value_factors(self, player):
         """Get factors affecting player value."""
         factors = []
-        
-        if player.age < 25:
-            factors.append("Young player with upside potential")
-        elif player.age > 33:
-            factors.append("Veteran experience but declining years")
-        
-        if player.overall_rating() > 47:
-            factors.append("Elite talent commands premium")
-        elif player.overall_rating() < 37:
-            factors.append("Developing player or depth role")
-        
-        goals = getattr(player, 'goals', 0)
-        if goals > 25:
-            factors.append("Proven goal scorer")
-        
-        assists = getattr(player, 'assists', 0)
-        if assists > 35:
-            factors.append("Elite playmaker")
-        
-        if getattr(player, 'plus_minus', 0) > 15:
-            factors.append("Strong defensive impact")
-        
-        return factors if factors else ["Standard market factors apply"]
-    
+
+        age = player.age
+        if age < 25:
+            factors.append(("Young age", "+15%"))
+        elif age > 32:
+            factors.append(("Advanced age", "-20%"))
+
+        rating = player.overall_rating()
+        if rating > 45:
+            factors.append(("Elite rating", "+25%"))
+        elif rating > 40:
+            factors.append(("Above average rating", "+10%"))
+        elif rating < 35:
+            factors.append(("Below average rating", "-15%"))
+
+        position = player.primary_position.value
+        if position == 'C':
+            factors.append(("Center premium", "+15%"))
+        elif position == 'G':
+            factors.append(("Goalie premium", "+10%"))
+
+        potential = player.potential_grade
+        if potential in ['A', 'A+']:
+            factors.append(("High potential", "+20%"))
+        elif potential in ['B', 'B+']:
+            factors.append(("Good potential", "+10%"))
+
+        return factors
+
     def find_comparable_players(self, target_player):
-        """Find players comparable to the target player."""
-        comparables = []
+        """Find comparable players for market analysis."""
+        comparable = []
         target_rating = target_player.overall_rating()
         target_age = target_player.age
-        target_position = str(target_player.primary_position)
-        
-        # Search through all teams for similar players
-        for team in self.parent.league.teams:
-            for roster_list in [team.roster, team.ahl_roster, team.prospects]:
-                for player in roster_list:
-                    if player == target_player:
-                        continue
-                    
-                    # Check similarity criteria
-                    rating_diff = abs(player.overall_rating() - target_rating)
-                    age_diff = abs(player.age - target_age)
-                    same_position = str(player.primary_position) == target_position
-                    
-                    # Include if similar rating, age, and position
-                    if rating_diff <= 5 and age_diff <= 3 and same_position:
-                        comparables.append(player)
-        
-        # Sort by overall rating
-        comparables.sort(key=lambda p: p.overall_rating(), reverse=True)
-        return comparables[:10]  # Return top 10 most similar
-    
+        target_pos = target_player.primary_position.value
+
+        for player in self.parent.game_manager.free_agents:
+            if player == target_player:
+                continue
+
+            # Calculate similarity score
+            rating_diff = abs(player.overall_rating() - target_rating)
+            age_diff = abs(player.age - target_age)
+            pos_match = 1 if player.primary_position.value == target_pos else 0
+
+            # Similarity score (lower is more similar)
+            similarity = rating_diff * 2 + age_diff * 0.5 - pos_match * 5
+            score = max(0, 100 - similarity)
+
+            if score > 60:  # Only include reasonably similar players
+                comparable.append((player, score))
+
+        return sorted(comparable, key=lambda x: x[1], reverse=True)
+
+    # ------------------------------------------------------------------
+    # Refresh / export / help
+    # ------------------------------------------------------------------
     def refresh_market(self):
-        """Refresh the free agency market."""
-        # Update all filtered views
+        """Refresh the free agency market data."""
         self.update_views()
-        
-        # Refresh the Market Overview tab by recreating it
+        # Rebuild the market overview tab content
         try:
-            # Find and remove the existing Market Overview tab
-            for i in range(self.notebook.index("end")):
-                if self.notebook.tab(i, "text") == "Market Overview":
-                    # Get the tab widget and destroy it
-                    tab_widget = self.notebook.nametowidget(self.notebook.tabs()[i])
-                    self.notebook.forget(i)
-                    tab_widget.destroy()
-                    break
-            
-            # Recreate the Market Overview tab
-            self.create_market_overview_tab()
-            
-        except (tk.TclError, IndexError):
-            # If there's an error, just update views
+            tab = self.tabview.tab("Market Overview")
+            for child in tab.winfo_children():
+                child.destroy()
+            self._build_market_overview(tab)
+        except Exception:
             pass
-        
-        tk.messagebox.showinfo("Market Refreshed", "Free agency market has been refreshed!")
-    
+        tk.messagebox.showinfo("Market Refreshed",
+                               "Free agency market data has been refreshed.")
+
     def update_views(self):
         """Update all views with current data."""
+        current = self.tabview.get()
         self.populate_filtered_players()
         self.populate_filtered_staff()
-        
-        # Also refresh market overview if the current tab is market overview
-        try:
-            current_tab = self.notebook.index(self.notebook.select())
-            if self.notebook.tab(current_tab, "text") == "Market Overview":
-                # Refresh market overview data by recreating the tab
-                self.refresh_market_overview_data()
-        except (tk.TclError, AttributeError):
-            pass
-    
+        # Re-select the previously active tab (population doesn't change it,
+        # but keep this deterministic for callers during __init__).
+        self.tabview.set(current)
+
     def refresh_market_overview_data(self):
-        """Refresh just the data in the Market Overview tab without recreating it."""
-        # This is a lighter refresh that just updates the data
-        # For now, we'll use the full refresh method, but this could be optimized
-        pass
-    
+        """Refresh just the market overview numbers after a signing."""
+        try:
+            tab = self.tabview.tab("Market Overview")
+            for child in tab.winfo_children():
+                child.destroy()
+            self._build_market_overview(tab)
+        except Exception:
+            pass
+
     def export_free_agents(self):
-        """Export the free agent lists."""
+        """Export free agent lists to CSV."""
         import csv
         from tkinter import filedialog
-        path = filedialog.asksaveasfilename(
+
+        filename = filedialog.asksaveasfilename(
             defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv")],
-            title="Export Free Agents",
-            initialfile="free_agents.csv")
-        if not path:
-            return
-        try:
-            with open(path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                # Players
-                writer.writerow(["PLAYERS"])
-                writer.writerow(["Name", "Pos", "Age", "OVR", "Potential",
-                                 "Salary", "Years", "Country", "Shoots",
-                                 "Height", "Weight"])
-                pmap = self.parent.tree_maps.get('fa_players', {})
-                for item in self.fa_player_tree.get_children():
-                    p = pmap.get(item)
-                    if not p:
-                        continue
-                    writer.writerow([
-                        p.full_name, p.primary_position.value, p.age,
-                        to_100_scale(p.overall_rating()),
-                        getattr(p, 'potential_grade', ''),
-                        getattr(p.contract, 'salary', ''),
-                        getattr(p.contract, 'years_remaining', ''),
-                        getattr(p, 'nationality', ''),
-                        getattr(p, 'shoots', ''),
-                        f"{getattr(p, 'height_feet', '')}'{getattr(p, 'height_inches', '')}\"",
-                        getattr(p, 'weight', ''),
-                    ])
-                writer.writerow([])
-                # Staff
-                writer.writerow(["STAFF"])
-                writer.writerow(["Name", "Role", "Department", "Rating",
-                                 "Age", "Salary", "Contract Yrs", "Country"])
-                smap = self.parent.tree_maps.get('fa_staff', {})
-                for item in self.fa_staff_tree.get_children():
-                    s = smap.get(item)
-                    if not s:
-                        continue
-                    writer.writerow([
-                        s.full_name, s.role.value, self._staff_dept(s),
-                        to_100_scale(s.overall_rating), s.age, s.salary,
-                        s.contract_years, s.nationality,
-                    ])
-            tk.messagebox.showinfo("Export Complete",
-                                   f"Free agent lists exported to:\n{path}")
-        except Exception as e:
-            tk.messagebox.showerror("Export Failed", f"Could not export:\n{e}")
-    
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Export Free Agents"
+        )
+
+        if filename:
+            try:
+                with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(['Type', 'Name', 'Position/Role', 'Age', 'Rating',
+                                     'Salary', 'Contract Years', 'Nationality'])
+
+                    for player in self.parent.game_manager.free_agents:
+                        salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
+                        years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
+                        writer.writerow(['Player', player.full_name,
+                                         player.primary_position.value, player.age,
+                                         to_100_scale(player.overall_rating()),
+                                         salary, years, getattr(player, 'nationality', 'Unknown')])
+
+                    for staff in self.parent.league.free_agent_staff:
+                        writer.writerow(['Staff', staff.full_name, staff.role.value,
+                                         staff.age, to_100_scale(staff.overall_rating),
+                                         staff.salary, staff.contract_years, staff.nationality])
+
+                tk.messagebox.showinfo("Export Complete",
+                                       f"Free agent data exported to {filename}")
+            except Exception as e:
+                tk.messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
+
     def show_help(self):
         """Show help information."""
-        help_text = """
-FREE AGENCY HELP
+        help_text = """Free Agency Market Help
 
-Use the filters to narrow down available players and staff:
-• Name: Search by player/staff name
-• Position/Role: Filter by specific positions or roles
-• Age: Filter by age ranges
-• Rating: Filter by overall rating ranges
-• Salary: Filter by salary expectations
+PLAYER TAB:
+- Use filters to narrow down available players
+- Pill buttons apply instantly -- no dropdowns to manage
+- Click column headers to sort
+- Double-click a player to open contract negotiations
+- Select multiple players and click "Compare Players" to compare them
+- Use "Market Analysis" for detailed value assessment
+
+STAFF TAB:
+- Filter staff by role, department, experience, and salary
+- Double-click a staff member to make a contract offer
+- Compare staff members to find the best fit
+
+MARKET OVERVIEW:
+- View market statistics and trends
+- See top available players by position
+- Double-click players to open negotiations
+
+FILTERS:
+- Position: Filter by player position
+- Age: Filter by age ranges
+- Rating: Filter by overall rating ranges
+- Salary: Filter by salary expectations
+- Contract: Filter by desired contract length
 
 Double-click any player or staff member to begin negotiations.
 Right-click for additional options and analysis tools.
 
 The Market Overview tab provides analytics and top available talent.
-        """
+"""
         tk.messagebox.showinfo("Free Agency Help", help_text)
-    
+
 class TradeWindow(ctk.CTkToplevel):
     """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
 
