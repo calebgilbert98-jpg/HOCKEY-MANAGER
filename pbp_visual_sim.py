@@ -439,7 +439,8 @@ class PBPVisualSim(tk.Toplevel):
         self._penalty_timers = {}
 
         # -- broadcast camera (puck-follow pan; zoom fixed at CAM_ZOOM) --
-        self._cam = {"x": 100.0, "on": True, "shake_until": 0.0,
+        # Default OFF: the whole ice stays visible so no player gets lost.
+        self._cam = {"x": 100.0, "on": False, "shake_until": 0.0,
                      "shake_mag": 0.0}
         self._pan_applied = 0.0
 
@@ -649,7 +650,7 @@ class PBPVisualSim(tk.Toplevel):
         self._pill(ctl, "End", self._sim_to_end, w=56)
         self.shotmap_btn = self._pill(ctl, "Shot Map", self._toggle_shotmap, w=84)
         self.cam_btn = self._pill(ctl, "Cam", self._toggle_cam, w=56)
-        self._refresh_toggle_btn(self.cam_btn, True)
+        self._refresh_toggle_btn(self.cam_btn, False)
         self.sound_btn = self._pill(ctl, "Sound", self._toggle_sound, w=68)
         self._refresh_toggle_btn(self.sound_btn, self._sound_on)
 
