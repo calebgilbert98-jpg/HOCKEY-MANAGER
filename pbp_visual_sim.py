@@ -437,15 +437,10 @@ class PBPVisualSim(tk.Toplevel):
         self._build_widgets()
         self._draw_rink()
         self._create_dots()
-        # full line charts for on-the-fly changes (rotation cadence below)
-        self.home_lines = _build_lines(home_team)
-        self.away_lines = _build_lines(away_team)
-        self._line_now = {"home": (0, 0), "away": (0, 0)}
+        # On-ice units are driven by the sim's authoritative skate events;
+        # the dots start on the opening lines until the first sync arrives.
+        # (_line_change kept as a stub for the bench-glide hooks below.)
         self._line_change = {"home": None, "away": None}
-        f0, d0 = self._line_indices()
-        self._apply_line("home", f0, d0)
-        self._apply_line("away", f0, d0)
-        self._line_now = {"home": (f0, d0), "away": (f0, d0)}
         self._faceoff_formation(100, 42.5, winner_is_home=True, teleport=True)
         self._feed("Game about to begin…", tag="period")
 
@@ -2630,67 +2625,17 @@ class PBPVisualSim(tk.Toplevel):
         return clk, last.get("period", 1)
 
     def _line_indices(self):
-        """0-based (forward line, D pair) from elapsed game time."""
+        """0-based (forward line, D pair) from elapsed game time.
+
+        Retained for compatibility; the sim's authoritative on-ice units
+        (skate events) drive line changes now.
+        """
         clk, _p = self._game_clock()
         el = max(0, 1200 - int(clk))
         return (el // 45) % 4, (el // 60) % 3
 
-    def _apply_line(self, side, f_idx, d_idx):
-        """Swap the five skater dots to a new line (roles stay, players
-        and jersey numbers change)."""
-        lines = self.home_lines if side == "home" else self.away_lines
-        if not lines["F"] or not lines["D"]:
-            return
-        fline = lines["F"][f_idx % len(lines["F"])]
-        dline = lines["D"][d_idx % len(lines["D"])]
-        want = {"C": fline.get("C"), "LW": fline.get("LW"),
-                "RW": fline.get("RW"), "D1": dline.get("D1"),
-                "D2": dline.get("D2")}
-        for d in self.dots.values():
-            dside = "home" if d["is_home"] else "away"
-            if dside != side:
-                continue
-            p = want.get(d["role"])
-            if p is None:
-                continue
-            if getattr(p, "id", None) == getattr(d["player"], "id", None):
-                continue
-            d["player"] = p
-            num = getattr(p, "jersey_number", None) or "–"
-            try:
-                self.canvas.itemconfig(d["text"], text=str(num))
-            except Exception:
-                pass
-
-    def _check_line_change(self, now):
-        """Start a bench-swap animation when the rotation cadence advances."""
-        if (now < self.hold_until or self._shootout_pending
-                or self._faceoff_ceremony):
-            return
-        f_idx, d_idx = self._line_indices()
-        for side in ("home", "away"):
-            if self._line_change[side] is not None:
-                continue
-            if (f_idx, d_idx) == self._line_now[side]:
-                continue
-            cf, cd = self._line_now[side]
-            roles = []
-            if f_idx != cf:
-                roles += ["C", "LW", "RW"]
-            if d_idx != cd:
-                roles += ["D1", "D2"]
-            self._line_now[side] = (f_idx, d_idx)
-            if not roles:
-                continue
-            self._line_change[side] = {"t0": now, "phase": 0,
-                                       "f": f_idx, "d": d_idx,
-                                       "roles": roles}
-
     def _update_units(self):
         clk, period = self._game_clock()
-        el = max(0, 1200 - int(clk))
-        fl = (el // 45) % 4 + 1   # same cadence as GameSim line changes
-        dp = (el // 60) % 3 + 1
         hm = sum(1 for did in self.penalty_box
                  if self.dots.get(did, {}).get("is_home"))
         am = sum(1 for did in self.penalty_box
@@ -2700,8 +2645,8 @@ class PBPVisualSim(tk.Toplevel):
         ot = f" OT{period - 3}" if period > 3 else ""
         hab = _abbr(self.home_team.team_name)
         aab = _abbr(self.away_team.team_name)
-        htxt = f"{hab}  F{fl} · D{dp}{hsuf}{ot}"
-        atxt = f"{aab}  F{fl} · D{dp}{asuf}{ot}"
+        htxt = f"{hab}{hsuf}{ot}"
+        atxt = f"{aab}{asuf}{ot}"
         if htxt != self._units_cache["home"]:
             self.units_home_var.set(htxt)
             self._units_cache["home"] = htxt
@@ -3130,18 +3075,6 @@ class PBPVisualSim(tk.Toplevel):
 
             # line changes are driven by the sim's authoritative on-ice
             # units (skate events) -- no independent rotation here
-            for side in ("home", "away"):
-                ch = self._line_change[side]
-                if ch is None:
-                    continue
-                if ch["phase"] == 0 and now - ch["t0"] >= 0.55:
-                    # old line reached the bench: swap the players over
-                    self._apply_line(side, ch["f"], ch["d"])
-                    ch["phase"] = 1
-                    ch["t0"] = now
-                elif ch["phase"] == 1 and now - ch["t0"] >= 0.35:
-                    # fresh line is back in formation
-                    self._line_change[side] = None
 
             # record position history for replays/highlights
             if self.playing and not self._instant:
