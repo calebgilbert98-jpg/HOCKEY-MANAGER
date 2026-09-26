@@ -1012,6 +1012,7 @@ class CareerState:
         self.intake_preview_sent: int = 0
         self.prompts_enabled: bool = True
         self.career_start_date: str = ""
+        self.sack_announced: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -1024,6 +1025,7 @@ class CareerState:
             "intake_preview_sent": self.intake_preview_sent,
             "prompts_enabled": self.prompts_enabled,
             "career_start_date": self.career_start_date,
+            "sack_announced": self.sack_announced,
         }
 
     @classmethod
@@ -1039,4 +1041,5 @@ class CareerState:
         c.intake_preview_sent = data.get("intake_preview_sent", 0)
         c.prompts_enabled = data.get("prompts_enabled", True)
         c.career_start_date = data.get("career_start_date", "")
+        c.sack_announced = data.get("sack_announced", False)
         return c

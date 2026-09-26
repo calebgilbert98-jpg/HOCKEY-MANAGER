@@ -8598,6 +8598,33 @@ class HockeyManagerGUI(tk.Tk):
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
+        # Guard: the season-end flow must only fire ONCE per season. Without
+        # this, every Continue press after the playoffs start re-shows the
+        # season summary / playoff prompt, and there is no path from a
+        # completed playoff bracket to the offseason (soft-lock).
+        season_year = getattr(getattr(self, 'league', None), 'season_year', None)
+        if getattr(self, '_season_end_handled_year', None) == season_year:
+            if self._playoffs_complete():
+                self._start_offseason()
+            elif getattr(self, '_bulk_simming', False):
+                # Bulk sim: drive the bracket to completion automatically.
+                self.open_playoffs_window()
+                w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+                try:
+                    if w is not None and w.winfo_exists():
+                        if not getattr(w, 'playoff_bracket', None):
+                            w._generate_bracket()
+                        w._simulate_all_playoffs()
+                except Exception:
+                    pass
+                if self._playoffs_complete():
+                    self._start_offseason()
+            else:
+                # Playoffs still in progress: focus the bracket, don't re-prompt.
+                self.open_playoffs_window()
+            return
+        self._season_end_handled_year = season_year
+
         # Show season summary first (skip the modal dialog when bulk simming)
         if not getattr(self, '_bulk_simming', False):
             self._show_season_summary()
@@ -8615,6 +8642,21 @@ class HockeyManagerGUI(tk.Tk):
             # Skip directly to offseason
             self._start_offseason()
             
+    def _playoffs_complete(self) -> bool:
+        """True once a Stanley Cup champion has been decided."""
+        try:
+            w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            if w is not None and w.winfo_exists():
+                bracket = getattr(w, 'playoff_bracket', None)
+                if bracket is not None and getattr(bracket, 'stanley_cup_champion', None):
+                    return True
+            lb = getattr(getattr(self, 'league', None), 'playoff_bracket', None)
+            if lb is not None and getattr(lb, 'stanley_cup_champion', None):
+                return True
+        except Exception:
+            pass
+        return False
+
     def _show_season_summary(self):
         """Display end of season summary with stats and awards."""
         season_str = f"{self.league.season_year}-{self.league.season_year + 1}"
@@ -9507,6 +9549,11 @@ class HockeyManagerGUI(tk.Tk):
     def _career_handle_sack(self):
         """Board has lost patience: game-over flow."""
         from tkinter import messagebox
+        # Fire once: without this the dialog + news spam on every subsequent
+        # game day / monthly review for the rest of the save.
+        if getattr(self.career, 'sack_announced', False):
+            return
+        self.career.sack_announced = True
         self.add_news("🚨 BREAKING: The board has sacked the manager.")
         messagebox.showwarning(
             "Sacked",
