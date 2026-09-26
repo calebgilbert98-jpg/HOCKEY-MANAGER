@@ -6194,6 +6194,18 @@ class GameSim:
         scorer = min(skaters,
                      key=lambda p: self._ppos_dist(self._ppos_get(p),
                                                    (px, self.puck_pos[1])))
+        # Hockey sense: nobody fires from center ice on camera. If we're
+        # not already deep, the scorer skates the puck into the zone first
+        # so the visual shows a proper play, not a prayer from distance.
+        if not deep_off:
+            anx = 189.0 if team_with_puck == self.home_team else 11.0
+            adir = 1 if team_with_puck == self.home_team else -1
+            self._ppos_place(scorer, anx - 25 * adir, 42.5, jitter=3.0)
+            self.possession_player = scorer
+            self.possession_team = team_with_puck
+            sx, sy = self._ppos_get(scorer)
+            self.puck_pos = self._clamp_boards(sx, sy)
+            self._emit_skate(force=True)
         self._log_event(
             f"{scorer.full_name} scores into the EMPTY NET!", "GOAL")
         self._handle_goal(team_with_puck, scorer, [],

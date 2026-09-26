@@ -1248,7 +1248,7 @@ class PBPVisualSim(tk.Toplevel):
             # and goalies keep their crease logic below.)
             pid = getattr(d.get("player"), "id", None)
             sp = self._sim_pos.get(pid) if pid is not None else None
-            sim_fresh = (self.playhead - self._sim_pos_t) < 3.0
+            sim_fresh = (self.playhead - self._sim_pos_t) < 1.2
             if (sp is not None and sim_fresh and d["role"] != "G"
                     and d["id"] != self.carrier_id):
                 d["tx"], d["ty"] = sp[0], sp[1]
@@ -1473,6 +1473,29 @@ class PBPVisualSim(tk.Toplevel):
             for d in mates:
                 d["tx"] = min(max(d["tx"], 5), 195)
                 d["ty"] = min(max(d["ty"], 5), 80)
+        # ---- cross-team separation: no 10-man piles on loose pucks ----
+        # Teammates keep 8ft; opponents keep 4ft (battles are 1v1, not 5v5).
+        all_skaters = [d for d in self.dots.values()
+                       if d["role"] != "G" and d["id"] not in self.penalty_box]
+        for _ in range(2):
+            for i in range(len(all_skaters)):
+                for j in range(i + 1, len(all_skaters)):
+                    a, b = all_skaters[i], all_skaters[j]
+                    if a["is_home"] == b["is_home"]:
+                        continue  # teammates handled above
+                    # battle pair gets a pass -- they're supposed to be close
+                    if a.get("nudge") or b.get("nudge"):
+                        continue
+                    dx, dy = b["tx"] - a["tx"], b["ty"] - a["ty"]
+                    dist = (dx * dx + dy * dy) ** 0.5
+                    if dist >= 4.0 or dist < 0.01:
+                        continue
+                    ux, uy = dx / dist, dy / dist
+                    push = (4.0 - dist) / 2
+                    a["tx"] -= ux * push
+                    a["ty"] -= uy * push
+                    b["tx"] += ux * push
+                    b["ty"] += uy * push
 
     def _slot_dz(self, role, adir, onx, py):
         """Defensive-zone wedge slot for a non-checker (role discipline)."""
