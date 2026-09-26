@@ -293,12 +293,13 @@ def _build_lines(team):
 # ----------------------------------------------------------------------------
 class PBPVisualSim(tk.Toplevel):
     GAME_RATE = 8.0  # game-seconds per real second at 1x
-    # faceoff ceremony beats (real seconds): whistle freeze -> skate to the
-    # dot -> set formation -> puck drop. Makes every stoppage a visible break.
-    _FO_WHISTLE = 0.7
-    _FO_LINEUP = 2.2
-    _FO_SET = 0.8
-    _FO_DROP = 0.5
+    # Quick faceoff beats (no ceremony every whistle): brief whistle freeze,
+    # glide to the dot, set, drop. ~1.5s total so stoppages read as breaks
+    # in play without stalling the broadcast.
+    _FO_WHISTLE = 0.3
+    _FO_LINEUP = 0.6
+    _FO_SET = 0.3
+    _FO_DROP = 0.3
     _FO_TOTAL = _FO_WHISTLE + _FO_LINEUP + _FO_SET + _FO_DROP
 
     def __init__(self, parent, sim, home_team, away_team,
@@ -339,6 +340,7 @@ class PBPVisualSim(tk.Toplevel):
         # -- live goalie stats: pid -> {name, shots, saves} --
         self._goalie_stats = {}
         self._cur_goalie = {"home": None, "away": None}
+        self._en = {"home": False, "away": False}  # goalie pulled: empty net
         for side, line in (("home", self.home_line), ("away", self.away_line)):
             g = line.get("G")
             pid = getattr(g, "id", None)
@@ -415,7 +417,7 @@ class PBPVisualSim(tk.Toplevel):
         self._card_until = 0.0
         self._card_items = []
 
-        # -- faceoff ceremony: dict(el, phase, dx, dy, winner_is_home, ev,
+        # -- quick faceoff state: dict(el, phase, dx, dy, winner_is_home, ev,
         #    puck_from) while a stoppage break is playing out --
         self._faceoff_ceremony = None
         # -- goal celebration state --
@@ -998,7 +1000,7 @@ class PBPVisualSim(tk.Toplevel):
             s = 1 if wins else -1  # winner on attack side of dot
             if role == "C":
                 spots[d["id"]] = (dx + 2.5 * s * wdir, dy)
-            elif role in ("LW", "RW"):
+            elif role in ("LW", "RW", "XF"):
                 side = -1 if role == "LW" else 1
                 spots[d["id"]] = (dx - 7 * s * wdir, dy + 11 * side)
             else:  # D1, D2
@@ -1063,7 +1065,7 @@ class PBPVisualSim(tk.Toplevel):
         tick; sim skate snapshots only feed puck position + carrier.
         """
         if self._faceoff_ceremony:
-            return  # ceremony owns every dot's targets until the puck drops
+            return  # faceoff owns every dot's targets until the puck drops
         px, py = self.puck["x"], self.puck["y"]
         pp = self._pp_team()
         strong_y, weak_y = (24.0, 61.0) if py < 42.5 else (61.0, 24.0)
@@ -1091,9 +1093,14 @@ class PBPVisualSim(tk.Toplevel):
                 return ((d["x"] - px) ** 2 + (d["y"] - py) ** 2) ** 0.5
             by_dist = sorted(skaters, key=_dist)
             fwd_by_dist = sorted(fwds, key=_dist)
+            team = self.home_team if home else self.away_team
             tstate[side] = dict(adir=adir, anx=anx, onx=onx, has=has, oz=oz,
                                 dz=dz, is_pp=is_pp, is_pk=is_pk,
                                 skaters=skaters, fwds=fwds,
+                                forecheck=getattr(team, "tactic_forecheck",
+                                                  "2-1-2"),
+                                offense=getattr(team, "tactic_offense",
+                                                "Spread"),
                                 check1={d["id"] for d in by_dist[:1]},
                                 check2={d["id"] for d in by_dist[:2]},
                                 fcheck1=([d["id"] for d in fwd_by_dist[:1]] or
@@ -1153,22 +1160,59 @@ class PBPVisualSim(tk.Toplevel):
                                 behind_net=((adir == 1 and px > anx - 28) or
                                             (adir == -1 and px < anx + 28)))
             elif has and st["oz"]:
+                # 5v5 offensive formation follows the coach's tactic
                 behind = ((adir == 1 and px > anx - 6) or
                           (adir == -1 and px < anx + 6))
-                if role == "C":
-                    tx, ty = (anx - 13 * adir, 42.5) if behind else \
-                        (anx - 27 * adir, 42.5)
-                elif role in ("LW", "RW"):
-                    mine = ((role == "LW") == (py < 42.5))
-                    if behind and mine:
-                        tx, ty = anx - 30 * adir, strong_y
-                    elif mine:
-                        tx, ty = anx - 37 * adir, strong_y
+                off = st["offense"]
+                if role == "XF":
+                    # extra attacker camps the net-front with the goalie out
+                    tx, ty = anx - 14 * adir, 42.5
+                elif off == "Umbrella":
+                    # D walk the line, C high slot, wingers down low
+                    if role == "C":
+                        tx, ty = anx - 40 * adir, 42.5
+                    elif role in ("LW", "RW"):
+                        tx, ty = (anx - 22 * adir, 24.0) if role == "LW" \
+                            else (anx - 22 * adir, 61.0)
                     else:
-                        tx, ty = anx - 45 * adir, weak_y  # stay wide
+                        tx, ty = (anx - 57 * adir, 30.0) if role == "D1" \
+                            else (anx - 57 * adir, 55.0)
+                elif off == "Overload":
+                    # numbers to the strong side
+                    if role == "C":
+                        tx, ty = anx - 26 * adir, 42.5
+                    elif role in ("LW", "RW"):
+                        mine = ((role == "LW") == (py < 42.5))
+                        tx, ty = (anx - 24 * adir, strong_y) if mine \
+                            else (anx - 44 * adir, weak_y)
+                    elif role == "D1":
+                        tx, ty = (anx - 40 * adir, strong_y)
+                    else:
+                        tx, ty = (anx - 54 * adir, 42.5)
+                elif off == "Crash the Net":
+                    # bodies on the doorstep, D bombing from the points
+                    if role in ("C", "LW", "RW"):
+                        s = {"C": 42.5, "LW": 38.0, "RW": 47.0}[role]
+                        tx, ty = anx - 13 * adir, s
+                    else:
+                        tx, ty = (anx - 52 * adir, 30.0) if role == "D1" \
+                            else (anx - 52 * adir, 55.0)
                 else:
-                    tx, ty = (anx - 57 * adir, 30.0) if role == "D1" else \
-                        (anx - 57 * adir, 55.0)
+                    # Spread: slot + wide wingers + active points
+                    if role == "C":
+                        tx, ty = (anx - 13 * adir, 42.5) if behind else \
+                            (anx - 27 * adir, 42.5)
+                    elif role in ("LW", "RW"):
+                        mine = ((role == "LW") == (py < 42.5))
+                        if behind and mine:
+                            tx, ty = anx - 30 * adir, strong_y
+                        elif mine:
+                            tx, ty = anx - 37 * adir, strong_y
+                        else:
+                            tx, ty = anx - 45 * adir, weak_y  # stay wide
+                    else:
+                        tx, ty = (anx - 57 * adir, 30.0) if role == "D1" \
+                            else (anx - 57 * adir, 55.0)
             elif has:
                 # breakout / regroup through the middle
                 if role == "C":
@@ -1211,18 +1255,43 @@ class PBPVisualSim(tk.Toplevel):
                     tx, ty = (onx + 30 * adir, strong_y) if mine else \
                         (onx + 33 * adir, weak_y)
             elif st["oz"]:
-                # 2-1-2 forecheck: two hunters, F3 high, D hold the line
-                hunters = st["fcheck2"]
-                if d["id"] in hunters:
-                    if hunters[0] == d["id"]:
-                        tx, ty = px, py
+                # Forecheck follows the coach's tactic: 2-1-2 sends two
+                # hunters, 1-2-2 staggers F2/F3, 1-4 drops everyone back.
+                fc = st["forecheck"]
+                if role == "XF":
+                    # extra attacker stays high as the safety valve
+                    tx, ty = px - 22 * adir, 42.5
+                elif fc == "1-4":
+                    # one checker contains, four back toward neutral ice
+                    if d["id"] == st["fcheck1"]:
+                        tx, ty = px - 8 * adir, py
+                    elif role in ("C", "LW", "RW"):
+                        tx, ty = px - 26 * adir, 32.0 if role != "RW" else 53.0
                     else:
-                        tx, ty = px + 11 * adir, 42.5 + (py - 42.5) * 0.4
-                elif role in ("C", "LW", "RW"):
-                    tx, ty = px + 24 * adir, 42.5
+                        tx, ty = (anx - 62 * adir, 32.0) if role == "D1" else \
+                            (anx - 62 * adir, 53.0)
+                elif fc == "1-2-2":
+                    # F1 pressures, F2/F3 stagger, D hold the line deeper
+                    if d["id"] == st["fcheck1"]:
+                        tx, ty = px, py
+                    elif role in ("C", "LW", "RW"):
+                        tx, ty = px - 16 * adir, 32.0 if role != "RW" else 53.0
+                    else:
+                        tx, ty = (anx - 55 * adir, 32.0) if role == "D1" else \
+                            (anx - 55 * adir, 53.0)
                 else:
-                    tx, ty = (anx - 50 * adir, 32.0) if role == "D1" else \
-                        (anx - 50 * adir, 53.0)
+                    # 2-1-2: two hunters, F3 high, D hold the line
+                    hunters = st["fcheck2"]
+                    if d["id"] in hunters:
+                        if hunters[0] == d["id"]:
+                            tx, ty = px, py
+                        else:
+                            tx, ty = px + 11 * adir, 42.5 + (py - 42.5) * 0.4
+                    elif role in ("C", "LW", "RW"):
+                        tx, ty = px + 24 * adir, 42.5
+                    else:
+                        tx, ty = (anx - 50 * adir, 32.0) if role == "D1" else \
+                            (anx - 50 * adir, 53.0)
             else:
                 # neutral zone 1-2-2: F1 pressures, F2/F3 clog the middle,
                 # D gap up at their own blue line instead of backing in
@@ -1380,6 +1449,10 @@ class PBPVisualSim(tk.Toplevel):
                                 f"{_abbr(self.away_team.team_name)}")
         elif et == "faceoff":
             self._on_faceoff(ev)
+        elif et == "goalie_pulled":
+            self._on_goalie_pulled(ev)
+        elif et == "goalie_back":
+            self._on_goalie_back(ev)
         elif et == "shot":
             self._on_shot(ev)
         elif et in ("goal", "save", "blocked_shot", "missed_shot"):
@@ -1388,6 +1461,12 @@ class PBPVisualSim(tk.Toplevel):
             self._on_hit(ev)
         elif et == "penalty":
             self._on_penalty(ev)
+        elif et == "delayed_penalty":
+            self._on_delayed_penalty(ev)
+        elif et == "goalie_freeze":
+            self._feed(f"{self._pname(ev.get('goalie'))} covers the puck -- "
+                       f"faceoff coming up in the {ev.get('team', '')} zone.",
+                       tag="info", ev=ev)
         elif et == "fight":
             self._on_fight(ev)
         elif et == "milestone":
@@ -1396,8 +1475,12 @@ class PBPVisualSim(tk.Toplevel):
             self._feed(random.choice(_ICING_T).format(
                 team=ev.get("team", "")), tag="info", ev=ev)
         elif et == "offside":
-            self._feed(random.choice(_OFFSIDE_T).format(
-                team=ev.get("team", "")), tag="info", ev=ev)
+            if ev.get("intentional"):
+                self._feed(f"Intentional offside on {ev.get('team', '')} -- "
+                           f"the faceoff comes all the way back.", tag="info", ev=ev)
+            else:
+                self._feed(random.choice(_OFFSIDE_T).format(
+                    team=ev.get("team", "")), tag="info", ev=ev)
         elif et == "penalty_shot":
             self._feed(f"Penalty shot awarded: {self._pname(ev.get('player'))} "
                        f"({ev.get('team', '')})…", tag="shot", ev=ev)
@@ -1484,13 +1567,32 @@ class PBPVisualSim(tk.Toplevel):
         return d
 
     def _sync_dots_to_sim(self, is_home, ids):
-        """Remap the five skater dots to the sim's on-ice player ids,
-        slotting each into the role that best fits his position."""
+        """Remap the skater dots to the sim's on-ice player ids,
+        slotting each into the role that best fits his position.
+        With the goalie pulled, the goalie dot becomes the 6th skater
+        (XF, extra forward); it reverts when the goalie returns."""
+        goalie_dot = next((d for d in self.dots.values()
+                           if d["is_home"] == is_home and d["role"] == "G"),
+                          None)
+        if len(ids) >= 6 and goalie_dot is not None:
+            goalie_dot["role"] = "XF"
+            goalie_dot["r"] = 13
+        else:
+            xf = next((d for d in self.dots.values()
+                       if d["is_home"] == is_home and d["role"] == "XF"),
+                      None)
+            if xf is not None:
+                xf["role"] = "G"
+                xf["r"] = 15
         dots = [d for d in self.dots.values()
-                if d["is_home"] == is_home and d["role"] != "G"]
+                if d["is_home"] == is_home and d["role"] not in ("G", "XF")]
         if not dots:
             return
         cur = {getattr(d["player"], "id", None) for d in dots}
+        xf_dot = next((d for d in self.dots.values()
+                       if d["is_home"] == is_home and d["role"] == "XF"), None)
+        if xf_dot is not None:
+            cur.add(getattr(xf_dot["player"], "id", None))
         if cur == set(ids):
             return
         team = self.home_team if is_home else self.away_team
@@ -1505,9 +1607,25 @@ class PBPVisualSim(tk.Toplevel):
                 if getattr(p, "id", None) not in have:
                     players.append(p)
                     have.add(getattr(p, "id", None))
+        remaining = list(players)
+        if xf_dot is not None and remaining:
+            # extra attacker: best remaining forward on the XF dot
+            def _is_fwd(p):
+                return getattr(getattr(p, "primary_position", None),
+                               "name", "") in ("CENTER", "LEFT_WING",
+                                               "RIGHT_WING")
+            fwds = [p for p in remaining if _is_fwd(p)]
+            pick = fwds[0] if fwds else remaining[0]
+            remaining.remove(pick)
+            if getattr(xf_dot["player"], "id", None) != getattr(pick, "id", None):
+                xf_dot["player"] = pick
+                num = getattr(pick, "jersey_number", None) or "-"
+                try:
+                    self.canvas.itemconfig(xf_dot["text"], text=str(num))
+                except Exception:
+                    pass
         role_pos = {"C": "CENTER", "LW": "LEFT_WING", "RW": "RIGHT_WING",
                     "D1": "LEFT_DEFENSE", "D2": "RIGHT_DEFENSE"}
-        remaining = list(players)
         for role in ("C", "LW", "RW", "D1", "D2"):
             d = next((x for x in dots if x["role"] == role), None)
             if d is None or not remaining:
@@ -1570,11 +1688,31 @@ class PBPVisualSim(tk.Toplevel):
             self._battle_settle_at = now + 0.55
             self.hold_until = max(self.hold_until, now + 0.55)
 
+    def _on_goalie_pulled(self, ev):
+        """Broadcast the empty-net gamble: feed line + EN on the bug."""
+        home = ev.get("team") == self.home_team.team_name
+        self._en["home" if home else "away"] = True
+        self._feed(f"{ev.get('team', '')} pull the goalie -- extra attacker "
+                   f"on with {ev.get('home_score', 0)}-{ev.get('away_score', 0)} "
+                   f"on the board.", tag="info", ev=ev)
+        self._update_scoreboard(ev)
+
+    def _on_goalie_back(self, ev):
+        home = ev.get("team") == self.home_team.team_name
+        self._en["home" if home else "away"] = False
+        self._update_scoreboard(ev)
+
     def _on_faceoff(self, ev):
         winner_is_home = ev["winner_team"] == self.home_team.team_name
-        dx, dy = faceoff_dot(ev.get("zone", "neutral_zone"), winner_is_home)
+        # The sim now ships the exact NHL faceoff dot (faceoff_x/faceoff_y);
+        # fall back to the old zone heuristic for legacy events.
+        fx, fy = ev.get("faceoff_x"), ev.get("faceoff_y")
+        if fx is None or fy is None:
+            dx, dy = faceoff_dot(ev.get("zone", "neutral_zone"), winner_is_home)
+        else:
+            dx, dy = fx, fy
         if self._instant:
-            # fast path (sim-to-end / big-moment jump): no ceremony
+            # fast path (sim-to-end / big-moment jump): no faceoff pause
             self._faceoff_formation(dx, dy, winner_is_home, teleport=False)
             self.possession_home = winner_is_home
             w = self._dot_by_player(ev.get("winner_player"))
@@ -1586,8 +1724,9 @@ class PBPVisualSim(tk.Toplevel):
             self._pstat(ev.get("winner_player"), "FO")
             self._update_scoreboard(ev)
             return
-        # Broadcast faceoff ceremony: whistle freeze -> skate to the dot ->
-        # set formation -> puck drop. Every stoppage becomes a visible break.
+        # Broadcast faceoff: whistle freeze -> glide to the dot ->
+        # set formation -> puck drop. Quick at every stoppage; the sim
+        # supplies the NHL-correct dot for the whistle.
         self._cancel_faceoff_ceremony()
         # a goal celebration still running is over; everyone lines up
         self._celly = None
@@ -1773,7 +1912,8 @@ class PBPVisualSim(tk.Toplevel):
             msg = self._goal_text(ev)
             self._feed(msg, tag="goal", ev=ev)
             self._note("goal", msg, ev)
-            self._goalie_shot(side, scored=True)
+            if not ev.get("empty_net"):
+                self._goalie_shot(side, scored=True)
             self._pstat(ev.get("shooter"), "G")
             for a in ev.get("assists") or []:
                 self._pstat(a, "A")
@@ -2314,6 +2454,9 @@ class PBPVisualSim(tk.Toplevel):
     # -- richer commentary helpers --------------------------------------
     def _goal_text(self, ev):
         S = self._pname(ev.get("shooter"))
+        score = f"{ev.get('home_score', 0)}-{ev.get('away_score', 0)}"
+        if ev.get("empty_net"):
+            return f"{S} scores into the EMPTY NET! {score}"
         ast = ev.get("assists") or []
         ast_txt = (" (assists: " + ", ".join(self._pname(a) for a in ast) + ")"
                    if ast else "")
@@ -2327,7 +2470,6 @@ class PBPVisualSim(tk.Toplevel):
             how = f" from the {loc}"
         else:
             how = ""
-        score = f"{ev.get('home_score', 0)}-{ev.get('away_score', 0)}"
         return random.choice(_GOAL_T).format(S=S, how=how, ast=ast_txt,
                                              score=score)
 
@@ -2389,6 +2531,17 @@ class PBPVisualSim(tk.Toplevel):
                   "player": player}
             self._pstats[pid] = st
         st[key] = st.get(key, 0) + amount
+
+    def _on_delayed_penalty(self, ev):
+        # The arm is up but play continues -- the penalized player stays on
+        # the ice until the whistle (the real "penalty" event hides his dot).
+        # The other end is already empty: "goalie_pulled" arrived with it.
+        msg = (f"Delayed penalty coming -- "
+               f"{self._pname(ev.get('player'))} ({ev.get('team', '')}, "
+               f"{ev.get('infraction', 'a foul')}). Play continues, "
+               f"extra attacker on!")
+        self._feed(msg, tag="penalty", ev=ev)
+        self._note("penalty", msg, ev)
 
     def _on_penalty(self, ev):
         d = self._dot_by_player(ev.get("player"))
@@ -2512,7 +2665,12 @@ class PBPVisualSim(tk.Toplevel):
         hn = self.home_team.team_name
         an = self.away_team.team_name
         self._cur_score = (hs, aws)
-        self.score_var.set(f"{hs} – {aws}")
+        en = []
+        if self._en.get("home"):
+            en.append(f"{_abbr(hn)} EN")
+        if self._en.get("away"):
+            en.append(f"{_abbr(an)} EN")
+        self.score_var.set(f"{hs} – {aws}" + (f"  {' '.join(en)}" if en else ""))
         if ev:
             clk = ev.get("clock", 0)
             p = ev.get("period", 1)

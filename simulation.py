@@ -524,6 +524,14 @@ class GameSim:
         
         self.home_on_ice = []
         self.away_on_ice = []
+
+        # Empty-net state: team NAMES currently skating 6 with the goalie
+        # pulled (Team objects are unhashable). Reset every game in run().
+        self.goalie_pulled = set()
+        # Rule 84.2: an OT penalty expiry leaves 4v4 until the next whistle.
+        self._ot_4v4_until_whistle = False
+        # Rule 26: a signaled-but-unwhistled penalty (delayed call).
+        self._delayed_penalty = None
         
         # Stage 2: Zone and possession tracking
         self.current_zone = Zone.NEUTRAL_ZONE
@@ -1951,6 +1959,9 @@ class GameSim:
     def run(self):
         """Runs the entire game simulation from period 1 through OT/shootout if necessary."""
         self._ppos_ensure()
+        self.goalie_pulled = set()  # no carryover between games
+        self._ot_4v4_until_whistle = False
+        self._delayed_penalty = None
         self._log_event("Game Start!", "PERIOD_START")
         self._emit_pbp("game_start",
                        home_team=self.home_team.team_name,
@@ -2085,6 +2096,7 @@ class GameSim:
             except Exception:
                 pass
         
+        self._return_all_goalies()  # final whistle: nets are full again
         self._emit_pbp("game_end", winner=winner.team_name,
                        home_score=self.home_score, away_score=self.away_score)
 
@@ -2125,7 +2137,7 @@ class GameSim:
         Stage 2 Enhancement: Simulates a single 20-minute period with zone-based gameplay.
         """
         self._select_starting_lines()
-        possession_team = self._resolve_faceoff()
+        possession_team = self._resolve_faceoff(reason="period_start")
         self.possession_team = possession_team
         self.current_zone = Zone.NEUTRAL_ZONE
         self.zone_time = 0
@@ -2159,7 +2171,32 @@ class GameSim:
                 self._update_ml_predictions()
 
             # Determine what happens based on current zone and possession
+            prev_possession = self.possession_team
             event_outcome = self._resolve_zone_based_event()
+
+            # Rule 26: a delayed penalty is whistled the instant the
+            # offending team touches the puck (or forced after ~8 ticks as
+            # a safety). This MUST run before the empty-net check: the
+            # touch that ends the delay kills the play, so the offending
+            # team can never score into the vacated net on that touch.
+            dp = getattr(self, "_delayed_penalty", None)
+            if dp is not None:
+                dp["ticks"] = dp.get("ticks", 0) + 1
+                if self.possession_team == dp["team"] or dp["ticks"] > 8:
+                    self._delayed_penalty = None
+                    self._whistle_penalty(dp["player"], dp["team"],
+                                          *dp["infraction"])
+
+            # Empty net: a live-play turnover to the other team is an
+            # empty-net chance (whistles return the goalie, so a pulled
+            # goalie here means live play).
+            if (self.possession_team is not None
+                    and self.possession_team != prev_possession):
+                self._maybe_empty_net_goal(self.possession_team)
+
+            # Late-game: trailing teams pull the goalie on the fly with
+            # offensive-zone possession.
+            self._maybe_pull_goalies()
 
             # Refresh lines before publishing positions, so the emitted
             # on-ice units always match the carrier's unit
@@ -2172,6 +2209,13 @@ class GameSim:
                 self._emit_skate()
             except Exception:
                 pass
+
+        # Rule 26: a delayed call can't survive the horn -- force the
+        # whistle at the period boundary.
+        dp = getattr(self, "_delayed_penalty", None)
+        if dp is not None:
+            self._delayed_penalty = None
+            self._whistle_penalty(dp["player"], dp["team"], *dp["infraction"])
 
     # Per-tick background penalty probability. Tuned so total penalties
     # (background + hit-path + defensive-play triggers) land near the NHL
@@ -2504,8 +2548,8 @@ class GameSim:
     def _maybe_icing(self, clearing_team, clearer):
         """NHL icing: no icing while shorthanded; tired/pressured clears get iced."""
         pens = self.home_penalties if clearing_team == self.home_team else self.away_penalties
-        if any(p for p in pens if p.get('minutes', 2) >= 2):
-            return False  # shorthanded: no icing
+        if any(p for p in pens if p.get('manpower_loss', True)):
+            return False  # shorthanded (manpower loss): no icing
         fatigue = self.player_fatigue.get(getattr(clearer, 'id', None), 100) / 100
         icing_prob = 0.05 + (1.0 - fatigue) * 0.30
         if random.random() < icing_prob:
@@ -2524,9 +2568,12 @@ class GameSim:
         self._frozen_line = (self.clock // 45) % 4 + 1
         self._frozen_d_pair = (self.clock // 60) % 3 + 1
         self._forced_faceoff_team = offending_team
-        self.possession_team = self._resolve_faceoff()
-        self.possession_player = None
+        # Freeze starts at the icing whistle: the offending team's tired
+        # skaters take the draw and can't change until the next stoppage.
         self._no_line_change_team = offending_team
+        self.possession_team = self._resolve_faceoff(reason="icing",
+                                                     offending_team=offending_team)
+        self.possession_player = None
         # Tired legs are stuck out: extra fatigue for the frozen skaters
         for p in self._get_on_ice(offending_team):
             if p.primary_position != PlayerPosition.GOALIE:
@@ -2536,14 +2583,27 @@ class GameSim:
         self.current_situation = self._get_current_situation()
 
     def _call_offside(self, carrier, attacking_team):
-        """Whistle: offside -> neutral-zone faceoff."""
+        """Whistle: offside -> neutral-zone faceoff (Rule 83.4: an intentional
+        offside is punished with a defensive-zone draw instead)."""
         self.offsides_called += 1
-        self._log_event(f"Offside on {attacking_team.team_name} ({carrier.full_name}).",
-                        "OFFSIDE")
-        self._emit_pbp("offside", player=carrier, team=attacking_team.team_name)
+        # ~8% of offsides are judged intentional (shot/pass deliberately
+        # played off a teammate deep in the zone, no tag-up attempt).
+        intentional = random.random() < 0.08
+        if intentional:
+            self._log_event(f"Intentional offside on {attacking_team.team_name} "
+                            f"({carrier.full_name}) -- faceoff comes all the way back.",
+                            "OFFSIDE")
+            reason = "offside_intentional"
+        else:
+            self._log_event(f"Offside on {attacking_team.team_name} ({carrier.full_name}).",
+                            "OFFSIDE")
+            reason = "offside"
+        self._emit_pbp("offside", player=carrier, team=attacking_team.team_name,
+                       intentional=intentional)
         self.current_zone = Zone.NEUTRAL_ZONE
         self._forced_faceoff_team = None
-        self.possession_team = self._resolve_faceoff()
+        self.possession_team = self._resolve_faceoff(reason=reason,
+                                                     offending_team=attacking_team)
         self.possession_player = None
         self.current_situation = self._get_current_situation()
         return "Offside", self.possession_team
@@ -2646,6 +2706,9 @@ class GameSim:
         if attackers:
             best_forechecker = max(attackers, key=lambda p: p.checking + p.anticipation)
             pressure = best_forechecker.checking + best_forechecker.anticipation
+            # Coach's forecheck sets the commitment on the clear attempt too.
+            fc = getattr(attacking_team, "tactic_forecheck", "2-1-2")
+            pressure *= {"2-1-2": 1.15, "1-2-2": 1.0, "1-4": 0.80}.get(fc, 1.0)
         
         # Clear attempt
         clear_skill = best_defender.passing + best_defender.defensive_awareness + best_defender.composure
@@ -2683,6 +2746,10 @@ class GameSim:
         pressure = 0
         if forecheckers:
             pressure = sum(p.forechecking + p.checking for p in forecheckers[:2]) / 2  # Top 2 forecheckers
+            # Coach's forecheck sets the commitment: 2-1-2 leans on the
+            # breakout hard, 1-4 concedes the zone and barely pressures.
+            fc = getattr(defending_team, "tactic_forecheck", "2-1-2")
+            pressure *= {"2-1-2": 1.15, "1-2-2": 1.0, "1-4": 0.80}.get(fc, 1.0)
         
         # Forecheck pressure is physical: finish the check on the breakout passer
         hit_outcome = self._maybe_throw_hit(defending_team, attacking_team, best_defender, 0.30)
@@ -2911,9 +2978,37 @@ class GameSim:
             centers, wings, ds = by_role["C"], by_role["W"], by_role["D"]
 
             if shape == "attack":
-                spots = {"C": [(att_net - 24 * adir, 42.5)],
-                         "W": [(att_net - 36 * adir, 22.0), (att_net - 36 * adir, 63.0)],
-                         "D": [(att_net - 54 * adir, 30.0), (att_net - 54 * adir, 55.0)]}
+                # Offensive-zone formation follows the coach's tactic.
+                off = getattr(team, "tactic_offense", "Spread")
+                shy = 22.0 if py < 42.5 else 63.0   # strong-side y
+                why = 63.0 if py < 42.5 else 22.0   # weak-side y
+                if off == "Umbrella":
+                    # two D walk the blue line, C in the high slot, wingers low
+                    spots = {"C": [(att_net - 40 * adir, 42.5)],
+                             "W": [(att_net - 22 * adir, 24.0),
+                                   (att_net - 22 * adir, 61.0)],
+                             "D": [(att_net - 54 * adir, 30.0),
+                                   (att_net - 54 * adir, 55.0)]}
+                elif off == "Overload":
+                    # numbers to the strong side: C + strong W + strong D low
+                    spots = {"C": [(att_net - 26 * adir, 42.5)],
+                             "W": [(att_net - 24 * adir, shy),
+                                   (att_net - 44 * adir, why)],
+                             "D": [(att_net - 40 * adir, shy),
+                                   (att_net - 54 * adir, 42.5)]}
+                elif off == "Crash the Net":
+                    # two bodies on the doorstep, D bombing from the points
+                    spots = {"C": [(att_net - 14 * adir, 42.5)],
+                             "W": [(att_net - 12 * adir, 38.0),
+                                   (att_net - 12 * adir, 47.0)],
+                             "D": [(att_net - 50 * adir, 30.0),
+                                   (att_net - 50 * adir, 55.0)]}
+                else:  # Spread: slot + wide wingers + active points
+                    spots = {"C": [(att_net - 24 * adir, 42.5)],
+                             "W": [(att_net - 36 * adir, 22.0),
+                                   (att_net - 36 * adir, 63.0)],
+                             "D": [(att_net - 54 * adir, 30.0),
+                                   (att_net - 54 * adir, 55.0)]}
             elif shape == "breakout":
                 spots = {"C": [(def_net + 20 * adir, 42.5)],
                          "W": [(def_net + 34 * adir, 22.0), (def_net + 34 * adir, 63.0)],
@@ -2930,11 +3025,23 @@ class GameSim:
                          "D": [(def_net + 13 * adir, 36.0),
                                (def_net + 13 * adir, 49.0)]}
             elif shape == "forecheck":
-                # 2-1-2 with real F1/F2/F3 roles, assigned below by
-                # proximity (nearest forward pressures, not always C).
-                spots = {"C": [(px - 10 * adir, 42.5)],
-                         "W": [(px - 10 * adir, 28.0), (px - 10 * adir, 57.0)],
-                         "D": [(px - 32 * adir, 32.0), (px - 32 * adir, 53.0)]}
+                # Forecheck shape follows the coach's tactic: 2-1-2 sends
+                # two hunters deep, 1-2-2 keeps F2/F3 staggered, 1-4 drops
+                # four back and concedes the zone. F1/F2/F3 roles are
+                # assigned below by proximity.
+                fc = getattr(team, "tactic_forecheck", "2-1-2")
+                if fc == "1-4":
+                    spots = {"C": [(px - 26 * adir, 42.5)],
+                             "W": [(px - 24 * adir, 28.0), (px - 24 * adir, 57.0)],
+                             "D": [(px - 40 * adir, 32.0), (px - 40 * adir, 53.0)]}
+                elif fc == "1-2-2":
+                    spots = {"C": [(px - 16 * adir, 42.5)],
+                             "W": [(px - 18 * adir, 28.0), (px - 18 * adir, 57.0)],
+                             "D": [(px - 32 * adir, 32.0), (px - 32 * adir, 53.0)]}
+                else:  # 2-1-2
+                    spots = {"C": [(px - 10 * adir, 42.5)],
+                             "W": [(px - 10 * adir, 28.0), (px - 10 * adir, 57.0)],
+                             "D": [(px - 32 * adir, 32.0), (px - 32 * adir, 53.0)]}
             else:  # neutral: lanes stretched through the middle
                 spots = {"C": [(px + 2 * adir, 42.5)],
                          "W": [(px + 10 * adir, 25.0), (px + 10 * adir, 60.0)],
@@ -2951,10 +3058,8 @@ class GameSim:
             for p in extras:
                 self._ppos_place(p, px - 18 * adir, 42.5)
             if shape == "forecheck":
-                # 2-1-2 roles by proximity: F1 pressures the carrier from
-                # the middle (steering him to the boards), F2 supports on
-                # the strong side and kills the middle outlet, F3 stays
-                # high as the safety valve; D hold the line with gap.
+                # Forecheck roles by proximity, shaped by the coach's tactic.
+                # F1 is the nearest forward (not always the center).
                 fwds = centers + wings
                 by_dist = sorted(
                     fwds,
@@ -2962,23 +3067,46 @@ class GameSim:
                 strong_y = 24.0 if py < 42.5 else 61.0
                 weak_y = 61.0 if py < 42.5 else 24.0
                 mid_side = -1.0 if py < 42.5 else 1.0  # angle from the middle
-                if by_dist:
-                    self._ppos_place(by_dist[0], px + 2 * adir,
-                                     py + mid_side * 4.0, jitter=1.2)
-                if len(by_dist) > 1:
-                    self._ppos_place(by_dist[1], px - 11 * adir,
-                                     (py + strong_y) / 2.0, jitter=1.5)
-                if len(by_dist) > 2:
-                    self._ppos_place(by_dist[2], px - 20 * adir,
-                                     (py + weak_y) / 2.0, jitter=1.5)
-                ds_sorted = sorted(
-                    ds, key=lambda p: abs(self._ppos_get(p)[1] - py))
-                if ds_sorted:
-                    self._ppos_place(ds_sorted[0], px - 26 * adir,
-                                     strong_y, jitter=1.5)
-                if len(ds_sorted) > 1:
-                    self._ppos_place(ds_sorted[1], px - 30 * adir,
-                                     42.5, jitter=1.5)
+                fc = getattr(team, "tactic_forecheck", "2-1-2")
+                if fc == "1-4":
+                    # one checker contains from the middle, everyone else
+                    # holds the neutral-zone wall (base spots above)
+                    if by_dist:
+                        self._ppos_place(by_dist[0], px - 6 * adir,
+                                         py + mid_side * 4.0, jitter=1.2)
+                elif fc == "1-2-2":
+                    # F1 pressures, F2/F3 stagger through the middle, D back
+                    if by_dist:
+                        self._ppos_place(by_dist[0], px + 2 * adir,
+                                         py + mid_side * 4.0, jitter=1.2)
+                    if len(by_dist) > 1:
+                        self._ppos_place(by_dist[1], px - 18 * adir,
+                                         strong_y, jitter=1.5)
+                    if len(by_dist) > 2:
+                        self._ppos_place(by_dist[2], px - 18 * adir,
+                                         weak_y, jitter=1.5)
+                else:
+                    # 2-1-2: F1 pressures the carrier from the middle
+                    # (steering him to the boards), F2 supports on the
+                    # strong side and kills the middle outlet, F3 stays
+                    # high as the safety valve; D hold the line with gap.
+                    if by_dist:
+                        self._ppos_place(by_dist[0], px + 2 * adir,
+                                         py + mid_side * 4.0, jitter=1.2)
+                    if len(by_dist) > 1:
+                        self._ppos_place(by_dist[1], px - 11 * adir,
+                                         (py + strong_y) / 2.0, jitter=1.5)
+                    if len(by_dist) > 2:
+                        self._ppos_place(by_dist[2], px - 20 * adir,
+                                         (py + weak_y) / 2.0, jitter=1.5)
+                    ds_sorted = sorted(
+                        ds, key=lambda p: abs(self._ppos_get(p)[1] - py))
+                    if ds_sorted:
+                        self._ppos_place(ds_sorted[0], px - 26 * adir,
+                                         strong_y, jitter=1.5)
+                    if len(ds_sorted) > 1:
+                        self._ppos_place(ds_sorted[1], px - 30 * adir,
+                                         42.5, jitter=1.5)
             # puck carrier skates with the puck
             if carrier_id and is_att:
                 for p in skaters:
@@ -3019,13 +3147,19 @@ class GameSim:
                            on_ice_home=_skater_ids(self.home_team),
                            on_ice_away=_skater_ids(self.away_team))
 
-    def _faceoff_formation(self, winner, zone):
-        """Line everyone up for the draw, then tell the visual sim."""
+    def _faceoff_formation(self, winner, zone, dot=None):
+        """Line everyone up for the draw, then tell the visual sim.
+
+        dot: explicit (dx, dy) faceoff spot from _faceoff_location; falls
+        back to the old zone-based heuristic when not provided.
+        """
         self._ppos_ensure()
         wdir = 1 if winner == self.home_team else -1   # direction winner attacks
         wnet = 189.0 if wdir == 1 else 11.0
-        # dot: neutral -> center ice; else the relevant end-zone dot
-        if zone == FaceoffZone.NEUTRAL_ZONE:
+        if dot is not None:
+            dx, dy = dot
+        elif zone == FaceoffZone.NEUTRAL_ZONE:
+            # dot: neutral -> center ice; else the relevant end-zone dot
             dx, dy = 100.0, 42.5
         else:
             # offensive-zone draw ~20 ft outside the attacked net, else own end
@@ -3167,7 +3301,7 @@ class GameSim:
         defending_skaters = [p for p in self._get_on_ice(defending_team) if p.primary_position != PlayerPosition.GOALIE]
 
         if not attacking_skaters or not defending_skaters:
-            return "Turnover", self._resolve_faceoff()
+            return "Turnover", self._resolve_faceoff(reason="stoppage")
 
         attacker = random.choice(attacking_skaters)
         # the 1v1 battle is against the nearest checker, not a random
@@ -3252,7 +3386,21 @@ class GameSim:
         elif shooter.primary_position == PlayerPosition.CENTER:
             location_weights[ShotLocation.HIGH_SLOT] *= 1.5
             location_weights[ShotLocation.LOW_SLOT] *= 1.3
-        
+
+        # Coach's offensive formation shapes where shots come from.
+        off = getattr(attacking_team, "tactic_offense", "Spread")
+        if off == "Umbrella":
+            location_weights[ShotLocation.POINT] *= 1.8
+            location_weights[ShotLocation.HIGH_SLOT] *= 1.2
+        elif off == "Overload":
+            location_weights[ShotLocation.LOW_SLOT] *= 1.5
+            location_weights[ShotLocation.LEFT_CIRCLE] *= 1.2
+            location_weights[ShotLocation.RIGHT_CIRCLE] *= 1.2
+        elif off == "Crash the Net":
+            location_weights[ShotLocation.POINT] *= 1.3
+            location_weights[ShotLocation.CREASE] *= 2.5
+            location_weights[ShotLocation.LOW_SLOT] *= 1.3
+
         return self._weighted_random_choice(location_weights)
 
     def _calculate_shot_distance(self, location):
@@ -3741,7 +3889,8 @@ class GameSim:
                 self._resolve_rebound_chance(attacking_team, defending_team)
             else:
                 # Regular save
-                self._handle_save(goalie, shooter, shot_type, quality)
+                self._handle_save(goalie, shooter, shot_type, quality,
+                                  defending_team=defending_team)
             
             # Update goaltender fatigue
             self._update_goaltender_fatigue(goalie, quality)
@@ -3888,7 +4037,7 @@ class GameSim:
         
         return False
 
-    def _handle_save(self, goalie, shooter, shot_type, quality):
+    def _handle_save(self, goalie, shooter, shot_type, quality, defending_team=None):
         """Handle a save event."""
         self._log_event(f"Shot by {shooter.full_name}, saved by {goalie.full_name}!", "SAVE")
         self._emit_pbp("save",
@@ -3896,14 +4045,53 @@ class GameSim:
                        shooter=shooter,
                        defending_team=getattr(goalie, "team_name", None),
                        shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type))
+        # NHL: on a controlled save the goalie often covers the puck for a
+        # whistle -- faceoff at the nearest end-zone dot in his own end.
+        # More likely on dangerous looks / under sustained pressure.
+        # (Kept modest: each whistle breaks up the attack's sustained
+        # pressure, so too many freezes would drag scoring below target.)
+        try:
+            q = float(quality)
+        except (TypeError, ValueError):
+            q = 0.4
+        if defending_team is not None and random.random() < 0.06 + 0.08 * q:
+            self._log_event(f"{goalie.full_name} covers the puck for a faceoff.",
+                            "STOPPAGE")
+            self._emit_pbp("goalie_freeze", goalie=goalie,
+                           team=defending_team.team_name,
+                           home_score=self.home_score,
+                           away_score=self.away_score)
+            self._forced_faceoff_team = None
+            self.possession_team = self._resolve_faceoff(reason="stoppage")
+            self.possession_player = None
+            self.current_situation = self._get_current_situation()
 
 
-    def _resolve_faceoff(self):
+    def _resolve_faceoff(self, reason=None, offending_team=None):
         """
         Stage 3 Enhancement: Determines faceoff winner with detailed mechanics and zone tracking.
+
+        reason: stoppage that caused the draw ("period_start", "goal",
+        "icing", "offside", "penalty", "penalty_shot", "stoppage"). The
+        faceoff dot follows NHL placement rules (see _faceoff_location).
+        offending_team: the team at fault for icing/offside/penalty whistles.
         """
-        # Any whistle ends an icing no-line-change freeze
-        self._no_line_change_team = None
+        # Any whistle ends the empty-net gamble: the goalie comes back in.
+        # (A trailing coach may re-pull for an offensive-zone draw below.)
+        self._return_all_goalies()
+        # Rule 26: a delayed penalty is assessed at the next stoppage --
+        # booked quietly, since this faceoff is the whistle.
+        dp = getattr(self, "_delayed_penalty", None)
+        if dp is not None and reason != "penalty":
+            self._delayed_penalty = None
+            self._book_penalty(dp["player"], dp["team"], *dp["infraction"])
+        # Icing no-line-change: the restriction ends when the ensuing
+        # faceoff is taken (cleared at the end of _resolve_faceoff for
+        # reason == "icing"). This is a safety net for any other whistle.
+        if reason != "icing":
+            self._no_line_change_team = None
+        # Any whistle ends the post-penalty OT 4v4: back to 3v3 (Rule 84.2)
+        self._ot_4v4_until_whistle = False
         # A forced faceoff team (penalty/icing whistle) pins the draw to that
         # team's defensive zone; resolved winner-relative below.
         forced_team = getattr(self, '_forced_faceoff_team', None)
@@ -3971,7 +4159,12 @@ class GameSim:
 
         # Set zone based on faceoff location and update zone starts
         self._update_zone_starts(winner, self.faceoff_zone)
-        
+
+        # NHL faceoff dot for this stoppage (center ice after goals, the
+        # offending team's end zone after icing/penalties, neutral-zone dots
+        # after offsides, nearest dot otherwise).
+        fx, fy = self._faceoff_location(reason, offending_team)
+
         # Log the faceoff
         zone_desc = self.faceoff_zone.value.replace('_', ' ')
         outcome_desc = outcome.value.replace('_', ' ')
@@ -3982,10 +4175,64 @@ class GameSim:
                        home_center=home_player,
                        away_center=away_player,
                        zone=self.faceoff_zone.value,
-                       outcome=outcome.value)
-        self._faceoff_formation(winner, self.faceoff_zone)
+                       outcome=outcome.value,
+                       faceoff_x=round(fx, 1),
+                       faceoff_y=round(fy, 1))
+        self._faceoff_formation(winner, self.faceoff_zone, dot=(fx, fy))
+
+        # A trailing coach sends the extra attacker back out for an
+        # offensive-zone draw (goalie returned at the whistle above).
+        self._maybe_pull_goalie_for_draw(fx)
+
+        # Rule 81.2: the icing no-change restriction ends once the ensuing
+        # faceoff is taken -- the tired line took its draw, play is live.
+        if reason == "icing":
+            self._no_line_change_team = None
 
         return winner
+
+    # The nine NHL faceoff dots (x, y): center, four neutral-zone, four end-zone.
+    _FACEOFF_DOT_CENTER = (100.0, 42.5)
+    _FACEOFF_DOTS_NZ = ((69.0, 30.0), (69.0, 55.0), (131.0, 30.0), (131.0, 55.0))
+    _FACEOFF_DOTS_EZ_HOME = ((31.0, 30.0), (31.0, 55.0))
+    _FACEOFF_DOTS_EZ_AWAY = ((169.0, 30.0), (169.0, 55.0))
+
+    def _faceoff_location(self, reason, offending_team):
+        """Pick the NHL faceoff dot for a stoppage.
+
+        Rules (simplified but true to the NHL rulebook):
+        - goals / period starts / penalty shots -> center ice
+        - icing -> offending team's defensive-zone dot, strong side
+        - penalty -> penalized team's defensive-zone dot, strong side
+          (the power play starts with an offensive-zone draw)
+        - offside -> nearest neutral-zone dot
+        - intentional offside (Rule 83.4) -> offending team's defensive zone
+        - everything else -> nearest dot to the puck
+        """
+        px, py = self.puck_pos if getattr(self, 'puck_pos', None) else (100.0, 42.5)
+        strong_left = py < 42.5
+
+        def ez_dot(team):
+            dots = (self._FACEOFF_DOTS_EZ_HOME if team == self.home_team
+                    else self._FACEOFF_DOTS_EZ_AWAY)
+            return dots[0] if strong_left else dots[1]
+
+        def nearest(dots):
+            return min(dots, key=lambda d: (d[0] - px) ** 2 + (d[1] - py) ** 2)
+
+        if reason in ("period_start", "goal", "penalty_shot"):
+            return self._FACEOFF_DOT_CENTER
+        if reason == "icing" and offending_team is not None:
+            return ez_dot(offending_team)
+        if reason == "penalty" and offending_team is not None:
+            return ez_dot(offending_team)
+        if reason == "offside":
+            return nearest(self._FACEOFF_DOTS_NZ)
+        if reason == "offside_intentional" and offending_team is not None:
+            return ez_dot(offending_team)
+        all_dots = ((self._FACEOFF_DOT_CENTER,) + self._FACEOFF_DOTS_NZ
+                    + self._FACEOFF_DOTS_EZ_HOME + self._FACEOFF_DOTS_EZ_AWAY)
+        return nearest(all_dots)
 
     def _calculate_faceoff_skill(self, player, faceoff_zone, team):
         """Calculate faceoff skill with zone and situation modifiers."""
@@ -4265,12 +4512,55 @@ class GameSim:
         NHL-style penalty call: named infraction, realistic length, whistle,
         and a defensive-zone faceoff for the offending team.
         infraction may be a (name, minutes, detail) tuple to force a call.
+
+        Rule 26 (delayed penalty): when the offending team does not have the
+        puck, the referee signals but play continues -- the non-offending
+        team gets the extra attacker, and the whistle comes when the
+        offending team touches the puck. A goal during the delay washes out
+        a minor (handled in _handle_goal); any other stoppage assesses the
+        call (handled in _resolve_faceoff).
         """
         if infraction is None:
             name, penalty_length, detail = _draw_infraction()
         else:
             name, penalty_length, detail = infraction
 
+        if (name != "Fighting"
+                and getattr(self, "_delayed_penalty", None) is None
+                and getattr(self, "possession_team", None) is not None
+                and self.possession_team != team):
+            self._delayed_penalty = {"player": player, "team": team,
+                                     "infraction": (name, penalty_length, detail),
+                                     "ticks": 0}
+            opposing = self.away_team if team == self.home_team else self.home_team
+            self._pull_goalie(opposing)  # 6th attacker during the delay
+            self._log_event(
+                f"Delayed penalty coming up on {player.full_name} "
+                f"({team.team_name}, {name}) -- play continues!", "PENALTY")
+            self._emit_pbp("delayed_penalty", player=player,
+                           team=team.team_name, infraction=name,
+                           minutes=penalty_length,
+                           home_score=self.home_score,
+                           away_score=self.away_score)
+            return
+
+        self._whistle_penalty(player, team, name, penalty_length, detail)
+
+    def _whistle_penalty(self, player, team, name, penalty_length, detail):
+        """Book a penalty and blow the whistle immediately (faceoff in the
+        offending team's defensive zone). Used for immediate calls and for
+        forcing a delayed call at a period boundary."""
+        self._book_penalty(player, team, name, penalty_length, detail)
+        # Whistle: play stops, faceoff in the offending team's defensive zone
+        self._forced_faceoff_team = team
+        self.possession_team = self._resolve_faceoff(reason="penalty",
+                                                     offending_team=team)
+        self.possession_player = None
+        self.current_situation = self._get_current_situation()
+
+    def _book_penalty(self, player, team, name, penalty_length, detail):
+        """Record a penalty (box time, PIM, PP/PK bookkeeping, PBP) without
+        stopping play. The whistle/faceoff is the caller's job."""
         opposing_team = self.away_team if team == self.home_team else self.home_team
         team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
         opp_penalties = self.away_penalties if team == self.home_team else self.home_penalties
@@ -4375,12 +4665,6 @@ class GameSim:
                 self.away_penalties_called += 1
                 self.away_pim_called += penalty_length
 
-        # Whistle: play stops, faceoff in the offending team's defensive zone
-        self._forced_faceoff_team = team
-        self.possession_team = self._resolve_faceoff()
-        self.possession_player = None
-        self.current_situation = self._get_current_situation()
-
     def _resolve_penalty_shot(self, shooter, attacking_team, defending_team, fouler):
         """Rare NHL event: a penalty shot for a foul on a clear breakaway."""
         self.penalty_shots_called += 1
@@ -4419,7 +4703,7 @@ class GameSim:
         # Faceoff at center ice after the attempt
         self._forced_faceoff_team = None
         self.current_zone = Zone.NEUTRAL_ZONE
-        self.possession_team = self._resolve_faceoff()
+        self.possession_team = self._resolve_faceoff(reason="penalty_shot")
         self.possession_player = None
 
     def _update_penalties(self, time_elapsed):
@@ -4448,22 +4732,67 @@ class GameSim:
                     self.game_stats[player.id]['penalty_kill_time'] += time_elapsed
         
         # Process penalty time
+        ot_was_uneven = (self.period == 4 and not self.is_playoff and
+                         any(p.get('manpower_loss', True)
+                             for p in self.home_penalties + self.away_penalties))
+        # Rule 19.1: a team can never dress fewer than 3 skaters, so when
+        # 3+ manpower-loss penalties stack, the extras' clocks are delayed
+        # (frozen) until the team is back above the floor.
         for penalty_list in [self.home_penalties, self.away_penalties]:
+            mp = [p for p in penalty_list if p.get('manpower_loss', True)]
+            frozen = set(id(p) for p in sorted(mp, key=lambda p: p['time'])[2:])
             for penalty in penalty_list[:]:
+                if id(penalty) in frozen:
+                    continue
                 penalty['time'] -= time_elapsed
                 if penalty['time'] <= 0:
                     self._log_event(f"{penalty['player'].full_name} is out of the penalty box.", "PENALTY_END")
                     penalty_list.remove(penalty)
-        
+
+        # Rule 84.2: when an OT penalty expires leaving even strength, play
+        # continues 4-on-4 until the next stoppage, then reverts to 3-on-3.
+        if ot_was_uneven and not any(p.get('manpower_loss', True)
+                                     for p in self.home_penalties + self.away_penalties):
+            self._ot_4v4_until_whistle = True
+
         # Update situation after penalty changes
         self.current_situation = self._get_current_situation()
 
-    def _handle_goal(self, scoring_team, shooter, assists, shot_type=None, location=None):
+    def _handle_goal(self, scoring_team, shooter, assists, shot_type=None, location=None,
+                     empty_net=False):
         """
         Stage 3 Enhancement: Enhanced goal handling with special teams tracking.
+
+        empty_net: scored into an empty net -- not charged to any goalie,
+        and both goalies return (the trailing coach may re-pull after).
         """
+        # Rule 26: a goal during a delayed call washes out a minor. A double
+        # minor is reduced to a single minor; majors are still fully assessed
+        # (booked after the goal faceoff -- the goal is the whistle).
+        dp = getattr(self, "_delayed_penalty", None)
+        _deferred_after_goal = None
+        if dp is not None and dp["team"] != scoring_team:
+            self._delayed_penalty = None
+            _dname, _dminutes, _ddetail = dp["infraction"]
+            if _dminutes == 2:
+                self._log_event(
+                    f"{scoring_team.team_name} score during the delayed call -- "
+                    f"the minor to {dp['player'].full_name} is waved off!",
+                    "GOAL")
+            else:
+                reduced = (_dname, 2, _ddetail) if _dminutes == 4 else dp["infraction"]
+                _deferred_after_goal = (dp["player"], dp["team"], reduced)
+                self._log_event(
+                    f"{scoring_team.team_name} score during the delayed call -- "
+                    f"{_dname} to {dp['player'].full_name} is still assessed.",
+                    "GOAL")
+        # Any goal ends the empty-net gamble: goalies go back in.
+        self._return_all_goalies()
         shooter.stats.goals += 1
         self.game_stats[shooter.id]['g'] += 1
+        if empty_net:
+            self.game_stats[shooter.id]['empty_net_goals'] = \
+                self.game_stats[shooter.id].get('empty_net_goals', 0) + 1
         
         # Check if it's a special teams goal
         current_situation = self._get_current_situation()
@@ -4503,6 +4832,8 @@ class GameSim:
             log_msg += " (POWER PLAY GOAL)"
         elif self._is_team_on_penalty_kill(scoring_team):
             log_msg += " (SHORT-HANDED GOAL)"
+        if empty_net:
+            log_msg += " (EMPTY NET)"
         
         if shot_type:
             log_msg += f" ({shot_type.value.replace('_', ' ').title()})"
@@ -4516,6 +4847,7 @@ class GameSim:
                        assists=list(assists),
                        shot_type=shot_type.value if shot_type is not None and hasattr(shot_type, "value") else None,
                        location=location.value if location is not None and hasattr(location, "value") else None,
+                       empty_net=empty_net,
                        home_score=self.home_score,
                        away_score=self.away_score)
         # Broadcast milestone moments: hat-trick watch on #2, hats on #3.
@@ -4556,7 +4888,13 @@ class GameSim:
                         f"from penalty box.", "PENALTY_END")
         
         self._select_starting_lines()
-        self._resolve_faceoff()
+        self._resolve_faceoff(reason="goal")
+        # Rule 26: a major (or reduced double minor) from a delayed call that
+        # produced a goal is assessed now that the goal faceoff is done.
+        if _deferred_after_goal is not None:
+            _dp, _dt, _di = _deferred_after_goal
+            self._book_penalty(_dp, _dt, *_di)
+            self.current_situation = self._get_current_situation()
 
     def _update_shot_stats(self, shooter, attacking_team, defending_team, quality, distance, shot_type):
         """
@@ -4635,8 +4973,10 @@ class GameSim:
         formation = self._select_formation(attacking_team, current_situation)
         
         # Base event probabilities (shot_chance tuned so team SOG lands
-        # near NHL ~30/game with the flattened shooter distribution)
-        shot_chance = 0.40
+        # near NHL ~30/game with the flattened shooter distribution;
+        # nudged up 2026-09-26 to offset the honest scoring loss from
+        # goalie freezes breaking up sustained pressure)
+        shot_chance = 0.425
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
@@ -4789,19 +5129,34 @@ class GameSim:
         # stats. Only the winner gets a single goal added at the end.
         home_so_goals, away_so_goals = 0, 0
 
+        # Rule 84.4: the home team chooses whether to shoot first or second.
+        home_first = random.random() < 0.5
+        self._log_event(
+            f"Shootout: home team elects to shoot "
+            f"{'first' if home_first else 'second'}.",
+            "SHOOTOUT_START",
+        )
+
+        def one_round():
+            nonlocal home_so_goals, away_so_goals
+            order = ((away_pool, away_used, home_goalie, "away"),
+                     (home_pool, home_used, away_goalie, "home"))
+            if home_first:
+                order = (order[1], order[0])
+            for pool, used, goalie, side in order:
+                if self._resolve_shootout_attempt(next_shooter(pool, used), goalie):
+                    if side == "away":
+                        away_so_goals += 1
+                    else:
+                        home_so_goals += 1
+
         for _ in range(3):
-            if self._resolve_shootout_attempt(next_shooter(away_pool, away_used), home_goalie):
-                away_so_goals += 1
-            if self._resolve_shootout_attempt(next_shooter(home_pool, home_used), away_goalie):
-                home_so_goals += 1
+            one_round()
 
         extra_rounds = 0
         while home_so_goals == away_so_goals and extra_rounds < 15:
             extra_rounds += 1
-            if self._resolve_shootout_attempt(next_shooter(away_pool, away_used), home_goalie):
-                away_so_goals += 1
-            if self._resolve_shootout_attempt(next_shooter(home_pool, home_used), away_goalie):
-                home_so_goals += 1
+            one_round()
 
         if home_so_goals > away_so_goals:
             self.home_score += 1
@@ -4913,15 +5268,20 @@ class GameSim:
                           if p.get('manpower_loss', True)
                           and getattr(p['player'], 'primary_position', None) != PlayerPosition.GOALIE]
         num_skaters = 5
-        if self.period == 4:
-            # 3-on-3 OT: a penalty gives the OTHER team a 4th skater (4-on-3);
-            # the penalized team stays at 3. Offsetting calls keep it 3-on-3.
-            if len(penalized_skaters) > len(opp_mp_skaters):
-                num_skaters = 3
-            elif len(opp_mp_skaters) > len(penalized_skaters):
+        if self.period == 4 and not self.is_playoff:
+            # 3-on-3 regular-season OT only (playoff OT is 5-on-5, Rule 84.5).
+            # The non-offending team adds skaters for its advantage: 4-on-3 on
+            # a one-man edge, 5-on-3 on a two-man edge (Rule 84.2, incl. a
+            # two-penalty carryover from regulation); the offending team
+            # never drops below 3. Offsetting calls keep it 3-on-3.
+            # A penalty that just expired leaves 4-on-4 until the next
+            # whistle (Rule 84.2).
+            if (getattr(self, '_ot_4v4_until_whistle', False)
+                    and not penalized_skaters and not opp_mp_skaters):
                 num_skaters = 4
             else:
-                num_skaters = 3
+                edge = len(opp_mp_skaters) - len(penalized_skaters)
+                num_skaters = 3 + min(2, max(0, edge))
         else:
             num_skaters = max(3, 5 - len(penalized_skaters))
         
@@ -4992,11 +5352,24 @@ class GameSim:
             if player and player not in penalized_players and player not in on_ice:
                 on_ice.append(player)
         
+        # Empty net: the pulled team skates six (extra attacker, no goalie)
+        pulled = team.team_name in getattr(self, "goalie_pulled", set())
+        if pulled:
+            num_skaters += 1
         # If lineup is incomplete, fill with best available players
         if len(on_ice) < num_skaters:
-            best_available = sorted([p for p in team.roster if p not in on_ice and p not in penalized_players], key=lambda p: p.overall_rating(), reverse=True)
+            pool = [pl for pl in team.roster
+                    if pl not in on_ice and pl not in penalized_players]
+            if pulled:
+                # the 6th skater is a forward -- never dress the goalie
+                pool = [pl for pl in pool
+                        if pl.primary_position != PlayerPosition.GOALIE]
+            best_available = sorted(pool, key=lambda pl: pl.overall_rating(),
+                                    reverse=True)
             on_ice.extend(best_available[:num_skaters - len(on_ice)])
 
+        if pulled:
+            return on_ice  # net is empty
         # Selected starter (G1) first; fall back to best goalie on the roster.
         goalie = self._selected_goalie(team)
         on_ice.append(goalie)
@@ -5023,6 +5396,110 @@ class GameSim:
                         same_pos[0] if same_pos
                         else (skaters[0] if skaters else None))
                     break
+
+    # ------------------------------------------------------------------
+    # Empty net / goalie pulling (NHL late-game + delayed-penalty logic)
+    # ------------------------------------------------------------------
+    def _pull_eligible(self, team):
+        """Can this team pull its goalie right now? Late 3rd, trailing by
+        1-2, not shorthanded, not in OT."""
+        if getattr(self, "period", 1) != 3:
+            return False
+        if team.team_name in getattr(self, "goalie_pulled", set()):
+            return False
+        diff = ((self.home_score - self.away_score) if team == self.home_team
+                else (self.away_score - self.home_score))
+        if diff >= 0:
+            return False
+        deficit = -diff
+        if deficit == 1 and self.clock > 120:
+            return False
+        if deficit == 2 and self.clock > 60:
+            return False
+        if deficit > 2:
+            return False
+        if self._is_team_on_penalty_kill(team):
+            return False  # never pull while shorthanded
+        return True
+
+    def _team_in_oz(self, team):
+        """Puck deep in this team's attacking end (on-the-fly pull spot)."""
+        px = self.puck_pos[0] if getattr(self, "puck_pos", None) else 100.0
+        return ((team == self.home_team and px > 125)
+                or (team == self.away_team and px < 75))
+
+    def _pull_goalie(self, team):
+        """Pull the goalie for the extra attacker (6 skaters, empty net)."""
+        if team.team_name in self.goalie_pulled:
+            return
+        self.goalie_pulled.add(team.team_name)
+        self._select_starting_lines()
+        try:
+            self._emit_skate(force=True)
+        except Exception:
+            pass
+        self._log_event(
+            f"{team.team_name} pull the goalie for the extra attacker!",
+            "GOALIE_PULLED")
+        self._emit_pbp("goalie_pulled", team=team.team_name,
+                       home_score=self.home_score, away_score=self.away_score)
+
+    def _return_goalie(self, team):
+        """Goalie back in the net (whistles, goals, period ends)."""
+        if team.team_name not in self.goalie_pulled:
+            return
+        self.goalie_pulled.discard(team.team_name)
+        self._select_starting_lines()
+        self._emit_pbp("goalie_back", team=team.team_name,
+                       home_score=self.home_score, away_score=self.away_score)
+
+    def _return_all_goalies(self):
+        self._return_goalie(self.home_team)
+        self._return_goalie(self.away_team)
+
+    def _maybe_pull_goalies(self):
+        """Once-per-tick: trailing teams pull on the fly with OZ possession."""
+        for team in (self.home_team, self.away_team):
+            if (self._pull_eligible(team)
+                    and self.possession_team == team
+                    and self._team_in_oz(team)):
+                self._pull_goalie(team)
+
+    def _maybe_pull_goalie_for_draw(self, fx):
+        """A trailing coach keeps the goalie out for an offensive-zone draw."""
+        for team in (self.home_team, self.away_team):
+            if not self._pull_eligible(team):
+                continue
+            adir = 1 if team == self.home_team else -1
+            if (adir == 1 and fx > 125) or (adir == -1 and fx < 75):
+                self._pull_goalie(team)
+
+    def _maybe_empty_net_goal(self, team_with_puck):
+        """The other team's net is empty and they just turned it over."""
+        other = (self.away_team if team_with_puck == self.home_team
+                 else self.home_team)
+        if other.team_name not in self.goalie_pulled:
+            return
+        px = self.puck_pos[0] if getattr(self, "puck_pos", None) else 100.0
+        adir = 1 if team_with_puck == self.home_team else -1
+        deep_off = (adir == 1 and px > 125) or (adir == -1 and px < 75)
+        neutral = (adir == 1 and px > 75) or (adir == -1 and px < 125)
+        prob = 0.30 if deep_off else (0.10 if neutral else 0.03)
+        if random.random() >= prob:
+            return
+        skaters = [p for p in self._get_on_ice(team_with_puck)
+                   if p.primary_position != PlayerPosition.GOALIE]
+        if not skaters:
+            return
+        # the guy who picked it off fires it down the ice
+        scorer = min(skaters,
+                     key=lambda p: self._ppos_dist(self._ppos_get(p),
+                                                   (px, self.puck_pos[1])))
+        self._log_event(
+            f"{scorer.full_name} scores into the EMPTY NET!", "GOAL")
+        self._handle_goal(team_with_puck, scorer, [],
+                          shot_type=ShotType.WRIST_SHOT,
+                          location=ShotLocation.CREASE, empty_net=True)
 
     def _emit_pbp(self, event_type, **payload):
         """Emit a play-by-play event to registered listeners (no-op if none)."""

@@ -11658,6 +11658,12 @@ class TacticsWindow(tk.Toplevel):
         ("Line Matching", "tactic_line_matching", "Standard",
          ["Conservative", "Standard", "Aggressive"],
          "Home-ice line deployment vs score state"),
+        ("Forecheck", "tactic_forecheck", "2-1-2",
+         ["2-1-2", "1-2-2", "1-4"],
+         "Pressure scheme when the other team has the puck in their end"),
+        ("Offensive Zone", "tactic_offense", "Spread",
+         ["Overload", "Umbrella", "Spread", "Crash the Net"],
+         "5v5 attacking shape — where your shots come from"),
     ]
 
     # Mirrors GameSim._team_tactics_xg_factor tables so the readout is honest
@@ -11671,7 +11677,7 @@ class TacticsWindow(tk.Toplevel):
         self.parent = parent
         self.team = parent.user_team
         self.title(f"Team Tactics — {self.team.team_name}")
-        self.geometry("660x640")
+        self.geometry("660x780")
         bg = getattr(parent, 'CONTENT_BG', '#0e0e11')
         self.configure(bg=bg)
 
@@ -11750,6 +11756,8 @@ class TacticsWindow(tk.Toplevel):
         pp = getattr(self.team, 'tactic_power_play', 'Offensive')
         pk = getattr(self.team, 'tactic_penalty_kill', 'Defensive')
         lm = getattr(self.team, 'tactic_line_matching', 'Standard')
+        fc = getattr(self.team, 'tactic_forecheck', '2-1-2')
+        off = getattr(self.team, 'tactic_offense', 'Spread')
         atk = (self._ES_ATTACK.get(es, 1.0) - 1.0) * 100
         allowed = (self._ES_DEFENSE.get(es, 1.0) - 1.0) * 100
         pp_mult = {'Conservative': 0.96, 'Balanced': 1.0, 'Offensive': 1.05,
@@ -11771,6 +11779,20 @@ class TacticsWindow(tk.Toplevel):
                 if lm == "Aggressive" else
                 "standard rotation" if lm == "Standard" else
                 "even ice time regardless of score"),
+            f"Forecheck ({fc}): " + (
+                "heavy pressure on breakouts, more risk"
+                if fc == "2-1-2" else
+                "balanced pressure through the neutral zone"
+                if fc == "1-2-2" else
+                "concede the zone, protect the middle"),
+            f"Offensive zone ({off}): " + (
+                "numbers to the strong side, slot chances"
+                if off == "Overload" else
+                "point shots through traffic"
+                if off == "Umbrella" else
+                "balanced looks from everywhere"
+                if off == "Spread" else
+                "net-front chaos, tips and rebounds"),
         ]
         self.impact_label.configure(text="\n".join(lines))
 

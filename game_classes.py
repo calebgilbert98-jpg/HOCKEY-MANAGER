@@ -1793,6 +1793,10 @@ class Team:
     tactic_penalty_kill: str = "Defensive"
     # Line matching: 'Aggressive', 'Standard', 'Conservative'
     tactic_line_matching: str = "Standard"
+    # Forecheck: '2-1-2', '1-2-2', '1-4' (pressure scheme in the other team's end)
+    tactic_forecheck: str = "2-1-2"
+    # Offensive-zone formation: 'Overload', 'Umbrella', 'Spread', 'Crash the Net'
+    tactic_offense: str = "Spread"
     
     # Draft picks owned by this team
     draft_picks: Dict[int, List[DraftPick]] = field(default_factory=dict)  # Year -> List of picks
