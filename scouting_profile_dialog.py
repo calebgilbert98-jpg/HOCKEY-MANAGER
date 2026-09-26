@@ -37,7 +37,7 @@ class ScoutingProfileDialog(tk.Toplevel):
         self.grab_set()
 
         bg = getattr(parent, "CONTENT_BG", "#1e2430")
-        fg = getattr(parent, "TEXT_COLOR", "#e8ecf4")
+        fg = getattr(parent, "TEXT_COLOR", "#ffffff")
         self.configure(bg=bg)
         self._bg, self._fg = bg, fg
 
@@ -88,12 +88,12 @@ class ScoutingProfileDialog(tk.Toplevel):
                                       radius=9, padx=14, pady=7)
         self._new_btn.pack(side="left", padx=(0, 6))
         self._edit_btn = RoundedButton(btn, text="Edit", command=self._edit,
-                                       bg="#242F42", fg=fg,
+                                       bg="#1e1e24", fg=fg,
                                        font=("Helvetica", 10),
                                        radius=9, padx=14, pady=7)
         self._edit_btn.pack(side="left", padx=(0, 6))
         self._del_btn = RoundedButton(btn, text="Delete", command=self._delete,
-                                      bg="#242F42", fg=fg,
+                                      bg="#1e1e24", fg=fg,
                                       font=("Helvetica", 10),
                                       radius=9, padx=14, pady=7)
         self._del_btn.pack(side="left", padx=(0, 6))
@@ -242,7 +242,7 @@ class ProfileEditorDialog(tk.Toplevel):
         self._rows = []  # (attr_var, min_var, row_frame)
 
         add_btn = RoundedButton(main, text="+ Add Attribute",
-                                command=self._add_row, bg="#242F42", fg=fg,
+                                command=self._add_row, bg="#1e1e24", fg=fg,
                                 font=("Helvetica", 10),
                                 radius=9, padx=14, pady=7)
         add_btn.pack(anchor="w", pady=(0, 10))
@@ -265,7 +265,7 @@ class ProfileEditorDialog(tk.Toplevel):
                       radius=9, padx=14, pady=7).pack(side="left",
                                                      padx=(0, 8))
         RoundedButton(btn, text="Cancel", command=self.destroy,
-                      bg="#242F42", fg=fg, font=("Helvetica", 10),
+                      bg="#1e1e24", fg=fg, font=("Helvetica", 10),
                       radius=9, padx=14, pady=7).pack(side="left")
 
     def _attr_options(self):

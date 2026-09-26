@@ -31,15 +31,15 @@ class AtmosphericDashboard:
         self.original_colors = self.theme.colors
         
         # Override with dark colors similar to main UI theme
-        self.theme.colors.background = '#0F1419'        # Dark navy
-        self.theme.colors.arena_shadow = '#0F1419'      # Same as background
-        self.theme.colors.secondary = '#1B2332'         # Lighter panel background
-        self.theme.colors.ice_blue = '#2E7BD6'          # Blue accent
-        self.theme.colors.text_light = '#B8C5D6'        # Light text color
+        self.theme.colors.background = '#0e0e11'        # Dark navy
+        self.theme.colors.arena_shadow = '#0e0e11'      # Same as background
+        self.theme.colors.secondary = '#16161a'         # Lighter panel background
+        self.theme.colors.ice_blue = '#00ceb8'          # Blue accent
+        self.theme.colors.text_light = '#a1a1aa'        # Light text color
         
         # Keep team-specific primary color but ensure it's not white
         if hasattr(self.theme.colors, 'primary') and self.theme.colors.primary in ['#FFFFFF', '#ffffff', 'white']:
-            self.theme.colors.primary = '#DC3545'  # Default red if primary is white
+            self.theme.colors.primary = '#00ceb8'  # Default red if primary is white
         
         self.hierarchy_manager = VisualHierarchyManager(self.theme)
         self.animation_manager = AnimationManager(parent)
@@ -1134,7 +1134,7 @@ class AtmosphericDashboard:
 
             your_initials = self._get_team_initials()
             opp_initials = self._initials_for(next_game_data['opponent'])
-            opp_color = "#4A9EFF"
+            opp_color = "#58a6ff"
 
             self._team_dot(comparison_frame, your_initials,
                            self.theme.colors.primary).pack(side='left', padx=4)

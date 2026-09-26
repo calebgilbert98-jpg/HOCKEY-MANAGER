@@ -51,37 +51,37 @@ class HockeyAtmosphereSystem:
             "Boston Bruins": TeamColorScheme(
                 primary="#FFB81C", secondary="#000000", accent="#FFFFFF",
                 background="#1A1A1A", text_light="#FFFFFF", text_dark="#000000",
-                success="#28A745", warning="#FFC107", danger="#DC3545",
+                success="#3fb950", warning="#d29922", danger="#f85149",
                 ice_blue="#E8F4F8", arena_shadow="#0D0D0D", spotlight="#FFFACD"
             ),
             "Montreal Canadiens": TeamColorScheme(
                 primary="#AF1E2D", secondary="#192168", accent="#FFFFFF",
                 background="#1A1A1A", text_light="#FFFFFF", text_dark="#AF1E2D",
-                success="#28A745", warning="#FFC107", danger="#DC3545",
+                success="#3fb950", warning="#d29922", danger="#f85149",
                 ice_blue="#E8F4F8", arena_shadow="#0D0D0D", spotlight="#FFFACD"
             ),
             "Toronto Maple Leafs": TeamColorScheme(
                 primary="#003E7E", secondary="#FFFFFF", accent="#003E7E",
                 background="#1A1A1A", text_light="#FFFFFF", text_dark="#003E7E",
-                success="#28A745", warning="#FFC107", danger="#DC3545",
+                success="#3fb950", warning="#d29922", danger="#f85149",
                 ice_blue="#E8F4F8", arena_shadow="#0D0D0D", spotlight="#FFFACD"
             ),
             "Tampa Bay Lightning": TeamColorScheme(
                 primary="#002868", secondary="#FFFFFF", accent="#000000",
                 background="#1A1A1A", text_light="#FFFFFF", text_dark="#002868",
-                success="#28A745", warning="#FFC107", danger="#DC3545",
+                success="#3fb950", warning="#d29922", danger="#f85149",
                 ice_blue="#E8F4F8", arena_shadow="#0D0D0D", spotlight="#FFFACD"
             ),
             "Pittsburgh Penguins": TeamColorScheme(
                 primary="#000000", secondary="#FCB514", accent="#FFFFFF",
                 background="#1A1A1A", text_light="#FFFFFF", text_dark="#000000",
-                success="#28A745", warning="#FFC107", danger="#DC3545",
+                success="#3fb950", warning="#d29922", danger="#f85149",
                 ice_blue="#E8F4F8", arena_shadow="#0D0D0D", spotlight="#FFFACD"
             ),
             "Chicago Blackhawks": TeamColorScheme(
                 primary="#CF0A2C", secondary="#000000", accent="#FFFFFF",
                 background="#1A1A1A", text_light="#FFFFFF", text_dark="#CF0A2C",
-                success="#28A745", warning="#FFC107", danger="#DC3545",
+                success="#3fb950", warning="#d29922", danger="#f85149",
                 ice_blue="#E8F4F8", arena_shadow="#0D0D0D", spotlight="#FFFACD"
             ),
             # Add more teams as needed
@@ -94,9 +94,9 @@ class HockeyAtmosphereSystem:
     def _get_default_scheme(self) -> TeamColorScheme:
         """Default color scheme for unknown teams"""
         return TeamColorScheme(
-            primary="#D13438", secondary="#1F1F1F", accent="#FFFFFF",
-            background="#181818", text_light="#E0E0E0", text_dark="#D13438",
-            success="#28A745", warning="#FFC107", danger="#DC3545",
+            primary="#f85149", secondary="#1F1F1F", accent="#FFFFFF",
+            background="#181818", text_light="#E0E0E0", text_dark="#f85149",
+            success="#3fb950", warning="#d29922", danger="#f85149",
             ice_blue="#E8F4F8", arena_shadow="#0D0D0D", spotlight="#FFFACD"
         )
     

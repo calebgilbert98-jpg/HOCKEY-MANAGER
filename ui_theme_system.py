@@ -11,39 +11,39 @@ from team_identity_system import NHLTeamIdentity
 class ColorScheme:
     """Professional color scheme for hockey management"""
     # Base colors
-    primary_bg: str = '#0F1419'        # Deep navy base
-    secondary_bg: str = '#1B2332'      # Lighter panel background
-    tertiary_bg: str = '#242F42'       # Card/widget backgrounds
+    primary_bg: str = '#0e0e11'        # Deep navy base
+    secondary_bg: str = '#16161a'      # Lighter panel background
+    tertiary_bg: str = '#1e1e24'       # Card/widget backgrounds
     
     # Text colors
-    primary_text: str = '#FFFFFF'      # Headers and important text
-    secondary_text: str = '#B8C5D6'    # Body text
-    muted_text: str = '#7A8AA3'        # Less important text
+    primary_text: str = '#ffffff'      # Headers and important text
+    secondary_text: str = '#a1a1aa'    # Body text
+    muted_text: str = '#71717a'        # Less important text
     
     # Accent colors
-    primary_accent: str = '#DC3545'    # Professional red (for buttons, highlights)
-    secondary_accent: str = '#4A9EFF'  # Ice blue (for links, secondary actions)
-    calendar_accent: str = '#2E7BD6'   # Blue specifically for calendar elements
-    success: str = '#46C93A'           # Green for positive stats
-    warning: str = '#FF9F43'           # Orange for warnings
-    danger: str = '#E74C3C'            # Red for negative stats
+    primary_accent: str = '#00ceb8'    # Professional red (for buttons, highlights)
+    secondary_accent: str = '#58a6ff'  # Ice blue (for links, secondary actions)
+    calendar_accent: str = '#00ceb8'   # Blue specifically for calendar elements
+    success: str = '#3fb950'           # Green for positive stats
+    warning: str = '#d29922'           # Orange for warnings
+    danger: str = '#f85149'            # Red for negative stats
     
     # Team-specific colors
-    team_home: str = '#2E86AB'         # Home team blue
-    team_away: str = '#A23B72'         # Away team burgundy
+    team_home: str = '#58a6ff'         # Home team blue
+    team_away: str = '#f778ba'         # Away team burgundy
     
     # UI element colors
-    border_light: str = '#3A4A63'      # Light borders
-    border_dark: str = '#1A2332'       # Dark borders
-    hover_bg: str = '#2A3441'          # Hover states
-    selected_bg: str = '#335577'       # Selected items
+    border_light: str = '#2e2e38'      # Light borders
+    border_dark: str = '#26262e'       # Dark borders
+    hover_bg: str = '#1e1e24'          # Hover states
+    selected_bg: str = '#0d2b28'       # Selected items
     
     # Data visualization
-    stat_excellent: str = '#46C93A'    # 90-100% ratings
-    stat_good: str = '#6BCF7F'         # 80-89% ratings  
-    stat_average: str = '#FFD93D'      # 70-79% ratings
-    stat_poor: str = '#FF9F43'         # 60-69% ratings
-    stat_terrible: str = '#E74C3C'     # Below 60% ratings
+    stat_excellent: str = '#3fb950'    # 90-100% ratings
+    stat_good: str = '#6fdd8b'         # 80-89% ratings  
+    stat_average: str = '#d29922'      # 70-79% ratings
+    stat_poor: str = '#e8933c'         # 60-69% ratings
+    stat_terrible: str = '#f85149'     # Below 60% ratings
 
 class ModernUITheme:
     """Modern UI theme with professional sports management styling"""

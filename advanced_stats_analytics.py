@@ -507,7 +507,7 @@ class AdvancedAnalyticsDashboard:
         generate_btn.pack(side='left', padx=10)
         
         # Heat map display
-        self.heat_map_canvas = tk.Canvas(self.heat_map_frame, bg='#1B2332', height=400)
+        self.heat_map_canvas = tk.Canvas(self.heat_map_frame, bg='#16161a', height=400)
         self.heat_map_canvas.pack(fill='both', expand=True, pady=5)
     
     def create_analytics_tab(self):
@@ -516,7 +516,7 @@ class AdvancedAnalyticsDashboard:
         momentum_frame = ttk.LabelFrame(self.analytics_frame, text="Game Momentum", padding=10)
         momentum_frame.pack(fill='x', pady=5)
         
-        self.momentum_canvas = tk.Canvas(momentum_frame, height=100, bg='#1B2332')
+        self.momentum_canvas = tk.Canvas(momentum_frame, height=100, bg='#16161a')
         self.momentum_canvas.pack(fill='x', pady=5)
         
         # Advanced metrics
@@ -671,7 +671,7 @@ class AdvancedAnalyticsDashboard:
         
         # Home team momentum (left side)
         if home_momentum != 0:
-            color = '#4CAF50' if home_momentum > 0 else '#F44336'
+            color = '#4CAF50' if home_momentum > 0 else '#f85149'
             x1 = center_x - home_bar_width if home_momentum > 0 else center_x
             x2 = center_x if home_momentum > 0 else center_x - home_bar_width
             self.momentum_canvas.create_rectangle(x1, 10, x2, canvas_height - 10, 
@@ -679,7 +679,7 @@ class AdvancedAnalyticsDashboard:
         
         # Away team momentum (right side)  
         if away_momentum != 0:
-            color = '#4CAF50' if away_momentum > 0 else '#F44336'
+            color = '#4CAF50' if away_momentum > 0 else '#f85149'
             x1 = center_x if away_momentum > 0 else center_x + away_bar_width
             x2 = center_x + away_bar_width if away_momentum > 0 else center_x
             self.momentum_canvas.create_rectangle(x1, 10, x2, canvas_height - 10, 

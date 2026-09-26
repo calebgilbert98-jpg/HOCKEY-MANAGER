@@ -284,7 +284,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         content_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Add subtle hockey-themed border
-        border_frame = tk.Frame(content_frame, bg='#D13438', height=2)
+        border_frame = tk.Frame(content_frame, bg='#f85149', height=2)
         border_frame.pack(fill='x', pady=(0, 5))
         
         # Create notebook for tabs
@@ -1266,7 +1266,7 @@ This profile will influence player relationships, media interactions, and trade 
         # Eastern Conference
         east_frame = tk.LabelFrame(grid_container, text="  Eastern Conference  ",
                                   font=('Segoe UI', 12, 'bold'),
-                                  bg='#1A1A1A', fg='#4A9EFF')
+                                  bg='#1A1A1A', fg='#58a6ff')
         east_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
         
         # Western Conference

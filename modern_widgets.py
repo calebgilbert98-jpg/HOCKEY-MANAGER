@@ -9,18 +9,18 @@ import tkinter as tk
 # Defaults mirror ui_theme_system.ColorScheme so the widgets blend in even
 # when the caller doesn't pass explicit colors.
 _DEFAULTS = {
-    "primary_bg": "#0F1419",
-    "secondary_bg": "#1B2332",
-    "tertiary_bg": "#242F42",
+    "primary_bg": "#0e0e11",
+    "secondary_bg": "#16161a",
+    "tertiary_bg": "#1e1e24",
     "primary_text": "#FFFFFF",
-    "secondary_text": "#B8C5D6",
-    "muted_text": "#7A8AA3",
-    "primary_accent": "#DC3545",
-    "secondary_accent": "#4A9EFF",
-    "success": "#46C93A",
-    "warning": "#FF9F43",
-    "border_light": "#3A4A63",
-    "hover_bg": "#2A3441",
+    "secondary_text": "#a1a1aa",
+    "muted_text": "#71717a",
+    "primary_accent": "#00ceb8",
+    "secondary_accent": "#58a6ff",
+    "success": "#3fb950",
+    "warning": "#d29922",
+    "border_light": "#2e2e38",
+    "hover_bg": "#1e1e24",
 }
 
 try:  # Prefer the live theme palette when available.
@@ -300,7 +300,7 @@ def style_treeview(style, *, row_bg=None, alt_bg=None):
         style.map("Treeview",
                   background=[("selected", _DEFAULTS["selected_bg"]
                                if "selected_bg" in _DEFAULTS
-                               else "#335577")],
+                               else "#0d2b28")],
                   foreground=[("selected", _DEFAULTS["primary_text"])])
     except Exception:
         pass
@@ -311,8 +311,8 @@ def style_treeview(style, *, row_bg=None, alt_bg=None):
 # ----------------------------------------------------------------------
 
 _INPUT_BG = "#161D29"
-_INPUT_BORDER = "#3A4A63"
-_INPUT_FOCUS = "#4A9EFF"
+_INPUT_BORDER = "#2e2e38"
+_INPUT_FOCUS = "#58a6ff"
 
 
 class DarkEntry(tk.Canvas):
@@ -407,7 +407,7 @@ class DarkText(tk.Text):
         kw.setdefault("bg", _INPUT_BG)
         kw.setdefault("fg", _DEFAULTS["primary_text"])
         kw.setdefault("insertbackground", _DEFAULTS["primary_text"])
-        kw.setdefault("selectbackground", "#335577")
+        kw.setdefault("selectbackground", "#0d2b28")
         kw.setdefault("selectforeground", _DEFAULTS["primary_text"])
         kw.setdefault("relief", "flat")
         kw.setdefault("bd", 0)
@@ -441,7 +441,7 @@ def style_combobox(style, style_name="Dark.TCombobox"):
             root.option_add("*TCombobox*Listbox.background", _INPUT_BG)
             root.option_add("*TCombobox*Listbox.foreground",
                             _DEFAULTS["primary_text"])
-            root.option_add("*TCombobox*Listbox.selectBackground", "#335577")
+            root.option_add("*TCombobox*Listbox.selectBackground", "#0d2b28")
             root.option_add("*TCombobox*Listbox.selectForeground",
                             _DEFAULTS["primary_text"])
         except Exception:
@@ -457,7 +457,7 @@ class DarkListbox(tk.Listbox):
     def __init__(self, parent, *, font=None, **kw):
         kw.setdefault("bg", _INPUT_BG)
         kw.setdefault("fg", _DEFAULTS["secondary_text"])
-        kw.setdefault("selectbackground", "#335577")
+        kw.setdefault("selectbackground", "#0d2b28")
         kw.setdefault("selectforeground", _DEFAULTS["primary_text"])
         kw.setdefault("relief", "flat")
         kw.setdefault("bd", 0)
@@ -483,7 +483,7 @@ def apply_dark_form_theme(root):
         root.option_add(f"*{cls}.background", _INPUT_BG)
         root.option_add(f"*{cls}.foreground", _pt if cls != "Listbox" else _st)
         root.option_add(f"*{cls}.insertBackground", _pt)
-        root.option_add(f"*{cls}.selectBackground", "#335577")
+        root.option_add(f"*{cls}.selectBackground", "#0d2b28")
         root.option_add(f"*{cls}.selectForeground", _pt)
         root.option_add(f"*{cls}.highlightBackground", _INPUT_BORDER)
         root.option_add(f"*{cls}.highlightColor", _INPUT_FOCUS)
@@ -493,7 +493,7 @@ def apply_dark_form_theme(root):
     # Combobox dropdown listbox.
     root.option_add("*TCombobox*Listbox.background", _INPUT_BG)
     root.option_add("*TCombobox*Listbox.foreground", _pt)
-    root.option_add("*TCombobox*Listbox.selectBackground", "#335577")
+    root.option_add("*TCombobox*Listbox.selectBackground", "#0d2b28")
     root.option_add("*TCombobox*Listbox.selectForeground", _pt)
 
     try:
@@ -721,7 +721,7 @@ class IconTile(tk.Canvas):
 class FormStreak(tk.Canvas):
     """Row of colored dots: W green, L red, OTL/T yellow. Most recent last."""
 
-    COLORS = {"W": "#46C93A", "L": "#DC3545", "O": "#FF9F43", "T": "#FF9F43"}
+    COLORS = {"W": "#3fb950", "L": "#00ceb8", "O": "#d29922", "T": "#d29922"}
 
     def __init__(self, parent, results, *, dot=14, gap=6, bg=None, **kw):
         self._results = [r.upper() for r in results]
@@ -733,8 +733,8 @@ class FormStreak(tk.Canvas):
         y = h / 2
         for i, r in enumerate(self._results):
             x = gap + dot / 2 + i * (dot + gap)
-            color = self.COLORS.get(r, "#7A8AA3")
+            color = self.COLORS.get(r, "#71717a")
             self.create_oval(x - dot / 2, y - dot / 2, x + dot / 2, y + dot / 2,
                              fill=color, outline="")
-            self.create_text(x, y, text=r, fill="#0B0F16",
+            self.create_text(x, y, text=r, fill="#0e0e11",
                              font=("Segoe UI", 8, "bold"))

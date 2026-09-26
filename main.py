@@ -2913,6 +2913,14 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+        # Modern theme bridge: restyle every legacy window (ttk defaults
+        # and classic tk widgets) to the charcoal/teal Puck Dynasty UI.
+        try:
+            from modern_theme_bridge import apply_modern_theme
+            apply_modern_theme(self)
+        except Exception:
+            pass
+
         # Initialize modern UI systems FIRST
         self.modern_theme = create_modern_theme()
         self.typography = TypographySystem()
@@ -3111,7 +3119,7 @@ class HockeyManagerGUI(tk.Tk):
             team_listbox = tk.Listbox(selection_window, 
                                      font=('Segoe UI', 12),
                                      bg='#2A2A2A', fg='#FFFFFF',
-                                     selectbackground='#D13438')
+                                     selectbackground='#f85149')
             
             for team_name in team_names:
                 team_listbox.insert(tk.END, team_name)
@@ -3142,7 +3150,7 @@ class HockeyManagerGUI(tk.Tk):
             
             tk.Button(button_frame, text="Select Team", 
                      command=on_select,
-                     bg='#D13438', fg='white', font=('Segoe UI', 12)).pack(side='left', padx=5)
+                     bg='#f85149', fg='white', font=('Segoe UI', 12)).pack(side='left', padx=5)
             
             tk.Button(button_frame, text="Cancel",
                      command=on_cancel, 
@@ -3675,7 +3683,7 @@ class HockeyManagerGUI(tk.Tk):
         from modern_widgets import RoundedButton
         self.season_flow_btn = RoundedButton(season_controls_frame, text="⚡ Season Flow",
                                             command=self.toggle_season_flow_panel,
-                                            bg="#2E7BD6", radius=10,
+                                            bg="#00ceb8", radius=10,
                                             font=(self.FONT_FAMILY, 11, "bold"))
         self.season_flow_btn.pack(pady=(2, 5))
 
@@ -4836,7 +4844,7 @@ class HockeyManagerGUI(tk.Tk):
             result_color = '#4CAF50'
         else:
             result_text = "😞 DEFEAT"
-            result_color = '#F44336'
+            result_color = '#f85149'
             
         result_label = tk.Label(header_frame, text=result_text, 
                                font=('Segoe UI', 14, 'bold'), fg=result_color, bg=self.TITLE_BAR_COLOR)
@@ -5394,7 +5402,7 @@ class HockeyManagerGUI(tk.Tk):
         choice = {'mode': 'quick'}
         dlg = tk.Toplevel(self)
         dlg.title("Game Day")
-        dlg.configure(bg="#0B0F16")
+        dlg.configure(bg="#0e0e11")
         dlg.resizable(False, False)
         try:
             dlg.transient(self)
@@ -5409,18 +5417,18 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             dlg.geometry(f"{w}x{h}")
 
-        tk.Label(dlg, text="GAME DAY", bg="#0B0F16", fg="#E63946",
+        tk.Label(dlg, text="GAME DAY", bg="#0e0e11", fg="#00ceb8",
                  font=("Segoe UI", 11, "bold")).pack(pady=(18, 4))
         matchup = f"{getattr(home_team, 'team_name', home_team)}  vs  " \
                   f"{getattr(away_team, 'team_name', away_team)}"
-        tk.Label(dlg, text=matchup, bg="#0B0F16", fg="#E8ECF1",
+        tk.Label(dlg, text=matchup, bg="#0e0e11", fg="#E8ECF1",
                  font=("Segoe UI", 14, "bold"), wraplength=380,
                  justify="center").pack(pady=4)
         tk.Label(dlg, text="How do you want to play this one?",
-                 bg="#0B0F16", fg="#8B93A5",
+                 bg="#0e0e11", fg="#8B93A5",
                  font=("Segoe UI", 10)).pack(pady=(0, 16))
 
-        btns = tk.Frame(dlg, bg="#0B0F16")
+        btns = tk.Frame(dlg, bg="#0e0e11")
         btns.pack(pady=6)
 
         def _pick(m):
@@ -5431,8 +5439,8 @@ class HockeyManagerGUI(tk.Tk):
                 pass
             dlg.destroy()
 
-        for label, m, bgc in (("Quick Sim", "quick", "#1B2A41"),
-                              ("Watch Live", "watch", "#E63946")):
+        for label, m, bgc in (("Quick Sim", "quick", "#16161a"),
+                              ("Watch Live", "watch", "#00ceb8")):
             b = tk.Button(btns, text=label, font=("Segoe UI", 12, "bold"),
                           bg=bgc, fg="white", activebackground=bgc,
                           activeforeground="white", relief="flat",
@@ -9919,7 +9927,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         
         # Stylish buttons
         self.create_modern_button(header_buttons, "Auto Best Lines", self.auto_populate_best_lines, 
-                                 bg='#28a745', hover_bg='#218838')
+                                 bg='#3fb950', hover_bg='#218838')
         self.create_modern_button(header_buttons, "Save Lines", self.save_lines_with_feedback, 
                                  bg='#007bff', hover_bg='#0056b3')
         self.create_modern_button(header_buttons, "Reset", self.reset_lines, 
@@ -10101,8 +10109,8 @@ class CleanEditLinesWindow(tk.Toplevel):
         
         # Color scheme based on type (dark theme)
         colors = {
-            "success": {"bg": "#1d2b22", "border": "#28a745", "icon": "✅"},
-            "error": {"bg": "#2b1d1f", "border": "#dc3545", "icon": "❌"},
+            "success": {"bg": "#1d2b22", "border": "#3fb950", "icon": "✅"},
+            "error": {"bg": "#2b1d1f", "border": "#00ceb8", "icon": "❌"},
             "info": {"bg": "#1b2630", "border": "#17a2b8", "icon": "ℹ️"}
         }
         
@@ -10124,7 +10132,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         content_frame = tk.Frame(notification, bg=color_scheme["bg"])
         content_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        tk.Label(content_frame, text=message, bg=color_scheme["bg"], fg='#e8ecf4',
+        tk.Label(content_frame, text=message, bg=color_scheme["bg"], fg='#ffffff',
                 font=(self.parent.FONT_FAMILY, 10), wraplength=300).pack()
         
         # OK button
@@ -10573,7 +10581,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         # Bind click to clear with subtle feedback
         for widget in [player_display, card_frame, info_frame, name_label, rating_label, arch_label]:
             widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, drop_zone.zone_id))
-            widget.bind('<Enter>', lambda e: card_frame.config(bg='#dc3545'))  # Red on hover
+            widget.bind('<Enter>', lambda e: card_frame.config(bg='#00ceb8'))  # Red on hover
             widget.bind('<Leave>', lambda e: card_frame.config(bg='#6c757d'))  # Back to gray
         
         # Store assignment
@@ -10693,7 +10701,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         tk.Label(header, text=title, bg="#1a2030", fg="white",
                  font=(self.parent.FONT_FAMILY, 13, "bold")).pack(anchor="w")
         sign = "+" if total >= 0 else ""
-        color = "#28a745" if total >= 0 else "#dc3545"
+        color = "#3fb950" if total >= 0 else "#00ceb8"
         tk.Label(header, text=f"Total chemistry: {sign}{total:g}", bg="#1a2030",
                  fg=color, font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w", pady=(4, 0))
         tk.Label(header, text="Archetype pairings drive chemistry. "
@@ -10712,7 +10720,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         for text, value in drivers:
             row = tk.Frame(body, bg="#1a2030")
             row.pack(fill="x", pady=3)
-            dot_color = "#28a745" if value > 0 else "#dc3545"
+            dot_color = "#3fb950" if value > 0 else "#00ceb8"
             dot = tk.Canvas(row, width=10, height=10, bg="#1a2030",
                             highlightthickness=0)
             dot.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
@@ -11275,13 +11283,13 @@ class TacticsWindow(tk.Toplevel):
         self.team = parent.user_team
         self.title(f"Team Tactics — {self.team.team_name}")
         self.geometry("660x640")
-        bg = getattr(parent, 'CONTENT_BG', '#111826')
+        bg = getattr(parent, 'CONTENT_BG', '#0e0e11')
         self.configure(bg=bg)
 
         font = getattr(parent, 'FONT_FAMILY', 'Helvetica')
-        fg = getattr(parent, 'TEXT_COLOR', '#e8ecf4')
-        muted = getattr(parent, 'MUTED_COLOR', '#8a94a6')
-        accent = '#E63946'
+        fg = getattr(parent, 'TEXT_COLOR', '#ffffff')
+        muted = getattr(parent, 'MUTED_COLOR', '#71717a')
+        accent = '#00ceb8'
 
         header = tk.Frame(self, bg=bg)
         header.pack(fill='x', padx=20, pady=(16, 4))
@@ -11325,8 +11333,8 @@ class TacticsWindow(tk.Toplevel):
         footer = tk.Frame(self, bg=bg)
         footer.pack(fill='x', padx=20, pady=(8, 16))
         done_btn = PillButton(footer, text="Done", bg=bg, font=(font, 11, 'bold'),
-                              fg='white', selected_bg='#E63946',
-                              selected_fg='white', hover_bg='#c1121f',
+                              fg='white', selected_bg='#00ceb8',
+                              selected_fg='white', hover_bg='#00a894',
                               padx=28, pady=8, command=self.destroy)
         done_btn.pack(side='right')
         done_btn.set_selected(True)  # Done is always in its active visual state
@@ -11433,9 +11441,9 @@ class TradeBlockWindow(tk.Toplevel):
             var = self.filter_vars[var_key]
             btns = {}
             try:
-                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#0e0e11'
             except Exception:
-                canvas_bg = '#111826'
+                canvas_bg = '#0e0e11'
             for value, text in options:
                 b = PillButton(row, text=text, bg=canvas_bg,
                                font=(self.parent.FONT_FAMILY, 9, 'bold'),
@@ -12193,8 +12201,8 @@ class ContractExtensionsWindow(tk.Toplevel):
         # Morale tags
         self.tree.tag_configure('high_morale', foreground='#4CAF50')   # Green
         self.tree.tag_configure('med_morale', foreground='#8BC34A')    # Light green
-        self.tree.tag_configure('low_morale', foreground='#FFC107')    # Yellow
-        self.tree.tag_configure('vlow_morale', foreground='#F44336')   # Red
+        self.tree.tag_configure('low_morale', foreground='#d29922')    # Yellow
+        self.tree.tag_configure('vlow_morale', foreground='#f85149')   # Red
     
     def show_context_menu(self, event):
         """Show right-click context menu for the tree."""
@@ -12470,7 +12478,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
                      
         status_color = "#4CAF50" if player.morale >= 15 else \
                       "#8BC34A" if player.morale >= 10 else \
-                      "#FFC107" if player.morale >= 5 else "#F44336"
+                      "#d29922" if player.morale >= 5 else "#f85149"
         
         ttk.Label(
             player_display, 
@@ -12506,7 +12514,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         ovr_bg_color = "#1A9B00" if player.overall_rating() >= 50 else \
                       "#4CAF50" if player.overall_rating() >= 47 else \
                       "#8BC34A" if player.overall_rating() >= 44 else \
-                      "#FFC107" if player.overall_rating() >= 40 else "#FF9800"
+                      "#d29922" if player.overall_rating() >= 40 else "#FF9800"
         
         rating_label = ttk.Label(
             rating_value,
@@ -12527,7 +12535,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         pot_bg_color = "#1A9B00" if player.potential_grade in ['A+', 'A'] else \
                       "#4CAF50" if player.potential_grade in ['A-', 'B+'] else \
                       "#8BC34A" if player.potential_grade in ['B', 'B-'] else \
-                      "#FFC107" if player.potential_grade in ['C+', 'C'] else "#FF9800"
+                      "#d29922" if player.potential_grade in ['C+', 'C'] else "#FF9800"
         
         pot_label = ttk.Label(
             pot_value,
@@ -12611,7 +12619,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
                         
         interest_color = "#4CAF50" if player.morale >= 15 else \
                         "#8BC34A" if player.morale >= 10 else \
-                        "#FFC107" if player.morale >= 5 else "#F44336"
+                        "#d29922" if player.morale >= 5 else "#f85149"
                         
         interest_text = f"Player Interest: {interest_level}"
         

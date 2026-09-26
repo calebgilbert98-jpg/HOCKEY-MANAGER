@@ -24,11 +24,11 @@ from simulation import GameSim
 # ----------------------------------------------------------------------------
 # Theme (matches app dark theme; square corners everywhere, pills on buttons)
 # ----------------------------------------------------------------------------
-BG = "#0B0F16"
-CONTENT_BG = "#111826"
+BG = "#0e0e11"
+CONTENT_BG = "#0e0e11"
 TEXT = "#E8ECF1"
 MUTED = "#8B93A5"
-ACCENT = "#E63946"          # home
+ACCENT = "#00ceb8"          # home
 AWAY_COLOR = "#6CB4EE"      # away (ice blue)
 PUCK_COLOR = "#111418"
 # Broadcast-rink palette (real NHL look: bright ice, crisp markings)
@@ -38,8 +38,8 @@ LINE_BLUE = "#005EB8"
 FACEOFF_RED = "#D31145"
 BOARD_BLUE = "#1E88C7"
 CREASE_BLUE = "#BFD9F2"
-RINK_SURROUND = "#0B0F16"
-INK = "#1B2A41"             # dark text on ice
+RINK_SURROUND = "#0e0e11"
+INK = "#16161a"             # dark text on ice
 FONT = "Segoe UI"
 
 try:
@@ -445,7 +445,7 @@ class PBPVisualSim(tk.Toplevel):
         oval = c.create_oval(self.X(x) - r, self.Y(y) - r,
                              self.X(x) + r, self.Y(y) + r,
                              fill=color, outline="white", width=2)
-        fg = "white" if is_home else "#0B0F16"
+        fg = "white" if is_home else "#0e0e11"
         txt = c.create_text(self.X(x), self.Y(y), text=str(num),
                             fill=fg, font=(FONT, 9, "bold"))
         self.dots[dot_id] = {

@@ -97,12 +97,12 @@ except Exception:  # standalone safety
 # Constants
 # ---------------------------------------------------------------------------
 
-BG = "#0B0F16"
-CONTENT_BG = "#111826"
+BG = "#0e0e11"
+CONTENT_BG = "#0e0e11"
 PANEL_BG = "#141C2A"
 TEXT = "#E8ECF1"
 MUTED = "#8B94A5"
-ACCENT = "#E63946"
+ACCENT = "#00ceb8"
 FONT = "Segoe UI"
 
 DATABASE_SIZES = {

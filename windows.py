@@ -22,9 +22,9 @@ def make_pill_group(parent, options, on_select, font_family='Segoe UI'):
     except tk.TclError:
         # ttk containers have no -bg; fall back to the theme background
         try:
-            canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+            canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#0e0e11'
         except Exception:
-            canvas_bg = '#111826'
+            canvas_bg = '#0e0e11'
     btns = {}
     for value, label in options:
         b = PillButton(parent, text=label, bg=canvas_bg,
@@ -1406,7 +1406,7 @@ class FreeAgencyWindow(tk.Toplevel):
         cap_space = 83500000 - current_salary  # NHL salary cap
         
         cap_text = f"Available Cap Space: ${cap_space:,}"
-        cap_color = self.parent.ACCENT_COLOR if cap_space > 10000000 else "#FFC107" if cap_space > 0 else "#F44336"
+        cap_color = self.parent.ACCENT_COLOR if cap_space > 10000000 else "#d29922" if cap_space > 0 else "#f85149"
         
         cap_label = ttk.Label(
             subtitle_frame,
@@ -1460,9 +1460,9 @@ class FreeAgencyWindow(tk.Toplevel):
             ttk.Label(row, text=label, style='Content.TLabel', width=9).pack(side=tk.LEFT)
             btns = {}
             try:
-                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#0e0e11'
             except Exception:
-                canvas_bg = '#111826'
+                canvas_bg = '#0e0e11'
             for value, text in options:
                 b = PillButton(row, text=text, bg=canvas_bg,
                                font=(self.parent.FONT_FAMILY, 9, 'bold'),
@@ -1606,9 +1606,9 @@ class FreeAgencyWindow(tk.Toplevel):
             ttk.Label(row, text=label, style='Content.TLabel', width=11).pack(side=tk.LEFT)
             btns = {}
             try:
-                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+                canvas_bg = ttk.Style().lookup('Panel.TFrame', 'background') or '#0e0e11'
             except Exception:
-                canvas_bg = '#111826'
+                canvas_bg = '#0e0e11'
             for value, text in options:
                 b = PillButton(row, text=text, bg=canvas_bg,
                                font=(self.parent.FONT_FAMILY, 9, 'bold'),
@@ -2352,7 +2352,7 @@ class FreeAgencyWindow(tk.Toplevel):
         years_row.pack(fill=tk.X, pady=(4, 10))
         year_btns = {}
         for y in ("1", "2", "3", "4", "5"):
-            b = PillButton(years_row, text=f"{y} yr", bg='#111826',
+            b = PillButton(years_row, text=f"{y} yr", bg='#0e0e11',
                            font=(self.parent.FONT_FAMILY, 9, 'bold'),
                            padx=12, pady=5,
                            command=lambda v=y: (years_var.set(v), _paint()))
@@ -2365,7 +2365,7 @@ class FreeAgencyWindow(tk.Toplevel):
         sal_row.pack(fill=tk.X, pady=(4, 6))
         sal_btns = {}
         for mult, label in (("0.8", "80%"), ("1.0", "Asking"), ("1.2", "120%")):
-            b = PillButton(sal_row, text=label, bg='#111826',
+            b = PillButton(sal_row, text=label, bg='#0e0e11',
                            font=(self.parent.FONT_FAMILY, 9, 'bold'),
                            padx=12, pady=5,
                            command=lambda v=mult: (salary_mult_var.set(v), _paint()))
@@ -2392,13 +2392,13 @@ class FreeAgencyWindow(tk.Toplevel):
 
         footer = ttk.Frame(dlg, style='Panel.TFrame', padding=12)
         footer.pack(fill=tk.X, padx=12, pady=(4, 12))
-        PillButton(footer, text="Make Offer", bg='#111826',
+        PillButton(footer, text="Make Offer", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 10, 'bold'),
                    padx=16, pady=7,
                    command=lambda: self._resolve_staff_offer(
                        dlg, staff, incumbent, int(years_var.get()),
                        _offer(), _chance())).pack(side=tk.LEFT, padx=(0, 8))
-        PillButton(footer, text="Cancel", bg='#111826',
+        PillButton(footer, text="Cancel", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 10, 'bold'),
                    padx=16, pady=7,
                    command=dlg.destroy).pack(side=tk.LEFT)
@@ -2511,7 +2511,7 @@ class FreeAgencyWindow(tk.Toplevel):
         ttk.Label(footer,
                   text=f"Salary: ${staff.salary:,}/yr  •  Contract: {staff.contract_years} yr",
                   style='Secondary.TLabel').pack(anchor='w')
-        PillButton(footer, text="Offer Contract", bg='#111826',
+        PillButton(footer, text="Offer Contract", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 10, 'bold'),
                    padx=16, pady=7,
                    command=lambda: (dlg.destroy(),
@@ -3290,9 +3290,9 @@ class TradeWindow(tk.Toplevel):
         ttk.Label(center, text="YOUR OFFER", style='Secondary.TLabel',
                   font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
         self.user_offer_list = tk.Listbox(center, height=6, activestyle='none',
-                                          bg='#232a3a', fg='#e8ecf4',
-                                          selectbackground='#335577', relief='flat',
-                                          highlightthickness=1, highlightbackground='#3a4a63')
+                                          bg='#232a3a', fg='#ffffff',
+                                          selectbackground='#0d2b28', relief='flat',
+                                          highlightthickness=1, highlightbackground='#2e2e38')
         self.user_offer_list.pack(fill='x', pady=(2, 2))
         ttk.Button(center, text="Remove selected",
                    command=lambda: self._remove_from_trade('user'),
@@ -3314,9 +3314,9 @@ class TradeWindow(tk.Toplevel):
         ttk.Label(center, text="THEIR OFFER", style='Secondary.TLabel',
                   font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
         self.partner_offer_list = tk.Listbox(center, height=6, activestyle='none',
-                                             bg='#232a3a', fg='#e8ecf4',
-                                             selectbackground='#335577', relief='flat',
-                                             highlightthickness=1, highlightbackground='#3a4a63')
+                                             bg='#232a3a', fg='#ffffff',
+                                             selectbackground='#0d2b28', relief='flat',
+                                             highlightthickness=1, highlightbackground='#2e2e38')
         self.partner_offer_list.pack(fill='x', pady=(2, 2))
         ttk.Button(center, text="Remove selected",
                    command=lambda: self._remove_from_trade('partner'),
@@ -3404,17 +3404,17 @@ class TradeWindow(tk.Toplevel):
         c.create_rectangle(0, 0, w, h, fill='#232a3a', outline='')
         if total > 0:
             uw = w * ev.user_value / total
-            c.create_rectangle(0, 0, uw, h, fill='#4a9eff', outline='')
+            c.create_rectangle(0, 0, uw, h, fill='#58a6ff', outline='')
             c.create_rectangle(uw, 0, w, h, fill='#e8b93c', outline='')
             # Center marker
             c.create_line(w/2, 0, w/2, h, fill='#0e1420', width=2)
         # Label
         if not self.trade_offers['user'] or not self.trade_offers['partner']:
             self.meter_label.config(text="Add assets on both sides to evaluate",
-                                    foreground='#7a8aa3')
+                                    foreground='#71717a')
         else:
-            color = {'Fair deal': '#46c93a', 'You overpay': '#4a9eff',
-                     'They overpay': '#e8b93c'}.get(ev.label, '#e8ecf4')
+            color = {'Fair deal': '#3fb950', 'You overpay': '#58a6ff',
+                     'They overpay': '#e8b93c'}.get(ev.label, '#ffffff')
             self.meter_label.config(
                 text=f"{ev.label}  (you {ev.user_value} vs them {ev.partner_value})",
                 foreground=color)
@@ -3431,7 +3431,7 @@ class TradeWindow(tk.Toplevel):
             self.cap_label.config(
                 text=f"Cap room after: ${room/1e6:.1f}M"
                      if ok else f"OVER CAP by ${-room/1e6:.1f}M — shed salary!",
-                foreground='#46c93a' if ok else '#e74c3c')
+                foreground='#3fb950' if ok else '#e74c3c')
         except Exception:
             self.cap_label.config(text="")
 
@@ -3486,8 +3486,8 @@ class TradeWindow(tk.Toplevel):
         dlg.transient(self)
         ttk.Label(dlg, text=f"Select a {team.team_name} pick:",
                   style='TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(pady=10)
-        lb = tk.Listbox(dlg, height=12, bg='#232a3a', fg='#e8ecf4',
-                        selectbackground='#335577', relief='flat')
+        lb = tk.Listbox(dlg, height=12, bg='#232a3a', fg='#ffffff',
+                        selectbackground='#0d2b28', relief='flat')
         lb.pack(fill='both', expand=True, padx=12)
         for pk in picks:
             lb.insert(tk.END, f"{self.te.asset_label(pk)}  [{self.te.asset_value(pk)}]")
@@ -3610,7 +3610,7 @@ class TradeWindow(tk.Toplevel):
                       style='Secondary.TLabel').pack(anchor='w', pady=4)
         else:
             lb = tk.Listbox(self.history_frame, height=5, bg='#232a3a',
-                            fg='#e8ecf4', relief='flat')
+                            fg='#ffffff', relief='flat')
             lb.pack(fill='x', pady=4)
             for t in reversed(history[-20:]):
                 lb.insert(tk.END, f"{t.date} — {t.summary}")
@@ -3732,10 +3732,10 @@ class ScoutingWindow(tk.Toplevel):
                   style='Secondary.TLabel', wraplength=240,
                   font=(parent.FONT_FAMILY, 9)).pack(anchor='w', pady=(0, 4))
         self.board_list = tk.Listbox(right, height=24, activestyle='none',
-                                     bg='#232a3a', fg='#e8ecf4',
-                                     selectbackground='#335577', relief='flat',
+                                     bg='#232a3a', fg='#ffffff',
+                                     selectbackground='#0d2b28', relief='flat',
                                      highlightthickness=1,
-                                     highlightbackground='#3a4a63')
+                                     highlightbackground='#2e2e38')
         self.board_list.pack(fill='both', expand=True)
         brow = ttk.Frame(right, style='Panel.TFrame')
         brow.pack(fill='x', pady=(6, 0))
@@ -4163,9 +4163,9 @@ class DraftWindow(tk.Toplevel):
         ttk.Label(strat_row, text="Strategy:", style='Secondary.TLabel').pack(side='left')
         self._draft_pill_groups = []
         try:
-            _dbg = ttk.Style().lookup('Panel.TFrame', 'background') or '#111826'
+            _dbg = ttk.Style().lookup('Panel.TFrame', 'background') or '#0e0e11'
         except Exception:
-            _dbg = '#111826'
+            _dbg = '#0e0e11'
         self._draft_pill_bg = _dbg
         for sval, stext in (("BPA", "Best Available"), ("Need", "Positional Need")):
             b = PillButton(strat_row, text=stext, bg=_dbg,
@@ -4191,10 +4191,10 @@ class DraftWindow(tk.Toplevel):
         ttk.Label(center, text="SHORTLIST", style='Secondary.TLabel',
                   font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(4, 2))
         self.shortlist = tk.Listbox(center, height=14, activestyle='none',
-                                    bg='#232a3a', fg='#e8ecf4',
-                                    selectbackground='#335577', relief='flat',
+                                    bg='#232a3a', fg='#ffffff',
+                                    selectbackground='#0d2b28', relief='flat',
                                     highlightthickness=1,
-                                    highlightbackground='#3a4a63')
+                                    highlightbackground='#2e2e38')
         self.shortlist.pack(fill='x', pady=(0, 4))
         self.shortlist.bind('<<ListboxSelect>>', self._on_shortlist_select)
 
@@ -4224,7 +4224,7 @@ class DraftWindow(tk.Toplevel):
         self.ticker = tk.Listbox(right, activestyle='none', bg='#141a26',
                                  fg='#c8d2e3', relief='flat', height=30,
                                  highlightthickness=1,
-                                 highlightbackground='#3a4a63')
+                                 highlightbackground='#2e2e38')
         self.ticker.pack(fill='both', expand=True)
         self.grades_button = ttk.Button(right, text="Draft Grades",
                                         command=self.show_grades,
@@ -4520,8 +4520,8 @@ class DraftWindow(tk.Toplevel):
                              state='readonly', width=30)
         combo.pack(pady=4)
 
-        lb = tk.Listbox(dlg, height=10, bg='#232a3a', fg='#e8ecf4',
-                        selectbackground='#335577', relief='flat')
+        lb = tk.Listbox(dlg, height=10, bg='#232a3a', fg='#ffffff',
+                        selectbackground='#0d2b28', relief='flat')
         lb.pack(fill='both', expand=True, padx=14, pady=6)
 
         def _partner_picks(name):
@@ -4666,7 +4666,7 @@ class DraftWindow(tk.Toplevel):
         ttk.Label(dlg, text="Draft Grades",
                   font=(self.parent.FONT_FAMILY, 16, 'bold'),
                   style='Heading.TLabel').pack(pady=12)
-        lb = tk.Listbox(dlg, bg='#232a3a', fg='#e8ecf4', relief='flat',
+        lb = tk.Listbox(dlg, bg='#232a3a', fg='#ffffff', relief='flat',
                         font=(self.parent.FONT_FAMILY, 11))
         lb.pack(fill='both', expand=True, padx=14, pady=6)
         user_grade = None
@@ -5129,7 +5129,7 @@ class ScheduleWindow(tk.Toplevel):
                     self._first_upcoming = my_item_id
                     
         # Configure tags for styling
-        self.my_schedule_tree.tag_configure('today', background='#1B2A4A', foreground='#FFFFFF')
+        self.my_schedule_tree.tag_configure('today', background='#0d2b28', foreground='#FFFFFF')
         self.my_schedule_tree.tag_configure('completed', foreground='#8A8A8A')
         self.my_schedule_tree.tag_configure('win', foreground='#7ED492')
         self.my_schedule_tree.tag_configure('loss', foreground='#E07A7A')
@@ -5524,7 +5524,7 @@ class FinancesWindow(tk.Toplevel):
         
         # Used cap bar
         used_width = (current_payroll / salary_cap) * bar_width
-        color = '#D13438' if percentage > 95 else '#4CAF50' if percentage < 80 else '#FFA500'
+        color = '#f85149' if percentage > 95 else '#4CAF50' if percentage < 80 else '#FFA500'
         
         canvas.create_rectangle(x_start, y_start, x_start + used_width, y_start + bar_height, 
                               fill=color, outline=color)
@@ -7763,7 +7763,7 @@ class GMDashboardWindow(tk.Toplevel):
         season = getattr(league, 'season_year', '')
         ttk.Label(header, text=f"  Season {season}" if season else "",
                   style='Secondary.TLabel').pack(side=tk.LEFT)
-        PillButton(header, text="Refresh", bg='#111826',
+        PillButton(header, text="Refresh", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
 
@@ -7808,7 +7808,7 @@ class GMDashboardWindow(tk.Toplevel):
         fill.pack(fill=tk.X)
         fill.update_idletasks()
         bw = max(1, fill.winfo_width())
-        color = '#e63946' if frac >= 0.95 else ('#e0a030' if frac >= 0.85 else '#2a9d8f')
+        color = '#00ceb8' if frac >= 0.95 else ('#e0a030' if frac >= 0.85 else '#2a9d8f')
         fill.create_rectangle(0, 0, bw * frac, 10, fill=color, outline='')
         self._line(card, f"{frac * 100:.0f}% of cap used", secondary=True)
 
@@ -7927,7 +7927,7 @@ class SeasonGoalsWindow(tk.Toplevel):
         ttk.Label(header, text="Season Goals",
                   font=(self.parent.FONT_FAMILY, 16, 'bold'),
                   style='TLabel').pack(side=tk.LEFT)
-        PillButton(header, text="Refresh", bg='#111826',
+        PillButton(header, text="Refresh", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh_progress).pack(side=tk.RIGHT)
 
@@ -8078,7 +8078,7 @@ class TeamAnalyticsWindow(tk.Toplevel):
         ttk.Label(header, text="Team Analytics",
                   font=(self.parent.FONT_FAMILY, 16, 'bold'),
                   style='TLabel').pack(side=tk.LEFT)
-        PillButton(header, text="Refresh", bg='#111826',
+        PillButton(header, text="Refresh", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
 
@@ -8203,7 +8203,7 @@ class SalaryAnalyticsWindow(tk.Toplevel):
         ttk.Label(header, text="Salary Analytics",
                   font=(self.parent.FONT_FAMILY, 16, 'bold'),
                   style='TLabel').pack(side=tk.LEFT)
-        PillButton(header, text="Refresh", bg='#111826',
+        PillButton(header, text="Refresh", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
         self.body = ttk.Frame(self, style='Panel.TFrame')
@@ -8320,8 +8320,8 @@ class BuyoutCalculatorWindow(tk.Toplevel):
         ttk.Label(left, text="Roster", style='TLabel',
                   font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         self.lb = tk.Listbox(left, height=22, activestyle='none',
-                             bg='#232a3a', fg='#e8ecf4',
-                             selectbackground='#335577', relief='flat',
+                             bg='#232a3a', fg='#ffffff',
+                             selectbackground='#0d2b28', relief='flat',
                              font=(self.parent.FONT_FAMILY, 10))
         self.lb.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.lb.bind('<<ListboxSelect>>', self._on_select)
@@ -8387,7 +8387,7 @@ class BuyoutCalculatorWindow(tk.Toplevel):
                 txt = f"{yr_label}: cap hit ${hit:,.0f} — dead money"
             self._line(self.detail, txt, secondary=True)
         ttk.Separator(self.detail, orient='horizontal').pack(fill='x', pady=6)
-        PillButton(self.detail, text="Execute Buyout", bg='#111826',
+        PillButton(self.detail, text="Execute Buyout", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 10, 'bold'),
                    padx=16, pady=7,
                    command=self._execute_buyout).pack(anchor='w', pady=(4, 0))
@@ -8493,7 +8493,7 @@ class GameDetailWindow(tk.Toplevel):
         self.body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
         self._tab_var = tk.StringVar(value=initial_tab)
         for key, label in (("recap", "Game Recap"), ("stats", "Game Stats")):
-            PillButton(tabs, text=label, bg='#111826',
+            PillButton(tabs, text=label, bg='#0e0e11',
                        font=(self.parent.FONT_FAMILY, 9, 'bold'),
                        padx=14, pady=6,
                        command=lambda k=key: self._show_tab(k)).pack(side=tk.LEFT, padx=(0, 6))

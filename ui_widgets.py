@@ -11,9 +11,9 @@ class PillButton(tk.Canvas):
     rounded corners on Linux). Used for selector rows in dark UI windows."""
 
     def __init__(self, parent, text, command=None, font=('Helvetica', 10, 'bold'),
-                 padx=16, pady=8, bg=None, fg='#c8d0e0',
-                 selected_bg='#E63946', selected_fg='white',
-                 hover_bg='#2a3550', **kw):
+                 padx=16, pady=8, bg=None, fg='#a1a1aa',
+                 selected_bg='#00ceb8', selected_fg='white',
+                 hover_bg='#1e1e24', **kw):
         self.text = text
         self.command = command
         self.font = font
