@@ -2309,7 +2309,11 @@ class GameSim:
         
         # Update zone time stats
         self._update_zone_time_stats(defending_team, attacking_team)  # Flip for defensive zone
-        
+
+        # The forechecking unit stays alive -- without this all five
+        # hunters stand frozen while the breakout develops.
+        self._defense_tick(defending_team, mode="forecheck")
+
         # Attempt breakout
         return self._attempt_breakout(attacking_team, defending_team)
 
@@ -3180,6 +3184,94 @@ class GameSim:
             if g is not None:
                 self._ppos_place(g, def_net, 42.5 + max(-9.0, min(9.0, (py - 42.5) * 0.3)),
                                  jitter=0.5)
+
+    def _defense_tick(self, defending_team, mode="dzone"):
+        """Keep the defending unit alive between whistles.
+
+        _shape_positions only runs on turnovers and zone entries, so a
+        long possession used to leave all five defenders standing frozen
+        while the attack worked the puck around. This runs every tick:
+        defenders adjust incrementally (capped stride, no teleporting) so
+        the unit tracks the puck like real penalty-killers and checkers.
+
+        mode="dzone": low-zone coverage -- nearest defender takes a step
+        at the puck staying goal-side, the rest slide toward their
+        coverage landmarks as the puck moves.
+        mode="forecheck": press the breakout -- nearest forward hunts the
+        carrier, the rest hold the forecheck structure.
+        """
+        self._ppos_ensure()
+        px, py = self.puck_pos
+        adir = 1 if defending_team == self.home_team else -1
+        def_net = 11.0 if adir == 1 else 189.0
+        skaters = self._on_ice_skaters(defending_team)
+        if not skaters:
+            return
+        by_dist = sorted(skaters,
+                         key=lambda p: self._ppos_dist(self._ppos_get(p),
+                                                       (px, py)))
+
+        def slide(p, tx, ty, max_step):
+            x, y = self._ppos_get(p)
+            dx, dy = tx - x, ty - y
+            dist = math.hypot(dx, dy)
+            if dist < 0.5:
+                return
+            step = min(dist, max_step)
+            self.player_positions[p.id] = self._clamp_boards(
+                x + dx / dist * step, y + dy / dist * step)
+
+        if mode == "dzone":
+            # coverage landmarks (mirror the "dzone" shape in
+            # _shape_positions)
+            shy = 24.0 if py < 42.5 else 61.0
+            why = 61.0 if py < 42.5 else 24.0
+            by_role = {"C": [], "W": [], "D": []}
+            for p in skaters:
+                r = self._ppos_role(p)
+                by_role["C" if r == "C" else
+                        "W" if r in ("LW", "RW") else "D"].append(p)
+            targets = {}
+            if by_role["C"]:
+                targets[by_role["C"][0].id] = (def_net + 24 * adir, 42.5)
+            ws = by_role["W"]
+            if len(ws) > 0:
+                targets[ws[0].id] = (def_net + 40 * adir, shy)
+            if len(ws) > 1:
+                targets[ws[1].id] = (def_net + 30 * adir, why)
+            ds = by_role["D"]
+            if len(ds) > 0:
+                targets[ds[0].id] = (def_net + 13 * adir, 36.0)
+            if len(ds) > 1:
+                targets[ds[1].id] = (def_net + 13 * adir, 49.0)
+            # nearest defender pressures: step at the puck but stay
+            # goal-side (between the puck and his own net)
+            pressurer = by_dist[0]
+            px_, py_ = self._ppos_get(pressurer)
+            ang = math.atan2(py_ - py, px_ - px)  # from puck to defender
+            # goal-side point: 7 feet from the puck toward the defender's net
+            gx, gy = def_net, 42.5
+            gang = math.atan2(gy - py, gx - px)
+            tx = px + math.cos(gang) * 7.0
+            ty = py + math.sin(gang) * 7.0
+            slide(pressurer, tx, ty, 9.0)
+            for p in skaters:
+                if p.id == pressurer.id:
+                    continue
+                t = targets.get(p.id)
+                if t:
+                    slide(p, t[0], t[1], 7.0)
+        else:  # forecheck
+            # F1 hunts the carrier; the rest hold structure relative to
+            # the puck so the forecheck breathes with the breakout
+            f1 = by_dist[0]
+            slide(f1, px + 3 * adir, py, 10.0)
+            for i, p in enumerate(by_dist[1:], 1):
+                # stagger back through the middle, strong side first
+                sy = (24.0 if py < 42.5 else 61.0) if i % 2 == 1 else \
+                     (61.0 if py < 42.5 else 24.0)
+                slide(p, px - (10 + i * 6) * adir, (py + sy) / 2.0, 7.0)
+        self._emit_skate()
 
     def _emit_skate(self, force=False):
         """Send position snapshot to visual listeners if anyone moved."""
@@ -5117,7 +5209,7 @@ class GameSim:
         # starve the shot count; raised again after the zone-state honesty
         # fix (turnovers now recompute the zone) removed phantom
         # defensive-zone "shots" that had been inflating scoring)
-        shot_chance = 0.59
+        shot_chance = 0.585
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
@@ -5166,6 +5258,10 @@ class GameSim:
                     defending_team, attacking_team, carrier, 0.12)
                 if hit_outcome is not None:
                     return hit_outcome
+
+        # The defending unit reacts to every puck movement -- without this
+        # all five defenders stand frozen while the attack cycles.
+        self._defense_tick(defending_team, mode="dzone")
 
         # Random events in offensive zone -- but only if the puck is still
         # there. The setup sequence can carry it back out (D-to-D, a
