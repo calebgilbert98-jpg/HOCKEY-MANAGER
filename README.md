@@ -1,74 +1,62 @@
-# Puck Dynasty - Beta Release
+# Puck Dynasty
 
-## 🏒 Hockey Manager Game - Beta Version
+A hockey management simulator inspired by Eastside Hockey Manager and
+Football Manager. Take over an NHL franchise: manage the roster, set
+tactics and lines, develop prospects, work the trade market, and watch
+every game unfold in a broadcast-style visualizer.
 
-Welcome to Puck Dynasty, an advanced hockey management simulation game!
+**Version:** 0.9.0 (see `CHANGELOG.md`)
 
-### 🎮 What's Included
+## Features
 
-**Core Features:**
-- Complete team management system
-- Advanced game simulation with visual game viewer
-- Player development and scouting
-- Fantasy draft system
-- Automated season flow with intelligent progression
-- Professional save/load system
-- Comprehensive UI with modern dark theme
+**Management**
+- Full 32-team NHL structure with 82-game seasons, playoffs, draft,
+  free agency, and the trade deadline
+- Roster management with line chemistry, player archetypes, and morale
+- Player development, training, and scouting systems
+- Finances, staff, owner expectations, and media climate
+- Contract negotiations and extensions
+- Save/load system with multiple slots
 
-**Beta Features:**
-- Automated Season Flow (5 automation modes)
-- Interactive Game Viewer with real-time visualization
-- Fantasy Draft System with player cards and analytics
-- Enhanced Player Management
-- Professional UI with Puck Dynasty branding
+**Simulation engine**
+- Zone-based gameplay (offensive / neutral / defensive) with forechecking,
+  breakouts, cycles, dump-and-chase, and special teams
+- EHM-style tactical positioning: formation slots for even strength,
+  power play (umbrella), and penalty kill (box)
+- Line rotation with fatigue, icing rules, and aggressive line matching
+- Realistic shot distribution across the lineup; weighted rebound scrambles
+- Overtime (3v3) and shootouts; broadcast milestones (hat-trick watch,
+  shutout bids)
 
-### 🚀 How to Run
+**Broadcast visualizer**
+- TV score bug, win-probability meter, and momentum tracker
+- Puck-follow camera, slow-mo goal replays, and Three Stars
+- Faceoff ceremonies after every stoppage (goals, offsides, icing, penalties)
+- Puck-carrier ring, shot trails, shot map, skate marks, hit bursts,
+  goalie reactions, and clickable player dots
+- Play-by-play feed with period summaries and Next Big Moment jumps
+- Adjustable speed (1x/2x/4x/Auto) and pause
 
-1. **Prerequisites:**
-   - Python 3.8+ installed on your system
-   - Required packages will be installed automatically
+## How to run
 
-2. **Launch Game:**
-   - Double-click `main.py` OR
-   - Open terminal/command prompt in game folder
-   - Run: `python main.py`
+1. **Prerequisites:** Python 3.8+
+2. **Launch:** run `python main.py` (or `python3 main.py` on macOS/Linux)
+3. **New game:** pick your team in the setup wizard, set your lines,
+   and drop the puck.
 
-3. **First Time Setup:**
-   - The game will create necessary directories
-   - Save files are stored in the `saves/` folder
-   - Settings are automatically saved
+Save files live in `saves/`. Settings are stored automatically.
 
-### 🎯 Getting Started
+## Project layout
 
-1. **New Game Setup:**
-   - Choose your team (30 NHL teams available)
-   - Set up initial roster and prospects
-   - Begin your hockey management career!
+- `main.py` — application entry point and management UI
+- `simulation.py` — the game simulation engine
+- `pbp_visual_sim.py` — the broadcast game visualizer
+- `game_classes.py` — core data model (players, teams, league)
+- `player_generator.py` — procedural player/database generation
+- `validate_season.py` — headless 1,312-game season validation harness
 
-2. **Key Features to Try:**
-   - **Automated Season Flow:** Use the season automation panel to skip through non-game days
-   - **Game Viewer:** Watch games with real-time visual simulation
-   - **Fantasy Draft:** Access via Tools menu for complete draft experience
-   - **Player Management:** Manage rosters, trades, and player development
+## Status
 
-### 🔧 System Requirements
-
-- **OS:** Windows 10+ (Primary), macOS, Linux compatible
-- **Python:** 3.8 or higher
-- **RAM:** 4GB+ recommended
-- **Storage:** 100MB free space
-
-### 🐛 Known Beta Limitations
-
-- Some advanced features still in development
-- Performance optimization ongoing
-- Save compatibility may change between beta versions
-
-### 📧 Feedback
-
-This is a beta version - your feedback is valuable!
-Report issues, suggestions, or bugs to help improve the game.
-
----
-
-**Enjoy managing your hockey dynasty!** 🏆
+Actively developed. The EHM roster-import framework is shelved for now
+(see `CHANGELOG.md`). Known limitation: no goalie-pulling/empty-net
+system yet.

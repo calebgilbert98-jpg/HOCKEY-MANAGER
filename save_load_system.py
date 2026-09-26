@@ -484,7 +484,10 @@ class GameSaveManager:
             
             if success:
                 print(f"Game loaded successfully from: {filepath}")
-                messagebox.showinfo("Load Complete", "Game loaded successfully!")
+                try:
+                    messagebox.showinfo("Load Complete", "Game loaded successfully!")
+                except Exception:
+                    pass  # headless / no display: the print above suffices
                 
                 # Update UI if available
                 if hasattr(self.game_manager, 'update_all_views'):
@@ -492,7 +495,10 @@ class GameSaveManager:
                 
                 return True
             else:
-                messagebox.showerror("Load Error", "Failed to restore game state")
+                try:
+                    messagebox.showerror("Load Error", "Failed to restore game state")
+                except Exception:
+                    pass
                 return False
             
         except Exception as e:
