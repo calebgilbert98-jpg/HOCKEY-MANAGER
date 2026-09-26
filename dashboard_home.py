@@ -530,7 +530,22 @@ class HomeDashboard:
         PillBadge(record_frame, text=f"{self._division_rank()} in {getattr(self.user_team, 'division', '')}",
                   bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY).pack(side="left", padx=(8, 0))
 
-        # Right: date + continue
+        # Right: game logo + date + continue
+        try:
+            from PIL import Image, ImageTk
+            import os as _os
+            _logo_path = _os.path.join(_os.path.dirname(__file__), "assets",
+                                      "puck_dynasty_logo.png")
+            if _os.path.exists(_logo_path):
+                _img = Image.open(_logo_path).convert("RGBA")
+                _img.thumbnail((64, 64), Image.LANCZOS)
+                self._logo_photo = ImageTk.PhotoImage(_img)
+                _logo_lbl = tk.Label(header, image=self._logo_photo,
+                                     bg=AppColors.BG)
+                _logo_lbl.pack(side="right", padx=(12, 0))
+        except Exception:
+            pass  # Logo is decorative; never break the header
+
         date_frame = tk.Frame(header, bg=AppColors.BG)
         date_frame.pack(side="right")
         try:

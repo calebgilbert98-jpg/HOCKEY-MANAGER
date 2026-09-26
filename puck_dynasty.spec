@@ -12,6 +12,7 @@ a = Analysis(
     datas=[
         ('*.png', '.'),
         ('icons', 'icons'),
+        ('assets', 'assets'),
     ],
     hiddenimports=[
         'PIL', 'PIL.Image', 'PIL.ImageTk', 'PIL.ImageDraw',
