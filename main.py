@@ -13690,6 +13690,72 @@ def _direct_launch():
     print("Starting Hockey Manager directly (setup wizard)...")
     _launch_with_wizard()
     
+def _launch_with_imported_league(config):
+    """Start a career from rosters imported by the roster import wizard.
+
+    Skips database generation entirely: the wizard already built a full
+    Puck Dynasty League. Runs the same post-generation setup as
+    GameManager.apply_startup_settings (draft picks, settings, schedule).
+    """
+    from tkinter import messagebox
+    try:
+        print("Starting Puck Dynasty with imported rosters...")
+        settings = {
+            'selected_team': config.get('user_team'),
+            'database_size': 'Medium',
+            'user_team': config.get('user_team'),
+            'user_league': config.get('user_league', 'NHL'),
+            'gm_name': config.get('gm_name', 'General Manager'),
+            'fog_of_war': config.get('fog_of_war', True),
+            'sim_detail': config.get('sim_detail', {'NHL': 'full'}),
+            'fantasy_draft': False,
+        }
+        gm = GameManager()
+        league = config['imported_league']
+        gm.league = league
+        league.set_game_manager(gm)
+        league.initialize_standings()
+
+        gm.fog_of_war = settings['fog_of_war']
+        gm.sim_detail = settings['sim_detail']
+        gm.user_league = settings['user_league']
+        gm.gm_name = settings['gm_name']
+        try:
+            import scouting_profiles
+            scouting_profiles.FOG_OF_WAR_OVERRIDE = gm.fog_of_war
+        except Exception:
+            pass
+
+        print("Initializing draft picks for all teams...")
+        league.initialize_all_draft_picks()
+        print("Applying game settings...")
+        gm.apply_all_game_settings(settings)
+        gm.set_user_team(config.get('user_team'))
+
+        print("Generating league schedule...")
+        if hasattr(league, 'generate_schedule'):
+            league.generate_schedule()
+
+        n_players = len(league.get_all_players()) if hasattr(league, 'get_all_players') else 0
+        print(f"Imported league ready! {len(league.teams)} teams, {n_players} players.")
+
+        app = HockeyManagerGUI(gm)
+        app.startup_settings = settings
+        app._update_game_viewer_button_state()
+        app.mainloop()
+        return True
+
+    except Exception as e:
+        import traceback
+        print("Error launching with imported rosters:", e)
+        traceback.print_exc()
+        try:
+            messagebox.showerror("Launch Error", f"Failed to start with imported rosters:\n{str(e)}")
+        except Exception:
+            pass
+        return False
+
+
 def _launch_with_wizard():
     """Launch a new game through the setup wizard (Quick Start / Custom Setup).
 
@@ -13713,6 +13779,9 @@ def _launch_with_wizard():
     if not config:
         print("User cancelled setup - game not launched")
         return False
+
+    if config.get('mode') == 'import' and config.get('imported_league') is not None:
+        return _launch_with_imported_league(config)
 
     try:
         print("Starting Puck Dynasty with setup wizard settings...")

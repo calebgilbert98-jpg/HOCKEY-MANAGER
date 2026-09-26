@@ -308,7 +308,8 @@ class NewGameSetupWizard(tk.Toplevel):
                  font=(FONT, 11), bg=BG, fg=MUTED).pack(side="left", padx=(12, 0), pady=(8, 0))
 
         if _HAS_MODERN:
-            seg = SegmentedControl(header, ["Quick Start", "Custom Setup"],
+            seg = SegmentedControl(header, ["Quick Start", "Custom Setup",
+                                            "Import Rosters"],
                                    initial=0, accent=ACCENT, bg=BG,
                                    command=self._on_mode_seg)
             seg.pack(side="right")
@@ -324,28 +325,37 @@ class NewGameSetupWizard(tk.Toplevel):
                            value="custom", command=lambda: self._show_mode("custom"),
                            bg=BG, fg=TEXT, selectcolor=PANEL_BG,
                            activebackground=BG, activeforeground=TEXT).pack(side="left")
+            tk.Radiobutton(frm, text="Import Rosters", variable=self.mode_var,
+                           value="import", command=lambda: self._show_mode("import"),
+                           bg=BG, fg=TEXT, selectcolor=PANEL_BG,
+                           activebackground=BG, activeforeground=TEXT).pack(side="left")
 
         self.body = tk.Frame(self, bg=BG)
         self.body.pack(fill="both", expand=True, padx=24, pady=6)
 
         self.quick_frame = tk.Frame(self.body, bg=BG)
         self.custom_frame = tk.Frame(self.body, bg=BG)
+        self.import_frame = tk.Frame(self.body, bg=BG)
         self._build_quick(self.quick_frame)
         self._build_custom(self.custom_frame)
+        self._build_import(self.import_frame)
 
         footer = tk.Frame(self, bg=BG)
         footer.pack(fill="x", padx=24, pady=(6, 18))
         if _HAS_MODERN:
-            RoundedButton(footer, text="Cancel", bg="#2A3346", fg=TEXT,
-                          command=self.destroy, padx=18, pady=8).pack(side="right", padx=(8, 0))
+            self._cancel_btn = RoundedButton(footer, text="Cancel", bg="#2A3346", fg=TEXT,
+                          command=self.destroy, padx=18, pady=8)
+            self._cancel_btn.pack(side="right", padx=(8, 0))
             self._start_btn = RoundedButton(footer, text="Start Career \u2192", bg=ACCENT,
                                             fg="white", font=(FONT, 12, "bold"),
                                             command=self._on_start, padx=26, pady=10)
             self._start_btn.pack(side="right")
         else:
-            tk.Button(footer, text="Cancel", command=self.destroy).pack(side="right", padx=(8, 0))
-            tk.Button(footer, text="Start Career \u2192", bg=ACCENT, fg="white",
-                      activebackground=ACCENT, command=self._on_start).pack(side="right")
+            self._cancel_btn = tk.Button(footer, text="Cancel", command=self.destroy)
+            self._cancel_btn.pack(side="right", padx=(8, 0))
+            self._start_btn = tk.Button(footer, text="Start Career \u2192", bg=ACCENT, fg="white",
+                      activebackground=ACCENT, command=self._on_start)
+            self._start_btn.pack(side="right")
 
     def _center(self):
         self.update_idletasks()
@@ -358,7 +368,8 @@ class NewGameSetupWizard(tk.Toplevel):
         self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
     def _on_mode_seg(self, value):
-        self._show_mode("quick" if value == "Quick Start" else "custom")
+        self._show_mode({"Quick Start": "quick",
+                         "Custom Setup": "custom"}.get(value, "import"))
 
     def _show_mode(self, mode):
         # SegmentedControl fires its command during construction, before the
@@ -368,11 +379,22 @@ class NewGameSetupWizard(tk.Toplevel):
             return
         self.quick_frame.pack_forget()
         self.custom_frame.pack_forget()
-        (self.quick_frame if mode == "quick" else self.custom_frame).pack(fill="both", expand=True)
-        # Size the window to the content: quick mode is compact, custom needs
-        # the full height for all sections.
+        self.import_frame.pack_forget()
+        {"quick": self.quick_frame, "custom": self.custom_frame,
+         "import": self.import_frame}[mode].pack(fill="both", expand=True)
+        # Import mode runs its own wizard; hide the footer Start button so
+        # there is exactly one way forward on this page.
         try:
-            self.geometry("920x560" if mode == "quick" else "920x790")
+            if mode == "import":
+                self._start_btn.pack_forget()
+            else:
+                self._start_btn.pack(side="right")
+        except Exception:
+            pass
+        # Size the window to the content: quick/import are compact, custom
+        # needs the full height for all sections.
+        try:
+            self.geometry("920x560" if mode in ("quick", "import") else "920x790")
             self._center()
         except Exception:
             pass
@@ -569,6 +591,63 @@ class NewGameSetupWizard(tk.Toplevel):
                                league_choices=["NHL", "AHL"])
         self._gm_name_row(sec)
 
+    # -- import rosters page ------------------------------------------------
+    def _build_import(self, parent):
+        sec = self._section(parent, "Import Rosters",
+                            "Start a career with real rosters instead of generated "
+                            "players. Point the importer at an Eastside Hockey "
+                            "Manager database.db (for example xECK29x's Premier "
+                            "Pivot / ECK rosters) or at CSV roster files, preview "
+                            "what it finds, then start your career.")
+        steps = tk.Label(sec, font=(FONT, 10), bg=PANEL_BG, fg=MUTED,
+                         justify="left", wraplength=720,
+                         text="1  Choose your source file\n"
+                              "2  The importer detects tables, players, clubs and "
+                              "contracts automatically\n"
+                              "3  Preview the data and pick your team\n"
+                              "4  Start your career with the imported rosters")
+        steps.pack(anchor="w", pady=(0, 10))
+        self.i_fog_var = tk.BooleanVar(value=True)
+        self._dark_check(sec, "Enable fog of war (recommended)",
+                         self.i_fog_var).pack(anchor="w", pady=(0, 10))
+        if _HAS_MODERN:
+            RoundedButton(sec, text="Import Rosters...", bg=ACCENT,
+                          fg="white", font=(FONT, 12, "bold"),
+                          command=self._open_import_wizard,
+                          padx=26, pady=10).pack(anchor="w")
+        else:
+            tk.Button(sec, text="Import Rosters...", bg=ACCENT, fg="white",
+                      activebackground=ACCENT,
+                      command=self._open_import_wizard).pack(anchor="w")
+
+    def _open_import_wizard(self):
+        try:
+            from roster_import_wizard import open_roster_import_wizard
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Import Rosters",
+                                 f"Could not open the import wizard:\n{exc}")
+            return
+        open_roster_import_wizard(self, self._on_import_complete)
+
+    def _on_import_complete(self, league, user_team, gm_name):
+        """Called by the import wizard with a fully built League."""
+        cfg = {
+            "mode": "import",
+            "database_size": "medium",
+            "leagues": ["NHL"],
+            "sim_detail": {"NHL": "full"},
+            "fog_of_war": self.i_fog_var.get(),
+            "gm_name": gm_name or "General Manager",
+            "user_league": "NHL",
+            "user_team": user_team,
+            "imported_league": league,
+        }
+        try:
+            self.on_start_callback(cfg)
+        finally:
+            self.destroy()
+
     def _on_size(self, label):
         key = {"Small": "small", "Medium": "medium", "Large": "large"}.get(label, label)
         self.size_var.set(key)
@@ -598,6 +677,11 @@ class NewGameSetupWizard(tk.Toplevel):
 
     def _on_start(self):
         mode = self.mode_var.get()
+        if mode == "import":
+            # Import mode goes through the import wizard, not this button
+            # (the footer Start button is hidden on that page).
+            self._open_import_wizard()
+            return
         if mode == "quick":
             cfg = make_config(
                 mode="quick",
