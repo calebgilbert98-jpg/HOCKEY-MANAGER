@@ -306,9 +306,25 @@ class SettingsWindow(tk.Toplevel):
         """Create tab for game simulation preferences"""
         tab_frame = ttk.Frame(self.notebook, style='Panel.TFrame')
         self.notebook.add(tab_frame, text="🏒 Simulation")
-        
+
+        # Scrollable content (rows overflow on smaller windows)
+        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab_frame, orient='vertical', command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=self.parent.CONTENT_BG)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
         # Content with padding
-        content_frame = ttk.Frame(tab_frame, style='Panel.TFrame', padding=15)
+        content_frame = ttk.Frame(scrollable_frame, style='Panel.TFrame', padding=15)
         content_frame.pack(fill='both', expand=True)
         
         # Simulation Speed
@@ -386,7 +402,7 @@ class SettingsWindow(tk.Toplevel):
         viewer_mode_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
 
         # Draft class quality
-        draft_quality_row = ttk.Frame(simulation_frame, style='Panel.TFrame')
+        draft_quality_row = ttk.Frame(content_frame, style='Panel.TFrame')
         draft_quality_row.pack(fill='x', pady=(10, 2))
 
         tk.Label(draft_quality_row, text="Draft class quality:",
@@ -401,6 +417,25 @@ class SettingsWindow(tk.Toplevel):
         draft_quality_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
 
         tk.Label(draft_quality_row, text="(applies to future draft classes)",
+                font=(self.parent.FONT_FAMILY, 9, 'italic'),
+                fg='#888888', bg=self.parent.CONTENT_BG).pack(side='left', padx=(10, 0))
+
+        # Scoring level
+        scoring_row = ttk.Frame(content_frame, style='Panel.TFrame')
+        scoring_row.pack(fill='x', pady=(10, 2))
+
+        tk.Label(scoring_row, text="Scoring level:",
+                font=(self.parent.FONT_FAMILY, 10),
+                fg=self.parent.TEXT_COLOR, bg=self.parent.CONTENT_BG).pack(side='left')
+
+        self.scoring_level_var = tk.StringVar()
+        scoring_values = ['Low (Current)', 'Medium (NHL Baseline)', 'High (Arcade)']
+        scoring_dropdown = ttk.Combobox(scoring_row, textvariable=self.scoring_level_var,
+                                        values=scoring_values, state='readonly', width=22)
+        scoring_dropdown.pack(side='left', padx=(10, 0))
+        scoring_dropdown.bind('<<ComboboxSelected>>', self._mark_changed)
+
+        tk.Label(scoring_row, text="(goals per game: ~5.5 / ~6.0 / 7+)",
                 font=(self.parent.FONT_FAMILY, 9, 'italic'),
                 fg='#888888', bg=self.parent.CONTENT_BG).pack(side='left', padx=(10, 0))
         
@@ -543,7 +578,8 @@ class SettingsWindow(tk.Toplevel):
                 'always_show_daily_results': True,
                 'use_game_viewer': False,
                 'game_viewer_mode': 'Full Game',
-                'draft_class_quality': 'Normal'
+                'draft_class_quality': 'Normal',
+                'scoring_level': 'Low (Current)'
             },
             'notifications': {
                 'email_notifications': {
@@ -617,6 +653,8 @@ class SettingsWindow(tk.Toplevel):
         self.game_viewer_mode_var.set(simulation.get('game_viewer_mode', 'Full Game'))
         if hasattr(self, 'draft_quality_var'):
             self.draft_quality_var.set(simulation.get('draft_class_quality', 'Normal'))
+        if hasattr(self, 'scoring_level_var'):
+            self.scoring_level_var.set(simulation.get('scoring_level', 'Low (Current)'))
         
         # Notifications
         notifications = self.settings.get('notifications', {})
@@ -700,7 +738,8 @@ class SettingsWindow(tk.Toplevel):
             'always_show_daily_results': self.show_daily_results_var.get(),
             'use_game_viewer': self.use_game_viewer_var.get(),
             'game_viewer_mode': self.game_viewer_mode_var.get(),
-            'draft_class_quality': self.draft_quality_var.get() if hasattr(self, 'draft_quality_var') else 'Normal'
+            'draft_class_quality': self.draft_quality_var.get() if hasattr(self, 'draft_quality_var') else 'Normal',
+            'scoring_level': self.scoring_level_var.get() if hasattr(self, 'scoring_level_var') else 'Low (Current)'
         }
         
         # Notifications

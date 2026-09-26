@@ -26,7 +26,8 @@
     "always_show_daily_results": true,
     "use_game_viewer": false,
     "game_viewer_mode": "Full Game",
-    "user_game_mode": "ask"
+    "draft_class_quality": "Normal",
+    "scoring_level": "Low (Current)"
   },
   "notifications": {
     "email_notifications": {
