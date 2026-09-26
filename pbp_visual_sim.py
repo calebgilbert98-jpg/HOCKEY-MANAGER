@@ -1438,13 +1438,98 @@ class PBPVisualSim(tk.Toplevel):
 
     def _on_skate(self, ev):
         """Sim movement snapshot: the per-tick tactical engine positions
-        every skater, so the sim only feeds puck position + carrier."""
+        every skater, so the sim only feeds puck position + carrier.
+        The sim's on-ice units are authoritative -- the dots are synced to
+        the sim's actual players (line rotation, PP/PK, icing, matching)."""
         pk = ev.get("puck")
         if pk:
             self.puck_target = (pk[0], pk[1])
+        for is_home, key in ((True, "on_ice_home"), (False, "on_ice_away")):
+            ids = ev.get(key)
+            if ids:
+                self._sync_dots_to_sim(is_home, ids)
         cpid = ev.get("possession_player")
         d = self._dot_by_id(cpid)
+        if d is None and cpid is not None:
+            # transient sim state (e.g. a line change resolving mid-tick):
+            # the puck carrier is always shown, slotted by position
+            d = self._force_carrier_dot(cpid)
         self.carrier_id = d["id"] if d else None
+
+    def _force_carrier_dot(self, cpid):
+        """Slot an undotted puck carrier into his position's dot so the
+        carrier ring never loses him during transient sim states."""
+        player, is_home = None, True
+        for ih, team in ((True, self.home_team), (False, self.away_team)):
+            for p in team.roster:
+                if getattr(p, "id", None) == cpid:
+                    player, is_home = p, ih
+                    break
+            if player is not None:
+                break
+        if player is None:
+            return None
+        want = getattr(getattr(player, "primary_position", None), "name", "")
+        role_pos = {"C": "CENTER", "LW": "LEFT_WING", "RW": "RIGHT_WING",
+                    "D1": "LEFT_DEFENSE", "D2": "RIGHT_DEFENSE"}
+        dots = [d for d in self.dots.values()
+                if d["is_home"] == is_home and d["role"] != "G"]
+        d = next((x for x in dots
+                  if role_pos.get(x["role"]) == want), None)
+        if d is None and dots:
+            d = dots[0]
+        if d is None:
+            return None
+        d["player"] = player
+        num = getattr(player, "jersey_number", None) or "-"
+        try:
+            self.canvas.itemconfig(d["text"], text=str(num))
+        except Exception:
+            pass
+        return d
+
+    def _sync_dots_to_sim(self, is_home, ids):
+        """Remap the five skater dots to the sim's on-ice player ids,
+        slotting each into the role that best fits his position."""
+        dots = [d for d in self.dots.values()
+                if d["is_home"] == is_home and d["role"] != "G"]
+        if not dots:
+            return
+        cur = {getattr(d["player"], "id", None) for d in dots}
+        if cur == set(ids):
+            return
+        team = self.home_team if is_home else self.away_team
+        by_id = {getattr(p, "id", None): p for p in team.roster}
+        players = [by_id[i] for i in ids if i in by_id]
+        if len(players) < 5:
+            have = {getattr(p, "id", None) for p in players}
+            for d in dots:
+                if len(players) >= 5:
+                    break
+                p = d["player"]
+                if getattr(p, "id", None) not in have:
+                    players.append(p)
+                    have.add(getattr(p, "id", None))
+        role_pos = {"C": "CENTER", "LW": "LEFT_WING", "RW": "RIGHT_WING",
+                    "D1": "LEFT_DEFENSE", "D2": "RIGHT_DEFENSE"}
+        remaining = list(players)
+        for role in ("C", "LW", "RW", "D1", "D2"):
+            d = next((x for x in dots if x["role"] == role), None)
+            if d is None or not remaining:
+                continue
+            want = role_pos[role]
+            pick = next((p for p in remaining
+                         if getattr(getattr(p, "primary_position", None),
+                                     "name", "") == want),
+                        remaining[0])
+            remaining.remove(pick)
+            if getattr(d["player"], "id", None) != getattr(pick, "id", None):
+                d["player"] = pick
+                num = getattr(pick, "jersey_number", None) or "-"
+                try:
+                    self.canvas.itemconfig(d["text"], text=str(num))
+                except Exception:
+                    pass
 
     def _on_pass(self, ev):
         pp = ev.get("passer_pos") or (100.0, 42.5)
@@ -3043,9 +3128,8 @@ class PBPVisualSim(tk.Toplevel):
             if self._penalty_timers:
                 self._release_penalties()
 
-            # line changes on the sim's rotation cadence
-            if self.playing:
-                self._check_line_change(now)
+            # line changes are driven by the sim's authoritative on-ice
+            # units (skate events) -- no independent rotation here
             for side in ("home", "away"):
                 ch = self._line_change[side]
                 if ch is None:

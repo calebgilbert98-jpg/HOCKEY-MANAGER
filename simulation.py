@@ -2160,16 +2160,18 @@ class GameSim:
 
             # Determine what happens based on current zone and possession
             event_outcome = self._resolve_zone_based_event()
+
+            # Refresh lines before publishing positions, so the emitted
+            # on-ice units always match the carrier's unit
+            if self._should_change_lines():
+                self._select_starting_lines()
+                self.line_change_timer = 0
+
             # Positional safety net: flush any un-emitted movement (throttled)
             try:
                 self._emit_skate()
             except Exception:
                 pass
-
-            # Force line changes periodically or due to fatigue
-            if self._should_change_lines():
-                self._select_starting_lines()
-                self.line_change_timer = 0
 
     # Per-tick background penalty probability. Tuned so total penalties
     # (background + hit-path + defensive-play triggers) land near the NHL
@@ -2427,7 +2429,14 @@ class GameSim:
     def _should_change_lines(self):
         """Determine if lines should be changed based on fatigue and time."""
         self.line_change_timer += 1
-        
+
+        # Rotation phase flip: keep the stored units in lockstep with the
+        # clock-phase rotation that game logic (and the visualizer) uses.
+        phase = (self.clock // 45, self.clock // 60)
+        if phase != getattr(self, "_line_phase", None):
+            self._line_phase = phase
+            return True
+
         # Force change every 45-60 seconds
         if self.line_change_timer > random.randint(45, 60):
             return True
@@ -2957,9 +2966,18 @@ class GameSim:
         if changed:
             self._last_skate_sent = dict(snap)
             carrier = getattr(self, "possession_player", None)
+            # Authoritative on-ice units: the visualizer syncs its dots to
+            # the sim's stored units (the same lists game logic uses for
+            # shots, passes, and stats) so the players on screen are the
+            # sim's actual players.
+            def _skater_ids(team):
+                return [p.id for p in self._get_on_ice(team)
+                        if p.primary_position != PlayerPosition.GOALIE]
             self._emit_pbp("skate", positions=snap,
                            puck=(round(self.puck_pos[0], 1), round(self.puck_pos[1], 1)),
-                           possession_player=getattr(carrier, "id", None))
+                           possession_player=getattr(carrier, "id", None),
+                           on_ice_home=_skater_ids(self.home_team),
+                           on_ice_away=_skater_ids(self.away_team))
 
     def _faceoff_formation(self, winner, zone):
         """Line everyone up for the draw, then tell the visual sim."""
@@ -4927,8 +4945,25 @@ class GameSim:
 
     def _select_starting_lines(self):
         """Selects the players to start a shift."""
+        old_home = set(self.home_on_ice)
+        old_away = set(self.away_on_ice)
         self.home_on_ice = self._get_on_ice(self.home_team)
         self.away_on_ice = self._get_on_ice(self.away_team)
+        # possession can't stay with a player who just left the ice: hand
+        # the puck to the same-position player on the fresh unit
+        carrier = getattr(self, "possession_player", None)
+        if carrier is not None:
+            for old, new in ((old_home, self.home_on_ice),
+                             (old_away, self.away_on_ice)):
+                if carrier in old and carrier not in new:
+                    skaters = [p for p in new
+                               if p.primary_position != PlayerPosition.GOALIE]
+                    same_pos = [p for p in skaters
+                                if p.primary_position == carrier.primary_position]
+                    self.possession_player = (
+                        same_pos[0] if same_pos
+                        else (skaters[0] if skaters else None))
+                    break
 
     def _emit_pbp(self, event_type, **payload):
         """Emit a play-by-play event to registered listeners (no-op if none)."""
