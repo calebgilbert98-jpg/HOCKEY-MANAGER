@@ -34,7 +34,6 @@ from PIL import Image, ImageTk  # For icons/logos
 from ui_theme_system import create_modern_theme, ModernUITheme, ProfessionalWidgets
 from typography_system import TypographySystem, TextStyles
 from team_identity_system import nhl_identity
-from modern_dashboard import ModernDashboard
 
 # Import Trade Deadline Center
 from trade_deadline_center import TradeDeadlineCenter, is_trade_deadline_day
@@ -3074,6 +3073,15 @@ class HockeyManagerGUI(tk.Tk):
         self.game_manager.current_date = self.current_date  # Sync with game_manager for dashboard
         self.news_log = [{'date': self.current_date, 'story': "Welcome to the new season!"}]
         self.game_results = []  # Store completed game results for viewing
+        # Derived lookup indexes over game_results (rebuilt lazily; never
+        # pickled -- create_save_data only stores the list itself).
+        # _results_by_date: date -> [results]  (daily results window)
+        # _results_by_matchup: (date, id(home), id(away)) -> result
+        # _results_index_src tracks which list object the indexes were built
+        # from, so a load_game that swaps the list triggers a rebuild.
+        self._results_by_date = {}
+        self._results_by_matchup = {}
+        self._results_index_src = self.game_results
         self.waiver_list = []
         self.trade_block = []
         
@@ -3110,6 +3118,9 @@ class HockeyManagerGUI(tk.Tk):
         self.mp_client = mp_client
         self.checkpoint_manager = None
         self._mp_role_ui_done = False
+        # Client ACTION intents that arrive while a snapshot worker is
+        # serializing game state wait here; replayed on "snapshot_done".
+        self._mp_deferred_actions = []
         if self.mp_host is not None or self.mp_client is not None:
             self.after(400, self._poll_multiplayer)
         
@@ -4994,28 +5005,29 @@ class HockeyManagerGUI(tk.Tk):
         future_games = [g for g in user_games if g[0] >= self.current_date][:5]
         
         # Add past games
+        matchup_index = self._results_by_matchup_index()
         for game_date, home, away in past_games:
             opponent = away.team_name if self.user_team == home else f"@ {home.team_name}"
             
-            # Find game result
+            # Find game result: O(1) matchup lookup
+            # (was: full scan of game_results per past game)
             result = ""
-            for game_result in self.game_results:
-                if (game_result['date'] == game_date and 
-                    game_result['home_team'] == home and 
-                    game_result['away_team'] == away):
-                    # Show score from user team perspective (user score first)
-                    if self.user_team == home:
-                        user_score = game_result['home_score']
-                        opp_score = game_result['away_score']
-                    else:
-                        user_score = game_result['away_score']
-                        opp_score = game_result['home_score']
-                    
-                    if game_result['winner'] == self.user_team:
-                        result = f"W {user_score}-{opp_score}"
-                    else:
-                        result = f"L {user_score}-{opp_score}"
-                    break
+            date_key = self._result_date_key(game_date)
+            game_result = matchup_index.get(
+                (date_key, id(home), id(away))) if date_key else None
+            if game_result is not None:
+                # Show score from user team perspective (user score first)
+                if self.user_team == home:
+                    user_score = game_result['home_score']
+                    opp_score = game_result['away_score']
+                else:
+                    user_score = game_result['away_score']
+                    opp_score = game_result['home_score']
+                
+                if game_result['winner'] == self.user_team:
+                    result = f"W {user_score}-{opp_score}"
+                else:
+                    result = f"L {user_score}-{opp_score}"
             
             # If no result found, check if this is because the game hasn't been simulated yet
             if not result:
@@ -6278,7 +6290,15 @@ class HockeyManagerGUI(tk.Tk):
                                  "You must complete the fantasy draft before advancing the day.\n"
                                  "Go to Tools → Fantasy Draft to continue or complete the draft.")
             return
-            
+
+        # MULTIPLAYER: never mutate game state while a snapshot worker is
+        # serializing it (see MultiplayerHost.broadcast_state_async). The
+        # window is ~1-3s; the next Continue press will go through.
+        if getattr(self, 'mp_host', None) is not None and \
+                self.mp_host.snapshot_busy:
+            self._mp_toast("Syncing with clients — one moment…")
+            return
+
         # Prevent multiple clicks by disabling button during simulation
         continue_btn = None
         if hasattr(self, 'continue_btn'):
@@ -6467,23 +6487,32 @@ class HockeyManagerGUI(tk.Tk):
             # Use async update to prevent blocking
             self.after_idle(self.update_all_views)
 
+            # Bound the ever-growing history logs (game_results ~1312/season,
+            # news_log unbounded) so daily scans and save pickles stay O(season).
+            self._trim_history_logs()
+
             # --- MULTIPLAYER (Phase 1) + CHECKPOINTS ---
             # Placed at the end of the try block so it runs ONLY on a
             # successful day advance (the early returns above skip it).
-            # Still on the tkinter main thread: safe to snapshot + broadcast.
+            # Checkpoint + snapshot run on a WORKER thread via
+            # broadcast_state_async: create_save_data/pickle/gzip over the
+            # ~12k-player league is seconds-scale and must never block the
+            # tkinter main thread. announce_day stays synchronous (tiny).
+            # While the worker runs, snapshot_busy is True: simulate_day
+            # refuses new advances and client actions are deferred, so the
+            # game objects being serialized cannot be mutated mid-flight.
+            # Completion arrives as a "snapshot_done" poll event.
             try:
-                cpm = getattr(self, 'checkpoint_manager', None)
-                if cpm is not None:
-                    cpm.checkpoint(f"Day {self.current_date}")
-                    if getattr(self, 'mp_host', None) is not None:
-                        self.mp_host.notify_checkpoint(
-                            f"Day {self.current_date}", str(self.current_date))
-            except Exception as _mp_e:
-                print(f"Checkpoint failed (non-fatal): {_mp_e}")
-            try:
-                if getattr(self, 'mp_host', None) is not None:
-                    self.mp_host.announce_day(str(self.current_date))
-                    self.mp_host.broadcast_state(f"Day {self.current_date}")
+                host = getattr(self, 'mp_host', None)
+                if host is not None:
+                    label = f"Day {self.current_date}"
+                    cpm = getattr(self, 'checkpoint_manager', None)
+                    pre = (lambda: cpm.checkpoint(label)) \
+                        if cpm is not None else None
+                    host.announce_day(str(self.current_date))
+                    if cpm is not None:
+                        host.notify_checkpoint(label, str(self.current_date))
+                    host.broadcast_state_async(label, pre_broadcast=pre)
             except Exception as _mp_e:
                 print(f"Multiplayer broadcast failed (non-fatal): {_mp_e}")
 
@@ -6546,6 +6575,11 @@ class HockeyManagerGUI(tk.Tk):
 
     def _handle_host_event(self, kind, payload):
         if kind == "action":
+            # Never apply a client action while a snapshot worker is
+            # serializing: defer until the "snapshot_done" event.
+            if self.mp_host.snapshot_busy:
+                self._mp_deferred_actions.append(payload)
+                return
             ok, detail = self._apply_multiplayer_action(
                 payload.get("action"), payload.get("params", {}),
                 payload.get("manager", "?"))
@@ -6555,6 +6589,13 @@ class HockeyManagerGUI(tk.Tk):
                     ok, detail)
             except Exception as e:
                 print(f"resolve_action failed (non-fatal): {e}")
+        elif kind == "snapshot_done":
+            # Serialization finished: game objects are mutable again.
+            # Replay any client actions that arrived mid-snapshot.
+            deferred, self._mp_deferred_actions = \
+                self._mp_deferred_actions, []
+            for p in deferred:
+                self._handle_host_event("action", p)
         elif kind in ("manager_joined", "manager_left", "team_claimed"):
             self._mp_toast(
                 f"{payload.get('name', '?')} "
@@ -7106,7 +7147,7 @@ class HockeyManagerGUI(tk.Tk):
             'shootout': len([e for e in notable_events if e['period'] == 5]) > 0
         }
         
-        self.game_results.append(game_result)
+        self._record_game_result(game_result)
         
         # Generate media events for the game (if media system enabled)
         if hasattr(self, 'media_system') and self.media_system:
@@ -7202,44 +7243,106 @@ class HockeyManagerGUI(tk.Tk):
             # Generate post-game emails for user team games
             self._generate_post_game_emails(game_result, opponent, result, user_score, opp_score, notable_events)
 
+    # --- game_results indexes + history caps ---------------------------
+    # game_results grows by ~1312 entries per 82-game season and used to be
+    # scanned in full on EVERY day advance (plus pickled into every save).
+    # These helpers keep two derived indexes and bound the history size.
+    RESULTS_HISTORY_CAP = 4000   # ~3 seasons of games
+    RESULTS_TRIM_BATCH = 500
+    NEWS_HISTORY_CAP = 1000
+    NEWS_TRIM_BATCH = 200
+
+    @staticmethod
+    def _result_date_key(value):
+        """Normalize a result's mixed-format date to a datetime.date."""
+        try:
+            if isinstance(value, datetime):
+                return value.date()
+            if isinstance(value, str):
+                return datetime.strptime(value, '%Y-%m-%d').date()
+            if isinstance(value, date):
+                return value
+        except (ValueError, AttributeError, TypeError):
+            pass
+        return None
+
+    def _record_game_result(self, game_result):
+        """Append a game result and keep the derived indexes in sync."""
+        self.game_results.append(game_result)
+        if self._results_index_src is self.game_results:
+            key = self._result_date_key(game_result.get('date'))
+            if key is not None:
+                self._results_by_date.setdefault(key, []).append(game_result)
+                self._results_by_matchup[
+                    (key, id(game_result.get('home_team')),
+                     id(game_result.get('away_team')))] = game_result
+
+    def _rebuild_result_index(self):
+        """Full rebuild of the derived indexes from the current list."""
+        by_date = {}
+        by_matchup = {}
+        for r in self.game_results:
+            key = self._result_date_key(r.get('date'))
+            if key is None:
+                continue
+            by_date.setdefault(key, []).append(r)
+            by_matchup[(key, id(r.get('home_team')),
+                        id(r.get('away_team')))] = r
+        self._results_by_date = by_date
+        self._results_by_matchup = by_matchup
+        self._results_index_src = self.game_results
+
+    def _results_by_date_index(self):
+        # load_game swaps game_results for a fresh list; rebuild on change.
+        if self._results_index_src is not self.game_results:
+            self._rebuild_result_index()
+        return self._results_by_date
+
+    def _results_by_matchup_index(self):
+        if self._results_index_src is not self.game_results:
+            self._rebuild_result_index()
+        return self._results_by_matchup
+
+    def find_game_result(self, game_date, home_team, away_team):
+        """O(1) lookup of a played game's result for a scheduled matchup.
+
+        Returns the result dict, or None when the game hasn't been played
+        yet (or nothing matches). Replaces the old pattern of scanning the
+        whole game_results list per scheduled game (O(games x results)).
+        """
+        key = self._result_date_key(game_date)
+        if key is None:
+            return None
+        return self._results_by_matchup_index().get(
+            (key, id(home_team), id(away_team)))
+
+    def _trim_history_logs(self):
+        """Bound game_results/news_log so saves and scans stay O(season)."""
+        if len(self.game_results) > \
+                self.RESULTS_HISTORY_CAP + self.RESULTS_TRIM_BATCH:
+            del self.game_results[:self.RESULTS_TRIM_BATCH]
+            self._rebuild_result_index()
+        if len(self.news_log) > self.NEWS_HISTORY_CAP + self.NEWS_TRIM_BATCH:
+            del self.news_log[:self.NEWS_TRIM_BATCH]
+
     def _show_daily_results_window(self):
         """Show the daily game results window after day advance"""
         try:
             # Get today's game results (the day we just simulated, before date advancement)
             simulated_date = self.current_date - timedelta(days=1)
-            today_results = []
-            user_game_result = None
-            
-            # Find games from the simulated date
-            for result in self.game_results:
-                result_date = result['date']
-                
-                # Handle different date formats/types consistently
-                try:
-                    if hasattr(result_date, 'date'):
-                        # If it's a datetime object, extract the date part
-                        result_date = result_date.date()
-                    elif isinstance(result_date, str):
-                        # If it's a string, try to parse it
-                        from datetime import datetime
-                        result_date = datetime.strptime(result_date, '%Y-%m-%d').date()
-                    # If already a date object, use as is
-                    
-                    # Ensure simulated_date is also a date object for comparison
-                    if hasattr(simulated_date, 'date'):
-                        simulated_date_only = simulated_date.date()
-                    else:
-                        simulated_date_only = simulated_date
-                        
-                except (ValueError, AttributeError) as e:
-                    # Skip results with unparseable dates
-                    continue
-                    
-                if result_date == simulated_date_only:
-                    today_results.append(result)
-                    # Check if user team played
-                    if self.user_team in (result['home_team'], result['away_team']):
-                        user_game_result = result
+            if isinstance(simulated_date, datetime):
+                simulated_date_only = simulated_date.date()
+            else:
+                simulated_date_only = simulated_date
+
+            # O(1) date lookup via the derived index (was: full scan of the
+            # entire multi-season game_results list every day).
+            today_results = list(
+                self._results_by_date_index().get(simulated_date_only, []))
+            user_game_result = next(
+                (r for r in today_results
+                 if self.user_team in (r['home_team'], r['away_team'])),
+                None)
             
             # Get league standings
             league_results = []
@@ -7683,8 +7786,8 @@ class HockeyManagerGUI(tk.Tk):
                 game_result['notable_events'] = getattr(full_sim, 'notable_events', []) or []
                 game_result['events'] = getattr(full_sim, 'game_log', []) or []
             
-            # Add to game results
-            self.game_results.append(game_result)
+            # Add to game results (keeps the date/matchup indexes in sync)
+            self._record_game_result(game_result)
             
             # Only generate news for user team games
             if user_team and user_team in (home_team, away_team):
@@ -9800,15 +9903,15 @@ class HockeyManagerGUI(tk.Tk):
         # TODO: Apply specific settings to relevant components
         
     def get_settings(self):
-        """Get current user settings or defaults."""
+        """Get current user settings or defaults (never builds a window)."""
         if not hasattr(self, 'user_settings'):
-            # Load default settings if not already loaded
+            # Load default settings if not already loaded. Reads
+            # settings.json directly -- constructing a SettingsWindow here
+            # used to flash a GUI and break headless/test use.
             try:
-                from settings_window import SettingsWindow
-                temp_settings = SettingsWindow(self)
-                self.user_settings = temp_settings.settings
-                temp_settings.destroy()
-            except:
+                from settings_window import load_settings
+                self.user_settings = load_settings()
+            except Exception:
                 # Fallback to basic defaults
                 self.user_settings = {
                     'game_results': {

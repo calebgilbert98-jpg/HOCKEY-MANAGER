@@ -9,6 +9,79 @@ import os
 from modern_ui import AppColors, AppFonts, AppCard, AppButton
 
 
+def default_settings():
+    """Built-in settings defaults.
+
+    Kept at module level so headless callers (e.g. main.get_settings)
+    can read settings without constructing the SettingsWindow GUI.
+    """
+    return {
+        'game_results': {
+            'show_user_team_only': True,
+            'default_leagues': ['National Hockey League'],
+            'max_games_display': '50',
+            'max_news_display': '10',
+            'default_news_categories': ['Team News', 'League News',
+                                        'Trades', 'Injuries']
+        },
+        'ui_preferences': {
+            'theme': 'Dark (Current)',
+            'font_size': 'Medium (Current)',
+            'auto_close_settings': False,
+            'remember_window_positions': True
+        },
+        'simulation': {
+            'simulation_speed': 'Fast (Current)',
+            'auto_continue_non_game_days': False,
+            'always_show_daily_results': True,
+            'use_game_viewer': False,
+            'game_viewer_mode': 'Full Game',
+            'draft_class_quality': 'Normal',
+            'scoring_level': 'Low (Current)'
+        },
+        'notifications': {
+            'email_notifications': {
+                'Trade Offers': True,
+                'Contract Expiring Soon': True,
+                'Injury Reports': True,
+                'Player Milestones': False,
+                'League News': False,
+                'Draft Updates': True
+            },
+            'enable_sounds': True,
+            'sound_volume': 'Medium'
+        }
+    }
+
+
+def _merge_settings(defaults, loaded):
+    """Recursively merge loaded settings into defaults (in place)."""
+    for key, value in loaded.items():
+        if key in defaults:
+            if isinstance(value, dict) and isinstance(defaults[key], dict):
+                _merge_settings(defaults[key], value)
+            else:
+                defaults[key] = value
+
+
+def load_settings(path=None):
+    """Load settings.json merged over defaults — no GUI involved.
+
+    Used by main.get_settings() so reading settings never constructs
+    (and flashes) a SettingsWindow.
+    """
+    settings_file = path or os.path.join(os.path.dirname(__file__),
+                                         'settings.json')
+    settings = default_settings()
+    try:
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r') as f:
+                _merge_settings(settings, json.load(f))
+    except Exception as e:
+        print(f"Error loading settings: {e}")
+    return settings
+
+
 class ModernCheck(tk.Frame):
     """Dark checkbox row: custom-drawn box + label, bound to a BooleanVar."""
 
@@ -458,71 +531,8 @@ class SettingsWindow(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _load_settings(self):
-        """Load settings from file or create defaults"""
-        settings_file = os.path.join(os.path.dirname(__file__),
-                                     'settings.json')
-
-        # Default settings
-        defaults = {
-            'game_results': {
-                'show_user_team_only': True,
-                'default_leagues': ['National Hockey League'],
-                'max_games_display': '50',
-                'max_news_display': '10',
-                'default_news_categories': ['Team News', 'League News',
-                                            'Trades', 'Injuries']
-            },
-            'ui_preferences': {
-                'theme': 'Dark (Current)',
-                'font_size': 'Medium (Current)',
-                'auto_close_settings': False,
-                'remember_window_positions': True
-            },
-            'simulation': {
-                'simulation_speed': 'Fast (Current)',
-                'auto_continue_non_game_days': False,
-                'always_show_daily_results': True,
-                'use_game_viewer': False,
-                'game_viewer_mode': 'Full Game',
-                'draft_class_quality': 'Normal',
-                'scoring_level': 'Low (Current)'
-            },
-            'notifications': {
-                'email_notifications': {
-                    'Trade Offers': True,
-                    'Contract Expiring Soon': True,
-                    'Injury Reports': True,
-                    'Player Milestones': False,
-                    'League News': False,
-                    'Draft Updates': True
-                },
-                'enable_sounds': True,
-                'sound_volume': 'Medium'
-            }
-        }
-
-        try:
-            if os.path.exists(settings_file):
-                with open(settings_file, 'r') as f:
-                    loaded_settings = json.load(f)
-                    # Merge with defaults to ensure all keys exist
-                    self._merge_settings(defaults, loaded_settings)
-                    return defaults
-            else:
-                return defaults
-        except Exception as e:
-            print(f"Error loading settings: {e}")
-            return defaults
-
-    def _merge_settings(self, defaults, loaded):
-        """Recursively merge loaded settings into defaults"""
-        for key, value in loaded.items():
-            if key in defaults:
-                if isinstance(value, dict) and isinstance(
-                        defaults[key], dict):
-                    self._merge_settings(defaults[key], value)
-                else:
-                    defaults[key] = value
+        """Load settings from file or create defaults (GUI-free helper)."""
+        return load_settings()
 
     def _load_current_values(self):
         """Load current values into the UI"""

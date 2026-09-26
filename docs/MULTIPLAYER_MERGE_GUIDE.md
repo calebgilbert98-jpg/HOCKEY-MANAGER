@@ -186,8 +186,9 @@ real games to validate against, not headless tests:
 
 ## 4. Test report (2026-09-26)
 
-`python3 test_multiplayer_phase1.py` — **11/11 passing**, 13/13
-consecutive runs green (headless: loopback host + 2 clients,
+`python3 test_multiplayer_phase1.py` — **12/12 passing** (was 11/11 at
+Phase-1 ship; test 12 covers the async snapshot added in §5a),
+3 consecutive runs green (headless: loopback host + 2 clients,
 checkpoint ring bounds, crash-flag lifecycle).
 
 One real bug was found *in the test itself* during this work and fixed:
@@ -207,7 +208,135 @@ lobby but never destroyed the "Connecting" window (only the failure
 path did). Fixed with a `_join_succeeded` method that destroys the
 wait window before opening the lobby.
 
-## 5. What NOT to touch
+## 5. Performance work (2026-09-26 — audit → implementation)
+
+After Phase 1 shipped, a three-agent audit produced 10 ranked perf items.
+All were worked through; what follows is what changed, what was measured
+and deliberately *not* changed, and why. Nothing here alters game logic —
+only how fast the same answers are computed.
+
+### 5a. Multiplayer snapshot off the main thread (item 1, HIGH)
+
+`NetHost.broadcast_state()` pickled + gzipped the full league state on
+the tkinter main thread (~1–2 s freeze per Continue click in MP games).
+Now:
+
+- `multiplayer/net_host.py`: new `broadcast_state_async(label, pre_broadcast=None)`.
+  Serialization runs on a worker thread; `_broadcast`/`_send` were already
+  thread-safe (per-peer locks), so the network path is unchanged.
+  Concurrent requests while busy coalesce — the latest label wins and is
+  chained after the in-flight one. Completion/failure surfaces on the
+  existing poll queue as `("snapshot_done", {})` / `("error", ...)`.
+  `start_game()` and `resolve_action()` use the async path; the sync
+  `broadcast_state()` is kept for tests/one-shot callers.
+- `main.py::simulate_day`: early-returns with a "Syncing with clients"
+  toast while `mp_host.snapshot_busy`; the end-of-day block does the
+  checkpoint write + snapshot in **one** worker via `pre_broadcast`;
+  client actions arriving mid-snapshot are deferred in
+  `_mp_deferred_actions` and replayed on `snapshot_done`.
+- Hard rule going forward: **no thread but the main thread touches
+  tkinter, and nobody mutates game objects while `snapshot_busy`.**
+
+A real bug was found while testing: `NetHost.stop()` never woke the
+`accept()` thread, so rebinding the same port failed with EADDRINUSE for
+~1.5 s. Fixed with `shutdown(SHUT_RDWR)` before `close()` (comment in code).
+
+### 5b. Player browser paging (item 2, HIGH)
+
+`player_browser.py` rendered all ~12k players into the Treeview at once
+(~1 s open, **~1.1 s per keystroke** while filtering). Now: display rows
+are precomputed once in `__init__`, filters scan the precomputed rows
+with a 200 ms debounce, and the Treeview renders **250 rows/page** with
+◀ Prev / Next ▶ buttons (selection index is global). Measured under xvfb
+with 12k fake players: open+render 1.0 s → 0.5 s, filter pass 1.1 s →
+**0.05 s (~20×)**, page turn ~0 ms.
+
+### 5c. `game_results` / `news_log` caps + result index (item 3, HIGH)
+
+`main.py`: `_record_game_result()` appends and incrementally maintains two
+derived indexes — `_results_by_date` and `_results_by_matchup` (keyed by
+normalized date + `id()` of the team objects), rebuilt lazily if
+`load_game` swaps the list. `_trim_history_logs()` caps results at 4000
+(trim 500) and news at 1000 (trim 200), called at end of `simulate_day`.
+The daily-results window's full list scan and the past-games panel's
+matchup scan are now O(1) lookups. New helper `find_game_result(date,
+home, away)` exposes the matchup lookup (used by the schedule window,
+§7e). Semantics were verified identical to the old nested scan
+(hit/miss/swapped-teams/datetime-normalization) by an AST-extracted
+headless test.
+
+### 5d. Schedule template cache (item 4, HIGH)
+
+`game_classes.py::League.generate_schedule` re-rolled the 1317-entry
+schedule from scratch on every new game (~13 s). Now: a versioned
+(`SCHEDULE_CACHE_VERSION = 1`) template cache in `saves/schedule_cache/`,
+keyed by sha1 of version + season year + rotation seed + sorted team
+names/leagues. On a hit, entries are mapped onto the new league's live
+Team objects and validated (82 games/NHL team); any mismatch falls back
+to generation. Cached only when `rotation_seed is None`. Verified: second
+league build loaded from cache in **0.01 s**, byte-identical games.
+
+### 5e. Free-agent lookups + AI rating recompute (item 5, MED)
+
+Measured before deciding. `database_manager.get_free_agents()` scans
+~12k players in **3.25 ms** — it is the *correct* source of truth (the
+maintained `database_manager.free_agents` list goes stale on signings,
+and `PlayerIndex` in `database_indexing.py` is never refreshed after
+`initialize()`), so wiring either index would have been a regression for
+no meaningful gain. Left as-is.
+
+The real cost was in `ai_team_management._evaluate_free_agency` (runs per
+team per week): `overall_rating()` — ~30 lines of arithmetic — was
+recomputed up to **4× per FA** (sort key, priority ×2, offer details).
+Now computed once per FA and threaded through new optional
+`overall=` params on `_estimate_player_salary()` and
+`_calculate_fa_priority()` (backward compatible; priority math verified
+bit-identical by a headless regression test).
+
+The 14 `full_name ==` name-scans across 7 files were audited: all are in
+UI click handlers (context menus, compare dialogs, captain selection),
+none in sim/AI loops — a shared index would add staleness risk for
+microseconds. Deliberately not changed.
+
+Also fixed while here: `ScheduleWindow.update_views` (windows.py) scanned
+the full 1317-entry schedule **twice** per refresh (months + rows) and,
+for every past game, did a **linear scan of the whole `game_results`
+list** — O(games × results), worst ~5M comparisons per window open, and
+this runs on every Continue click while the window is open. Now: schedule
+entries are parsed once per refresh via `_parsed_schedule()` (cache
+invalidated when the schedule list is replaced), and result lookup goes
+through `find_game_result()` — O(1) per game. (The audit's "schedule
+panel" premise turned out to be dormant code — the two panel updaters in
+main.py no-op because their Treeviews are never created — but the live
+`ScheduleWindow` had the real cost.)
+
+### 5f. `get_settings` without constructing a window (item 7, MED)
+
+`main.get_settings()` built a full `SettingsWindow` (flashing GUI, widget
+construction) just to read its `.settings` dict. `settings_window.py` now
+exposes module-level `default_settings()`, `_merge_settings()`, and
+`load_settings(path=None)`; the window's `_load_settings` delegates to
+it, and `main.get_settings()` reads the JSON directly — verified
+headless, merge semantics unchanged.
+
+### 5g. Dead code removed (item 8, LOW)
+
+`git rm`: `modern_dashboard.py` (only reference was an unused import at
+`main.py:37`, also removed), `modern_nav.py`, `modern_roster.py`,
+`page_navigator.py`, `db_importer.py`. `simple_launcher.py` was checked
+and is **live** (`launcher.py` imports `PuckDynastyLauncher` from it) —
+kept. Full-repo `compileall` clean; no dangling references.
+
+### 5h. Test report (perf work)
+
+- `python3 test_multiplayer_phase1.py` — **12/12 passing**, 3 consecutive
+  runs (new test 12 covers the async snapshot: non-blocking, busy flag,
+  coalescing, ordered delivery, pre-broadcast runs once).
+- Headless logic tests: result-index semantics (5 checks), `find_game_result`
+  (5 checks), `load_settings` merge, AI FA priority math — all green.
+- Full-repo `compileall` clean after the deletions.
+
+## 6. What NOT to touch
 
 - `multiplayer/*` internals — extend via the callbacks, not edits.
 - The checkpoint ring size/location contract (`saves/checkpoints/`,
@@ -217,7 +346,7 @@ wait window before opening the lobby.
 - Pickle-over-TCP stays LAN-only. If anyone proposes internet hosting
   without a VPN, that needs auth + encryption first (Phase 3 scope).
 
-## 6. Branch / version guidance
+## 7. Branch / version guidance
 
 - Develop multiplayer on a feature branch (e.g. `feature/multiplayer-phase1`).
 - New files merge cleanly; conflicts will concentrate in

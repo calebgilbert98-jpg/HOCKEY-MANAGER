@@ -2147,6 +2147,117 @@ class League:
         for team in self.teams:
             self.standings[team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
 
+    # ------------------------------------------------------------------
+    # Schedule template cache.
+    #
+    # generate_schedule() is deterministic for a given (season_year,
+    # league structure): it seeds `random` from the season year before the
+    # constraint solver runs. The solver takes ~13s; the cached template --
+    # (date, home_name, away_name) tuples -- rebuilds in milliseconds by
+    # mapping team names back onto the current Team objects. Bump
+    # SCHEDULE_CACHE_VERSION whenever the scheduling algorithm changes so
+    # stale templates are never served.
+    # ------------------------------------------------------------------
+    SCHEDULE_CACHE_VERSION = 1
+    SCHEDULE_CACHE_DIR = _os.path.join("saves", "schedule_cache")
+
+    def _schedule_cache_path(self, season_year, seed):
+        import hashlib
+        teams_key = "|".join(sorted(
+            f"{t.team_name}@{getattr(t, 'league_name', '')}"
+            for t in self.teams))
+        raw = (f"v{self.SCHEDULE_CACHE_VERSION}|{season_year}|{seed}|"
+               f"{teams_key}")
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+        return _os.path.join(self.SCHEDULE_CACHE_DIR,
+                             f"template_{season_year}_{digest}.pkl.gz")
+
+    def _load_schedule_template(self, season_year, seed):
+        """Return the cached template list, or None on any miss/problem."""
+        import gzip, pickle
+        path = self._schedule_cache_path(season_year, seed)
+        try:
+            with open(path, "rb") as fh:
+                template = pickle.loads(gzip.decompress(fh.read()))
+            if isinstance(template, list) and template:
+                return template
+        except (OSError, ValueError, EOFError):
+            pass
+        return None
+
+    def _save_schedule_template(self, season_year, seed):
+        """Serialize the freshly generated schedule as a name-based template."""
+        import gzip, pickle
+        template = []
+        for entry in self.schedule:
+            if isinstance(entry, dict):
+                home, away = entry.get('home_team'), entry.get('away_team')
+                if not (hasattr(home, 'team_name')
+                        and hasattr(away, 'team_name')):
+                    return  # unknown shape: don't cache
+                d = entry.get('date')
+                template.append((
+                    'G',
+                    d.isoformat() if hasattr(d, 'isoformat') else str(d),
+                    home.team_name, away.team_name,
+                    entry.get('league', '')))
+            elif isinstance(entry, (tuple, list)) and len(entry) >= 3:
+                d = entry[0]
+                template.append((
+                    'E',
+                    d.isoformat() if hasattr(d, 'isoformat') else str(d),
+                    str(entry[1]), entry[2]))
+            else:
+                return  # unknown shape: don't cache
+        if not template:
+            return
+        try:
+            _os.makedirs(self.SCHEDULE_CACHE_DIR, exist_ok=True)
+            tmp = self._schedule_cache_path(season_year, seed) + ".tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(gzip.compress(
+                    pickle.dumps(template, protocol=pickle.HIGHEST_PROTOCOL)))
+            _os.replace(tmp, self._schedule_cache_path(season_year, seed))
+        except OSError:
+            pass
+
+    def _apply_schedule_template(self, template):
+        """Rebuild self.schedule from a cached template. False => regenerate."""
+        by_name = {t.team_name: t for t in self.teams}
+        rebuilt = []
+        try:
+            for item in template:
+                kind = item[0]
+                game_date = date.fromisoformat(item[1])
+                if kind == 'G':
+                    _, _, home_name, away_name, league = item
+                    home, away = by_name.get(home_name), by_name.get(away_name)
+                    if home is None or away is None:
+                        return False  # structure changed
+                    rebuilt.append({'date': game_date, 'home_team': home,
+                                    'away_team': away, 'league': league})
+                elif kind == 'E':
+                    _, _, event_kind, payload = item
+                    rebuilt.append((game_date, event_kind, payload))
+                else:
+                    return False
+        except (ValueError, IndexError, TypeError):
+            return False
+        # Light validation: every NHL team must have exactly 82 games.
+        counts = {}
+        for e in rebuilt:
+            if isinstance(e, dict) and e.get('league') == 'NHL':
+                for side in ('home_team', 'away_team'):
+                    name = e[side].team_name
+                    counts[name] = counts.get(name, 0) + 1
+        if counts and any(c != 82 for c in counts.values()):
+            return False
+        self.schedule.clear()
+        self.schedule.extend(rebuilt)
+        self.schedule.sort(key=lambda x: x['date']
+                           if isinstance(x, dict) and 'date' in x else x[0])
+        return True
+
     def generate_schedule(self, season_year=None, rotation_seed=None):
         """Generate complete league schedule with authentic NHL rotating patterns and realistic distribution.
 
@@ -2158,10 +2269,20 @@ class League:
         if season_year is None:
             season_year = self.season_year
         print(f"🏒 Generating league schedule for {season_year}-{season_year+1} season...")
-        
+
         # Set up seasonal rotation seed
         if rotation_seed is None:
             rotation_seed = season_year
+
+        # Fast path: the solver is deterministic per (season_year, league
+        # structure), so a cached template rebuilds the identical schedule
+        # in milliseconds instead of ~13s of constraint solving.
+        template = self._load_schedule_template(season_year, rotation_seed)
+        if template is not None and self._apply_schedule_template(template):
+            print(f"⚡ Schedule loaded from template cache "
+                  f"({len(self.schedule)} entries).")
+            return
+
         random.seed(rotation_seed)  # For reproducible but varied schedules
         
         self.schedule.clear()
@@ -2190,7 +2311,11 @@ class League:
         
         # Verify schedule integrity
         self._verify_complete_schedule_integrity()
-        
+
+        # Cache the template so the next new game with the same league
+        # structure skips the constraint solver entirely.
+        self._save_schedule_template(season_year, rotation_seed)
+
         # Reset random seed to avoid affecting other game elements
         import time
         random.seed(int(time.time()))

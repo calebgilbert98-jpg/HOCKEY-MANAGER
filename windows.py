@@ -5352,15 +5352,30 @@ class ScheduleWindow(tk.Toplevel):
             return None
         return game_date, home, away
 
+    def _parsed_schedule(self):
+        """Schedule entries normalized to (date, home, away), parsed once.
+
+        The raw league.schedule mixes dict and tuple formats and is
+        re-scanned by several views; parse it once per schedule object and
+        reuse. Rebuilds automatically when the schedule list is replaced
+        (new season / load game).
+        """
+        src = self.parent.league.schedule
+        if getattr(self, '_parsed_schedule_src', None) is not src:
+            parsed = []
+            for game_entry in src:
+                entry = self._parse_schedule_entry(game_entry)
+                if entry:
+                    parsed.append(entry)
+            self._parsed_schedule_cache = parsed
+            self._parsed_schedule_src = src
+        return self._parsed_schedule_cache
+
     def _schedule_months(self):
         """Month labels present in the schedule, in chronological order."""
         months = []
         seen = set()
-        for game_entry in self.parent.league.schedule:
-            parsed = self._parse_schedule_entry(game_entry)
-            if not parsed:
-                continue
-            game_date = parsed[0]
+        for game_date, home, away in self._parsed_schedule():
             try:
                 label = game_date.strftime("%b %Y")
             except (AttributeError, ValueError):
@@ -5384,33 +5399,26 @@ class ScheduleWindow(tk.Toplevel):
             self.month_filter.set('All')
         selected_month = self.month_filter.get()
 
-        for game_entry in self.parent.league.schedule:
-            parsed = self._parse_schedule_entry(game_entry)
-            if not parsed:
-                continue
-            game_date, home, away = parsed
-
+        for game_date, home, away in self._parsed_schedule():
             # Month filter
             try:
                 if selected_month != 'All' and game_date.strftime("%b %Y") != selected_month:
                     continue
             except (AttributeError, ValueError):
                 pass
-            
+
             # Determine game status and score
             status = "Scheduled"
             score = "- : -"
-            
+
             if game_date < self.parent.current_date:
-                # Look for actual game result
-                for game_result in self.parent.game_results:
-                    if (game_result['date'] == game_date and 
-                        game_result['home_team'] == home and 
-                        game_result['away_team'] == away):
-                        score = f"{game_result['away_score']}-{game_result['home_score']}"
-                        status = "Final"
-                        break
-                if status != "Final":
+                # O(1) result lookup via the app's matchup index (was a full
+                # scan of game_results per scheduled game: O(games x results))
+                game_result = self.parent.find_game_result(game_date, home, away)
+                if game_result is not None:
+                    score = f"{game_result['away_score']}-{game_result['home_score']}"
+                    status = "Final"
+                else:
                     score = "0-0"  # Fallback if no result found
                     status = "Simulated"
             elif game_date == self.parent.current_date:

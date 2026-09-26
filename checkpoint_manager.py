@@ -27,10 +27,13 @@ flag is still there at the next launch, the previous session died
 uncleanly and the launcher offers one-click recovery from the newest
 checkpoint.
 
-Threading: call :meth:`CheckpointManager.checkpoint` on the tkinter
-main thread (it reads live game objects via ``create_save_data``).
-It performs no widget I/O itself, so it is safe to call from the
-Continue handler and the draft UI callbacks directly.
+Threading: :meth:`CheckpointManager.checkpoint` reads live game objects
+via ``create_save_data`` and performs no widget I/O, so it is safe to
+call from the Continue handler and draft UI callbacks directly. It may
+also run on the multiplayer snapshot worker thread: the host
+guarantees (via ``snapshot_busy``) that no other thread mutates game
+objects while a snapshot/checkpoint is in flight. Writes are atomic
+(temp file + os.replace) either way.
 
 Multiplayer: the host owns checkpointing. Clients are told via
 CHECKPOINT_NOTICE so their UI can toast "Host checkpointed".

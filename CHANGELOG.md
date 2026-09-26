@@ -63,10 +63,33 @@ claim teams, and stay in sync through full-state snapshots. See
   own screen); roster/cap mutations are validated stubs returning a
   clean "not implemented yet (Phase 1b)" rejection, ready for
   incremental implementation.
-- `test_multiplayer_phase1.py`: 11/11 headless integration tests
+- `test_multiplayer_phase1.py`: 12/12 headless integration tests
   (handshake, version mismatch, team claims, ACTION round-trip,
   cross-team/unsupported rejection, chat, day announce, client fallback,
-  disconnect, ring bounds, crash-flag lifecycle).
+  disconnect, ring bounds, crash-flag lifecycle, async snapshot).
+
+### Performance (audit -> implementation, 2026-09-26)
+- MP snapshot off the main thread: `NetHost.broadcast_state_async()`
+  serializes on a worker (coalescing while busy); `simulate_day` toasts
+  and returns while busy, defers client actions to `snapshot_done`.
+  Fixed `NetHost.stop()` never waking `accept()` (EADDRINUSE on rebind).
+- Player browser: 250 rows/page, precomputed display rows, 200 ms
+  filter debounce (filter pass 1.1 s -> 0.05 s under 12k players).
+- `game_results` capped at 4000 / `news_log` at 1000, with derived
+  date + matchup indexes and `find_game_result()` O(1) lookup.
+- Schedule template cache (`saves/schedule_cache/`): new-game
+  schedule build 13 s -> 0.01 s on cache hit (validated, falls back
+  to generation on mismatch).
+- Weekly AI free agency: `overall_rating()` computed once per FA per
+  team (was up to 4x) via optional `overall=` params; `get_free_agents`
+  scan measured at 3.25 ms and kept as the correct source of truth.
+- `ScheduleWindow`: schedule parsed once per refresh; per-game result
+  lookup via index instead of O(games x results) nested scan.
+- `get_settings()` no longer constructs a `SettingsWindow`;
+  `settings_window.load_settings()` reads JSON directly.
+- Deleted dead modules: `modern_dashboard.py`, `modern_nav.py`,
+  `modern_roster.py`, `page_navigator.py`, `db_importer.py`
+  (+ unused `ModernDashboard` import in `main.py`).
 
 ## [0.9.0] - 2026-09-26
 

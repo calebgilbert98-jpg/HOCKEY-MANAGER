@@ -93,6 +93,11 @@ class MultiplayerHost:
         self._listener: Optional[socket.socket] = None
         self._threads: List[threading.Thread] = []
         self._last_game_date = "unknown"
+        # Async snapshot state: only one serialization worker runs at a
+        # time; extra requests coalesce into _snapshot_pending (latest wins).
+        self._snapshot_lock = threading.Lock()
+        self._snapshot_busy = False
+        self._snapshot_pending: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -119,6 +124,15 @@ class MultiplayerHost:
         for peer in peers:
             self._drop_peer(peer, "host shutting down", notify=False)
         if self._listener is not None:
+            try:
+                # shutdown() first: it wakes the accept thread blocked in
+                # accept() immediately. close() alone does NOT interrupt a
+                # thread stuck in accept(), so the bind would linger ~1s
+                # (the socket timeout) and a prompt restart on the same
+                # port would fail with EADDRINUSE.
+                self._listener.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 self._listener.close()
             except OSError:
@@ -154,16 +168,82 @@ class MultiplayerHost:
     # ------------------------------------------------------------------
 
     def broadcast_state(self, label: str = "") -> None:
-        """Snapshot via state_provider and push STATE_SYNC to every client."""
+        """Snapshot via state_provider and push STATE_SYNC to every client.
+
+        Synchronous: runs create_save_data + pickle + gzip on the calling
+        thread. Prefer broadcast_state_async() from UI code so the main
+        thread never freezes; this variant stays for tests and one-shot
+        callers that already own their thread.
+        """
         save_bytes, game_date, _auto_label = self._state_provider()
         self._last_game_date = game_date
         self._broadcast(P.STATE_SYNC,
                         P.state_sync(save_bytes, game_date, label or _auto_label))
 
+    @property
+    def snapshot_busy(self) -> bool:
+        """True while a snapshot worker is serializing game state.
+
+        The GUI must not mutate game objects while this is set (no day
+        advance, no action application); see broadcast_state_async.
+        """
+        with self._snapshot_lock:
+            return self._snapshot_busy
+
+    def broadcast_state_async(self, label: str = "",
+                              pre_broadcast: Optional[Callable[[], None]] = None
+                              ) -> bool:
+        """Serialize + broadcast STATE_SYNC on a worker thread.
+
+        ``pre_broadcast`` (e.g. the host's checkpoint-to-disk) runs first
+        on the same worker, so one serialization window covers both.
+
+        Returns True if a worker was started. If one is already running,
+        the request is coalesced into a single pending snapshot (latest
+        label wins) and False is returned. Completion (or failure) is
+        reported as a ("snapshot_done", {}) / ("error", ...) event on the
+        normal poll queue, so the main thread can resume mutations then.
+
+        Threading contract: while snapshot_busy is True, NOBODY may mutate
+        the game objects the state_provider reads -- the GUI enforces this
+        by deferring client actions and refusing day advances.
+        """
+        with self._snapshot_lock:
+            if self._snapshot_busy:
+                self._snapshot_pending = label
+                return False
+            self._snapshot_busy = True
+        self._spawn(
+            lambda: self._snapshot_worker(label, pre_broadcast),
+            "mp-snapshot")
+        return True
+
+    def _snapshot_worker(self, label: str,
+                         pre_broadcast: Optional[Callable[[], None]]) -> None:
+        try:
+            if pre_broadcast is not None:
+                pre_broadcast()
+            save_bytes, game_date, auto_label = self._state_provider()
+            self._last_game_date = game_date
+            self._broadcast(P.STATE_SYNC,
+                            P.state_sync(save_bytes, game_date,
+                                         label or auto_label))
+        except Exception as e:
+            self.events.put(("error",
+                             {"message": f"state snapshot failed: {e}"}))
+        finally:
+            with self._snapshot_lock:
+                self._snapshot_busy = False
+                pending, self._snapshot_pending = self._snapshot_pending, None
+            # Main-thread bridge: mutations may resume on this event.
+            self.events.put(("snapshot_done", {}))
+            if pending:
+                self.broadcast_state_async(pending)
+
     def start_game(self) -> None:
         """Leave the lobby: tell clients the game is starting, then sync state."""
         self._broadcast(P.START_GAME, {"type": P.START_GAME})
-        self.broadcast_state("Game started")
+        self.broadcast_state_async("Game started")
 
     def announce_day(self, game_date: str) -> None:
         """Call right after the host advances a day, then broadcast_state()."""
@@ -192,7 +272,8 @@ class MultiplayerHost:
                        {"type": P.ACTION_ACK, "action_seq": msg_seq,
                         "result": detail})
             if broadcast:
-                self.broadcast_state(f"After action ({detail})" if detail else "State update")
+                self.broadcast_state_async(
+                    f"After action ({detail})" if detail else "State update")
         else:
             self._send(peer, P.ACTION_REJECT,
                        {"type": P.ACTION_REJECT, "action_seq": msg_seq,

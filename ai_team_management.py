@@ -293,7 +293,10 @@ class AITeamManager:
         if available_budget < 1_000_000:  # Need at least 1M available
             return decisions
         
-        # Find suitable free agents
+        # Find suitable free agents. overall_rating() is computed ONCE per FA
+        # here and threaded through: this runs per team per week, and the
+        # old code recomputed it up to 4x per FA (sort key, priority x2,
+        # offer details).
         suitable_fas = []
         for fa in free_agents:
             if fa.primary_position in strategy.position_needs:
@@ -302,19 +305,20 @@ class AITeamManager:
                     continue
                 if strategy.prefer_experience and fa.age < strategy.min_roster_age:
                     continue
-                
+
+                ovr = fa.overall_rating()
                 # Estimate salary demand
-                estimated_salary = self._estimate_player_salary(fa)
+                estimated_salary = self._estimate_player_salary(fa, ovr)
                 if estimated_salary <= available_budget:
-                    suitable_fas.append((fa, estimated_salary))
-        
+                    suitable_fas.append((fa, estimated_salary, ovr))
+
         # Sort by priority (overall rating vs cost)
-        suitable_fas.sort(key=lambda x: x[0].overall_rating() / (x[1] / 1_000_000), reverse=True)
-        
+        suitable_fas.sort(key=lambda x: x[2] / (x[1] / 1_000_000), reverse=True)
+
         # Make offers to top candidates
-        for fa, estimated_salary in suitable_fas[:3]:  # Top 3 candidates
-            priority_score = self._calculate_fa_priority(fa, strategy, team)
-            
+        for fa, estimated_salary, ovr in suitable_fas[:3]:  # Top 3 candidates
+            priority_score = self._calculate_fa_priority(fa, strategy, team, ovr)
+
             if priority_score > 0.6:  # High interest threshold
                 decision = AIDecision(
                     team_name=team.team_name,
@@ -323,7 +327,7 @@ class AITeamManager:
                     offer_details={
                         "salary": estimated_salary,
                         "term": self._determine_contract_length(fa, strategy),
-                        "no_trade_clause": fa.overall_rating() > 85
+                        "no_trade_clause": ovr > 85
                     },
                     priority_score=priority_score,
                     reasoning=f"Addresses {fa.primary_position.value} need, fits strategy",
@@ -420,7 +424,8 @@ class AITeamManager:
         
         return decisions
     
-    def _estimate_player_salary(self, player: Player) -> int:
+    def _estimate_player_salary(self, player: Player,
+                                overall: Optional[float] = None) -> int:
         """Estimate fair market salary for a player.
 
         Demands are expressed as a % of the salary cap, so they scale
@@ -429,7 +434,9 @@ class AITeamManager:
         cap_sys = self._cap_system
         cap = cap_sys.current_cap if cap_sys else DEFAULT_CAP
 
-        ovr = player.overall_rating()  # internal ~50 scale
+        # overall_rating() is ~30 lines of arithmetic: callers in hot loops
+        # (e.g. _evaluate_free_agency over 32 teams x FAs) pass it in.
+        ovr = overall if overall is not None else player.overall_rating()  # internal ~50 scale
         # Convert to 1-100 display scale for market logic
         try:
             from game_classes import to_100_scale
@@ -476,29 +483,32 @@ class AITeamManager:
         else:
             return random.randint(1, 3)  # Short term for veterans
     
-    def _calculate_fa_priority(self, player: Player, strategy: TeamStrategy, team: Team) -> float:
+    def _calculate_fa_priority(self, player: Player, strategy: TeamStrategy,
+                               team: Team,
+                               overall: Optional[float] = None) -> float:
         """Calculate how much a team wants a free agent"""
         priority = 0.0
-        
+        ovr = overall if overall is not None else player.overall_rating()
+
         # Position need bonus
         if player.primary_position in strategy.position_needs:
             priority += 0.4
-        
+
         # Overall rating bonus
-        priority += min(player.overall_rating() / 170, 0.3)  # 51 OVR -> full 0.3
-        
+        priority += min(ovr / 170, 0.3)  # 51 OVR -> full 0.3
+
         # Age preference
         if strategy.prefer_youth and player.age < 26:
             priority += 0.2
         elif strategy.prefer_experience and player.age > 28:
             priority += 0.2
-        
+
         # Strategic fit
-        if strategy.priority == ManagementPriority.CONTEND and player.overall_rating() > 85:
+        if strategy.priority == ManagementPriority.CONTEND and ovr > 85:
             priority += 0.2
         elif strategy.priority == ManagementPriority.REBUILD and player.age < 24:
             priority += 0.2
-        
+
         return min(priority, 1.0)
     
     def _should_extend_player(self, player: Player, strategy: TeamStrategy) -> bool:

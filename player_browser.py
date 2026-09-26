@@ -17,8 +17,33 @@ class PlayerBrowserWindow(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.players = players
-        self.filtered_players = players.copy()
         self.selected_player = None
+
+        # Paging: a Treeview with ~12k rows costs one Tcl round-trip per
+        # insert, so we render one page at a time (filters still scan all).
+        self.page = 0
+        self.page_size = 250
+        self._filter_after_id = None
+
+        # Precompute display rows ONCE: (player, values, rating). Filtering
+        # and sorting then reuse these instead of recomputing overall_rating
+        # (and the fog-of-war noise) on every keystroke.
+        user_team = self._user_team()
+        self._all_rows = []
+        for p in players:
+            try:
+                rating = p.overall_rating()
+                self._all_rows.append((p, (
+                    p.full_name,
+                    p.primary_position.value,
+                    f"{displayed_overall(p, user_team):.0f}",
+                    p.age,
+                    getattr(p, 'former_team', 'Unknown'),
+                ), rating))
+            except Exception:
+                continue
+        self._rows = []              # filtered + sorted (player, values, rating)
+        self.filtered_players = []   # players only, same order as _rows
         
         # Window setup
         self.title(title)
@@ -33,8 +58,8 @@ class PlayerBrowserWindow(tk.Toplevel):
         # Setup UI
         self.setup_ui()
         
-        # Initial population
-        self.populate_players()
+        # Initial filter + population (replaces direct populate_players)
+        self._do_filter()
         
     def setup_ui(self):
         """Setup the simple player browser UI"""
@@ -141,6 +166,21 @@ class PlayerBrowserWindow(tk.Toplevel):
         self.info_label = tk.Label(button_frame, text="Select a player to draft", 
                                   fg='#E0E0E0', bg='#181818')
         self.info_label.pack(side=tk.LEFT)
+
+        # Paging controls (Treeview renders one page; filters scan all rows)
+        page_frame = tk.Frame(button_frame, bg='#181818')
+        page_frame.pack(side=tk.LEFT, padx=20)
+        self.prev_btn = tk.Button(page_frame, text="◀ Prev", command=self._prev_page,
+                                  bg='#2A2A2A', fg='#FFFFFF',
+                                  activebackground='#3A3A3A')
+        self.prev_btn.pack(side=tk.LEFT, padx=2)
+        self.page_label = tk.Label(page_frame, text="Page 1 / 1",
+                                   fg='#E0E0E0', bg='#181818')
+        self.page_label.pack(side=tk.LEFT, padx=6)
+        self.next_btn = tk.Button(page_frame, text="Next ▶", command=self._next_page,
+                                  bg='#2A2A2A', fg='#FFFFFF',
+                                  activebackground='#3A3A3A')
+        self.next_btn.pack(side=tk.LEFT, padx=2)
         
         # Close button
         close_btn = tk.Button(button_frame, text="Close", command=self.destroy,
@@ -148,71 +188,85 @@ class PlayerBrowserWindow(tk.Toplevel):
         close_btn.pack(side=tk.RIGHT)
         
     def populate_players(self):
-        """Populate the treeview with filtered players"""
-        # Clear existing items
+        """Render the current page of the filtered/sorted rows.
+
+        Only ~250 Treeview inserts per refresh instead of one per player
+        (~12k Tcl round-trips before this change).
+        """
         for item in self.tree.get_children():
             self.tree.delete(item)
-            
-        debug_print(f"DEBUG: Populating player browser with {len(self.filtered_players)} players")
-        
-        # Add players to tree
-        for i, player in enumerate(self.filtered_players):
+
+        total = len(self._rows)
+        pages = max(1, -(-total // self.page_size))
+        self.page = min(max(0, self.page), pages - 1)
+        start = self.page * self.page_size
+        page_rows = self._rows[start:start + self.page_size]
+
+        for j, (player, values, _rating) in enumerate(page_rows):
             try:
-                former_team = getattr(player, 'former_team', 'Unknown')
-                
-                item_id = self.tree.insert('', 'end', values=(
-                    player.full_name,
-                    player.primary_position.value,
-                    # Fog of war: unscouted players show a noisy estimate
-                    f"{displayed_overall(player, self._user_team()):.0f}",
-                    player.age,
-                    former_team
-                ))
-                
-                # Store player reference
-                self.tree.set(item_id, '#0', str(i))  # Store index
-                
+                item_id = self.tree.insert('', 'end', values=values)
+                # Index into filtered_players (global, not page-local)
+                self.tree.set(item_id, '#0', str(start + j))
             except Exception as e:
-                debug_print(f"DEBUG: Error adding player {i}: {e}")
+                debug_print(f"DEBUG: Error adding player {start + j}: {e}")
                 continue
-        
-        # Update count
-        total_count = len(self.players)
-        filtered_count = len(self.filtered_players)
-        self.count_label.configure(text=f"Showing {filtered_count} of {total_count} players")
-        
-        debug_print(f"DEBUG: Added {len(self.tree.get_children())} players to tree")
-        
+
+        # Paging UI
+        shown = f"{start + 1}-{start + len(page_rows)}" if total else "0"
+        self.count_label.configure(
+            text=f"Showing {shown} of {total} players "
+                 f"(page {self.page + 1}/{pages})")
+        self.page_label.configure(text=f"Page {self.page + 1} / {pages}")
+        self.prev_btn.configure(state='normal' if self.page > 0 else 'disabled')
+        self.next_btn.configure(
+            state='normal' if self.page < pages - 1 else 'disabled')
+
+        debug_print(f"DEBUG: Rendered page {self.page + 1}/{pages} "
+                    f"({len(page_rows)} rows of {total})")
+
+    def _prev_page(self):
+        if self.page > 0:
+            self.page -= 1
+            self.populate_players()
+
+    def _next_page(self):
+        if (self.page + 1) * self.page_size < len(self._rows):
+            self.page += 1
+            self.populate_players()
+
     def on_filter_change(self, *args):
-        """Handle filter changes"""
+        """Debounced: typing in search no longer re-renders per keystroke."""
+        if self._filter_after_id is not None:
+            self.after_cancel(self._filter_after_id)
+        self._filter_after_id = self.after(200, self._do_filter)
+
+    def _do_filter(self):
+        """Apply filters over the precomputed rows, sort once, page 1."""
+        self._filter_after_id = None
         try:
             search_text = self.search_var.get().lower()
             position_filter = self.position_var.get()
-            min_rating = int(self.min_rating_var.get() or 0)
-            
-            # Filter players
-            self.filtered_players = []
-            for player in self.players:
-                # Search filter
-                if search_text and search_text not in player.full_name.lower():
+            try:
+                min_rating = int(self.min_rating_var.get() or 0)
+            except (ValueError, TypeError):
+                min_rating = 0
+
+            rows = []
+            for player, values, rating in self._all_rows:
+                if search_text and search_text not in values[0].lower():
                     continue
-                    
-                # Position filter
-                if position_filter != "All" and player.primary_position.value != position_filter:
+                if position_filter != "All" and values[1] != position_filter:
                     continue
-                    
-                # Rating filter
-                if to_100_scale(player.overall_rating()) < min_rating:
+                if to_100_scale(rating) < min_rating:
                     continue
-                    
-                self.filtered_players.append(player)
-            
-            # Sort by rating (highest first)
-            self.filtered_players.sort(key=lambda p: p.overall_rating(), reverse=True)
-            
-            # Repopulate
+                rows.append((player, values, rating))
+
+            # Sort by rating (highest first) -- rating computed once above
+            rows.sort(key=lambda r: r[2], reverse=True)
+            self._rows = rows
+            self.filtered_players = [p for p, _v, _r in rows]
+            self.page = 0
             self.populate_players()
-            
         except Exception as e:
             debug_print(f"DEBUG: Error in filter: {e}")
             

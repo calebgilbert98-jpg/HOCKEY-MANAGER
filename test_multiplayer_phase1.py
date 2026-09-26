@@ -13,6 +13,7 @@ import pickle
 import shutil
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -216,6 +217,48 @@ assert cm.previous_session_crashed()
 cm.mark_clean_shutdown()
 assert not cm.previous_session_crashed()
 print("11. crash-flag lifecycle OK")
+
+# --- 12. async snapshot: non-blocking, busy flag, coalescing ------------
+gate = threading.Event()
+pre_ran = {"n": 0}
+gated_calls = {"n": 0}
+
+
+def gated_provider():
+    gated_calls["n"] += 1
+    assert gate.wait(5.0), "snapshot worker never released"
+    return FAKE_BLOB, "2026-10-05", "gated-sync"
+
+
+def pre_fn():
+    pre_ran["n"] += 1
+
+
+host2 = MultiplayerHost(gated_provider, host_name="Commish2", port=PORT)
+host2.start()
+c3 = MultiplayerClient("Async")
+c3.connect("127.0.0.1", PORT)
+
+t0 = time.time()
+assert host2.broadcast_state_async("first", pre_broadcast=pre_fn) is True
+assert time.time() - t0 < 1.0, "async broadcast blocked the caller"
+assert host2.snapshot_busy is True
+# A second request while busy coalesces instead of spawning a worker.
+assert host2.broadcast_state_async("second") is False
+assert gated_calls["n"] == 1
+gate.set()  # release the worker
+drain_host(host2, "snapshot_done", timeout=5.0)
+assert host2.snapshot_busy is False
+assert pre_ran["n"] == 1, pre_ran
+# Both snapshots were delivered, in order; pending carried no pre_broadcast.
+k1, p1 = drain(c3, "state_sync")
+assert p1["label"] == "first" and p1["save_bytes"] == FAKE_BLOB, p1
+k2, p2 = drain(c3, "state_sync")
+assert p2["label"] == "second", p2
+assert gated_calls["n"] == 2, gated_calls
+host2.stop()
+c3.disconnect()
+print("12. async snapshot (non-blocking, coalesced) OK")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\nALL PHASE-1 INTEGRATION TESTS PASSED (state_provider calls: {state_calls['n']})")
