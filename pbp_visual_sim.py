@@ -46,6 +46,11 @@ FONT = "Segoe UI"
 # Event types the "Next Big Moment" button jumps to
 BIG_MOMENTS = ("goal", "penalty", "fight", "penalty_shot")
 
+# Replay tuning (playback rate; snapshots are tick-based so any speed works)
+REPLAY_RATE = 0.5
+# History kept for instant replays: snapshots recorded every tick while playing
+HISTORY_MAX = 1400
+
 
 def _abbr(team_name):
     """3-letter abbreviation for scoreboard-style readouts."""
@@ -216,6 +221,65 @@ def _best_line(team):
     return line
 
 
+def _build_lines(team):
+    """4 forward lines + 3 D pairs + goalie, sorted by overall (best on L1/P1).
+
+    Used for real on-the-fly line changes in the visualizer: the five
+    skater dots keep their roles (C/LW/RW/D1/D2) but get a new player
+    (and jersey number) every 45s (F) / 60s (D), matching the sim's
+    rotation cadence.
+    """
+    skaters = [p for p in team.roster
+               if getattr(p, "primary_position", None) != PlayerPosition.GOALIE]
+    fw_pos = (PlayerPosition.CENTER, PlayerPosition.LEFT_WING,
+              PlayerPosition.RIGHT_WING)
+    df_pos = (PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE)
+    try:
+        fw = sorted((p for p in skaters if p.primary_position in fw_pos),
+                    key=lambda p: p.overall_rating(), reverse=True)
+        df = sorted((p for p in skaters if p.primary_position in df_pos),
+                    key=lambda p: p.overall_rating(), reverse=True)
+    except Exception:
+        fw, df = list(skaters), []
+
+    def pad(group, n):
+        if not group:
+            return [None] * n
+        return [group[i % len(group)] for i in range(n)]
+    fw = pad(fw, 12)
+    df = pad(df, 6)
+
+    def fit(chunk, roles):
+        """Greedily assign the best position-fit player to each role."""
+        remaining = [p for p in chunk if p is not None]
+        out = {}
+        for role, want in roles:
+            best = next((p for p in remaining
+                         if getattr(p, "primary_position", None) == want), None)
+            if best is None and remaining:
+                best = remaining[0]
+            if best in remaining:
+                remaining.remove(best)
+            out[role] = best
+        return out
+
+    lines = {"F": [], "D": []}
+    for i in range(4):
+        lines["F"].append(fit(fw[i * 3:(i + 1) * 3],
+                              [("C", PlayerPosition.CENTER),
+                               ("LW", PlayerPosition.LEFT_WING),
+                               ("RW", PlayerPosition.RIGHT_WING)]))
+    for i in range(3):
+        lines["D"].append(fit(df[i * 2:(i + 1) * 2],
+                              [("D1", PlayerPosition.LEFT_DEFENSE),
+                               ("D2", PlayerPosition.RIGHT_DEFENSE)]))
+    try:
+        lines["G"] = team.get_starting_goalie()
+    except Exception:
+        lines["G"] = None
+    return lines
+
+
 # ----------------------------------------------------------------------------
 # The visualizer window
 # ----------------------------------------------------------------------------
@@ -284,12 +348,57 @@ class PBPVisualSim(tk.Toplevel):
         self._instant = False         # True during sim-to-end: no flights
         self.puck_target = None       # sim-authored puck destination (eased)
         self._pass_arrival = None     # pass event awaiting flight landing
+        self._shootout_pending = None # shootout attempt awaiting flight landing
         self._battle_winner = None
         self._battle_settle_at = 0.0
+        self._cur_score = (0, 0)       # (home, away) as currently displayed
+
+        # -- broadcast replay system --
+        # history: deque of (playhead_t, {dot_id: (x, y)}, (puck_x, puck_y),
+        #                   home_score, away_score), recorded every tick
+        self._history = deque(maxlen=HISTORY_MAX)
+        self._last_snap_t = -1.0
+        self._replay = None           # None or dict(frames, rt, dur, label)
+        self._highlights = []         # list of dict(start_t, end_t, label, pid, frames)
+        self._stars = None            # computed at game_end
+        self._stars_win = None
+
+        # -- puck trail (shot flights) --
+        self._trail = deque(maxlen=30)
+        self._trail_color = ACCENT
+        self._trail_item = None
+
+        # -- shot map overlay: list of (x, y, side, result); result in
+        #    {"goal","save","block","miss"}; cleared each period
+        self._shotmap = []
+        self._shotmap_on = False
+        self._last_shot = None        # (x, y, side) awaiting outcome
+
+        # -- per-player live game stats: pid -> dict(G,A,SOG,HIT,PIM,FO) --
+        self._pstats = {}
+
+        # -- smart broadcast pacing --
+        self.auto_pace = False
+
+        # -- player card popup --
+        self._card_win = None
+        self._card_pid = None
+
+        # -- penalty release timers: dot_id -> release playhead (game-sec) --
+        self._penalty_timers = {}
 
         self._build_widgets()
         self._draw_rink()
         self._create_dots()
+        # full line charts for on-the-fly changes (rotation cadence below)
+        self.home_lines = _build_lines(home_team)
+        self.away_lines = _build_lines(away_team)
+        self._line_now = {"home": (0, 0), "away": (0, 0)}
+        self._line_change = {"home": None, "away": None}
+        f0, d0 = self._line_indices()
+        self._apply_line("home", f0, d0)
+        self._apply_line("away", f0, d0)
+        self._line_now = {"home": (f0, d0), "away": (f0, d0)}
         self._faceoff_formation(100, 42.5, winner_is_home=True, teleport=True)
         self._feed("Game about to begin…", tag="period")
 
@@ -381,6 +490,7 @@ class PBPVisualSim(tk.Toplevel):
         self.canvas = tk.Canvas(rink_frame, width=self.rink_w, height=self.rink_h,
                                 bg=RINK_SURROUND, highlightthickness=0, bd=0)
         self.canvas.pack(padx=4, pady=4)
+        self.canvas.bind("<Button-1>", self._on_canvas_click)
 
         # Live team-stats strip under the rink (Shots / Hits / Faceoffs / PIM)
         self.team_stats = {"home": {"Shots": 0, "Hits": 0, "FO": 0, "PIM": 0},
@@ -434,7 +544,9 @@ class PBPVisualSim(tk.Toplevel):
         for label, val in (("1x", 1), ("2x", 2), ("4x", 4)):
             b = self._pill(spd, label, lambda v=val: self._set_speed(v), w=38)
             self.speed_btns[val] = b
+        self.auto_btn = self._pill(ctl, "Auto", self._toggle_auto, w=56)
         self._pill(ctl, "End", self._sim_to_end, w=56)
+        self.shotmap_btn = self._pill(ctl, "Shot Map", self._toggle_shotmap, w=84)
 
         self.feed = tk.Text(right, bg="#0D1420", fg=TEXT, font=(FONT, 10),
                             wrap="word", relief="flat", highlightthickness=0,
@@ -558,6 +670,34 @@ class PBPVisualSim(tk.Toplevel):
         boards = self._rr_points(8, 8, W - 8, H - 8, rr)
         c.create_polygon(boards, outline=BOARD_BLUE, fill="", width=18)
 
+        # --- penalty boxes (top corners, outside the ice) ---
+        self._penalty_boxes = {}
+        for side, fx in (("home", 0.06), ("away", 0.94)):
+            bx0, bx1 = W * fx - 46, W * fx + 46
+            c.create_rectangle(bx0, 2, bx1, 26, outline="#3A4152", width=1)
+            c.create_text((bx0 + bx1) / 2, 14, text="PENALTY",
+                          fill="#5A6274", font=(FONT, 7, "bold"))
+            self._penalty_boxes[side] = (bx0, bx1)
+
+        # --- benches (center ice, top/bottom boards) ---
+        cxm = self.X(100)
+        for y0 in (2, H - 24):
+            c.create_rectangle(cxm - 70, y0, cxm + 70, y0 + 22,
+                               outline="#3A4152", width=1)
+            c.create_text(cxm, y0 + 11, text="BENCH",
+                          fill="#5A6274", font=(FONT, 7, "bold"))
+
+        # --- broadcast REPLAY bug (hidden unless replaying) ---
+        self._replay_dot = c.create_oval(14, 14, 26, 26, fill="#FF2E3E",
+                                         outline="", state="hidden")
+        self._replay_text = c.create_text(34, 20, text="REPLAY", anchor="w",
+                                          fill="white", font=(FONT, 11, "bold"),
+                                          state="hidden")
+
+        # --- puck trail (single polyline, redrawn each tick) ---
+        self._trail_item = c.create_line(0, 0, 0, 0, fill=ACCENT, width=3,
+                                         smooth=True, state="hidden")
+
     def _bump_stat(self, side, key, amount=1):
         """Increment a team stat ('home'/'away', 'Shots'/'Hits'/'FO'/'PIM')."""
         self.team_stats[side][key] += amount
@@ -606,8 +746,10 @@ class PBPVisualSim(tk.Toplevel):
             if g is not None:
                 self._make_dot(f"G{idx}", g, is_home, "G", color, r=15)
                 idx += 1
-        # puck
+        # puck (+ soft glow behind it)
         px, py = self.X(self.puck["x"]), self.Y(self.puck["y"])
+        self.puck_glow = c.create_oval(px - 11, py - 11, px + 11, py + 11,
+                                       fill="#bcd6ee", outline="")
         self.puck_item = c.create_oval(px - 5, py - 5, px + 5, py + 5,
                                        fill="#111418", outline="white", width=1)
 
@@ -616,21 +758,37 @@ class PBPVisualSim(tk.Toplevel):
         num = getattr(player, "jersey_number", None) or "–"
         # start off-ice; formations will place them
         x, y = (100.0, 42.5)
+        sx, sy = self.X(x) + 2.5, self.Y(y) + 3.5
+        shadow = c.create_oval(sx - r, sy - r, sx + r, sy + r,
+                               fill="#8fa3b8", outline="")
         oval = c.create_oval(self.X(x) - r, self.Y(y) - r,
                              self.X(x) + r, self.Y(y) + r,
                              fill=color, outline="white", width=2)
         fg = "white" if is_home else "#0e0e11"
         txt = c.create_text(self.X(x), self.Y(y), text=str(num),
                             fill=fg, font=(FONT, 9, "bold"))
+        # facing tick: short line showing skate direction (updated per tick)
+        tick = c.create_line(self.X(x), self.Y(y), self.X(x), self.Y(y),
+                             fill="white", width=2)
         self.dots[dot_id] = {
             "id": dot_id, "player": player, "is_home": is_home,
             "role": role, "x": x, "y": y, "tx": x, "ty": y,
-            "oval": oval, "text": txt, "r": r,
+            "oval": oval, "text": txt, "shadow": shadow, "tick": tick,
+            "r": r, "fx": 1.0, "fy": 0.0,
             "nudge": None,  # (dx, dy, until) hit animation
             "jx": random.uniform(-2.5, 2.5),  # fixed personal jitter
             "jy": random.uniform(-2.5, 2.5),
             "sim_set": False,  # True while the sim positions this dot
         }
+
+    def _set_dot_visible(self, d, visible):
+        state = "normal" if visible else "hidden"
+        c = self.canvas
+        for key in ("shadow", "oval", "text", "tick"):
+            try:
+                c.itemconfig(d[key], state=state)
+            except Exception:
+                pass
 
     def _dot_by_player(self, player):
         if player is None:
@@ -646,12 +804,22 @@ class PBPVisualSim(tk.Toplevel):
         return None
 
     def _move_dot(self, d, x, y):
+        # update facing from movement direction
+        dx, dy = x - d["x"], y - d["y"]
+        if dx * dx + dy * dy > 0.004:
+            m = math.hypot(dx, dy)
+            d["fx"], d["fy"] = dx / m, dy / m
         d["x"], d["y"] = x, y
         c = self.canvas
         r = d["r"]
         c.coords(d["oval"], self.X(x) - r, self.Y(y) - r,
                  self.X(x) + r, self.Y(y) + r)
         c.coords(d["text"], self.X(x), self.Y(y))
+        c.coords(d["shadow"], self.X(x) - r + 2.5, self.Y(y) - r + 3.5,
+                 self.X(x) + r + 2.5, self.Y(y) + r + 3.5)
+        fx, fy = d["fx"], d["fy"]
+        c.coords(d["tick"], self.X(x) + fx * (r + 1), self.Y(y) + fy * (r + 1),
+                 self.X(x) + fx * (r + 7), self.Y(y) + fy * (r + 7))
 
     # ------------------------------------------------------------------
     # Formations & targets
@@ -684,8 +852,16 @@ class PBPVisualSim(tk.Toplevel):
                 self._move_dot(d, x, y)
             d["tx"], d["ty"] = x, y
         self.puck["x"], self.puck["y"] = dx, dy
-        self.puck_flight = None
-        self.pending_outcome = None
+        # Flush any in-flight shot outcome first: a faceoff always follows a
+        # goal, and silently discarding the pending outcome would lose goals.
+        if self.pending_outcome is not None and not self._instant:
+            oc = self.pending_outcome
+            self.pending_outcome = None
+            self.puck_flight = None
+            self._apply_outcome(oc)
+        else:
+            self.puck_flight = None
+            self.pending_outcome = None
 
     def _attack_dir(self, is_home):
         return 1 if is_home else -1
@@ -696,20 +872,52 @@ class PBPVisualSim(tk.Toplevel):
             return AWAY_NET_X if is_home else HOME_NET_X
         return HOME_NET_X if is_home else AWAY_NET_X
 
+    def _pp_team(self):
+        """'home'/'away'/None based on current on-ice manpower."""
+        h = sum(1 for did, d in self.dots.items()
+                if d["is_home"] and d["role"] != "G"
+                and did not in self.penalty_box)
+        a = sum(1 for did, d in self.dots.items()
+                if not d["is_home"] and d["role"] != "G"
+                and did not in self.penalty_box)
+        if h > a:
+            return "home"
+        if a > h:
+            return "away"
+        return None
+
     def _update_targets(self):
         """Fallback hockey sense for dots the sim isn't positioning (e.g.
         benched lines); sim-authored dots keep their sim targets. Goalies
         always shuffle with the puck."""
         px, py = self.puck["x"], self.puck["y"]
+        pp = self._pp_team()
+        # penalized skaters sit in the drawn penalty boxes (hidden on ice)
+        box_n = {"home": 0, "away": 0}
         for d in self.dots.values():
             if d["id"] in self.penalty_box:
-                d["tx"], d["ty"] = 100, 4
+                side = "home" if d["is_home"] else "away"
+                i = box_n[side]
+                box_n[side] += 1
+                bx = 12 + i * 7 if side == "home" else 188 - i * 7
+                d["tx"], d["ty"] = bx, 3
+                continue
+            side = "home" if d["is_home"] else "away"
+            ch = self._line_change.get(side)
+            if ch is not None and d["role"] in ch["roles"]:
+                # line change in progress: skate to the bench door, then the
+                # fresh line skates back on (players swap mid-change)
+                d["tx"] = 100 + d["jx"] * 3
+                d["ty"] = 5 if side == "home" else 80
                 continue
             home, role = d["is_home"], d["role"]
             if role == "G":
                 own = self._net_x(home, attacking=False)
-                # shuffle with puck
-                d["tx"] = own
+                # shuffle with puck + challenge as it gets close (depth)
+                dist = abs(px - own)
+                out = min(7.0, max(1.0, (34.0 - dist) * 0.28))
+                toward = 1.0 if px >= own else -1.0
+                d["tx"] = own + toward * out
                 d["ty"] = 42.5 + max(-8, min(8, (py - 42.5) * 0.35))
                 continue
             if d.get("sim_set"):
@@ -719,8 +927,32 @@ class PBPVisualSim(tk.Toplevel):
             anx = self._net_x(home, attacking=True)     # net we attack
             onx = self._net_x(home, attacking=False)    # net we defend
             jx, jy = d["jx"], d["jy"]
+            side = "home" if home else "away"
             if d["id"] == self.carrier_id:
                 d["tx"], d["ty"] = px, py
+            elif pp == side and has_puck:
+                # power-play umbrella: C high slot, wings half-boards, D points
+                if role == "C":
+                    d["tx"], d["ty"] = anx - 40 * adir + jx, 42.5 + jy
+                elif role == "LW":
+                    d["tx"], d["ty"] = anx - 44 * adir + jx, 24 + jy
+                elif role == "RW":
+                    d["tx"], d["ty"] = anx - 44 * adir + jx, 61 + jy
+                elif role == "D1":
+                    d["tx"], d["ty"] = anx - 62 * adir + jx, 32 + jy
+                else:
+                    d["tx"], d["ty"] = anx - 62 * adir + jx, 53 + jy
+            elif pp is not None and pp != side and not has_puck:
+                # penalty-kill box: collapse tight around the slot
+                if role in ("D1", "D2"):
+                    s = -6 if role == "D1" else 6
+                    d["tx"], d["ty"] = onx + 14 * adir + jx, 42.5 + s + jy
+                elif role == "C":
+                    d["tx"], d["ty"] = onx + 26 * adir + jx, 42.5 + jy
+                elif role == "LW":
+                    d["tx"], d["ty"] = onx + 24 * adir + jx, 30 + jy
+                else:
+                    d["tx"], d["ty"] = onx + 24 * adir + jx, 55 + jy
             elif has_puck:
                 # offensive shape: forwards to slot/half-boards, D to points
                 if role == "C":
@@ -791,11 +1023,15 @@ class PBPVisualSim(tk.Toplevel):
             self._update_scoreboard(ev)
         elif et == "period_start":
             self.penalty_box.clear()
+            self._penalty_timers.clear()
             for d in self.dots.values():
-                self.canvas.itemconfig(d["oval"], state="normal")
+                self._set_dot_visible(d, True)
             self._period_stats = {"shots": {"home": 0, "away": 0},
                                   "goals": {"home": 0, "away": 0},
                                   "notes": []}
+            self._shotmap = []
+            self._last_shot = None
+            self._redraw_shotmap()
             self._feed(f"Start of period {ev.get('period', 1)}.", tag="period", ev=ev)
             self._faceoff_formation(100, 42.5, winner_is_home=True)
             self.possession_home = None
@@ -851,6 +1087,7 @@ class PBPVisualSim(tk.Toplevel):
             self._update_scoreboard(ev)
             self.playing = False
             self._refresh_play_btn()
+            self._show_stars()
             if not self._complete_fired:
                 self._complete_fired = True
                 cb = self.on_complete
@@ -935,6 +1172,7 @@ class PBPVisualSim(tk.Toplevel):
         self._feed(random.choice(_FACEOFF_T).format(
             zone=zone, W=self._pname(ev.get("winner_player"))), ev=ev)
         self._bump_stat("home" if winner_is_home else "away", "FO")
+        self._pstat(ev.get("winner_player"), "FO")
         self._update_scoreboard(ev)
 
     def _on_shot(self, ev):
@@ -943,13 +1181,28 @@ class PBPVisualSim(tk.Toplevel):
         self._bump_stat(side, "Shots")
         self._period_stats["shots"][side] += 1
         self._push_momentum(side, 1)
+        self._pstat(ev.get("shooter"), "SOG")
+        self._trail_color = ACCENT if att_home else AWAY_COLOR
         sx, sy = shot_spot(ev.get("location", "high_slot"), att_home)
         shooter_dot = self._dot_by_player(ev.get("shooter"))
         if shooter_dot:
             sx, sy = shooter_dot["x"], shooter_dot["y"]
+        self._last_shot = (sx, sy, side)
         nx = AWAY_NET_X if att_home else HOME_NET_X
         self.possession_home = att_home
         self.carrier_id = shooter_dot["id"] if shooter_dot else None
+        # flush any still-pending outcome from a previous shot: a quick
+        # second shot must not silently drop the first shot's outcome.
+        # (A goal flushed here is mid-action — save its highlight but don't
+        # hijack the broadcast with a replay for it.)
+        if self.pending_outcome is not None and not self._instant:
+            oc = self.pending_outcome
+            self.pending_outcome = None
+            self._no_replay_once = True
+            try:
+                self._apply_outcome(oc)
+            finally:
+                self._no_replay_once = False
         # peek: the outcome event should already be in the stream
         outcome = None
         if self.cursor < len(self.events):
@@ -991,7 +1244,13 @@ class PBPVisualSim(tk.Toplevel):
             self._feed(msg, tag="goal", ev=ev)
             self._note("goal", msg, ev)
             self._goalie_shot(side, scored=True)
-            self.hold_until = self._now() + 1.6
+            self._pstat(ev.get("shooter"), "G")
+            for a in ev.get("assists") or []:
+                self._pstat(a, "A")
+            self._record_shotmap("goal")
+            self._save_highlight(ev, "goal")
+            self._maybe_start_goal_replay(ev)
+            self.hold_until = max(self.hold_until, self._now() + 1.6)
             self.possession_home = None
             self.carrier_id = None
             self._update_scoreboard(ev)
@@ -1000,6 +1259,7 @@ class PBPVisualSim(tk.Toplevel):
             self._feed(msg, ev=ev)
             side = self._player_side(ev.get("goalie"), ev, "defending_team")
             self._goalie_shot(side, goalie=ev.get("goalie"), scored=False)
+            self._record_shotmap("save")
             # goalie covers: defending team keeps it
             self.possession_home = (side == "home")
             self.carrier_id = None
@@ -1008,6 +1268,7 @@ class PBPVisualSim(tk.Toplevel):
             B = self._pname(ev.get("blocker"))
             S = self._pname(ev.get("shooter"))
             self._feed(random.choice(_BLOCK_T).format(B=B, S=S), ev=ev)
+            self._record_shotmap("block")
             def_home = ev.get("defending_team") == self.home_team.team_name
             self.possession_home = def_home
             self.carrier_id = None
@@ -1016,8 +1277,363 @@ class PBPVisualSim(tk.Toplevel):
             st = (ev.get("shot_type") or "").replace("_", " ")
             how = f" {st}" if st else ""
             self._feed(random.choice(_MISS_T).format(S=S, how=how), ev=ev)
+            self._record_shotmap("miss")
             att_home = ev.get("attacking_team") == self.home_team.team_name
             self.possession_home = att_home
+
+    # ------------------------------------------------------------------
+    # Broadcast replays & highlights
+    # ------------------------------------------------------------------
+    def _recent_frames(self, n=90):
+        """Last n recorded snapshots (~n*50ms of viewed action).
+
+        Tick-based (not game-clock-based) so replays work at any speed.
+        """
+        h = self._history
+        return list(h)[-n:] if len(h) > n else list(h)
+
+    @staticmethod
+    def _interp_frames(frames, t):
+        """Interpolate dot/puck positions at game-time t from frames."""
+        if not frames:
+            return None
+        if t <= frames[0][0]:
+            f = frames[0]
+            return dict(f[1]), f[2], f[3], f[4]
+        for i in range(1, len(frames)):
+            t0, t1 = frames[i - 1][0], frames[i][0]
+            if t0 <= t <= t1:
+                fa, fb = frames[i - 1], frames[i]
+                k = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+                pos = {}
+                for did, (xa, ya) in fa[1].items():
+                    xb, yb = fb[1].get(did, (xa, ya))
+                    pos[did] = (xa + (xb - xa) * k, ya + (yb - ya) * k)
+                px = fa[2][0] + (fb[2][0] - fa[2][0]) * k
+                py = fa[2][1] + (fb[2][1] - fa[2][1]) * k
+                return pos, (px, py), fa[3], fa[4]
+        f = frames[-1]
+        return dict(f[1]), f[2], f[3], f[4]
+
+    def _start_replay(self, frames, label):
+        if len(frames) < 3 or self._replay:
+            return False
+        start_t, end_t = frames[0][0], frames[-1][0]
+        # real-seconds of footage, played at REPLAY_RATE, capped
+        dur = max(2.0, min(9.0, len(frames) * 0.05 / REPLAY_RATE))
+        self._replay = {"frames": frames, "rt": 0.0, "dur": dur,
+                        "start_t": start_t, "end_t": end_t, "label": label}
+        self.hold_until = max(self.hold_until, self._now() + dur + 0.4)
+        self.canvas.itemconfig(self._replay_dot, state="normal")
+        self.canvas.itemconfig(self._replay_text, state="normal")
+        self._feed(f"REPLAY: {label}", tag="info")
+        return True
+
+    def _step_replay(self):
+        rp = self._replay
+        if rp is None:
+            return
+        rp["rt"] += 0.05
+        frac = min(1.0, rp["rt"] / rp["dur"])
+        t = rp["start_t"] + (rp["end_t"] - rp["start_t"]) * frac
+        interp = self._interp_frames(rp["frames"], t)
+        if interp:
+            pos, (px, py), hs, aws = interp
+            for did, (x, y) in pos.items():
+                d = self.dots.get(did)
+                if d:
+                    self._move_dot(d, x, y)
+            self.puck["x"], self.puck["y"] = px, py
+            self.score_var.set(
+                f"{self.home_team.team_name} {hs} — {aws} "
+                f"{self.away_team.team_name}")
+        if rp["rt"] >= rp["dur"]:
+            self._end_replay()
+
+    def _end_replay(self):
+        if not self._replay:
+            return
+        self._replay = None
+        self.canvas.itemconfig(self._replay_dot, state="hidden")
+        self.canvas.itemconfig(self._replay_text, state="hidden")
+        # snap dots back to live targets so playback resumes cleanly
+        for d in self.dots.values():
+            self._move_dot(d, d["tx"], d["ty"])
+        self.hold_until = 0
+        self._update_scoreboard()
+
+    def _cancel_replay(self):
+        self._end_replay()
+
+    def _maybe_start_goal_replay(self, ev):
+        if self._instant or self._replay:
+            return
+        if getattr(self, "_no_replay_once", False):
+            return
+        frames = self._recent_frames(80)
+        self._start_replay(frames, self._goal_text(ev))
+
+    def _save_highlight(self, ev, kind, label=None):
+        t = ev.get("t", self.playhead)
+        frames = self._recent_frames(110)
+        if len(frames) < 3:
+            return
+        # during instant consume the history is stale; don't clip wrong action
+        if abs(frames[-1][0] - t) > 30:
+            return
+        pid = None
+        if kind == "goal":
+            label = label or self._goal_text(ev)
+            pid = getattr(ev.get("shooter"), "id", None)
+        elif kind == "fight":
+            label = label or f"Fight: {self._pname(ev.get('player'))}"
+            pid = getattr(ev.get("player"), "id", None)
+        self._highlights.append({"start_t": frames[0][0],
+                                 "end_t": frames[-1][0],
+                                 "label": label or kind, "pid": pid,
+                                 "frames": frames, "kind": kind})
+
+    def _play_highlight(self, h):
+        self._cancel_replay()
+        self.playing = False
+        self._refresh_play_btn()
+        self._start_replay(h["frames"], h["label"])
+
+    # ------------------------------------------------------------------
+    # Shot map overlay
+    # ------------------------------------------------------------------
+    def _record_shotmap(self, result):
+        if self._last_shot is None:
+            return
+        x, y, side = self._last_shot
+        self._last_shot = None
+        self._shotmap.append((x, y, side, result))
+        if self._shotmap_on:
+            self._redraw_shotmap()
+
+    def _toggle_shotmap(self):
+        self._shotmap_on = not self._shotmap_on
+        self._redraw_shotmap()
+        self._refresh_toggle_btn(self.shotmap_btn, self._shotmap_on)
+
+    def _redraw_shotmap(self):
+        c = self.canvas
+        c.delete("shotmap")
+        if not self._shotmap_on:
+            return
+        for x, y, side, result in self._shotmap:
+            px, py = self.X(x), self.Y(y)
+            if result == "goal":
+                col = "#00ff9d"
+                r = 7
+                c.create_line(px - r, py, px + r, py, fill=col, width=2,
+                              tags="shotmap")
+                c.create_line(px, py - r, px, py + r, fill=col, width=2,
+                              tags="shotmap")
+                c.create_line(px - r * 0.7, py - r * 0.7, px + r * 0.7,
+                              py + r * 0.7, fill=col, width=2, tags="shotmap")
+                c.create_line(px - r * 0.7, py + r * 0.7, px + r * 0.7,
+                              py - r * 0.7, fill=col, width=2, tags="shotmap")
+            elif result == "save":
+                col = ACCENT if side == "home" else AWAY_COLOR
+                c.create_oval(px - 4, py - 4, px + 4, py + 4, fill=col,
+                              outline="white", width=1, tags="shotmap")
+            elif result == "block":
+                c.create_rectangle(px - 4, py - 4, px + 4, py + 4,
+                                   fill="#8a8f9c", outline="", tags="shotmap")
+            else:  # miss
+                c.create_text(px, py, text="x", fill="#c9ced8",
+                              font=(FONT, 10, "bold"), tags="shotmap")
+        # keep markers under the player dots
+        try:
+            first = next(iter(self.dots.values()))
+            c.tag_lower("shotmap", first["shadow"])
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Smart broadcast pacing
+    # ------------------------------------------------------------------
+    def _toggle_auto(self):
+        self.auto_pace = not self.auto_pace
+        self._refresh_toggle_btn(self.auto_btn, self.auto_pace)
+        self._feed("Auto pacing " + ("ON — broadcast-style speed control."
+                                     if self.auto_pace else "off."),
+                   tag="info")
+
+    @staticmethod
+    def _refresh_toggle_btn(btn, on):
+        """Show toggle state with a trailing dot (works for pills/buttons)."""
+        try:
+            cur = btn.cget("text").replace(" ●", "")
+            btn.config(text=cur + (" ●" if on else ""))
+        except Exception:
+            pass
+
+    def _set_speed(self, v):
+        self.speed = v
+        if self.auto_pace:
+            self.auto_pace = False
+            self._refresh_toggle_btn(self.auto_btn, False)
+
+    def _auto_speed(self):
+        """Broadcast-style speed: slow in the zones, fast through neutral."""
+        if self.puck_flight or self._replay:
+            return 1
+        px = self.puck["x"]
+        if px < 67 or px > 133:
+            return 1
+        return 3
+
+    # ------------------------------------------------------------------
+    # Clickable players -> live stat card
+    # ------------------------------------------------------------------
+    def _on_canvas_click(self, event):
+        if self._replay:
+            self._end_replay()  # click skips the replay
+            return
+        best, bd = None, 26
+        for d in self.dots.values():
+            try:
+                if self.canvas.itemcget(d["oval"], "state") == "hidden":
+                    continue
+            except Exception:
+                pass
+            dist = math.hypot(self.X(d["x"]) - event.x,
+                              self.Y(d["y"]) - event.y)
+            if dist < bd:
+                best, bd = d, dist
+        if best is not None:
+            self._show_player_card(best)
+        elif self._card_win is not None:
+            try:
+                self._card_win.destroy()
+            except Exception:
+                pass
+            self._card_win = None
+
+    @staticmethod
+    def _fullname(p):
+        full = (getattr(p, "full_name", None) or "").strip()
+        if full:
+            return full
+        first = (getattr(p, "first_name", None) or "").strip()
+        last = (getattr(p, "last_name", None) or "").strip()
+        return (first + " " + last).strip() or "?"
+
+    def _show_player_card(self, d):
+        p = d["player"]
+        pid = getattr(p, "id", None)
+        win = self._card_win
+        if win is None or not win.winfo_exists():
+            win = tk.Toplevel(self)
+            win.title("Player")
+            win.configure(bg="#16161a")
+            win.geometry("260x300")
+            self._card_win = win
+        else:
+            for w in win.winfo_children():
+                w.destroy()
+        col = ACCENT if d["is_home"] else AWAY_COLOR
+        team = (self.home_team.team_name if d["is_home"]
+                else self.away_team.team_name)
+        tk.Label(win, text=self._fullname(p), bg="#16161a", fg="white",
+                 font=(FONT, 13, "bold"), wraplength=240).pack(pady=(10, 0))
+        pos = getattr(getattr(p, "primary_position", None), "name",
+                      "?").replace("_", " ")
+        try:
+            ovr = int(round(p.overall_rating()))
+        except Exception:
+            ovr = "?"
+        tk.Label(win, text=f"{team} · {pos} · {ovr} OVR", bg="#16161a",
+                 fg=col, font=(FONT, 10, "bold")).pack(pady=(0, 8))
+        body = tk.Frame(win, bg="#16161a")
+        body.pack(fill="both", expand=True, padx=14)
+        if d["role"] == "G":
+            gs = self._goalie_stats.get(pid, {"saves": 0, "shots": 0})
+            sv = (gs["saves"] / gs["shots"]) if gs["shots"] else 0.0
+            rows = [("Saves", str(gs["saves"])),
+                    ("Shots faced", str(gs["shots"])),
+                    ("Save %", f"{sv:.3f}")]
+        else:
+            st = self._pstats.get(pid, {})
+            pts = st.get("G", 0) + st.get("A", 0)
+            rows = [("Goals", str(st.get("G", 0))),
+                    ("Assists", str(st.get("A", 0))),
+                    ("Points", str(pts)),
+                    ("Shots", str(st.get("SOG", 0))),
+                    ("Hits", str(st.get("HIT", 0))),
+                    ("PIM", str(st.get("PIM", 0))),
+                    ("Faceoff wins", str(st.get("FO", 0)))]
+        for label, val in rows:
+            r = tk.Frame(body, bg="#16161a")
+            r.pack(fill="x", pady=2)
+            tk.Label(r, text=label, bg="#16161a", fg="#a1a1aa",
+                     font=(FONT, 10)).pack(side="left")
+            tk.Label(r, text=val, bg="#16161a", fg="white",
+                     font=(FONT, 10, "bold")).pack(side="right")
+        tk.Button(win, text="Close", command=win.destroy, bg="#23262e",
+                  fg="white", relief="flat", padx=12, pady=4).pack(pady=10)
+
+    # ------------------------------------------------------------------
+    # Three stars
+    # ------------------------------------------------------------------
+    def _compute_stars(self):
+        cands = []  # (score, kind, pid, name, line)
+        for pid, st in self._pstats.items():
+            score = st["G"] * 3 + st["A"] * 2 + st["SOG"] * 0.15 \
+                + st["HIT"] * 0.05
+            p = st.get("player")
+            line = (f"{st['G']}G {st['A']}A · {st['SOG']} shots · "
+                    f"{st['HIT']} hits")
+            cands.append((score, "skater", pid, self._fullname(p), line))
+        for pid, gs in self._goalie_stats.items():
+            if gs["shots"] >= 12:
+                sv = gs["saves"] / max(1, gs["shots"])
+                score = gs["saves"] * 0.18 + (3 if sv >= 0.94 else 0)
+                line = (f"{gs['saves']}/{gs['shots']} saves "
+                        f"({sv:.3f} SV%)")
+                cands.append((score, "goalie", pid, gs["name"], line))
+        cands.sort(key=lambda c: c[0], reverse=True)
+        stars = []
+        for _score, _kind, pid, name, line in cands[:3]:
+            moments = [h for h in self._highlights
+                       if h["pid"] == pid][:3]
+            stars.append({"name": name, "line": line, "moments": moments})
+        return stars
+
+    def _show_stars(self):
+        stars = self._compute_stars()
+        if not stars:
+            return
+        self._stars = stars
+        win = tk.Toplevel(self)
+        win.title("Three Stars")
+        win.configure(bg="#16161a")
+        win.geometry("340x430")
+        self._stars_win = win
+        tk.Label(win, text="THREE STARS", bg="#16161a", fg=ACCENT,
+                 font=(FONT, 13, "bold")).pack(pady=(12, 4))
+        medals = ("1st", "2nd", "3rd")
+        for i, s in enumerate(stars):
+            card = tk.Frame(win, bg="#0e0e11")
+            card.pack(fill="x", padx=12, pady=6)
+            tk.Label(card, text=f"{medals[i]} STAR", bg="#0e0e11",
+                     fg="#FFD166", font=(FONT, 9, "bold")).pack(anchor="w",
+                     padx=10, pady=(8, 0))
+            tk.Label(card, text=s["name"], bg="#0e0e11", fg="white",
+                     font=(FONT, 12, "bold")).pack(anchor="w", padx=10)
+            tk.Label(card, text=s["line"], bg="#0e0e11", fg="#a1a1aa",
+                     font=(FONT, 10)).pack(anchor="w", padx=10)
+            for h in s["moments"]:
+                b = tk.Button(card, text=f"Watch: {h['label'][:44]}",
+                              command=lambda h=h: self._play_highlight(h),
+                              bg="#23262e", fg="white", relief="flat",
+                              font=(FONT, 9), anchor="w", padx=8, pady=3)
+                b.pack(fill="x", padx=10, pady=2)
+            tk.Frame(card, bg="#0e0e11", height=8).pack()
+        tk.Button(win, text="Close", command=win.destroy, bg="#23262e",
+                  fg="white", relief="flat", padx=12, pady=4).pack(pady=10)
 
     # -- richer commentary helpers --------------------------------------
     def _goal_text(self, ev):
@@ -1058,22 +1674,50 @@ class PBPVisualSim(tk.Toplevel):
             self.carrier_id = h["id"] if h else None
         hp = ev.get("hitting_player")
         self._bump_stat(self._player_side(hp), "Hits")
+        self._pstat(hp, "HIT")
         ht = ev.get("hit_type", "hit").replace("_", " ")
         self._feed(random.choice(_HIT_T).format(
             H=self._pname(ev.get("hitting_player")),
             T=self._pname(ev.get("target_player")), ht=ht), ev=ev)
 
+    def _pstat(self, player, key, amount=1):
+        """Accumulate a live per-player game stat (for cards + 3 stars)."""
+        pid = getattr(player, "id", None)
+        if pid is None:
+            return
+        st = self._pstats.get(pid)
+        if st is None:
+            st = {"G": 0, "A": 0, "SOG": 0, "HIT": 0, "PIM": 0, "FO": 0,
+                  "player": player}
+            self._pstats[pid] = st
+        st[key] = st.get(key, 0) + amount
+
     def _on_penalty(self, ev):
         d = self._dot_by_player(ev.get("player"))
+        mins = ev.get("minutes", 2)
         if d:
             self.penalty_box.add(d["id"])
-            self.canvas.itemconfig(d["oval"], state="normal")
-        self._bump_stat(self._side_of(ev.get("team")), "PIM", ev.get("minutes", 2))
+            self._set_dot_visible(d, False)
+            # release when the penalty expires on the game clock
+            self._penalty_timers[d["id"]] = self.playhead + mins * 60
+        self._bump_stat(self._side_of(ev.get("team")), "PIM", mins)
+        self._pstat(ev.get("player"), "PIM", mins)
         msg = random.choice(_PENALTY_T).format(
-            m=ev.get("minutes", 2), P=self._pname(ev.get("player")),
+            m=mins, P=self._pname(ev.get("player")),
             team=ev.get("team", ""), inf=ev.get("infraction", "a foul"))
         self._feed(msg, tag="penalty", ev=ev)
         self._note("penalty", msg, ev)
+
+    def _release_penalties(self):
+        """Unhide dots whose penalties expired on the game clock."""
+        done = [did for did, rel in self._penalty_timers.items()
+                if self.playhead >= rel]
+        for did in done:
+            del self._penalty_timers[did]
+            self.penalty_box.discard(did)
+            d = self.dots.get(did)
+            if d:
+                self._set_dot_visible(d, True)
 
     def _on_fight(self, ev):
         msg = random.choice(_FIGHT_T).format(
@@ -1081,6 +1725,7 @@ class PBPVisualSim(tk.Toplevel):
         self._feed(msg, tag="fight", ev=ev)
         self._push_momentum(self._side_of(ev.get("team")), 2)
         self._note("fight", msg, ev)
+        self._save_highlight(ev, "fight", msg)
 
     def _on_shootout_attempt(self, ev):
         shooter = ev.get("shooter")
@@ -1135,6 +1780,7 @@ class PBPVisualSim(tk.Toplevel):
                 hs, aws = e.get("home_score", hs), e.get("away_score", aws)
         hn = self.home_team.team_name
         an = self.away_team.team_name
+        self._cur_score = (hs, aws)
         self.score_var.set(f"{hn} {hs} — {aws} {an}")
         if ev:
             clk = ev.get("clock", 0)
@@ -1145,6 +1791,7 @@ class PBPVisualSim(tk.Toplevel):
     def _flash_light(self, side):
         self.canvas.itemconfig(self.lights[side], state="normal")
         self._light_until = self._now() + 1.4
+        self._light_toggle = self._now()
         self._light_side = side
 
     # ------------------------------------------------------------------
@@ -1191,19 +1838,79 @@ class PBPVisualSim(tk.Toplevel):
                       fill=AWAY_COLOR, font=(FONT, 8, "bold"))
 
     # ------------------------------------------------------------------
-    # On-ice units readout (mirrors the sim's line rotation, driven by the
-    # PLAYHEAD clock — the sim thread finishes long before playback does)
     # ------------------------------------------------------------------
-    def _update_units(self):
+    # On-ice units readout + real line changes (mirrors the sim's rotation)
+    # ------------------------------------------------------------------
+    def _game_clock(self):
+        """(clock seconds remaining, period) from the playhead."""
         if not self.events or self.cursor == 0:
-            clk, period = 1200, 1
-        else:
-            last = self.events[self.cursor - 1]
-            clk = max(0, last.get("clock", 0) -
-                      (self.playhead - last.get("t", 0)))
-            period = last.get("period", 1)
-        fl = (int(clk) // 45) % 4 + 1   # same cadence as GameSim line changes
-        dp = (int(clk) // 60) % 3 + 1
+            return 1200, 1
+        last = self.events[self.cursor - 1]
+        clk = max(0, last.get("clock", 0) -
+                  (self.playhead - last.get("t", 0)))
+        return clk, last.get("period", 1)
+
+    def _line_indices(self):
+        """0-based (forward line, D pair) from elapsed game time."""
+        clk, _p = self._game_clock()
+        el = max(0, 1200 - int(clk))
+        return (el // 45) % 4, (el // 60) % 3
+
+    def _apply_line(self, side, f_idx, d_idx):
+        """Swap the five skater dots to a new line (roles stay, players
+        and jersey numbers change)."""
+        lines = self.home_lines if side == "home" else self.away_lines
+        if not lines["F"] or not lines["D"]:
+            return
+        fline = lines["F"][f_idx % len(lines["F"])]
+        dline = lines["D"][d_idx % len(lines["D"])]
+        want = {"C": fline.get("C"), "LW": fline.get("LW"),
+                "RW": fline.get("RW"), "D1": dline.get("D1"),
+                "D2": dline.get("D2")}
+        for d in self.dots.values():
+            dside = "home" if d["is_home"] else "away"
+            if dside != side:
+                continue
+            p = want.get(d["role"])
+            if p is None:
+                continue
+            if getattr(p, "id", None) == getattr(d["player"], "id", None):
+                continue
+            d["player"] = p
+            num = getattr(p, "jersey_number", None) or "–"
+            try:
+                self.canvas.itemconfig(d["text"], text=str(num))
+            except Exception:
+                pass
+
+    def _check_line_change(self, now):
+        """Start a bench-swap animation when the rotation cadence advances."""
+        if now < self.hold_until or self._shootout_pending:
+            return
+        f_idx, d_idx = self._line_indices()
+        for side in ("home", "away"):
+            if self._line_change[side] is not None:
+                continue
+            if (f_idx, d_idx) == self._line_now[side]:
+                continue
+            cf, cd = self._line_now[side]
+            roles = []
+            if f_idx != cf:
+                roles += ["C", "LW", "RW"]
+            if d_idx != cd:
+                roles += ["D1", "D2"]
+            self._line_now[side] = (f_idx, d_idx)
+            if not roles:
+                continue
+            self._line_change[side] = {"t0": now, "phase": 0,
+                                       "f": f_idx, "d": d_idx,
+                                       "roles": roles}
+
+    def _update_units(self):
+        clk, period = self._game_clock()
+        el = max(0, 1200 - int(clk))
+        fl = (el // 45) % 4 + 1   # same cadence as GameSim line changes
+        dp = (el // 60) % 3 + 1
         hm = sum(1 for did in self.penalty_box
                  if self.dots.get(did, {}).get("is_home"))
         am = sum(1 for did in self.penalty_box
@@ -1226,6 +1933,7 @@ class PBPVisualSim(tk.Toplevel):
     # Next big moment jump
     # ------------------------------------------------------------------
     def _jump_to_next_moment(self):
+        self._cancel_replay()
         target = None
         for i in range(self.cursor, len(self.events)):
             if self.events[i].get("type") in BIG_MOMENTS:
@@ -1324,6 +2032,7 @@ class PBPVisualSim(tk.Toplevel):
         self.speed = v
 
     def _sim_to_end(self):
+        self._cancel_replay()
         # wait for sim, then consume everything instantly
         while not self.sim_done:
             self.update()
@@ -1352,6 +2061,13 @@ class PBPVisualSim(tk.Toplevel):
 
     def _on_close(self):
         self.closed = True
+        for attr in ("_card_win", "_stars_win"):
+            try:
+                w = getattr(self, attr, None)
+                if w is not None and w.winfo_exists():
+                    w.destroy()
+            except Exception:
+                pass
         try:
             self.destroy()
         except Exception:
@@ -1381,17 +2097,30 @@ class PBPVisualSim(tk.Toplevel):
 
     def _step(self):
         now = self._now()
-        # goal light timeout
-        if getattr(self, "_light_until", 0) and now > self._light_until:
-            self.canvas.itemconfig(self.lights[self._light_side], state="hidden")
-            self._light_until = 0
+        # goal light: blink while the celebration lasts
+        if getattr(self, "_light_until", 0):
+            if now > self._light_until:
+                self.canvas.itemconfig(self.lights[self._light_side],
+                                       state="hidden")
+                self._light_until = 0
+            elif now >= getattr(self, "_light_toggle", 0):
+                cur = self.canvas.itemcget(self.lights[self._light_side],
+                                           "state")
+                self.canvas.itemconfig(
+                    self.lights[self._light_side],
+                    state="hidden" if cur == "normal" else "normal")
+                self._light_toggle = now + 0.22
 
-        # advance playback
+        # advance playback (auto-pace overrides manual speed)
         if self.playing and now >= self.hold_until and self.events:
-            dt = 0.05 * self.speed * self.GAME_RATE
+            eff = self._auto_speed() if self.auto_pace else self.speed
+            dt = 0.05 * eff * self.GAME_RATE
             target = self.playhead + dt
             # don't run past un-simulated events; sim is fast so this rarely binds
-            while self.cursor < len(self.events) and self.events[self.cursor].get("t", 0) <= target:
+            # (stop immediately if a replay started mid-loop)
+            while (self.cursor < len(self.events)
+                   and self.events[self.cursor].get("t", 0) <= target
+                   and not self._replay):
                 ev = self.events[self.cursor]
                 self.cursor += 1
                 self.playhead = max(self.playhead, ev.get("t", self.playhead))
@@ -1438,40 +2167,90 @@ class PBPVisualSim(tk.Toplevel):
                     self._apply_shootout(so)
                     self._scatter_puck(so)
 
-        # hit nudge
-        for d in self.dots.values():
-            if d["nudge"]:
-                nx, ny, until = d["nudge"]
-                if now < until:
-                    d["tx"], d["ty"] = nx, ny
-                else:
-                    d["nudge"] = None
+        # broadcast replay takes over all dot/puck motion
+        if self._replay:
+            self._step_replay()
+        else:
+            # hit nudge
+            for d in self.dots.values():
+                if d["nudge"]:
+                    nx, ny, until = d["nudge"]
+                    if now < until:
+                        d["tx"], d["ty"] = nx, ny
+                    else:
+                        d["nudge"] = None
 
-        # drift dots toward targets (kept live even during puck flights)
-        self._update_targets()
-        for d in self.dots.values():
-            x, y = d["x"], d["y"]
-            d["x"] = x + (d["tx"] - x) * 0.14
-            d["y"] = y + (d["ty"] - y) * 0.14
-            self._move_dot(d, d["x"], d["y"])
+            # drift dots toward targets (kept live even during puck flights)
+            self._update_targets()
+            for d in self.dots.values():
+                x, y = d["x"], d["y"]
+                d["x"] = x + (d["tx"] - x) * 0.14
+                d["y"] = y + (d["ty"] - y) * 0.14
+                self._move_dot(d, d["x"], d["y"])
 
-        # puck eases toward carrier (or sim puck target) when not flying
-        if not self.puck_flight:
-            tx, ty = None, None
-            if self.carrier_id and self.carrier_id in self.dots:
-                c = self.dots[self.carrier_id]
-                tx, ty = c["x"] + 1.5, c["y"] + 1.5
-            elif self.puck_target:
-                tx, ty = self.puck_target
-            if tx is not None:
-                self.puck["x"] += (tx - self.puck["x"]) * 0.35
-                self.puck["y"] += (ty - self.puck["y"]) * 0.35
+            # puck eases toward carrier (or sim puck target) when not flying
+            if not self.puck_flight:
+                tx, ty = None, None
+                if self.carrier_id and self.carrier_id in self.dots:
+                    c = self.dots[self.carrier_id]
+                    tx, ty = c["x"] + 1.5, c["y"] + 1.5
+                elif self.puck_target:
+                    tx, ty = self.puck_target
+                if tx is not None:
+                    self.puck["x"] += (tx - self.puck["x"]) * 0.35
+                    self.puck["y"] += (ty - self.puck["y"]) * 0.35
 
-        # battle winner takes the puck once the pile settles
-        if self._battle_settle_at and now >= self._battle_settle_at:
-            self._battle_settle_at = 0.0
-            self.carrier_id = self._battle_winner
-            self._battle_winner = None
+            # battle winner takes the puck once the pile settles
+            if self._battle_settle_at and now >= self._battle_settle_at:
+                self._battle_settle_at = 0.0
+                self.carrier_id = self._battle_winner
+                self._battle_winner = None
+
+            # penalty expirations on the game clock
+            if self._penalty_timers:
+                self._release_penalties()
+
+            # line changes on the sim's rotation cadence
+            if self.playing:
+                self._check_line_change(now)
+            for side in ("home", "away"):
+                ch = self._line_change[side]
+                if ch is None:
+                    continue
+                if ch["phase"] == 0 and now - ch["t0"] >= 0.55:
+                    # old line reached the bench: swap the players over
+                    self._apply_line(side, ch["f"], ch["d"])
+                    ch["phase"] = 1
+                    ch["t0"] = now
+                elif ch["phase"] == 1 and now - ch["t0"] >= 0.35:
+                    # fresh line is back in formation
+                    self._line_change[side] = None
+
+            # record position history for replays/highlights
+            if self.playing and not self._instant:
+                pos = {did: (d["x"], d["y"]) for did, d in self.dots.items()}
+                hs, aws = self._cur_score
+                self._history.append((self.playhead, pos,
+                                      (self.puck["x"], self.puck["y"]),
+                                      hs, aws))
+
+            # puck trail: grow during flights, fade after
+            if self.puck_flight:
+                self._trail.append((self.puck["x"], self.puck["y"]))
+            elif self._trail:
+                for _ in range(3):
+                    if self._trail:
+                        self._trail.popleft()
+            if self._trail and len(self._trail) > 1:
+                coords = []
+                for (x, y) in self._trail:
+                    coords += [self.X(x), self.Y(y)]
+                self.canvas.coords(self._trail_item, *coords)
+                self.canvas.itemconfig(self._trail_item,
+                                       fill=self._trail_color, state="normal")
+                self.canvas.tag_raise(self._trail_item)
+            else:
+                self.canvas.itemconfig(self._trail_item, state="hidden")
 
         # live readouts: on-ice units + momentum meter
         self._update_units()
@@ -1479,9 +2258,10 @@ class PBPVisualSim(tk.Toplevel):
             self._mom_dirty = False
             self._draw_momentum()
 
-        # draw puck
+        # draw puck (+ glow)
         px, py = self.X(self.puck["x"]), self.Y(self.puck["y"])
         self.canvas.coords(self.puck_item, px - 5, py - 5, px + 5, py + 5)
+        self.canvas.coords(self.puck_glow, px - 11, py - 11, px + 11, py + 11)
 
         # live clock interpolation between events
         if self.events and self.cursor > 0:
