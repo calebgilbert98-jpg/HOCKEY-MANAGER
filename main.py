@@ -10319,9 +10319,22 @@ class CleanEditLinesWindow(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.title("Edit Lines")
-        self.geometry("1000x700")
+        self.geometry("1440x920")
         self.configure(bg=parent.BG_COLOR)
         self.resizable(True, True)
+
+        # Sleeper-inspired palette for the line editor
+        self.C_BG = '#0e0e11'
+        self.C_CARD = '#16161a'
+        self.C_CARD2 = '#1c1c21'
+        self.C_BORDER = '#26262b'
+        self.C_ACCENT = '#00ceb8'
+        self.C_TEXT = '#f2f2f3'
+        self.C_SEC = '#a1a1aa'
+        self.C_TER = '#6b6b74'
+        self.C_AMBER = '#e8b34b'
+        self.C_RED = '#e07a7a'
+        self.C_GREEN = '#7ed492'
         
         # Make text more readable with better contrast
         self.LABEL_BG = parent.CONTENT_BG  # Dark background for labels
@@ -10358,9 +10371,11 @@ class CleanEditLinesWindow(tk.Toplevel):
                             font=(parent.FONT_FAMILY, 12, 'bold'),
                             padding=10)
         
-        # Drag and drop state
-        self.drag_data = {"item": None, "source": None}
-        self.player_widgets = {}  # Track all player display widgets
+        # Point-click selection state (replaces drag and drop)
+        self._selection = None  # {'player': Player, 'from_zone': zone|None}
+        self.player_widgets = {}  # player.id -> {'outer','card','dot','assigned_position'}
+        self._roster_filter = "ALL"
+        self._view_prefs = self._load_view_prefs()
 
         # Generated face thumbnails: window-level cache keeps PhotoImages
         # alive (avoids Tk garbage-collection blanking) and a lazy queue
@@ -10447,316 +10462,498 @@ class CleanEditLinesWindow(tk.Toplevel):
         except Exception:
             pass
     
+    # ------------------------------------------------------------------
+    # Sleeper-style team strip + roster panel (point-click, no tabs)
+    # ------------------------------------------------------------------
     def create_team_overview(self, parent_frame):
-        """Create a quick team overview with key stats"""
-        overview_frame = ttk.LabelFrame(parent_frame, text="Team Overview", padding=10, style='TLabelframe')
-        overview_frame.pack(fill=tk.X, pady=5)
-        
-        # Calculate team stats
-        total_players = len(self.parent.user_team.roster)
-        avg_rating = sum(p.overall_rating() for p in self.parent.user_team.roster) / max(total_players, 1)
-        
-        # Top line rating
-        if self.lineup and 'Forwards' in self.lineup and self.lineup['Forwards']:
-            top_line = [p for p in self.lineup['Forwards'][0] if p is not None]
-            top_line_rating = sum(p.overall_rating() for p in top_line) / max(len(top_line), 1) if top_line else 0
-        else:
-            top_line_rating = 0
-        
-        # Create info labels
-        info_frame = ttk.Frame(overview_frame)
-        info_frame.pack(fill=tk.X)
-        
-        ttk.Label(info_frame, text=f"Team Avg: {avg_rating:.1f}", 
-                 style='TLabel', font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Label(info_frame, text=f"Top Line: {top_line_rating:.1f}", 
-                 style='TLabel', font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Label(info_frame, text=f"Roster Size: {total_players}", 
-                 style='TLabel', font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.LEFT)
-    
-    def create_roster_panel(self, parent_paned):
-        """Create the draggable player roster panel"""
-        roster_frame = tk.Frame(parent_paned, bg='#0e0e11', relief='flat', bd=0)
-        parent_paned.add(roster_frame, weight=1)  # Takes less space
-        
-        # Modern header with subtle styling
-        header_frame = tk.Frame(roster_frame, bg='#495057', height=50)
-        header_frame.pack(fill=tk.X)
-        header_frame.pack_propagate(False)
-        
-        header_content = tk.Frame(header_frame, bg='#495057')
-        header_content.pack(expand=True, fill='both', padx=15, pady=10)
-        
-        tk.Label(header_content, text="Active Roster", 
-                bg='#495057', fg='white',
-                font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(side=tk.LEFT)
-        
-        tk.Label(header_content, text="Drag to Assign", 
-                bg='#495057', fg='#adb5bd',
-                font=(self.parent.FONT_FAMILY, 9)).pack(side=tk.RIGHT)
-        
-        # Create notebook for different position groups with subtle styling
-        notebook_frame = tk.Frame(roster_frame, bg='#f8f9fa')
-        notebook_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        roster_notebook = ttk.Notebook(notebook_frame, style='TNotebook')
-        roster_notebook.pack(fill=tk.BOTH, expand=True)
-        
-        # Position tabs
-        self.create_forwards_roster_tab(roster_notebook)
-        self.create_defense_roster_tab(roster_notebook)
-        self.create_goalies_roster_tab(roster_notebook)
-    
-    def create_forwards_roster_tab(self, notebook):
-        """Create draggable forwards roster"""
-        forwards_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(forwards_frame, text="Forwards")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(forwards_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(forwards_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
+        """Slim Sleeper-style stat strip: team avg / top line / roster size."""
+        strip = tk.Frame(parent_frame, bg=self.C_CARD)
+        strip.pack(fill=tk.X, padx=20, pady=(0, 12))
+        inner = tk.Frame(strip, bg=self.C_CARD)
+        inner.pack(fill=tk.X, padx=16, pady=10)
+
+        total = len(self.parent.user_team.roster)
+        avg = (sum(p.overall_rating() for p in self.parent.user_team.roster)
+               / max(total, 1))
+        top = 0.0
+        if self.lineup and self.lineup.get('Forwards') and self.lineup['Forwards'][0]:
+            tl = [p for p in self.lineup['Forwards'][0] if p is not None]
+            if tl:
+                top = sum(p.overall_rating() for p in tl) / len(tl)
+
+        for label, val in (("TEAM AVG", f"{avg:.1f}"),
+                           ("TOP LINE", f"{top:.1f}" if top else "--"),
+                           ("ROSTER", str(total))):
+            cell = tk.Frame(inner, bg=self.C_CARD)
+            cell.pack(side=tk.LEFT, padx=(0, 36))
+            tk.Label(cell, text=label, bg=self.C_CARD, fg=self.C_TER,
+                     font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+            tk.Label(cell, text=val, bg=self.C_CARD, fg=self.C_TEXT,
+                     font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(anchor='w')
+
+    def _make_scrollable(self, parent):
+        """Canvas+scrollbar boilerplate. Returns the inner content frame."""
+        canvas = tk.Canvas(parent, bg=self.C_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=self.C_BG)
         canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
+
+        def _conf(event):
             canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
+            canvas.itemconfig(win_id, width=event.width)
+
+        canvas.bind('<Configure>', _conf)
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
-        # Add draggable player widgets
-        for i, player in enumerate(self.forwards):
-            self.create_draggable_player_widget(scrollable_frame, player, "forward")
-    
-    def create_defense_roster_tab(self, notebook):
-        """Create draggable defense roster"""
-        defense_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(defense_frame, text="Defense")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(defense_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(defense_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Add draggable player widgets
-        for i, player in enumerate(self.defensemen):
-            self.create_draggable_player_widget(scrollable_frame, player, "defense")
-    
-    def create_goalies_roster_tab(self, notebook):
-        """Create draggable goalies roster"""
-        goalies_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(goalies_frame, text="Goalies")
-        
-        # Add draggable player widgets
-        for i, player in enumerate(self.goalies):
-            self.create_draggable_player_widget(goalies_frame, player, "goalie")
-    
-    def create_draggable_player_widget(self, parent, player, position_type):
-        """Create a draggable player widget with comprehensive info"""
-        # Darker player card with modern styling - easier on the eyes
-        player_frame = tk.Frame(parent, bg='#495057', relief='flat', bd=0, cursor='hand2')
-        player_frame.pack(fill=tk.X, pady=3, padx=8)
-        
-        # Darker card with rounded appearance
-        card_inner = tk.Frame(player_frame, bg='#6c757d', relief='flat', bd=0)
-        card_inner.pack(fill=tk.X, padx=1, pady=1)
 
-        # Generated face thumbnail on the left (filled in lazily so the
-        # editor opens instantly; the blank reserves the exact space).
-        face_label = tk.Label(card_inner, bg='#2b2b31', bd=0,
-                              image=self._face_blank(48))
-        face_label.image = self._face_photos.get(('blank', 48))
-        face_label.pack(side=tk.LEFT, padx=(8, 4), pady=8)
-        self._pending_faces.append((player, face_label, 48))
+        def _wheel(event):
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        inner.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
+        inner.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return inner
 
-        # Bind drag events
-        for widget in [player_frame, card_inner, face_label]:
-            widget.bind('<Button-1>', lambda e: self.start_drag(e, player, player_frame))
-            widget.bind('<B1-Motion>', self.on_drag)
-            widget.bind('<ButtonRelease-1>', self.end_drag)
+    def create_roster_panel(self, parent):
+        """Left roster panel: search + position chips + click-to-select rows."""
+        panel = tk.Frame(parent, bg=self.C_BG, width=340)
+        panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 16))
+        panel.pack_propagate(False)
 
-        # Player info layout with darker styling
-        info_frame = tk.Frame(card_inner, bg='#6c757d')
-        info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12), pady=8)
-        
-        # Top row - Name and rating with modern typography
-        top_row = tk.Frame(info_frame, bg='#6c757d')
-        top_row.pack(fill=tk.X)
-        
-        name_label = tk.Label(top_row, text=player.full_name, bg='#6c757d', fg='white',
-                             font=(self.parent.FONT_FAMILY, 10, 'bold'), anchor='w')
-        name_label.pack(side=tk.LEFT)
-        
-        # Accent rating badge
-        rating_frame = tk.Frame(top_row, bg='#343a40', relief='flat')
-        rating_frame.pack(side=tk.RIGHT)
-        
-        rating_label = tk.Label(rating_frame, text=str(player.overall_rating()), bg='#343a40', fg='white',
-                               font=(self.parent.FONT_FAMILY, 9, 'bold'), padx=6, pady=2)
-        rating_label.pack()
-        
-        # Middle row - Position and condition with darker styling
-        middle_row = tk.Frame(info_frame, bg='#6c757d')
-        middle_row.pack(fill=tk.X, pady=(4, 0))
-        
-        pos_label = tk.Label(middle_row, text=f"{player.primary_position.name}", bg='#6c757d', fg='#f8f9fa',
-                            font=(self.parent.FONT_FAMILY, 8))
-        pos_label.pack(side=tk.LEFT)
-        
-        # Darker condition indicator
-        condition = getattr(player, 'condition', 100)
-        condition_color = '#343a40'  # Dark gray for all conditions
-        condition_text = "" if condition > 85 else "" if condition > 70 else ""
-        
-        condition_frame = tk.Frame(middle_row, bg=condition_color, relief='flat')
-        condition_frame.pack(side=tk.RIGHT)
-        
-        condition_label = tk.Label(condition_frame, text=f"{condition_text} {condition}%", 
-                                  bg=condition_color, fg='white',
-                                  font=(self.parent.FONT_FAMILY, 8, 'bold'), padx=4, pady=1)
-        condition_label.pack()
-        
-        # Bottom row - Archetype and stats
-        bottom_row = tk.Frame(info_frame, bg='#6c757d')
-        bottom_row.pack(fill=tk.X, pady=(2, 0))
+        hdr = tk.Frame(panel, bg=self.C_BG)
+        hdr.pack(fill='x', pady=(0, 6))
+        tk.Label(hdr, text="Roster", bg=self.C_BG, fg=self.C_TEXT,
+                 font=(self.parent.FONT_FAMILY, 15, 'bold')).pack(side='left')
+        self._sel_hint = tk.Label(hdr, text="", bg=self.C_BG, fg=self.C_ACCENT,
+                                  font=(self.parent.FONT_FAMILY, 9))
+        self._sel_hint.pack(side='left', padx=(10, 0))
 
+        self._search_var = tk.StringVar()
+        search = tk.Entry(panel, textvariable=self._search_var, bg=self.C_CARD2,
+                          fg=self.C_TEXT, insertbackground=self.C_TEXT, relief='flat',
+                          font=(self.parent.FONT_FAMILY, 10))
+        search.pack(fill='x', pady=(0, 8), ipady=7)
+        self._search_var.trace_add('write', lambda *a: self._rebuild_roster_list())
+
+        chips = tk.Frame(panel, bg=self.C_BG)
+        chips.pack(fill='x', pady=(0, 8))
+        self._chip_btns = {}
+        for key, label in (("ALL", "All"), ("F", "Forwards"),
+                           ("D", "Defense"), ("G", "Goalies")):
+            b = tk.Label(chips, text=label, bg=self.C_CARD2, fg=self.C_SEC,
+                         font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                         padx=12, pady=6, cursor='hand2')
+            b.pack(side='left', padx=(0, 6))
+            b.bind('<Button-1>', lambda e, k=key: self._set_roster_filter(k))
+            self._chip_btns[key] = b
+        self._set_roster_filter("ALL", rebuild=False)
+
+        list_wrap = tk.Frame(panel, bg=self.C_BG)
+        list_wrap.pack(fill='both', expand=True)
+        self._roster_inner = self._make_scrollable(list_wrap)
+        self._rebuild_roster_list()
+
+    def _set_roster_filter(self, key, rebuild=True):
+        self._roster_filter = key
+        for k, b in self._chip_btns.items():
+            if k == key:
+                b.config(bg=self.C_ACCENT, fg='#06231f')
+            else:
+                b.config(bg=self.C_CARD2, fg=self.C_SEC)
+        if rebuild:
+            self._rebuild_roster_list()
+
+    def _player_group(self, player):
+        pos = player.primary_position.name
+        if pos == 'GOALIE':
+            return 'G'
+        if pos in ('LEFT_DEFENSE', 'RIGHT_DEFENSE', 'DEFENSE'):
+            return 'D'
+        return 'F'
+
+    def _pos_short(self, player):
+        mapping = {'LEFT_WING': 'LW', 'CENTER': 'C', 'RIGHT_WING': 'RW',
+                   'LEFT_DEFENSE': 'LD', 'RIGHT_DEFENSE': 'RD',
+                   'DEFENSE': 'D', 'GOALIE': 'G'}
+        return mapping.get(player.primary_position.name,
+                           player.primary_position.name[:2])
+
+    def _rebuild_roster_list(self):
+        # Preserve assignment tracking across rebuilds.
+        old = self.player_widgets
+        self.player_widgets = {}
+        for widget in self._roster_inner.winfo_children():
+            widget.destroy()
+
+        q = self._search_var.get().strip().lower()
+        filt = self._roster_filter
+        players = list(self.forwards) + list(self.defensemen) + list(self.goalies)
+        if filt != "ALL":
+            players = [p for p in players if self._player_group(p) == filt]
+        if q:
+            players = [p for p in players if q in p.full_name.lower()]
+        players.sort(key=lambda p: p.overall_rating(), reverse=True)
+
+        for player in players:
+            self.create_player_row(self._roster_inner, player,
+                                   old.get(getattr(player, 'id', None), {}))
+        # Keep assignment tracking for players hidden by the current
+        # search/filter so their dots survive the next rebuild.
+        for pid, info in old.items():
+            if pid not in self.player_widgets:
+                self.player_widgets[pid] = info
+        self._refresh_selection_visuals()
+
+    def create_player_row(self, parent, player, prev_info):
+        """Sleeper-style player row: face, name + pos pill, big OVR. Click to select."""
+        outer = tk.Frame(parent, bg=self.C_BG)
+        outer.pack(fill='x', pady=3)
+        card = tk.Frame(outer, bg=self.C_CARD)
+        card.pack(fill='x', padx=2, pady=2)
+
+        blank_key = ('blank', 40)
+        blank = self._face_photos.get(blank_key)
+        if blank is None:
+            blank = self._face_blank(40)
+            if blank is not None:
+                self._face_photos[blank_key] = blank
+        face = tk.Label(card, bg='#2b2b31', bd=0, image=blank)
+        face.image = blank
+        face.pack(side='left', padx=(8, 4), pady=8)
+        self._pending_faces.append((player, face, 40))
+
+        info = tk.Frame(card, bg=self.C_CARD)
+        info.pack(side='left', fill='y', expand=True, pady=8)
+        name_l = tk.Label(info, text=player.full_name, bg=self.C_CARD, fg=self.C_TEXT,
+                          font=(self.parent.FONT_FAMILY, 10, 'bold'), anchor='w')
+        name_l.pack(anchor='w')
+        sub = tk.Frame(info, bg=self.C_CARD)
+        sub.pack(anchor='w', pady=(3, 0))
+        pos_l = tk.Label(sub, text=self._pos_short(player), bg=self.C_CARD2,
+                         fg=self.C_SEC, font=(self.parent.FONT_FAMILY, 8, 'bold'),
+                         padx=6, pady=2)
+        pos_l.pack(side='left')
         try:
             arch = get_archetype(player)
         except Exception:
-            arch = "—"
-        arch_label = tk.Label(bottom_row, text=f"Archetype: {arch}", bg='#6c757d', fg='#ffd166',
-                              font=(self.parent.FONT_FAMILY, 8, 'bold'))
-        arch_label.pack(side=tk.LEFT)
+            arch = ""
+        arch_l = tk.Label(sub, text=arch, bg=self.C_CARD, fg=self.C_TER,
+                          font=(self.parent.FONT_FAMILY, 8))
+        arch_l.pack(side='left', padx=(6, 0))
 
-        if hasattr(player, 'stats'):
-            goals = getattr(player.stats, 'goals', 0)
-            assists = getattr(player.stats, 'assists', 0)
-            stats_label = tk.Label(bottom_row, text=f"  {goals}G  {assists}A", bg='#6c757d', fg='#f8f9fa',
-                                  font=(self.parent.FONT_FAMILY, 8))
-            stats_label.pack(side=tk.LEFT)
-        
-        # Store reference for tracking
-        self.player_widgets[player.id] = {
-            'widget': player_frame,
-            'player': player,
-            'position_type': position_type,
-            'assigned_position': None
+        right = tk.Frame(card, bg=self.C_CARD)
+        right.pack(side='right', padx=(4, 10))
+        ovr_l = tk.Label(right, text=str(player.overall_rating()), bg=self.C_CARD,
+                         fg=self.C_TEXT, font=(self.parent.FONT_FAMILY, 18, 'bold'))
+        ovr_l.pack(anchor='e')
+        cond = getattr(player, 'condition', 100)
+        cond_l = tk.Label(right, text=f"{cond}%", bg=self.C_CARD, fg=self.C_TER,
+                          font=(self.parent.FONT_FAMILY, 8))
+        cond_l.pack(anchor='e')
+
+        dot = tk.Label(card, text="\u25cf", bg=self.C_CARD, fg=self.C_CARD,
+                       font=(self.parent.FONT_FAMILY, 8))
+        dot.pack(side='right', padx=(0, 2))
+
+        bound = [outer, card, face, info, name_l, sub, pos_l, arch_l,
+                 right, ovr_l, cond_l]
+        for w in bound:
+            w.bind('<Button-1>', lambda e, p=player: self._on_row_click(p))
+            w.bind('<Enter>', lambda e, c=card: c.config(bg=self.C_CARD2))
+            w.bind('<Leave>', lambda e, c=card: c.config(bg=self.C_CARD))
+
+        pid = getattr(player, 'id', None)
+        self.player_widgets[pid] = {
+            'outer': outer, 'card': card, 'dot': dot,
+            'assigned_position': (prev_info or {}).get('assigned_position'),
         }
-        
-        # Bind drag events to all child widgets
-        drag_widgets = [info_frame, top_row, middle_row, name_label, rating_frame, rating_label,
-                        pos_label, condition_frame, condition_label,
-                        bottom_row, arch_label, face_label]
-        try:
-            drag_widgets.append(stats_label)
-        except NameError:
-            pass
-        for widget in drag_widgets:
-            widget.bind('<Button-1>', lambda e: self.start_drag(e, player, player_frame))
-            widget.bind('<B1-Motion>', self.on_drag)
-            widget.bind('<ButtonRelease-1>', self.end_drag)
-    
+
+    def _on_row_click(self, player):
+        sel = self._selection
+        if sel and sel['player'] is player and sel['from_zone'] is None:
+            self._clear_selection()
+            return
+        self._selection = {'player': player, 'from_zone': None}
+        self._refresh_selection_visuals()
+        if hasattr(self, '_sel_hint'):
+            self._sel_hint.config(text=f"Selected: {player.full_name} \u2192 click a slot")
+
+    # ------------------------------------------------------------------
+    # Main layout: slim header, roster panel, unit-switched line area
+    # ------------------------------------------------------------------
     def create_clean_interface(self):
-        """Create a clean, easy-to-read interface"""
-        # Modern header with gradient-like appearance
-        header_frame = tk.Frame(self, bg='#343a40', height=80)
-        header_frame.pack(fill=tk.X)
-        header_frame.pack_propagate(False)
-        
-        # Header content
-        header_content = tk.Frame(header_frame, bg='#343a40')
-        header_content.pack(expand=True, fill='both', padx=20, pady=15)
-        
-        title_label = tk.Label(header_content, text="Line Editor", 
-                              bg='#343a40', fg='white', 
-                              font=(self.parent.FONT_FAMILY, 18, 'bold'))
-        title_label.pack(side=tk.LEFT)
-        
-        # Modern action buttons in header
-        header_buttons = tk.Frame(header_content, bg='#343a40')
-        header_buttons.pack(side=tk.RIGHT)
-        
-        # Stylish buttons
-        self.create_modern_button(header_buttons, "Auto Best Lines", self.auto_populate_best_lines, 
-                                 bg='#3fb950', hover_bg='#218838')
-        self.create_modern_button(header_buttons, "Save Lines", self.save_lines_with_feedback, 
-                                 bg='#007bff', hover_bg='#0056b3')
-        self.create_modern_button(header_buttons, "Reset", self.reset_lines, 
-                                 bg='#6c757d', hover_bg='#545b62')
-        
-        instruction_label = tk.Label(header_content, 
-                                   text="Drag players from the roster to positions • Auto-assign or manually build your lines", 
-                                   bg='#343a40', fg='#adb5bd', 
-                                   font=(self.parent.FONT_FAMILY, 10))
-        instruction_label.pack(side=tk.LEFT, padx=(20, 0))
-        
-        # Team overview in a modern card
-        stats_card = tk.Frame(self, bg='#16161a', relief='solid', bd=1)
-        stats_card.pack(fill=tk.X, padx=20, pady=10)
-        
-        self.create_team_overview(stats_card)
-        
-        # Main content with modern styling
-        content_frame = tk.Frame(self, bg='#0e0e11')
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
-        
-        # Create main layout with roster panel and tabs
-        main_paned = ttk.PanedWindow(content_frame, orient=tk.HORIZONTAL)
-        main_paned.pack(fill=tk.BOTH, expand=True)
-        
-        # Left side - Player roster panel
-        self.create_roster_panel(main_paned)
-        
-        # Right side - Line editing tabs
-        self.notebook = ttk.Notebook(main_paned, style='TNotebook')
-        main_paned.add(self.notebook, weight=3)  # Takes more space
-        
-        # Create tabs
-        self.create_forwards_tab()
-        self.create_defense_tab()
-        self.create_goalies_tab()
-        self.create_special_teams_tab()
-    
-    def create_modern_button(self, parent, text, command, bg='#007bff', hover_bg='#0056b3'):
-        """Create a modern styled button with hover effects"""
+        """Sleeper/FM24-style line editor: everything visible, point-click."""
+        # ---- header ----
+        header = tk.Frame(self, bg=self.C_BG)
+        header.pack(fill=tk.X)
+        tk.Frame(header, bg=self.C_BORDER, height=1).pack(side='bottom', fill='x')
+        tk.Label(header, text="Lines", bg=self.C_BG, fg=self.C_TEXT,
+                 font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(
+                     side='left', padx=20, pady=14)
+
+        # Unit segmented control (replaces the 4-tab notebook)
+        seg = tk.Frame(header, bg=self.C_CARD2)
+        seg.pack(side='left', padx=28, pady=10)
+        self._unit_btns = {}
+        for key, label in (("ES", "Even Strength"), ("PP", "Power Play"),
+                           ("PK", "Penalty Kill")):
+            b = tk.Label(seg, text=label, bg=self.C_CARD2, fg=self.C_SEC,
+                         font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                         padx=18, pady=8, cursor='hand2')
+            b.pack(side='left', padx=2, pady=2)
+            b.bind('<Button-1>', lambda e, k=key: self.switch_unit(k))
+            self._unit_btns[key] = b
+
+        # Right-side actions
+        actions = tk.Frame(header, bg=self.C_BG)
+        actions.pack(side='right', padx=20)
+        self.create_modern_button(actions, "View", self._open_view_menu,
+                                  kind='ghost')
+        self.create_modern_button(actions, "Auto Best",
+                                  self.auto_populate_best_lines, kind='secondary')
+        self.create_modern_button(actions, "Reset", self.reset_lines,
+                                  kind='ghost')
+        self.create_modern_button(actions, "Save Lines",
+                                  self.save_lines_with_feedback, kind='primary')
+
+        # ---- team strip ----
+        self.create_team_overview(self)
+
+        # ---- body ----
+        body = tk.Frame(self, bg=self.C_BG)
+        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 8))
+
+        self.create_roster_panel(body)
+
+        unit_wrap = tk.Frame(body, bg=self.C_BG)
+        unit_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._build_unit_views(unit_wrap)
+        self._paint_unit_buttons()
+
+        # ---- footer ----
+        footer = tk.Frame(self, bg=self.C_BG)
+        footer.pack(fill=tk.X, side='bottom', padx=20, pady=(0, 12))
+        self._footer_hint = tk.Label(
+            footer,
+            text=("Click a player, then a slot to assign  \u00b7  "
+                  "Click a slotted player to move him  \u00b7  "
+                  "Double-click a slot (or \u00d7) to clear  \u00b7  Esc cancels"),
+            bg=self.C_BG, fg=self.C_TER, font=(self.parent.FONT_FAMILY, 9))
+        self._footer_hint.pack(side='left')
+        self._footer_warn = tk.Label(footer, text="", bg=self.C_BG,
+                                     fg=self.C_AMBER,
+                                     font=(self.parent.FONT_FAMILY, 9, 'bold'))
+        self._footer_warn.pack(side='right')
+
+        self.bind('<Escape>', lambda e: self._clear_selection())
+
+    def create_modern_button(self, parent, text, command, kind='primary'):
+        """Sleeper-style button: primary teal / secondary elevated / ghost."""
+        styles = {
+            'primary':   {'bg': self.C_ACCENT, 'fg': '#06231f', 'hover': '#3adcc9'},
+            'secondary': {'bg': self.C_CARD2, 'fg': self.C_TEXT, 'hover': '#2b2b31'},
+            'ghost':     {'bg': self.C_BG, 'fg': self.C_SEC, 'hover': self.C_CARD2},
+        }
+        st = styles.get(kind, styles['primary'])
         button = tk.Button(parent, text=text, command=command,
-                          bg=bg, fg='white', border=0, relief='flat',
-                          font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                          padx=15, pady=8, cursor='hand2')
-        button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Hover effects
-        def on_enter(e):
-            button.config(bg=hover_bg)
-        def on_leave(e):
-            button.config(bg=bg)
-        
-        button.bind('<Enter>', on_enter)
-        button.bind('<Leave>', on_leave)
-        
+                           bg=st['bg'], fg=st['fg'], border=0, relief='flat',
+                           font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                           padx=16, pady=8, cursor='hand2')
+        button.pack(side=tk.LEFT, padx=(0, 8))
+        button.bind('<Enter>', lambda e: button.config(bg=st['hover']))
+        button.bind('<Leave>', lambda e: button.config(bg=st['bg']))
         return button
-    
+
+    # ------------------------------------------------------------------
+    # Unit views (all zones are built up-front; switchers show one group)
+    # ------------------------------------------------------------------
+    def _build_unit_views(self, parent):
+        self._unit_frames = {}
+        self._rating_bigs = []     # big-numeral rating labels (view pref)
+        self._icetime_labels = []  # ice-time hint labels (view pref)
+        self._chem_labels = []     # chemistry detail labels (view pref)
+        self.forward_vars = []
+        self.defense_vars = []
+        self.goalie_vars = []
+        self.powerplay_vars = []
+        self.penalty_kill_vars = []
+        self.forward_rating_labels = {}
+        self.forward_rating_big = {}
+        self.defense_rating_labels = {}
+        self.defense_rating_big = {}
+        self.pp_rating_big = {}
+        self.pk_rating_big = {}
+
+        self._unit_frames["ES"] = self._build_es_view(parent)
+        self._unit_frames["PP"] = self._build_pp_view(parent)
+        self._unit_frames["PK"] = self._build_pk_view(parent)
+        self._current_unit = "ES"
+        self._unit_frames["ES"].pack(fill='both', expand=True)
+        self._apply_view_prefs()
+
+    def _paint_unit_buttons(self):
+        for key, b in self._unit_btns.items():
+            if key == self._current_unit:
+                b.config(bg=self.C_ACCENT, fg='#06231f')
+            else:
+                b.config(bg=self.C_CARD2, fg=self.C_SEC)
+
+    def switch_unit(self, unit):
+        if unit == getattr(self, '_current_unit', None):
+            return
+        self._unit_frames[self._current_unit].pack_forget()
+        self._unit_frames[unit].pack(fill='both', expand=True)
+        self._current_unit = unit
+        self._paint_unit_buttons()
+        self._clear_selection()
+
+    def _unit_card(self, parent, kicker):
+        """Sleeper card for a line/pair/unit. Returns (body, big, detail, ice)."""
+        card = tk.Frame(parent, bg=self.C_CARD)
+        card.pack(fill=tk.X, pady=(0, 12), padx=2)
+        top = tk.Frame(card, bg=self.C_CARD)
+        top.pack(fill='x', padx=16, pady=(12, 0))
+        tk.Label(top, text=kicker, bg=self.C_CARD, fg=self.C_TER,
+                 font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(side='left')
+        big = tk.Label(top, text="--", bg=self.C_CARD, fg=self.C_TEXT,
+                       font=(self.parent.FONT_FAMILY, 26, 'bold'))
+        big.pack(side='right')
+        big._pk = {'side': 'right'}
+        self._rating_bigs.append(big)
+        detail = tk.Label(card, text="", bg=self.C_CARD, fg=self.C_SEC,
+                          font=(self.parent.FONT_FAMILY, 9))
+        detail.pack(anchor='w', padx=16)
+        detail._pk = {'anchor': 'w', 'padx': 16}
+        self._chem_labels.append(detail)
+        ice = tk.Label(card, text="", bg=self.C_CARD, fg=self.C_TER,
+                       font=(self.parent.FONT_FAMILY, 9, 'italic'))
+        ice.pack(anchor='w', padx=16, pady=(0, 4))
+        ice._pk = {'anchor': 'w', 'padx': 16, 'pady': (0, 4)}
+        self._icetime_labels.append(ice)
+        body = tk.Frame(card, bg=self.C_CARD)
+        body.pack(fill='x', padx=12, pady=(4, 14))
+        return body, big, detail, ice
+
+    def _build_es_view(self, parent):
+        frame = tk.Frame(parent, bg=self.C_BG)
+
+        # Sub-toggle: Forward Lines | D Pairings | Goalies
+        sub = tk.Frame(frame, bg=self.C_BG)
+        sub.pack(fill='x', padx=2, pady=(0, 8))
+        seg = tk.Frame(sub, bg=self.C_CARD2)
+        seg.pack(side='left')
+        self._es_sub_btns = {}
+        for key, label in (("F", "Forward Lines"), ("D", "D Pairings"),
+                           ("G", "Goalies")):
+            b = tk.Label(seg, text=label, bg=self.C_CARD2, fg=self.C_SEC,
+                         font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                         padx=16, pady=6, cursor='hand2')
+            b.pack(side='left', padx=2, pady=2)
+            b.bind('<Button-1>', lambda e, k=key: self.switch_es_sub(k))
+            self._es_sub_btns[key] = b
+
+        inner = self._make_scrollable(frame)
+        f_frame = tk.Frame(inner, bg=self.C_BG)
+        d_frame = tk.Frame(inner, bg=self.C_BG)
+        g_frame = tk.Frame(inner, bg=self.C_BG)
+        self._es_sub = {"F": f_frame, "D": d_frame, "G": g_frame}
+
+        es_ice = ["22-25 min", "18-22 min", "12-16 min", "8-12 min"]
+        for i in range(4):
+            body, big, detail, ice = self._unit_card(
+                f_frame, f"LINE {i+1} \u00b7 {self.get_line_type_name(i).upper()}")
+            self.forward_rating_big[i] = big
+            self.forward_rating_labels[i] = detail
+            ice.config(text=f"Suggested ice time: {es_ice[i]}")
+            slots = []
+            for j, pos in enumerate(("LW", "C", "RW")):
+                slot = self.create_slot(body, f"forward_line_{i}_pos_{j}", pos)
+                slot.pack(side='left', fill='both', expand=True, padx=4)
+                slots.append(slot)
+            self.forward_vars.append(slots)
+
+        d_ice = ["24-28 min", "20-24 min", "16-20 min"]
+        for i in range(3):
+            body, big, detail, ice = self._unit_card(
+                d_frame,
+                f"PAIR {i+1} \u00b7 {self.get_defense_pair_name(i).upper()}")
+            self.defense_rating_big[i] = big
+            self.defense_rating_labels[i] = detail
+            ice.config(text=f"Suggested ice time: {d_ice[i]}")
+            slots = []
+            for j, pos in enumerate(("LD", "RD")):
+                slot = self.create_slot(body, f"defense_pair_{i}_pos_{j}", pos)
+                slot.pack(side='left', fill='both', expand=True, padx=4)
+                slots.append(slot)
+            self.defense_vars.append(slots)
+
+        body, big, detail, ice = self._unit_card(g_frame, "GOALIES")
+        for w in (big, detail, ice):
+            w.pack_forget()
+            w._force_hidden = True
+        for i, role in enumerate(("Starter", "Backup")):
+            slot = self.create_slot(body, f"goalie_role_{i}", role)
+            slot.pack(side='left', fill='both', expand=True, padx=4)
+            self.goalie_vars.append(slot)
+
+        self._es_current = "F"
+        f_frame.pack(fill='both', expand=True)
+        self._paint_es_sub_buttons()
+        return frame
+
+    def switch_es_sub(self, key):
+        """Swap between Forward Lines / D Pairings / Goalies."""
+        if key == getattr(self, '_es_current', None):
+            return
+        self._es_sub[self._es_current].pack_forget()
+        self._es_sub[key].pack(fill='both', expand=True)
+        self._es_current = key
+        self._paint_es_sub_buttons()
+        self._clear_selection()
+
+    def _paint_es_sub_buttons(self):
+        for key, b in self._es_sub_btns.items():
+            if key == self._es_current:
+                b.config(bg=self.C_ACCENT, fg='#06231f')
+            else:
+                b.config(bg=self.C_CARD2, fg=self.C_SEC)
+
+    def _build_pp_view(self, parent):
+        frame = tk.Frame(parent, bg=self.C_BG)
+        inner = self._make_scrollable(frame)
+        for i in range(2):
+            body, big, detail, ice = self._unit_card(inner, f"POWER PLAY {i+1}")
+            self.pp_rating_big[i] = big
+            for w in (detail, ice):
+                w.pack_forget()
+                w._force_hidden = True
+            unit_slots = []
+            for pos in ("LW", "C", "RW", "LD", "RD"):
+                slot = self.create_slot(body, f"powerplay_{i}_{pos}", pos)
+                slot.pack(side='left', fill='both', expand=True, padx=4)
+                unit_slots.append(slot)
+            self.powerplay_vars.append(unit_slots)
+        return frame
+
+    def _build_pk_view(self, parent):
+        frame = tk.Frame(parent, bg=self.C_BG)
+        inner = self._make_scrollable(frame)
+        for i in range(2):
+            body, big, detail, ice = self._unit_card(inner, f"PENALTY KILL {i+1}")
+            self.pk_rating_big[i] = big
+            for w in (detail, ice):
+                w.pack_forget()
+                w._force_hidden = True
+            unit_slots = []
+            for pos in ("LW", "RW", "LD", "RD"):
+                slot = self.create_slot(body, f"penalty_kill_{i}_{pos}", pos)
+                slot.pack(side='left', fill='both', expand=True, padx=4)
+                unit_slots.append(slot)
+            self.penalty_kill_vars.append(unit_slots)
+        return frame
+
     def auto_populate_best_lines(self):
         """Automatically populate all lines with the best available players"""
         # Clear all current assignments
@@ -10959,164 +11156,16 @@ class CleanEditLinesWindow(tk.Toplevel):
                 return found
         return None
     
-    def create_forwards_tab(self):
-        """Create the forwards tab with horizontal LW-C-RW layout and scrolling"""
-        forwards_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(forwards_frame, text="Forwards")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(forwards_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(forwards_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        self.forward_vars = []
-        
-        for i in range(4):
-            # Line header with clear styling and line stats
-            line_frame = ttk.LabelFrame(scrollable_frame, text=f"Line {i+1} - {self.get_line_type_name(i)}", 
-                                       padding=15, style='TLabelframe')
-            line_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # Line info frame
-            line_info_frame = ttk.Frame(line_frame)
-            line_info_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # Ice time suggestion
-            ice_times = ["22-25 min", "18-22 min", "12-16 min", "8-12 min"]
-            ttk.Label(line_info_frame, text=f"Suggested Ice Time: {ice_times[i]}", 
-                     style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'italic')).pack(side=tk.LEFT)
-            
-            # Line rating display (will be updated when players are selected)
-            rating_label = ttk.Label(line_info_frame, text="Line Rating: --",
-                                   style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
-            rating_label.pack(side=tk.RIGHT)
-            if not hasattr(self, 'forward_rating_labels'):
-                self.forward_rating_labels = {}
-            self.forward_rating_labels[i] = rating_label
-            
-            # Horizontal position layout: LW - C - RW
-            positions_frame = ttk.Frame(line_frame)
-            positions_frame.pack(fill=tk.X, pady=5)
-            
-            positions = ["Left Wing", "Center", "Right Wing"]
-            line_vars = []
-            
-            for j, position in enumerate(positions):
-                # Create position column
-                pos_column = ttk.Frame(positions_frame)
-                pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-                
-                # Position label
-                pos_label = ttk.Label(pos_column, text=position, 
-                                     style='TLabel', font=(self.parent.FONT_FAMILY, 10, 'bold'))
-                pos_label.pack(pady=(0, 5))
-                
-                # Drop zone for player
-                drop_zone = self.create_drop_zone(pos_column, f"forward_line_{i}_pos_{j}")
-                drop_zone.pack(fill=tk.BOTH, expand=True, ipady=20)
-                
-                line_vars.append(drop_zone)
-            
-            self.forward_vars.append(line_vars)
-    
-    def create_defense_tab(self):
-        """Create the defense tab with horizontal LD-RD layout and scrolling"""
-        defense_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(defense_frame, text="Defense")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(defense_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(defense_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        self.defense_vars = []
-        
-        for i in range(3):
-            # Pair header with clear styling
-            pair_frame = ttk.LabelFrame(scrollable_frame, text=f"Defense Pair {i+1} - {self.get_defense_pair_name(i)}", 
-                                       padding=15, style='TLabelframe')
-            pair_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # Pair info frame
-            pair_info_frame = ttk.Frame(pair_frame)
-            pair_info_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # Ice time suggestion
-            ice_times = ["24-28 min", "20-24 min", "16-20 min"]
-            ttk.Label(pair_info_frame, text=f"Suggested Ice Time: {ice_times[i]}", 
-                     style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'italic')).pack(side=tk.LEFT)
-            
-            # Pair rating display
-            rating_label = ttk.Label(pair_info_frame, text="Pair Rating: --",
-                                   style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
-            rating_label.pack(side=tk.RIGHT)
-            if not hasattr(self, 'defense_rating_labels'):
-                self.defense_rating_labels = {}
-            self.defense_rating_labels[i] = rating_label
-            
-            # Horizontal position layout: LD - RD
-            positions_frame = ttk.Frame(pair_frame)
-            positions_frame.pack(fill=tk.X, pady=5)
-            
-            positions = ["Left Defense", "Right Defense"]
-            pair_vars = []
-            
-            for j, position in enumerate(positions):
-                # Create position column
-                pos_column = ttk.Frame(positions_frame)
-                pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
-                
-                # Position label
-                pos_label = ttk.Label(pos_column, text=position, 
-                                     style='TLabel', font=(self.parent.FONT_FAMILY, 10, 'bold'))
-                pos_label.pack(pady=(0, 5))
-                
-                # Drop zone for player
-                drop_zone = self.create_drop_zone(pos_column, f"defense_pair_{i}_pos_{j}")
-                drop_zone.pack(fill=tk.BOTH, expand=True, ipady=20)
-                
-                pair_vars.append(drop_zone)
-            
-            self.defense_vars.append(pair_vars)
-
     def get_line_type_name(self, line_index):
         """Get descriptive name for each line"""
         line_types = ["Top Line", "Second Line", "Third Line", "Fourth Line"]
         return line_types[line_index] if line_index < len(line_types) else f"Line {line_index + 1}"
-    
+
     def get_defense_pair_name(self, pair_index):
         """Get descriptive name for each defense pair"""
         pair_types = ["Top Pair", "Second Pair", "Third Pair"]
         return pair_types[pair_index] if pair_index < len(pair_types) else f"Pair {pair_index + 1}"
-    
+
     def get_position_role_info(self, position, line_index):
         """Get role information for position based on line"""
         role_info = {
@@ -11126,33 +11175,7 @@ class CleanEditLinesWindow(tk.Toplevel):
             3: {"Left Wing": "Physical", "Center": "Faceoffs", "Right Wing": "Enforcer"}
         }
         return role_info.get(line_index, {}).get(position, "Versatile")
-    
-    def update_line_rating(self, line_index, rating_label):
-        """Update the line rating display when players change"""
-        if line_index >= len(self.forward_vars):
-            return
-            
-        line_vars = self.forward_vars[line_index]
-        players = []
-        
-        for combo, var in line_vars:
-            selection = var.get()
-            if selection and selection != "-- Select Player --":
-                player_name = selection.split(" (")[0]
-                player = next((p for p in self.forwards if p.full_name == player_name), None)
-                if player:
-                    players.append(player)
-        
-        if players:
-            avg_rating = sum(p.overall_rating() for p in players) / len(players)
-            chemistry_bonus = self.calculate_chemistry_bonus(players)
-            final_rating = avg_rating + chemistry_bonus
-            
-            color = "green" if final_rating >= 85 else "orange" if final_rating >= 75 else "red"
-            rating_label.config(text=f"Line Rating: {final_rating:.1f} (+{chemistry_bonus:.1f})")
-        else:
-            rating_label.config(text="Line Rating: --")
-    
+
     def calculate_chemistry_bonus(self, players):
         """Canonical chemistry bonus: archetype complementarity between linemates.
 
@@ -11165,301 +11188,341 @@ class CleanEditLinesWindow(tk.Toplevel):
             return float(line_chemistry_score(players))
         except Exception:
             return 0.0
-    
-    def create_drop_zone(self, parent, zone_id):
-        """Create a drop zone for players"""
-        drop_frame = tk.Frame(parent, bg='#1c1c21', relief='flat', bd=0, height=70)
-        drop_frame.pack_propagate(False)  # Maintain size
 
-        # Subtle placeholder with modern styling
-        placeholder_frame = tk.Frame(drop_frame, bg='#1c1c21')
-        placeholder_frame.pack(expand=True, fill='both', padx=10, pady=10)
+    
+    # ------------------------------------------------------------------
+    # Slots + point-click selection (replaces drag and drop)
+    # ------------------------------------------------------------------
+    def create_slot(self, parent, zone_id, pos_label):
+        """A line slot. Click a selected player, then the slot, to assign."""
+        outer = tk.Frame(parent, bg=self.C_BORDER)
+        inner = tk.Frame(outer, bg=self.C_CARD)
+        inner.pack(fill='both', expand=True, padx=1, pady=1)
+        outer.zone_id = zone_id
+        outer.assigned_player = None
+        outer._inner = inner
+        outer._pos_label = pos_label
+        self._render_slot_empty(outer)
+        return outer
 
-        text_label = tk.Label(placeholder_frame, text="Drop Player Here", bg='#1c1c21', fg='#8a8f98',
-                             font=(self.parent.FONT_FAMILY, 9))
-        text_label.pack()
+    def _render_slot_empty(self, slot):
+        inner = slot._inner
+        for w in inner.winfo_children():
+            w.destroy()
+        ph = tk.Frame(inner, bg=self.C_CARD)
+        ph.pack(fill='both', expand=True)
+        pos_l = tk.Label(ph, text=slot._pos_label, bg=self.C_CARD, fg=self.C_TER,
+                         font=(self.parent.FONT_FAMILY, 12, 'bold'))
+        pos_l.pack(expand=True, pady=(14, 0))
+        emp_l = tk.Label(ph, text="Empty", bg=self.C_CARD, fg=self.C_TER,
+                         font=(self.parent.FONT_FAMILY, 8))
+        emp_l.pack(expand=True, pady=(0, 14))
+        for w in (ph, pos_l, emp_l):
+            w.bind('<Button-1>', lambda e, s=slot: self._on_slot_click(s))
+            w.bind('<Enter>', lambda e, s=slot: self._on_slot_hover(s, True))
+            w.bind('<Leave>', lambda e, s=slot: self._on_slot_hover(s, False))
+        inner.bind('<Button-1>', lambda e, s=slot: self._on_slot_click(s))
 
-        # Bind drop events and hover effects
-        for widget in [drop_frame, placeholder_frame, text_label]:
-            widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_frame, zone_id))
-            widget.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_frame))
-            widget.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_frame))
-        
-        # Store zone info
-        drop_frame.zone_id = zone_id
-        drop_frame.assigned_player = None
-        drop_frame.placeholder_frame = placeholder_frame
-        drop_frame.original_bg = '#1c1c21'
-        
-        return drop_frame
-    
-    def on_drop_zone_enter(self, drop_zone):
-        """Handle mouse entering drop zone during drag"""
-        if self.drag_data["item"] and not drop_zone.assigned_player:
-            drop_zone.config(bg='#14332f', relief='flat')  # Teal highlight
-    
-    def on_drop_zone_leave(self, drop_zone):
-        """Handle mouse leaving drop zone"""
-        if not drop_zone.assigned_player:
-            drop_zone.config(bg=drop_zone.original_bg, relief='flat')
-    
-    def start_drag(self, event, player, widget):
-        """Start dragging a player"""
-        self.drag_data["item"] = player
-        self.drag_data["source"] = widget
-        widget.config(relief='raised', bd=3)
-        
-        # Change cursor to indicate dragging
-        widget.config(cursor='plus')
-    
-    def on_drag(self, event):
-        """Handle drag motion"""
-        if self.drag_data["item"]:
-            # Update cursor position
-            pass
-    
-    def end_drag(self, event):
-        """Handle end of drag - check for drop targets"""
-        if not self.drag_data["item"]:
+    def _on_slot_hover(self, slot, entering):
+        if (self._selection and self._selection['player'] is not None
+                and slot.assigned_player is None):
+            slot.config(bg=self.C_ACCENT if entering else self.C_BORDER)
+
+    def _on_slot_click(self, slot):
+        sel = self._selection
+        if sel is None or sel['player'] is None:
+            # No selection: pick up the slotted player for a move/swap.
+            if slot.assigned_player is not None:
+                self._selection = {'player': slot.assigned_player,
+                                   'from_zone': slot}
+                self._refresh_selection_visuals()
+                if hasattr(self, '_sel_hint'):
+                    self._sel_hint.config(
+                        text=f"Moving: {slot.assigned_player.full_name} \u2192 click a slot")
             return
-            
-        # Reset source widget appearance
-        if self.drag_data["source"]:
-            self.drag_data["source"].config(relief='raised', bd=1, cursor='hand2')
-        
-        # Find drop target under cursor
-        x, y = event.widget.winfo_pointerx(), event.widget.winfo_pointery()
-        target = self.winfo_containing(x, y)
-        
-        if target:
-            drop_zone = self.find_drop_zone_parent(target)
-            if drop_zone:
-                self.handle_drop(self.drag_data["item"], drop_zone)
-        
-        # Clear drag data
-        self.drag_data = {"item": None, "source": None}
-    
-    def find_drop_zone_parent(self, widget):
-        """Find the drop zone parent of a widget"""
-        current = widget
-        while current:
-            if hasattr(current, 'zone_id'):
-                return current
-            current = current.master
-        return None
-    
-    def handle_drop(self, player, drop_zone):
-        """Handle dropping a player on a drop zone"""
-        if not drop_zone or not hasattr(drop_zone, 'zone_id'):
+
+        player = sel['player']
+        src = sel['from_zone']
+        if src is slot:
+            self._clear_selection()
             return
-            
-        # Check if player is compatible with this position
-        zone_parts = drop_zone.zone_id.split('_')
-        if len(zone_parts) >= 2:
-            position_type = zone_parts[0]  # 'forward', 'defense', 'goalie'
-            
-            # Validate position compatibility
-            if not self.is_position_compatible(player, position_type):
-                # Show error message
-                tk.messagebox.showwarning("Invalid Position", 
-                                        f"{player.full_name} cannot be assigned to this position type.")
+
+        # Hard compatibility (goalies only in net, skaters never in net).
+        position_type = slot.zone_id.split('_')[0]
+        if not self.is_position_compatible(player, position_type):
+            tk.messagebox.showwarning(
+                "Invalid Position",
+                f"{player.full_name} cannot be assigned to this position type.")
+            return
+
+        if slot.assigned_player is None:
+            self.clear_player_assignments(player)
+            self.assign_player_to_zone(player, slot)
+        else:
+            other = slot.assigned_player
+            if other is player:
+                self._clear_selection()
                 return
-        
-        # Clear any existing assignment for this player
-        self.clear_player_assignments(player)
-        
-        # Assign player to this drop zone
-        self.assign_player_to_zone(player, drop_zone)
-        
-        # Update line ratings if it's a forward line
-        if 'forward_line' in drop_zone.zone_id:
-            line_idx = int(zone_parts[2]) if len(zone_parts) > 2 else 0
-            self.update_line_rating_for_drop_zones(line_idx)
-    
+            if src is not None:
+                # Swap the two slotted players.
+                self.clear_drop_zone(src, src.zone_id)
+                self.clear_drop_zone(slot, slot.zone_id)
+                self.assign_player_to_zone(player, slot)
+                self.assign_player_to_zone(other, src)
+            else:
+                # Replace: the displaced player returns to the pool.
+                self.clear_player_assignments(player)
+                self.clear_drop_zone(slot, slot.zone_id)
+                self.assign_player_to_zone(player, slot)
+        self._clear_selection()
+        self.refresh_roster_panel()
+
+    def _on_slot_double_click(self, slot):
+        self.clear_drop_zone(slot, slot.zone_id)
+        if self._selection and self._selection.get('from_zone') is slot:
+            self._clear_selection()
+        self.refresh_roster_panel()
+
+    def _clear_selection(self):
+        self._selection = None
+        self._refresh_selection_visuals()
+        if hasattr(self, '_sel_hint'):
+            self._sel_hint.config(text="")
+
+    def _refresh_selection_visuals(self):
+        sel = self._selection
+        sel_player = sel['player'] if sel else None
+        sel_zone = sel['from_zone'] if sel else None
+        sel_pid = getattr(sel_player, 'id', None) if sel_player else None
+        for pid, info in self.player_widgets.items():
+            try:
+                info['outer'].config(
+                    bg=self.C_ACCENT if (sel_pid is not None and pid == sel_pid
+                                         and sel_zone is None)
+                    else self.C_BG)
+            except Exception:
+                pass
+        for zone in self._all_zones():
+            try:
+                zone.config(bg=self.C_ACCENT if zone is sel_zone else self.C_BORDER)
+            except Exception:
+                pass
+
+    def _slot_expected_pos(self, zone_id):
+        """Expected primary_position name for a zone, or None."""
+        parts = zone_id.split('_')
+        try:
+            if zone_id.startswith('forward_line_') and len(parts) >= 5:
+                return ('LEFT_WING', 'CENTER', 'RIGHT_WING')[int(parts[4])]
+            if zone_id.startswith('defense_pair_') and len(parts) >= 5:
+                return ('LEFT_DEFENSE', 'RIGHT_DEFENSE')[int(parts[4])]
+            if zone_id.startswith('goalie_role_'):
+                return 'GOALIE'
+            if zone_id.startswith('powerplay_') and len(parts) >= 3:
+                return {'LW': 'LEFT_WING', 'C': 'CENTER', 'RW': 'RIGHT_WING',
+                        'LD': 'LEFT_DEFENSE', 'RD': 'RIGHT_DEFENSE'}.get(parts[2])
+            if zone_id.startswith('penalty_kill_') and len(parts) >= 4:
+                return {'LW': 'LEFT_WING', 'RW': 'RIGHT_WING',
+                        'LD': 'LEFT_DEFENSE', 'RD': 'RIGHT_DEFENSE'}.get(parts[3])
+        except (ValueError, IndexError):
+            pass
+        return None
+
+    def _is_off_position(self, player, zone_id):
+        expected = self._slot_expected_pos(zone_id)
+        if not expected:
+            return False
+        actual = player.primary_position.name
+        if actual == 'GOALIE' or expected == 'GOALIE':
+            return actual != expected
+        fam = lambda p: 'F' if p in ('LEFT_WING', 'CENTER', 'RIGHT_WING') else 'D'
+        return fam(actual) != fam(expected)
+
     def is_position_compatible(self, player, position_type):
         """Check if player can play this position type"""
         player_pos = player.primary_position.name
-        
+
         # Goalies can only play goalie positions
         if player_pos == 'GOALIE':
             return position_type == "goalie"
-        
+
         # Non-goalies can play any non-goalie position
         if position_type == "goalie":
             return False  # Only goalies can play goalie
-        
+
         # Allow forwards and defensemen to play any forward/defense/special teams position
         return position_type in ["forward", "defense", "powerplay", "penalty_kill"]
-    
+
     def clear_player_assignments(self, player):
-        """Clear any existing assignments for this player"""
-        # Update player widget tracking
-        if player.id in self.player_widgets:
-            self.player_widgets[player.id]['assigned_position'] = None
-        
-        # Find and clear any drop zones containing this player
-        for widget in self.winfo_children():
-            self.clear_player_from_zones_recursive(widget, player)
-    
-    def clear_player_from_zones_recursive(self, widget, player):
-        """Recursively clear player from drop zones"""
-        if hasattr(widget, 'zone_id') and hasattr(widget, 'assigned_player'):
-            if widget.assigned_player and widget.assigned_player.id == player.id:
-                self.clear_drop_zone(widget, widget.zone_id)
-        
-        # Check children
-        for child in widget.winfo_children():
-            self.clear_player_from_zones_recursive(child, player)
-    
+        """Clear any existing slot assignments for this player."""
+        pid = getattr(player, 'id', None)
+        if pid in self.player_widgets:
+            self.player_widgets[pid]['assigned_position'] = None
+        for zone in self._all_zones():
+            if (getattr(zone, 'assigned_player', None) is not None
+                    and zone.assigned_player.id == pid):
+                self.clear_drop_zone(zone, zone.zone_id)
+
     def assign_player_to_zone(self, player, drop_zone):
-        """Assign a player to a drop zone"""
-        # Clear the drop zone first
-        for widget in drop_zone.winfo_children():
+        """Assign a player to a slot (Sleeper-style filled card)."""
+        inner = drop_zone._inner
+        for widget in inner.winfo_children():
             widget.destroy()
-        
-        # Create subtle player display in drop zone
-        player_display = tk.Frame(drop_zone, bg='#2b2b31', relief='flat', bd=0)
-        player_display.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Subtle assigned player card
-        card_frame = tk.Frame(player_display, bg='#6c757d', relief='flat')
-        card_frame.pack(fill='both', expand=True)
-        
-        # Player info with subtle styling
-        info_frame = tk.Frame(card_frame, bg='#6c757d')
-        info_frame.pack(expand=True, fill='both', padx=8, pady=6)
 
-        # Generated face thumbnail beside the name (single player, cached).
-        dz_face = tk.Label(info_frame, bg='#2b2b31', bd=0)
-        dz_photo = self._face_photo(player, 40)
-        if dz_photo is None:
-            dz_photo = self._face_blank(40)
-        if dz_photo is not None:
-            dz_face.config(image=dz_photo)
-            dz_face.image = dz_photo
-        dz_face.pack(side=tk.LEFT, padx=(0, 8))
+        card = tk.Frame(inner, bg=self.C_CARD2)
+        card.pack(fill='both', expand=True, padx=4, pady=4)
 
-        text_col = tk.Frame(info_frame, bg='#6c757d')
-        text_col.pack(side=tk.LEFT, expand=True, fill='y')
+        face = tk.Label(card, bg='#2b2b31', bd=0)
+        photo = self._face_photo(player, 36)
+        if photo is None:
+            photo = self._face_blank(36)
+        if photo is not None:
+            face.config(image=photo)
+            face.image = photo
+        face.pack(side='left', padx=(6, 4), pady=6)
 
-        name_label = tk.Label(text_col, text=player.full_name, bg='#6c757d', fg='white',
-                             font=(self.parent.FONT_FAMILY, 9, 'bold'), anchor='w')
-        name_label.pack(anchor='w')
-
-        rating_label = tk.Label(text_col, text=f"{to_100_scale(player.overall_rating())}", bg='#6c757d', fg='white',
-                               font=(self.parent.FONT_FAMILY, 8), anchor='w')
-        rating_label.pack(anchor='w')
-
+        mid = tk.Frame(card, bg=self.C_CARD2)
+        mid.pack(side='left', fill='y', expand=True, pady=6)
+        name_l = tk.Label(mid, text=player.full_name, bg=self.C_CARD2,
+                          fg=self.C_TEXT, font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                          anchor='w')
+        name_l.pack(anchor='w')
+        sub = tk.Frame(mid, bg=self.C_CARD2)
+        sub.pack(anchor='w', pady=(2, 0))
         try:
             arch = get_archetype(player)
         except Exception:
-            arch = "—"
-        arch_label = tk.Label(info_frame, text=arch, bg='#6c757d', fg='#ffd166',
-                              font=(self.parent.FONT_FAMILY, 7, 'bold'))
-        arch_label.pack(side=tk.LEFT, padx=(8, 0))
+            arch = ""
+        arch_l = tk.Label(sub, text=arch, bg=self.C_CARD2, fg=self.C_TER,
+                          font=(self.parent.FONT_FAMILY, 8))
+        arch_l.pack(side='left')
+        if self._is_off_position(player, drop_zone.zone_id):
+            off_l = tk.Label(sub, text="OFF POS", bg='#3a2c14', fg=self.C_AMBER,
+                             font=(self.parent.FONT_FAMILY, 7, 'bold'),
+                             padx=5, pady=1)
+            off_l.pack(side='left', padx=(6, 0))
 
-        # Bind click to clear with subtle feedback
-        for widget in [player_display, card_frame, info_frame, name_label, rating_label, arch_label,
-                       dz_face, text_col]:
-            widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, drop_zone.zone_id))
-            widget.bind('<Enter>', lambda e: card_frame.config(bg='#00ceb8'))  # Red on hover
-            widget.bind('<Leave>', lambda e: card_frame.config(bg='#6c757d'))  # Back to gray
-        
+        ovr_l = tk.Label(card, text=str(to_100_scale(player.overall_rating())),
+                         bg=self.C_CARD2, fg=self.C_TEXT,
+                         font=(self.parent.FONT_FAMILY, 16, 'bold'))
+        ovr_l.pack(side='right', padx=(4, 8))
+
+        clear_l = tk.Label(card, text="\u00d7", bg=self.C_CARD2, fg=self.C_TER,
+                           font=(self.parent.FONT_FAMILY, 12, 'bold'),
+                           cursor='hand2', padx=4)
+        clear_l.pack(side='right', anchor='n')
+        clear_l.bind('<Button-1>',
+                     lambda e, s=drop_zone: self._on_slot_double_click(s))
+        clear_l.bind('<Enter>', lambda e: clear_l.config(fg=self.C_RED))
+        clear_l.bind('<Leave>', lambda e: clear_l.config(fg=self.C_TER))
+
+        bound = [card, face, mid, name_l, sub, arch_l, ovr_l]
+        for widget in bound:
+            widget.bind('<Button-1>', lambda e, s=drop_zone: self._on_slot_click(s))
+            widget.bind('<Double-Button-1>',
+                        lambda e, s=drop_zone: self._on_slot_double_click(s))
+            widget.bind('<Enter>', lambda e, c=card: c.config(bg='#232328'))
+            widget.bind('<Leave>', lambda e, c=card: c.config(bg=self.C_CARD2))
+
         # Store assignment
         drop_zone.assigned_player = player
-        if player.id in self.player_widgets:
-            self.player_widgets[player.id]['assigned_position'] = drop_zone.zone_id
+        pid = getattr(player, 'id', None)
+        if pid in self.player_widgets:
+            self.player_widgets[pid]['assigned_position'] = drop_zone.zone_id
         try:
             self._refresh_ratings_for_zone(drop_zone.zone_id)
         except AttributeError:
             pass
-    
+        self.refresh_roster_panel()
+
     def clear_drop_zone(self, drop_zone, zone_id):
-        """Clear a drop zone"""
-        # Clear assigned player
+        """Clear a slot back to its empty placeholder."""
         if hasattr(drop_zone, 'assigned_player'):
             player = drop_zone.assigned_player
-            if player and player.id in self.player_widgets:
-                self.player_widgets[player.id]['assigned_position'] = None
-        
+            pid = getattr(player, 'id', None) if player else None
+            if pid and pid in self.player_widgets:
+                self.player_widgets[pid]['assigned_position'] = None
+
         drop_zone.assigned_player = None
         try:
             self._refresh_ratings_for_zone(zone_id)
         except AttributeError:
             pass
-        
-        # Clear widgets
-        for widget in drop_zone.winfo_children():
-            widget.destroy()
-        
-        # Restore subtle placeholder
-        placeholder_frame = tk.Frame(drop_zone, bg='#1c1c21')
-        placeholder_frame.pack(expand=True, fill='both', padx=10, pady=10)
 
-        text_label = tk.Label(placeholder_frame, text="Drop Player Here", bg='#1c1c21', fg='#8a8f98',
-                             font=(self.parent.FONT_FAMILY, 9))
-        text_label.pack()
+        self._render_slot_empty(drop_zone)
+        self.refresh_roster_panel()
 
-        # Rebind events
-        for widget in [placeholder_frame, text_label]:
-            widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, zone_id))
-            widget.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_zone))
-            widget.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_zone))
-        
-        drop_zone.placeholder_frame = placeholder_frame
-        
-        # Update line ratings if it's a forward line
-        if 'forward_line' in zone_id:
-            zone_parts = zone_id.split('_')
-            line_idx = int(zone_parts[2]) if len(zone_parts) > 2 else 0
-            self.update_line_rating_for_drop_zones(line_idx)
-    
     def update_line_rating_for_drop_zones(self, line_index):
-        """Update line rating for drop zone based lines."""
+        """Update line rating: big numeral + clickable chemistry detail."""
         if line_index >= len(self.forward_vars):
             return
-        players = [getattr(dz, 'assigned_player', None) for dz in self.forward_vars[line_index]]
+        players = [getattr(dz, 'assigned_player', None)
+                   for dz in self.forward_vars[line_index]]
         players = [p for p in players if p is not None]
+        big = getattr(self, 'forward_rating_big', {}).get(line_index)
         label = getattr(self, 'forward_rating_labels', {}).get(line_index)
-        if label is None:
+        if big is None or label is None:
             return
         if players:
             avg = sum(p.overall_rating() for p in players) / len(players)
             chem = self.calculate_chemistry_bonus(players)
-            sign = "+" if chem >= 0 else ""
-            label.config(text=f"Line Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
-            # Store for the breakdown popup; (re)bind click
+            big.config(text=f"{avg:.1f}")
+            label.config(text=f"Chemistry {chem:+g}  \u00b7  click for details")
             label._chem_players = list(players)
             label._chem_title = f"Line {line_index + 1} Chemistry"
-            label.bind("<Button-1>", lambda e, l=label: self.show_chemistry_breakdown(l))
+            label.bind("<Button-1>",
+                       lambda e, l=label: self.show_chemistry_breakdown(l))
             label.config(cursor="hand2")
         else:
-            label.config(text="Line Rating: --")
+            big.config(text="--")
+            label.config(text="No players assigned")
             label.unbind("<Button-1>")
             label.config(cursor="")
 
     def update_pair_rating_for_drop_zones(self, pair_index):
-        """Update pair rating for drop zone based defense pairs."""
+        """Update pair rating: big numeral + clickable chemistry detail."""
         if pair_index >= len(self.defense_vars):
             return
-        players = [getattr(dz, 'assigned_player', None) for dz in self.defense_vars[pair_index]]
+        players = [getattr(dz, 'assigned_player', None)
+                   for dz in self.defense_vars[pair_index]]
         players = [p for p in players if p is not None]
+        big = getattr(self, 'defense_rating_big', {}).get(pair_index)
         label = getattr(self, 'defense_rating_labels', {}).get(pair_index)
-        if label is None:
+        if big is None or label is None:
             return
         if players:
             avg = sum(p.overall_rating() for p in players) / len(players)
             chem = self.calculate_chemistry_bonus(players)
-            sign = "+" if chem >= 0 else ""
-            label.config(text=f"Pair Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
+            big.config(text=f"{avg:.1f}")
+            label.config(text=f"Chemistry {chem:+g}  \u00b7  click for details")
             label._chem_players = list(players)
             label._chem_title = f"Defense Pair {pair_index + 1} Chemistry"
-            label.bind("<Button-1>", lambda e, l=label: self.show_chemistry_breakdown(l))
+            label.bind("<Button-1>",
+                       lambda e, l=label: self.show_chemistry_breakdown(l))
             label.config(cursor="hand2")
         else:
-            label.config(text="Pair Rating: --")
+            big.config(text="--")
+            label.config(text="No players assigned")
             label.unbind("<Button-1>")
             label.config(cursor="")
+
+    def _update_st_unit_ratings(self, prefix):
+        """Average-OVR big numeral for PP/PK units."""
+        if prefix == 'PP':
+            var_sets, bigs = self.powerplay_vars, self.pp_rating_big
+        else:
+            var_sets, bigs = self.penalty_kill_vars, self.pk_rating_big
+        for i, slots in enumerate(var_sets):
+            players = [getattr(dz, 'assigned_player', None) for dz in slots]
+            players = [p for p in players if p is not None]
+            big = bigs.get(i)
+            if big is None:
+                continue
+            if players:
+                avg = sum(p.overall_rating() for p in players) / len(players)
+                big.config(text=f"{avg:.1f}")
+            else:
+                big.config(text="--")
 
     def show_chemistry_breakdown(self, label):
         """Popup explaining exactly what drives a line/pair's chemistry."""
@@ -11520,14 +11583,22 @@ class CleanEditLinesWindow(tk.Toplevel):
                      justify="left", anchor="w").pack(anchor="w")
 
     def _refresh_ratings_for_zone(self, zone_id):
-        """Refresh line/pair rating labels affected by a drop-zone change."""
+        """Refresh line/pair/unit rating labels affected by a slot change."""
         try:
             parts = zone_id.split("_")
             if zone_id.startswith("forward_line_"):
                 self.update_line_rating_for_drop_zones(int(parts[2]))
             elif zone_id.startswith("defense_pair_"):
                 self.update_pair_rating_for_drop_zones(int(parts[2]))
+            elif zone_id.startswith("powerplay_"):
+                self._update_st_unit_ratings("PP")
+            elif zone_id.startswith("penalty_kill_"):
+                self._update_st_unit_ratings("PK")
         except (ValueError, IndexError, AttributeError):
+            pass
+        try:
+            self._update_footer_warnings()
+        except AttributeError:
             pass
 
     def refresh_all_line_ratings(self):
@@ -11538,19 +11609,15 @@ class CleanEditLinesWindow(tk.Toplevel):
             self.update_pair_rating_for_drop_zones(i)
     
     def refresh_roster_panel(self):
-        """Refresh the roster panel to show current assignments"""
-        # Update visual indicators on player widgets to show assignments
-        for player_id, widget_info in self.player_widgets.items():
-            widget = widget_info['widget']
-            assigned_pos = widget_info['assigned_position']
-            
-            if assigned_pos:
-                # Change appearance to show assigned
-                widget.config(bg='#14332f', relief='flat')
-            else:
-                # Reset to unassigned appearance
-                widget.config(bg='#495057', relief='flat')
-    
+        """Refresh roster rows: teal dot on assigned players."""
+        for pid, info in self.player_widgets.items():
+            assigned = info.get('assigned_position')
+            try:
+                info['dot'].config(fg=self.C_ACCENT if assigned else self.C_CARD)
+                info['card'].config(bg=self.C_CARD2 if assigned else self.C_CARD)
+            except Exception:
+                pass
+
     def extract_lineup_from_drop_zones(self):
         """Extract the current lineup from all drop zones"""
         lineup = {
@@ -11644,122 +11711,139 @@ class CleanEditLinesWindow(tk.Toplevel):
         for child in widget.winfo_children():
             self.extract_assignments_recursive(child, lineup)
     
-    def create_goalies_tab(self):
-        """Create the goalies tab with clean, readable layout"""
-        goalies_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(goalies_frame, text="Goalies")
-        
-        self.goalie_vars = []
-        roles = ["Starting Goalie", "Backup Goalie"]
-        
-        for i, role in enumerate(roles):
-            # Goalie frame
-            goalie_frame = ttk.LabelFrame(goalies_frame, text=role, 
-                                         padding=15, style='TLabelframe')
-            goalie_frame.pack(fill=tk.X, pady=(0, 15))
-            
-            # Create drop zone instead of combobox
-            drop_zone = self.create_drop_zone(goalie_frame, f"goalie_role_{i}")
-            drop_zone.pack(pady=5, fill=tk.X)
-            
-            self.goalie_vars.append(drop_zone)
-    
-    def create_special_teams_tab(self):
-        """Create the special teams tab with horizontal layouts and scrolling"""
-        special_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(special_frame, text="Special Teams")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(special_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(special_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make sure the scrollable frame stretches to fill canvas width
-            canvas_width = event.width
-            canvas.itemconfig(window_id, width=canvas_width)
-        
-        canvas.bind('<Configure>', configure_scroll_region)
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Power Play section
-        pp_frame = ttk.LabelFrame(scrollable_frame, text="Power Play Units", padding=15, style='TLabelframe')
-        pp_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        self.powerplay_vars = []
-        
-        for i in range(2):  # PP1 and PP2
-            unit_frame = ttk.LabelFrame(pp_frame, text=f"Power Play {i+1}", padding=10, style='TLabelframe')
-            unit_frame.pack(fill=tk.X, pady=5)
-            
-            # Horizontal layout: LW - C - RW - LD - RD
-            positions_frame = ttk.Frame(unit_frame)
-            positions_frame.pack(fill=tk.X, pady=5)
-            
-            unit_vars = []
-            positions = ["LW", "C", "RW", "LD", "RD"]
-            position_names = ["Left Wing", "Center", "Right Wing", "Left Defense", "Right Defense"]
-            
-            for j, (pos, pos_name) in enumerate(zip(positions, position_names)):
-                # Create position column
-                pos_column = ttk.Frame(positions_frame)
-                pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-                
-                # Position label
-                pos_label = ttk.Label(pos_column, text=pos_name, 
-                                     style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
-                pos_label.pack(pady=(0, 5))
-                
-                # Drop zone for special teams
-                drop_zone = self.create_drop_zone(pos_column, f"powerplay_{i}_{pos}")
-                drop_zone.pack(fill=tk.BOTH, expand=True, ipady=15)
-                
-                unit_vars.append(drop_zone)
-            
-            self.powerplay_vars.append(unit_vars)
-        
-        # Penalty Kill section
-        pk_frame = ttk.LabelFrame(scrollable_frame, text="Penalty Kill Units", padding=15, style='TLabelframe')
-        pk_frame.pack(fill=tk.X, pady=(15, 0))
-        
-        self.penalty_kill_vars = []
-        
-        for i in range(2):  # PK1 and PK2
-            unit_frame = ttk.LabelFrame(pk_frame, text=f"Penalty Kill {i+1}", padding=10, style='TLabelframe')
-            unit_frame.pack(fill=tk.X, pady=5)
-            
-            # Horizontal layout: LW - RW - LD - RD (4-man PK unit)
-            positions_frame = ttk.Frame(unit_frame)
-            positions_frame.pack(fill=tk.X, pady=5)
-            
-            unit_vars = []
-            positions = ["LW", "RW", "LD", "RD"]  # 4-man PK unit
-            position_names = ["Left Wing", "Right Wing", "Left Defense", "Right Defense"]
-            
-            for j, (pos, pos_name) in enumerate(zip(positions, position_names)):
-                # Create position column
-                pos_column = ttk.Frame(positions_frame)
-                pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-                
-                # Position label
-                pos_label = ttk.Label(pos_column, text=pos_name, 
-                                     style='TLabel', font=(self.parent.FONT_FAMILY, 9, 'bold'))
-                pos_label.pack(pady=(0, 5))
-                
-                # Create drop zone for penalty kill
-                drop_zone = self.create_drop_zone(pos_column, f"penalty_kill_{i}_{pos}")
-                drop_zone.pack(fill=tk.BOTH, expand=True, ipady=15)
-                
-                unit_vars.append(drop_zone)
-            
-            self.penalty_kill_vars.append(unit_vars)
-    
+    # ------------------------------------------------------------------
+    # View preferences (persisted), footer warnings, zone helpers
+    # ------------------------------------------------------------------
+    def _prefs_path(self):
+        import os
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'settings.json')
+
+    def _load_view_prefs(self):
+        prefs = {'show_ratings': True, 'show_icetime': True,
+                 'show_chemistry': True}
+        try:
+            import json, os
+            path = self._prefs_path()
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+                saved = (data.get('ui_preferences') or {}).get('lines_view') or {}
+                for k in prefs:
+                    if k in saved:
+                        prefs[k] = bool(saved[k])
+        except Exception:
+            pass
+        return prefs
+
+    def _save_view_prefs(self):
+        try:
+            import json, os
+            path = self._prefs_path()
+            data = {}
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+            ui = data.get('ui_preferences')
+            if not isinstance(ui, dict):
+                ui = {}
+                data['ui_preferences'] = ui
+            ui['lines_view'] = dict(self._view_prefs)
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def _open_view_menu(self):
+        pop = tk.Toplevel(self)
+        pop.title("View")
+        pop.configure(bg=self.C_CARD)
+        pop.resizable(False, False)
+        pop.transient(self)
+        try:
+            x = self.winfo_rootx() + self.winfo_width() - 280
+            y = self.winfo_rooty() + 70
+            pop.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+        tk.Label(pop, text="Show in this editor", bg=self.C_CARD, fg=self.C_TEXT,
+                 font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(
+                     anchor='w', padx=16, pady=(14, 6))
+        for key, label in (('show_ratings', 'Line ratings'),
+                           ('show_icetime', 'Ice-time hints'),
+                           ('show_chemistry', 'Chemistry details')):
+            var = tk.BooleanVar(value=self._view_prefs[key])
+            cb = tk.Checkbutton(pop, text=label, variable=var, bg=self.C_CARD,
+                                fg=self.C_TEXT, selectcolor=self.C_CARD2,
+                                activebackground=self.C_CARD,
+                                activeforeground=self.C_TEXT,
+                                font=(self.parent.FONT_FAMILY, 10), anchor='w',
+                                command=lambda k=key, v=var: self._toggle_pref(k, v))
+            cb.pack(anchor='w', padx=16, pady=4, fill='x')
+        tk.Frame(pop, bg=self.C_CARD, height=10).pack()
+
+    def _toggle_pref(self, key, var):
+        self._view_prefs[key] = bool(var.get())
+        self._save_view_prefs()
+        self._apply_view_prefs()
+
+    def _apply_view_prefs(self):
+        p = self._view_prefs
+        for w in getattr(self, '_rating_bigs', []):
+            if getattr(w, '_force_hidden', False):
+                continue
+            if p['show_ratings']:
+                w.pack(**w._pk)
+            else:
+                w.pack_forget()
+        for w in getattr(self, '_icetime_labels', []):
+            if getattr(w, '_force_hidden', False):
+                continue
+            if p['show_icetime']:
+                w.pack(**w._pk)
+            else:
+                w.pack_forget()
+        for w in getattr(self, '_chem_labels', []):
+            if getattr(w, '_force_hidden', False):
+                continue
+            if p['show_chemistry']:
+                w.pack(**w._pk)
+            else:
+                w.pack_forget()
+
+    def _all_zones(self):
+        zones = []
+        for group in (getattr(self, 'forward_vars', []),
+                      getattr(self, 'defense_vars', [])):
+            zones.extend(s for row in group for s in row)
+        zones.extend(getattr(self, 'goalie_vars', []))
+        for group in (getattr(self, 'powerplay_vars', []),
+                      getattr(self, 'penalty_kill_vars', [])):
+            zones.extend(s for row in group for s in row)
+        return zones
+
+    def _update_footer_warnings(self):
+        if not hasattr(self, '_footer_warn'):
+            return
+        off_pos = 0
+        empty_es = 0
+        for zone in self._all_zones():
+            zid = getattr(zone, 'zone_id', '')
+            player = getattr(zone, 'assigned_player', None)
+            if player is None:
+                if zid.startswith(('forward_line_', 'defense_pair_',
+                                   'goalie_role_')):
+                    empty_es += 1
+            elif self._is_off_position(player, zid):
+                off_pos += 1
+        parts = []
+        if off_pos:
+            parts.append(f"{off_pos} off-position")
+        if empty_es:
+            parts.append(f"{empty_es} empty slots")
+        self._footer_warn.config(
+            text=("  \u26a0 " + " \u00b7 ".join(parts)) if parts else "")
+
     def load_current_lineup(self):
         """Load the current lineup into the drop zones"""
         # Load forwards
