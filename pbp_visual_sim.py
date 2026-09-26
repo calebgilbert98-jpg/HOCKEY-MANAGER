@@ -2319,7 +2319,7 @@ class PBPVisualSim(tk.Toplevel):
             except Exception:
                 pass
         self._shake(mag=6.0, dur=0.7)
-        self._flash_until = now + 0.14
+        self._flash_until = now + 0.08
         # beaten goalie flashes red
         gpid = self._cur_goalie.get("away" if att_home else "home")
         gd = self._dot_by_id(gpid) if gpid else None
@@ -3749,11 +3749,14 @@ class PBPVisualSim(tk.Toplevel):
         self.canvas.coords(self.puck_item, px - 5, py - 5, px + 5, py + 5)
         self.canvas.coords(self.puck_glow, px - 11, py - 11, px + 11, py + 11)
 
-        # goal flash: full-rink white pop on a goal
+        # goal flash: brief translucent pop on a goal. Stippled (not
+        # solid) so the puck stays trackable through it -- a solid white
+        # frame was whiting out the screen at the moment of the goal.
         if now < self._flash_until:
             if not getattr(self, "_flash_item", None):
                 self._flash_item = self.canvas.create_rectangle(
-                    0, 0, self.rink_w, self.rink_h, fill="white", outline="")
+                    0, 0, self.rink_w, self.rink_h, fill="white", outline="",
+                    stipple="gray50")
                 self.canvas.tag_raise(self._flash_item)
             self.canvas.itemconfig(self._flash_item, state="normal")
             self.canvas.tag_raise(self._flash_item)
