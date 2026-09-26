@@ -26,7 +26,7 @@ class SeasonFlowControlPanel(ttk.Frame):
         title_frame = ttk.Frame(self)
         title_frame.pack(fill='x', padx=5, pady=5)
         
-        ttk.Label(title_frame, text="⚡ AUTOMATED SEASON FLOW", 
+        ttk.Label(title_frame, text="AUTOMATED SEASON FLOW", 
                  style='Title.TLabel', font=('Segoe UI', 12, 'bold')).pack(side='left')
         
         # Current status display
@@ -87,16 +87,16 @@ class SeasonFlowControlPanel(ttk.Frame):
         button_frame = ttk.Frame(control_frame)
         button_frame.pack(fill='x', pady=(10, 0))
         
-        self.start_btn = ttk.Button(button_frame, text="🚀 Start Automation", 
+        self.start_btn = ttk.Button(button_frame, text="Start Automation", 
                                    command=self._start_automation, style='TButton')
         self.start_btn.pack(side='left', padx=(0, 5))
         
-        self.stop_btn = ttk.Button(button_frame, text="⏹️ Stop Automation", 
+        self.stop_btn = ttk.Button(button_frame, text="⏹ Stop Automation", 
                                   command=self._stop_automation, style='TButton')
         self.stop_btn.pack(side='left', padx=5)
         self.stop_btn.config(state='disabled')
         
-        self.settings_btn = ttk.Button(button_frame, text="⚙️ Settings", 
+        self.settings_btn = ttk.Button(button_frame, text="Settings", 
                                       command=self._open_settings, style='TButton')
         self.settings_btn.pack(side='right')
         
@@ -107,13 +107,13 @@ class SeasonFlowControlPanel(ttk.Frame):
         quick_button_frame = ttk.Frame(quick_frame)
         quick_button_frame.pack(fill='x')
         
-        ttk.Button(quick_button_frame, text="📅 Next Game", 
+        ttk.Button(quick_button_frame, text="Next Game", 
                   command=self._advance_to_next_game, style='Menu.TButton').pack(side='left', padx=(0, 5))
-        ttk.Button(quick_button_frame, text="🎯 Next Milestone", 
+        ttk.Button(quick_button_frame, text="Next Milestone", 
                   command=self._advance_to_milestone, style='Menu.TButton').pack(side='left', padx=5)
-        ttk.Button(quick_button_frame, text="📅 Skip Week", 
+        ttk.Button(quick_button_frame, text="Skip Week", 
                   command=self._skip_week, style='Menu.TButton').pack(side='left', padx=5)
-        ttk.Button(quick_button_frame, text="📅 Skip Month", 
+        ttk.Button(quick_button_frame, text="Skip Month", 
                   command=self._skip_month, style='Menu.TButton').pack(side='right')
         
         # Update display
@@ -274,7 +274,7 @@ class SettingsWindow(tk.Toplevel):
         main_frame.pack(fill='both', expand=True)
         
         # Title
-        ttk.Label(main_frame, text="⚙️ Automation Settings", 
+        ttk.Label(main_frame, text="Automation Settings", 
                  style='Title.TLabel', font=('Segoe UI', 14, 'bold')).pack(pady=(0, 20))
         
         # Game simulation settings

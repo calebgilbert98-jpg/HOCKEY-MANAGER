@@ -437,7 +437,7 @@ class InboxWindow(tk.Toplevel):
             
             # Show fantasy draft button
             self.special_action_btn.config(
-                text="🏒 START FANTASY DRAFT",
+                text="START FANTASY DRAFT",
                 command=self._start_fantasy_draft
             )
             self.special_action_btn.pack(side='right', padx=5)

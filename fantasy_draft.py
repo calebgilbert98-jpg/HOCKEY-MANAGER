@@ -350,7 +350,7 @@ class FantasyDraftWindow(tk.Toplevel):
         self.game_manager = game_manager
         
         # Set up window with modern styling
-        self.title("🏒 Fantasy Draft - Hockey Manager")
+        self.title("Fantasy Draft - Hockey Manager")
         self.geometry("1600x1000")
         self.configure(background=parent.BG_COLOR)
         self.minsize(1400, 900)
@@ -668,7 +668,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         begin_frame = ttk.Frame(init_frame, style='Panel.TFrame')
         begin_frame.pack(pady=30)
         
-        begin_button = ttk.Button(begin_frame, text="🏒 Begin Fantasy Draft", 
+        begin_button = ttk.Button(begin_frame, text="Begin Fantasy Draft", 
                                 command=self.begin_fantasy_draft, 
                                 style='TButton')
         begin_button.pack()
@@ -868,13 +868,13 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
     def create_draft_board_tab(self):
         """Create draft board with round-by-round tabs"""
         draft_board_tab = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(draft_board_tab, text="📋 Draft Board")
+        self.notebook.add(draft_board_tab, text="Draft Board")
         
         # Header
         header_frame = ttk.Frame(draft_board_tab, style='Panel.TFrame')
         header_frame.pack(fill=tk.X, padx=15, pady=(15, 10))
         
-        title_label = ttk.Label(header_frame, text="📋 Draft Board - Round by Round", 
+        title_label = ttk.Label(header_frame, text="Draft Board - Round by Round", 
                                style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         title_label.pack(anchor='w')
         
@@ -927,13 +927,13 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
     def create_team_rosters_tab(self):
         """Create working team rosters tab that actually shows drafted players"""
         rosters_tab = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(rosters_tab, text="🏒 Team Rosters")
+        self.notebook.add(rosters_tab, text="Team Rosters")
         
         # Header
         header_frame = ttk.Frame(rosters_tab, style='Panel.TFrame')
         header_frame.pack(fill=tk.X, padx=15, pady=(15, 10))
         
-        title_label = ttk.Label(header_frame, text="🏒 Team Rosters - Fantasy Draft", 
+        title_label = ttk.Label(header_frame, text="Team Rosters - Fantasy Draft", 
                                style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         title_label.pack(anchor='w')
         
@@ -1021,7 +1021,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         spotlight_header = ttk.Frame(roster_spotlight_frame, style='Panel.TFrame')
         spotlight_header.pack(fill=tk.X, pady=(0, 10))
         
-        spotlight_title = ttk.Label(spotlight_header, text="👤 Player Spotlight", 
+        spotlight_title = ttk.Label(spotlight_header, text="Player Spotlight", 
                                    style='Header.TLabel', font=('Segoe UI', 14, 'bold'))
         spotlight_title.pack(anchor='w')
         
@@ -1061,7 +1061,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         info_frame.pack(fill=tk.X, padx=15, pady=(0, 15))
         
         info_label = ttk.Label(info_frame, 
-                              text="🔄 Automatically updates as picks are made • Double-click player for details", 
+                              text="Automatically updates as picks are made • Double-click player for details", 
                               style='Info.TLabel', font=('Segoe UI', 10, 'italic'))
         info_label.pack(side=tk.LEFT)
         
@@ -1084,7 +1084,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
     def create_draft_order_tab(self):
         """Create the draft order tab with integrated browser"""
         order_tab = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(order_tab, text="📅 Draft Order")
+        self.notebook.add(order_tab, text="Draft Order")
         
         # Create integrated draft order browser directly in tab
         self.setup_integrated_draft_order(order_tab)
@@ -1209,7 +1209,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         header_frame = ttk.Frame(main_frame, style='Panel.TFrame')
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        title_label = ttk.Label(header_frame, text="🏒 Available Players", 
+        title_label = ttk.Label(header_frame, text="Available Players", 
                                style='Header.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
         title_label.pack(side=tk.LEFT)
         
@@ -1218,7 +1218,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.count_label.pack(side=tk.RIGHT)
         
         # Filter frame
-        filter_frame = ttk.LabelFrame(main_frame, text="🔍 Filter & Search", style='TLabelframe')
+        filter_frame = ttk.LabelFrame(main_frame, text="Filter & Search", style='TLabelframe')
         filter_frame.pack(fill=tk.X, pady=(0, 10))
         
         # Filter row 1
@@ -1289,7 +1289,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.integrated_players_tree.bind('<Double-1>', self.integrated_on_player_draft)
         
         # Button frame (more prominent and always visible)
-        button_frame = ttk.LabelFrame(main_frame, text="🎯 Draft Actions", style='TLabelframe')
+        button_frame = ttk.LabelFrame(main_frame, text="Draft Actions", style='TLabelframe')
         button_frame.pack(fill=tk.X, pady=(15, 5), padx=10)
         
         # Content frame inside the LabelFrame
@@ -1300,7 +1300,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         left_button_frame = ttk.Frame(content_frame, style='Panel.TFrame')
         left_button_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        self.integrated_draft_btn = ttk.Button(left_button_frame, text="🎯 DRAFT SELECTED PLAYER", 
+        self.integrated_draft_btn = ttk.Button(left_button_frame, text="DRAFT SELECTED PLAYER", 
                                              command=self.integrated_draft_player, state='disabled',
                                              style='Accent.TButton')
         self.integrated_draft_btn.pack(side=tk.LEFT, padx=(0, 15), ipady=5)
@@ -1323,17 +1323,17 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         btn_container.pack()
         
         # Next pick button
-        self.integrated_next_pick_button = ttk.Button(btn_container, text="⏭️ Next Pick", 
+        self.integrated_next_pick_button = ttk.Button(btn_container, text="⏭ Next Pick", 
                                                     command=self.advance_one_pick, style='Accent.TButton')
         self.integrated_next_pick_button.pack(side=tk.LEFT, padx=(0, 8), ipady=8, ipadx=8)
         
         # Sim to user pick button
-        self.integrated_sim_button = ttk.Button(btn_container, text="🚀 Sim to My Pick", 
+        self.integrated_sim_button = ttk.Button(btn_container, text="Sim to My Pick", 
                                               command=self.sim_to_user_pick, style='Accent.TButton')
         self.integrated_sim_button.pack(side=tk.LEFT, padx=(0, 8), ipady=8, ipadx=8)
         
         # Sim rest of draft button
-        self.integrated_sim_rest_button = ttk.Button(btn_container, text="⚡ Sim Rest of Draft", 
+        self.integrated_sim_rest_button = ttk.Button(btn_container, text="Sim Rest of Draft", 
                                                    command=self.sim_rest_of_draft, style='Accent.TButton')
         self.integrated_sim_rest_button.pack(side=tk.LEFT, ipady=8, ipadx=8)
         
@@ -1365,7 +1365,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         title_frame = ttk.Frame(button_container, style='Panel.TFrame')
         title_frame.pack(fill=tk.X, pady=(0, 15))
         
-        title_label = ttk.Label(title_frame, text="🎯 FANTASY DRAFT CONTROLS", 
+        title_label = ttk.Label(title_frame, text="FANTASY DRAFT CONTROLS", 
                                style='Header.TLabel', font=('Segoe UI', 18, 'bold'))
         title_label.pack()
         
@@ -1383,21 +1383,21 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Next Pick Button - Large and prominent
         self.simple_next_pick_btn = ttk.Button(row1, 
-                                              text="⏭️ ADVANCE ONE PICK", 
+                                              text="⏭ ADVANCE ONE PICK", 
                                               command=self.advance_one_pick,
                                               style='Accent.TButton')
         self.simple_next_pick_btn.pack(side=tk.LEFT, padx=(0, 20), ipady=10, ipadx=20)
         
         # Sim to User Pick Button
         self.simple_sim_to_user_btn = ttk.Button(row1, 
-                                                text="🚀 SIM TO MY TURN", 
+                                                text="SIM TO MY TURN", 
                                                 command=self.sim_to_user_pick,
                                                 style='Accent.TButton')
         self.simple_sim_to_user_btn.pack(side=tk.LEFT, padx=(0, 20), ipady=10, ipadx=20)
         
         # Sim Rest Button
         self.simple_sim_rest_btn = ttk.Button(row1, 
-                                             text="⚡ SIM ENTIRE DRAFT", 
+                                             text="SIM ENTIRE DRAFT", 
                                              command=self.sim_rest_of_draft,
                                              style='Accent.TButton')
         self.simple_sim_rest_btn.pack(side=tk.LEFT, ipady=10, ipadx=20)
@@ -1527,7 +1527,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                     if current_pick and current_pick.team == self.user_team:
                         self.integrated_draft_btn.configure(state='normal')
                         self.integrated_info_label.configure(
-                            text=f"✅ Ready to Draft: {self.selected_player.full_name} "
+                            text=f"Ready to Draft: {self.selected_player.full_name} "
                                  f"({self.selected_player.primary_position.value}, "
                                  f"OVR {self.selected_player.overall_rating()})")
                     else:
@@ -1685,13 +1685,13 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 if next_pick:
                     if next_pick.team == self.user_team:
                         if hasattr(self, 'integrated_info_label'):
-                            self.integrated_info_label.configure(text="🎯 YOUR TURN AGAIN - Select next player to draft")
+                            self.integrated_info_label.configure(text="YOUR TURN AGAIN - Select next player to draft")
                     else:
                         if hasattr(self, 'integrated_info_label'):
                             self.integrated_info_label.configure(text=f"Next up: {next_pick.team.team_name} (Pick #{next_pick.overall_pick})")
                 else:
                     if hasattr(self, 'integrated_info_label'):
-                        self.integrated_info_label.configure(text="🏆 Draft Complete!")
+                        self.integrated_info_label.configure(text="Draft Complete!")
                     self.complete_draft()
                     
             else:
@@ -1710,7 +1710,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         header_frame = ttk.Frame(main_frame, style='Panel.TFrame')
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        title_label = ttk.Label(header_frame, text="🎯 Fantasy Draft Order", 
+        title_label = ttk.Label(header_frame, text="Fantasy Draft Order", 
                                style='Header.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
         title_label.pack(side=tk.LEFT)
         
@@ -1758,7 +1758,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         button_frame = ttk.Frame(main_frame, style='Panel.TFrame')
         button_frame.pack(fill=tk.X, pady=(10, 0))
         
-        refresh_btn = ttk.Button(button_frame, text="🔄 Refresh Draft Order", 
+        refresh_btn = ttk.Button(button_frame, text="Refresh Draft Order", 
                                 command=self.integrated_populate_draft_order,
                                 style='TButton')
         refresh_btn.pack(side=tk.LEFT)
@@ -1832,7 +1832,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Main title
         ttk.Label(
             title_content,
-            text="🏒 Fantasy Draft",
+            text="Fantasy Draft",
             style='Title.TLabel',
             font=(self.parent.FONT_FAMILY, 24, 'bold')
         ).pack(anchor='w')
@@ -1886,7 +1886,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Begin Draft button (if draft hasn't started)
         if self.draft_manager.current_pick == 0:
-            self.begin_draft_button = ttk.Button(controls_frame, text="🚀 Begin Draft", 
+            self.begin_draft_button = ttk.Button(controls_frame, text="Begin Draft", 
                                                command=self.begin_draft,
                                                style='Accent.TButton')
             self.begin_draft_button.pack(side=tk.LEFT, padx=5)
@@ -1904,7 +1904,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
     def create_draft_tab(self):
         """Create the main draft tab with player browser and player cards"""
         draft_tab = ttk.Frame(self.notebook, style='Panel.TFrame')
-        self.notebook.add(draft_tab, text="🎯 Available Players")
+        self.notebook.add(draft_tab, text="Available Players")
         
         # Create split layout: player list on left, player card on right
         main_paned = ttk.PanedWindow(draft_tab, orient=tk.HORIZONTAL)
@@ -1928,7 +1928,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         card_header = ttk.Frame(right_frame, style='Panel.TFrame')
         card_header.pack(fill=tk.X, padx=10, pady=(10, 5))
         
-        ttk.Label(card_header, text="🎯 Player Spotlight", 
+        ttk.Label(card_header, text="Player Spotlight", 
                  style='Header.TLabel', font=('Segoe UI', 14, 'bold')).pack(anchor='w')
         
         ttk.Label(card_header, text="Click any player to view detailed information", 
@@ -1951,7 +1951,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         welcome_frame.pack(fill=tk.BOTH, expand=True)
         
         # Welcome content
-        welcome_label = ttk.Label(welcome_frame, text="🏒 Player Spotlight", 
+        welcome_label = ttk.Label(welcome_frame, text="Player Spotlight", 
                                  style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         welcome_label.pack(pady=(50, 20))
         
@@ -1959,7 +1959,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                               style='Info.TLabel', justify='center', font=('Segoe UI', 11))
         info_label.pack(pady=20)
         
-        tip_label = ttk.Label(welcome_frame, text="💡 Click on any available player to get started!", 
+        tip_label = ttk.Label(welcome_frame, text="Click on any available player to get started!", 
                              style='Info.TLabel', font=('Segoe UI', 10, 'italic'))
         tip_label.pack(pady=(30, 0))
     
@@ -2002,7 +2002,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         position_label.pack(pady=(2, 0))
         
         # Basic info section
-        info_frame = ttk.LabelFrame(card_frame, text="📊 Basic Information", style='TLabelframe')
+        info_frame = ttk.LabelFrame(card_frame, text="Basic Information", style='TLabelframe')
         info_frame.pack(fill=tk.X, pady=(0, 10))
         
         info_grid = ttk.Frame(info_frame, style='Panel.TFrame')
@@ -2038,7 +2038,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 row=row, column=col+1, sticky='w', padx=(0, 20), pady=2)
         
         # Contract analysis section
-        contract_frame = ttk.LabelFrame(card_frame, text="💰 Contract Analysis", style='TLabelframe')
+        contract_frame = ttk.LabelFrame(card_frame, text="Contract Analysis", style='TLabelframe')
         contract_frame.pack(fill=tk.X, pady=(0, 10))
         
         contract_content = ttk.Frame(contract_frame, style='Panel.TFrame')
@@ -2080,33 +2080,33 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 restrictions.append("No-Trade Clause")
                 
             if restrictions:
-                restriction_text = f"⚠️ Trade Restrictions: {', '.join(restrictions)}"
+                restriction_text = f"Trade Restrictions: {', '.join(restrictions)}"
                 restriction_label = ttk.Label(contract_content, text=restriction_text,
                                              style='Info.TLabel', font=('Segoe UI', 10, 'italic'),
                                              foreground=self.parent.ACCENT_COLOR)
                 restriction_label.pack(anchor='w', pady=(3, 0))
         else:
             default_label = ttk.Label(contract_content, 
-                                     text="🟢 Entry Level Contract - Low risk, team-friendly deal",
+                                     text="Entry Level Contract - Low risk, team-friendly deal",
                                      style='Info.TLabel', font=('Segoe UI', 10),
                                      foreground="#4CAF50")
             default_label.pack(anchor='w')
         
         # Attributes section
-        attr_frame = ttk.LabelFrame(card_frame, text="⚡ Key Attributes", style='TLabelframe')
+        attr_frame = ttk.LabelFrame(card_frame, text="Key Attributes", style='TLabelframe')
         attr_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.create_main_attribute_grid(attr_frame, player)
         
         # Draft action section
-        action_frame = ttk.LabelFrame(card_frame, text="🎯 Draft Action", style='TLabelframe')
+        action_frame = ttk.LabelFrame(card_frame, text="Draft Action", style='TLabelframe')
         action_frame.pack(fill=tk.X, pady=(0, 10))
         
         action_content = ttk.Frame(action_frame, style='Panel.TFrame')
         action_content.pack(fill=tk.X, padx=10, pady=10)
         
         # Draft button
-        draft_button = ttk.Button(action_content, text=f"🏒 Draft {player.first_name}", 
+        draft_button = ttk.Button(action_content, text=f"Draft {player.first_name}", 
                                  command=lambda: self.draft_selected_player_from_card(player), 
                                  style='TButton')
         draft_button.pack(pady=5)
@@ -2244,7 +2244,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         draft_header = ttk.Frame(card_frame, style='Panel.TFrame')
         draft_header.pack(fill=tk.X, pady=(0, 10))
         
-        draft_status = ttk.Label(draft_header, text="📋 RECENTLY DRAFTED", 
+        draft_status = ttk.Label(draft_header, text="RECENTLY DRAFTED", 
                                 style='Header.TLabel', font=('Segoe UI', 12, 'bold'), 
                                 foreground=self.parent.ACCENT_COLOR)
         draft_status.pack()
@@ -2267,7 +2267,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         position_label.pack(pady=(2, 0))
         
         # Basic info section
-        info_frame = ttk.LabelFrame(card_frame, text="📊 Basic Information", style='TLabelframe')
+        info_frame = ttk.LabelFrame(card_frame, text="Basic Information", style='TLabelframe')
         info_frame.pack(fill=tk.X, pady=(0, 10))
         
         info_grid = ttk.Frame(info_frame, style='Panel.TFrame')
@@ -2293,13 +2293,13 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 row=row, column=col+1, sticky='w', padx=(0, 20), pady=2)
         
         # Attributes section
-        attr_frame = ttk.LabelFrame(card_frame, text="⚡ Key Attributes", style='TLabelframe')
+        attr_frame = ttk.LabelFrame(card_frame, text="Key Attributes", style='TLabelframe')
         attr_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.create_main_attribute_grid(attr_frame, player)
         
         # Draft summary
-        summary_frame = ttk.LabelFrame(card_frame, text="🎯 Draft Summary", style='TLabelframe')
+        summary_frame = ttk.LabelFrame(card_frame, text="Draft Summary", style='TLabelframe')
         summary_frame.pack(fill=tk.X, pady=(0, 10))
         
         summary_content = ttk.Frame(summary_frame, style='Panel.TFrame')
@@ -2330,7 +2330,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.available_count_label.pack(side=tk.RIGHT)
         
         # Advanced filter section
-        filter_frame = ttk.LabelFrame(left_panel, text="🔍 Filter & Search")
+        filter_frame = ttk.LabelFrame(left_panel, text="Filter & Search")
         filter_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # First row - Search and position
@@ -2440,7 +2440,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         parent.add(right_panel, weight=1)
         
         # Selected player details
-        details_frame = ttk.LabelFrame(right_panel, text="🎯 Selected Player")
+        details_frame = ttk.LabelFrame(right_panel, text="Selected Player")
         details_frame.pack(fill=tk.X, padx=10, pady=10)
         
         # Player info display
@@ -2454,14 +2454,14 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.no_selection_label.pack(pady=20)
         
         # Draft action panel
-        action_frame = ttk.LabelFrame(right_panel, text="🏒 Draft Actions")
+        action_frame = ttk.LabelFrame(right_panel, text="Draft Actions")
         action_frame.pack(fill=tk.X, padx=10, pady=10)
         
         action_content = ttk.Frame(action_frame, style='Panel.TFrame')
         action_content.pack(fill=tk.X, padx=15, pady=15)
         
         # Draft button (large and prominent)
-        self.draft_button = ttk.Button(action_content, text="🎯 DRAFT SELECTED PLAYER", 
+        self.draft_button = ttk.Button(action_content, text="DRAFT SELECTED PLAYER", 
                                      command=self.draft_selected_player, style='Accent.TButton')
         self.draft_button.pack(fill=tk.X, pady=(0, 10), ipady=8)
         self.draft_button.configure(state='disabled')
@@ -2471,22 +2471,22 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         button_frame.pack(fill=tk.X, pady=(0, 10))
         
         # Next pick button (advance one pick)
-        self.next_pick_button = ttk.Button(button_frame, text="⏭️ Next Pick", 
+        self.next_pick_button = ttk.Button(button_frame, text="⏭ Next Pick", 
                                          command=self.advance_one_pick, style='TButton')
         self.next_pick_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
         # Sim to user pick button (advance until user's turn)
-        self.sim_to_user_button = ttk.Button(button_frame, text="🚀 Sim to My Pick", 
+        self.sim_to_user_button = ttk.Button(button_frame, text="Sim to My Pick", 
                                            command=self.sim_to_user_pick, style='TButton')
         self.sim_to_user_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 2))
         
         # Sim rest of draft button (complete remaining draft)
-        self.sim_rest_button = ttk.Button(button_frame, text="⚡ Sim Rest", 
+        self.sim_rest_button = ttk.Button(button_frame, text="Sim Rest", 
                                         command=self.sim_rest_of_draft, style='TButton')
         self.sim_rest_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
         
         # Auto-pick for AI teams button (legacy - full width)
-        self.skip_button = ttk.Button(action_content, text="⏭️ Auto-Pick for AI Teams", 
+        self.skip_button = ttk.Button(action_content, text="⏭ Auto-Pick for AI Teams", 
                                     command=self.auto_pick_for_ai, style='TButton')
         self.skip_button.pack(fill=tk.X, pady=(0, 5))
         
@@ -2565,7 +2565,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         button_frame = ttk.Frame(left_frame, style='Panel.TFrame')
         button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        self.draft_button = ttk.Button(button_frame, text="🎯 DRAFT PLAYER", 
+        self.draft_button = ttk.Button(button_frame, text="DRAFT PLAYER", 
                                      command=self.draft_selected_player, style='Accent.TButton')
         self.draft_button.pack(pady=5)
         self.draft_button.configure(state='disabled')
@@ -2934,7 +2934,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                                  f"Team: {current_pick.team.team_name}\n\n"
                                  f"Please select a player from the Available Players list and click 'DRAFT SELECTED PLAYER'")
             if hasattr(self, 'simple_status_label'):
-                self.simple_status_label.configure(text=f"🎯 YOUR TURN - Pick #{current_pick.overall_pick} - Select a player to draft!")
+                self.simple_status_label.configure(text=f"YOUR TURN - Pick #{current_pick.overall_pick} - Select a player to draft!")
             return
         else:
             # AI makes one pick
@@ -2987,7 +2987,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                                               f"Pick #{next_pick.overall_pick} - Round {next_pick.round_num}\n\n"
                                               f"Select a player and click 'DRAFT SELECTED PLAYER'")
                             if hasattr(self, 'simple_status_label'):
-                                self.simple_status_label.configure(text=f"🎯 YOUR TURN - Pick #{next_pick.overall_pick} - Select a player to draft!")
+                                self.simple_status_label.configure(text=f"YOUR TURN - Pick #{next_pick.overall_pick} - Select a player to draft!")
                         else:
                             status_text = f"Pick #{current_pick.overall_pick}: {current_pick.team.team_name} → {ai_pick.full_name} ({ai_pick.primary_position.value}, {ai_pick.overall_rating()})"
                             if hasattr(self, 'draft_status_label'):
@@ -2997,7 +2997,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                     else:
                         # Draft is complete
                         if hasattr(self, 'simple_status_label'):
-                            self.simple_status_label.configure(text="🏆 Fantasy Draft Complete!")
+                            self.simple_status_label.configure(text="Fantasy Draft Complete!")
                         self.complete_draft()
                 
                 # Ensure draft board is current after the pick
@@ -3023,7 +3023,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                               f"Team: {current_pick.team.team_name}\n\n"
                               f"Select a player from the list and click 'DRAFT SELECTED PLAYER'")
             if hasattr(self, 'simple_status_label'):
-                self.simple_status_label.configure(text=f"🎯 YOUR TURN - Pick #{current_pick.overall_pick}")
+                self.simple_status_label.configure(text=f"YOUR TURN - Pick #{current_pick.overall_pick}")
             return
             
         picks_simmed = 0
@@ -3050,11 +3050,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                                   f"Select a player and click 'DRAFT SELECTED PLAYER'")
                 
                 if hasattr(self, 'simple_status_label'):
-                    self.simple_status_label.configure(text=f"🎯 YOUR TURN - Pick #{current_pick.overall_pick} - Select a player!")
+                    self.simple_status_label.configure(text=f"YOUR TURN - Pick #{current_pick.overall_pick} - Select a player!")
                     
                 # Update integrated browser to reflect current state
                 if hasattr(self, 'integrated_info_label'):
-                    self.integrated_info_label.configure(text="🎯 YOUR TURN - Select a player to draft")
+                    self.integrated_info_label.configure(text="YOUR TURN - Select a player to draft")
                     
                 return
                 
@@ -3464,13 +3464,13 @@ NHL League Office""",
                 # Update draft status
                 if hasattr(self, 'draft_status_label'):
                     if current_pick.team == self.user_team:
-                        self.draft_status_label.configure(text="🎯 YOUR TURN TO PICK!")
+                        self.draft_status_label.configure(text="YOUR TURN TO PICK!")
                     else:
                         self.draft_status_label.configure(text=f"Waiting for {current_pick.team.team_name}...")
             else:
                 self.current_pick_label.configure(text="Draft Complete!")
                 if hasattr(self, 'draft_status_label'):
-                    self.draft_status_label.configure(text="🏆 Draft Complete!")
+                    self.draft_status_label.configure(text="Draft Complete!")
         
         # Update integrated current pick label
         if hasattr(self, 'integrated_current_label'):
@@ -3511,11 +3511,11 @@ NHL League Office""",
         if hasattr(self, 'simple_status_label'):
             if current_pick:
                 if current_pick.team == self.user_team:
-                    status_text = f"🎯 YOUR TURN - Pick #{current_pick.overall_pick}"
+                    status_text = f"YOUR TURN - Pick #{current_pick.overall_pick}"
                 else:
                     status_text = f"⏳ {current_pick.team.team_name} is selecting - Pick #{current_pick.overall_pick}"
             else:
-                status_text = "🏆 DRAFT COMPLETE - All picks made!"
+                status_text = "DRAFT COMPLETE - All picks made!"
             self.simple_status_label.configure(text=status_text)
         
         # ENHANCED: Force multiple UI refresh cycles to ensure updates show
@@ -3835,7 +3835,7 @@ NHL League Office""",
         center_frame.pack(expand=True)
         
         welcome_label = ttk.Label(center_frame, 
-                                 text="🎯 Player Cards", 
+                                 text="Player Cards", 
                                  style='Header.TLabel', 
                                  font=('Segoe UI', 18, 'bold'))
         welcome_label.pack(pady=(50, 10))
@@ -3852,7 +3852,7 @@ NHL League Office""",
         separator.pack(fill=tk.X, pady=20, padx=40)
         
         tip_label = ttk.Label(center_frame,
-                             text="💡 Tip: Player cards show detailed stats,\nratings, and draft information",
+                             text="Tip: Player cards show detailed stats,\nratings, and draft information",
                              style='Info.TLabel',
                              font=('Segoe UI', 10, 'italic'),
                              justify=tk.CENTER)
@@ -3866,7 +3866,7 @@ NHL League Office""",
             
         # Main card frame with border
         card_main = ttk.LabelFrame(self.player_card_frame, 
-                                  text=f"🏒 {player.full_name}", 
+                                  text=f"{player.full_name}", 
                                   style='Card.TLabelframe')
         card_main.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
@@ -3914,7 +3914,7 @@ NHL League Office""",
         # Draft information if available
         if draft_pick:
             draft_frame = ttk.LabelFrame(scrollable_frame, 
-                                       text="📋 Draft Information", 
+                                       text="Draft Information", 
                                        style='Section.TLabelframe')
             draft_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
             
@@ -3931,7 +3931,7 @@ NHL League Office""",
         
         # Key attributes section
         attrs_frame = ttk.LabelFrame(scrollable_frame, 
-                                   text="⭐ Key Attributes", 
+                                   text="Key Attributes", 
                                    style='Section.TLabelframe')
         attrs_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
         
@@ -3943,7 +3943,7 @@ NHL League Office""",
         
         # Physical info section
         physical_frame = ttk.LabelFrame(scrollable_frame, 
-                                      text="💪 Physical Information", 
+                                      text="Physical Information", 
                                       style='Section.TLabelframe')
         physical_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
         
@@ -3973,7 +3973,7 @@ NHL League Office""",
         # Contract info if available
         if hasattr(player, 'contract') and player.contract:
             contract_frame = ttk.LabelFrame(scrollable_frame, 
-                                          text="💰 Contract Information", 
+                                          text="Contract Information", 
                                           style='Section.TLabelframe')
             contract_frame.pack(fill=tk.X, padx=15, pady=(0, 15))
             
@@ -4179,7 +4179,7 @@ NHL League Office""",
         # Update user team indicator
         if self.user_team and selected_team_name == self.user_team.team_name:
             self.roster_user_indicator.config(
-                text="👤 Your Team", 
+                text="Your Team", 
                 foreground=self.parent.ACCENT_COLOR
             )
         else:
@@ -4243,7 +4243,7 @@ NHL League Office""",
         if current_pick:
             # Update current pick info
             if current_pick.team == self.draft_manager.user_team:
-                pick_text = f"🎯 YOUR PICK - Round {current_pick.round_num}, Pick #{current_pick.overall_pick}"
+                pick_text = f"YOUR PICK - Round {current_pick.round_num}, Pick #{current_pick.overall_pick}"
                 self.current_pick_label.configure(foreground=self.parent.ACCENT_COLOR)
             else:
                 pick_text = f"Round {current_pick.round_num}, Pick #{current_pick.overall_pick} - {current_pick.team.team_name}"
@@ -4263,7 +4263,7 @@ NHL League Office""",
             
         else:
             # Draft complete
-            self.current_pick_label.configure(text="🏆 DRAFT COMPLETE", 
+            self.current_pick_label.configure(text="DRAFT COMPLETE", 
                                             foreground=self.parent.ACCENT_COLOR)
             self.progress_label.configure(text="All picks completed!")
             
@@ -4358,7 +4358,7 @@ NHL League Office""",
         welcome_frame.pack(fill=tk.X, padx=10, pady=10)
         
         # Welcome message
-        welcome_title = ttk.Label(welcome_frame, text="🏒 Team Roster Spotlight", 
+        welcome_title = ttk.Label(welcome_frame, text="Team Roster Spotlight", 
                                  style='Header.TLabel', font=('Segoe UI', 12, 'bold'))
         welcome_title.pack(anchor='w', pady=(0, 10))
         
@@ -4430,7 +4430,7 @@ NHL League Office""",
         info_frame = ttk.Frame(card_frame, style='Panel.TFrame')
         info_frame.pack(fill=tk.X, pady=(0, 10))
         
-        info_title = ttk.Label(info_frame, text="📋 Basic Information", 
+        info_title = ttk.Label(info_frame, text="Basic Information", 
                               style='TLabel', font=('Segoe UI', 10, 'bold'))
         info_title.pack(anchor='w', pady=(0, 5))
         
@@ -4455,7 +4455,7 @@ NHL League Office""",
         contract_frame = ttk.Frame(info_frame, style='Panel.TFrame')
         contract_frame.pack(fill=tk.X, pady=(5, 0))
         
-        contract_title = ttk.Label(contract_frame, text="💰 Contract Details", 
+        contract_title = ttk.Label(contract_frame, text="Contract Details", 
                                   style='TLabel', font=('Segoe UI', 10, 'bold'))
         contract_title.pack(anchor='w', pady=(0, 3))
         
@@ -4476,13 +4476,13 @@ NHL League Office""",
             
             if value_per_mil >= 10:
                 value_color = "#4CAF50"  # Green - excellent value
-                value_text = "📈 Excellent Contract Value"
+                value_text = "Excellent Contract Value"
             elif value_per_mil >= 5:
                 value_color = "#FFC107"  # Yellow - fair value
-                value_text = "📊 Fair Contract Value"
+                value_text = "Fair Contract Value"
             else:
                 value_color = "#F44336"  # Red - poor value
-                value_text = "📉 Expensive Contract"
+                value_text = "Expensive Contract"
                 
             value_label = ttk.Label(contract_frame, text=value_text,
                                    style='Info.TLabel', font=('Segoe UI', 9, 'italic'),
@@ -4497,7 +4497,7 @@ NHL League Office""",
                 clauses.append("No-Trade")
                 
             if clauses:
-                clause_text = f"⚠️ {', '.join(clauses)} Clause{'s' if len(clauses) > 1 else ''}"
+                clause_text = f"{', '.join(clauses)} Clause{'s' if len(clauses) > 1 else ''}"
                 clause_label = ttk.Label(contract_frame, text=clause_text,
                                         style='Info.TLabel', font=('Segoe UI', 9, 'italic'),
                                         foreground=self.parent.ACCENT_COLOR)
@@ -4535,7 +4535,7 @@ NHL League Office""",
         attrs_frame = ttk.Frame(parent_frame, style='Panel.TFrame')
         attrs_frame.pack(fill=tk.X, pady=(10, 0))
         
-        attrs_title = ttk.Label(attrs_frame, text="⚡ Key Attributes", 
+        attrs_title = ttk.Label(attrs_frame, text="Key Attributes", 
                                style='TLabel', font=('Segoe UI', 10, 'bold'))
         attrs_title.pack(anchor='w', pady=(0, 8))
         

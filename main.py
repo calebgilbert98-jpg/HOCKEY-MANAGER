@@ -3359,11 +3359,11 @@ class HockeyManagerGUI(tk.Tk):
                     print("✅ Puck Dynasty logo set as application icon")
                 except ImportError:
                     print("⚠️ PIL not available for icon, using text icon")
-                    self.title("🏒 Puck Dynasty - Hockey Manager")
+                    self.title("Puck Dynasty - Hockey Manager")
             else:
                 print(f"⚠️ Logo file not found at: {logo_path}")
                 # Set a text-based icon as fallback
-                self.title("🏒 Puck Dynasty - Hockey Manager")
+                self.title("Puck Dynasty - Hockey Manager")
         except Exception as e:
             print(f"⚠️ Error setting application icon: {e}")
             # Continue without icon - don't crash the application
@@ -3681,7 +3681,7 @@ class HockeyManagerGUI(tk.Tk):
         
         # Automated Season Flow button
         from modern_widgets import RoundedButton
-        self.season_flow_btn = RoundedButton(season_controls_frame, text="⚡ Season Flow",
+        self.season_flow_btn = RoundedButton(season_controls_frame, text="Season Flow",
                                             command=self.toggle_season_flow_panel,
                                             bg="#00ceb8", radius=10,
                                             font=(self.FONT_FAMILY, 11, "bold"))
@@ -4593,7 +4593,7 @@ class HockeyManagerGUI(tk.Tk):
         title_frame = ttk.Frame(content_frame, style='Panel.TFrame')
         title_frame.pack(fill='x', pady=(0, 10))
         
-        ttk.Label(title_frame, text="📧", font=(self.FONT_FAMILY, 24)).pack(side='left')
+        ttk.Label(title_frame, text="", font=(self.FONT_FAMILY, 24)).pack(side='left')
         ttk.Label(title_frame, text="Urgent Email Received", 
                  style='Header.TLabel', font=(self.FONT_FAMILY, 14, 'bold')).pack(side='left', padx=(10, 0))
         
@@ -4840,10 +4840,10 @@ class HockeyManagerGUI(tk.Tk):
         
         # Game result indicator
         if game_result['winner'] == self.user_team:
-            result_text = "🏆 VICTORY"
+            result_text = "VICTORY"
             result_color = '#4CAF50'
         else:
-            result_text = "😞 DEFEAT"
+            result_text = "DEFEAT"
             result_color = '#f85149'
             
         result_label = tk.Label(header_frame, text=result_text, 
@@ -4860,24 +4860,24 @@ class HockeyManagerGUI(tk.Tk):
         
         # 1. GAME SUMMARY TAB
         summary_frame = self._create_summary_tab(notebook, game_result)
-        notebook.add(summary_frame, text="📋 Game Summary")
+        notebook.add(summary_frame, text="Game Summary")
         
         # 2. SCORING TAB  
         scoring_frame = self._create_scoring_tab(notebook, game_result)
-        notebook.add(scoring_frame, text="🥅 Scoring")
+        notebook.add(scoring_frame, text="Scoring")
         
         # 3. PLAYER STATS TAB
         stats_frame = self._create_player_stats_tab(notebook, game_result)
-        notebook.add(stats_frame, text="📊 Player Stats")
+        notebook.add(stats_frame, text="Player Stats")
         
         # 4. TEAM STATS TAB
         team_stats_frame = self._create_team_stats_tab(notebook, game_result)
-        notebook.add(team_stats_frame, text="🏒 Team Stats")
+        notebook.add(team_stats_frame, text="Team Stats")
         
         # 5. GAME VIEWER TAB (if event log exists)
         if 'event_log' in game_result and game_result['event_log']:
             viewer_frame = self._create_game_viewer_tab(notebook, game_result)
-            notebook.add(viewer_frame, text="🎮 Game Viewer")
+            notebook.add(viewer_frame, text="Game Viewer")
         
         # Bottom action bar
         action_frame = tk.Frame(main_container, bg=self.BG_COLOR)
@@ -5222,7 +5222,7 @@ class HockeyManagerGUI(tk.Tk):
         frame = tk.Frame(parent, bg=self.CONTENT_BG)
         
         # Header
-        header_label = tk.Label(frame, text="🎮 Interactive Game Viewer", 
+        header_label = tk.Label(frame, text="Interactive Game Viewer", 
                                font=('Segoe UI', 16, 'bold'), fg=self.HEADER_COLOR, bg=self.CONTENT_BG)
         header_label.pack(pady=20)
         
@@ -5234,7 +5234,7 @@ class HockeyManagerGUI(tk.Tk):
         info_label.pack(pady=10)
         
         # Launch button
-        launch_btn = tk.Button(frame, text="🚀 Launch Game Viewer", 
+        launch_btn = tk.Button(frame, text="Launch Game Viewer", 
                               font=('Segoe UI', 14, 'bold'), bg=self.ACCENT_COLOR, fg='white',
                               activebackground=self.ACCENT_ACTIVE, relief='flat', padx=40, pady=15,
                               command=lambda: self._launch_standalone_viewer(game_result['event_log']))
@@ -5481,7 +5481,7 @@ class HockeyManagerGUI(tk.Tk):
         # Update button text (menu-bar button was removed; the toggle now
         # lives in GM Options -> Game Presentation)
         if hasattr(self, 'game_viewer_btn'):
-            self.game_viewer_btn.config(text=f"🎮 Viewer: {'ON' if new_setting else 'OFF'}")
+            self.game_viewer_btn.config(text=f"Viewer: {'ON' if new_setting else 'OFF'}")
         debug_print(f"DEBUG: Button text updated to: {'ON' if new_setting else 'OFF'}")
 
     def _update_game_viewer_button_state(self):
@@ -5524,7 +5524,7 @@ class HockeyManagerGUI(tk.Tk):
                     return
                     
             self.season_flow_visible = True
-            self.season_flow_btn.config(text="⚡ Hide Flow")
+            self.season_flow_btn.config(text="Hide Flow")
             print("Season flow panel shown")
             
         except ImportError as e:
@@ -5543,7 +5543,7 @@ class HockeyManagerGUI(tk.Tk):
                 
             self.season_flow_panel = None
             self.season_flow_visible = False
-            self.season_flow_btn.config(text="⚡ Season Flow")
+            self.season_flow_btn.config(text="Season Flow")
             print("Season flow panel hidden")
             
         except Exception as e:
@@ -7758,12 +7758,12 @@ class HockeyManagerGUI(tk.Tk):
             button_frame = ttk.Frame(main_frame, style='Panel.TFrame')
             button_frame.pack(fill='x')
             
-            view_records_btn = ttk.Button(button_frame, text="🏆 View Records",
+            view_records_btn = ttk.Button(button_frame, text="View Records",
                                          command=lambda: [achievement_window.destroy(), 
                                                          self.open_stats_standings_window('records')])
             view_records_btn.pack(side='left', padx=(0, 10))
             
-            close_btn = ttk.Button(button_frame, text="✅ Awesome!",
+            close_btn = ttk.Button(button_frame, text="Awesome!",
                                   command=achievement_window.destroy)
             close_btn.pack(side='right')
             
@@ -7941,7 +7941,7 @@ class HockeyManagerGUI(tk.Tk):
         
         # Create a summary window
         summary_window = tk.Toplevel(self)
-        summary_window.title(f"🏆 {season_str} Season Summary")
+        summary_window.title(f"{season_str} Season Summary")
         summary_window.geometry("900x700")
         summary_window.configure(background=self.BG_COLOR)
         summary_window.transient(self)
@@ -7952,7 +7952,7 @@ class HockeyManagerGUI(tk.Tk):
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
         # Title
-        ttk.Label(main_frame, text=f"🏒 {season_str} Season Complete!", 
+        ttk.Label(main_frame, text=f"{season_str} Season Complete!", 
                  font=(self.FONT_FAMILY, 20, 'bold'), style='Title.TLabel').pack(pady=(0, 20))
         
         # Create notebook for different summary sections
@@ -7961,17 +7961,17 @@ class HockeyManagerGUI(tk.Tk):
         
         # Awards Tab
         awards_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(awards_frame, text="🏆 Awards")
+        notebook.add(awards_frame, text="Awards")
         self._create_awards_section(awards_frame)
         
         # League Leaders Tab
         leaders_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(leaders_frame, text="⭐ League Leaders")
+        notebook.add(leaders_frame, text="League Leaders")
         self._create_leaders_section(leaders_frame)
         
         # Your Team Tab
         team_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(team_frame, text="📊 Your Team")
+        notebook.add(team_frame, text="Your Team")
         self._create_team_summary_section(team_frame)
         
         # Close button
@@ -8001,7 +8001,7 @@ class HockeyManagerGUI(tk.Tk):
         row = 0
         for award_name, winner_info in awards.items():
             # Award name
-            ttk.Label(awards_grid, text=f"🏆 {award_name}", 
+            ttk.Label(awards_grid, text=f"{award_name}", 
                      font=(self.FONT_FAMILY, 11, 'bold'), 
                      style='Header.TLabel').grid(row=row, column=0, sticky='w', pady=5, padx=10)
             
@@ -9723,7 +9723,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         header_content = tk.Frame(header_frame, bg='#495057')
         header_content.pack(expand=True, fill='both', padx=15, pady=10)
         
-        tk.Label(header_content, text="🏒 Active Roster", 
+        tk.Label(header_content, text="Active Roster", 
                 bg='#495057', fg='white',
                 font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(side=tk.LEFT)
         
@@ -9848,14 +9848,14 @@ class CleanEditLinesWindow(tk.Toplevel):
         middle_row = tk.Frame(info_frame, bg='#6c757d')
         middle_row.pack(fill=tk.X, pady=(4, 0))
         
-        pos_label = tk.Label(middle_row, text=f"📍 {player.primary_position.name}", bg='#6c757d', fg='#f8f9fa',
+        pos_label = tk.Label(middle_row, text=f"{player.primary_position.name}", bg='#6c757d', fg='#f8f9fa',
                             font=(self.parent.FONT_FAMILY, 8))
         pos_label.pack(side=tk.LEFT)
         
         # Darker condition indicator
         condition = getattr(player, 'condition', 100)
         condition_color = '#343a40'  # Dark gray for all conditions
-        condition_text = "🟢" if condition > 85 else "🟡" if condition > 70 else "🔴"
+        condition_text = "" if condition > 85 else "" if condition > 70 else ""
         
         condition_frame = tk.Frame(middle_row, bg=condition_color, relief='flat')
         condition_frame.pack(side=tk.RIGHT)
@@ -9916,7 +9916,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         header_content = tk.Frame(header_frame, bg='#343a40')
         header_content.pack(expand=True, fill='both', padx=20, pady=15)
         
-        title_label = tk.Label(header_content, text="🏒 Line Editor", 
+        title_label = tk.Label(header_content, text="Line Editor", 
                               bg='#343a40', fg='white', 
                               font=(self.parent.FONT_FAMILY, 18, 'bold'))
         title_label.pack(side=tk.LEFT)
@@ -10190,7 +10190,7 @@ class CleanEditLinesWindow(tk.Toplevel):
     def create_forwards_tab(self):
         """Create the forwards tab with horizontal LW-C-RW layout and scrolling"""
         forwards_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(forwards_frame, text="⚡ Forwards")
+        self.notebook.add(forwards_frame, text="Forwards")
         
         # Create scrollable frame
         canvas = tk.Canvas(forwards_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
@@ -10404,7 +10404,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         placeholder_frame.pack(expand=True, fill='both', padx=10, pady=10)
         
         # Subtle icon and text
-        icon_label = tk.Label(placeholder_frame, text="👤", bg='#e9ecef', fg='#adb5bd',
+        icon_label = tk.Label(placeholder_frame, text="", bg='#e9ecef', fg='#adb5bd',
                              font=(self.parent.FONT_FAMILY, 18))
         icon_label.pack()
         
@@ -10566,7 +10566,7 @@ class CleanEditLinesWindow(tk.Toplevel):
                              font=(self.parent.FONT_FAMILY, 9, 'bold'))
         name_label.pack()
         
-        rating_label = tk.Label(info_frame, text=f"⭐ {to_100_scale(player.overall_rating())}", bg='#6c757d', fg='white',
+        rating_label = tk.Label(info_frame, text=f"{to_100_scale(player.overall_rating())}", bg='#6c757d', fg='white',
                                font=(self.parent.FONT_FAMILY, 8))
         rating_label.pack()
 
@@ -10615,7 +10615,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         placeholder_frame = tk.Frame(drop_zone, bg='#e9ecef')
         placeholder_frame.pack(expand=True, fill='both', padx=10, pady=10)
         
-        icon_label = tk.Label(placeholder_frame, text="👤", bg='#e9ecef', fg='#adb5bd',
+        icon_label = tk.Label(placeholder_frame, text="", bg='#e9ecef', fg='#adb5bd',
                              font=(self.parent.FONT_FAMILY, 20))
         icon_label.pack()
         
@@ -10870,7 +10870,7 @@ class CleanEditLinesWindow(tk.Toplevel):
     def create_goalies_tab(self):
         """Create the goalies tab with clean, readable layout"""
         goalies_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(goalies_frame, text="🥅 Goalies")
+        self.notebook.add(goalies_frame, text="Goalies")
         
         self.goalie_vars = []
         roles = ["Starting Goalie", "Backup Goalie"]
@@ -10890,7 +10890,7 @@ class CleanEditLinesWindow(tk.Toplevel):
     def create_special_teams_tab(self):
         """Create the special teams tab with horizontal layouts and scrolling"""
         special_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=20)
-        self.notebook.add(special_frame, text="⚡ Special Teams")
+        self.notebook.add(special_frame, text="Special Teams")
         
         # Create scrollable frame
         canvas = tk.Canvas(special_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
@@ -11143,7 +11143,7 @@ class CleanEditLinesWindow(tk.Toplevel):
     def show_line_analytics(self):
         """Show detailed analytics for current line combinations"""
         analytics_window = tk.Toplevel(self)
-        analytics_window.title("🏒 Line Analytics")
+        analytics_window.title("Line Analytics")
         analytics_window.geometry("800x600")
         analytics_window.configure(bg=self.parent.BG_COLOR)
         
@@ -12993,32 +12993,32 @@ class GMOptionsWindow(tk.Toplevel):
         content_frame.pack(fill="both", expand=True)
 
         # Player Management section
-        player_section = ttk.LabelFrame(content_frame, text="🎯 Player Management", padding=15)
+        player_section = ttk.LabelFrame(content_frame, text="Player Management", padding=15)
         player_section.pack(fill="x", pady=(0, 15))
         
-        ttk.Button(player_section, text="📋 Player Shortlist", 
+        ttk.Button(player_section, text="Player Shortlist", 
                   command=self.open_shortlist_window).pack(fill="x", pady=3)
-        ttk.Button(player_section, text="👑 Set Captains", 
+        ttk.Button(player_section, text="Set Captains", 
                   command=parent.open_set_captains_window).pack(fill="x", pady=3)
         
         # Executive Actions section
-        exec_section = ttk.LabelFrame(content_frame, text="🏢 Executive Actions", padding=15)
+        exec_section = ttk.LabelFrame(content_frame, text="Executive Actions", padding=15)
         exec_section.pack(fill="x", pady=(0, 15))
         
-        ttk.Button(exec_section, text="📊 GM Dashboard", 
+        ttk.Button(exec_section, text="GM Dashboard", 
                   command=self.open_gm_dashboard).pack(fill="x", pady=3)
-        ttk.Button(exec_section, text="📈 Team Analytics", 
+        ttk.Button(exec_section, text="Team Analytics", 
                   command=self.open_team_analytics).pack(fill="x", pady=3)
-        ttk.Button(exec_section, text="🎯 Season Goals", 
+        ttk.Button(exec_section, text="Season Goals", 
                   command=self.open_season_goals).pack(fill="x", pady=3)
         
         # Quick Actions section
-        quick_section = ttk.LabelFrame(content_frame, text="⚡ Quick Actions", padding=15)
+        quick_section = ttk.LabelFrame(content_frame, text="Quick Actions", padding=15)
         quick_section.pack(fill="x", pady=(0, 15))
         
-        ttk.Button(quick_section, text="🔄 Auto-Negotiate Extensions", 
+        ttk.Button(quick_section, text="Auto-Negotiate Extensions", 
                   command=self.auto_negotiate_extensions).pack(fill="x", pady=3)
-        ttk.Button(quick_section, text="📧 Check Inbox", 
+        ttk.Button(quick_section, text="Check Inbox", 
                   command=parent.open_inbox_window).pack(fill="x", pady=3)
 
         # Game Presentation section — how the user's games are presented:

@@ -12,7 +12,7 @@ class MediaCenterWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
-        self.title("🎬 Media Center")
+        self.title("Media Center")
         self.configure(background=parent.BG_COLOR)
         self.geometry("1200x800")
         
@@ -86,7 +86,7 @@ class MediaCenterWindow(tk.Toplevel):
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
         # Title
-        title_label = ttk.Label(header_frame, text="🎬 Media Center", style='Title.TLabel')
+        title_label = ttk.Label(header_frame, text="Media Center", style='Title.TLabel')
         title_label.pack(side=tk.LEFT)
         
         # Quick status
@@ -222,7 +222,7 @@ class MediaCenterWindow(tk.Toplevel):
             no_events_frame = ttk.Frame(self.events_scroll_frame, style='Media.TFrame')
             no_events_frame.pack(fill=tk.X, pady=5, padx=5)
             
-            ttk.Label(no_events_frame, text="📰 No pending media events", 
+            ttk.Label(no_events_frame, text="No pending media events", 
                      style='MediaTitle.TLabel').pack(pady=20)
             ttk.Label(no_events_frame, text="Events will appear here based on your engagement level\nand recent team activities.", 
                      style='MediaContent.TLabel').pack()
@@ -263,7 +263,7 @@ class MediaCenterWindow(tk.Toplevel):
             journalist_frame = ttk.Frame(card_frame, style='Panel.TFrame')
             journalist_frame.pack(fill=tk.X, padx=10, pady=2)
             
-            journalist_text = f"📰 {journalist.name} ({journalist.outlet}) - {journalist.type.value}"
+            journalist_text = f"{journalist.name} ({journalist.outlet}) - {journalist.type.value}"
             ttk.Label(journalist_frame, text=journalist_text, style='Journalist.TLabel').pack(side=tk.LEFT)
             
             # Relationship indicator
@@ -424,7 +424,7 @@ class InterviewWindow(tk.Toplevel):
         self.parent = parent
         self.event = event
         
-        self.title(f"🎙️ {event['type'].replace('_', ' ').title()}")
+        self.title(f"{event['type'].replace('_', '').title()}")
         self.configure(background=parent.parent.BG_COLOR)
         self.geometry("800x600")
         self.resizable(True, True)
@@ -468,7 +468,7 @@ class InterviewWindow(tk.Toplevel):
         journalist = self.event.get('journalist')
         if journalist:
             # Journalist info
-            journalist_text = f"📰 {journalist.name} - {journalist.outlet}"
+            journalist_text = f"{journalist.name} - {journalist.outlet}"
             ttk.Label(header_frame, text=journalist_text, style='MediaTitle.TLabel').pack(pady=5)
             
             # Journalist type and relationship

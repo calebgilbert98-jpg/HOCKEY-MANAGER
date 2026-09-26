@@ -265,7 +265,7 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
     def _create_overview_tab(self):
         """Create the overview tab with player list and quick details"""
         overview_frame = ttk.Frame(self.notebook)
-        self.notebook.add(overview_frame, text="📊 Overview")
+        self.notebook.add(overview_frame, text="Overview")
         
         # Create paned window for resizable layout
         paned = ttk.PanedWindow(overview_frame, orient='horizontal')
@@ -356,7 +356,7 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
     def _create_individual_tab(self):
         """Create individual player development tab"""
         individual_frame = ttk.Frame(self.notebook)
-        self.notebook.add(individual_frame, text="👤 Individual Development")
+        self.notebook.add(individual_frame, text="Individual Development")
         
         # Create paned window
         individual_paned = ttk.PanedWindow(individual_frame, orient='horizontal')
@@ -412,7 +412,7 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
             rb.pack(side='left', padx=(0, 15))
         
         # Assign button
-        assign_btn = ttk.Button(selection_content, text="📋 Assign Training Program",
+        assign_btn = ttk.Button(selection_content, text="Assign Training Program",
                                command=self._assign_training)
         assign_btn.pack(pady=(20, 10), fill='x')
         
@@ -435,7 +435,7 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
     def _create_analysis_tab(self):
         """Create team analysis tab"""
         analysis_frame = ttk.Frame(self.notebook)
-        self.notebook.add(analysis_frame, text="📈 Team Analysis")
+        self.notebook.add(analysis_frame, text="Team Analysis")
         
         # Scrollable frame for analytics with dark theme
         analysis_canvas = tk.Canvas(analysis_frame, bg=self.parent.BG_COLOR, highlightthickness=0)
@@ -1311,43 +1311,43 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
         
         # Menu options
         context_menu.add_command(
-            label=f"👤 View {selected_player.full_name}'s Profile",
+            label=f"View {selected_player.full_name}'s Profile",
             command=lambda: self._view_player_profile(selected_player)
         )
         
         context_menu.add_separator()
         
         context_menu.add_command(
-            label="🔍 Scout Player",
+            label="Scout Player",
             command=lambda: self._scout_player(selected_player)
         )
         
         context_menu.add_command(
-            label="⭐ Add to Shortlist",
+            label="Add to Shortlist",
             command=lambda: self._add_to_shortlist(selected_player)
         )
         
         context_menu.add_command(
-            label="📊 Compare with Another Player",
+            label="Compare with Another Player",
             command=lambda: self._compare_players(selected_player)
         )
         
         context_menu.add_separator()
         
         context_menu.add_command(
-            label="🎯 Assign Training Focus",
+            label="Assign Training Focus",
             command=lambda: self._assign_individual_training(selected_player)
         )
         
         context_menu.add_command(
-            label="📈 View Development History",
+            label="View Development History",
             command=lambda: self._view_development_history(selected_player)
         )
         
         context_menu.add_separator()
         
         context_menu.add_command(
-            label="💼 Contract Details",
+            label="Contract Details",
             command=lambda: self._view_contract_details(selected_player)
         )
         
@@ -1588,17 +1588,17 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
                              font=('Segoe UI', 9))
         
         context_menu.add_command(
-            label=f"👤 View Full Profile",
+            label=f"View Full Profile",
             command=lambda: self._view_player_profile(player)
         )
         
         context_menu.add_command(
-            label="🎯 Quick Training Assignment", 
+            label="Quick Training Assignment", 
             command=lambda: self._assign_individual_training(player)
         )
         
         context_menu.add_command(
-            label="📊 Compare with Another Player",
+            label="Compare with Another Player",
             command=lambda: self._compare_players(player)
         )
         

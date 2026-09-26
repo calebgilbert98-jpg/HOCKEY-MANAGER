@@ -144,7 +144,7 @@ class StatsStandingsWindow(tk.Toplevel):
         title_label.pack(side='left')
         
         # Live data indicator
-        self.live_indicator = ttk.Label(title_container, text="🟢 LIVE", 
+        self.live_indicator = ttk.Label(title_container, text="LIVE", 
                                        style='Success.TLabel', font=('Segoe UI', 9, 'bold'))
         self.live_indicator.pack(side='left', padx=(10, 0))
         
@@ -161,7 +161,7 @@ class StatsStandingsWindow(tk.Toplevel):
         period_combo.bind('<<ComboboxSelected>>', self.on_filter_change)
         
         # Close button
-        close_btn = ttk.Button(filters_frame, text="✕ Close", style='TButton',
+        close_btn = ttk.Button(filters_frame, text="Close", style='TButton',
                               command=self.destroy)
         close_btn.pack(side='left', padx=(10, 0))
         
@@ -184,17 +184,17 @@ class StatsStandingsWindow(tk.Toplevel):
         refresh_frame = ttk.Frame(status_frame, style='Panel.TFrame')
         refresh_frame.pack(side='right')
         
-        ttk.Button(refresh_frame, text="🔄 Refresh All", style='TButton',
+        ttk.Button(refresh_frame, text="Refresh All", style='TButton',
                   command=self.refresh_all_data).pack(side='right', padx=5)
         
-        ttk.Button(refresh_frame, text="📊 Export Data", style='TButton',
+        ttk.Button(refresh_frame, text="Export Data", style='TButton',
                   command=self.export_data).pack(side='right', padx=5)
         
         # Status info
         status_info = ttk.Frame(status_frame, style='Panel.TFrame')
         status_info.pack(side='left', fill='x', expand=True)
         
-        self.status_label = ttk.Label(status_info, text="✅ Ready - Real game data loaded successfully", 
+        self.status_label = ttk.Label(status_info, text="Ready - Real game data loaded successfully", 
                                      style='Muted.TLabel')
         self.status_label.pack(side='left')
         
@@ -224,14 +224,14 @@ class StatsStandingsWindow(tk.Toplevel):
                 summary = f"📊 {team_count} teams • {total_players:,} players • Analytics: {'✅ Active' if self.analytics_engine else '❌ Unavailable'}"
                 self.data_summary_label.config(text=summary)
             else:
-                self.data_summary_label.config(text="⚠️ No league data available")
+                self.data_summary_label.config(text="No league data available")
         except Exception as e:
-            self.data_summary_label.config(text=f"❌ Data error: {str(e)}")
+            self.data_summary_label.config(text=f"Data error: {str(e)}")
     
     def create_enhanced_standings_tab(self):
         """Create enhanced standings tab with playoff race and momentum indicators"""
         standings_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(standings_frame, text="🏆 Standings")
+        self.notebook.add(standings_frame, text="Standings")
         
         # Enhanced controls with more options
         controls_frame = ttk.Frame(standings_frame, style='Panel.TFrame')
@@ -289,7 +289,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def create_advanced_team_stats_tab(self):
         """Create advanced team statistics with comparative analysis"""
         stats_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(stats_frame, text="📊 Team Analytics")
+        self.notebook.add(stats_frame, text="Team Analytics")
         
         # Advanced controls
         controls_frame = ttk.Frame(stats_frame, style='Panel.TFrame')
@@ -337,7 +337,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def create_enhanced_player_leaders_tab(self):
         """Create enhanced player leaders with advanced filtering"""
         leaders_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(leaders_frame, text="⭐ Player Leaders")
+        self.notebook.add(leaders_frame, text="Player Leaders")
         
         # Enhanced controls
         controls_frame = ttk.Frame(leaders_frame, style='Panel.TFrame')
@@ -393,7 +393,7 @@ class StatsStandingsWindow(tk.Toplevel):
         
         # Records section - accessible from player leaders
         records_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
-        self.leaders_notebook.add(records_frame, text="🏆 NHL Records")
+        self.leaders_notebook.add(records_frame, text="NHL Records")
         self.create_records_section(records_frame)
     
     def create_records_section(self, parent_frame):
@@ -412,7 +412,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def create_comprehensive_analytics_tab(self):
         """Create comprehensive analytics tab combining analytics, trends, and insights"""
         analytics_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(analytics_frame, text="📈 Analytics & Trends")
+        self.notebook.add(analytics_frame, text="Analytics & Trends")
         
         # Create sub-notebook for different analytics views
         self.analytics_notebook = ttk.Notebook(analytics_frame)
@@ -420,23 +420,23 @@ class StatsStandingsWindow(tk.Toplevel):
         
         # Analytics Dashboard
         dashboard_frame = ttk.Frame(self.analytics_notebook, style='Panel.TFrame', padding=10)
-        self.analytics_notebook.add(dashboard_frame, text="📊 Dashboard")
+        self.analytics_notebook.add(dashboard_frame, text="Dashboard")
         self.create_analytics_dashboard_content(dashboard_frame)
         
         # Trends Analysis
         trends_frame = ttk.Frame(self.analytics_notebook, style='Panel.TFrame', padding=10)
-        self.analytics_notebook.add(trends_frame, text="📈 Trends")
+        self.analytics_notebook.add(trends_frame, text="Trends")
         self.create_trends_analysis_content(trends_frame)
         
         # Performance Insights
         insights_frame = ttk.Frame(self.analytics_notebook, style='Panel.TFrame', padding=10)
-        self.analytics_notebook.add(insights_frame, text="🎯 Insights")
+        self.analytics_notebook.add(insights_frame, text="Insights")
         self.create_performance_insights_content(insights_frame)
     
     def create_records_tab(self):
         """Create NHL Records tab with comprehensive record tracking"""
         records_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=15)
-        self.notebook.add(records_frame, text="🏆 NHL Records")
+        self.notebook.add(records_frame, text="NHL Records")
         
         # Professional header
         header_frame = ttk.Frame(records_frame, style='Panel.TFrame')
@@ -447,7 +447,7 @@ class StatsStandingsWindow(tk.Toplevel):
         title_container = ttk.Frame(header_frame, style='Panel.TFrame')
         title_container.grid(row=0, column=0, sticky="w")
         
-        title_label = ttk.Label(title_container, text="🏆 NHL Records & Achievements", 
+        title_label = ttk.Label(title_container, text="NHL Records & Achievements", 
                                font=(self.parent.FONT_FAMILY, 16, 'bold'),
                                foreground='#FFFFFF', background=self.parent.BG_COLOR)
         title_label.pack(anchor='w')
@@ -464,11 +464,11 @@ class StatsStandingsWindow(tk.Toplevel):
         try:
             record_manager = self.parent.game_manager.record_manager
             total_records = len(record_manager.nhl_records.season_records) + len(record_manager.nhl_records.career_records)
-            stats_text = f"📊 {total_records} Official NHL Records"
+            stats_text = f"{total_records} Official NHL Records"
             if hasattr(record_manager, 'achievements') and record_manager.achievements:
                 stats_text += f" • 🎯 {len(record_manager.achievements)} Achievements"
         except:
-            stats_text = "📊 Official NHL Records Database"
+            stats_text = "Official NHL Records Database"
             
         stats_label = ttk.Label(stats_frame, text=stats_text,
                                font=(self.parent.FONT_FAMILY, 9),
@@ -484,7 +484,7 @@ class StatsStandingsWindow(tk.Toplevel):
         search_container = ttk.Frame(toolbar_frame, style='Panel.TFrame')
         search_container.grid(row=0, column=0, sticky="w")
         
-        ttk.Label(search_container, text="🔍 Search:", 
+        ttk.Label(search_container, text="Search:", 
                  font=(self.parent.FONT_FAMILY, 9), foreground=self.parent.TEXT_COLOR,
                  background=self.parent.BG_COLOR).pack(side='left', padx=(0, 5))
         
@@ -497,7 +497,7 @@ class StatsStandingsWindow(tk.Toplevel):
         filter_container = ttk.Frame(toolbar_frame, style='Panel.TFrame')
         filter_container.grid(row=0, column=1, sticky="")
         
-        ttk.Label(filter_container, text="📂 Category:",
+        ttk.Label(filter_container, text="Category:",
                  font=(self.parent.FONT_FAMILY, 9), foreground=self.parent.TEXT_COLOR,
                  background=self.parent.BG_COLOR).pack(side='left', padx=(0, 5))
         
@@ -511,7 +511,7 @@ class StatsStandingsWindow(tk.Toplevel):
         refresh_container = ttk.Frame(toolbar_frame, style='Panel.TFrame')
         refresh_container.grid(row=0, column=2, sticky="e")
         
-        refresh_btn = ttk.Button(refresh_container, text="🔄 Refresh",
+        refresh_btn = ttk.Button(refresh_container, text="Refresh",
                                 style='TButton', command=self.refresh_records_data)
         refresh_btn.pack(side='left')
         
@@ -529,7 +529,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def _create_season_records_tab(self):
         """Create season records tab"""
         season_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(season_frame, text="🏒 Season Records")
+        self.records_notebook.add(season_frame, text="Season Records")
         
         # Create scrollable frame
         canvas = tk.Canvas(season_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
@@ -553,7 +553,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def _create_career_records_tab(self):
         """Create career records tab"""
         career_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(career_frame, text="🎯 Career Records")
+        self.records_notebook.add(career_frame, text="Career Records")
         
         # Create scrollable frame
         canvas = tk.Canvas(career_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
@@ -577,7 +577,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def _create_current_leaders_tab(self):
         """Create current season leaders tab"""
         leaders_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(leaders_frame, text="⭐ Current Leaders")
+        self.records_notebook.add(leaders_frame, text="Current Leaders")
         
         # Create treeview for current leaders
         columns = {
@@ -597,7 +597,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def _create_record_chase_tab(self):
         """Create record chase tracking tab"""
         chase_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(chase_frame, text="🏃 Record Chase")
+        self.records_notebook.add(chase_frame, text="Record Chase")
         
         # Header with explanation
         header_frame = ttk.Frame(chase_frame, style='Panel.TFrame')
@@ -631,7 +631,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def _create_achievements_tab(self):
         """Create achievements and recent records tab"""
         achievements_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(achievements_frame, text="🏅 Achievements")
+        self.records_notebook.add(achievements_frame, text="Achievements")
         
         # Create treeview for achievements
         columns = {
@@ -651,7 +651,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def create_analytics_dashboard_tab(self):
         """Create advanced analytics dashboard"""
         analytics_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(analytics_frame, text="📈 Analytics")
+        self.notebook.add(analytics_frame, text="Analytics")
         
         # Dashboard grid
         analytics_frame.grid_rowconfigure(0, weight=1)
@@ -678,7 +678,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def create_trends_analysis_tab(self):
         """Create trends and momentum analysis tab"""
         trends_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(trends_frame, text="📈 Trends")
+        self.notebook.add(trends_frame, text="Trends")
         
         # Time period selector
         period_frame = ttk.Frame(trends_frame, style='Panel.TFrame')
@@ -702,7 +702,7 @@ class StatsStandingsWindow(tk.Toplevel):
     def create_division_analysis_tab(self):
         """Create enhanced division analysis tab"""
         division_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(division_frame, text="🏛️ Division Analysis")
+        self.notebook.add(division_frame, text="Division Analysis")
         
         # Division selector
         div_controls = ttk.Frame(division_frame, style='Panel.TFrame')
@@ -733,7 +733,7 @@ class StatsStandingsWindow(tk.Toplevel):
         
         self.populate_division_analysis()
         division_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(division_frame, text="🏒 Divisions")
+        self.notebook.add(division_frame, text="Divisions")
         
         # Create a grid layout for all 4 divisions
         self.create_division_grid(division_frame)
@@ -3567,7 +3567,7 @@ Analysis will be updated as the season progresses.
         charts_frame = ttk.LabelFrame(parent_frame, text="Performance Charts", style='Panel.TLabelframe')
         charts_frame.pack(fill='both', expand=True, pady=(10, 0))
         
-        chart_label = ttk.Label(charts_frame, text="📊 Advanced charts and visualizations would appear here", 
+        chart_label = ttk.Label(charts_frame, text="Advanced charts and visualizations would appear here", 
                                style='Content.TLabel')
         chart_label.pack(pady=50)
     

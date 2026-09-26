@@ -252,7 +252,7 @@ class ModernScoutingWindow(tk.Toplevel):
         self.profile_combo.pack(side='left', padx=(5, 5))
         self.profile_combo.bind('<<ComboboxSelected>>', self._filter_players)
 
-        profiles_btn = RoundedButton(filter_row, text="⚙ Profiles",
+        profiles_btn = RoundedButton(filter_row, text="Profiles",
                                      bg=self.parent.CONTENT_BG,
                                      fg=self.parent.TEXT_COLOR,
                                      font=(self.parent.FONT_FAMILY, 10, "bold"),
@@ -343,12 +343,12 @@ class ModernScoutingWindow(tk.Toplevel):
         btn_frame = tk.Frame(list_frame, bg=self.parent.CONTENT_BG)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
-        hire_btn = tk.Button(btn_frame, text="➕ Hire Scout", 
+        hire_btn = tk.Button(btn_frame, text="Hire Scout", 
                             bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
                             command=self._hire_scout)
         hire_btn.pack(side='left', padx=(0, 10))
         
-        edit_btn = tk.Button(btn_frame, text="📝 Edit Scout", 
+        edit_btn = tk.Button(btn_frame, text="Edit Scout", 
                             bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
                             command=self._edit_scout)
         edit_btn.pack(side='left')
@@ -414,12 +414,12 @@ class ModernScoutingWindow(tk.Toplevel):
         btn_frame = tk.Frame(active_frame, bg=self.parent.CONTENT_BG)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
-        new_btn = tk.Button(btn_frame, text="➕ New Assignment", 
+        new_btn = tk.Button(btn_frame, text="New Assignment", 
                            bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
                            command=self._create_assignment)
         new_btn.pack(side='left', padx=(0, 10))
         
-        cancel_btn = tk.Button(btn_frame, text="❌ Cancel Assignment", 
+        cancel_btn = tk.Button(btn_frame, text="Cancel Assignment", 
                               bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
                               command=self._cancel_assignment)
         cancel_btn.pack(side='left')
@@ -855,7 +855,7 @@ Checking: {to_100_scale(displayed_attribute(player, 'checking', self._user_team(
             # Create context menu
             context_menu = tk.Menu(self, tearoff=0)
             context_menu.add_command(label="Scout Player", command=self._scout_player)
-            context_menu.add_command(label="👤 View Profile", command=self._view_player_profile)
+            context_menu.add_command(label="View Profile", command=self._view_player_profile)
             context_menu.add_separator()
             context_menu.add_command(label="Add to Watchlist", command=self._add_to_watchlist)
             

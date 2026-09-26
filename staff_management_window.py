@@ -1193,7 +1193,7 @@ class StaffManagementWindow(tk.Toplevel):
                 offered_years = int(years_var.get())
                 
                 if staff.negotiate_contract(offered_salary, offered_years):
-                    result_label.config(text="✓ Offer Accepted!")
+                    result_label.config(text="Offer Accepted!")
                     
                     if is_hiring:
                         # Add to team with role validation
@@ -1224,7 +1224,7 @@ class StaffManagementWindow(tk.Toplevel):
                         nego_window.destroy()
                         self.update_views()
                 else:
-                    result_label.config(text="✗ Offer Rejected. Try adjusting your offer.")
+                    result_label.config(text="Offer Rejected. Try adjusting your offer.")
                     
             except ValueError:
                 messagebox.showerror("Invalid Input", "Please enter valid numbers for salary and years.")
@@ -2072,9 +2072,9 @@ class StaffManagementWindow(tk.Toplevel):
                 diff_text = f"{diff:+}" if diff != '' else ''
                 # Color code the difference
                 if diff > 0:
-                    diff_text = f"🔺 {diff_text}"
+                    diff_text = f"{diff_text}"
                 elif diff < 0:
-                    diff_text = f"🔻 {diff_text}"
+                    diff_text = f"{diff_text}"
             else:
                 diff_text = str(diff) if diff != '' else ''
             

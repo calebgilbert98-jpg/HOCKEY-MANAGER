@@ -958,7 +958,7 @@ class SaveLoadWindow(tk.Toplevel):
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
         # Title
-        title_text = f"{'💾 Save Game' if self.mode == 'save' else '📁 Load Game'}"
+        title_text = f"{' Save Game' if self.mode == 'save' else ' Load Game'}"
         title_label = ttk.Label(main_frame, text=title_text, style='Title.TLabel',
                                font=(self.parent.FONT_FAMILY, 20, 'bold'))
         title_label.pack(pady=(0, 20))
@@ -1010,7 +1010,7 @@ class SaveLoadWindow(tk.Toplevel):
         quick_buttons_frame = ttk.Frame(parent, style='Content.TFrame')
         quick_buttons_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Button(quick_buttons_frame, text="❌ Cancel", 
+        ttk.Button(quick_buttons_frame, text="Cancel", 
                   command=self.on_window_close, 
                   style='TButton').pack(side='right')
     
@@ -1090,17 +1090,17 @@ class SaveLoadWindow(tk.Toplevel):
         buttons_frame = ttk.Frame(parent, style='Content.TFrame')
         buttons_frame.pack(fill='x', padx=10, pady=10)
         
-        save_btn = ttk.Button(buttons_frame, text="💾 Save Game", 
+        save_btn = ttk.Button(buttons_frame, text="Save Game", 
                              command=self._advanced_save_game, 
                              style='Accent.TButton')
         save_btn.pack(side='left', padx=(0, 10))
         
-        save_as_btn = ttk.Button(buttons_frame, text="💾 Save As...", 
+        save_as_btn = ttk.Button(buttons_frame, text="Save As...", 
                                 command=self._save_as_dialog, 
                                 style='TButton')
         save_as_btn.pack(side='left', padx=(0, 10))
         
-        cancel_btn = ttk.Button(buttons_frame, text="❌ Cancel", 
+        cancel_btn = ttk.Button(buttons_frame, text="Cancel", 
                                command=self.on_window_close, 
                                style='TButton')
         cancel_btn.pack(side='right')
@@ -1111,16 +1111,16 @@ class SaveLoadWindow(tk.Toplevel):
         toolbar_frame = ttk.Frame(parent, style='Content.TFrame')
         toolbar_frame.pack(fill='x', padx=10, pady=10)
         
-        ttk.Button(toolbar_frame, text="🗂️ Open Save Folder", 
+        ttk.Button(toolbar_frame, text="Open Save Folder", 
                   command=self._open_save_folder, style='TButton').pack(side='left', padx=(0, 5))
         
-        ttk.Button(toolbar_frame, text="📤 Export Save", 
+        ttk.Button(toolbar_frame, text="Export Save", 
                   command=self._export_save, style='TButton').pack(side='left', padx=5)
         
-        ttk.Button(toolbar_frame, text="📥 Import Save", 
+        ttk.Button(toolbar_frame, text="Import Save", 
                   command=self._import_save, style='TButton').pack(side='left', padx=5)
         
-        ttk.Button(toolbar_frame, text="🗑️ Delete Selected", 
+        ttk.Button(toolbar_frame, text="Delete Selected", 
                   command=self._delete_selected_save, style='TButton').pack(side='left', padx=5)
         
         # Enhanced file list with more details
@@ -1148,11 +1148,11 @@ class SaveLoadWindow(tk.Toplevel):
                                       style='Content.TLabel', width=50)
                 info_label.pack(side='left', padx=(5, 0))
                 
-                ttk.Button(slot_frame, text="💾 Overwrite", 
+                ttk.Button(slot_frame, text="Overwrite", 
                           command=lambda s=i+1: self._quick_save_to_slot(s),
                           style='TButton').pack(side='right', padx=(0, 5))
                 
-                ttk.Button(slot_frame, text="📁 Load", 
+                ttk.Button(slot_frame, text="Load", 
                           command=lambda s=i+1: self._quick_load_from_slot(s),
                           style='TButton').pack(side='right', padx=5)
             else:
@@ -1161,7 +1161,7 @@ class SaveLoadWindow(tk.Toplevel):
                                        style='Content.TLabel', foreground='gray')
                 empty_label.pack(side='left', padx=(5, 0))
                 
-                ttk.Button(slot_frame, text="💾 Save Here", 
+                ttk.Button(slot_frame, text="Save Here", 
                           command=lambda s=i+1: self._quick_save_to_slot(s),
                           style='TButton').pack(side='right')
     
@@ -1225,12 +1225,12 @@ class SaveLoadWindow(tk.Toplevel):
         load_buttons_frame = ttk.Frame(parent, style='Content.TFrame')
         load_buttons_frame.pack(fill='x', pady=(10, 0))
         
-        self.load_btn = ttk.Button(load_buttons_frame, text="📁 Load Selected Game", 
+        self.load_btn = ttk.Button(load_buttons_frame, text="Load Selected Game", 
                                   command=self._load_game, style='Accent.TButton',
                                   state='disabled')
         self.load_btn.pack(side='left')
         
-        cancel_btn = ttk.Button(load_buttons_frame, text="❌ Cancel", 
+        cancel_btn = ttk.Button(load_buttons_frame, text="Cancel", 
                                command=self.on_window_close, 
                                style='TButton')
         cancel_btn.pack(side='right')

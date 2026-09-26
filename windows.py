@@ -4754,7 +4754,7 @@ class ScheduleWindow(tk.Toplevel):
         # Watch Game button
         self.watch_game_btn = ttk.Button(
             button_frame,
-            text="🎥 Watch Game",
+            text="Watch Game",
             command=self.watch_selected_game,
             style='Accent.TButton'
         )
@@ -4772,7 +4772,7 @@ class ScheduleWindow(tk.Toplevel):
         # Refresh button
         ttk.Button(
             button_frame,
-            text="🔄 Refresh",
+            text="Refresh",
             command=self.update_views,
             style='TButton'
         ).pack(side='right')
@@ -4789,11 +4789,11 @@ class ScheduleWindow(tk.Toplevel):
             return
             
         menu = tk.Menu(self, tearoff=0, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
-        menu.add_command(label="🎥 Watch Game", command=self.watch_selected_game)
-        menu.add_command(label="⚡ Simulate Game", command=self.simulate_selected_game)
+        menu.add_command(label="Watch Game", command=self.watch_selected_game)
+        menu.add_command(label="Simulate Game", command=self.simulate_selected_game)
         menu.add_separator()
-        menu.add_command(label="📊 Game Stats", command=self.view_game_stats)
-        menu.add_command(label="📰 Game Recap", command=self.view_game_recap)
+        menu.add_command(label="Game Stats", command=self.view_game_stats)
+        menu.add_command(label="Game Recap", command=self.view_game_recap)
         
         menu.tk_popup(event.x_root, event.y_root)
         
@@ -5229,7 +5229,7 @@ class FinancesWindow(tk.Toplevel):
     def create_salary_cap_tab(self):
         """Create salary cap overview tab."""
         cap_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(cap_frame, text="💰 Salary Cap")
+        self.notebook.add(cap_frame, text="Salary Cap")
         
         # Top section - Cap overview
         overview_frame = ttk.LabelFrame(cap_frame, text="Salary Cap Overview")
@@ -5278,7 +5278,7 @@ class FinancesWindow(tk.Toplevel):
     def create_contracts_tab(self):
         """Create detailed player contracts tab."""
         contracts_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(contracts_frame, text="📋 Contracts")
+        self.notebook.add(contracts_frame, text="Contracts")
         
         # Controls frame
         controls_frame = ttk.Frame(contracts_frame, style='Panel.TFrame')
@@ -5343,7 +5343,7 @@ class FinancesWindow(tk.Toplevel):
     def create_projections_tab(self):
         """Create future salary projections tab."""
         projections_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(projections_frame, text="📈 Projections")
+        self.notebook.add(projections_frame, text="Projections")
         
         # Controls
         controls_frame = ttk.Frame(projections_frame, style='Panel.TFrame')
@@ -5388,7 +5388,7 @@ class FinancesWindow(tk.Toplevel):
     def create_management_tab(self):
         """Create contract management tools tab."""
         management_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(management_frame, text="🔧 Management")
+        self.notebook.add(management_frame, text="Management")
         
         # Quick actions section
         actions_frame = ttk.LabelFrame(management_frame, text="Quick Actions", )
@@ -5402,22 +5402,22 @@ class FinancesWindow(tk.Toplevel):
             actions_grid.columnconfigure(i, weight=1)
         
         # Action buttons
-        ttk.Button(actions_grid, text="📝 Negotiate Extensions", 
+        ttk.Button(actions_grid, text="Negotiate Extensions", 
                   command=self.open_contract_extensions).grid(row=0, column=0, padx=5, pady=5, sticky='ew')
         
-        ttk.Button(actions_grid, text="🔄 Trade Evaluator", 
+        ttk.Button(actions_grid, text="Trade Evaluator", 
                   command=self.open_trade_evaluator).grid(row=0, column=1, padx=5, pady=5, sticky='ew')
         
         ttk.Button(actions_grid, text="Salary Analytics", 
                   command=self.show_salary_analytics).grid(row=0, column=2, padx=5, pady=5, sticky='ew')
         
-        ttk.Button(actions_grid, text="💸 Buyout Calculator", 
+        ttk.Button(actions_grid, text="Buyout Calculator", 
                   command=self.open_buyout_calculator).grid(row=1, column=0, padx=5, pady=5, sticky='ew')
         
-        ttk.Button(actions_grid, text="🎯 Cap Compliance Check", 
+        ttk.Button(actions_grid, text="Cap Compliance Check", 
                   command=self.check_cap_compliance).grid(row=1, column=1, padx=5, pady=5, sticky='ew')
         
-        ttk.Button(actions_grid, text="📋 Export Report", 
+        ttk.Button(actions_grid, text="Export Report", 
                   command=self.export_financial_report).grid(row=1, column=2, padx=5, pady=5, sticky='ew')
         
         # Recommendations section
@@ -6340,7 +6340,7 @@ class GMOptionsWindow(tk.Toplevel):
         settings_frame = ttk.LabelFrame(self, text="Game Settings & Preferences", padding=15)
         settings_frame.pack(fill='x', padx=20, pady=10)
         
-        ttk.Button(settings_frame, text="⚙️ Settings & Preferences", command=self.parent.open_settings_window).pack(pady=5, fill='x')
+        ttk.Button(settings_frame, text="Settings & Preferences", command=self.parent.open_settings_window).pack(pady=5, fill='x')
         
         # Close button
         ttk.Button(self, text="Close", command=self.destroy).pack(pady=20)

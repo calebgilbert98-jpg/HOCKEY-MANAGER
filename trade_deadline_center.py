@@ -59,7 +59,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         
     def _setup_window(self):
         """Configure the main window with immersive design"""
-        self.title("🚨 NHL TRADE DEADLINE CENTER 🚨")
+        self.title("NHL TRADE DEADLINE CENTER")
         self.configure(bg='#0D1421')  # Deep navy background
         try:
             self.state('zoomed')  # Full screen on Windows
@@ -229,7 +229,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         
         # Title
         title_label = ttk.Label(header_frame, 
-                               text="🚨 NHL TRADE DEADLINE CENTER 🚨", 
+                               text="NHL TRADE DEADLINE CENTER", 
                                style='DeadlineTitle.TLabel')
         title_label.pack(pady=(0, 10))
         
@@ -258,7 +258,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         
         # Scrolling label
         self.ticker_label = tk.Label(ticker_bg, 
-                                    text="🚨 BREAKING: Multiple teams active in trade discussions... Stay tuned for updates! 🚨", 
+                                    text="BREAKING: Multiple teams active in trade discussions... Stay tuned for updates!", 
                                     bg=self.URGENT_RED, 
                                     fg=self.TEXT_WHITE, 
                                     font=('Segoe UI', 12, 'bold'))
@@ -272,7 +272,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         
         # Market Activity Header
         market_header = ttk.Label(left_frame, 
-                                 text="🔥 MARKET ACTIVITY", 
+                                 text="MARKET ACTIVITY", 
                                  style='DeadlineSubtitle.TLabel')
         market_header.pack(pady=(0, 15))
         
@@ -328,7 +328,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         
         # Trade Tools Header
         tools_header = ttk.Label(center_frame, 
-                                text="⚡ DEADLINE TOOLS", 
+                                text="DEADLINE TOOLS", 
                                 style='DeadlineSubtitle.TLabel')
         tools_header.pack(pady=(0, 15))
         
@@ -347,7 +347,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         actions_frame.pack(fill='x', pady=(0, 20))
         
         ttk.Label(actions_frame, 
-                 text="⚡ DEADLINE ACTIONS", 
+                 text="DEADLINE ACTIONS", 
                  style='DeadlineSubtitle.TLabel').pack(pady=(0, 10))
         
         buttons_frame = tk.Frame(actions_frame, bg=self.PANEL_COLOR)
@@ -371,7 +371,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         # Emergency Trade button
         emergency_btn = tk.Button(
             buttons_frame,
-            text="🚨 EMERGENCY TRADE",
+            text="EMERGENCY TRADE",
             command=self._open_emergency_trade,
             bg=self.DEADLINE_RED,
             fg=self.TEXT_WHITE,
@@ -407,7 +407,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         trades_frame.pack(fill='both', expand=True)
         
         ttk.Label(trades_frame, 
-                 text="📈 RECENT TRADES", 
+                 text="RECENT TRADES", 
                  style='DeadlineSubtitle.TLabel').pack(pady=(0, 10))
         
         # Create scrollable frame for trades
@@ -569,7 +569,7 @@ class TradeDeadlineCenter(tk.Toplevel):
                           relwidth=0.8, height=60)
         
         # Breaking news label
-        breaking_label = tk.Label(news_overlay, text="🚨 BREAKING NEWS 🚨",
+        breaking_label = tk.Label(news_overlay, text="BREAKING NEWS",
                                  bg='#DC2626', fg='white',
                                  font=('Segoe UI', 12, 'bold'))
         breaking_label.pack(pady=2)
@@ -606,7 +606,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         movement_frame.pack(fill='both', expand=True, pady=(20, 0))
         
         ttk.Label(movement_frame, 
-                 text="📊 PLAYER MOVEMENT TRACKER", 
+                 text="PLAYER MOVEMENT TRACKER", 
                  style='DeadlineSubtitle.TLabel').pack(pady=(0, 10))
         
         # Stats frame
@@ -620,7 +620,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         impact_frame = tk.Frame(movement_frame, bg=self.PANEL_COLOR, relief='sunken', bd=2)
         impact_frame.pack(fill='both', expand=True)
         
-        ttk.Label(impact_frame, text="🌟 Impact Players Available",
+        ttk.Label(impact_frame, text="Impact Players Available",
                  background=self.PANEL_COLOR, foreground=self.DEADLINE_GOLD,
                  font=('Segoe UI', 10, 'bold')).pack(pady=5)
         
@@ -722,13 +722,13 @@ class TradeDeadlineCenter(tk.Toplevel):
         
         if time_info['urgency'] == 'critical':
             status_color = self.URGENT_RED
-            status_text = "🔥 CRITICAL"
+            status_text = "CRITICAL"
         elif time_info['urgency'] == 'high':
             status_color = self.DEADLINE_GOLD
-            status_text = "⚠️ HIGH"
+            status_text = "HIGH"
         else:
             status_color = self.SUCCESS_GREEN
-            status_text = "✓ NORMAL"
+            status_text = "NORMAL"
             
         tk.Label(status_frame, text="Market Status:", bg=self.PANEL_COLOR, 
                 fg=self.TEXT_WHITE, font=('Segoe UI', 9)).pack()
@@ -785,7 +785,7 @@ class QuickTradeInterface(tk.Toplevel):
         header.pack_propagate(False)
         
         time_info = self.deadline_manager.get_time_until_deadline()
-        tk.Label(header, text=f"⚡ QUICK TRADE - {time_info['formatted']} REMAINING",
+        tk.Label(header, text=f"QUICK TRADE - {time_info['formatted']} REMAINING",
                 bg=self.URGENT_RED, fg=self.TEXT_WHITE,
                 font=('Segoe UI', 16, 'bold')).pack(expand=True)
         
@@ -864,7 +864,7 @@ class QuickTradeInterface(tk.Toplevel):
         eval_frame = tk.Frame(parent, bg=self.PANEL_COLOR, relief='sunken', bd=2)
         eval_frame.pack(fill='x', pady=(0, 20))
         
-        tk.Label(eval_frame, text="📊 Trade Evaluation",
+        tk.Label(eval_frame, text="Trade Evaluation",
                 bg=self.PANEL_COLOR, fg=self.DEADLINE_GOLD,
                 font=('Segoe UI', 12, 'bold')).pack(pady=10)
         
@@ -890,14 +890,14 @@ class QuickTradeInterface(tk.Toplevel):
         buttons_frame.pack(fill='x')
         
         # Send Proposal button
-        send_btn = tk.Button(buttons_frame, text="📤 SEND PROPOSAL",
+        send_btn = tk.Button(buttons_frame, text="SEND PROPOSAL",
                             bg=self.URGENT_RED, fg=self.TEXT_WHITE,
                             font=('Segoe UI', 12, 'bold'), padx=30, pady=10,
                             command=self._send_proposal)
         send_btn.pack(side='left', padx=(0, 10))
         
         # Cancel button
-        cancel_btn = tk.Button(buttons_frame, text="❌ CANCEL",
+        cancel_btn = tk.Button(buttons_frame, text="CANCEL",
                               bg='#6B7280', fg=self.TEXT_WHITE,
                               font=('Segoe UI', 12, 'bold'), padx=30, pady=10,
                               command=self.destroy)
@@ -933,7 +933,7 @@ class EmergencyTradeInterface(tk.Toplevel):
         
     def _setup_window(self):
         """Setup emergency window"""
-        self.title("🚨 EMERGENCY TRADE - DEADLINE IMMINENT")
+        self.title("EMERGENCY TRADE - DEADLINE IMMINENT")
         self.geometry("600x400")
         self.configure(bg=self.DEADLINE_RED)
         self.resizable(False, False)
@@ -951,7 +951,7 @@ class EmergencyTradeInterface(tk.Toplevel):
         warning_frame.pack_propagate(False)
         
         time_info = self.deadline_manager.get_time_until_deadline()
-        tk.Label(warning_frame, text="🚨 EMERGENCY TRADE MODE 🚨",
+        tk.Label(warning_frame, text="EMERGENCY TRADE MODE",
                 bg=self.URGENT_RED, fg=self.TEXT_WHITE,
                 font=('Segoe UI', 18, 'bold')).pack(expand=True)
         
@@ -1016,7 +1016,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         
     def _setup_window(self):
         """Setup market browser window"""
-        self.title("🔍 Deadline Market Intelligence")
+        self.title("Deadline Market Intelligence")
         self.geometry("1200x800")
         self.configure(bg=self.BG_COLOR)
         
@@ -1046,7 +1046,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         title_frame = tk.Frame(header_frame, bg=self.DEADLINE_RED)
         title_frame.pack(expand=True, fill='both')
         
-        tk.Label(title_frame, text="🔍 DEADLINE MARKET INTELLIGENCE",
+        tk.Label(title_frame, text="DEADLINE MARKET INTELLIGENCE",
                 bg=self.DEADLINE_RED, fg=self.TEXT_WHITE,
                 font=('Segoe UI', 18, 'bold')).pack(pady=5)
         
@@ -1073,27 +1073,27 @@ class DeadlineMarketBrowser(tk.Toplevel):
         
         # Market Overview Tab
         overview_tab = tk.Frame(notebook, bg=self.BG_COLOR)
-        notebook.add(overview_tab, text='📊 Market Overview')
+        notebook.add(overview_tab, text='Market Overview')
         self._create_market_overview(overview_tab)
         
         # Buyers & Sellers Tab
         buyers_sellers_tab = tk.Frame(notebook, bg=self.BG_COLOR)
-        notebook.add(buyers_sellers_tab, text='💰 Buyers & Sellers')
+        notebook.add(buyers_sellers_tab, text='Buyers & Sellers')
         self._create_buyers_sellers(buyers_sellers_tab)
         
         # Position Analysis Tab
         position_tab = tk.Frame(notebook, bg=self.BG_COLOR)
-        notebook.add(position_tab, text='🏒 Position Needs')
+        notebook.add(position_tab, text='Position Needs')
         self._create_position_analysis(position_tab)
         
         # Trade Predictions Tab
         predictions_tab = tk.Frame(notebook, bg=self.BG_COLOR)
-        notebook.add(predictions_tab, text='🔮 Trade Predictions')
+        notebook.add(predictions_tab, text='Trade Predictions')
         self._create_trade_predictions(predictions_tab)
         
         # Salary Cap Tab
         cap_tab = tk.Frame(notebook, bg=self.BG_COLOR)
-        notebook.add(cap_tab, text='💵 Salary Cap Analysis')
+        notebook.add(cap_tab, text='Salary Cap Analysis')
         self._create_salary_cap_analysis(cap_tab)
         
     def _create_market_overview(self, parent):
@@ -1102,7 +1102,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         temp_frame = tk.Frame(parent, bg=self.PANEL_COLOR, relief='raised', bd=2)
         temp_frame.pack(fill='x', pady=(0, 20))
         
-        tk.Label(temp_frame, text="🌡️ Market Temperature",
+        tk.Label(temp_frame, text="Market Temperature",
                 bg=self.PANEL_COLOR, fg=self.DEADLINE_GOLD,
                 font=('Segoe UI', 14, 'bold')).pack(pady=10)
         
@@ -1171,7 +1171,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         sellers_frame.pack(side='right', fill='both', expand=True, padx=(10, 0))
         
         # Buyers section
-        tk.Label(buyers_frame, text="💰 ACTIVE BUYERS",
+        tk.Label(buyers_frame, text="ACTIVE BUYERS",
                 bg=self.PANEL_COLOR, fg=self.SUCCESS_GREEN,
                 font=('Segoe UI', 14, 'bold')).pack(pady=10)
         
@@ -1205,7 +1205,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
                     font=('Segoe UI', 9), wraplength=250).pack(padx=5, pady=2)
         
         # Sellers section
-        tk.Label(sellers_frame, text="📤 ACTIVE SELLERS",
+        tk.Label(sellers_frame, text="ACTIVE SELLERS",
                 bg=self.PANEL_COLOR, fg=self.URGENT_RED,
                 font=('Segoe UI', 14, 'bold')).pack(pady=10)
         
@@ -1239,7 +1239,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
     
     def _create_position_analysis(self, parent):
         """Create position needs analysis"""
-        tk.Label(parent, text="🏒 POSITION NEEDS ANALYSIS",
+        tk.Label(parent, text="POSITION NEEDS ANALYSIS",
                 bg=self.BG_COLOR, fg=self.DEADLINE_GOLD,
                 font=('Segoe UI', 16, 'bold')).pack(pady=20)
         
@@ -1276,7 +1276,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
     
     def _create_trade_predictions(self, parent):
         """Create trade predictions display"""
-        tk.Label(parent, text="🔮 TRADE PREDICTIONS",
+        tk.Label(parent, text="TRADE PREDICTIONS",
                 bg=self.BG_COLOR, fg=self.DEADLINE_GOLD,
                 font=('Segoe UI', 16, 'bold')).pack(pady=20)
         
@@ -1336,7 +1336,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
     
     def _create_salary_cap_analysis(self, parent):
         """Create salary cap analysis display"""
-        tk.Label(parent, text="💵 SALARY CAP ANALYSIS",
+        tk.Label(parent, text="SALARY CAP ANALYSIS",
                 bg=self.BG_COLOR, fg=self.DEADLINE_GOLD,
                 font=('Segoe UI', 16, 'bold')).pack(pady=20)
         
@@ -1412,14 +1412,14 @@ class DeadlineMarketBrowser(tk.Toplevel):
         footer_frame.pack_propagate(False)
         
         # Close button
-        tk.Button(footer_frame, text="✖️ Close Browser",
+        tk.Button(footer_frame, text="Close Browser",
                  command=self.destroy,
                  bg='#6B7280', fg=self.TEXT_WHITE,
                  font=('Segoe UI', 12, 'bold'), 
                  padx=20, pady=8).pack(side='right', padx=20, pady=10)
         
         # Refresh button
-        tk.Button(footer_frame, text="🔄 Refresh Data",
+        tk.Button(footer_frame, text="Refresh Data",
                  command=self._refresh_data,
                  bg=self.DEADLINE_GOLD, fg='black',
                  font=('Segoe UI', 12, 'bold'),
@@ -1438,7 +1438,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         
         # Intelligence Header
         intel_header = ttk.Label(right_frame, 
-                                text="🔍 TRADE INTELLIGENCE", 
+                                text="TRADE INTELLIGENCE", 
                                 style='DeadlineSubtitle.TLabel')
         intel_header.pack(pady=(0, 15))
         
@@ -1454,7 +1454,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         rumors_frame.pack(fill='x', pady=(0, 20))
         
         ttk.Label(rumors_frame, 
-                 text="🗣️ TRADE RUMORS", 
+                 text="TRADE RUMORS", 
                  style='DeadlineSubtitle.TLabel').pack(pady=(0, 10))
         
         # Rumors text area
@@ -1478,7 +1478,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         temp_frame.pack(fill='both', expand=True)
         
         ttk.Label(temp_frame, 
-                 text="🌡️ MARKET TEMPERATURE", 
+                 text="MARKET TEMPERATURE", 
                  style='DeadlineSubtitle.TLabel').pack(pady=(0, 10))
         
         # Get real market temperature from deadline manager
@@ -1523,7 +1523,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         status_frame.pack_propagate(False)
         
         self.status_label = tk.Label(status_frame, 
-                                   text="🚨 TRADE DEADLINE ACTIVE - All trades must be completed before 3:00 PM ET", 
+                                   text="TRADE DEADLINE ACTIVE - All trades must be completed before 3:00 PM ET", 
                                    bg=self.URGENT_RED, 
                                    fg=self.TEXT_WHITE, 
                                    font=('Segoe UI', 12, 'bold'))
@@ -1546,7 +1546,7 @@ class DeadlineMarketBrowser(tk.Toplevel):
         if time_info['expired']:
             self.deadline_passed = True
             self.countdown_label.config(text="DEADLINE PASSED", foreground=self.NEUTRAL_GRAY)
-            self.status_label.config(text="🚫 TRADE DEADLINE HAS PASSED - No more trades allowed", 
+            self.status_label.config(text="TRADE DEADLINE HAS PASSED - No more trades allowed", 
                                    bg=self.NEUTRAL_GRAY)
             self.auto_trades_active = False
             return
@@ -1665,7 +1665,7 @@ def create_trade_deadline_button(parent_frame, parent_app):
         
     deadline_btn = tk.Button(
         parent_frame,
-        text="🚨 TRADE DEADLINE CENTER 🚨",
+        text="TRADE DEADLINE CENTER",
         bg='#FF1744',
         fg='white',
         font=('Segoe UI', 14, 'bold'),

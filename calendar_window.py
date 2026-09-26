@@ -8,7 +8,7 @@ class CalendarWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
-        self.title(f"🗓️ Season Calendar - {self.parent.user_team.team_name}")
+        self.title(f"Season Calendar - {self.parent.user_team.team_name}")
         self.geometry("1200x800")
         self.configure(background=parent.BG_COLOR)
         
@@ -144,12 +144,12 @@ class CalendarWindow(tk.Toplevel):
         content_frame.pack(fill='both', expand=True, pady=(10, 0))
         
         # Calendar frame (left side)
-        calendar_frame = ttk.LabelFrame(content_frame, text="📅 Calendar View", 
+        calendar_frame = ttk.LabelFrame(content_frame, text="Calendar View", 
                                        style='TitleBar.TFrame', padding=10)
         calendar_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
         
         # Details frame (right side)
-        details_frame = ttk.LabelFrame(content_frame, text="📋 Event Details", 
+        details_frame = ttk.LabelFrame(content_frame, text="Event Details", 
                                       style='TitleBar.TFrame', padding=10)
         details_frame.pack(side='right', fill='y', padx=(5, 0))
         details_frame.configure(width=300)
@@ -282,11 +282,11 @@ class CalendarWindow(tk.Toplevel):
         for widget in self.actions_frame.winfo_children():
             widget.destroy()
             
-        ttk.Button(self.actions_frame, text="🏒 View Game Details", style='TButton',
+        ttk.Button(self.actions_frame, text="View Game Details", style='TButton',
                   command=self._view_game_details).pack(fill='x', pady=2)
-        ttk.Button(self.actions_frame, text="📊 Team Stats", style='TButton',
+        ttk.Button(self.actions_frame, text="Team Stats", style='TButton',
                   command=self._view_team_stats).pack(fill='x', pady=2)
-        ttk.Button(self.actions_frame, text="📰 News & Updates", style='TButton',
+        ttk.Button(self.actions_frame, text="News & Updates", style='TButton',
                   command=self._view_news).pack(fill='x', pady=2)
                   
     def _create_trade_deadline_actions(self):
@@ -296,13 +296,13 @@ class CalendarWindow(tk.Toplevel):
             widget.destroy()
             
         # Trade Deadline Center button (prominent)
-        ttk.Button(self.actions_frame, text="🚨 TRADE DEADLINE CENTER", style='TradeDeadline.TButton',
+        ttk.Button(self.actions_frame, text="TRADE DEADLINE CENTER", style='TradeDeadline.TButton',
                   command=self._launch_trade_deadline_center).pack(fill='x', pady=2)
-        ttk.Button(self.actions_frame, text="🔄 Trade Center", style='TButton',
+        ttk.Button(self.actions_frame, text="Trade Center", style='TButton',
                   command=self.parent.open_trade_window).pack(fill='x', pady=2)
-        ttk.Button(self.actions_frame, text="📈 Market Analysis", style='TButton',
+        ttk.Button(self.actions_frame, text="Market Analysis", style='TButton',
                   command=self._view_market_analysis).pack(fill='x', pady=2)
-        ttk.Button(self.actions_frame, text="📰 Deadline News", style='TButton',
+        ttk.Button(self.actions_frame, text="Deadline News", style='TButton',
                   command=self._view_news).pack(fill='x', pady=2)
                   
     def _launch_trade_deadline_center(self):

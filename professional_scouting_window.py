@@ -389,7 +389,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
     def _create_player_database_tab(self):
         """Create comprehensive player database interface"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="🏒 Player Database")
+        self.notebook.add(tab_frame, text="Player Database")
         
         # Advanced filters
         self._create_advanced_player_filters(tab_frame)
@@ -552,25 +552,25 @@ class ProfessionalScoutingWindow(tk.Toplevel):
         toolbar_frame.grid_propagate(False)
         
         # Primary actions
-        scout_btn = tk.Button(toolbar_frame, text="🔍 Assign Scout", 
+        scout_btn = tk.Button(toolbar_frame, text="Assign Scout", 
                             bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
                             font=(self.parent.FONT_FAMILY, 10, "bold"),
                             command=self._assign_scout_to_player)
         scout_btn.pack(side='left', padx=(10, 8))
         
-        profile_btn = tk.Button(toolbar_frame, text="👤 View Profile", 
+        profile_btn = tk.Button(toolbar_frame, text="View Profile", 
                                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
                                font=(self.parent.FONT_FAMILY, 10),
                                command=self._view_player_profile)
         profile_btn.pack(side='left', padx=(0, 8))
         
-        watchlist_btn = tk.Button(toolbar_frame, text="⭐ Add to Watchlist", 
+        watchlist_btn = tk.Button(toolbar_frame, text="Add to Watchlist", 
                                 bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
                                 font=(self.parent.FONT_FAMILY, 10),
                                 command=self._add_to_watchlist)
         watchlist_btn.pack(side='left', padx=(0, 8))
         
-        compare_btn = tk.Button(toolbar_frame, text="⚖️ Compare Players", 
+        compare_btn = tk.Button(toolbar_frame, text="Compare Players", 
                                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
                                font=(self.parent.FONT_FAMILY, 10),
                                command=self._compare_players)
@@ -585,7 +585,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
     def _create_scouting_staff_tab(self):
         """Create scouting staff management interface"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="👥 Scouting Staff")
+        self.notebook.add(tab_frame, text="Scouting Staff")
         
         # Staff overview
         self._create_staff_overview(tab_frame)
@@ -596,7 +596,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
     def _create_draft_center_tab(self):
         """Create dedicated draft analysis center - THE NEW FEATURE"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="🎯 Draft Center")
+        self.notebook.add(tab_frame, text="Draft Center")
         
         # Draft year info
         self._create_draft_header(tab_frame)
@@ -610,7 +610,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
     def _create_assignments_tab(self):
         """Create scouting assignments management"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="📋 Assignments")
+        self.notebook.add(tab_frame, text="Assignments")
         
         # Assignment management interface
         self._create_assignment_interface(tab_frame)
@@ -618,7 +618,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
     def _create_reports_tab(self):
         """Create scouting reports interface"""
         tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
-        self.notebook.add(tab_frame, text="📄 Reports")
+        self.notebook.add(tab_frame, text="Reports")
         
         # Reports interface
         self._create_reports_interface(tab_frame)
@@ -1045,13 +1045,13 @@ class ProfessionalScoutingWindow(tk.Toplevel):
             self.players_tree.selection_set(item)
             
             context_menu = tk.Menu(self, tearoff=0)
-            context_menu.add_command(label="🔍 Assign Scout", command=self._assign_scout_to_player)
-            context_menu.add_command(label="👤 View Profile", command=self._view_player_profile)
+            context_menu.add_command(label="Assign Scout", command=self._assign_scout_to_player)
+            context_menu.add_command(label="View Profile", command=self._view_player_profile)
             context_menu.add_separator()
-            context_menu.add_command(label="⭐ Add to Watchlist", command=self._add_to_watchlist)
-            context_menu.add_command(label="⚖️ Compare", command=self._compare_players)
+            context_menu.add_command(label="Add to Watchlist", command=self._add_to_watchlist)
+            context_menu.add_command(label="Compare", command=self._compare_players)
             context_menu.add_separator()
-            context_menu.add_command(label="📊 Advanced Analysis", command=self._advanced_analysis)
+            context_menu.add_command(label="Advanced Analysis", command=self._advanced_analysis)
             
             try:
                 context_menu.tk_popup(event.x_root, event.y_root)
