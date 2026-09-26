@@ -2050,6 +2050,19 @@ class GameSim:
                 except Exception:
                     pass
 
+        # Flush per-game skater shots into season stats (goals/assists/PIM
+        # are written live; shots were only in game_stats and never flushed).
+        for stats in self.game_stats.values():
+            player = stats.get('player')
+            if player is None:
+                continue
+            try:
+                if getattr(getattr(player, 'primary_position', None), 'value', '') == 'G':
+                    continue
+                player.stats.shots += stats.get('shots_on_goal', 0)
+            except Exception:
+                pass
+
         # Flush per-game goalie stats into season stats so saves / shots
         # against / goals against accumulate on every GameSim path.
         for stats in self.game_stats.values():

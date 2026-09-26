@@ -7014,8 +7014,8 @@ class HockeyManagerGUI(tk.Tk):
             'notable_events': notable_events,
             'player_ratings': player_ratings,
             'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
-            'overtime': away_score != home_score and len([e for e in notable_events if e['period'] > 3]) > 0,
-            'shootout': len([e for e in notable_events if e['period'] == 5]) > 0
+            'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
+            'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
         }
         
         self.game_results.append(game_result)
@@ -7091,11 +7091,14 @@ class HockeyManagerGUI(tk.Tk):
                     player.stats.penalties += 1
                     player.stats.penalties_in_minutes += 2
         
-        # Games played: all roster players get credit
-        # (In real NHL only dressed players get GP, but sim doesn't track scratches)
-        for team in [home_team, away_team]:
-            for player in team.roster:
-                player.stats.games_played += 1
+        # Games played: all roster players get credit -- but only when stats
+        # are derived from events (quick sim). GameSim already credited GP
+        # to dressed players itself; running this too would double-count.
+        if stats_from_events:
+            # (In real NHL only dressed players get GP, but sim doesn't track scratches)
+            for team in [home_team, away_team]:
+                for player in team.roster:
+                    player.stats.games_played += 1
         
         # Update news log for user team games
         if self.user_team in (home_team, away_team):
