@@ -2686,8 +2686,24 @@ class GameSim:
             return self._turnover_possession(defending_team)
 
     def _maintain_offensive_possession(self, attacking_team):
-        """Maintain possession in offensive zone."""
+        """Keep the cycle alive: work the puck laterally (D-to-D, low to
+        high) instead of standing still. A real pass event, so the
+        visualizer shows the puck moving and a defender can jump it."""
+        defending_team = (self.away_team if attacking_team == self.home_team
+                          else self.home_team)
+        skaters = [p for p in self._get_on_ice(attacking_team)
+                   if p.primary_position != PlayerPosition.GOALIE]
+        carrier = getattr(self, "possession_player", None)
+        if carrier not in skaters:
+            carrier = random.choice(skaters) if skaters else None
+        if carrier is None:
+            return "MAINTAIN_POSSESSION"
+        self.possession_player = carrier
         self.possession_time += random.randint(3, 8)
+        res = self._attempt_pass(carrier, attacking_team, defending_team,
+                                 kind="cycle")
+        if res is not None and self.possession_team != attacking_team:
+            return "TURNOVER"
         return "MAINTAIN_POSSESSION"
 
     def _attempt_zone_clear(self, defending_team, attacking_team):
@@ -2765,6 +2781,13 @@ class GameSim:
         
         if breakout_roll > pressure_roll:
             self._log_event(f"{best_defender.full_name} completes the breakout", "BREAKOUT")
+            # The breakout is a real pass -- D to a forward up the ice --
+            # so the puck visibly moves out and a forechecker can jump it.
+            self.possession_player = best_defender
+            res = self._attempt_pass(best_defender, attacking_team,
+                                     defending_team, kind="breakout")
+            if res is not None and self.possession_team != attacking_team:
+                return "TURNOVER"
             self.current_zone = Zone.NEUTRAL_ZONE
             self.zone_time = 0
             return "BREAKOUT"
@@ -3200,14 +3223,16 @@ class GameSim:
                 best, bd = d, dd
         return best, bd
 
-    def _attempt_pass(self, passer, attacking_team, defending_team, kind="cycle"):
+    def _attempt_pass(self, passer, attacking_team, defending_team, kind="cycle",
+                      safe=False):
         """A real pass with off-puck play.
 
         Each potential receiver first battles his coverage to get open
         (offensive awareness + agility vs defensive awareness + anticipation).
         Winners shake to space; the passer then picks a target and the pass
         is completed or picked off. Returns the receiver, the interceptor,
-        or None.
+        or None. safe=True marks routine puck movement (perimeter, D-to-D)
+        that pros complete at a very high rate.
         """
         self._ppos_ensure()
         mates = [p for p in self._on_ice_skaters(attacking_team) if p.id != passer.id]
@@ -3245,12 +3270,18 @@ class GameSim:
         _, receiver, rx, ry, nd, dd, got_open = cands[0]
 
         # --- pass execution ---
+        # NHL-authentic: the passer's job is to put it on the tape. Routine
+        # puck movement (safe=True: D-to-D, low-to-high, around the wall)
+        # is completed at a very high rate -- failures come from defenders
+        # reading the lane and making a play, not from random incompetence.
         lane_pressure = max(0.0, 10.0 - dd) if nd is not None else 0.0
         q = (52 + passer.passing * 1.0 + min(dd, 10.0) * 1.2
              - lane_pressure * 3.0)
+        if safe:
+            q += 14
         # Trait: Playmakers complete more passes
         q *= _trait_bonus(passer, "pass_success_mult")
-        q = max(10.0, min(95.0, q))
+        q = max(10.0, min(98.0 if safe else 95.0, q))
         completed = random.uniform(0, 100) < q
         interceptor = None
         if not completed and defenders:
@@ -4975,8 +5006,10 @@ class GameSim:
         # Base event probabilities (shot_chance tuned so team SOG lands
         # near NHL ~30/game with the flattened shooter distribution;
         # nudged up 2026-09-26 to offset the honest scoring loss from
-        # goalie freezes breaking up sustained pressure)
-        shot_chance = 0.425
+        # goalie freezes breaking up sustained pressure; raised again for
+        # the possession-sequence rework so the extra setup passes don't
+        # starve the shot count)
+        shot_chance = 0.50
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
@@ -4994,6 +5027,38 @@ class GameSim:
             elif current_situation == SpecialSituation.PENALTY_KILL:
                 self.formation_usage['penalty_kill'][formation] = self.formation_usage['penalty_kill'].get(formation, 0) + 1
         
+        # A real offensive-zone shift is a possession sequence, not one die
+        # roll: the puck moves (1-3 setup passes working it around, each of
+        # which a defender can read and break up), bodies bump on every
+        # touch, and only then does the chance come -- shot, clear, or the
+        # cycle grinding on. Per-tick shot rate is unchanged on purpose so
+        # scoring calibration holds; the connective tissue is what's new.
+        carrier = getattr(self, "possession_player", None)
+        if carrier not in attacking_skaters:
+            carrier = (random.choice(attacking_skaters)
+                       if attacking_skaters else None)
+        if carrier is not None:
+            if current_situation == SpecialSituation.POWER_PLAY:
+                n_setup = random.choices([1, 2, 3], weights=[0.25, 0.45, 0.30])[0]
+            elif self._is_team_on_penalty_kill(attacking_team):
+                n_setup = random.choices([0, 1], weights=[0.7, 0.3])[0]
+            else:
+                n_setup = random.choices([1, 2, 3], weights=[0.35, 0.40, 0.25])[0]
+            for _ in range(n_setup):
+                self.possession_player = carrier
+                res = self._attempt_pass(carrier, attacking_team,
+                                         defending_team, kind="cycle",
+                                         safe=True)
+                if res is not None and self.possession_team != attacking_team:
+                    return "TURNOVER"
+                carrier = getattr(self, "possession_player", None) or carrier
+                # Contact on the touch: rub-outs along the wall happen all
+                # game in real hockey, not just on highlight hits.
+                hit_outcome = self._maybe_throw_hit(
+                    defending_team, attacking_team, carrier, 0.12)
+                if hit_outcome is not None:
+                    return hit_outcome
+
         # Random events in offensive zone
         event_roll = random.random()
         
@@ -5969,6 +6034,15 @@ class GameSim:
         # Log significant hits
         if result in [HitResult.TURNOVER_CAUSED, HitResult.PENALTY_DRAWN, HitResult.INJURY_CAUSED]:
             self._log_event(f"{hit_type.value.title()} by {hitting_player.full_name} on {target_player.full_name} - {result.value}", "HIT")
+            self._emit_pbp("hit",
+                           hitting_player=hitting_player,
+                           target_player=target_player,
+                           hit_type=hit_type.value,
+                           result=result.value)
+        elif result == HitResult.SUCCESSFUL:
+            # Routine contact is still hockey: rub-outs along the wall and
+            # finishes on the forecheck happen all game. Emit it so the
+            # broadcast shows the physical play instead of hiding it.
             self._emit_pbp("hit",
                            hitting_player=hitting_player,
                            target_player=target_player,
