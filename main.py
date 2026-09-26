@@ -10854,8 +10854,10 @@ class CleanEditLinesWindow(tk.Toplevel):
         tk.Frame(card, bg='#2e2e36', height=1).pack(fill='x', side='top')
         top = tk.Frame(card, bg=self.C_CARD)
         top.pack(fill='x', padx=16, pady=(12, 0))
-        tk.Label(top, text=kicker, bg=self.C_CARD, fg=self.C_TER,
-                 font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(side='left')
+        kicker_l = tk.Label(top, text=kicker, bg=self.C_CARD, fg=self.C_TER,
+                            font=(self.parent.FONT_FAMILY, 11, 'bold'))
+        kicker_l.pack(side='left')
+        card._kicker = kicker_l
         big = tk.Label(top, text="--", bg=self.C_CARD, fg=self.C_TEXT,
                        font=(self.parent.FONT_FAMILY, 26, 'bold'))
         big.pack(side='right')
@@ -10877,33 +10879,19 @@ class CleanEditLinesWindow(tk.Toplevel):
         return body, big, detail, ice
 
     def _build_es_view(self, parent):
+        """One scroll: forwards, defense, goalies. Card headers are
+        clickable dropdowns (LINE 1-4 / PAIR 1-3) so you never tab out
+        to switch units. All zones are built up-front."""
         frame = tk.Frame(parent, bg=self.C_BG)
-
-        # Sub-toggle: Forward Lines | D Pairings | Goalies
-        sub = tk.Frame(frame, bg=self.C_BG)
-        sub.pack(fill='x', padx=2, pady=(0, 8))
-        seg = tk.Frame(sub, bg=self.C_CARD2)
-        seg.pack(side='left')
-        self._es_sub_btns = {}
-        for key, label in (("F", "Forward Lines"), ("D", "D Pairings"),
-                           ("G", "Goalies")):
-            b = tk.Label(seg, text=label, bg=self.C_CARD2, fg=self.C_SEC,
-                         font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                         padx=16, pady=6, cursor='hand2')
-            b.pack(side='left', padx=2, pady=2)
-            b.bind('<Button-1>', lambda e, k=key: self.switch_es_sub(k))
-            self._es_sub_btns[key] = b
-
         inner = self._make_scrollable(frame)
-        f_frame = tk.Frame(inner, bg=self.C_BG)
-        d_frame = tk.Frame(inner, bg=self.C_BG)
-        g_frame = tk.Frame(inner, bg=self.C_BG)
-        self._es_sub = {"F": f_frame, "D": d_frame, "G": g_frame}
 
+        # ---- Forwards: one visible line card, header dropdown to swap ----
+        self._fwd_cards = []
         es_ice = ["22-25 min", "18-22 min", "12-16 min", "8-12 min"]
         for i in range(4):
             body, big, detail, ice = self._unit_card(
-                f_frame, f"LINE {i+1} \u00b7 {self.get_line_type_name(i).upper()}")
+                inner,
+                f"LINE {i+1} \u00b7 {self.get_line_type_name(i).upper()} \u25be")
             self.forward_rating_big[i] = big
             self.forward_rating_labels[i] = detail
             ice.config(text=f"Suggested ice time: {es_ice[i]}")
@@ -10913,12 +10901,20 @@ class CleanEditLinesWindow(tk.Toplevel):
                 slot.pack(side='left', fill='both', expand=True, padx=4)
                 slots.append(slot)
             self.forward_vars.append(slots)
+            card = body.master
+            self._fwd_cards.append(card)
+            self._make_header_dropdown(card._kicker, 'F')
+            if i != 0:
+                card.pack_forget()
+        self._fwd_shown = 0
 
+        # ---- Defense: one visible pair card, header dropdown to swap ----
+        self._def_cards = []
         d_ice = ["24-28 min", "20-24 min", "16-20 min"]
         for i in range(3):
             body, big, detail, ice = self._unit_card(
-                d_frame,
-                f"PAIR {i+1} \u00b7 {self.get_defense_pair_name(i).upper()}")
+                inner,
+                f"PAIR {i+1} \u00b7 {self.get_defense_pair_name(i).upper()} \u25be")
             self.defense_rating_big[i] = big
             self.defense_rating_labels[i] = detail
             ice.config(text=f"Suggested ice time: {d_ice[i]}")
@@ -10928,8 +10924,15 @@ class CleanEditLinesWindow(tk.Toplevel):
                 slot.pack(side='left', fill='both', expand=True, padx=4)
                 slots.append(slot)
             self.defense_vars.append(slots)
+            card = body.master
+            self._def_cards.append(card)
+            self._make_header_dropdown(card._kicker, 'D')
+            if i != 0:
+                card.pack_forget()
+        self._def_shown = 0
 
-        body, big, detail, ice = self._unit_card(g_frame, "GOALIES")
+        # ---- Goalies: single static card ----
+        body, big, detail, ice = self._unit_card(inner, "GOALIES")
         for w in (big, detail, ice):
             w.pack_forget()
             w._force_hidden = True
@@ -10937,28 +10940,55 @@ class CleanEditLinesWindow(tk.Toplevel):
             slot = self.create_slot(body, f"goalie_role_{i}", role)
             slot.pack(side='left', fill='both', expand=True, padx=4)
             self.goalie_vars.append(slot)
-
-        self._es_current = "F"
-        f_frame.pack(fill='both', expand=True)
-        self._paint_es_sub_buttons()
         return frame
 
-    def switch_es_sub(self, key):
-        """Swap between Forward Lines / D Pairings / Goalies."""
-        if key == getattr(self, '_es_current', None):
+    def _make_header_dropdown(self, kicker_label, kind):
+        """Turn a card header into a clickable unit-switch dropdown."""
+        kicker_label.config(cursor='hand2')
+        kicker_label.bind('<Button-1>',
+                          lambda e: self._unit_menu_popup(e, kind))
+        kicker_label.bind('<Enter>',
+                          lambda e, k=kicker_label: k.config(fg=self.C_ACCENT))
+        kicker_label.bind('<Leave>',
+                          lambda e, k=kicker_label: k.config(fg=self.C_TER))
+
+    def _unit_menu_popup(self, event, kind):
+        """Dropdown listing Line 1-4 / Pair 1-3 with live ratings."""
+        if kind == 'F':
+            n, shown = 4, self._fwd_shown
+            title, bigs, switch = 'Line', self.forward_rating_big, self.show_forward_line
+        else:
+            n, shown = 3, self._def_shown
+            title, bigs, switch = 'Pair', self.defense_rating_big, self.show_defense_pair
+        menu = tk.Menu(self, tearoff=0, bg=self.C_CARD2, fg=self.C_TEXT,
+                       activebackground=self.C_ACCENT,
+                       activeforeground='#06231f',
+                       font=(self.parent.FONT_FAMILY, 10))
+        self._menu_var = tk.IntVar(value=shown)
+        for i in range(n):
+            r = bigs[i].cget('text')
+            label = f"{title} {i+1}" + (f"  \u00b7  {r}" if r != '--' else "")
+            menu.add_radiobutton(label=label, variable=self._menu_var,
+                                 value=i, command=lambda i=i: switch(i))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def show_forward_line(self, i):
+        """Swap the visible forward-line card (header dropdown)."""
+        if i == self._fwd_shown:
             return
-        self._es_sub[self._es_current].pack_forget()
-        self._es_sub[key].pack(fill='both', expand=True)
-        self._es_current = key
-        self._paint_es_sub_buttons()
+        self._fwd_cards[self._fwd_shown].pack_forget()
+        self._fwd_cards[i].pack(fill=tk.X, pady=(0, 12), padx=2)
+        self._fwd_shown = i
         self._clear_selection()
 
-    def _paint_es_sub_buttons(self):
-        for key, b in self._es_sub_btns.items():
-            if key == self._es_current:
-                b.config(bg=self.C_ACCENT, fg='#06231f')
-            else:
-                b.config(bg=self.C_CARD2, fg=self.C_SEC)
+    def show_defense_pair(self, i):
+        """Swap the visible defense-pair card (header dropdown)."""
+        if i == self._def_shown:
+            return
+        self._def_cards[self._def_shown].pack_forget()
+        self._def_cards[i].pack(fill=tk.X, pady=(0, 12), padx=2)
+        self._def_shown = i
+        self._clear_selection()
 
     def _build_pp_view(self, parent):
         frame = tk.Frame(parent, bg=self.C_BG)
