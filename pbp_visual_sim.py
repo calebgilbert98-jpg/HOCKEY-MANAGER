@@ -940,7 +940,6 @@ class PBPVisualSim(tk.Toplevel):
             "nudge": None,  # (dx, dy, until) hit animation
             "jx": random.uniform(-2.5, 2.5),  # fixed personal jitter
             "jy": random.uniform(-2.5, 2.5),
-            "sim_set": False,  # True while the sim positions this dot
         }
 
     def _set_dot_visible(self, d, visible):
@@ -1054,99 +1053,246 @@ class PBPVisualSim(tk.Toplevel):
         return None
 
     def _update_targets(self):
-        """Fallback hockey sense for dots the sim isn't positioning (e.g.
-        benched lines); sim-authored dots keep their sim targets. Goalies
-        always shuffle with the puck."""
+        """Tactical positioning engine (EHM-style formation slots).
+
+        Every skater holds a zone-anchored formation slot driven by puck
+        location, possession, role, and manpower -- the way real systems
+        work. Only the puck carrier (attack) or a designated checker or
+        two (defense/forecheck/loose puck) ever goes to the puck; everyone
+        else keeps their shape, holds the weak side, and stays goal-side.
+        A separation pass guarantees teammates never pile up. Runs every
+        tick; sim skate snapshots only feed puck position + carrier.
+        """
         if self._faceoff_ceremony:
             return  # ceremony owns every dot's targets until the puck drops
         px, py = self.puck["x"], self.puck["y"]
         pp = self._pp_team()
-        # penalized skaters sit in the drawn penalty boxes (hidden on ice)
-        box_n = {"home": 0, "away": 0}
+        strong_y, weak_y = (24.0, 61.0) if py < 42.5 else (61.0, 24.0)
+
+        # ---- per-team tactical state, computed once per tick ----
+        tstate = {}
+        for home in (True, False):
+            side = "home" if home else "away"
+            adir = 1 if home else -1
+            anx = AWAY_NET_X if home else HOME_NET_X   # net we attack
+            onx = HOME_NET_X if home else AWAY_NET_X   # net we defend
+            has = ((self.possession_home == home)
+                   if self.possession_home is not None else None)
+            oz = (adir == 1 and px > 135) or (adir == -1 and px < 65)
+            dz = (adir == 1 and px < 65) or (adir == -1 and px > 135)
+            is_pp = pp == side
+            is_pk = pp is not None and not is_pp
+            skaters = [d for d in self.dots.values()
+                       if d["is_home"] == home and d["role"] != "G"
+                       and d["id"] not in self.penalty_box
+                       and not (self._line_change.get(side)
+                                and d["role"] in self._line_change[side]["roles"])]
+            fwds = [d for d in skaters if d["role"] in ("C", "LW", "RW")]
+            def _dist(d):
+                return ((d["x"] - px) ** 2 + (d["y"] - py) ** 2) ** 0.5
+            by_dist = sorted(skaters, key=_dist)
+            fwd_by_dist = sorted(fwds, key=_dist)
+            tstate[side] = dict(adir=adir, anx=anx, onx=onx, has=has, oz=oz,
+                                dz=dz, is_pp=is_pp, is_pk=is_pk,
+                                skaters=skaters, fwds=fwds,
+                                check1={d["id"] for d in by_dist[:1]},
+                                check2={d["id"] for d in by_dist[:2]},
+                                fcheck1=([d["id"] for d in fwd_by_dist[:1]] or
+                                          [None])[0],
+                                fcheck2=[d["id"] for d in fwd_by_dist[:2]],
+                                fwd_by_dist=fwd_by_dist)
+
+        # ---- assign targets ----
         for d in self.dots.values():
             if d["id"] in self.penalty_box:
                 side = "home" if d["is_home"] else "away"
-                i = box_n[side]
-                box_n[side] += 1
+                i = sum(1 for o in self.dots.values()
+                        if o["id"] in self.penalty_box
+                        and ("home" if o["is_home"] else "away") == side
+                        and o["id"] < d["id"])
                 bx = 12 + i * 7 if side == "home" else 188 - i * 7
                 d["tx"], d["ty"] = bx, 3
                 continue
             side = "home" if d["is_home"] else "away"
             ch = self._line_change.get(side)
             if ch is not None and d["role"] in ch["roles"]:
-                # line change in progress: skate to the bench door, then the
-                # fresh line skates back on (players swap mid-change)
                 d["tx"] = 100 + d["jx"] * 3
                 d["ty"] = 5 if side == "home" else 80
                 continue
-            home, role = d["is_home"], d["role"]
+            role, home = d["role"], d["is_home"]
             if role == "G":
                 own = self._net_x(home, attacking=False)
-                # shuffle with puck + challenge as it gets close (depth)
                 dist = abs(px - own)
                 out = min(7.0, max(1.0, (34.0 - dist) * 0.28))
                 toward = 1.0 if px >= own else -1.0
                 d["tx"] = own + toward * out
                 d["ty"] = 42.5 + max(-8, min(8, (py - 42.5) * 0.35))
                 continue
-            if d.get("sim_set"):
-                continue
-            has_puck = (self.possession_home == home) if self.possession_home is not None else None
-            adir = self._attack_dir(home)
-            anx = self._net_x(home, attacking=True)     # net we attack
-            onx = self._net_x(home, attacking=False)    # net we defend
-            jx, jy = d["jx"], d["jy"]
-            side = "home" if home else "away"
+            if d.get("nudge"):
+                continue  # hit/battle lunge owns this dot briefly
+            st = tstate[side]
+            adir, anx, onx = st["adir"], st["anx"], st["onx"]
+            has = st["has"]
             if d["id"] == self.carrier_id:
                 d["tx"], d["ty"] = px, py
-            elif pp == side and has_puck:
-                # power-play umbrella: C high slot, wings half-boards, D points
-                if role == "C":
-                    d["tx"], d["ty"] = anx - 40 * adir + jx, 42.5 + jy
-                elif role == "LW":
-                    d["tx"], d["ty"] = anx - 44 * adir + jx, 24 + jy
-                elif role == "RW":
-                    d["tx"], d["ty"] = anx - 44 * adir + jx, 61 + jy
-                elif role == "D1":
-                    d["tx"], d["ty"] = anx - 62 * adir + jx, 32 + jy
+                continue
+            jx, jy = d["jx"], d["jy"]
+            tx, ty = None, None
+
+            if has is None:
+                # loose puck: two nearest race for it, everyone else holds
+                # a neutral wedge -- a 1v1/2v2 battle, never a 10-man pile
+                if d["id"] in st["check2"]:
+                    k = sorted(st["check2"]).index(d["id"])
+                    tx, ty = px + (k * 3 - 1.5) * adir, py + (k - 0.5) * 4
+                elif st["dz"]:
+                    tx, ty = self._slot_dz(role, adir, onx, py)
                 else:
-                    d["tx"], d["ty"] = anx - 62 * adir + jx, 53 + jy
-            elif pp is not None and pp != side and not has_puck:
-                # penalty-kill box: collapse tight around the slot
+                    tx, ty = self._slot_nz(role, px, py, adir, onx)
+            elif has and st["is_pp"]:
+                tx, ty = self._slot_pp(role, adir, anx,
+                                behind_net=((adir == 1 and px > anx - 28) or
+                                            (adir == -1 and px < anx + 28)))
+            elif has and st["oz"]:
+                behind = ((adir == 1 and px > anx - 6) or
+                          (adir == -1 and px < anx + 6))
+                if role == "C":
+                    tx, ty = (anx - 13 * adir, 42.5) if behind else \
+                        (anx - 27 * adir, 42.5)
+                elif role in ("LW", "RW"):
+                    mine = ((role == "LW") == (py < 42.5))
+                    if behind and mine:
+                        tx, ty = anx - 30 * adir, strong_y
+                    elif mine:
+                        tx, ty = anx - 37 * adir, strong_y
+                    else:
+                        tx, ty = anx - 45 * adir, weak_y  # stay wide
+                else:
+                    tx, ty = (anx - 57 * adir, 30.0) if role == "D1" else \
+                        (anx - 57 * adir, 55.0)
+            elif has:
+                # breakout / regroup through the middle
+                if role == "C":
+                    tx, ty = px - 16 * adir, 42.5
+                elif role in ("LW", "RW"):
+                    mine = ((role == "LW") == (py < 42.5))
+                    tx, ty = (px + 22 * adir, strong_y) if mine else \
+                        (px + 30 * adir, weak_y)
+                else:
+                    tx, ty = (px - 10 * adir, 33.0) if role == "D1" else \
+                        (px - 10 * adir, 52.0)
+            elif st["is_pk"]:
+                # tight box; nearest forward takes the point man only when
+                # the puck is high
                 if role in ("D1", "D2"):
-                    s = -6 if role == "D1" else 6
-                    d["tx"], d["ty"] = onx + 14 * adir + jx, 42.5 + s + jy
+                    s = 36.0 if role == "D1" else 49.0
+                    tx, ty = onx + 12 * adir, s
+                else:
+                    high = ((adir == 1 and px > onx + 42) or
+                            (adir == -1 and px < onx - 42))
+                    if high and d["id"] == st["fcheck1"]:
+                        tx, ty = px - 6 * adir, py
+                    else:
+                        tx, ty = onx + 25 * adir, 31.0 if role != "RW" else 54.0
+            elif st["dz"]:
+                # wedge + 1: D own the house, C the slot, wingers contain;
+                # one checker pressures, nobody else dives in
+                if d["id"] in st["check1"]:
+                    tx, ty = px - 4 * adir, py
+                elif role in ("D1", "D2"):
+                    behind = ((adir == 1 and px < onx + 6) or
+                              (adir == -1 and px > onx - 6))
+                    s = 35.0 if role == "D1" else 50.0
+                    tx, ty = (onx + 8 * adir, s) if behind else \
+                        (onx + 13 * adir, s)
                 elif role == "C":
-                    d["tx"], d["ty"] = onx + 26 * adir + jx, 42.5 + jy
-                elif role == "LW":
-                    d["tx"], d["ty"] = onx + 24 * adir + jx, 30 + jy
+                    tx, ty = onx + 22 * adir, 42.5
                 else:
-                    d["tx"], d["ty"] = onx + 24 * adir + jx, 55 + jy
-            elif has_puck:
-                # offensive shape: forwards to slot/half-boards, D to points
-                if role == "C":
-                    d["tx"], d["ty"] = anx - 26 * adir + jx, 42.5 + jy
-                elif role == "LW":
-                    d["tx"], d["ty"] = anx - 38 * adir + jx, 20 + jy
-                elif role == "RW":
-                    d["tx"], d["ty"] = anx - 38 * adir + jx, 65 + jy
-                elif role == "D1":
-                    d["tx"], d["ty"] = anx - 56 * adir + jx, 30 + jy
+                    mine = ((role == "LW") == (py < 42.5))
+                    tx, ty = (onx + 30 * adir, strong_y) if mine else \
+                        (onx + 33 * adir, weak_y)
+            elif st["oz"]:
+                # 2-1-2 forecheck: two hunters, F3 high, D hold the line
+                hunters = st["fcheck2"]
+                if d["id"] in hunters:
+                    if hunters[0] == d["id"]:
+                        tx, ty = px, py
+                    else:
+                        tx, ty = px + 11 * adir, 42.5 + (py - 42.5) * 0.4
+                elif role in ("C", "LW", "RW"):
+                    tx, ty = px + 24 * adir, 42.5
                 else:
-                    d["tx"], d["ty"] = anx - 56 * adir + jx, 55 + jy
+                    tx, ty = (anx - 50 * adir, 32.0) if role == "D1" else \
+                        (anx - 50 * adir, 53.0)
             else:
-                # defensive shape: collapse between puck and own net
-                if role in ("D1", "D2"):
-                    side = -7 if role == "D1" else 7
-                    d["tx"], d["ty"] = onx + 16 * adir + jx, 42.5 + side + jy
-                elif role == "C":
-                    d["tx"], d["ty"] = onx + 26 * adir + jx, 42.5 + jy
-                elif role == "LW":
-                    d["tx"], d["ty"] = onx + 32 * adir + jx, 24 + jy
+                # neutral zone 1-2-2: F1 pressures, F2/F3 clog the middle,
+                # D gap up at their own blue line instead of backing in
+                if d["id"] == st["fcheck1"]:
+                    tx, ty = px - 5 * adir, py
+                elif role in ("C", "LW", "RW"):
+                    tx, ty = px - 13 * adir, 32.0 if role != "RW" else 53.0
                 else:
-                    d["tx"], d["ty"] = onx + 32 * adir + jx, 61 + jy
-            d["tx"] = min(max(d["tx"], 5), 195)
-            d["ty"] = min(max(d["ty"], 5), 80)
+                    tx, ty = (onx + 48 * adir, 32.0) if role == "D1" else \
+                        (onx + 48 * adir, 53.0)
+            d["tx"] = min(max(tx + jx, 5), 195)
+            d["ty"] = min(max(ty + jy, 5), 80)
+
+        # ---- separation: teammates never share a phone booth ----
+        for home in (True, False):
+            mates = [d for d in self.dots.values()
+                     if d["is_home"] == home and d["role"] != "G"
+                     and d["id"] not in self.penalty_box]
+            for _ in range(2):
+                for i in range(len(mates)):
+                    for j in range(i + 1, len(mates)):
+                        a, b = mates[i], mates[j]
+                        dx, dy = b["tx"] - a["tx"], b["ty"] - a["ty"]
+                        dist = (dx * dx + dy * dy) ** 0.5
+                        if dist >= 8.0 or dist < 0.01:
+                            continue
+                        ux, uy = dx / dist, dy / dist
+                        push = (8.0 - dist)
+                        a_anchor = a["id"] == self.carrier_id
+                        b_anchor = b["id"] == self.carrier_id
+                        if not a_anchor:
+                            sh = push if b_anchor else push / 2
+                            a["tx"] -= ux * sh
+                            a["ty"] -= uy * sh
+                        if not b_anchor:
+                            sh = push if a_anchor else push / 2
+                            b["tx"] += ux * sh
+                            b["ty"] += uy * sh
+            for d in mates:
+                d["tx"] = min(max(d["tx"], 5), 195)
+                d["ty"] = min(max(d["ty"], 5), 80)
+
+    def _slot_dz(self, role, adir, onx, py):
+        """Defensive-zone wedge slot for a non-checker (role discipline)."""
+        strong_y, weak_y = (24.0, 61.0) if py < 42.5 else (61.0, 24.0)
+        if role in ("D1", "D2"):
+            return (onx + 13 * adir, 35.0 if role == "D1" else 50.0)
+        if role == "C":
+            return (onx + 22 * adir, 42.5)
+        mine = (role == "LW") == (py < 42.5)
+        return ((onx + 30 * adir, strong_y) if mine
+                else (onx + 33 * adir, weak_y))
+
+    def _slot_nz(self, role, px, py, adir, onx):
+        """Neutral-zone 1-2-2 slot: clog the middle, D gap at the line."""
+        if role in ("C", "LW", "RW"):
+            return (px - 13 * adir, 32.0 if role != "RW" else 53.0)
+        return (onx + 48 * adir, 32.0 if role == "D1" else 53.0)
+
+    def _slot_pp(self, role, adir, anx, behind_net):
+        """Power-play umbrella slot."""
+        if role == "C":
+            return ((anx - 14 * adir, 42.5) if behind_net
+                    else (anx - 33 * adir, 42.5))
+        if role == "LW":
+            return (anx - 40 * adir, 22.0)
+        if role == "RW":
+            return (anx - 40 * adir, 63.0)
+        return (anx - 58 * adir, 30.0 if role == "D1" else 55.0)
 
     # ------------------------------------------------------------------
     # Feed
@@ -1285,20 +1431,8 @@ class PBPVisualSim(tk.Toplevel):
                     self.after(500, lambda: cb(sim))
 
     def _on_skate(self, ev):
-        """Sim-authored positions: tween dots there, ease puck, set carrier."""
-        seen = set()
-        for pid, (x, y) in (ev.get("positions") or {}).items():
-            d = self._dot_by_id(pid)
-            if d is None:
-                continue
-            seen.add(d["id"])
-            d["sim_set"] = True
-            d["jx"], d["jy"] = random.uniform(-2.5, 2.5), random.uniform(-2.5, 2.5)
-            d["tx"], d["ty"] = x + d["jx"], y + d["jy"]
-        # dots the sim benched go back to fallback behavior
-        for d in self.dots.values():
-            if d["role"] != "G" and d["id"] not in seen:
-                d["sim_set"] = False
+        """Sim movement snapshot: the per-tick tactical engine positions
+        every skater, so the sim only feeds puck position + carrier."""
         pk = ev.get("puck")
         if pk:
             self.puck_target = (pk[0], pk[1])
