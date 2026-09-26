@@ -132,7 +132,13 @@ class HomeDashboard:
         scrollable = tk.Frame(canvas, bg=AppColors.BG)
         scrollable.bind("<Configure>",
                         lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scrollable, anchor="nw")
+        # Tag the inner window so we can resize it with the canvas --
+        # without this the content stays at its requested width and the
+        # right side of the screen is dead space.
+        canvas.create_window((0, 0), window=scrollable, anchor="nw",
+                             tags="dashboard_inner")
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfig("dashboard_inner", width=e.width))
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -597,10 +603,18 @@ class HomeDashboard:
         grid = tk.Frame(parent, bg=AppColors.BG)
         grid.pack(fill="both", expand=True)
 
+        # Use grid with weighted columns for a proportional split that
+        # scales with window width (roughly 62/38). Pack's side=left/right
+        # gives unpredictable widths; grid weights keep both columns
+        # filling the available space.
+        grid.grid_columnconfigure(0, weight=62)
+        grid.grid_columnconfigure(1, weight=38)
+        grid.grid_rowconfigure(0, weight=1)
+
         left = tk.Frame(grid, bg=AppColors.BG)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 12))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         right = tk.Frame(grid, bg=AppColors.BG)
-        right.pack(side="right", fill="y", padx=(12, 0))
+        right.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
 
         self._create_standings_card(left)
         self._create_leaders_card(left)
