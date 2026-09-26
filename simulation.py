@@ -3556,7 +3556,7 @@ class GameSim:
                 x, y = self.player_positions[p.id]
                 snap[p.id] = (round(x, 1), round(y, 1))
                 old = self._last_skate_sent.get(p.id)
-                if old is None or abs(old[0] - x) > 6 or abs(old[1] - y) > 6:
+                if old is None or abs(old[0] - x) > 1 or abs(old[1] - y) > 1:
                     changed = True
         if changed:
             self._last_skate_sent = dict(snap)
@@ -5656,6 +5656,7 @@ class GameSim:
                 # chasing and shots go off with defenders 20+ feet away.
                 self._defense_tick(defending_team, mode="dzone")
                 self._offense_tick(attacking_team)
+                self._emit_skate()
                 # Contact on the touch: rub-outs along the wall happen all
                 # game in real hockey, not just on highlight hits.
                 hit_outcome = self._maybe_throw_hit(

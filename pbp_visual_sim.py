@@ -413,6 +413,7 @@ class PBPVisualSim(tk.Toplevel):
         # positions (from "skate" snapshots) win over our local formation
         # guess so the picture matches the play being described.
         self._sim_pos = {}            # player_id -> (x, y) in rink coords
+        self._sim_pos_t = 0.0         # playhead time of last _sim_pos update
         self._sim_jobs = {}           # player_id -> job code from the sim
         self._sim_phases = {}         # team_name -> phase code from the sim
         self.shootout_mode = False
@@ -1239,7 +1240,8 @@ class PBPVisualSim(tk.Toplevel):
             # and goalies keep their crease logic below.)
             pid = getattr(d.get("player"), "id", None)
             sp = self._sim_pos.get(pid) if pid is not None else None
-            if (sp is not None and d["role"] != "G"
+            sim_fresh = (self.playhead - self._sim_pos_t) < 3.0
+            if (sp is not None and sim_fresh and d["role"] != "G"
                     and d["id"] != self.carrier_id):
                 d["tx"], d["ty"] = sp[0], sp[1]
                 continue
@@ -1647,6 +1649,7 @@ class PBPVisualSim(tk.Toplevel):
         pos = ev.get("positions")
         if pos:
             self._sim_pos = {pid: (p[0], p[1]) for pid, p in pos.items()}
+            self._sim_pos_t = self.playhead
         # Tactical jobs from the sim: what each skater is TRYING to do
         # (f1_pressure, slot, point, ...). The visualizer is a view of the
         # sim, so it reads intent instead of guessing it.
