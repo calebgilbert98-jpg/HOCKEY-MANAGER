@@ -293,6 +293,13 @@ def _build_lines(team):
 # ----------------------------------------------------------------------------
 class PBPVisualSim(tk.Toplevel):
     GAME_RATE = 8.0  # game-seconds per real second at 1x
+    TICK_DT = 1.0 / 30.0  # real seconds per animation frame (~30fps)
+    # Smooth-skating speeds in rink-feet per real second. Dots glide toward
+    # their targets at constant velocity (no exponential rubber-banding), so
+    # motion reads as continuous skating instead of choppy teleporting.
+    SKATE_SPEED = 30.0   # skaters: brisk but natural on the broadcast view
+    GOALIE_SPEED = 14.0  # goalies shuffle; they rarely leave the crease
+    CEREMONY_SPEED = 6.0  # faceoff glide to the dot: slow and deliberate
     # Quick faceoff beats (no ceremony every whistle): brief whistle freeze,
     # glide to the dot, set, drop. ~1.5s total so stoppages read as breaks
     # in play without stalling the broadcast.
@@ -704,7 +711,14 @@ class PBPVisualSim(tk.Toplevel):
             look = 0.0
         want = min(max(self.puck["x"] + look,
                        vw / 2 - 10), 200.0 - vw / 2 + 10)
-        cam["x"] += (want - cam["x"]) * 0.07
+        # constant-velocity pan (no exponential easing): the broadcast camera
+        # glides after the play instead of whipping then crawling.
+        cdx = want - cam["x"]
+        cstep = 45.0 * self.TICK_DT
+        if abs(cdx) <= cstep:
+            cam["x"] = want
+        else:
+            cam["x"] += math.copysign(cstep, cdx)
         # screen shake: decaying random offset while celebrating / big hits
         shake = 0.0
         if now < cam["shake_until"]:
@@ -2977,7 +2991,7 @@ class PBPVisualSim(tk.Toplevel):
         if self.closed:
             return
         try:
-            self.after(50, self._tick)
+            self.after(33, self._tick)
         except Exception:
             pass
 
@@ -3014,7 +3028,7 @@ class PBPVisualSim(tk.Toplevel):
         if (self.playing and now >= self.hold_until and self.events
                 and not self._faceoff_ceremony):
             eff = self._auto_speed() if self.auto_pace else self.speed
-            dt = 0.05 * eff * self.GAME_RATE
+            dt = self.TICK_DT * eff * self.GAME_RATE
             target = self.playhead + dt
             # don't run past un-simulated events; sim is fast so this rarely binds
             # (stop immediately if a replay started mid-loop)
@@ -3110,7 +3124,7 @@ class PBPVisualSim(tk.Toplevel):
                 # skate marks: fast dots carve fading trails into the ice
                 dx, dy = x - d.get("_px", x), y - d.get("_py", y)
                 d["_px"], d["_py"] = x, y
-                if dx * dx + dy * dy > 1.1 and random.random() < 0.45:
+                if dx * dx + dy * dy > 0.25 and random.random() < 0.45:
                     it = self.canvas.create_line(
                         self.X(x - dx), self.Y(y - dy),
                         self.X(x), self.Y(y),
@@ -3122,10 +3136,23 @@ class PBPVisualSim(tk.Toplevel):
                             self.canvas.delete(old_it)
                         except Exception:
                             pass
-                # faceoff ceremony: slow deliberate glide to the dot
-                lerp = 0.05 if d.get("ceremony_glide") else 0.14
-                d["x"] = x + (d["tx"] - x) * lerp
-                d["y"] = y + (d["ty"] - y) * lerp
+                # smooth skating: constant-velocity glide toward the target.
+                # No exponential easing -- dots skate like players, covering
+                # ground at a steady pace instead of zooming then crawling.
+                if d.get("ceremony_glide"):
+                    spd = self.CEREMONY_SPEED
+                elif d["role"] == "G":
+                    spd = self.GOALIE_SPEED
+                else:
+                    spd = self.SKATE_SPEED
+                step = spd * self.TICK_DT
+                dx, dy = d["tx"] - x, d["ty"] - y
+                dist = math.hypot(dx, dy)
+                if dist <= step + 0.15:
+                    d["x"], d["y"] = d["tx"], d["ty"]
+                elif dist > 0:
+                    d["x"] = x + dx / dist * step
+                    d["y"] = y + dy / dist * step
                 self._move_dot(d, d["x"], d["y"])
             # goal celly: scorer skates a little victory circle
             if celly_dot is not None:
@@ -3209,17 +3236,22 @@ class PBPVisualSim(tk.Toplevel):
                     keep.append(b)
                 self._bursts = keep
 
-            # puck eases toward carrier (or sim puck target) when not flying
+            # puck rides on the carrier's stick (no laggy easing behind him);
+            # a loose puck glides quickly to its target spot.
             if not self.puck_flight:
-                tx, ty = None, None
                 if self.carrier_id and self.carrier_id in self.dots:
                     c = self.dots[self.carrier_id]
-                    tx, ty = c["x"] + 1.5, c["y"] + 1.5
+                    self.puck["x"], self.puck["y"] = c["x"] + 1.5, c["y"] + 1.5
                 elif self.puck_target:
                     tx, ty = self.puck_target
-                if tx is not None:
-                    self.puck["x"] += (tx - self.puck["x"]) * 0.35
-                    self.puck["y"] += (ty - self.puck["y"]) * 0.35
+                    pdx, pdy = tx - self.puck["x"], ty - self.puck["y"]
+                    pdist = math.hypot(pdx, pdy)
+                    pstep = 40.0 * self.TICK_DT
+                    if pdist <= pstep:
+                        self.puck["x"], self.puck["y"] = tx, ty
+                    elif pdist > 0:
+                        self.puck["x"] += pdx / pdist * pstep
+                        self.puck["y"] += pdy / pdist * pstep
 
             # battle winner takes the puck once the pile settles
             if self._battle_settle_at and now >= self._battle_settle_at:
