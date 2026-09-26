@@ -1061,6 +1061,14 @@ class PBPVisualSim(tk.Toplevel):
         c = self.canvas
         r = d["r"]
         px, py = self.X(x), self.Y(y)
+        # knockdown: draw flattened (wide ellipse) to read as crumpled ice-level
+        if self._now() < d.get("knockdown_until", 0):
+            c.coords(d["oval"], px - r * 1.4, py - r * 0.55,
+                     px + r * 1.4, py + r * 0.55)
+            c.coords(d["text"], px, py)
+            c.coords(d["shadow"], px - r + 2.5, py - r + 3.5,
+                     px + r + 2.5, py + r + 3.5)
+            return
         # On-ice life: settled skaters never stand statuesque -- a slow,
         # small drift around their spot so the whole rink breathes even
         # between sim events. Render-time only; logical position untouched.
@@ -2898,9 +2906,15 @@ class PBPVisualSim(tk.Toplevel):
         # impact burst at the target; bigger hits shake the camera
         if t and not self._instant:
             self._spawn_burst(t["x"], t["y"])
-            if ev.get("hit_type", "hit") != "hit" or \
-                    ev.get("result") == "turnover_caused":
+            big = (ev.get("hit_type", "hit") != "hit" or
+                   ev.get("result") == "turnover_caused")
+            if big:
                 self._shake(mag=2.5, dur=0.3)
+                # knockdown: target crumples and stays down briefly.
+                # Duration scales with hit violence; he can't skate while down.
+                down_gs = 1.5 if ev.get("result") == "turnover_caused" else 1.0
+                t["knockdown_until"] = self._now() + down_gs
+                t["tx"], t["ty"] = t["x"], t["y"]  # stay where he fell
 
     def _spawn_burst(self, x, y, color="#ffd166"):
         items = []
@@ -3557,6 +3571,14 @@ class PBPVisualSim(tk.Toplevel):
                             self.canvas.delete(old_it)
                         except Exception:
                             pass
+                # knocked down: stays crumpled where he fell, can't skate.
+                # The dot draws flattened (see _move_dot) until he gets up.
+                if now < d.get("knockdown_until", 0):
+                    d["tx"], d["ty"] = d["x"], d["y"]
+                    self._move_dot(d, d["x"], d["y"])
+                    continue
+                elif d.get("knockdown_until"):
+                    d["knockdown_until"] = 0  # back on his skates
                 # smooth skating: constant-velocity glide toward the target.
                 # No exponential easing -- dots skate like players, covering
                 # ground at a steady pace instead of zooming then crawling.
