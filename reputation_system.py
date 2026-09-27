@@ -3819,3 +3819,141 @@ def coach_development_factor(player: Any, coach: Any) -> float:
         return round(max(0.6, min(1.4, factor)), 3)
     except Exception:
         return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Situations factor: the room, the bench, and the kids, compounded into one
+# pre-game edge. Morale + coaching + development all land here, and the sim
+# reads it as its own channel (like the controversy momentum channel) rather
+# than as part of any capped budget.
+# ---------------------------------------------------------------------------
+
+SITUATION_XG_PER_POINT = 0.008  # +/-8% finishing at the extremes; the room
+                                 # matters, but talent still decides most nights
+
+_ROOM_SCORE = {"Secure": 1.5, "Strain": -1.0, "Fracturing": -2.5, "Lost": -4.0}
+_BUYIN_SCORE = {"Bought in": 1.0, "Neutral": 0.0, "Tuning out": -1.0,
+                "Quit on coach": -1.5}
+
+
+def situations_factor(team: Any, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """How much tonight's situation lifts or drags this team.
+
+    Compounds three legs that used to live in separate systems:
+      ROOM  -- chemistry, whether the coach still has the room, recent
+               dynamics (rallies lift, bag-skate fallout drags)
+      BENCH -- coach influence, buy-in across the roster, GM trust,
+               line-control power struggles
+      HUNGER -- young legs with high morale (energy) vs a roster full of
+               unhappy players (drag). Morale-based, so it works even
+               before the attribute engine weighs in.
+
+    Returns {"team", "score" (-10..10), "xg_mult", "drivers", "story"}.
+    Pure function of stored state; never raises.
+    """
+    ctx = ctx or {}
+    drivers: List[tuple] = []
+
+    def add(label: str, value: float) -> None:
+        if value:
+            drivers.append((label, round(value, 2)))
+
+    roster = list(getattr(team, "roster", None) or [])
+    coach = None
+    try:
+        from game_classes import StaffRole
+        staff = team.get_staff_by_role(StaffRole.HEAD_COACH)
+        coach = staff[0] if staff else None
+    except Exception:
+        coach = getattr(team, "head_coach", None)
+
+    # ---- ROOM -----------------------------------------------------------
+    try:
+        if coach is not None:
+            rs = room_status(coach, {"win_pct": ctx.get("win_pct", 0.5)},
+                             roster=roster)
+            lvl = rs.get("level", "Secure")
+            add(f"Room: {lvl.lower()}", _ROOM_SCORE.get(lvl, 0.0))
+    except Exception:
+        pass
+    try:
+        if roster:
+            chem = team_chemistry(roster)
+            add("Room chemistry", max(-2.0, min(2.0, (chem.get("score", 50) - 55) / 22.5)))
+    except Exception:
+        pass
+    try:
+        log = list(getattr(team, "dynamics_log", None) or [])[-6:]
+        blob = " ".join(str(e).lower() for e in log)
+        if any(k in blob for k in ("rally", "inspiring speech", "great practice",
+                                   "bought in", "standing ovation")):
+            add("Room rallying", 1.0)
+        if any(k in blob for k in ("bag skate", "mistreat", "quit on",
+                                   "tuning out", "fallout")):
+            add("Room fallout", -1.0)
+    except Exception:
+        pass
+
+    # ---- BENCH ----------------------------------------------------------
+    try:
+        if coach is not None:
+            inf = getattr(coach, "influence", 70) or 70
+            add("Coach influence", max(-2.5, min(2.5, (inf - 70) / 20.0)))
+            trust = getattr(coach, "gm_trust", 70) or 70
+            if trust < 45:
+                add("GM doesn't trust the coach", -1.0)
+    except Exception:
+        pass
+    try:
+        if coach is not None and roster:
+            scores = []
+            for p in roster:
+                try:
+                    r = player_coach_response(p, coach)
+                    scores.append(_BUYIN_SCORE.get(r.get("label", "Neutral"), 0.0))
+                except Exception:
+                    continue
+            if scores:
+                add("Locker-room buy-in", round(sum(scores) / len(scores) * 1.5, 2))
+    except Exception:
+        pass
+    try:
+        if getattr(team, "line_control", "coach") == "gm":
+            add("GM holding the lineup pen", -0.5)
+    except Exception:
+        pass
+
+    # ---- HUNGER ---------------------------------------------------------
+    try:
+        if roster:
+            kids = [p for p in roster if (getattr(p, "age", 27) or 27) <= 23]
+            if kids:
+                hungry = sum(1 for p in kids if (getattr(p, "morale", 5) or 5) >= 7)
+                add("Hungry young legs", round(hungry / len(kids) * 2.0, 2))
+            sour = sum(1 for p in roster if (getattr(p, "happiness", 70) or 70) <= 35)
+            if sour:
+                add("Unhappy room", round(-sour / len(roster) * 4.0, 2))
+    except Exception:
+        pass
+
+    score = max(-10.0, min(10.0, sum(v for _, v in drivers)))
+    score = round(score, 2)
+    xg_mult = round(1.0 + score * SITUATION_XG_PER_POINT, 4)
+
+    drivers.sort(key=lambda t: -abs(t[1]))
+    tname = getattr(team, "team_name", "The team")
+    if drivers:
+        top_label, top_val = drivers[0]
+        mood = "lifting them" if top_val > 0 else "weighing them down"
+        story = (f"{tname}: situation {'+' if score >= 0 else ''}{score} -- "
+                 f"{top_label} {mood}.")
+    else:
+        story = f"{tname}: no situational edge tonight."
+
+    return {
+        "team": getattr(team, "team_name", "unknown"),
+        "score": score,
+        "xg_mult": xg_mult,
+        "drivers": [{"label": l, "value": v} for l, v in drivers],
+        "story": story,
+    }

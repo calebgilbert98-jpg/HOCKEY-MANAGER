@@ -529,6 +529,8 @@ class GameSim:
             self._away_coach = self._find_head_coach(away_team)
         except Exception:
             pass
+        # --- Situations factor: computed after log fields exist (it may log
+        # its pre-game story line). Set in _init_situations().
         self.home_score = 0
         self.away_score = 0
         self.period = 1
@@ -545,6 +547,7 @@ class GameSim:
         # that one list-append per game is the entire overhead.
         self.pending_headlines = []
         # Pre-game punishment orders need score/period fields set first.
+        self._init_situations()
         self._evaluate_punishment_orders()
 
         # Recent shooters: keeps one sniper from monopolizing every shot.
@@ -4493,6 +4496,12 @@ class GameSim:
         expected_goal = min(0.95, expected_goal * self._man_advantage_xg_factor(
             attacking_team, defending_team))
 
+        # Situations channel: the room, the bench, and the kids move
+        # finishing a few percent either way. Own channel, like the
+        # controversy momentum channel -- not part of any capped budget.
+        expected_goal = min(0.95, expected_goal * self._situation_xg_factor(
+            attacking_team))
+
         # Update expected goals tracking
         self.expected_goals[attacking_team.team_name] = \
             self.expected_goals.get(attacking_team.team_name, 0.0) + expected_goal
@@ -5468,6 +5477,37 @@ class GameSim:
                                         resp.get("retaliation_mod", 1.0))
             self._live_heat = min(40.0, self._live_heat + resp.get("tension_delta", 0) / 2.0)
             self._log_event(resp.get("story", ""), "COACH")
+
+    def _init_situations(self):
+        """Per-team pre-game situational finishing edge.
+
+        Compounds morale (room state, chemistry, recent dynamics), coaching
+        (influence, buy-in, GM trust, line control) and youth hunger into one
+        xG multiplier per side. Additive and inert when unused; never raises.
+        """
+        self._situation_edge = {"home": 1.0, "away": 1.0}
+        self._situation_breakdown = {}
+        try:
+            from reputation_system import situations_factor as _sf
+            for _key, _team in (("home", self.home_team), ("away", self.away_team)):
+                _bd = _sf(_team, {"is_playoff": self.is_playoff})
+                self._situation_breakdown[_key] = _bd
+                self._situation_edge[_key] = float(_bd.get("xg_mult", 1.0))
+                if abs(_bd.get("score", 0)) >= 3.5:
+                    self._log_event(f"Pregame -- {_bd.get('story', '')}",
+                                    "SITUATION")
+        except Exception:
+            pass
+
+    def _situation_xg_factor(self, attacking_team):
+        """Finishing multiplier for the attacking side from the situations
+        factor (+/-8% at the extremes)."""
+        try:
+            if attacking_team is self.home_team:
+                return self._situation_edge["home"]
+            return self._situation_edge["away"]
+        except Exception:
+            return 1.0
 
     def _fight_weight_mult(self):
         """Scale the Fighting draw weight so the sim's fight rate tracks the
