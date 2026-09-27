@@ -5677,125 +5677,173 @@ class ScheduleWindow(ctk.CTkToplevel):
         set_tree_empty_state(self.my_schedule_tree, "No games scheduled for your team")
         set_tree_empty_state(self.league_schedule_tree, "No league games scheduled")
 
-class FinancesWindow(tk.Toplevel):
-    """Comprehensive financial management window with detailed breakdown and projections."""
-    
+class FinancesWindow(ctk.CTkToplevel):
+    """Comprehensive financial management window with detailed breakdown and projections.
+
+    Rebuilt with CustomTkinter (Sept 2026): CTkToplevel shell, CTkTabview
+    tabs, CTkFrame stat cards, dark styled Treeviews, CTkComboBox year
+    selector, CTkSegmentedButton report picker, pill filter rows, and a
+    CTkProgressBar cap-utilization meter. All calculation and reporting
+    logic is unchanged from the ttk version.
+    """
+
     def __init__(self, parent):
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_HOVER, ROW_SELECTED,
+        )
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
+                        RED=RED, BLUE=BLUE, ROW_HOVER=ROW_HOVER,
+                        ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title(f"{parent.user_team.team_name} - Financial Management")
-        self.configure(background=parent.BG_COLOR)
+        self.configure(fg_color=BG)
         self.geometry("1400x900")
         self.minsize(1200, 700)
-        
+
         # Initialize data structures
         self.current_season = 2024
         self.selected_projection_year = tk.StringVar(master=self, value=str(self.current_season))
-        
+
         # Create the interface
         self.create_interface()
-        self.setup_styles()
+        self._setup_tree_style()
         self.update_views()
-        
+
         # Track window
         self.parent.open_windows['finances'] = self
 
+    # ------------------------------------------------------------------
+    # Layout construction
+    # ------------------------------------------------------------------
     def create_interface(self):
         """Create the comprehensive financial interface."""
+        ct = self._ct
         # Main container
-        main_container = ttk.Frame(self, style='Panel.TFrame')
-        main_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
+        main_container = ctk.CTkFrame(self, fg_color=ct['BG'], corner_radius=0)
+        main_container.pack(fill="both", expand=True, padx=15, pady=15)
+
         # Header section
         self.create_header_section(main_container)
-        
-        # Main tabbed interface
-        self.notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
-        
+
+        # Main tabbed interface (CTkTabview instead of ttk.Notebook)
+        self.tabview = ctk.CTkTabview(
+            main_container,
+            fg_color=ct['PANEL'],
+            corner_radius=12,
+            border_width=1,
+            border_color=ct['BORDER'],
+            segmented_button_fg_color=ct['PANEL'],
+            segmented_button_selected_color=ct['TEAL'],
+            segmented_button_selected_hover_color=ct['TEAL_HOVER'],
+            segmented_button_unselected_color=ct['CARD'],
+            segmented_button_unselected_hover_color=ct['BORDER'],
+            text_color=ct['TEXT'],
+        )
+        self.tabview.pack(fill="both", expand=True, pady=(16, 0))
+        for name in ("Salary Cap", "Contracts", "Projections", "Management", "Reports"):
+            self.tabview.add(name)
+
         # Salary Cap Overview tab
-        self.create_salary_cap_tab()
-        
-        # Player Contracts tab  
-        self.create_contracts_tab()
-        
+        self.create_salary_cap_tab(self.tabview.tab("Salary Cap"))
+
+        # Player Contracts tab
+        self.create_contracts_tab(self.tabview.tab("Contracts"))
+
         # Future Projections tab
-        self.create_projections_tab()
-        
+        self.create_projections_tab(self.tabview.tab("Projections"))
+
         # Contract Management tab
-        self.create_management_tab()
-        
+        self.create_management_tab(self.tabview.tab("Management"))
+
         # Financial Reports tab
-        self.create_reports_tab()
+        self.create_reports_tab(self.tabview.tab("Reports"))
 
     def create_header_section(self, parent):
         """Create header with financial overview."""
-        header_frame = ttk.Frame(parent, style='TitleBar.TFrame', padding=(20, 15))
-        header_frame.pack(fill=tk.X, pady=(0, 10))
-        
+        ct = self._ct
+        header_frame = ctk.CTkFrame(parent, fg_color=ct['PANEL'], corner_radius=12)
+        header_frame.pack(fill="x", pady=(0, 4))
+
+        top = ctk.CTkFrame(header_frame, fg_color="transparent")
+        top.pack(fill="x", padx=20, pady=(14, 4))
+
         # Title
-        title_label = ttk.Label(
-            header_frame,
-            text=f"{self.parent.user_team.team_name.upper()} FINANCIAL MANAGEMENT",
-            style='Title.TLabel',
-            font=(self.parent.FONT_FAMILY, 18, 'bold')
-        )
-        title_label.pack(side=tk.LEFT)
-        
+        self._heading(top, text=f"{self.parent.user_team.team_name.upper()} FINANCIAL MANAGEMENT",
+                      size=18).pack(side="left")
+
         # Quick stats on the right
-        stats_frame = ttk.Frame(header_frame, style='TitleBar.TFrame')
-        stats_frame.pack(side=tk.RIGHT)
-        
+        stats_frame = ctk.CTkFrame(top, fg_color="transparent")
+        stats_frame.pack(side="right")
+
         # Calculate current financials
         current_payroll = self.calculate_current_payroll()
         salary_cap = self._salary_cap()
         cap_space = salary_cap - current_payroll
-        
-        self.header_stats_label = ttk.Label(
+
+        cap_color = ct['GREEN'] if cap_space >= 0 else ct['RED']
+        self.header_stats_label = ctk.CTkLabel(
             stats_frame,
-            text=f"Cap Space: ${cap_space:,} | Payroll: ${current_payroll:,} | Cap: ${salary_cap:,}",
-            style='Header.TLabel',
-            font=(self.parent.FONT_FAMILY, 12)
+            text=f"Cap Space: ${cap_space:,}  |  Payroll: ${current_payroll:,}  |  Cap: ${salary_cap:,}",
+            font=("Segoe UI", 12, "bold"),
+            text_color=cap_color,
         )
         self.header_stats_label.pack()
 
-    def create_salary_cap_tab(self):
+    def create_salary_cap_tab(self, cap_frame):
         """Create salary cap overview tab."""
-        cap_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(cap_frame, text="Salary Cap")
-        
+        ct = self._ct
+
         # Top section - Cap overview
-        overview_frame = ttk.LabelFrame(cap_frame, text="Salary Cap Overview")
-        overview_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+        overview_frame = ctk.CTkFrame(cap_frame, fg_color=ct['CARD'], corner_radius=12)
+        overview_frame.pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkLabel(overview_frame, text="Salary Cap Overview",
+                     font=("Segoe UI", 13, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=16, pady=(12, 0))
+
         # Create overview grid
-        overview_grid = ttk.Frame(overview_frame)
-        overview_grid.pack(fill=tk.X, padx=15, pady=15)
-        
+        overview_grid = ctk.CTkFrame(overview_frame, fg_color="transparent")
+        overview_grid.pack(fill="x", padx=12, pady=12)
+
         # Configure grid columns
         for i in range(4):
             overview_grid.columnconfigure(i, weight=1)
-        
+
         # Current payroll breakdown
         current_payroll = self.calculate_current_payroll()
         ahl_payroll = self.calculate_ahl_payroll()
         buried_salary = self.calculate_buried_salary()
         salary_cap = self._salary_cap()
         cap_space = salary_cap - current_payroll
-        
+
         self.create_stat_box(overview_grid, "Current Payroll", f"${current_payroll:,}", 0, 0)
         self.create_stat_box(overview_grid, "Salary Cap", f"${salary_cap:,}", 0, 1)
-        self.create_stat_box(overview_grid, "Cap Space", f"${cap_space:,}", 0, 2, 
-                           color='green' if cap_space > 0 else 'red')
+        self.create_stat_box(overview_grid, "Cap Space", f"${cap_space:,}", 0, 2,
+                             color='green' if cap_space >= 0 else 'red')
         self.create_stat_box(overview_grid, "AHL Payroll", f"${ahl_payroll:,}", 0, 3)
-        
+
         # Cap utilization bar
         self.create_cap_utilization_bar(overview_frame, current_payroll, salary_cap)
-        
+
         # Middle section - Position breakdown
-        position_frame = ttk.LabelFrame(cap_frame, text="Salary by Position", )
-        position_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
+        position_frame = ctk.CTkFrame(cap_frame, fg_color=ct['CARD'], corner_radius=12)
+        position_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ctk.CTkLabel(position_frame, text="Salary by Position",
+                     font=("Segoe UI", 13, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=16, pady=(12, 0))
+
         # Create position breakdown treeview
         pos_columns = {
             'position': ('Position', 100),
@@ -5804,55 +5852,53 @@ class FinancesWindow(tk.Toplevel):
             'avg_salary': ('Avg Salary', 120),
             'percentage': ('% of Cap', 80)
         }
-        
-        self.position_tree = self.parent._create_treeview(position_frame, pos_columns, 8)
-        self.position_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-    def create_contracts_tab(self):
+        self._position_table, self.position_tree = self._create_fin_treeview(position_frame, pos_columns, 8)
+        self._position_table.pack(fill="both", expand=True, padx=10, pady=10)
+
+    def create_contracts_tab(self, contracts_frame):
         """Create detailed player contracts tab."""
-        contracts_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(contracts_frame, text="Contracts")
-        
-        # Controls frame
-        controls_frame = ttk.Frame(contracts_frame, style='Panel.TFrame')
-        controls_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+        ct = self._ct
+
         # Filter controls
-        filter_frame = ttk.LabelFrame(controls_frame, text="Filters", )
-        filter_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        filter_grid = ttk.Frame(filter_frame)
-        filter_grid.pack(fill=tk.X, padx=10, pady=10)
-        
+        filter_frame = ctk.CTkFrame(contracts_frame, fg_color=ct['CARD'], corner_radius=12)
+        filter_frame.pack(fill="x", padx=10, pady=10)
+
+        filter_grid = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        filter_grid.pack(fill="x", padx=12, pady=12)
+
         # Roster filter (pills)
-        ttk.Label(filter_grid, text="Roster:", style='Info.TLabel').grid(row=0, column=0, padx=5, sticky='w')
+        ctk.CTkLabel(filter_grid, text="Roster:", font=("Segoe UI", 11, "bold"),
+                     text_color=ct['TEXT_DIM']).grid(row=0, column=0, padx=5, sticky='w')
         self.roster_filter = tk.StringVar(master=self, value='All')
-        _roster_pill_frame = ttk.Frame(filter_grid)
+        _roster_pill_frame = tk.Frame(filter_grid, bg=ct['CARD'])
         _roster_pill_frame.grid(row=0, column=1, padx=5, sticky='w')
         self._fin_roster_pills = make_pill_group(
             _roster_pill_frame, [(o, o) for o in ('All', 'NHL', 'AHL', 'Prospects')],
-            self._set_finance_filter('roster_filter'), self.parent.FONT_FAMILY)
+            self._set_finance_filter('roster_filter'))
 
         # Position filter (pills)
-        ttk.Label(filter_grid, text="Position:", style='Info.TLabel').grid(row=0, column=2, padx=5, sticky='w')
+        ctk.CTkLabel(filter_grid, text="Position:", font=("Segoe UI", 11, "bold"),
+                     text_color=ct['TEXT_DIM']).grid(row=0, column=2, padx=5, sticky='w')
         self.position_filter = tk.StringVar(master=self, value='All')
-        _pos_pill_frame = ttk.Frame(filter_grid)
+        _pos_pill_frame = tk.Frame(filter_grid, bg=ct['CARD'])
         _pos_pill_frame.grid(row=0, column=3, padx=5, sticky='w')
         self._fin_pos_pills = make_pill_group(
             _pos_pill_frame, [(o, o) for o in ('All', 'G', 'D', 'F')],
-            self._set_finance_filter('position_filter'), self.parent.FONT_FAMILY)
+            self._set_finance_filter('position_filter'))
 
         # Contract status filter (pills)
-        ttk.Label(filter_grid, text="Status:", style='Info.TLabel').grid(row=0, column=4, padx=5, sticky='w')
+        ctk.CTkLabel(filter_grid, text="Status:", font=("Segoe UI", 11, "bold"),
+                     text_color=ct['TEXT_DIM']).grid(row=0, column=4, padx=5, sticky='w')
         self.status_filter = tk.StringVar(master=self, value='All')
-        _status_pill_frame = ttk.Frame(filter_grid)
+        _status_pill_frame = tk.Frame(filter_grid, bg=ct['CARD'])
         _status_pill_frame.grid(row=0, column=5, padx=5, sticky='w')
         self._fin_status_pills = make_pill_group(
             _status_pill_frame,
             [(o, o) for o in ('All', 'Expiring', 'RFA', 'UFA', 'Long-term')],
-            self._set_finance_filter('status_filter'), self.parent.FONT_FAMILY)
+            self._set_finance_filter('status_filter'))
         self._paint_finance_pills()
-        
+
         # Contracts treeview
         contract_columns = {
             'name': ('Player', 180),
@@ -5866,45 +5912,70 @@ class FinancesWindow(tk.Toplevel):
             'cap_hit': ('Cap Hit', 100),
             'expiry': ('Expires', 70)
         }
-        
-        self.contracts_tree = self.parent._create_treeview(contracts_frame, contract_columns, 20)
-        self.contracts_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        self._contracts_table, self.contracts_tree = self._create_fin_treeview(contracts_frame, contract_columns, 20)
+        self._contracts_table.pack(fill="both", expand=True, padx=10, pady=10)
 
         # Right-click menu with finance actions (replaces the default binding
         # from _create_treeview so Negotiate Extension / Trade are one click away)
         self.contracts_tree.bind('<Button-3>', self._show_contracts_context_menu)
 
-    def create_projections_tab(self):
+    def create_projections_tab(self, projections_frame):
         """Create future salary projections tab."""
-        projections_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(projections_frame, text="Projections")
-        
+        ct = self._ct
+
         # Controls
-        controls_frame = ttk.Frame(projections_frame, style='Panel.TFrame')
-        controls_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Label(controls_frame, text="View Year:", style='Info.TLabel').pack(side=tk.LEFT, padx=5)
-        
-        year_combo = ttk.Combobox(controls_frame, textvariable=self.selected_projection_year, 
-                                 values=[str(y) for y in range(self.current_season, self.current_season + 6)], 
-                                 width=10)
-        year_combo.pack(side=tk.LEFT, padx=5)
-        year_combo.bind('<<ComboboxSelected>>', lambda e: self.update_projections_view())
-        
+        controls_frame = ctk.CTkFrame(projections_frame, fg_color=ct['CARD'], corner_radius=12)
+        controls_frame.pack(fill="x", padx=10, pady=10)
+
+        controls_inner = ctk.CTkFrame(controls_frame, fg_color="transparent")
+        controls_inner.pack(fill="x", padx=12, pady=12)
+
+        ctk.CTkLabel(controls_inner, text="View Year:", font=("Segoe UI", 11, "bold"),
+                     text_color=ct['TEXT_DIM']).pack(side="left", padx=5)
+
+        year_combo = ctk.CTkComboBox(
+            controls_inner,
+            variable=self.selected_projection_year,
+            values=[str(y) for y in range(self.current_season, self.current_season + 6)],
+            width=120,
+            fg_color=ct['BG'],
+            border_color=ct['BORDER'],
+            button_color=ct['TEAL'],
+            button_hover_color=ct['TEAL_HOVER'],
+            dropdown_fg_color=ct['PANEL'],
+            dropdown_text_color=ct['TEXT'],
+            dropdown_hover_color=ct['ROW_HOVER'],
+            text_color=ct['TEXT'],
+            command=lambda v: self.update_projections_view(),
+        )
+        year_combo.pack(side="left", padx=5)
+
         # Refresh button
-        ttk.Button(controls_frame, text="Refresh", command=self.update_projections_view).pack(side=tk.LEFT, padx=10)
-        
+        self._secondary_button(controls_inner, text="Refresh",
+                               command=self.update_projections_view).pack(side="left", padx=10)
+
         # Summary frame
-        summary_frame = ttk.LabelFrame(projections_frame, text="Financial Projection Summary", )
-        summary_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.projection_summary_label = ttk.Label(summary_frame, text="", font=('Consolas', 10), style='Info.TLabel')
-        self.projection_summary_label.pack(padx=15, pady=15)
-        
+        summary_frame = ctk.CTkFrame(projections_frame, fg_color=ct['CARD'], corner_radius=12)
+        summary_frame.pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkLabel(summary_frame, text="Financial Projection Summary",
+                     font=("Segoe UI", 13, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=16, pady=(12, 0))
+
+        self.projection_summary_label = ctk.CTkLabel(
+            summary_frame, text="", font=('Consolas', 11),
+            text_color=ct['TEXT'], justify="left", anchor="w")
+        self.projection_summary_label.pack(fill="x", padx=16, pady=(6, 14))
+
         # Expiring contracts
-        expiring_frame = ttk.LabelFrame(projections_frame, text="Expiring Contracts", )
-        expiring_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
+        expiring_frame = ctk.CTkFrame(projections_frame, fg_color=ct['CARD'], corner_radius=12)
+        expiring_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ctk.CTkLabel(expiring_frame, text="Expiring Contracts",
+                     font=("Segoe UI", 13, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=16, pady=(12, 0))
+
         expiring_columns = {
             'name': ('Player', 180),
             'position': ('Pos', 50),
@@ -5915,158 +5986,276 @@ class FinancesWindow(tk.Toplevel):
             'status': ('Status', 100),
             'estimated_ask': ('Est. Ask', 120)
         }
-        
-        self.expiring_tree = self.parent._create_treeview(expiring_frame, expiring_columns, 15)
-        self.expiring_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-    def create_management_tab(self):
+        self._expiring_table, self.expiring_tree = self._create_fin_treeview(expiring_frame, expiring_columns, 15)
+        self._expiring_table.pack(fill="both", expand=True, padx=10, pady=10)
+
+    def create_management_tab(self, management_frame):
         """Create contract management tools tab."""
-        management_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(management_frame, text="Management")
-        
+        ct = self._ct
+
         # Quick actions section
-        actions_frame = ttk.LabelFrame(management_frame, text="Quick Actions", )
-        actions_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        actions_grid = ttk.Frame(actions_frame)
-        actions_grid.pack(fill=tk.X, padx=15, pady=15)
-        
+        actions_frame = ctk.CTkFrame(management_frame, fg_color=ct['CARD'], corner_radius=12)
+        actions_frame.pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkLabel(actions_frame, text="Quick Actions",
+                     font=("Segoe UI", 13, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=16, pady=(12, 0))
+
+        actions_grid = ctk.CTkFrame(actions_frame, fg_color="transparent")
+        actions_grid.pack(fill="x", padx=12, pady=(6, 14))
+
         # Configure grid
         for i in range(3):
             actions_grid.columnconfigure(i, weight=1)
-        
+
         # Action buttons
-        ttk.Button(actions_grid, text="Negotiate Extensions", 
-                  command=self.open_contract_extensions).grid(row=0, column=0, padx=5, pady=5, sticky='ew')
-        
-        ttk.Button(actions_grid, text="Trade Evaluator", 
-                  command=self.open_trade_evaluator).grid(row=0, column=1, padx=5, pady=5, sticky='ew')
-        
-        ttk.Button(actions_grid, text="Salary Analytics", 
-                  command=self.show_salary_analytics).grid(row=0, column=2, padx=5, pady=5, sticky='ew')
-        
-        ttk.Button(actions_grid, text="Buyout Calculator", 
-                  command=self.open_buyout_calculator).grid(row=1, column=0, padx=5, pady=5, sticky='ew')
-        
-        ttk.Button(actions_grid, text="Cap Compliance Check", 
-                  command=self.check_cap_compliance).grid(row=1, column=1, padx=5, pady=5, sticky='ew')
-        
-        ttk.Button(actions_grid, text="Export Report", 
-                  command=self.export_financial_report).grid(row=1, column=2, padx=5, pady=5, sticky='ew')
-        
+        self._secondary_button(actions_grid, text="Negotiate Extensions",
+                               command=self.open_contract_extensions).grid(row=0, column=0, padx=5, pady=5, sticky='ew')
+
+        self._secondary_button(actions_grid, text="Trade Evaluator",
+                               command=self.open_trade_evaluator).grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+
+        self._secondary_button(actions_grid, text="Salary Analytics",
+                               command=self.show_salary_analytics).grid(row=0, column=2, padx=5, pady=5, sticky='ew')
+
+        self._secondary_button(actions_grid, text="Buyout Calculator",
+                               command=self.open_buyout_calculator).grid(row=1, column=0, padx=5, pady=5, sticky='ew')
+
+        self._secondary_button(actions_grid, text="Cap Compliance Check",
+                               command=self.check_cap_compliance).grid(row=1, column=1, padx=5, pady=5, sticky='ew')
+
+        self._primary_button(actions_grid, text="Export Report",
+                             command=self.export_financial_report).grid(row=1, column=2, padx=5, pady=5, sticky='ew')
+
         # Recommendations section
-        recommendations_frame = ttk.LabelFrame(management_frame, text="Financial Recommendations", )
-        recommendations_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        self.recommendations_text = tk.Text(recommendations_frame, height=15, wrap=tk.WORD,
-                                          bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                          font=('Segoe UI', 10), borderwidth=0)
-        
-        recommendations_scroll = ttk.Scrollbar(recommendations_frame, orient="vertical", command=self.recommendations_text.yview)
+        recommendations_frame = ctk.CTkFrame(management_frame, fg_color=ct['CARD'], corner_radius=12)
+        recommendations_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ctk.CTkLabel(recommendations_frame, text="Financial Recommendations",
+                     font=("Segoe UI", 13, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=16, pady=(12, 0))
+
+        text_wrap = ctk.CTkFrame(recommendations_frame, fg_color="transparent")
+        text_wrap.pack(fill="both", expand=True, padx=12, pady=(6, 14))
+
+        self.recommendations_text = tk.Text(
+            text_wrap, height=15, wrap=tk.WORD,
+            bg=ct['CARD'], fg=ct['TEXT'],
+            insertbackground=ct['TEXT'],
+            selectbackground=ct['ROW_SELECTED'],
+            font=('Segoe UI', 10), borderwidth=0,
+            highlightthickness=0)
+        self.recommendations_text.pack(side="left", fill="both", expand=True)
+
+        recommendations_scroll = ctk.CTkScrollbar(
+            text_wrap, orientation="vertical",
+            command=self.recommendations_text.yview)
+        recommendations_scroll.pack(side="right", fill="y")
         self.recommendations_text.configure(yscrollcommand=recommendations_scroll.set)
-        
-        self.recommendations_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
-        recommendations_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
 
-    def create_reports_tab(self):
+    def create_reports_tab(self, reports_frame):
         """Create financial reports tab."""
-        reports_frame = ttk.Frame(self.notebook, style='Tab.TFrame')
-        self.notebook.add(reports_frame, text="Reports")
-        
-        # Report selection
-        selection_frame = ttk.LabelFrame(reports_frame, text="Select Report", )
-        selection_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        report_grid = ttk.Frame(selection_frame)
-        report_grid.pack(fill=tk.X, padx=15, pady=15)
-        
-        self.report_type = tk.StringVar(master=self, value="salary_breakdown")
-        
-        reports = [
-            ("Salary Breakdown", "salary_breakdown"),
-            ("Contract Timeline", "contract_timeline"),
-            ("Position Analysis", "position_analysis"),
-            ("Age Demographics", "age_demographics"),
-            ("Performance vs Salary", "performance_salary")
-        ]
-        
-        for i, (text, value) in enumerate(reports):
-            ttk.Radiobutton(report_grid, text=text, variable=self.report_type, value=value,
-                           command=self.update_report_view).grid(row=i//3, column=i%3, padx=10, pady=5, sticky='w')
-        
-        # Report display
-        display_frame = ttk.LabelFrame(reports_frame, text="Report Output", )
-        display_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        self.report_text = tk.Text(display_frame, wrap=tk.WORD,
-                                  bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                  font=('Consolas', 10), borderwidth=0)
-        
-        report_scroll = ttk.Scrollbar(display_frame, orient="vertical", command=self.report_text.yview)
-        self.report_text.configure(yscrollcommand=report_scroll.set)
-        
-        self.report_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
-        report_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
+        ct = self._ct
 
-    def setup_styles(self):
-        """Set up custom styles for the finances window."""
-        style = ttk.Style()
-        
-        # Modern notebook style
-        style.configure('Modern.TNotebook', background=self.parent.BG_COLOR, borderwidth=0)
-        style.configure('Modern.TNotebook.Tab', padding=[20, 10], font=(self.parent.FONT_FAMILY, 10))
+        # Report selection
+        selection_frame = ctk.CTkFrame(reports_frame, fg_color=ct['CARD'], corner_radius=12)
+        selection_frame.pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkLabel(selection_frame, text="Select Report",
+                     font=("Segoe UI", 13, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=16, pady=(12, 0))
+
+        report_grid = ctk.CTkFrame(selection_frame, fg_color="transparent")
+        report_grid.pack(fill="x", padx=12, pady=(6, 14))
+
+        self.report_type = tk.StringVar(master=self, value="salary_breakdown")
+
+        self._report_labels = ["Salary Breakdown", "Contract Timeline",
+                               "Position Analysis", "Age Demographics",
+                               "Performance vs Salary"]
+        self._report_values = ["salary_breakdown", "contract_timeline",
+                               "position_analysis", "age_demographics",
+                               "performance_salary"]
+
+        report_seg = ctk.CTkSegmentedButton(
+            report_grid,
+            values=self._report_labels,
+            fg_color=ct['BG'],
+            selected_color=ct['TEAL'],
+            selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'],
+            unselected_hover_color=ct['BORDER'],
+            text_color=ct['TEXT'],
+            command=self._on_report_selected,
+        )
+        report_seg.pack(fill="x", padx=4)
+        report_seg.set("Salary Breakdown")
+        self._report_seg = report_seg
+
+        # Report display
+        display_frame = ctk.CTkFrame(reports_frame, fg_color=ct['CARD'], corner_radius=12)
+        display_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ctk.CTkLabel(display_frame, text="Report Output",
+                     font=("Segoe UI", 13, "bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=16, pady=(12, 0))
+
+        report_wrap = ctk.CTkFrame(display_frame, fg_color="transparent")
+        report_wrap.pack(fill="both", expand=True, padx=12, pady=(6, 14))
+
+        self.report_text = tk.Text(report_wrap, wrap=tk.WORD,
+                                   bg=ct['CARD'], fg=ct['TEXT'],
+                                   insertbackground=ct['TEXT'],
+                                   selectbackground=ct['ROW_SELECTED'],
+                                   font=('Consolas', 10), borderwidth=0,
+                                   highlightthickness=0)
+        self.report_text.pack(side="left", fill="both", expand=True)
+
+        report_scroll = ctk.CTkScrollbar(report_wrap, orientation="vertical",
+                                         command=self.report_text.yview)
+        report_scroll.pack(side="right", fill="y")
+        self.report_text.configure(yscrollcommand=report_scroll.set)
+
+    def _on_report_selected(self, label):
+        """Sync the segmented-button choice to the report key, then refresh."""
+        try:
+            idx = self._report_labels.index(label)
+        except ValueError:
+            return
+        self.report_type.set(self._report_values[idx])
+        self.update_report_view()
+
+    # ------------------------------------------------------------------
+    # Styling
+    # ------------------------------------------------------------------
+    def _setup_tree_style(self):
+        """Dark, flat styling for the finances tables (styled ttk.Treeview,
+        per the migration guide -- the tables carry 8-10 sortable columns)."""
+        ct = self._ct
+        style = ttk.Style(self)
+        style.configure('FIN.Treeview',
+                        background=ct['CARD'],
+                        fieldbackground=ct['CARD'],
+                        foreground=ct['TEXT'],
+                        borderwidth=0,
+                        relief='flat',
+                        rowheight=30,
+                        font=('Segoe UI', 10))
+        style.configure('FIN.Treeview.Heading',
+                        background=ct['PANEL'],
+                        foreground=ct['TEXT'],
+                        font=('Segoe UI', 10, 'bold'),
+                        relief='flat',
+                        borderwidth=0)
+        style.map('FIN.Treeview',
+                  background=[('selected', ct['ROW_SELECTED'])],
+                  foreground=[('selected', ct['TEXT'])])
+        style.layout('FIN.Treeview',
+                     [('Treeview.treearea', {'sticky': 'nswe'})])
+        style.configure('FIN.Vertical.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.configure('FIN.Horizontal.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.map('FIN.Vertical.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+        style.map('FIN.Horizontal.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+
+    def _create_fin_treeview(self, parent, columns, height=15):
+        """Dark-styled multi-column table inside a rounded card, with the
+        app's generic heading-click sorting wired up."""
+        ct = self._ct
+        table_frame = ctk.CTkFrame(parent, fg_color=ct['BG'], corner_radius=10)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        tree = ttk.Treeview(table_frame, columns=list(columns.keys()),
+                            show='headings', style='FIN.Treeview', height=height)
+        for col, (text, width) in columns.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col, t=tree: self.parent._sort_treeview_generic(t, c))
+            tree.column(col, width=width, anchor='w' if col == 'name' else 'center')
+
+        # Status tags -- color-code contract situations
+        tree.tag_configure('status_rfa', foreground=ct['TEAL'])
+        tree.tag_configure('status_ufa', foreground=ct['GOLD'])
+        tree.tag_configure('status_expiring', foreground=ct['GOLD'])
+        tree.tag_configure('status_longterm', foreground=ct['TEXT_DIM'])
+
+        v_scroll = ttk.Scrollbar(table_frame, orient="vertical",
+                                 style='FIN.Vertical.TScrollbar',
+                                 command=tree.yview)
+        h_scroll = ttk.Scrollbar(table_frame, orient="horizontal",
+                                 style='FIN.Horizontal.TScrollbar',
+                                 command=tree.xview)
+        tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        h_scroll.grid(row=1, column=0, sticky="ew")
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+        return table_frame, tree
 
     # Helper methods
     def create_stat_box(self, parent, title, value, row, col, color=None):
-        """Create a statistical display box."""
-        box_frame = ttk.Frame(parent, style='Panel.TFrame', padding=10)
+        """Create a statistical display card with color-coded value."""
+        ct = self._ct
+        box_frame = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=10)
         box_frame.grid(row=row, column=col, padx=5, pady=5, sticky='ew')
-        
-        title_label = ttk.Label(box_frame, text=title, style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10))
-        title_label.pack()
-        
-        value_style = 'Header.TLabel'
+
+        ctk.CTkLabel(box_frame, text=title,
+                     font=("Segoe UI", 10),
+                     text_color=ct['TEXT_DIM']).pack(pady=(12, 2))
+
         if color == 'green':
-            value_style = 'Success.TLabel'
+            value_color = ct['GREEN']
         elif color == 'red':
-            value_style = 'Error.TLabel'
-        
-        value_label = ttk.Label(box_frame, text=value, style=value_style, font=(self.parent.FONT_FAMILY, 14, 'bold'))
-        value_label.pack()
+            value_color = ct['RED']
+        else:
+            value_color = ct['TEXT']
+
+        ctk.CTkLabel(box_frame, text=value,
+                     font=("Segoe UI", 16, "bold"),
+                     text_color=value_color).pack(pady=(0, 12))
 
     def create_cap_utilization_bar(self, parent, current_payroll, salary_cap):
-        """Create a visual salary cap utilization bar."""
-        bar_frame = ttk.Frame(parent)
-        bar_frame.pack(fill=tk.X, padx=15, pady=15)
-        
+        """Create a modern pill-shaped salary cap utilization meter."""
+        ct = self._ct
+        bar_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        bar_frame.pack(fill="x", padx=16, pady=(4, 16))
+
         # Calculate percentage
-        percentage = (current_payroll / salary_cap) * 100
-        
-        # Create canvas for the bar
-        canvas = tk.Canvas(bar_frame, height=30, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        canvas.pack(fill=tk.X)
-        
-        # Draw the bar
-        bar_width = 400
-        bar_height = 20
-        x_start = 10
-        y_start = 5
-        
-        # Background bar (cap limit)
-        canvas.create_rectangle(x_start, y_start, x_start + bar_width, y_start + bar_height, 
-                              fill='#444444', outline='#666666')
-        
-        # Used cap bar
-        used_width = (current_payroll / salary_cap) * bar_width
-        color = '#f85149' if percentage > 95 else '#4CAF50' if percentage < 80 else '#FFA500'
-        
-        canvas.create_rectangle(x_start, y_start, x_start + used_width, y_start + bar_height, 
-                              fill=color, outline=color)
-        
-        # Percentage text
-        canvas.create_text(x_start + bar_width + 20, y_start + bar_height/2, 
-                         text=f"{percentage:.1f}% utilized", 
-                         fill=self.parent.TEXT_COLOR, anchor='w')
+        percentage = (current_payroll / salary_cap) * 100 if salary_cap else 0
+
+        # Utilization color: healthy -> teal, tight -> gold, over -> red
+        if percentage > 95:
+            bar_color = ct['RED']
+        elif percentage >= 80:
+            bar_color = ct['GOLD']
+        else:
+            bar_color = ct['TEAL']
+
+        self.cap_util_bar = ctk.CTkProgressBar(
+            bar_frame,
+            height=22,
+            corner_radius=11,
+            fg_color=ct['BORDER'],
+            progress_color=bar_color,
+        )
+        self.cap_util_bar.pack(fill="x", side="left", expand=True)
+        self.cap_util_bar.set(max(0.0, min(1.0, current_payroll / salary_cap if salary_cap else 0)))
+
+        ctk.CTkLabel(bar_frame, text=f"{percentage:.1f}% utilized",
+                     font=("Segoe UI", 11, "bold"),
+                     text_color=ct['TEXT_DIM']).pack(side="left", padx=(12, 0))
 
     # Calculation methods
     def calculate_current_payroll(self):
@@ -6113,14 +6302,17 @@ class FinancesWindow(tk.Toplevel):
         current_payroll = self.calculate_current_payroll()
         salary_cap = self._salary_cap()
         cap_space = salary_cap - current_payroll
-        
-        self.header_stats_label.config(
-            text=f"Cap Space: ${cap_space:,} | Payroll: ${current_payroll:,} | Cap: ${salary_cap:,}"
+
+        ct = self._ct
+        cap_color = ct['GREEN'] if cap_space >= 0 else ct['RED']
+        self.header_stats_label.configure(
+            text=f"Cap Space: ${cap_space:,}  |  Payroll: ${current_payroll:,}  |  Cap: ${salary_cap:,}",
+            text_color=cap_color,
         )
-        
+
         # Update position breakdown
         self.position_tree.delete(*self.position_tree.get_children())
-        
+
         position_data = self.calculate_position_breakdown()
         for pos, data in position_data.items():
             percentage = (data['total'] / salary_cap) * 100 if salary_cap > 0 else 0
@@ -6135,13 +6327,13 @@ class FinancesWindow(tk.Toplevel):
 
     def calculate_position_breakdown(self):
         """Calculate salary breakdown by position."""
-        positions = {'Goalies': {'count': 0, 'total': 0}, 
-                    'Defense': {'count': 0, 'total': 0}, 
+        positions = {'Goalies': {'count': 0, 'total': 0},
+                    'Defense': {'count': 0, 'total': 0},
                     'Forwards': {'count': 0, 'total': 0}}
-        
+
         for player in self.parent.user_team.roster:
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
-            
+
             if hasattr(player, 'primary_position'):
                 if player.primary_position == PlayerPosition.GOALIE:
                     positions['Goalies']['count'] += 1
@@ -6152,11 +6344,11 @@ class FinancesWindow(tk.Toplevel):
                 else:
                     positions['Forwards']['count'] += 1
                     positions['Forwards']['total'] += salary
-        
+
         # Calculate averages
         for pos_data in positions.values():
             pos_data['avg'] = pos_data['total'] // pos_data['count'] if pos_data['count'] > 0 else 0
-        
+
         return positions
 
     def _set_finance_filter(self, attr):
@@ -6175,17 +6367,20 @@ class FinancesWindow(tk.Toplevel):
             for value, btn in getattr(self, pills_attr, {}).items():
                 btn.set_selected(value == current)
 
+    _STATUS_TAGS = {'RFA': 'status_rfa', 'UFA': 'status_ufa',
+                    'Expiring': 'status_expiring', 'Long-term': 'status_longterm'}
+
     def update_contracts_view(self):
         """Update the contracts view with filtering."""
         self.contracts_tree.delete(*self.contracts_tree.get_children())
         # Keyed by the treeview widget, matching the app-wide tree_maps
         # convention (see main._create_treeview / _show_player_context_menu).
         self.parent.tree_maps[self.contracts_tree] = {}
-        
+
         # Get all players based on roster filter
         roster_filter = self.roster_filter.get()
         players = []
-        
+
         if roster_filter == 'All':
             players.extend(self.parent.user_team.roster)
             players.extend(getattr(self.parent.user_team, 'ahl_roster', []))
@@ -6196,7 +6391,7 @@ class FinancesWindow(tk.Toplevel):
             players = getattr(self.parent.user_team, 'ahl_roster', [])
         elif roster_filter == 'Prospects':
             players = getattr(self.parent.user_team, 'prospects', [])
-        
+
         # Apply filters and populate tree
         for player in players:
             # Position filter
@@ -6209,19 +6404,19 @@ class FinancesWindow(tk.Toplevel):
                         continue
                     elif pos_filter == 'F' and player.primary_position not in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
                         continue
-            
+
             # Get contract info
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
             years = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
-            
+
             # Determine status
             status = self.determine_contract_status(player, years)
-            
+
             # Status filter
             status_filter = self.status_filter.get()
             if status_filter != 'All' and status != status_filter:
                 continue
-            
+
             # Format position
             position = getattr(player.primary_position, 'name', 'F') if hasattr(player, 'primary_position') else 'F'
             if position in ['LEFT_WING', 'RIGHT_WING', 'CENTER']:
@@ -6230,7 +6425,7 @@ class FinancesWindow(tk.Toplevel):
                 position = 'D'
             elif position == 'GOALIE':
                 position = 'G'
-            
+
             values = (
                 player.full_name,
                 position,
@@ -6243,14 +6438,15 @@ class FinancesWindow(tk.Toplevel):
                 f"${salary:,}",  # Cap hit (simplified)
                 str(self.current_season + years)
             )
-            
-            item = self.contracts_tree.insert('', 'end', values=values)
+
+            item = self.contracts_tree.insert('', 'end', values=values,
+                                              tags=(self._STATUS_TAGS.get(status, ''),))
             self.parent.tree_maps[self.contracts_tree][item] = player
 
     def determine_contract_status(self, player, years_remaining):
         """Determine the contract status of a player."""
         age = getattr(player, 'age', 22)
-        
+
         if years_remaining <= 1:
             if age < 25:
                 return "RFA"
@@ -6269,46 +6465,45 @@ class FinancesWindow(tk.Toplevel):
             selected_year = self.current_season
             self.selected_projection_year.set(str(selected_year))
         years_ahead = selected_year - self.current_season
-        
+
         # Calculate projected payroll
         projected_payroll = 0
         expiring_players = []
-        
+
         for player in self.parent.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
-            
+
             if years_left > years_ahead:
                 projected_payroll += salary
             else:
                 expiring_players.append(player)
-        
+
         # Update summary
         salary_cap = self._salary_cap()
         projected_space = salary_cap - projected_payroll
-        
+
         summary_text = f"""
 Projection for {selected_year} Season:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Committed Payroll:    ${projected_payroll:,}
 Projected Cap:        ${salary_cap:,}
 Available Space:      ${projected_space:,}
 Expiring Contracts:   {len(expiring_players)} players
 """
-        
-        self.projection_summary_label.config(text=summary_text)
-        
+
+        self.projection_summary_label.configure(text=summary_text)
+
         # Update expiring contracts tree
         self.expiring_tree.delete(*self.expiring_tree.get_children())
-        
+
         for player in expiring_players:
             estimated_ask = self.estimate_contract_ask(player)
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             current_salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
-            
+
             status = self.determine_contract_status(player, years_left)
             position = getattr(player.primary_position, 'name', 'F') if hasattr(player, 'primary_position') else 'F'
-            
+
             values = (
                 player.full_name,
                 position[:1] if position in ['CENTER', 'LEFT_WING', 'RIGHT_WING'] else position[:1],
@@ -6319,15 +6514,16 @@ Expiring Contracts:   {len(expiring_players)} players
                 status,
                 f"${estimated_ask:,}"
             )
-            
-            self.expiring_tree.insert('', 'end', values=values)
+
+            self.expiring_tree.insert('', 'end', values=values,
+                                      tags=(self._STATUS_TAGS.get(status, ''),))
 
     def estimate_contract_ask(self, player):
         """Estimate what a player might ask for in their next contract."""
         ovr = player.overall_rating()
         age = getattr(player, 'age', 22)
         current_salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
-        
+
         # Base estimate on overall rating
         if ovr >= 85:
             base_ask = random.randint(8_000_000, 12_000_000)
@@ -6339,38 +6535,38 @@ Expiring Contracts:   {len(expiring_players)} players
             base_ask = random.randint(1_500_000, 3_000_000)
         else:
             base_ask = random.randint(750_000, 1_500_000)
-        
+
         # Age adjustments
         if age < 25:
             base_ask *= 0.9  # Younger players more affordable
         elif age > 32:
             base_ask *= 0.8  # Older players less expensive
-        
+
         # Don't go too far from current salary unless big performance change
         if current_salary > 0:
             max_increase = current_salary * 1.5
             min_decrease = current_salary * 0.7
             base_ask = max(min_decrease, min(max_increase, base_ask))
-        
+
         return int(base_ask)
 
     def update_recommendations(self):
         """Update financial recommendations."""
         recommendations = self.generate_recommendations()
-        
+
         self.recommendations_text.delete(1.0, tk.END)
         for rec in recommendations:
-            self.recommendations_text.insert(tk.END, f"• {rec}\n\n")
+            self.recommendations_text.insert(tk.END, f"\u2022 {rec}\n\n")
 
     def generate_recommendations(self):
         """Generate financial recommendations based on current situation."""
         recommendations = []
-        
+
         current_payroll = self.calculate_current_payroll()
         salary_cap = self._salary_cap()
         cap_space = salary_cap - current_payroll
         cap_percentage = (current_payroll / salary_cap) * 100
-        
+
         # Cap space recommendations
         if cap_percentage > 95:
             recommendations.append("URGENT: You are very close to the salary cap. Consider trading high-salary players or demoting players to create space.")
@@ -6378,17 +6574,17 @@ Expiring Contracts:   {len(expiring_players)} players
             recommendations.append("WARNING: Limited cap space available. Be cautious with any new signings.")
         elif cap_percentage < 70:
             recommendations.append("You have significant cap space available. Consider upgrading your roster through free agency or trades.")
-        
+
         # Contract expiry analysis
         expiring_next_year = []
         for player in self.parent.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             if years_left <= 1:
                 expiring_next_year.append(player)
-        
+
         if len(expiring_next_year) > 8:
             recommendations.append(f"You have {len(expiring_next_year)} players with expiring contracts. Start extension negotiations early to avoid losing key players.")
-        
+
         # Age demographics
         old_expensive_players = []
         for player in self.parent.user_team.roster:
@@ -6396,10 +6592,10 @@ Expiring Contracts:   {len(expiring_players)} players
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
             if age > 33 and salary > 4_000_000:
                 old_expensive_players.append(player)
-        
+
         if old_expensive_players:
             recommendations.append(f"Consider the future value of older, expensive players: {', '.join([p.full_name for p in old_expensive_players[:3]])}{'...' if len(old_expensive_players) > 3 else ''}")
-        
+
         # Position balance
         position_data = self.calculate_position_breakdown()
         for pos, data in position_data.items():
@@ -6410,18 +6606,18 @@ Expiring Contracts:   {len(expiring_players)} players
                 recommendations.append("High spending on defense. Ensure this matches your team strategy.")
             elif pos == 'Forwards' and percentage < 50:
                 recommendations.append("Consider if your forward spending is sufficient for offensive production.")
-        
+
         if not recommendations:
             recommendations.append("Your financial situation looks stable. Continue monitoring contract expirations and cap space.")
-        
+
         return recommendations
 
     def update_report_view(self):
         """Update the selected report view."""
         report_type = self.report_type.get()
-        
+
         self.report_text.delete(1.0, tk.END)
-        
+
         if report_type == "salary_breakdown":
             self.generate_salary_breakdown_report()
         elif report_type == "contract_timeline":
@@ -6455,25 +6651,25 @@ Cap Utilization:  {cap_pct:.1f}%
 TOP 10 SALARIES
 ---------------
 """
-        
+
         # Sort players by salary
-        sorted_players = sorted(self.parent.user_team.roster, 
-                              key=lambda p: getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0), 
+        sorted_players = sorted(self.parent.user_team.roster,
+                              key=lambda p: getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0),
                               reverse=True)
-        
+
         for i, player in enumerate(sorted_players[:10], 1):
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
             percentage = (salary / current_payroll) * 100 if current_payroll > 0 else 0
             report += f"{i:2}. {player.full_name:<20} ${salary:>10,} ({percentage:4.1f}%)\n"
-        
+
         # Position breakdown
         position_data = self.calculate_position_breakdown()
         report += "\n\nPOSITION BREAKDOWN\n------------------\n"
-        
+
         for pos, data in position_data.items():
             percentage = (data['total'] / current_payroll) * 100 if current_payroll > 0 else 0
             report += f"{pos:<10} {data['count']:2} players  ${data['total']:>10,} ({percentage:4.1f}%) avg: ${data['avg']:,}\n"
-        
+
         self.report_text.insert(tk.END, report)
 
     def generate_contract_timeline_report(self):
@@ -6486,30 +6682,30 @@ CONTRACT TIMELINE REPORT
 CONTRACTS BY EXPIRY YEAR
 ------------------------
 """
-        
+
         # Group by expiry year
         expiry_groups = {}
         for player in self.parent.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             expiry_year = self.current_season + years_left
-            
+
             if expiry_year not in expiry_groups:
                 expiry_groups[expiry_year] = []
             expiry_groups[expiry_year].append(player)
-        
+
         for year in sorted(expiry_groups.keys()):
             players = expiry_groups[year]
             total_salary = sum(getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0) for p in players)
-            
+
             report += f"\n{year}: {len(players)} players, ${total_salary:,}\n"
             report += "-" * 40 + "\n"
-            
+
             for player in sorted(players, key=lambda p: getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0), reverse=True):
                 salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
                 age_at_expiry = getattr(player, 'age', 22) + (year - self.current_season)
                 status = "RFA" if age_at_expiry < 25 else "UFA"
                 report += f"  {player.full_name:<20} ${salary:>8,} (age {age_at_expiry}, {status})\n"
-        
+
         self.report_text.insert(tk.END, report)
 
     def generate_position_analysis_report(self):
@@ -6522,7 +6718,7 @@ POSITION ANALYSIS REPORT
 DETAILED POSITION BREAKDOWN
 ---------------------------
 """
-        
+
         # Analyze by specific positions
         positions = {
             'Goalies': [],
@@ -6530,7 +6726,7 @@ DETAILED POSITION BREAKDOWN
             'Centers': [],
             'Wingers': []
         }
-        
+
         for player in self.parent.user_team.roster:
             if hasattr(player, 'primary_position'):
                 if player.primary_position == PlayerPosition.GOALIE:
@@ -6541,16 +6737,16 @@ DETAILED POSITION BREAKDOWN
                     positions['Centers'].append(player)
                 else:
                     positions['Wingers'].append(player)
-        
+
         for pos_name, players in positions.items():
             if not players:
                 continue
-                
+
             total_salary = sum(getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0) for p in players)
             avg_salary = total_salary / len(players) if players else 0
             avg_age = sum(getattr(p, 'age', 22) for p in players) / len(players) if players else 0
             avg_ovr = sum(p.overall_rating() for p in players) / len(players) if players else 0
-            
+
             report += f"\n{pos_name.upper()}\n"
             report += f"Players: {len(players)}\n"
             report += f"Total Salary: ${total_salary:,}\n"
@@ -6558,11 +6754,11 @@ DETAILED POSITION BREAKDOWN
             report += f"Average Age: {avg_age:.1f}\n"
             report += f"Average OVR: {avg_ovr:.1f}\n"
             report += "-" * 30 + "\n"
-            
+
             for player in sorted(players, key=lambda p: getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0), reverse=True):
                 salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
                 report += f"  {player.full_name:<20} {getattr(player, 'age', 22):2} yrs  OVR {player.overall_rating():2}  ${salary:>8,}\n"
-        
+
         self.report_text.insert(tk.END, report)
 
     def generate_age_demographics_report(self):
@@ -6575,11 +6771,11 @@ AGE DEMOGRAPHICS REPORT
 AGE GROUP BREAKDOWN
 -------------------
 """
-        
+
         age_groups = {
             '18-22': [], '23-26': [], '27-30': [], '31-34': [], '35+': []
         }
-        
+
         for player in self.parent.user_team.roster:
             age = getattr(player, 'age', 22)
             if age <= 22:
@@ -6592,24 +6788,24 @@ AGE GROUP BREAKDOWN
                 age_groups['31-34'].append(player)
             else:
                 age_groups['35+'].append(player)
-        
+
         for group_name, players in age_groups.items():
             if not players:
                 continue
-                
+
             total_salary = sum(getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0) for p in players)
             avg_ovr = sum(p.overall_rating() for p in players) / len(players) if players else 0
-            
+
             report += f"\nAGE {group_name}\n"
             report += f"Players: {len(players)}\n"
             report += f"Total Salary: ${total_salary:,}\n"
             report += f"Average OVR: {avg_ovr:.1f}\n"
             report += "-" * 25 + "\n"
-            
+
             for player in players:
                 salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
                 report += f"  {player.full_name:<20} {getattr(player, 'age', 22):2} yrs  ${salary:>8,}\n"
-        
+
         self.report_text.insert(tk.END, report)
 
     def generate_performance_salary_report(self):
@@ -6623,38 +6819,38 @@ VALUE ANALYSIS
 --------------
 (Players ranked by value: OVR rating vs salary cost)
 """
-        
+
         # Calculate value scores
         player_values = []
         for player in self.parent.user_team.roster:
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
             ovr = player.overall_rating()
-            
+
             # Calculate value score (higher is better value)
             if salary > 0:
                 value_score = (ovr ** 2) / (salary / 1_000_000)  # OVR squared divided by salary in millions
             else:
                 value_score = ovr ** 2
-            
+
             player_values.append((player, ovr, salary, value_score))
-        
+
         # Sort by value score
         player_values.sort(key=lambda x: x[3], reverse=True)
-        
+
         report += "\nBEST VALUE CONTRACTS\n" + "-" * 25 + "\n"
         for i, (player, ovr, salary, value) in enumerate(player_values[:10], 1):
             report += f"{i:2}. {player.full_name:<20} OVR {ovr:2} ${salary:>8,} (Value: {value:.1f})\n"
-        
+
         report += "\nHIGHEST PAID PLAYERS\n" + "-" * 25 + "\n"
         highest_paid = sorted(player_values, key=lambda x: x[2], reverse=True)[:10]
         for i, (player, ovr, salary, value) in enumerate(highest_paid, 1):
             report += f"{i:2}. {player.full_name:<20} OVR {ovr:2} ${salary:>8,} (Value: {value:.1f})\n"
-        
+
         report += "\nPOTENTIAL OVERPAYS\n" + "-" * 25 + "\n"
         potential_overpays = [pv for pv in player_values if pv[2] > 3_000_000 and pv[3] < 50][:5]
         for i, (player, ovr, salary, value) in enumerate(potential_overpays, 1):
             report += f"{i:2}. {player.full_name:<20} OVR {ovr:2} ${salary:>8,} (Value: {value:.1f})\n"
-        
+
         self.report_text.insert(tk.END, report)
 
     # Event handlers
@@ -6701,7 +6897,7 @@ VALUE ANALYSIS
             # Open trade window with this player pre-selected
             self.parent.open_trade_window()
 
-    # Action methods  
+    # Action methods
     def open_contract_extensions(self):
         """Open contract extensions window."""
         if 'contract_extensions' not in self.parent.open_windows or not self.parent.open_windows['contract_extensions'].winfo_exists():
@@ -6724,7 +6920,7 @@ VALUE ANALYSIS
         """Check salary cap compliance."""
         current_payroll = self.calculate_current_payroll()
         salary_cap = self._salary_cap()
-        
+
         if current_payroll > salary_cap:
             over_amount = current_payroll - salary_cap
             messagebox.showerror("Cap Violation", f"Your team is ${over_amount:,} over the salary cap!\nYou must make moves to become compliant.")
@@ -6742,20 +6938,20 @@ VALUE ANALYSIS
             exports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports")
             if not os.path.exists(exports_dir):
                 os.makedirs(exports_dir)
-            
+
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"financial_report_{self.parent.user_team.team_name.replace(' ', '_')}_{timestamp}.txt"
             filepath = os.path.join(exports_dir, filename)
 
             # Calculate financial data
-            current_payroll = sum(getattr(p.contract, 'salary', getattr(p, 'salary', 750000)) 
-                                for p in self.parent.user_team.roster 
+            current_payroll = sum(getattr(p.contract, 'salary', getattr(p, 'salary', 750000))
+                                for p in self.parent.user_team.roster
                                 if hasattr(p, 'contract') or hasattr(p, 'salary'))
-            
+
             salary_cap = self._salary_cap()
             cap_space = salary_cap - current_payroll
-            
+
             # Generate detailed report
             report_content = f"""
 DETAILED FINANCIAL REPORT
@@ -6773,85 +6969,87 @@ Cap Status:         {'COMPLIANT' if current_payroll <= salary_cap else 'OVER CAP
 ROSTER BREAKDOWN
 ----------------
 """
-            
+
             # Sort players by salary for detailed breakdown
-            sorted_players = sorted(self.parent.user_team.roster, 
-                                  key=lambda p: getattr(p.contract, 'salary', getattr(p, 'salary', 750000)), 
+            sorted_players = sorted(self.parent.user_team.roster,
+                                  key=lambda p: getattr(p.contract, 'salary', getattr(p, 'salary', 750000)),
                                   reverse=True)
-            
+
             for i, player in enumerate(sorted_players, 1):
                 salary = getattr(player.contract, 'salary', getattr(player, 'salary', 750000))
                 years_left = getattr(player.contract, 'years_remaining', 0) if hasattr(player, 'contract') else 0
-                
+
                 report_content += f"{i:2d}. {player.full_name:<25} {str(player.primary_position):<8} ${salary:>10,} ({years_left} yrs)\n"
-            
+
             # Contract expiry analysis
             report_content += f"\n\nCONTRACT EXPIRY ANALYSIS\n{'-'*25}\n"
-            
-            expiring_this_year = [p for p in self.parent.user_team.roster 
+
+            expiring_this_year = [p for p in self.parent.user_team.roster
                                 if hasattr(p, 'contract') and getattr(p.contract, 'years_remaining', 0) <= 1]
-            expiring_next_year = [p for p in self.parent.user_team.roster 
+            expiring_next_year = [p for p in self.parent.user_team.roster
                                 if hasattr(p, 'contract') and getattr(p.contract, 'years_remaining', 0) == 2]
-            
+
             report_content += f"Contracts expiring this season: {len(expiring_this_year)}\n"
             for player in expiring_this_year:
                 salary = getattr(player.contract, 'salary', 750000)
-                report_content += f"  • {player.full_name} - ${salary:,}\n"
-            
+                report_content += f"  \u2022 {player.full_name} - ${salary:,}\n"
+
             report_content += f"\nContracts expiring next season: {len(expiring_next_year)}\n"
             for player in expiring_next_year:
                 salary = getattr(player.contract, 'salary', 750000)
-                report_content += f"  • {player.full_name} - ${salary:,}\n"
-            
+                report_content += f"  \u2022 {player.full_name} - ${salary:,}\n"
+
             # Position breakdown
             report_content += f"\n\nSALARY BY POSITION\n{'-'*18}\n"
-            
+
             position_totals = {}
             for player in self.parent.user_team.roster:
                 pos = str(player.primary_position)
                 salary = getattr(player.contract, 'salary', getattr(player, 'salary', 750000))
-                
+
                 if pos not in position_totals:
                     position_totals[pos] = {'total': 0, 'count': 0}
                 position_totals[pos]['total'] += salary
                 position_totals[pos]['count'] += 1
-            
+
             for pos, data in sorted(position_totals.items()):
                 avg_salary = data['total'] / data['count'] if data['count'] > 0 else 0
                 report_content += f"{pos:<12} {data['count']:2d} players  ${data['total']:>10,}  (avg: ${avg_salary:,.0f})\n"
-            
+
             # Future projections
             report_content += f"\n\nFUTURE CAP PROJECTIONS\n{'-'*22}\n"
             report_content += f"Next season cap space (estimated): ${cap_space:,}\n"
             report_content += f"Extension priorities: {len(expiring_this_year)} players need new contracts\n"
             report_content += f"Trade candidates: Players with high salaries and declining performance\n"
-            
+
             # Write report to file
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(report_content)
-            
-            messagebox.showinfo("Export Successful", 
+
+            messagebox.showinfo("Export Successful",
                               f"Financial report exported successfully!\n\n"
                               f"File: {filename}\n"
                               f"Location: {exports_dir}")
-                              
+
         except Exception as e:
             print(f"Error exporting financial report: {e}")
             messagebox.showerror("Export Error", f"Failed to export financial report:\n{str(e)}")
-    
+
     def _view_contract_details(self, player):
         """View detailed contract information"""
         contract = getattr(player, 'contract', None)
         if contract:
             salary = getattr(contract, 'salary', 750000)
             years = getattr(contract, 'years_remaining', 0)
-            messagebox.showinfo("Contract Details", 
+            messagebox.showinfo("Contract Details",
                               f"Player: {player.full_name}\n"
                               f"Salary: ${salary:,}\n"
                               f"Years remaining: {years}\n"
                               f"Cap hit: ${salary:,}")
         else:
             messagebox.showinfo("Contract Details", f"No contract information available for {player.full_name}")
+
+
 
 class NewsWindow(tk.Toplevel):
     # Emoji ranges stripped from story text before display (stories are
