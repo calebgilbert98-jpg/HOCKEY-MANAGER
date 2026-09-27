@@ -126,10 +126,11 @@ class InGamePopup(tk.Frame):
     """
 
     def __new__(cls, master=None, *args, **kwargs):
-        if cls is InGamePopup:
-            # show_card() path -- plain construction, manager wires it up.
-            return super().__new__(cls)
-        mgr = _manager_for(master)
+        # Every construction -- subclass or direct -- is routed into a card
+        # on the in-game overlay. (Direct `InGamePopup(parent)` therefore
+        # behaves exactly like the old `tk.Toplevel(parent)` call sites it
+        # replaces: a visible, titled, closable dialog surface.)
+        mgr = _manager_for(master) if master is not None else _default_manager
         if mgr is None:
             # No in-game manager (pre-registration): degrade to a plain frame.
             return super().__new__(cls)
@@ -168,8 +169,9 @@ class InGamePopup(tk.Frame):
             # Widget already created inside the card by __new__; the passed
             # master is the *opener* (kept for the subclass's own use) --
             # do NOT re-run tk.Frame.__init__ (would recreate the widget).
+            # NOTE: _prebuilt_entry is intentionally kept on the instance so
+            # PopupManager.show_card() can adopt synchronously.
             entry = self._prebuilt_entry
-            object.__delattr__(self, "_prebuilt_entry")
             kw = _map_ctk_kwargs(kw)
             if kw:
                 try:
@@ -270,6 +272,22 @@ class InGamePopup(tk.Frame):
     def attributes(self, *args, **kwargs):  # noqa: D102 - compat no-op
         # Topmost/alpha are meaningless for an in-game card; swallow so the
         # call can't fall through to the app root (would pin the whole app).
+        pass
+
+    def withdraw(self):  # noqa: D102 - compat no-op
+        # A card can't be iconified; swallow so this can't fall through to
+        # the app root (would hide the entire game window).
+        pass
+
+    def deiconify(self):  # noqa: D102 - compat no-op
+        pass
+
+    def iconify(self):  # noqa: D102 - compat no-op
+        pass
+
+    def overrideredirect(self, *args):  # noqa: D102 - compat no-op
+        # Borderless floaters (tooltips/toasts) stay real Toplevels; a card
+        # must never strip the main window's chrome.
         pass
 
     def grab_set(self):
@@ -397,6 +415,8 @@ class PopupManager:
 
     def _adopt_prebuilt(self, popup, entry):
         """Place a __new__-routed card now that __init__ has finished."""
+        if self._entry_for(popup) is not None:
+            return  # already adopted (e.g. show_card did it synchronously)
         if getattr(popup, "_closed", False):
             self._teardown_entry(entry)
             return
@@ -418,21 +438,19 @@ class PopupManager:
         """Bare card for inline-built popups. Returns (host, close_fn).
 
         Build widgets into ``host`` (it quacks like a Toplevel); ``close_fn``
-        or ``host.destroy()`` dismisses the card.
+        or ``host.destroy()`` dismisses the card. Adopted synchronously so
+        the entry is in the stack before this returns.
         """
-        entry = self._make_entry(title, width, height, modal)
-        host = InGamePopup(entry["body"])
-        object.__setattr__(host, "_popup_title", str(title))
-        object.__setattr__(host, "_popup_size", (width, height))
+        host = InGamePopup(self.root)  # __new__-routed; idle adoption scheduled
+        host.title(title)
+        host.geometry(f"{width}x{height}")
         if on_close is not None:
             host.protocol("WM_DELETE_WINDOW", on_close)
-        entry["popup"] = host
-        self._stack.append(entry)
-        host.pack(fill="both", expand=True)
-        self._place_entry(entry)
+        # Adopt now (the scheduled idle adoption becomes a no-op via the
+        # _adopt_prebuilt guard) so _entry_for() works immediately.
+        self._adopt_prebuilt(host, host._prebuilt_entry)
         if modal:
             self._apply_modal(host)
-        host.bind("<Escape>", lambda e: self._on_escape(host))
         return host, host.destroy
 
     def close(self, popup):
