@@ -1955,6 +1955,10 @@ class AdvancedGameSim:
         # FM team-talk boost: team_name -> multiplier (default 1.0)
         self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
 
+        # Situations factor: pre-game room/bench/hunger edge per side,
+        # computed once here (the per-shot loop only reads the multiplier).
+        self._init_situations()
+
         # Initialize performance cache
         from performance_optimizations import get_global_cache
         self.cache = get_global_cache()
@@ -2016,6 +2020,37 @@ class AdvancedGameSim:
     def set_team_talk_boost(self, team_name: str, multiplier: float):
         """FM-style: apply a team-talk/morale multiplier to a team's scoring."""
         self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
+
+    def _init_situations(self):
+        """Per-team pre-game situational finishing edge (own channel).
+
+        Compounds room state, coaching buy-in and youth hunger into one xG
+        multiplier per side (+/-8% at the extremes). Computed ONCE per team
+        per game here in __init__ -- the per-shot hot loop below only reads
+        the stored multiplier, so the factor costs ~1ms per game total.
+        Never raises; inert (1.0) when unused.
+        """
+        self._situation_edge = {
+            self.home_team.team_name: 1.0, self.away_team.team_name: 1.0}
+        self._situation_breakdown = {}
+        try:
+            from reputation_system import situations_factor as _sf
+            _ctx = {"is_playoff": bool(getattr(self, "is_playoff", False))}
+            for _team in (self.home_team, self.away_team):
+                _bd = _sf(_team, _ctx)
+                self._situation_breakdown[_team.team_name] = _bd
+                self._situation_edge[_team.team_name] = float(
+                    _bd.get("xg_mult", 1.0))
+        except Exception:
+            pass
+
+    def _situation_edge_for(self, team_name: str) -> float:
+        """Finishing multiplier for the attacking side from the situations
+        factor. Read per shot; computed per game."""
+        try:
+            return self._situation_edge.get(team_name, 1.0)
+        except Exception:
+            return 1.0
 
     def _select_lines(self, team_name, fatigue=False):
         lineup = self.lineups[team_name]
@@ -2499,7 +2534,7 @@ class AdvancedGameSim:
             shooting_base = slapshot_val
             shot_type = "slap shot"
             
-        # Shooter skill on 1-20 scale (no multiplicative inflation)
+        # Shooter skill on the native 1-100 scale (no multiplicative inflation)
         # Fatigue reduces effectiveness; pressure/position are situational, not skill multipliers
         shooter_skill = (
             shooting_base * 0.3 +
@@ -2599,6 +2634,11 @@ class AdvancedGameSim:
 
         # FM team-talk / morale boost (set via set_team_talk_boost)
         shot_chance *= self.team_boost.get(puck_team_name, 1.0)
+
+        # Situations channel: the room, the bench, and the kids move
+        # finishing a few percent either way. Own channel, like the
+        # controversy momentum channel -- not part of any capped budget.
+        shot_chance *= self._situation_edge_for(puck_team_name)
         shot_chance = max(0.04, min(0.16, shot_chance))
 
         # Shot blocking check
