@@ -4500,17 +4500,32 @@ class GameSim:
             self._handle_goal(attacking_team, shooter, assists, shot_type, location)
             
             # Log advanced goal details
+            defending_team = (self.away_team if attacking_team == self.home_team
+                              else self.home_team)
+            if defending_team.team_name in getattr(self, "goalie_pulled", set()):
+                _goal_strength = 'EN'
+            elif self._is_team_on_power_play(attacking_team):
+                _goal_strength = 'PP'
+            elif self._is_team_on_penalty_kill(attacking_team):
+                _goal_strength = 'SH'
+            else:
+                _goal_strength = 'EV'
+            _elapsed = max(0.0, self._period_length - self.clock)
             self.event_log.append({
-                'timestamp': self._period_length - self.clock,
+                'timestamp': _elapsed,
                 'duration': 1.0,
                 'type': 'GOAL_ADVANCED',
                 'details': {
                     'scorer_id': shooter.id,
+                    'assist_ids': [p.id for p in assists],
                     'goaltender_id': goalie.id,
                     'goal_type': goal_type.value,
                     'expected_goal': round(expected_goal, 3),
                     'save_probability': round(adjusted_save_prob, 3),
-                    'shot_quality': quality
+                    'shot_quality': quality,
+                    'period': self.period,
+                    'strength': _goal_strength,
+                    'time_str': f"{int(_elapsed // 60)}:{int(_elapsed % 60):02d}",
                 }
             })
         else:
@@ -6240,6 +6255,24 @@ class GameSim:
         self._handle_goal(team_with_puck, scorer, [],
                           shot_type=ShotType.WRIST_SHOT,
                           location=ShotLocation.CREASE, empty_net=True)
+        _en_elapsed = max(0.0, self._period_length - self.clock)
+        self.event_log.append({
+            'timestamp': _en_elapsed,
+            'duration': 1.0,
+            'type': 'GOAL_ADVANCED',
+            'details': {
+                'scorer_id': scorer.id,
+                'assist_ids': [],
+                'goaltender_id': None,
+                'goal_type': 'empty_net',
+                'expected_goal': 1.0,
+                'save_probability': 0.0,
+                'shot_quality': 'high',
+                'period': self.period,
+                'strength': 'EN',
+                'time_str': f"{int(_en_elapsed // 60)}:{int(_en_elapsed % 60):02d}",
+            }
+        })
 
     def _emit_pbp(self, event_type, **payload):
         """Emit a play-by-play event to registered listeners (no-op if none)."""

@@ -2298,7 +2298,15 @@ class AdvancedGameSim:
         # NHL rules: 5-minute 3v3 sudden-death OT, then shootout
         overtime_limit = 300  # 5 minutes OT (NHL regular season)
         shootout_rounds = 3  # Initial shootout rounds, then sudden death
-        
+
+        # Fresh game: no stale last-passer carried over from a previous game
+        for _t in (self.home_team, self.away_team):
+            for _p in getattr(_t, 'roster', []) or []:
+                try:
+                    _p.assist_potential = None
+                except Exception:
+                    pass
+
         # Regulation: 60 minutes
         while self.time < 3600:
             self._simulate_shift()
@@ -2458,6 +2466,44 @@ class AdvancedGameSim:
 
             print(f"🏥 Injury: {injured.first_name} {injured.last_name} - {injured.injury_type} ({injured.games_remaining_injured} games)")
 
+    def _credit_assists(self, shooter, team_name):
+        """Credit primary/secondary assists for a goal.
+
+        Primary goes to the last successful passer to the shooter
+        (tracked as assist_potential when passes complete). Secondary is a
+        random on-ice teammate. Returns (assist_ids, assist_players).
+        """
+        assist_ids, assist_players = [], []
+        team = self.home_team if team_name == self.home_team.team_name else self.away_team
+        by_id = {p.id: p for p in getattr(team, 'roster', [])}
+
+        primary_id = getattr(shooter, 'assist_potential', None)
+        if primary_id and primary_id != shooter.id and primary_id in by_id:
+            assist_ids.append(primary_id)
+            assist_players.append(by_id[primary_id])
+            st = self.stats[team_name].get(primary_id)
+            if st is not None:
+                st['assists'] = st.get('assists', 0) + 1
+        # Never carry a stale passer into the next goal
+        try:
+            shooter.assist_potential = None
+        except Exception:
+            pass
+
+        # Secondary assist: another on-ice teammate (~45% of the time)
+        if random.random() < 0.45:
+            on_ice = self.on_ice.get(team_name, {})
+            candidates = [p for p in (on_ice.get('Forwards', []) + on_ice.get('Defense', []))
+                          if p is not None and p.id not in (shooter.id, *assist_ids)]
+            if candidates:
+                second = random.choice(candidates)
+                assist_ids.append(second.id)
+                assist_players.append(second)
+                st = self.stats[team_name].get(second.id)
+                if st is not None:
+                    st['assists'] = st.get('assists', 0) + 1
+        return assist_ids, assist_players
+
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
         """Enhanced shot resolution using multiple attributes"""
         # Determine shot type based on position and situation
@@ -2578,8 +2624,34 @@ class AdvancedGameSim:
             self.score[puck_team_name] += 1
             # Update stats
             self.stats[puck_team_name][shooter.id]['goals'] = self.stats[puck_team_name][shooter.id].get('goals', 0) + 1
+            # Assists: primary = last successful passer to the shooter
+            # (tracked as assist_potential on passes); secondary = a random
+            # on-ice teammate, the way real scoring works.
+            assist_ids, assist_players = self._credit_assists(shooter, puck_team_name)
             # Add goal event
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Goal'})
+            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name,
+                                'player': shooter, 'event': 'Goal', 'assists': assist_players})
+            if self.pp_team == puck_team_name:
+                _strength = 'PP'
+            elif self.pk_team == puck_team_name:
+                _strength = 'SH'
+            else:
+                _strength = 'EV'
+            _in_period = max(0.0, self.time - 1200 * (self.period - 1))
+            self.event_log.append({
+                'timestamp': self.time,
+                'duration': 1.0,
+                'type': 'GOAL_ADVANCED',
+                'details': {
+                    'scorer_id': shooter.id,
+                    'assist_ids': assist_ids,
+                    'goaltender_id': goalie.id if goalie else None,
+                    'goal_type': shot_type,
+                    'period': self.period,
+                    'strength': _strength,
+                    'time_str': f"{int(_in_period // 60)}:{int(_in_period % 60):02d}",
+                }
+            })
             # PP ends when the PP team scores (NHL rule)
             if self.pp_team == puck_team_name:
                 self.pp_team = None
@@ -7027,6 +7099,32 @@ class HockeyManagerGUI(tk.Tk):
         
         # Store game result for later viewing
         player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
+        game_stats = getattr(sim_engine, 'game_stats', None) or {}
+        if not game_stats:
+            # AdvancedGameSim keeps per-game stats as {team_name: {pid: {...}}};
+            # flatten to the {pid: {...}} shape the box score expects.
+            by_id = {}
+            for _tm in (home_team, away_team):
+                for _p in getattr(_tm, 'roster', []) or []:
+                    by_id[_p.id] = _p
+            for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
+                if not isinstance(_pmap, dict):
+                    continue
+                for _pid, _st in _pmap.items():
+                    if not isinstance(_st, dict) or _pid not in by_id:
+                        continue
+                    game_stats[_pid] = {
+                        'player': by_id[_pid],
+                        'g': _st.get('goals', 0), 'a': _st.get('assists', 0),
+                        'shots_on_goal': _st.get('shots', 0),
+                        'saves': _st.get('saves', 0),
+                        'shots_against': 0,  # derived in the box score
+                        'goals_against': 0,
+                        'hits': _st.get('hits', 0),
+                        'blocked_shots': _st.get('blocked_shots', 0),
+                        'faceoffs_won': _st.get('faceoffs_won', 0),
+                        'faceoffs_lost': _st.get('faceoffs_lost', 0),
+                    }
         game_result = {
             'date': game_date,
             'home_team': home_team,
@@ -7038,6 +7136,8 @@ class HockeyManagerGUI(tk.Tk):
             'notable_events': notable_events,
             'player_ratings': player_ratings,
             'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
+            'game_stats': game_stats,  # Per-player game stats (g/a/shots/...), normalized
+            'team_stats': getattr(sim_engine, 'team_stats', {}),  # Per-team game stats
             'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
             'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
         }
@@ -7621,6 +7721,8 @@ class HockeyManagerGUI(tk.Tk):
                 game_result['event_log'] = getattr(full_sim, 'event_log', []) or []
                 game_result['notable_events'] = getattr(full_sim, 'notable_events', []) or []
                 game_result['events'] = getattr(full_sim, 'game_log', []) or []
+                game_result['game_stats'] = getattr(full_sim, 'game_stats', {}) or {}
+                game_result['team_stats'] = getattr(full_sim, 'team_stats', {}) or {}
             
             # Add to game results
             self.game_results.append(game_result)
