@@ -989,6 +989,10 @@ class Staff:
     experience: int = field(default_factory=lambda: random.randint(1, 30))  # Years of experience
     years_with_team: int = field(default_factory=lambda: random.randint(0, 4))  # Tenure with current team (room-status shelf life)
     gm_trust: int = 70  # 0-100 GM-coach trust; evolves as advice is taken/ignored
+    ambition: str = "climb"  # stanley_cup | climb | developer | hometown | lifer
+    favorite_team: str = ""  # Boyhood team (Suzuki wants the Habs)
+    control_need: int = 50  # 0-100: Babcock 95 (authoritarian) ... Cooper 25 (collaborative)
+    first_nhl_chair: bool = False  # Rookie NHL head coach promoted from AHL: defers to the GM who believed in him
     # Reputation system (0-100 career standing; visible attitude/volatility 0-100)
     career_reputation: int = 0
     controversy: int = 0
@@ -2112,6 +2116,8 @@ class League:
     # held, and (event, year) pairs the user was already prompted about.
     draft_held_years: List[int] = field(default_factory=list)
     event_day_prompted: List[List] = field(default_factory=list)
+    # League-wide bad blood: coach-coach, GM-coach, player-player, team-team
+    rivalries: List[dict] = field(default_factory=list)
     # Dynamic salary cap system: growth, history, market-setting contracts.
     # Defaults keep old saves working (from_dict with empty dict).
     salary_cap_system: object = field(default_factory=SalaryCapSystem)

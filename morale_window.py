@@ -112,7 +112,7 @@ class MoraleWindow(ctk.CTkToplevel):
         self._secondary_button(coach_btns, text="Advise Coach",
                                command=self._open_advise_popup).pack(side='left', padx=(0, 6))
         self.line_btn = self._secondary_button(coach_btns, text="Lines: Coach",
-                                               command=self._toggle_line_control)
+                                               command=self._open_line_control_popup)
         self.line_btn.pack(side='left', padx=6)
         # Team actions the GM can order
         self._secondary_button(coach_btns, text="Bag Skate",
@@ -165,10 +165,15 @@ class MoraleWindow(ctk.CTkToplevel):
                                       font=('Segoe UI', 10))
         self.hier_body.pack(anchor='w', padx=12, pady=(0, 8))
         sg_card = self._make_card(right_col, "Social Groups")
-        sg_card.pack(fill='x')
+        sg_card.pack(fill='x', pady=(0, 10))
         self.sg_body = ctk.CTkLabel(sg_card, text="", justify='left',
                                     font=('Segoe UI', 10))
         self.sg_body.pack(anchor='w', padx=12, pady=(0, 8))
+        riv_card = self._make_card(right_col, "Rivalries & Bad Blood")
+        riv_card.pack(fill='x')
+        self.riv_body = ctk.CTkLabel(riv_card, text="", justify='left',
+                                     font=('Segoe UI', 10), wraplength=380)
+        self.riv_body.pack(anchor='w', padx=12, pady=(0, 8))
 
         # Footer
         footer = ctk.CTkFrame(main, fg_color=ct['BG'])
@@ -250,14 +255,21 @@ class MoraleWindow(ctk.CTkToplevel):
         except Exception:
             pass
 
-    def _toggle_line_control(self):
+    def _open_line_control_popup(self):
         try:
             team = self.parent.user_team
-            ctx = self._team_context()
             current = getattr(team, 'line_control', 'coach') or 'coach'
-            target = 'gm' if current == 'coach' else 'coach'
-            rs.set_line_control(team, target, ctx, list(team.roster))
-            self.refresh()
+            if current == 'gm':
+                # Giving the pen back is always amicable.
+                rs.set_line_control(team, 'coach', self._team_context(),
+                                    list(team.roster))
+                self.refresh()
+                return
+            coach = self._head_coach(team)
+            if coach is None:
+                return
+            LineControlPopup(self, coach, team, list(team.roster),
+                             self._team_context(), on_done=self.refresh)
         except Exception:
             pass
 
@@ -306,15 +318,22 @@ class MoraleWindow(ctk.CTkToplevel):
             style = rs.coach_style(coach)
             st = rs.room_status(coach, ctx, roster)
             lc = getattr(team, 'line_control', 'coach') or 'coach'
+            amb = rs.COACH_AMBITIONS.get(getattr(coach, 'ambition', 'climb'),
+                                             getattr(coach, 'ambition', ''))
+            fav = getattr(coach, 'favorite_team', '') or ''
+            preview = rs.preview_line_control_discussion(coach, ctx)
             self.coach_body.configure(
-                text=f"{getattr(coach, 'full_name', 'Coach')}  •  {style['label']}\n"
+                text=f"{getattr(coach, 'full_name', 'Coach')}  •  {style['label']}  •  "
+                     f"{rs.control_label(coach)}\n"
                      f"{style['description']}\n"
                      f"Motivating {getattr(coach, 'motivating', '?')}  •  "
                      f"Discipline {getattr(coach, 'discipline', '?')}  •  "
                      f"Leadership {getattr(coach, 'leadership', '?')}  •  "
                      f"Man-mgmt {getattr(coach, 'man_management', '?')}\n"
+                     f"Ambition: {amb}" + (f"  •  Boyhood team: {fav}" if fav else "") + "\n"
                      f"Room status: {st['level']} ({st['risk']:.0%} risk)  •  "
-                     f"GM trust: {getattr(coach, 'gm_trust', 70)}/100")
+                     f"GM trust: {getattr(coach, 'gm_trust', 70)}/100\n"
+                     f"If you discuss the lines: {preview['text']}")
             self.line_btn.configure(text=f"Lines: {'YOU (GM)' if lc == 'gm' else 'Coach'}")
         else:
             self.coach_body.configure(text="No head coach on staff.")
@@ -378,6 +397,36 @@ class MoraleWindow(ctk.CTkToplevel):
         self.hier_body.configure(text="\n".join(hier_lines))
         sg_lines = [f"{g} ({len(ps)})" for g, ps in groups.items()]
         self.sg_body.configure(text="   •   ".join(sg_lines))
+        self._refresh_rivalries(team, coach, roster)
+
+    def _refresh_rivalries(self, team, coach, roster):
+        try:
+            league = getattr(self.parent, 'league', None)
+            rivalries = list(getattr(league, 'rivalries', []) or [])
+        except Exception:
+            rivalries = []
+        lines = []
+        if coach is not None and rivalries:
+            for r in rs.get_rivalries_for(rivalries, coach)[:3]:
+                other = r['b_name'] if r['a_name'] == getattr(coach, 'full_name', '') else r['a_name']
+                lines.append(f"\U0001f525 {other} ({r['intensity']:.0f} -- {r['origin'].replace('_', ' ')})")
+        if rivalries:
+            team_rs = [r for r in rivalries
+                       if r['kind'] == 'team_team'
+                       and (r['a'][1] == team.team_name or r['b'][1] == team.team_name)]
+            team_rs.sort(key=lambda r: -r['intensity'])
+            for r in team_rs[:3]:
+                other = r['b_name'] if r['a'][1] == team.team_name else r['a_name']
+                lines.append(f"\U0001f3d2 {other}: {r['intensity']:.0f} ({r['origin'].replace('_', ' ')})")
+            # loudest player beef on the roster
+            beefs = []
+            for p in roster:
+                beefs += rs.get_rivalries_for(rivalries, p)
+            beefs.sort(key=lambda r: -r['intensity'])
+            for r in beefs[:2]:
+                lines.append(f"\U0001f94a {r['a_name']} vs {r['b_name']}: {r['intensity']:.0f}")
+        self.riv_body.configure(
+            text="\n".join(lines) if lines else "No bad blood on record. Yet.")
 
     def _record(self):
         try:
@@ -435,6 +484,67 @@ class AdviseCoachPopup(ctk.CTkToplevel):
             self.result.configure(
                 text=f"{heard} (p={out['probability']:.0%}): {out['text']}",
                 text_color=color)
+            if self._on_done:
+                self._on_done()
+        except Exception:
+            pass
+
+
+class LineControlPopup(ctk.CTkToplevel):
+    """Discuss (amicable) vs seize (nuclear) the lineup pen."""
+
+    def __init__(self, parent_win, coach, team, roster, ctx, on_done=None):
+        from ctk_theme import init_ctk_theme, secondary_button, heading, BG, TEXT_DIM, GREEN, RED
+        init_ctk_theme()
+        super().__init__(parent_win)
+        self.title("Line Control")
+        self.configure(fg_color=BG)
+        self.geometry("540x420")
+        self.minsize(480, 380)
+        self._coach = coach
+        self._team = team
+        self._roster = roster
+        self._ctx = ctx
+        self._on_done = on_done
+        self._GREEN = GREEN
+        self._RED = RED
+
+        cname = getattr(coach, 'full_name', 'Coach')
+        preview = rs.preview_line_control_discussion(coach, ctx)
+        heading(self, text=f"The lineup pen: {cname}").pack(anchor='w', padx=16, pady=(12, 2))
+        ctk.CTkLabel(self, text=f"{rs.control_label(coach)}  •  GM trust {getattr(coach, 'gm_trust', 70)}/100",
+                     font=('Segoe UI', 11), text_color=TEXT_DIM).pack(anchor='w', padx=16)
+        ctk.CTkLabel(self, text=f"Discuss: \"{preview['text']}\"",
+                     font=('Segoe UI', 11), wraplength=500, justify='left').pack(
+                         anchor='w', padx=16, pady=(10, 4))
+        tone_color = GREEN if preview['tone'] in ('welcomes', 'accepts') else RED
+        ctk.CTkLabel(self, text=f"Likely response: {preview['tone'].upper()}",
+                     font=('Segoe UI', 11, 'bold'), text_color=tone_color).pack(
+                         anchor='w', padx=16, pady=(0, 12))
+
+        secondary_button(self, text="Discuss: \"let me try something\"",
+                         command=self._discuss).pack(fill='x', padx=16, pady=6)
+        secondary_button(self, text="Seize control (nuclear option)",
+                         command=self._seize).pack(fill='x', padx=16, pady=6)
+        self.result = ctk.CTkLabel(self, text="", font=('Segoe UI', 11),
+                                   wraplength=500, justify='left')
+        self.result.pack(padx=16, pady=12)
+
+    def _discuss(self):
+        try:
+            out = rs.set_line_control(self._team, 'gm', self._ctx, self._roster,
+                                      coach=self._coach, approach='discuss')
+            self.result.configure(text=out['text'], text_color=self._GREEN)
+            if self._on_done:
+                self._on_done()
+        except Exception:
+            pass
+
+    def _seize(self):
+        try:
+            out = rs.set_line_control(self._team, 'gm', self._ctx, self._roster,
+                                      coach=self._coach, approach='seize')
+            self.result.configure(text=out['text'], text_color=self._RED)
             if self._on_done:
                 self._on_done()
         except Exception:

@@ -88,6 +88,18 @@ def ensure_reputation_fields(entity: Any) -> None:
             entity.years_with_team = random.randint(0, 4)
         if not hasattr(entity, "gm_trust"):
             entity.gm_trust = 70
+        if not hasattr(entity, "ambition"):
+            entity.ambition = "climb"
+        if not hasattr(entity, "favorite_team"):
+            entity.favorite_team = ""
+        if not hasattr(entity, "control_need"):
+            entity.control_need = 50
+        if not hasattr(entity, "first_nhl_chair"):
+            entity.first_nhl_chair = False
+    # League-level bad blood (rivalries follow people across teams).
+    if hasattr(entity, "teams") and hasattr(entity, "standings") and not hasattr(entity, "roster"):
+        if not hasattr(entity, "rivalries") or entity.rivalries is None:
+            entity.rivalries = []
     # Team-level dynamics state (survives saves once the dataclass lands).
     if hasattr(entity, "roster") and hasattr(entity, "staff"):
         if not hasattr(entity, "dynamics_log") or entity.dynamics_log is None:
@@ -1318,7 +1330,8 @@ def apply_great_practice(team: Any, coach: Any, roster: List[Any]) -> Dict[str, 
 
 
 def apply_mistreat_player(team: Any, coach: Any, player: Any,
-                          roster: List[Any]) -> Dict[str, Any]:
+                          roster: List[Any],
+                          rivalries: Optional[list] = None) -> Dict[str, Any]:
     """Coach mistreats (benches/buries) a player. The target seethes; if he's
     popular, the room notices."""
     ensure_reputation_fields(player)
@@ -1331,6 +1344,9 @@ def apply_mistreat_player(team: Any, coach: Any, player: Any,
         text = (f"{getattr(coach, 'full_name', 'Coach')} buried {name}. "
                 f"The room thinks it's unfair -- popular players have long memories.")
         delta = -4
+        if rivalries is not None:
+            record_coach_player_beef(rivalries, coach, player,
+                                     f"buried him unfairly; the room noticed")
     else:
         text = f"{getattr(coach, 'full_name', 'Coach')} buried {name}. Few complaints."
         delta = -1
@@ -1502,3 +1518,464 @@ def set_line_control(team: Any, who: str,
     text = "Coach has the lineup pen back. Clarity restored."
     record_team_event(team, "line_control", text, morale_delta=2, tone="up")
     return {"changed": True, "text": text, "strong_affected": 0}
+
+
+# ---------------------------------------------------------------------------
+# Coach ambitions, control need, and amicable line control
+# ---------------------------------------------------------------------------
+# Not every coach hears "I'm taking the lines" the same way. Babcock hears a
+# threat; Cooper hears a conversation; a rookie promoted from the AHL hears
+# the GM who believed in him. control_need (0-100) is the axis.
+
+COACH_AMBITIONS = {
+    "stanley_cup": "Win a Cup -- everything else is noise.",
+    "climb": "Climb the ladder -- AHL success, then an NHL chair.",
+    "developer": "Build the next generation.",
+    "hometown": "Coach his boyhood team before he's done.",
+    "lifer": "Content where he is; loves the day-to-day.",
+}
+
+
+def control_label(coach: Any) -> str:
+    cn = getattr(coach, "control_need", 50) or 50
+    if cn >= 70:
+        return "Authoritarian"
+    if cn >= 45:
+        return "Demanding"
+    if cn >= 25:
+        return "Collaborative"
+    return "Player-led"
+
+
+def _dry_spell(ctx: Dict[str, Any]) -> bool:
+    return ctx.get("losing_streak", 0) >= 3 or ctx.get("win_pct", 0.5) < 0.45
+
+
+def preview_line_control_discussion(coach: Any,
+                                    team_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The GM sits the coach down: 'we're in a dry spell, let me try something
+    with the lines.' Returns the coach's likely response BEFORE it happens,
+    so the Morale screen can show it FM-style."""
+    ensure_reputation_fields(coach)
+    ctx = team_context or {}
+    cn = getattr(coach, "control_need", 50) or 50
+    trust = getattr(coach, "gm_trust", 70) or 70
+    adapt = getattr(coach, "adaptability", 10) or 10
+    dry = _dry_spell(ctx)
+    rookie = bool(getattr(coach, "first_nhl_chair", False)) and \
+        (getattr(coach, "years_with_team", 0) or 0) <= 2
+    cname = getattr(coach, "full_name", "Coach").split()[0]
+
+    if rookie:
+        return {"tone": "welcomes", "penalty": 0, "trust_delta": 3,
+                "text": f"{cname} welcomes it -- you believed in him when nobody else did. "
+                        f"He'll try anything within reason for the team (and his career)."}
+    if cn <= 35:
+        if dry:
+            return {"tone": "accepts", "penalty": 0, "trust_delta": 2,
+                    "text": f"{cname} gets it -- dry spell, willing to try anything. No hard feelings."}
+        return {"tone": "accepts", "penalty": -2, "trust_delta": 0,
+                "text": f"{cname} is a little surprised (things are fine), but he trusts you."}
+    if cn < 70:
+        if dry:
+            return {"tone": "wary", "penalty": -2, "trust_delta": -2,
+                    "text": f"{cname} is wary -- it's his room -- but the results force his hand."}
+        return {"tone": "wary", "penalty": -5, "trust_delta": -4,
+                "text": f"{cname} doesn't love being second-guessed while things are working."}
+    # Authoritarian: Babcock hears a threat no matter how nicely it's phrased.
+    if dry:
+        return {"tone": "bristles", "penalty": -4, "trust_delta": -6,
+                "text": f"{cname} bristles. Even asked nicely, he hears: you don't trust him."}
+    return {"tone": "furious", "penalty": -8, "trust_delta": -10,
+            "text": f"{cname} is furious. Taking his lines is taking his authority -- he'll remember this."}
+
+
+def set_line_control(team: Any, who: str,
+                     team_context: Optional[Dict[str, Any]] = None,
+                     roster: Optional[List[Any]] = None,
+                     coach: Any = None,
+                     approach: str = "seize") -> Dict[str, Any]:
+    """who: 'coach' | 'gm'. approach: 'seize' (nuclear) | 'discuss' (amicable:
+    'we're in a dry spell, let me try something'). Discuss avoids major
+    penalties when the coach's personality allows it."""
+    if not hasattr(team, "line_control") or team.line_control is None:
+        team.line_control = "coach"
+    who = "gm" if who == "gm" else "coach"
+    if team.line_control == who:
+        return {"changed": False, "text": f"Line control already with {who}."}
+    ctx = team_context or {}
+    win_pct = max(0.0, min(1.0, ctx.get("win_pct", 0.5)))
+    roster = roster or []
+    team.line_control = who
+
+    if who == "coach":
+        _shift_happiness(roster, 2)
+        text = "Coach has the lineup pen back. Clarity restored."
+        record_team_event(team, "line_control", text, morale_delta=2, tone="up")
+        return {"changed": True, "text": text, "approach": approach}
+
+    # ---- GM takes the pen ----
+    if approach == "discuss" and coach is not None:
+        prev = preview_line_control_discussion(coach, ctx)
+        coach.gm_trust = max(0, min(100, (getattr(coach, "gm_trust", 70) or 70) + prev["trust_delta"]))
+        pen = prev["penalty"]
+        if pen:
+            _shift_happiness(roster, pen)
+        tone = "up" if prev["tone"] in ("welcomes", "accepts") else "down"
+        text = f"GM discussed the lines with {getattr(coach, 'full_name', 'Coach')}. {prev['text']}"
+        record_team_event(team, "line_control", text,
+                          morale_delta=pen, tone=tone)
+        return {"changed": True, "text": text, "approach": "discuss",
+                "tone": prev["tone"], "strong_affected": 0}
+
+    # ---- seize (nuclear option, unchanged) ----
+    if win_pct >= 0.58:
+        def strong(p):
+            return (p.controversy or 0) >= 55 and (p.reputation or 0) >= 55
+        n_strong = 0
+        for p in roster:
+            ensure_reputation_fields(p)
+            try:
+                if strong(p):
+                    p.happiness = max(0, (getattr(p, "happiness", 70) or 70) - 12)
+                    p.controversy = min(100, (p.controversy or 0) + 5)
+                    n_strong += 1
+                else:
+                    p.happiness = max(0, (getattr(p, "happiness", 70) or 70) - 3)
+            except Exception:
+                pass
+        text = (f"GM seized the lineup pen on a WINNING team ({win_pct:.0%}). "
+                f"{n_strong} strong personalities are furious -- why fix what isn't broken?")
+        record_team_event(team, "line_control", text, morale_delta=-6, tone="down")
+        return {"changed": True, "text": text, "approach": "seize",
+                "strong_affected": n_strong}
+    _shift_happiness(roster, 3, lambda p: (getattr(p, "happiness", 70) or 70) < 55)
+    _shift_happiness(roster, -2, lambda p: (getattr(p, "age", 27) or 27) >= 32)
+    text = (f"GM took over the lines ({win_pct:.0%} record). Struggling players welcome the shake-up; "
+            f"veterans are wary.")
+    record_team_event(team, "line_control", text, morale_delta=1, tone="neutral")
+    return {"changed": True, "text": text, "approach": "seize", "strong_affected": 0}
+
+
+def coach_job_appeal(coach: Any, team: Any,
+                     team_context: Optional[Dict[str, Any]] = None,
+                     is_promotion: bool = False) -> Dict[str, Any]:
+    """0-100: how badly does this coach want THIS job? Drives hiring logic."""
+    ensure_reputation_fields(coach)
+    ctx = team_context or {}
+    score = 50
+    reasons: List[str] = []
+    tname = getattr(team, "team_name", "")
+    ambition = getattr(coach, "ambition", "climb") or "climb"
+
+    if (getattr(coach, "favorite_team", "") or "") == tname:
+        score += 30
+        reasons.append("Boyhood team -- he'd run through a wall for this crest.")
+        if ambition == "hometown":
+            score += 10
+            reasons.append("It's his stated life's ambition.")
+    if ambition == "stanley_cup":
+        if ctx.get("win_pct", 0.5) >= 0.58:
+            score += 15
+            reasons.append("Contender -- a Cup is within reach.")
+        else:
+            score -= 10
+            reasons.append("Rebuild -- wastes his window.")
+    elif ambition == "climb" and is_promotion:
+        score += 12
+        reasons.append("A step up the ladder.")
+    elif ambition == "developer":
+        score += 8
+        reasons.append("Likes building -- roster age fits." if ctx.get("avg_age", 27) <= 26
+                       else "Wants young players to mold.")
+    elif ambition == "lifer":
+        score -= 8
+        reasons.append("Content where he is.")
+    score = max(0, min(100, score))
+    return {"score": score, "reasons": reasons, "ambition": ambition,
+            "ambition_label": COACH_AMBITIONS.get(ambition, ambition)}
+
+
+def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]:
+    """A player hangs them up and wants to coach. Carry what matters: his
+    leadership, his boyhood team, and the logic that a Suzuki wants the Habs."""
+    ensure_reputation_fields(player)
+    attrs: Dict[str, Any] = {}
+    attrs["leadership"] = max(8, min(18, int((getattr(player, "leadership", 50) or 50) / 100 * 18)))
+    # Favorite team: 40% the sweater he retires in, else a random boyhood team.
+    import random as _r
+    tnames = [getattr(t, "team_name", "") for t in (teams or []) if getattr(t, "team_name", "")]
+    fav = ""
+    if tnames:
+        last_team = getattr(player, "last_team_name", "") or ""
+        if last_team in tnames and _r.random() < 0.40:
+            fav = last_team
+        else:
+            fav = _r.choice(tnames)
+    attrs["favorite_team"] = fav
+    attrs["ambition"] = "hometown" if fav and _r.random() < 0.5 else "climb"
+    attrs["control_need"] = max(10, min(90, int((getattr(player, "controversy", 30) or 30) * 0.8 + 20)))
+    attrs["controversy"] = getattr(player, "controversy", 0) or 0
+    return attrs
+
+
+# ---------------------------------------------------------------------------
+# Rivalries & bad blood
+# ---------------------------------------------------------------------------
+# FM24-style favourite/rival staff logic, extended: coach-coach, coach-player,
+# GM-coach, GM-agent, player-player, and team-team (regional, playoff, brawl).
+# Stored on the league (league.rivalries) so bad blood follows people when
+# they change teams. Decay is personality-dependent: grudge-holders never
+# really let go; career-cost (a lost Cup, a firing) keeps it hot.
+
+RIVALRY_KINDS = ("coach_coach", "coach_player", "gm_coach", "gm_agent",
+                 "player_player", "team_team")
+
+RIVALRY_ORIGINS = ("brawl_game", "playoff_series", "major_injury", "firing",
+                   "heavy_hits", "award_race", "regional", "mistreatment",
+                   "gm_power_struggle", "contract_dispute")
+
+# The classics. Regional hate never fully dies.
+REGIONAL_RIVALRIES = frozenset([
+    ("Calgary Flames", "Edmonton Oilers"),
+    ("Toronto Maple Leafs", "Ottawa Senators"),
+    ("Toronto Maple Leafs", "Montreal Canadiens"),
+    ("Boston Bruins", "Montreal Canadiens"),
+    ("New York Rangers", "New York Islanders"),
+    ("New York Rangers", "New Jersey Devils"),
+    ("Philadelphia Flyers", "Pittsburgh Penguins"),
+    ("Pittsburgh Penguins", "Washington Capitals"),
+    ("Chicago Blackhawks", "St. Louis Blues"),
+    ("Los Angeles Kings", "Anaheim Ducks"),
+    ("Florida Panthers", "Tampa Bay Lightning"),
+    ("Vancouver Canucks", "Edmonton Oilers"),
+    ("Colorado Avalanche", "Vegas Golden Knights"),
+    ("Dallas Stars", "St. Louis Blues"),
+])
+
+
+def _ekey(entity: Any) -> tuple:
+    """Stable identity key: ('player', id) | ('staff', id) | ('team', name) | ('gm', team) | ('agent', name)."""
+    try:
+        if isinstance(entity, str):
+            return ("agent", entity)
+        if hasattr(entity, "primary_position"):
+            return ("player", getattr(entity, "id", getattr(entity, "full_name", "?")))
+        if hasattr(entity, "role"):
+            return ("staff", getattr(entity, "id", getattr(entity, "full_name", "?")))
+        if hasattr(entity, "roster") and hasattr(entity, "team_name"):
+            return ("team", getattr(entity, "team_name", "?"))
+        if hasattr(entity, "gm_name"):
+            return ("gm", getattr(entity, "team_name", "?"))
+    except Exception:
+        pass
+    return ("unknown", str(entity))
+
+
+def _ename(entity: Any) -> str:
+    try:
+        if isinstance(entity, str):
+            return entity
+        if hasattr(entity, "full_name"):
+            return getattr(entity, "full_name", "?")
+        if hasattr(entity, "team_name"):
+            return getattr(entity, "team_name", "?")
+    except Exception:
+        pass
+    return "?"
+
+
+def _rivalry_store(league: Any) -> list:
+    if not hasattr(league, "rivalries") or league.rivalries is None:
+        league.rivalries = []
+    return league.rivalries
+
+
+def add_rivalry(rivalries: list, a: Any, b: Any, kind: str, intensity: int,
+                origin: str, story: str, grudge: int = 50,
+                career_cost: int = 0) -> Dict[str, Any]:
+    """Add (or heat up) a rivalry. Merges with an existing one between the
+    same pair: intensity takes the max, stories accumulate."""
+    ka, kb = _ekey(a), _ekey(b)
+    if ka == kb:
+        return {}
+    # Canonical ordering so (a,b) == (b,a).
+    if ka > kb:
+        ka, kb, a, b = kb, ka, b, a
+    for r in rivalries:
+        if r["a"] == ka and r["b"] == kb and r["kind"] == kind:
+            r["intensity"] = max(r["intensity"], max(0, min(100, intensity)))
+            r["grudge"] = max(r["grudge"], grudge)
+            r["career_cost"] = max(r["career_cost"], career_cost)
+            if story and story not in r["story"]:
+                r["story"] = r["story"] + " " + story
+            return r
+    rec = {"a": ka, "b": kb, "a_name": _ename(a), "b_name": _ename(b),
+           "kind": kind, "intensity": max(0, min(100, intensity)),
+           "origin": origin, "story": story, "date": date.today().isoformat(),
+           "grudge": max(0, min(100, grudge)),
+           "career_cost": max(0, min(100, career_cost))}
+    rivalries.append(rec)
+    return rec
+
+
+def get_rivalries_for(rivalries: list, entity: Any,
+                      min_intensity: int = 1) -> List[Dict[str, Any]]:
+    k = _ekey(entity)
+    return sorted(
+        [r for r in rivalries
+         if (r["a"] == k or r["b"] == k) and r["intensity"] >= min_intensity],
+        key=lambda r: -r["intensity"])
+
+
+def rivalry_between(rivalries: list, a: Any, b: Any,
+                    kind: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    ka, kb = _ekey(a), _ekey(b)
+    if ka > kb:
+        ka, kb = kb, ka
+    for r in rivalries:
+        if r["a"] == ka and r["b"] == kb and (kind is None or r["kind"] == kind):
+            return r
+    return None
+
+
+def decay_rivalries(rivalries: list, years: int = 1) -> int:
+    """Offseason decay. Grudge-holders (high controversy/grudge) and people it
+    cost something real (career_cost) barely cool off. Returns count removed."""
+    removed = 0
+    for r in list(rivalries):
+        try:
+            # Regional hate has a floor: it never fully dies.
+            floor = 30 if r["origin"] == "regional" else 0
+            base = 8 * years
+            slow = (1 - r["grudge"] / 150.0) * (1 - r["career_cost"] / 200.0)
+            r["intensity"] = max(floor, r["intensity"] - base * max(0.15, slow))
+            if r["intensity"] <= 5 and floor == 0:
+                rivalries.remove(r)
+                removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def bury_hatchet(rivalries: list, a: Any, b: Any, reason: str = "") -> bool:
+    """Explicitly end it (won together, shook hands, time healed)."""
+    r = rivalry_between(rivalries, a, b)
+    if r:
+        rivalries.remove(r)
+        return True
+    return False
+
+
+def seed_regional_rivalries(rivalries: list, teams: List[Any]) -> int:
+    """Battle of Alberta etc. Intensity 55, high grudge: regional hate endures."""
+    names = {getattr(t, "team_name", ""): t for t in (teams or [])}
+    n = 0
+    for n1, n2 in REGIONAL_RIVALRIES:
+        if n1 in names and n2 in names:
+            add_rivalry(rivalries, names[n1], names[n2], "team_team", 55,
+                        "regional",
+                        f"{n1} vs {n2}: regional hate. The building shakes for these games.",
+                        grudge=75)
+            n += 1
+    return n
+
+
+def record_brawl_game(rivalries: list, team_a: Any, team_b: Any,
+                      coach_a: Any, coach_b: Any,
+                      aggressor: str = "a", fights: int = 3) -> List[Dict[str, Any]]:
+    """A coach sends his team out to punish the other: heavy hits, fights.
+    The coaches carry it with them even if they change teams."""
+    out = []
+    agg_coach = coach_a if aggressor == "a" else coach_b
+    vic_coach = coach_b if aggressor == "a" else coach_a
+    out.append(add_rivalry(
+        rivalries, agg_coach, vic_coach, "coach_coach", 45, "brawl_game",
+        f"{_ename(agg_coach)} sent his team to punish {_ename(vic_coach)}'s: "
+        f"{fights} fights, bad blood everywhere.",
+        grudge=65))
+    out.append(add_rivalry(
+        rivalries, team_a, team_b, "team_team",
+        30, "brawl_game",
+        f"Brawl game: {fights} fights. These teams don't like each other.",
+        grudge=55))
+    return out
+
+
+def record_playoff_series(rivalries: list, winner: Any, loser: Any,
+                          games: int = 7, upset: bool = False) -> List[Dict[str, Any]]:
+    out = []
+    heat = 20 + (10 if games >= 7 else 0) + (10 if upset else 0)
+    story = (f"Playoff series: {_ename(winner)} over {_ename(loser)} in {games}."
+             + (" Seven games. Nobody forgot." if games >= 7 else "")
+             + (" The upset stung." if upset else ""))
+    out.append(add_rivalry(rivalries, winner, loser, "team_team", heat,
+                           "playoff_series", story, grudge=60,
+                           career_cost=40 if games >= 7 else 20))
+    return out
+
+
+def record_major_injury(rivalries: list, injured: Any, hitter: Any,
+                        season_ending: bool = False) -> Dict[str, Any]:
+    return add_rivalry(
+        rivalries, injured, hitter, "player_player", 50, "major_injury",
+        f"{_ename(hitter)} ended {_ename(injured)}'s "
+        f"{'season' if season_ending else 'night'}. The room wants payback.",
+        grudge=70, career_cost=60 if season_ending else 25)
+
+
+def record_firing(rivalries: list, coach: Any, team: Any) -> Dict[str, Any]:
+    """The firing: coach blames the GM. Follows the coach to his next job."""
+    gm_name = f"{getattr(team, 'gm_name', 'GM')} ({getattr(team, 'team_name', '')})"
+    grudge = min(90, 40 + (getattr(coach, "controversy", 0) or 0) // 2)
+    return add_rivalry(
+        rivalries, coach, gm_name, "gm_coach", 55, "firing",
+        f"{_ename(coach)} was fired by {gm_name}. He blames the front office, not the room.",
+        grudge=grudge, career_cost=50)
+
+
+def record_award_race(rivalries: list, pa: Any, pb: Any, award: str) -> Dict[str, Any]:
+    return add_rivalry(
+        rivalries, pa, pb, "player_player", 25, "award_race",
+        f"{_ename(pa)} vs {_ename(pb)}: {award} race got personal.",
+        grudge=35)
+
+
+def record_coach_player_beef(rivalries: list, coach: Any, player: Any,
+                             reason: str) -> Dict[str, Any]:
+    return add_rivalry(
+        rivalries, coach, player, "coach_player", 40, "mistreatment",
+        f"{_ename(coach)} vs {_ename(player)}: {reason}",
+        grudge=55)
+
+
+def record_agent_dispute(rivalries: list, agent_name: str, team: Any,
+                         player: Any, issue: str) -> Dict[str, Any]:
+    """GM-agent-player triangle: holdouts, lowball offers, tampering whispers."""
+    gm_name = f"{getattr(team, 'gm_name', 'GM')} ({getattr(team, 'team_name', '')})"
+    return add_rivalry(
+        rivalries, agent_name,
+        f"{gm_name} // {_ename(player)}", "gm_agent", 35, "contract_dispute",
+        f"{agent_name} vs {gm_name} over {_ename(player)}: {issue}",
+        grudge=45)
+
+
+def get_rivalry_heat(rivalries: list, team_a: Any, team_b: Any,
+                     coach_a: Any = None, coach_b: Any = None) -> Dict[str, Any]:
+    """0-100 bad blood between two teams right now. Engine hook: high heat
+    means more hits, more fights, tighter games."""
+    heat = 0
+    parts = []
+    r = rivalry_between(rivalries, team_a, team_b, "team_team")
+    if r:
+        heat = max(heat, r["intensity"])
+        parts.append(f"{r['a_name']} vs {r['b_name']}: {r['intensity']}")
+    if coach_a is not None and coach_b is not None:
+        rc = rivalry_between(rivalries, coach_a, coach_b, "coach_coach")
+        if rc:
+            heat = max(heat, rc["intensity"])
+            parts.append(f"coaches: {rc['intensity']} ({rc['origin']})")
+    heat = max(0, min(100, heat))
+    return {"heat": heat,
+            "label": "Simmering" if heat < 35 else "Heated" if heat < 65 else "Bad blood",
+            "details": parts}
