@@ -277,6 +277,8 @@ class PlayerProfile(tk.Toplevel):
             if rivals:
                 lines.append("Bad blood  " + ", ".join(
                     f"{d['name']} ({d['origin']})" for d in rivals))
+            for _cid, story in list(getattr(p, "coach_bonds", None) or {}.items())[:3]:
+                lines.append("Forged bond  " + story)
             for ln in lines:
                 tk.Label(body, text=ln, font=AppFonts.SMALL,
                          fg=AppColors.TEXT_SECONDARY, bg=AppColors.BG_ELEVATED,

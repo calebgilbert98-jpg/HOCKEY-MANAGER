@@ -1227,6 +1227,13 @@ def player_coach_response(player: Any, coach: Any,
                           team_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """How THIS player is responding to the coach: bought in -> quit."""
     try:
+        # A bond forged in fire (Torts/Werenski arc) outlasts any fit model.
+        bonds = getattr(player, "coach_bonds", None) or {}
+        if getattr(coach, "id", None) in bonds:
+            return {"score": 0.85, "label": "Bought in",
+                    "fit": coach_player_fit(coach, player),
+                    "engagement": engagement_style(player)["label"],
+                    "bond": bonds[getattr(coach, "id")]}
         fit = coach_player_fit(coach, player)
         happy = getattr(player, "happiness", 70) or 70
         score = fit * 0.6 + (happy - 65) / 100 * 0.4
@@ -2211,6 +2218,8 @@ def _ensure_relationships(p: Any) -> dict:
     ensure_reputation_fields(p)
     if not hasattr(p, "relationships") or not isinstance(getattr(p, "relationships", None), dict):
         p.relationships = {}
+    if not hasattr(p, "coach_bonds") or not isinstance(getattr(p, "coach_bonds", None), dict):
+        p.coach_bonds = {}
     return p.relationships
 
 
@@ -2598,3 +2607,197 @@ def apply_international_tournament(rivalries: list, players: List[Any],
     return {"bonded_pairs": bonded, "buried": buried,
             "text": (f"{nation} {medal}: {bonded} pair(s) bonded. "
                      + (f"{len(buried)} NHL beef(s) buried." if buried else ""))}
+
+
+# ---------------------------------------------------------------------------
+# In-game punishment: coaches sending guys out, and who answers
+# ---------------------------------------------------------------------------
+# The Maurice scenario: getting blown out in a Cup Final game, he sends his
+# guys to wear the other team down for tomorrow. The Knoblauch archetype
+# would never -- character forbids it. Tortorella would be livid and answer
+# in kind. Personality first, situation second.
+
+def game_tension(home_team: Any, away_team: Any, rivalries: list,
+                 is_playoff: bool = False, series_game: int = 0) -> float:
+    """0-100: how much bad blood is in the building tonight."""
+    try:
+        t = 0.0
+        for r in rivalries:
+            if r["kind"] == "team_team":
+                names = {r["a_name"], r["b_name"]}
+                hn = getattr(home_team, "team_name", "")
+                an = getattr(away_team, "team_name", "")
+                if hn in names and an in names:
+                    t += r["intensity"] * 0.6
+        if is_playoff:
+            t += 15 + max(0, series_game) * 2
+        return round(min(100.0, t), 1)
+    except Exception:
+        return 0.0
+
+
+def coach_reprisal_tendency(coach: Any) -> float:
+    """0 = would never send guys out (Knoblauch). 1 = always will (Tortorella)."""
+    try:
+        style = coach_style(coach)["label"]
+        t = 0.30
+        if style == "Drill Sergeant":
+            t += 0.35
+        elif style == "Motivator":
+            t += 0.15
+        elif style == "Player's Coach":
+            t -= 0.25
+        t += (getattr(coach, "controversy", 20) or 20) / 100 * 0.30
+        t += (getattr(coach, "discipline", 10) or 10) / 20 * 0.10
+        return round(max(0.0, min(1.0, t)), 3)
+    except Exception:
+        return 0.3
+
+
+def order_punishment(coach: Any, team: Any, game_state: Dict[str, Any],
+                     rivalries: Optional[list] = None) -> Dict[str, Any]:
+    """Does the coach send his guys out to punish the other team?
+    game_state: score_diff (team's perspective), period, is_playoff,
+    opponent, tension.
+    The ORDERED team gets the bigger modifier -- the order carries weight
+    the mere retaliation doesn't."""
+    try:
+        tendency = coach_reprisal_tendency(coach)
+        sd = game_state.get("score_diff", 0)
+        period = game_state.get("period", 1)
+        is_playoff = game_state.get("is_playoff", False)
+        tension = game_state.get("tension", 0)
+        score = tendency
+        reasons: List[str] = []
+        if sd <= -3 and is_playoff:
+            score += 0.35
+            reasons.append("blown out in a playoff game -- wear them down for tomorrow")
+        elif sd <= -3:
+            score += 0.15
+            reasons.append("getting run out of the building")
+        elif sd <= -2 and period >= 3:
+            score += 0.10
+            reasons.append("game slipping away late")
+        if tension >= 60:
+            score += 0.15
+            reasons.append("bad blood already boiling over")
+        if game_state.get("running_it_up"):
+            score += 0.10
+            reasons.append("they're running it up")
+        ordered = score >= 0.75
+        cname = getattr(coach, "full_name", "Coach")
+        if not ordered:
+            return {"ordered": False, "tendency": tendency, "score": round(score, 3),
+                    "reasons": reasons,
+                    "story": f"{cname} keeps it clean. No order sent."}
+        # It happened: the building knows, and so does the league.
+        if rivalries is not None:
+            try:
+                opp = game_state.get("opponent")
+                if opp is not None:
+                    opp_coach = getattr(opp, "head_coach", None)
+                    if opp_coach is None:
+                        opp_coach = opp_head_coach_of(rivalries, opp)
+                    record_brawl_game(rivalries, team, opp, coach, opp_coach,
+                                      aggressor="a", fights=4)
+            except Exception:
+                pass
+        return {"ordered": True, "tendency": tendency, "score": round(score, 3),
+                "reasons": reasons,
+                "instigator_mod": 1.25,    # the ordered team: +25% physical impact
+                "retaliation_mod": 1.10,   # the answer: smaller, reactive
+                "story": f"{cname} sent them out: {'; '.join(reasons)}."}
+    except Exception:
+        return {"ordered": False, "tendency": 0.3, "score": 0.0,
+                "reasons": [], "story": "No order."}
+
+
+def opp_head_coach_of(rivalries: list, team: Any) -> Any:
+    """Best-effort lookup of a team's head coach for rivalry records."""
+    try:
+        hc = getattr(team, "head_coach", None)
+        if hc is not None:
+            return hc
+    except Exception:
+        pass
+    # Fallback: a lightweight stand-in keyed by team so the record still lands.
+    class _StandIn:
+        pass
+    s = _StandIn()
+    s.id = f"hc_{getattr(team, 'team_name', 'unknown')}"
+    s.full_name = f"{getattr(team, 'team_name', 'Opponent')} head coach"
+    return s
+
+
+def respond_to_punishment(coach: Any, game_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """They're running your guys. Do you answer?
+    Tortorella: livid, retaliates, tension +20. Knoblauch: composed, never."""
+    try:
+        tendency = coach_reprisal_tendency(coach)
+        cname = getattr(coach, "full_name", "Coach")
+        if tendency >= 0.65:
+            return {"responds": True, "tone": "livid",
+                    "retaliation_mod": 1.15, "tension_delta": 20,
+                    "story": f"{cname} is LIVID on the bench -- the response is coming, "
+                             f"and it's coming hard."}
+        if tendency >= 0.35:
+            return {"responds": True, "tone": "measured",
+                    "retaliation_mod": 1.05, "tension_delta": 10,
+                    "story": f"{cname} answers it -- measured, but they won't be pushed around."}
+        return {"responds": False, "tone": "composed",
+                "retaliation_mod": 1.0, "tension_delta": 0,
+                "story": f"{cname} keeps the bench calm. 'We play hockey. We don't do that.'"}
+    except Exception:
+        return {"responds": False, "tone": "composed", "retaliation_mod": 1.0,
+                "tension_delta": 0, "story": "No response."}
+
+
+# ---------------------------------------------------------------------------
+# Performance as a beef rectifier: the Torts/Werenski arc
+# ---------------------------------------------------------------------------
+# A hard coach who drags a career year out of a player forges a bond out of
+# the beef. The friction becomes the foundation -- "he made me the player
+# I am." Once forged, the player is bought in for good.
+
+def rectify_coach_player_beef(rivalries: list, player: Any, coach: Any,
+                              career_best: bool = False,
+                              form: float = 50.0) -> Dict[str, Any]:
+    """Performance heals coach-player bad blood. A career year under a hard
+    coach turns the beef into a bond."""
+    try:
+        r = rivalry_between(rivalries, player, coach)
+        if not r or r["kind"] != "coach_player":
+            return {"rectified": False, "reason": "no coach-player beef to rectify"}
+        style = coach_style(coach)["label"]
+        hard = style == "Drill Sergeant" or (getattr(coach, "discipline", 10) or 10) >= 14
+        score = 0.0
+        if career_best:
+            score += 60
+        score += max(0.0, form - 60) * 1.0
+        if hard:
+            score += 15  # the hard-driving coach gets credit for the career year
+        score -= r["grudge"] * 0.3  # deep grudges are harder to melt
+        cname = getattr(coach, "full_name", "Coach")
+        pname = getattr(player, "full_name", "Player")
+        if score >= 55:
+            bury_hatchet(rivalries, player, coach)
+            ensure_reputation_fields(player)
+            bonds = getattr(player, "coach_bonds", None)
+            if bonds is None:
+                player.coach_bonds = {}
+                bonds = player.coach_bonds
+            bonds[getattr(coach, "id", id(coach))] = (
+                f"Career year under {cname} -- the beef became a bond")
+            try:
+                player.happiness = min(100, (getattr(player, "happiness", 70) or 70) + 8)
+                player.morale = min(100, (getattr(player, "morale", 70) or 70) + 8)
+            except Exception:
+                pass
+            return {"rectified": True, "score": round(score, 1),
+                    "story": f"{cname} was hard on {pname} -- and dragged a career year "
+                             f"out of him. The beef is gone; what's left is a bond. "
+                             f"'He made me the player I am.'"}
+        return {"rectified": False, "score": round(score, 1),
+                "reason": "not enough on-ice proof yet -- the beef survives"}
+    except Exception:
+        return {"rectified": False, "reason": "error"}
