@@ -4214,7 +4214,7 @@ class HockeyManagerGUI(tk.Tk):
         # Add menu items with conditional logic
         for item_text, command in menu_items.items():
             # Special handling for Trade Deadline Center - only show on deadline day
-            if "Trade Deadline" in item_text and not is_trade_deadline_day():
+            if "Trade Deadline" in item_text and not self.is_trade_deadline_day():
                 continue  # Skip this menu item if it's not deadline day
             # Draft Day Central - only show on draft days
             if "Draft Day Central" in item_text and not is_draft_day(self.current_date):
@@ -6530,6 +6530,19 @@ class HockeyManagerGUI(tk.Tk):
             })
         if blockers:
             return ("Continue", blockers)
+        # Trade deadline day: the day runs on a 30-minute game clock
+        # (9:00 AM -> 3:00 PM ET). Each press advances the clock one
+        # increment -- instant AI answers, league deals, countdown.
+        try:
+            if self.is_trade_deadline_day():
+                from trade_deadline_manager import get_deadline_manager
+                _mgr = get_deadline_manager(self.game_manager)
+                if not _mgr.clock_active(self.current_date):
+                    return ("Deadline Day", [])
+                if not _mgr._clock_store().get('expired'):
+                    return (f"+30m ({_mgr.clock_display()})", [])
+        except Exception:
+            pass
         # Game-day label: pressing it opens the game-day inbox bundle
         # (presser + team talk + Watch/Quick choice) instead of simming.
         try:
@@ -6656,6 +6669,227 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
 
+    # ------------------------------------------------------------------
+    # Trade deadline day: 30-minute game clock (9 AM -> 3 PM ET)
+    # ------------------------------------------------------------------
+    def is_trade_deadline_day(self):
+        """Game-date check: is today trade deadline day (March 8)?"""
+        try:
+            from trade_deadline_manager import get_deadline_manager
+            return get_deadline_manager(self.game_manager).is_deadline_day(
+                self.current_date)
+        except Exception:
+            return False
+
+    def _maybe_run_deadline_clock_tick(self):
+        """Advance the deadline clock one 30-minute increment instead of a
+        full day sim. Returns True when a tick ran (the day did NOT advance
+        and callers should return), False to continue the normal sim."""
+        try:
+            from trade_deadline_manager import get_deadline_manager
+            mgr = get_deadline_manager(self.game_manager)
+        except Exception:
+            return False
+        if not mgr.is_deadline_day(self.current_date):
+            return False
+        if not mgr.clock_active(self.current_date):
+            mgr.start_clock(self.current_date)
+            # Tentpole prompt at 9 AM, not 3 PM: the event-day hub asks
+            # once whether to open the Trade Deadline Center. (The normal
+            # maintenance pass that fires it only runs after the clock
+            # expires, which would be too late.)
+            try:
+                self._check_for_event_day()
+            except Exception as e:
+                print(f"deadline day event prompt failed (non-fatal): {e}")
+        tick = mgr.advance_clock()
+        # Instant AI answers: any due negotiations resolve right now.
+        try:
+            import trade_negotiation as _tn
+            _tn.process_due_negotiations(self)
+        except Exception as e:
+            print(f"deadline tick negotiation processing failed (non-fatal): {e}")
+        # League-wide dealing for this 30-minute window.
+        try:
+            self._deadline_tick_activity(mgr, tick)
+        except Exception as e:
+            print(f"deadline tick activity failed (non-fatal): {e}")
+        if tick['expired']:
+            # 3 PM: the deadline passes. Lock trading, then let the normal
+            # day flow continue (maintenance, games, date advance).
+            self._close_trade_deadline(mgr)
+            return False
+        # Refresh the dashboard so the countdown + button label update.
+        try:
+            self._refresh_dashboard()
+        except Exception:
+            pass
+        try:
+            dl = self.open_windows.get('trade_deadline')
+            if dl is not None and dl.winfo_exists():
+                dl.refresh()
+        except Exception:
+            pass
+        return True
+
+    def _deadline_tick_activity(self, mgr, tick):
+        """Real AI-vs-AI trades for one 30-minute deadline window, scaled
+        by urgency as 3 PM approaches. Deals execute for real (rosters
+        change) and break as news."""
+        import random
+        import trade_engine as te
+        import trade_storylines as tsl
+        league = getattr(getattr(self, 'game_manager', None), 'league', None) \
+            or getattr(self, 'league', None)
+        if league is None:
+            return
+        user_name = getattr(getattr(self, 'user_team', None), 'team_name', '')
+        teams = [t for t in getattr(league, 'teams', [])
+                 if getattr(t, 'team_name', '') != user_name
+                 and getattr(t, 'league_name', 'National Hockey League')
+                 == 'National Hockey League']
+        if not teams:
+            return
+        prog = mgr.clock_progress()
+        # 0-3 real deals per window, more as the deadline nears.
+        random.shuffle(teams)
+        deals = 0
+        for team in teams:
+            if deals >= 3:
+                break
+            if random.random() > tsl.ai_initiative_odds(self, team) * 0.45:
+                continue
+            if self._try_ai_ai_deadline_deal(team, teams, te, tsl, mgr):
+                deals += 1
+
+    def _try_ai_ai_deadline_deal(self, initiator, teams, te, tsl, mgr):
+        """One AI-initiated deadline deal. Seller moves a veteran for a
+        pick/prospect; the buyer side goes through the real AI evaluation
+        (ai_consider_trade + situational context). Returns True on a deal."""
+        import random
+        from game_classes import DraftPick
+        iname = getattr(initiator, 'team_name', '')
+        stance = tsl.stance(self, iname)
+        # Pair sellers with buyers; anyone else shops opportunistically.
+        partners = [t for t in teams if t is not initiator]
+        random.shuffle(partners)
+        seller, buyer = None, None
+        if stance == 'seller':
+            seller = initiator
+            buyer = next((t for t in partners
+                          if tsl.stance(self, getattr(t, 'team_name', ''))
+                          in ('buyer', 'bubble')), None)
+        else:
+            buyer = initiator
+            seller = next((t for t in partners
+                           if tsl.stance(self, getattr(t, 'team_name', ''))
+                           == 'seller'), None)
+        if seller is None or buyer is None:
+            return False
+        # Seller's piece: highest-value veteran (30+) on an expiring-ish deal.
+        vets = [p for p in getattr(seller, 'roster', [])
+                if getattr(p, 'age', 0) >= 29]
+        if not vets:
+            vets = list(getattr(seller, 'roster', []))
+        if not vets:
+            return False
+        try:
+            vets.sort(key=lambda p: te.player_trade_value(p), reverse=True)
+        except Exception:
+            pass
+        piece = vets[0]
+        # Buyer's payment: a mid-round pick they own, else a prospect.
+        payment = None
+        try:
+            for yr, picks in getattr(buyer, 'draft_picks', {}).items():
+                for pk in picks:
+                    if (isinstance(pk, DraftPick)
+                            and getattr(pk, 'current_team', '')
+                            == getattr(buyer, 'team_name', '')
+                            and pk.round in (2, 3, 4)):
+                        payment = pk
+                        break
+                if payment:
+                    break
+        except Exception:
+            payment = None
+        if payment is None:
+            prospects = [p for p in getattr(buyer, 'roster', [])
+                         if getattr(p, 'age', 99) <= 23]
+            try:
+                prospects.sort(key=lambda p: te.player_trade_value(p))
+            except Exception:
+                pass
+            payment = prospects[0] if prospects else None
+        if payment is None:
+            return False
+        sname = getattr(seller, 'team_name', '')
+        bname = getattr(buyer, 'team_name', '')
+        try:
+            sit = tsl.situational_context(self, buyer, seller)
+            resp = te.ai_consider_trade(buyer, [payment], [piece],
+                                        user_team=seller, patience=1.0,
+                                        situational=sit)
+        except TypeError:
+            resp = te.ai_consider_trade(buyer, [payment], [piece],
+                                        user_team=seller, patience=1.0)
+        except Exception:
+            return False
+        if resp.decision != 'accept':
+            return False
+        try:
+            te.execute_trade(seller, buyer, [piece], [payment],
+                             date_str=self.current_date.isoformat())
+        except Exception:
+            return False
+        # Break the news: ticker + inbox.
+        pay_label = te.asset_label(payment)
+        piece_label = te.asset_label(piece)
+        story = (f"TRADE: {bname} acquires {piece_label} from {sname} "
+                 f"for {pay_label}.")
+        try:
+            mgr.breaking_news.append({'time': mgr.clock_display(),
+                                      'story': story})
+        except Exception:
+            pass
+        try:
+            from email_generator import EmailGenerator
+            email = EmailGenerator.create_league_announcement_email(
+                f"🚨 Deadline Deal: {piece_label} to {bname}", story)
+            email.is_urgent = True
+            email.priority = 4
+            self.send_email_to_user(email)
+        except Exception:
+            pass
+        try:
+            mgr.deadline_stats['total_trades'] += 1
+            mgr.deadline_stats['players_moved'] += 1
+        except Exception:
+            pass
+        print(f"⏰ {story}")
+        return True
+
+    def _close_trade_deadline(self, mgr):
+        """3 PM: lock trading, announce the freeze, kill the clock."""
+        try:
+            mgr.deadline_passed = True
+        except Exception:
+            pass
+        try:
+            from email_generator import EmailGenerator
+            email = EmailGenerator.create_league_announcement_email(
+                "Trade Deadline Has Passed",
+                "The 3:00 PM ET trade deadline has passed. No further trades "
+                "may be completed this season.\n\n"
+                f"League deals today: "
+                f"{mgr.deadline_stats.get('total_trades', 0)}.")
+            email.is_urgent = True
+            email.priority = 4
+            self.send_email_to_user(email)
+        except Exception:
+            pass
+        print("⏰ Trade deadline passed (3:00 PM ET). Trading locked.")
+
     def simulate_day(self):
         """Completely reworked daily simulation that properly handles all scenarios"""
         # BLOCKERS FIRST: pressing tasks (e.g. an active fantasy draft) must
@@ -6673,6 +6907,16 @@ class HockeyManagerGUI(tk.Tk):
                 and getattr(getattr(dashboard, 'continue_btn', None), '_enabled', True) is False):
             return  # Already processing, ignore this click
         self._set_continue_feedback(True, "Starting simulation...")
+
+        # TRADE DEADLINE DAY: the day runs on a 30-minute game clock
+        # (9:00 AM -> 3:00 PM ET) instead of a full-day sim. Each press of
+        # Continue advances the clock one increment: AI GMs answer trade
+        # talks instantly, league deals break, and the countdown ticks
+        # toward the 3 PM close. When the clock expires the day finishes
+        # normally (games sim, date advances).
+        if self._maybe_run_deadline_clock_tick():
+            self._set_continue_feedback(False)
+            return
 
         # Resuming after the game-day inbox bundle: daily maintenance
         # (scout report, career daily, ...) already ran before the bundle
@@ -9970,8 +10214,8 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_trade_deadline_center(self):
         """Open the Trade Deadline Center - only available on trade deadline day"""
-        if not is_trade_deadline_day():
-            messagebox.showinfo("Trade Deadline Center", 
+        if not self.is_trade_deadline_day():
+            messagebox.showinfo("Trade Deadline Center",
                               "The Trade Deadline Center is only available on Trade Deadline Day (March 8th).\n\n"
                               "Check back when the deadline approaches!")
             return

@@ -265,9 +265,22 @@ def _deliver(app, subject: str, content: str, sender: str,
 # Offer lifecycle
 # ---------------------------------------------------------------------------
 
+def is_deadline_rush(app) -> bool:
+    """True when the game date is trade deadline day -- AI GMs answer
+    instantly (the deadline-day phone-call feel) instead of in 1-3 days."""
+    try:
+        from trade_deadline_manager import get_deadline_manager
+        mgr = get_deadline_manager(getattr(app, 'game_manager', None))
+        return mgr.is_deadline_day(_today(app))
+    except Exception:
+        return False
+
+
 def send_offer(app, partner_team, user_assets, partner_assets) -> TradeNegotiation:
-    """User sends an offer. The AI GM replies in 1-3 days via the inbox."""
+    """User sends an offer. The AI GM replies in 1-3 days via the inbox --
+    instantly on trade deadline day."""
     today = _today(app)
+    rush = is_deadline_rush(app)
     neg = TradeNegotiation(
         partner_team_name=getattr(partner_team, "team_name", str(partner_team)),
         direction="outgoing",
@@ -277,23 +290,33 @@ def send_offer(app, partner_team, user_assets, partner_assets) -> TradeNegotiati
         user_assets=assets_to_dicts(user_assets, getattr(app.user_team, "team_name", "")),
         partner_assets=assets_to_dicts(partner_assets,
                                        getattr(partner_team, "team_name", "")),
-        response_due=today + timedelta(days=random.randint(1, 3)),
+        response_due=today if rush else today + timedelta(days=random.randint(1, 3)),
         created=today,
         history=[{"date": today.isoformat(), "by": "user",
                   "summary": f"Offered {asset_summary(assets_to_dicts(user_assets))} "
                              f"for {asset_summary(assets_to_dicts(partner_assets))}"}],
     )
     _store(app).append(neg)
+    wait_note = ("Their GM is on the line -- expect an answer right away."
+                 if rush else
+                 "Expect an answer within a few days. You can keep working -- "
+                 "this won't interrupt you.")
     neg.inbox_message_id = _deliver(
         app,
         subject=f"Trade offer sent to {neg.partner_team_name}",
         content=(f"Your offer is with {neg.partner_team_name}'s front office:\n\n"
                  f"YOU SEND: {asset_summary(neg.user_assets)}\n"
                  f"YOU GET: {asset_summary(neg.partner_assets)}\n\n"
-                 f"Expect an answer within a few days. You can keep working -- "
-                 f"this won't interrupt you."),
+                 f"{wait_note}"),
         sender=f"{neg.partner_team_name} (pending)",
     )
+    if rush:
+        # Deadline day: the AI answers on the spot. Process immediately so
+        # the reply lands in the inbox within the same interaction.
+        try:
+            process_due_negotiations(app)
+        except Exception as e:
+            print(f"deadline rush instant answer failed: {e}")
     return neg
 
 
@@ -341,19 +364,27 @@ def send_counter(app, neg: TradeNegotiation,
     neg.user_assets = assets_to_dicts(user_assets,
                                       getattr(app.user_team, "team_name", ""))
     neg.partner_assets = assets_to_dicts(partner_assets, neg.partner_team_name)
-    neg.response_due = today + timedelta(days=random.randint(1, 3))
+    rush = is_deadline_rush(app)
+    neg.response_due = today if rush else today + timedelta(days=random.randint(1, 3))
     neg.history.append({"date": today.isoformat(), "by": "user",
                         "summary": f"Countered (round {neg.rounds})"})
+    wait_note = ("They're still on the line -- answer coming right up."
+                 if rush else "They'll get back to you in a few days. ")
     neg.inbox_message_id = _deliver(
         app,
         subject=f"Counter-offer sent to {neg.partner_team_name}",
         content=(f"Your revised proposal is with {neg.partner_team_name}:\n\n"
                  f"YOU SEND: {asset_summary(neg.user_assets)}\n"
                  f"YOU GET: {asset_summary(neg.partner_assets)}\n\n"
-                 f"They'll get back to you in a few days. "
+                 f"{wait_note}"
                  f"{'They are losing patience -- make this one count.' if neg.patience < 0.7 else ''}"),
         sender=f"{neg.partner_team_name} (pending)",
     )
+    if rush:
+        try:
+            process_due_negotiations(app)
+        except Exception as e:
+            print(f"deadline rush instant answer failed: {e}")
     return neg
 
 
@@ -496,8 +527,25 @@ def _resolve_one(app, neg: TradeNegotiation, te, today: date):
                  sender="Assistant GM")
         _mark_action_done(app, neg)
         return
-    resp = te.ai_consider_trade(partner, user_objs, partner_objs,
-                                user_team=user_team, patience=neg.patience)
+    resp = None
+    try:
+        # Storyline-aware context: standings stance, streaks, rivalries,
+        # deadline urgency. Additive nudge on the AI's eagerness -- the
+        # core evaluation logic in trade_engine is untouched.
+        situational = None
+        try:
+            import trade_storylines
+            situational = trade_storylines.situational_context(
+                app, partner, user_team)
+        except Exception:
+            situational = None
+        resp = te.ai_consider_trade(partner, user_objs, partner_objs,
+                                    user_team=user_team, patience=neg.patience,
+                                    situational=situational)
+    except TypeError:
+        # Older ai_consider_trade without the situational kwarg
+        resp = te.ai_consider_trade(partner, user_objs, partner_objs,
+                                    user_team=user_team, patience=neg.patience)
     if resp.decision == "accept":
         _complete(app, neg, user_objs, partner_objs)
         _mark_action_done(app, neg)

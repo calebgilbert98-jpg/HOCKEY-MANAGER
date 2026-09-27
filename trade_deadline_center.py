@@ -278,8 +278,19 @@ class TradeDeadlineCenter(InGamePopup):
         self._update_countdown()
         self._animate_ticker()
 
+    def refresh(self):
+        """Refresh countdown/ticker on demand (called after each 30-min tick)."""
+        try:
+            self._update_countdown()
+        except Exception:
+            pass
+
     def _update_countdown(self):
-        """Update the countdown timer each second"""
+        """Update the countdown timer each second.
+
+        On deadline day the countdown follows the game clock (30-minute
+        increments toward 3 PM ET); otherwise the wall-clock estimate.
+        """
         if getattr(self, 'deadline_passed', False):
             return
         try:
@@ -289,7 +300,10 @@ class TradeDeadlineCenter(InGamePopup):
                 self.countdown_label.config(text="DEADLINE PASSED", foreground=self.NEUTRAL_GRAY)
                 self.status_label.config(text="TRADE DEADLINE HAS PASSED - No more trades allowed")
                 return
-            self.countdown_label.config(text=time_info.get('formatted', '--:--:--'))
+            text = time_info.get('formatted', '--:--:--')
+            if time_info.get('game_clock'):
+                text = f"{time_info['game_clock']}  ·  {text} left"
+            self.countdown_label.config(text=text)
         except Exception:
             pass
         if self.winfo_exists():
@@ -514,6 +528,21 @@ class TradeDeadlineCenter(InGamePopup):
             pady=8
         )
         quick_trade_btn.pack(side='left', padx=5)
+
+        # Advance the deadline clock 30 minutes (same as Continue)
+        advance_btn = tk.Button(
+            buttons_frame,
+            text="ADVANCE 30 MIN ⏩",
+            command=self._advance_deadline_clock,
+            bg='#1d4ed8',
+            fg=self.TEXT_WHITE,
+            font=('Segoe UI', 10, 'bold'),
+            relief='raised',
+            bd=3,
+            padx=20,
+            pady=8
+        )
+        advance_btn.pack(side='left', padx=5)
         
         # Emergency Trade button
         emergency_btn = tk.Button(
@@ -889,6 +918,13 @@ class TradeDeadlineCenter(InGamePopup):
     def _open_emergency_trade(self):
         """Open emergency trade interface for last-minute deals"""
         EmergencyTradeInterface(self, self.deadline_manager)
+
+    def _advance_deadline_clock(self):
+        """Advance the deadline-day game clock 30 minutes (same as Continue)."""
+        try:
+            self.parent.simulate_day()
+        except Exception as e:
+            print(f"deadline clock advance failed: {e}")
     
     def _open_market_browser(self):
         """Open comprehensive market browser"""

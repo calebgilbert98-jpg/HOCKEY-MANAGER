@@ -182,12 +182,16 @@ class AIResponse:
 
 
 def ai_consider_trade(partner_team, user_assets, partner_assets,
-                      user_team=None, patience=1.0) -> AIResponse:
+                      user_team=None, patience=1.0, situational=None) -> AIResponse:
     """AI GM evaluates your offer. Returns accept / reject / counter.
 
     patience: 1.0 = fresh talks. Drops each counter round; a tired GM
     drives a harder bargain (higher effective greed) and is likelier
     to walk away than counter.
+
+    situational: optional dict from trade_storylines.situational_context()
+    with a 'greed_mult' nudge (<1 = more eager, >1 = harder bargain).
+    Purely additive -- None means classic behavior.
     """
     from game_classes import DraftPick
     ev = evaluate_trade(user_assets, partner_assets)
@@ -218,6 +222,15 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     # (after several counter rounds) pushes the demand higher and can
     # turn a would-be counter into a flat rejection.
     greed = (0.95 + random.uniform(-0.03, 0.10)) / max(patience, 0.35)
+    # Situational nudge (standings stance, streaks, rivalries, deadline
+    # urgency). Additive only; absent without a context dict.
+    sit_mult = 1.0
+    if isinstance(situational, dict):
+        try:
+            sit_mult = float(situational.get('greed_mult', 1.0))
+        except Exception:
+            sit_mult = 1.0
+    greed *= sit_mult
 
     if effective >= greed:
         return AIResponse('accept', "You've got a deal.")

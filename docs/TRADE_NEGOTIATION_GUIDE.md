@@ -134,11 +134,44 @@ Trade Deadline Center's shouty chrome toned down (title 28→20pt,
 countdown 48→32pt, subtitle 16→12pt). Shortlist window is non-modal now
 (it called `grab_set()` despite its own "non-modal" comment).
 
+## 6. Deadline-day rush (2026-09-27)
+
+- **30-minute game clock** (`trade_deadline_manager`): on March 8 the day
+  runs 9:00 AM → 3:00 PM ET in 30-min increments instead of full-day sims.
+  State lives on `game_manager.deadline_clock` (persisted in saves).
+  `main.simulate_day` routes deadline day through
+  `_maybe_run_deadline_clock_tick()`; when the clock expires the day
+  finishes normally (games sim, date advances to March 9).
+- **Instant AI answers** (`trade_negotiation.is_deadline_rush`): offers and
+  counters sent on deadline day get `response_due = today` and are
+  processed immediately — the reply lands in the inbox in the same
+  interaction (the deadline-day phone-call feel).
+- **Storyline-aware AI** (`trade_storylines.py`, new): computes an additive
+  `situational_context` (buyer/seller/bubble stance from conference
+  standings, win/loss streaks, team-team rivalry premiums from
+  `league.rivalries`, deadline urgency scaling with clock progress).
+  Fed into `ai_consider_trade(..., situational=...)` as a `greed_mult`
+  nudge clamped to 0.80–1.30. Core ratio/needs/greed logic untouched;
+  `situational=None` behaves exactly as before.
+- **Real AI-vs-AI deadline deals** (`main._deadline_tick_activity`):
+  each 30-min window, AI teams roll `ai_initiative_odds()`; sellers move a
+  veteran for a mid-round pick/prospect through the real
+  `ai_consider_trade` + `execute_trade` path, and deals break as inbox
+  news + ticker items.
+- **Deadline gating is game-date now**: `HockeyManagerGUI.is_trade_deadline_day()`
+  uses `current_date` (the old module-level check used the wall clock, so
+  the Center only ever opened on real-world March 8). The event-day hub
+  prompt now fires on the first tick (9 AM), not after 3 PM.
+- Deadline Center: countdown follows the game clock ("10:00 AM ET ·
+  05:00:00 left") and there's an ADVANCE 30 MIN button (same as Continue).
+
 ## What not to touch
 
 - `trade_engine.ai_consider_trade` verdict semantics — the patience
   parameter is additive; don't change existing accept/counter thresholds
   without Muck's sign-off (engine boundary).
+- `trade_storylines` nudge clamp (0.80–1.30) — storylines whisper, they
+  don't shout. Widen only with Muck's sign-off.
 - `tn._complete` owns trade execution (rosters, cap, media, news). Don't
   duplicate it — the old `TradeWindow._complete_trade` was removed
   deliberately.

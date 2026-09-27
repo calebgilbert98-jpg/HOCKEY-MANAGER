@@ -75,6 +75,9 @@ class GameSaveManager:
                     (n.to_dict() if hasattr(n, 'to_dict') else n)
                     for n in getattr(self.game_manager, 'trade_negotiations', []) or []
                 ],
+                # Deadline-day game clock (9 AM -> 3 PM ET, 30-min increments)
+                'deadline_clock': dict(
+                    getattr(self.game_manager, 'deadline_clock', None) or {}),
                 
                 # Email and communication
                 'inbox_messages': getattr(self.game_manager, 'inbox_messages', []),
@@ -557,6 +560,14 @@ class GameSaveManager:
                     _tn.load_state(self, save_data['trade_negotiations'])
                 except Exception as _tne:
                     print(f"trade negotiations restore failed (non-fatal): {_tne}")
+
+            # Deadline-day game clock
+            if 'deadline_clock' in save_data:
+                try:
+                    dc = save_data['deadline_clock'] or {}
+                    self.game_manager.deadline_clock = dict(dc)
+                except Exception as _dce:
+                    print(f"deadline clock restore failed (non-fatal): {_dce}")
 
             for key in ['player_stats_history', 'team_stats_history', 'draft_classes', 
                        'scouting_reports', 'waiver_claims', 'trade_history', 
