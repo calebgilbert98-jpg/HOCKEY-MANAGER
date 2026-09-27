@@ -8,7 +8,7 @@ import customtkinter as ctk
 from ctk_theme import (
     init_ctk_theme, primary_button, secondary_button, heading,
     CTkPlayerList,
-    TEAL, BG, PANEL, CARD, TEXT, TEXT_DIM, TEXT_FAINT,
+    TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT,
     GOLD, GREEN, RED,
 )
 from datetime import date, timedelta, datetime
@@ -3941,24 +3941,41 @@ class HockeyManagerGUI(tk.Tk):
                               tooltip="Settings: game settings and preferences (? shows keyboard shortcuts)")
     
     def _create_nav_pill(self, parent, text, command, side="left", tooltip=None):
-        """Create a pill-style navigation button for the top menu bar."""
-        # Use modern color scheme
+        """Create a pill-style navigation button for the top menu bar.
+
+        CTk-based (was canvas-drawn PillButton): real rounded pill with
+        proper hover/pressed states. Auto-sizes to the label text.
+        """
+        init_ctk_theme()
         try:
             from modern_ui import AppColors
-            bg = AppColors.BG
             fg = AppColors.TEXT_SECONDARY
             hover_bg = AppColors.BG_HOVER
-            accent = AppColors.ACCENT
-        except:
-            bg = '#0e0e11'
+        except Exception:
             fg = '#a1a1aa'
             hover_bg = '#1e1e24'
-            accent = '#00ceb8'
-        
-        pill = PillButton(parent, text=text, command=command,
-                         font=(self.FONT_FAMILY, 10, 'bold'),
-                         padx=14, pady=6, bg=bg,
-                         fg=fg, hover_bg=hover_bg)
+
+        # Size the pill to its text like the old PillButton did.
+        font = (self.FONT_FAMILY, 10, 'bold')
+        probe = tk.Label(parent, text=text, font=font)
+        try:
+            probe.update_idletasks()
+            w = probe.winfo_reqwidth() + 28
+            h = probe.winfo_reqheight() + 12
+        finally:
+            probe.destroy()
+
+        pill = ctk.CTkButton(
+            parent, text=text, command=command,
+            font=font, width=w, height=h,
+            fg_color="transparent",
+            hover_color=hover_bg,
+            text_color=fg,
+            corner_radius=h // 2,
+            border_width=1,
+            border_color=BORDER,
+            cursor="hand2",
+        )
         pill.pack(side=side, padx=4)
         if tooltip:
             _qol_add_tooltip(pill, tooltip)
@@ -3998,9 +4015,9 @@ class HockeyManagerGUI(tk.Tk):
                 dropdown_menu.post(x, y)
             except:
                 pass
-        
-        dropdown_btn.command = show_dropdown
-        
+
+        dropdown_btn.configure(command=show_dropdown)
+
         return dropdown_btn
 
     # ------------------------------------------------------------------

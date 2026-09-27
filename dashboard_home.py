@@ -10,9 +10,16 @@ import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
 
+import customtkinter as ctk
+
 from modern_ui import (
     AppColors, AppFonts, AppCard, StatCard,
-    PlayerRow, PillBadge, AppButton, apply_app_theme,
+    PlayerRow, PillBadge, apply_app_theme,
+)
+
+from ctk_theme import (
+    init_ctk_theme, TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+    TEXT, TEXT_DIM, TEXT_FAINT,
 )
 
 try:
@@ -23,68 +30,94 @@ except Exception:
                 5: "Okay", 4: "Okay", 3: "Poor", 2: "Poor"}.get(int(m), "Abysmal")
 
 
-class AppDropdown(ttk.Combobox):
+class AppDropdown(ctk.CTkComboBox):
     """Themed dropdown (combobox) matching the dark UI.
+
+    CTk-based replacement for the old ttk.Combobox version: rounded,
+    proper dark-mode dropdown list, teal selection. Keeps the same
+    constructor and get_value()/set_value() API.
 
     Use for view selectors (standings scope, leader category, schedule view).
     """
 
     def __init__(self, parent, values, initial=None, on_select=None, width=16):
-        self._var = tk.StringVar(value=initial or (values[0] if values else ""))
-        super().__init__(parent, textvariable=self._var, values=list(values),
-                         state="readonly", width=width,
-                         font=AppFonts.SMALL)
+        init_ctk_theme()
         self._on_select = on_select
-        self.bind("<<ComboboxSelected>>", self._handle_select)
-        self._style()
+        super().__init__(
+            parent,
+            values=list(values),
+            command=self._handle_select,
+            state="readonly",
+            width=max(120, int(width * 9)),
+            height=32,
+            corner_radius=8,
+            fg_color=CARD,
+            border_color=BORDER,
+            border_width=1,
+            button_color=CARD,
+            button_hover_color=BORDER,
+            dropdown_fg_color=CARD,
+            dropdown_hover_color=BORDER,
+            dropdown_text_color=TEXT,
+            text_color=TEXT,
+            font=("Segoe UI", 11),
+            dropdown_font=("Segoe UI", 11),
+        )
+        if initial:
+            self.set(initial)
+        elif values:
+            self.set(values[0])
 
-    def _style(self):
-        style = ttk.Style()
-        # Unique style name per instance to avoid clashes
-        name = f"AppDropdown_{id(self)}.TCombobox"
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-        style.configure(name,
-                        fieldbackground=AppColors.BG_ELEVATED,
-                        background=AppColors.BG_ELEVATED,
-                        foreground=AppColors.TEXT_PRIMARY,
-                        arrowcolor=AppColors.TEXT_SECONDARY,
-                        bordercolor=AppColors.BORDER,
-                        lightcolor=AppColors.BORDER,
-                        darkcolor=AppColors.BORDER,
-                        padding=6)
-        style.map(name,
-                  fieldbackground=[("readonly", AppColors.BG_ELEVATED),
-                                   ("disabled", AppColors.BG)],
-                  foreground=[("readonly", AppColors.TEXT_PRIMARY)],
-                  background=[("readonly", AppColors.BG_HOVER)],
-                  arrowcolor=[("readonly", AppColors.ACCENT)])
-        self.configure(style=name)
-        # Dropdown list colors
-        try:
-            self.tk.call("ttk::combobox::PopdownWindow", self)
-        except Exception:
-            pass
-        option = f"{self}._popdown.f.l"
-        try:
-            self.tk.call(option, "configure", "-background", AppColors.BG_ELEVATED,
-                         "-foreground", AppColors.TEXT_PRIMARY,
-                         "-selectbackground", AppColors.ACCENT_BG,
-                         "-selectforeground", AppColors.TEXT_PRIMARY)
-        except Exception:
-            pass
-
-    def _handle_select(self, _event=None):
+    def _handle_select(self, value):
         if self._on_select:
-            self._on_select(self._var.get())
+            self._on_select(value)
 
     def get_value(self):
-        return self._var.get()
+        return self.get()
 
     def set_value(self, value):
-        self._var.set(value)
+        self.set(value)
+
+
+class CtkAppButton(ctk.CTkButton):
+    """Modern CTk replacement for modern_ui.AppButton (canvas-drawn).
+
+    Keeps the AppButton-compatible API the dashboard relies on:
+    ``text=``/``command=``/``style="primary"|"secondary"``/``width``/``height``
+    constructor kwargs plus ``set_text()`` / ``set_enabled()``.
+    Gets real hover/pressed/disabled states from CustomTkinter.
+    """
+
+    def __init__(self, parent, text="", command=None,
+                 style="primary", width=120, height=40,
+                 font=None, **kwargs):
+        init_ctk_theme()
+        if style == "primary":
+            fg_color, hover_color, text_color = TEAL, TEAL_HOVER, BG
+        else:  # secondary
+            fg_color, hover_color, text_color = CARD, BORDER, TEXT
+        super().__init__(
+            parent,
+            text=text,
+            command=command,
+            width=width,
+            height=height,
+            fg_color=fg_color,
+            hover_color=hover_color,
+            text_color=text_color,
+            corner_radius=8,
+            font=font or ("Segoe UI", 12, "bold"),
+            cursor="hand2",
+            **kwargs
+        )
+
+    def set_text(self, text):
+        """Change the button label (AppButton-compatible)."""
+        self.configure(text=text)
+
+    def set_enabled(self, enabled):
+        """Enable/disable with proper disabled visuals (AppButton-compatible)."""
+        self.configure(state="normal" if enabled else "disabled")
 
 
 def _safe(fn, default=None):
@@ -103,6 +136,7 @@ class HomeDashboard:
 
     def __init__(self, parent, game_manager, user_team, on_continue=None,
                  get_continue_state=None):
+        init_ctk_theme()
         self.parent = parent
         self.game_manager = game_manager
         self.user_team = user_team
@@ -185,13 +219,20 @@ class HomeDashboard:
             ("Inbox", "inbox"),
         ]
         for label, key in sections:
-            pill = tk.Label(nav, text=label, font=AppFonts.SMALL_BOLD,
-                            fg=AppColors.TEXT_SECONDARY, bg=AppColors.BG_ELEVATED,
-                            padx=12, pady=6, cursor="hand2")
+            pill = ctk.CTkButton(
+                nav, text=label,
+                command=lambda k=key: self._scroll_to(k),
+                fg_color="transparent",
+                hover_color=CARD,
+                text_color=AppColors.TEXT_SECONDARY,
+                corner_radius=14,
+                height=28,
+                border_width=1,
+                border_color=BORDER,
+                font=AppFonts.SMALL_BOLD,
+                cursor="hand2",
+            )
             pill.pack(side="left", padx=4)
-            pill.bind("<Button-1>", lambda _e, k=key: self._scroll_to(k))
-            pill.bind("<Enter>", lambda e: e.widget.config(fg=AppColors.ACCENT))
-            pill.bind("<Leave>", lambda e: e.widget.config(fg=AppColors.TEXT_SECONDARY))
 
     def _scroll_to(self, key):
         """Scroll the dashboard canvas so the named card is at the top."""
@@ -329,9 +370,9 @@ class HomeDashboard:
 
     def _view_all_button(self, content, text, method_name):
         """Full-width button at the bottom of a card linking to the full window."""
-        btn = AppButton(content, text=text, style="secondary",
-                        command=lambda: self._nav(method_name),
-                        width=200, height=36)
+        btn = CtkAppButton(content, text=text, style="secondary",
+                           command=lambda: self._nav(method_name),
+                           width=200, height=36)
         btn.pack(fill="x", pady=(12, 0))
         return btn
 
@@ -617,8 +658,8 @@ class HomeDashboard:
                  fg=AppColors.TEXT_PRIMARY, bg=AppColors.BG).pack(anchor="e")
         tk.Label(date_frame, text=day_str, font=AppFonts.SMALL,
                  fg=AppColors.ACCENT, bg=AppColors.BG).pack(anchor="e")
-        self.continue_btn = AppButton(date_frame, text="Next Day", command=self._on_continue,
-                                      style="primary", width=140, height=40)
+        self.continue_btn = CtkAppButton(date_frame, text="Next Day", command=self._on_continue,
+                                         style="primary", width=140, height=40)
         self.continue_btn.pack(pady=(12, 0))
         # Small live status line shown under the button while the day simulates.
         self._continue_status = tk.Label(date_frame, text="", font=AppFonts.SMALL,
@@ -1105,9 +1146,9 @@ class HomeDashboard:
         grid = tk.Frame(content, bg=bg)
         grid.pack(fill="x")
         for i, (label, method) in enumerate(actions):
-            btn = AppButton(grid, text=label, style="secondary",
-                            command=lambda m=method: self._nav(m),
-                            width=120, height=36)
+            btn = CtkAppButton(grid, text=label, style="secondary",
+                               command=lambda m=method: self._nav(m),
+                               width=120, height=36)
             btn.grid(row=i // 2, column=i % 2, padx=4, pady=4, sticky="ew")
         grid.grid_columnconfigure(0, weight=1)
         grid.grid_columnconfigure(1, weight=1)
