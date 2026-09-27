@@ -3053,46 +3053,133 @@ def _rivalry_age_years(r: Dict[str, Any]) -> float:
         return 0.0
 
 
-def game_tension(home_team: Any, away_team: Any, rivalries: list,
-                 is_playoff: bool = False, series_game: int = 0,
-                 recent_fights: int = 0, recent_pim: int = 0,
-                 extra_incidents: Optional[List[Dict[str, Any]]] = None) -> float:
-    """0-100: how much bad blood is in the building tonight.
-    Drivers: historic rivalry heat, recent fights, recent penalty minutes,
-    logged incidents (a star hurt last game spikes it), playoff stakes."""
+INCIDENT_LABELS = {
+    "star_injured": "Star injured",
+    "player_injured": "Player injured",
+    "controversial_hit": "Controversial hit",
+    "coach_comments": "Coach ran his mouth",
+    "brawl": "Brawl",
+}
+
+
+def _roster_chippiness(roster: Any) -> float:
+    """Mean locked personality of a roster -- chippy rooms run hotter."""
+    try:
+        vals = []
+        for p in (roster or []):
+            v = getattr(p, "base_controversy", None)
+            if v is None:
+                v = getattr(p, "controversy", 30)
+            vals.append(v or 30)
+        return sum(vals) / len(vals) if vals else 30.0
+    except Exception:
+        return 30.0
+
+
+def game_tension_breakdown(home_team: Any, away_team: Any, rivalries: list,
+                           is_playoff: bool = False, series_game: int = 0,
+                           recent_fights: int = 0, recent_pim: int = 0,
+                           extra_incidents: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """0-100 tension plus the signed drivers behind it.
+
+    Returns {"tension": float, "drivers": [{"label": str, "points": float}]}.
+    + heats the game up, - cools it down. Two strangers still get a little
+    heat (pride on the line); rivalries, wounds, fights, and chippy
+    personnel pile on, while clean professional matchups cool it off.
+    """
+    drivers: List[Dict[str, Any]] = []
     try:
         t = 0.0
         hn = getattr(home_team, "team_name", "")
         an = getattr(away_team, "team_name", "")
         incidents: List[Dict[str, Any]] = list(extra_incidents or [])
-        for r in rivalries:
-            if r["kind"] != "team_team":
+        rivalry_pts = 0.0
+        for r in (rivalries or []):
+            if r.get("kind") != "team_team":
                 continue
-            names = {r["a_name"], r["b_name"]}
+            names = {r.get("a_name"), r.get("b_name")}
             if not ({hn, an} <= names and len(names) == 2):
                 continue
-            contrib = r["intensity"] * 0.6
+            inten = r.get("intensity", 0) or 0
             # Historic feuds weigh more than fresh ones at the same heat.
             if r.get("solidified") or _rivalry_age_years(r) >= 5:
-                contrib = r["intensity"] * 0.75 + 5
-            t += contrib
+                contrib = inten * 0.75 + 5
+                tag = " (entrenched)"
+            else:
+                contrib = inten * 0.6
+                tag = ""
+            rname = r.get("name") or f"{r.get('a_name')} vs {r.get('b_name')}"
+            drivers.append({"label": f"Rivalry: {rname}{tag}",
+                            "points": round(contrib, 1)})
+            rivalry_pts += contrib
             for inc in (r.get("incidents") or []):
                 incidents.append(inc)
+        t += rivalry_pts
         # Fights and penalty minutes: chippiness is measurable.
-        t += min(24.0, recent_fights * 6.0)
-        t += min(15.0, recent_pim * 0.3)
+        if recent_fights:
+            pts = min(24.0, recent_fights * 6.0)
+            drivers.append({"label": f"Fights recently ({recent_fights})",
+                            "points": round(pts, 1)})
+            t += pts
+        if recent_pim:
+            pts = min(15.0, recent_pim * 0.3)
+            drivers.append({"label": f"Penalty minutes recently ({recent_pim})",
+                            "points": round(pts, 1)})
+            t += pts
         # Recent wounds decay -- last game matters, two months ago barely does.
         for inc in incidents:
             w = INCIDENT_WEIGHTS.get(inc.get("kind"), 0)
             if not w:
                 continue
             ago = inc.get("games_ago", _incident_games_ago(inc))
-            t += w * (0.75 ** max(0.0, ago))
+            pts = w * (0.75 ** max(0.0, ago))
+            if pts >= 0.5:
+                ilabel = INCIDENT_LABELS.get(inc.get("kind"), inc.get("kind"))
+                drivers.append({"label": f"{ilabel} ({int(ago)} games ago)",
+                                "points": round(pts, 1)})
+            t += pts
         if is_playoff:
-            t += 15 + max(0, series_game) * 2
-        return round(min(100.0, t), 1)
+            pts = 15 + max(0, series_game) * 2
+            drivers.append({"label": f"Playoff stakes (game {series_game or 1})",
+                            "points": round(pts, 1)})
+            t += pts
+        # Baseline: two NHL teams, pride on the line -- always some heat.
+        drivers.append({"label": "Pride on the line", "points": 8.0})
+        t += 8.0
+        # Personnel: chippy rooms run hotter; clean rooms cool it down.
+        chip = (_roster_chippiness(getattr(home_team, "roster", []))
+                + _roster_chippiness(getattr(away_team, "roster", []))) / 2.0
+        if chip >= 55:
+            pts = round(min(10.0, (chip - 50) * 0.4), 1)
+            drivers.append({"label": "Chippy personnel", "points": pts})
+            t += pts
+        elif chip >= 40:
+            pts = round((chip - 35) * 0.25, 1)
+            drivers.append({"label": "Edgy personnel", "points": pts})
+            t += pts
+        elif chip <= 30:
+            drivers.append({"label": "Clean, professional matchup", "points": -2.0})
+            t -= 2.0
+        if not incidents and rivalry_pts == 0:
+            drivers.append({"label": "No recent bad blood", "points": -1.0})
+            t -= 1.0
+        tension = round(min(100.0, max(0.0, t)), 1)
+        drivers.sort(key=lambda d: -abs(d["points"]))
+        return {"tension": tension, "drivers": drivers}
     except Exception:
-        return 0.0
+        return {"tension": 0.0, "drivers": []}
+
+
+def game_tension(home_team: Any, away_team: Any, rivalries: list,
+                 is_playoff: bool = False, series_game: int = 0,
+                 recent_fights: int = 0, recent_pim: int = 0,
+                 extra_incidents: Optional[List[Dict[str, Any]]] = None) -> float:
+    """0-100: how much bad blood is in the building tonight."""
+    return game_tension_breakdown(
+        home_team, away_team, rivalries, is_playoff=is_playoff,
+        series_game=series_game, recent_fights=recent_fights,
+        recent_pim=recent_pim,
+        extra_incidents=extra_incidents)["tension"]
 
 
 # ---------------------------------------------------------------------------

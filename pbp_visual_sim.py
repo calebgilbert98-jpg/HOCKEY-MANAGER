@@ -21,6 +21,10 @@ from tkinter import ttk
 
 from game_classes import PlayerPosition
 from simulation import GameSim
+try:
+    import reputation_system as _reputation
+except Exception:
+    _reputation = None
 
 # ----------------------------------------------------------------------------
 # Theme (matches app dark theme; square corners everywhere, pills on buttons)
@@ -346,7 +350,8 @@ class PBPVisualSim(tk.Toplevel):
     _FO_TOTAL = _FO_WHISTLE + _FO_LINEUP + _FO_SET + _FO_DROP
 
     def __init__(self, parent, sim, home_team, away_team,
-                 home_line=None, away_line=None, on_complete=None):
+                 home_line=None, away_line=None, on_complete=None,
+                 rivalries=None, is_playoff=False, series_game=0):
         super().__init__(parent)
         self.title(f"Live Sim — {home_team.team_name} vs {away_team.team_name}")
         self.configure(bg=BG)
@@ -360,6 +365,18 @@ class PBPVisualSim(tk.Toplevel):
         self.away_line = away_line or _best_line(away_team)
         self.on_complete = on_complete  # called once (on UI thread) when game_end plays
         self._complete_fired = False
+
+        # -- game intensity (tension) meter: pre-game drivers from the
+        #    rivalry/personality engine, plus live in-game moments --
+        self._tension_live = []  # in-game contributors: {"label", "points"}
+        self._tension_open = False
+        try:
+            self._tension_base = _reputation.game_tension_breakdown(
+                home_team, away_team, rivalries or [],
+                is_playoff=is_playoff,
+                series_game=series_game) if _reputation else {"tension": 0.0, "drivers": []}
+        except Exception:
+            self._tension_base = {"tension": 0.0, "drivers": []}
 
         # -- event stream state --
         self.events = []          # filled by sim thread via listener
@@ -572,6 +589,25 @@ class PBPVisualSim(tk.Toplevel):
         tk.Label(prow, textvariable=self.prob_var, bg=BG, fg=TEXT,
                  font=(FONT, 10, "bold"), width=5).pack(side="left", padx=(6, 0))
 
+        # Game intensity (tension) meter, next to win probability.
+        # Click it to expand the list of factors driving the rating.
+        tensf = tk.Frame(top, bg=BG)
+        tensf.pack(side="left", padx=(18, 0))
+        tk.Label(tensf, text="INTENSITY", bg=BG, fg=MUTED,
+                 font=(FONT, 8, "bold")).pack(anchor="w")
+        trow = tk.Frame(tensf, bg=BG)
+        trow.pack()
+        self.tension_canvas = tk.Canvas(trow, width=150, height=14, bg="#23262e",
+                                        highlightthickness=0, bd=0, cursor="hand2")
+        self.tension_canvas.pack(side="left")
+        self.tension_var = tk.StringVar(value="–")
+        self.tension_num = tk.Label(trow, textvariable=self.tension_var, bg=BG,
+                                    fg=TEXT, font=(FONT, 10, "bold"), width=5,
+                                    cursor="hand2")
+        self.tension_num.pack(side="left", padx=(6, 0))
+        for _w in (tensf, trow, self.tension_canvas, self.tension_num):
+            _w.bind("<Button-1>", lambda e: self._toggle_tension_panel())
+
         tk.Label(top, text="LIVE SIM", bg=ACCENT, fg="white",
                  font=(FONT, 10, "bold"), padx=8, pady=2).pack(side="right", padx=12)
 
@@ -605,8 +641,21 @@ class PBPVisualSim(tk.Toplevel):
         self.mom_canvas.pack(fill="x")
         self.mom_canvas.bind("<Configure>", lambda e: self._draw_momentum())
 
+        # Intensity breakdown panel (hidden until the meter is clicked).
+        # Lists every factor driving the rating, + heating / - cooling.
+        self.tension_panel = tk.Frame(self, bg=CONTENT_BG)
+        tph = tk.Frame(self.tension_panel, bg=CONTENT_BG)
+        tph.pack(fill="x", padx=14, pady=(4, 0))
+        tk.Label(tph, text="WHAT'S DRIVING THE INTENSITY", bg=CONTENT_BG,
+                 fg=MUTED, font=(FONT, 8, "bold")).pack(side="left")
+        tk.Label(tph, text="click the meter to hide", bg=CONTENT_BG, fg=MUTED,
+                 font=(FONT, 8)).pack(side="right")
+        self.tension_list = tk.Frame(self.tension_panel, bg=CONTENT_BG)
+        self.tension_list.pack(fill="x", padx=14, pady=(0, 4))
+
         # Main split
         main = tk.Frame(self, bg=BG)
+        self._main_frame = main
         main.pack(fill="both", expand=True, padx=10, pady=4)
 
         # Rink canvas (940x400 @ 4.7 px/ft)
@@ -2970,6 +3019,13 @@ class PBPVisualSim(tk.Toplevel):
                 down_gs = 1.5 if ev.get("result") == "turnover_caused" else 1.0
                 t["knockdown_until"] = self._now() + down_gs
                 t["tx"], t["ty"] = t["x"], t["y"]  # stay where he fell
+                # Big hits raise the temperature in the building.
+                try:
+                    self._tension_add(
+                        f"Big hit: {self._pname(ev.get('hitting_player'))} "
+                        f"on {self._pname(ev.get('target_player'))}", 3.0)
+                except Exception:
+                    pass
 
     def _spawn_burst(self, x, y, color="#ffd166"):
         items = []
@@ -3032,6 +3088,13 @@ class PBPVisualSim(tk.Toplevel):
                 f"{self._pname(ev.get('player'))} — {mins} min for "
                 f"{ev.get('infraction', 'a foul')}",
                 color=ACCENT if home else AWAY_COLOR)
+        # Majors heat the game up.
+        if mins >= 5:
+            try:
+                self._tension_add(
+                    f"Major penalty: {self._pname(ev.get('player'))}", 4.0)
+            except Exception:
+                pass
 
     def _release_penalties(self):
         """Unhide dots whose penalties expired on the game clock."""
@@ -3077,6 +3140,11 @@ class PBPVisualSim(tk.Toplevel):
             self._banner_show("fight", "FIGHT!",
                               self._pname(ev.get("player")), color="#ff8a5c")
             self._shake(mag=4.0, dur=0.5)
+        # Fights spike the intensity.
+        try:
+            self._tension_add(f"Fight: {self._pname(ev.get('player'))}", 6.0)
+        except Exception:
+            pass
 
     def _on_shootout_attempt(self, ev):
         shooter = ev.get("shooter")
@@ -3160,6 +3228,7 @@ class PBPVisualSim(tk.Toplevel):
         self._winprob = self._calc_winprob(hs, aws)
         self.prob_var.set(f"{int(round(self._winprob * 100))}%")
         self._draw_winprob()
+        self._draw_tension()
 
     def _calc_winprob(self, hs, aws):
         """Home win probability: score lead + shot tilt, time-weighted."""
@@ -3249,6 +3318,109 @@ class PBPVisualSim(tk.Toplevel):
                       fill=ACCENT, font=(FONT, 8, "bold"))
         c.create_text(W - 4, H / 2, text=aab, anchor="e",
                       fill=AWAY_COLOR, font=(FONT, 8, "bold"))
+
+    # ------------------------------------------------------------------
+    # Game intensity (tension) meter
+    # ------------------------------------------------------------------
+
+    def _tension_value(self):
+        """Current 0-100 intensity: pre-game drivers + live moments."""
+        try:
+            v = float(self._tension_base.get("tension", 0.0))
+            v += sum(float(d.get("points", 0)) for d in self._tension_live)
+            return max(0.0, min(100.0, round(v, 1)))
+        except Exception:
+            return 0.0
+
+    def _tension_add(self, label, points):
+        """Log an in-game moment as a live intensity contributor."""
+        try:
+            self._tension_live.append({"label": label,
+                                       "points": round(float(points), 1)})
+            if len(self._tension_live) > 12:
+                self._tension_live.pop(0)
+            self._draw_tension()
+            if self._tension_open:
+                self._render_tension_panel()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _tension_color(v):
+        if v >= 75:
+            return "#ff6b6b"
+        if v >= 50:
+            return "#ff9f5c"
+        if v >= 25:
+            return "#ffd166"
+        return "#7bc96f"
+
+    @staticmethod
+    def _tension_mood(v):
+        if v >= 75:
+            return "BOILING"
+        if v >= 50:
+            return "CHIPPY"
+        if v >= 25:
+            return "HEATING"
+        return "CALM"
+
+    def _draw_tension(self):
+        c = getattr(self, "tension_canvas", None)
+        if c is None:
+            return
+        try:
+            W, H = int(c["width"]), int(c["height"])
+        except Exception:
+            return
+        v = self._tension_value()
+        c.delete("all")
+        c.create_rectangle(0, 0, W * v / 100.0, H,
+                           fill=self._tension_color(v), outline="")
+        c.create_text(W / 2, H / 2, text=self._tension_mood(v),
+                      fill="#0e0e11", font=(FONT, 8, "bold"))
+        try:
+            self.tension_var.set(f"{int(round(v))}")
+        except Exception:
+            pass
+
+    def _toggle_tension_panel(self):
+        try:
+            self._tension_open = not self._tension_open
+            if self._tension_open:
+                self._render_tension_panel()
+                self.tension_panel.pack(fill="x", padx=10, pady=(0, 4),
+                                        before=self._main_frame)
+            else:
+                self.tension_panel.pack_forget()
+        except Exception:
+            pass
+
+    def _render_tension_panel(self):
+        lst = getattr(self, "tension_list", None)
+        if lst is None:
+            return
+        for w in lst.winfo_children():
+            w.destroy()
+        drivers = (list(self._tension_base.get("drivers", []))
+                   + list(self._tension_live))
+        drivers.sort(key=lambda d: -abs(d.get("points", 0)))
+        if not drivers:
+            tk.Label(lst, text="No intensity data for this game.",
+                     bg=CONTENT_BG, fg=MUTED,
+                     font=(FONT, 9)).pack(anchor="w", padx=4)
+            return
+        for d in drivers[:14]:
+            pts = d.get("points", 0)
+            row = tk.Frame(lst, bg=CONTENT_BG)
+            row.pack(fill="x", padx=4)
+            fg = "#ff9f5c" if pts > 0 else "#7bc96f"
+            sign = "+" if pts > 0 else ""
+            tk.Label(row, text=f"{sign}{pts:g}", bg=CONTENT_BG, fg=fg,
+                     font=(FONT, 9, "bold"), width=7,
+                     anchor="e").pack(side="left")
+            tk.Label(row, text=d.get("label", ""), bg=CONTENT_BG, fg=TEXT,
+                     font=(FONT, 9), anchor="w").pack(side="left", padx=(8, 0))
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
@@ -3880,18 +4052,23 @@ class PBPVisualSim(tk.Toplevel):
 # ----------------------------------------------------------------------------
 # Entry point
 # ----------------------------------------------------------------------------
-def open_pbp_window(parent, home_team, away_team, on_complete=None):
+def open_pbp_window(parent, home_team, away_team, on_complete=None,
+                    rivalries=None, is_playoff=False, series_game=0):
     """Open the visual play-by-play simulator for a game.
 
     parent: tk widget (usually the main app root)
     home_team, away_team: Team objects with full rosters
     on_complete: optional callable(sim) fired once on the UI thread when the
         final whistle plays, so the host app can process the result.
+    rivalries: optional list of rivalry records (league.rivalries) so the
+        intensity meter can account for bad blood between the clubs.
     Returns the PBPVisualSim window. Does not block.
     """
     sim = GameSim(home_team, away_team)
     win = PBPVisualSim(parent, sim, home_team, away_team,
                        home_line=_best_line(home_team),
                        away_line=_best_line(away_team),
-                       on_complete=on_complete)
+                       on_complete=on_complete,
+                       rivalries=rivalries, is_playoff=is_playoff,
+                       series_game=series_game)
     return win

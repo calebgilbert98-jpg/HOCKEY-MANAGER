@@ -8752,7 +8752,9 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
 
-        win = open_pbp_window(self, home_team, away_team, on_complete=_on_done)
+        win = open_pbp_window(self, home_team, away_team, on_complete=_on_done,
+                              rivalries=getattr(getattr(self, "league", None),
+                                                "rivalries", []))
         win_ref['win'] = win
         # Prevent closing before the sim finishes: the result is needed below.
         # (Re-enabled by _on_done when game_end plays.)
