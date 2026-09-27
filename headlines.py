@@ -203,8 +203,21 @@ def human_teams(app):
     if claimed:
         gm = getattr(app, "game_manager", None)
         league = getattr(gm, "league", None) or getattr(app, "league", None)
+        # Match claimed ids against every plausible team identifier (full
+        # name, abbreviation, short name, id), case-insensitively. A claim
+        # is a claim no matter which id format the lobby hands out, so a
+        # future lobby change can never silently drop a human manager
+        # from headline fan-out.
+        wanted = {str(c).strip().lower() for c in claimed if c}
         for t in getattr(league, "teams", []) or []:
-            if _team_name(t) in claimed:
+            ids = {
+                str(_team_name(t)).strip().lower(),
+                str(getattr(t, "abbreviation", "") or "").strip().lower(),
+                str(getattr(t, "name", "") or "").strip().lower(),
+                str(getattr(t, "id", "") or "").strip().lower(),
+            }
+            ids.discard("")
+            if ids & wanted:
                 _add(t)
     return teams
 

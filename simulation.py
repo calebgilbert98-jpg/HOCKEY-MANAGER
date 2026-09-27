@@ -4783,9 +4783,14 @@ class GameSim:
             _seff = _imp.save_effects(save_impact)
             if _seff["heat"]:
                 self._live_heat = min(40.0, self._live_heat + _seff["heat"])
-            if save_impact == 2 and defending_team is not None and _seff["momentum"]:
-                _imp.nudge_momentum(self, defending_team, _seff["momentum"])
             _story = _imp.story_worthy(save_impact, goalie, _sctx)
+            if save_impact == 2 and _story and defending_team is not None \
+                    and _seff["momentum"]:
+                # Momentum only moves at story moments -- a big save by a
+                # star, at a key moment, or by a goalie having a special
+                # night. Routine big stops stay quiet so the moment keeps
+                # its meaning (mirrors the hit path's story gating).
+                _imp.nudge_momentum(self, defending_team, _seff["momentum"])
             _freeze_mult = _seff["freeze_mult"]
         except Exception:
             _story = False

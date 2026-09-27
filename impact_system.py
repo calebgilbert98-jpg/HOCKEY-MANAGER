@@ -58,6 +58,13 @@ class ImpactContext:
     coach: Any = None
     team: Any = None
     scoring_mult: float = 1.0      # game difficulty (existing scoring level)
+    # "Special night" counters: what the actor has done *in this game*.
+    # A player with 2 goals / 3 points, or a goalie standing on his head
+    # with 25+ saves, has earned the broadcast treatment for his next big
+    # moment -- the story is the man, not just the moment.
+    game_goals: int = 0
+    game_points: int = 0
+    game_saves: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -373,12 +380,21 @@ def _key_moment(ctx: ImpactContext) -> bool:
 
 def story_worthy(tier: int, actor: Any, ctx: ImpactContext) -> bool:
     """A big moment earns the broadcast treatment only when the moment or
-    the man demands it: key moments, or genuine impact players in a
-    close game. Everything else is just a good play, not a story."""
+    the man demands it: key moments, genuine impact players in a close
+    game, or a player having a special night (2+ goals / 3+ points for a
+    skater, 25+ saves for a goalie). Everything else is just a good play,
+    not a story."""
     if tier != BIG:
         return False
     if _key_moment(ctx):
         return True
+    # Special night: the man's performance tonight demands the spotlight,
+    # regardless of reputation.
+    try:
+        if ctx.game_goals >= 2 or ctx.game_points >= 3 or ctx.game_saves >= 25:
+            return True
+    except Exception:
+        pass
     try:
         ov = _overall(actor)
         if ov >= 88 and abs(ctx.score_diff) <= 2:
@@ -496,6 +512,15 @@ def build_context(sim: Any, actor: Any, team: Any) -> ImpactContext:
     ctx.team = team
     try:
         ctx.scoring_mult = float(getattr(sim, "scoring_multiplier", 1.0) or 1.0)
+    except Exception:
+        pass
+    # Special-night counters from this game's stats (all defensive).
+    try:
+        gs = getattr(sim, "game_stats", {}) or {}
+        st = gs.get(getattr(actor, "id", None), {}) or {}
+        ctx.game_goals = int(st.get("g", 0) or 0)
+        ctx.game_points = int(st.get("g", 0) or 0) + int(st.get("a", 0) or 0)
+        ctx.game_saves = int(st.get("saves", 0) or 0)
     except Exception:
         pass
     return ctx

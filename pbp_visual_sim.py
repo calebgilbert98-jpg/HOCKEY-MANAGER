@@ -84,46 +84,49 @@ _GOAL_T = [
     "GOAL! {S} finishes it off{how}{ast}! {score}",
     "GOAL! What a finish by {S}{how}{ast}! {score}",
 ]
+# Feed templates: written for a radio-broadcaster read -- clear
+# subject-verb-object, plain words, no insider jargon. Names come from
+# _pname() ("#43 Gomez") and every line is prefixed with the game clock.
 _SAVE_T = [
-    "Save! {G} stones {S}{how}.",
-    "{G} flashes the leather on {S}!",
-    "{S} denied by {G}{how}.",
-    "What a stop! {G} robs {S}.",
-    "{G} holds his ground against {S}.",
+    "Save by {G} — {S} denied{how}.",
+    "{G} makes the stop on {S}{how}.",
+    "{S} can't beat {G}{how}.",
+    "{G} shuts the door on {S}{how}.",
+    "Big save! {G} turns away {S}{how}.",
 ]
 _BLOCK_T = [
-    "{B} gets in the lane to block {S}.",
-    "Blocked! {B} sacrifices the body in front of {S}.",
     "{B} blocks the shot from {S}.",
+    "Blocked! {B} steps in front of {S}.",
+    "{B} sacrifices the body to block {S}.",
 ]
 _MISS_T = [
     "{S} misses the net.",
     "{S} fires wide of the goal.",
     "{S} rings one off the post!",
-    "{S} can't hit the net{how}.",
+    "{S} can't find the target{how}.",
 ]
 _FACEOFF_T = [
-    "Faceoff ({zone}): {W} wins the draw.",
+    "Faceoff ({zone}): {W} wins it.",
     "{W} wins the faceoff cleanly.",
-    "{W} beats his man on the draw ({zone}).",
+    "{W} wins the draw ({zone}).",
     "{W} wins it back for his team.",
 ]
 _HIT_T = [
     "{H} levels {T} with a {ht}.",
-    "Big hit! {H} on {T}.",
-    "{H} finishes the check on {T}.",
-    "{H} sends {T} into the boards.",
+    "Big hit! {H} catches {T}.",
+    "{H} finishes his check on {T}.",
+    "{H} drives {T} into the boards.",
 ]
 _PASS_T = [
-    "{P} to {R}, tape-to-tape{extra}.",
-    "{P} finds {R} in stride{extra}.",
-    "{P} dishes to {R}{extra}.",
-    "{P} threads one to {R}{extra}.",
+    "{P} to {R}{extra}.",
+    "{P} finds {R}{extra}.",
+    "{P} moves it ahead to {R}{extra}.",
+    "{P} connects with {R}{extra}.",
 ]
 _BATTLE_T = [
     "{W} digs the puck free along the boards.",
     "{W} comes out of the scrum with the puck.",
-    "{W} wins the battle and takes possession.",
+    "{W} wins the battle for the puck.",
 ]
 _PENALTY_T = [
     "Penalty: {m} min to {P} ({team}) for {inf}.",
@@ -132,7 +135,7 @@ _PENALTY_T = [
 ]
 _FIGHT_T = [
     "Fight! {P} drops the gloves!",
-    "They're going! {P} in a tilt at center ice.",
+    "They're going! {P} in a fight at center ice.",
 ]
 _ICING_T = [
     "Icing against {team}.",
@@ -142,6 +145,68 @@ _OFFSIDE_T = [
     "Offside — play whistled down.",
     "Offside against {team}.",
 ]
+
+# ----------------------------------------------------------------------------
+# EHM-style presentation detail: how much of the game gets the full on-ice
+# treatment. "full" animates everything; "extended" keeps the feed for
+# routine puck movement; "key" animates only the moments that matter;
+# "text" is a pure text broadcast (rink hidden, feed only).
+# ----------------------------------------------------------------------------
+DETAIL_MODES = ("full", "extended", "key", "text")
+DETAIL_LABELS = {"full": "Full Game", "extended": "Extended",
+                 "key": "Key Moments", "text": "Text Only"}
+# Event types that always earn on-ice treatment in key-moment mode.
+_DETAIL_HIGHLIGHT_TYPES = {
+    "game_start", "period_start", "period_end", "game_end",
+    "goal", "penalty", "fight", "line_brawl", "penalty_shot",
+    "shootout", "shootout_end", "goalie_pulled",
+}
+# Event types demoted to feed-only lines in extended mode (routine play).
+_DETAIL_EXTENDED_ROUTINE = {
+    "pass", "skate", "battle", "dump", "carry", "takeaway",
+    "line_change", "faceoff",
+}
+
+
+def _detail_prefs_path():
+    try:
+        import os
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "settings.json")
+    except Exception:
+        return "settings.json"
+
+
+def _load_detail_pref():
+    """Sticky EHM-style detail preference (visualizer_detail). Defensive:
+    any failure returns 'full'."""
+    try:
+        import json
+        with open(_detail_prefs_path(), "r", encoding="utf-8") as f:
+            pref = (json.load(f).get("ui_preferences") or {}
+                    ).get("visualizer_detail", "full")
+        return pref if pref in DETAIL_MODES else "full"
+    except Exception:
+        return "full"
+
+
+def _save_detail_pref(mode):
+    """Persist the detail preference. Best-effort, never raises."""
+    try:
+        import json
+        import os
+        p = _detail_prefs_path()
+        data = {}
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+        ui = data.get("ui_preferences") or {}
+        ui["visualizer_detail"] = mode
+        data["ui_preferences"] = ui
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
 
 try:
     from modern_widgets import RoundedButton
@@ -388,6 +453,12 @@ class PBPVisualSim(tk.Toplevel):
         self.hold_until = 0.0     # real-time hold (goal celebrations)
         self.closed = False
 
+        # -- EHM-style presentation detail: full / extended / key / text --
+        self.detail_mode = _load_detail_pref()
+        if self.detail_mode not in DETAIL_MODES:
+            self.detail_mode = "full"
+        self._detail_btns = {}
+
         # -- momentum (recent shots/goals/fights, last ~10 per team) --
         self._mom = {"home": deque(maxlen=10), "away": deque(maxlen=10)}
         self._mom_dirty = True
@@ -548,11 +619,13 @@ class PBPVisualSim(tk.Toplevel):
     def _pill(self, parent, text, command, w=86, padx=3):
         if RoundedButton is not None:
             b = RoundedButton(parent, text=text, command=command, width=w,
-                              height=30, bg="#232E44", fg=TEXT)
+                              height=34, bg="#232E44", fg=TEXT,
+                              font=(FONT, 11, "bold"))
             b.pack(side="left", padx=padx)
             return b
         b = tk.Button(parent, text=text, command=command, bg="#1B2637",
-                      fg=TEXT, relief="flat", padx=10, pady=4)
+                      fg=TEXT, font=(FONT, 11, "bold"), relief="flat",
+                      padx=10, pady=6)
         b.pack(side="left", padx=padx)
         return b
 
@@ -563,53 +636,53 @@ class PBPVisualSim(tk.Toplevel):
         bug = tk.Frame(top, bg="#16161a")
         bug.pack(side="left")
         tk.Label(bug, text=_abbr(self.home_team.team_name), bg=ACCENT,
-                 fg="#0e0e11", font=(FONT, 13, "bold"),
+                 fg="#0e0e11", font=(FONT, 14, "bold"),
                  padx=10, pady=6).pack(side="left")
         self.score_var = tk.StringVar(value="0 – 0")
         tk.Label(bug, textvariable=self.score_var, bg="#16161a", fg="white",
-                 font=(FONT, 16, "bold"), padx=10).pack(side="left")
+                 font=(FONT, 18, "bold"), padx=10).pack(side="left")
         tk.Label(bug, text=_abbr(self.away_team.team_name), bg=AWAY_COLOR,
-                 fg="#0e0e11", font=(FONT, 13, "bold"),
+                 fg="#0e0e11", font=(FONT, 14, "bold"),
                  padx=10, pady=6).pack(side="left")
         self.clock_var = tk.StringVar(value="P1 20:00")
         tk.Label(bug, textvariable=self.clock_var, bg="#23262e", fg=ACCENT,
-                 font=(FONT, 13, "bold"), padx=10, pady=6).pack(side="left")
+                 font=(FONT, 14, "bold"), padx=10, pady=6).pack(side="left")
 
         # Win probability (home perspective), next to the bug
         probf = tk.Frame(top, bg=BG)
         probf.pack(side="left", padx=(18, 0))
-        tk.Label(probf, text="WIN PROB", bg=BG, fg=MUTED,
-                 font=(FONT, 8, "bold")).pack(anchor="w")
+        tk.Label(probf, text="WIN PROB", bg=BG, fg="#AEB6C8",
+                 font=(FONT, 10, "bold")).pack(anchor="w")
         prow = tk.Frame(probf, bg=BG)
         prow.pack()
-        self.prob_canvas = tk.Canvas(prow, width=150, height=14, bg="#23262e",
+        self.prob_canvas = tk.Canvas(prow, width=150, height=16, bg="#23262e",
                                      highlightthickness=0, bd=0)
         self.prob_canvas.pack(side="left")
         self.prob_var = tk.StringVar(value="50%")
         tk.Label(prow, textvariable=self.prob_var, bg=BG, fg=TEXT,
-                 font=(FONT, 10, "bold"), width=5).pack(side="left", padx=(6, 0))
+                 font=(FONT, 12, "bold"), width=5).pack(side="left", padx=(6, 0))
 
         # Game intensity (tension) meter, next to win probability.
         # Click it to expand the list of factors driving the rating.
         tensf = tk.Frame(top, bg=BG)
         tensf.pack(side="left", padx=(18, 0))
-        tk.Label(tensf, text="INTENSITY", bg=BG, fg=MUTED,
-                 font=(FONT, 8, "bold")).pack(anchor="w")
+        tk.Label(tensf, text="INTENSITY", bg=BG, fg="#AEB6C8",
+                 font=(FONT, 10, "bold")).pack(anchor="w")
         trow = tk.Frame(tensf, bg=BG)
         trow.pack()
-        self.tension_canvas = tk.Canvas(trow, width=150, height=14, bg="#23262e",
+        self.tension_canvas = tk.Canvas(trow, width=150, height=16, bg="#23262e",
                                         highlightthickness=0, bd=0, cursor="hand2")
         self.tension_canvas.pack(side="left")
         self.tension_var = tk.StringVar(value="–")
         self.tension_num = tk.Label(trow, textvariable=self.tension_var, bg=BG,
-                                    fg=TEXT, font=(FONT, 10, "bold"), width=5,
+                                    fg=TEXT, font=(FONT, 12, "bold"), width=5,
                                     cursor="hand2")
         self.tension_num.pack(side="left", padx=(6, 0))
         for _w in (tensf, trow, self.tension_canvas, self.tension_num):
             _w.bind("<Button-1>", lambda e: self._toggle_tension_panel())
 
         tk.Label(top, text="LIVE SIM", bg=ACCENT, fg="white",
-                 font=(FONT, 10, "bold"), padx=8, pady=2).pack(side="right", padx=12)
+                 font=(FONT, 11, "bold"), padx=8, pady=2).pack(side="right", padx=12)
 
         # Slim bar under the scoreboard: on-ice units, momentum, next moment
         sub = tk.Frame(self, bg=CONTENT_BG)
@@ -617,16 +690,16 @@ class PBPVisualSim(tk.Toplevel):
 
         units = tk.Frame(sub, bg=CONTENT_BG)
         units.pack(side="left")
-        tk.Label(units, text="ON ICE", bg=CONTENT_BG, fg=MUTED,
-                 font=(FONT, 8, "bold")).pack(anchor="w", padx=4)
+        tk.Label(units, text="ON ICE", bg=CONTENT_BG, fg="#AEB6C8",
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=4)
         urow = tk.Frame(sub, bg=CONTENT_BG)
         urow.pack(side="left", padx=(4, 0))
         self.units_home_var = tk.StringVar(value="–")
         self.units_away_var = tk.StringVar(value="–")
         tk.Label(urow, textvariable=self.units_home_var, bg=CONTENT_BG,
-                 fg=ACCENT, font=(FONT, 10, "bold")).pack(side="left", padx=(0, 14))
+                 fg=ACCENT, font=(FONT, 12, "bold")).pack(side="left", padx=(0, 14))
         tk.Label(urow, textvariable=self.units_away_var, bg=CONTENT_BG,
-                 fg=AWAY_COLOR, font=(FONT, 10, "bold")).pack(side="left")
+                 fg=AWAY_COLOR, font=(FONT, 12, "bold")).pack(side="left")
 
         btnf = tk.Frame(sub, bg=CONTENT_BG)
         btnf.pack(side="right", padx=4)
@@ -634,8 +707,8 @@ class PBPVisualSim(tk.Toplevel):
 
         momf = tk.Frame(sub, bg=CONTENT_BG)
         momf.pack(side="left", fill="x", expand=True, padx=14)
-        tk.Label(momf, text="MOMENTUM", bg=CONTENT_BG, fg=MUTED,
-                 font=(FONT, 8, "bold")).pack(anchor="w")
+        tk.Label(momf, text="MOMENTUM", bg=CONTENT_BG, fg="#AEB6C8",
+                 font=(FONT, 10, "bold")).pack(anchor="w")
         self.mom_canvas = tk.Canvas(momf, height=22, bg=CONTENT_BG,
                                     highlightthickness=0, bd=0)
         self.mom_canvas.pack(fill="x")
@@ -647,9 +720,9 @@ class PBPVisualSim(tk.Toplevel):
         tph = tk.Frame(self.tension_panel, bg=CONTENT_BG)
         tph.pack(fill="x", padx=14, pady=(4, 0))
         tk.Label(tph, text="WHAT'S DRIVING THE INTENSITY", bg=CONTENT_BG,
-                 fg=MUTED, font=(FONT, 8, "bold")).pack(side="left")
-        tk.Label(tph, text="click the meter to hide", bg=CONTENT_BG, fg=MUTED,
-                 font=(FONT, 8)).pack(side="right")
+                 fg="#AEB6C8", font=(FONT, 10, "bold")).pack(side="left")
+        tk.Label(tph, text="click the meter to hide", bg=CONTENT_BG, fg="#AEB6C8",
+                 font=(FONT, 10)).pack(side="right")
         self.tension_list = tk.Frame(self.tension_panel, bg=CONTENT_BG)
         self.tension_list.pack(fill="x", padx=14, pady=(0, 4))
 
@@ -663,10 +736,12 @@ class PBPVisualSim(tk.Toplevel):
         self.rink_w, self.rink_h = int(RINK_L * self.scale), int(RINK_W * self.scale)
         rink_frame = tk.Frame(main, bg=BG)
         rink_frame.pack(side="left", fill="both", expand=True)
+        self._rink_frame = rink_frame
         self.canvas = tk.Canvas(rink_frame, width=self.rink_w, height=self.rink_h,
                                 bg=RINK_SURROUND, highlightthickness=0, bd=0)
         self.canvas.pack(padx=4, pady=4)
         self.canvas.bind("<Button-1>", self._on_canvas_click)
+        rink_frame.bind("<Configure>", self._on_rink_frame_configure)
 
         # Live team-stats strip under the rink (Shots / Hits / Faceoffs / PIM)
         self.team_stats = {"home": {"Shots": 0, "Hits": 0, "FO": 0, "PIM": 0},
@@ -702,17 +777,31 @@ class PBPVisualSim(tk.Toplevel):
         tk.Label(gcell, textvariable=self._goalie_away_var, font=(FONT, 10, "bold"),
                  bg=CONTENT_BG, fg=AWAY_COLOR).pack(side="right", padx=(0, 10))
 
-        # Right panel: feed + controls
-        right = tk.Frame(main, bg=CONTENT_BG, width=300)
+        # Right panel: feed + controls (width adapts to the window; see
+        # _on_window_configure). Crucial details stay legible at any size.
+        right = tk.Frame(main, bg=CONTENT_BG, width=320)
         right.pack(side="right", fill="y", padx=(6, 0))
         right.pack_propagate(False)
+        self._right_panel = right
+        self._right_w = 320
+        self.bind("<Configure>", self._on_window_configure)
 
         tk.Label(right, text="PLAY BY PLAY", bg=CONTENT_BG, fg=ACCENT,
-                 font=(FONT, 11, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+                 font=(FONT, 13, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
 
         # Controls (packed before the feed so they always keep their space)
         ctl = tk.Frame(right, bg=CONTENT_BG)
         ctl.pack(side="bottom", fill="x", padx=8, pady=8)
+        # EHM-style detail selector: how much of the game plays out on ice.
+        drow = tk.Frame(ctl, bg=CONTENT_BG)
+        drow.pack(fill="x", pady=(0, 8))
+        tk.Label(drow, text="DETAIL", bg=CONTENT_BG, fg="#AEB6C8",
+                 font=(FONT, 10, "bold")).pack(side="left", padx=(2, 4))
+        for mode in DETAIL_MODES:
+            b = self._pill(drow, DETAIL_LABELS[mode],
+                           lambda m=mode: self._set_detail_mode(m), w=104)
+            self._detail_btns[mode] = b
+            self._refresh_toggle_btn(b, mode == self.detail_mode)
         self.play_btn = self._pill(ctl, "Pause", self._toggle_play, w=72)
         spd = tk.Frame(ctl, bg=CONTENT_BG)
         spd.pack(side="left", padx=2)
@@ -728,17 +817,18 @@ class PBPVisualSim(tk.Toplevel):
         self.sound_btn = self._pill(ctl, "Sound", self._toggle_sound, w=68)
         self._refresh_toggle_btn(self.sound_btn, self._sound_on)
 
-        self.feed = tk.Text(right, bg="#0D1420", fg=TEXT, font=(FONT, 10),
+        self.feed = tk.Text(right, bg="#0D1420", fg=TEXT, font=(FONT, 12),
                             wrap="word", relief="flat", highlightthickness=0,
-                            padx=8, pady=6, height=22)
+                            padx=10, pady=8, height=22, spacing1=2, spacing3=3)
         self.feed.pack(fill="both", expand=True, padx=8, pady=4)
-        self.feed.tag_config("goal", foreground="#7CFC98", font=(FONT, 10, "bold"))
-        self.feed.tag_config("period", foreground=ACCENT, font=(FONT, 10, "bold"))
-        self.feed.tag_config("penalty", foreground="#FFD166")
+        self.feed.tag_config("goal", foreground="#7CFC98", font=(FONT, 13, "bold"))
+        self.feed.tag_config("period", foreground=ACCENT, font=(FONT, 12, "bold"))
+        self.feed.tag_config("penalty", foreground="#FFD166", font=(FONT, 12, "bold"))
         self.feed.tag_config("shot", foreground="#9FD8FF")
-        self.feed.tag_config("fight", foreground="#FF8A5C", font=(FONT, 10, "bold"))
-        self.feed.tag_config("summary", foreground=ACCENT, font=(FONT, 11, "bold"))
-        self.feed.tag_config("info", foreground=MUTED)
+        self.feed.tag_config("fight", foreground="#FF8A5C", font=(FONT, 12, "bold"))
+        self.feed.tag_config("summary", foreground=ACCENT, font=(FONT, 13, "bold"))
+        self.feed.tag_config("big", foreground="#FFFFFF", font=(FONT, 12, "bold"))
+        self.feed.tag_config("info", foreground="#AEB6C8")
         self.feed.config(state="disabled")
 
         self._update_goalie_labels()
@@ -746,6 +836,79 @@ class PBPVisualSim(tk.Toplevel):
 
     def _toggle_cam(self):
         self._set_camera(not self._cam["on"])
+
+    def _set_detail_mode(self, mode):
+        """EHM-style presentation detail. Text mode hides the rink and runs
+        a fast text broadcast; key/extended filter per-event animation
+        through _feed_only(); full game is unchanged."""
+        if mode not in DETAIL_MODES:
+            return
+        self.detail_mode = mode
+        _save_detail_pref(mode)
+        for m, b in self._detail_btns.items():
+            try:
+                self._refresh_toggle_btn(b, m == mode)
+            except Exception:
+                pass
+        is_text = (mode == "text")
+        try:
+            if is_text:
+                self._rink_frame.pack_forget()
+                self._right_panel.pack_forget()
+                self._right_panel.pack(side="left", fill="both", expand=True,
+                                       padx=(10, 10))
+            else:
+                self._right_panel.pack_forget()
+                self._rink_frame.pack(side="left", fill="both", expand=True)
+                self._right_panel.pack(side="right", fill="y", padx=(6, 0))
+                self._right_panel.pack_propagate(False)
+                self._right_panel.configure(width=self._right_w)
+        except Exception:
+            pass
+        self._feed(f"Detail: {DETAIL_LABELS[mode]}.", tag="info")
+
+    # ------------------------------------------------------------------
+    # Responsive layout: legible from a 13" laptop to a big monitor.
+    # The feed panel takes a share of the window width; the rink
+    # shrink-to-fits its frame (never below a playable minimum).
+    # ------------------------------------------------------------------
+    def _on_window_configure(self, event):
+        # <Configure> bubbles up from children -- only the toplevel itself.
+        if event.widget is not self or self.detail_mode == "text":
+            return
+        try:
+            w = max(1, int(event.width))
+            target = min(480, max(300, int(w * 0.30)))
+            if abs(target - self._right_w) >= 20:
+                self._right_w = target
+                self._right_panel.configure(width=target)
+        except Exception:
+            pass
+
+    def _on_rink_frame_configure(self, event):
+        if event.widget is not getattr(self, "_rink_frame", None):
+            return
+        # Never rescale mid-animation: flights and the broadcast camera
+        # work in pixel space, and a rescale would visibly snap them.
+        if (getattr(self, "puck_flight", None) or getattr(self, "_replay", False)
+                or self._cam.get("on") or self.detail_mode == "text"):
+            return
+        try:
+            fw, fh = max(1, int(event.width)), max(1, int(event.height))
+            scale = min((fw - 12) / RINK_L, (fh - 12) / RINK_W, 4.7)
+            scale = max(2.6, scale)  # playable minimum
+            if abs(scale - self.scale) / self.scale < 0.04:
+                return
+            self.scale = scale
+            self.rink_w, self.rink_h = int(RINK_L * scale), int(RINK_W * scale)
+            self.canvas.configure(width=self.rink_w, height=self.rink_h)
+            self.canvas.delete("rink")
+            self._draw_rink()
+            for d in self.dots.values():
+                self._move_dot(d, d["x"], d["y"])
+            # the puck repositions itself on the next tick via X()/Y()
+        except Exception:
+            pass
 
     def _toggle_sound(self):
         self._sound_on = not self._sound_on
@@ -1612,7 +1775,46 @@ class PBPVisualSim(tk.Toplevel):
     # ------------------------------------------------------------------
     # Event application
     # ------------------------------------------------------------------
+    def _is_highlight(self, ev):
+        """Does this event earn on-ice treatment in key-moment mode?
+
+        Only structural events (goals, penalties, fights, period
+        boundaries) and story-gated big moments qualify. A big save or
+        hit that isn't story-worthy is, by the engine's own definition,
+        just a good play -- it gets a feed line, not the stage."""
+        et = ev.get("type")
+        if et in _DETAIL_HIGHLIGHT_TYPES:
+            return True
+        if ev.get("story"):  # story-gated big moments always qualify
+            return True
+        return False
+
+    def _feed_only(self, ev):
+        """EHM-style detail filter: True when this event should update the
+        scoreboard/stats and print its feed line, but skip all on-ice
+        animation (consumed via the instant path)."""
+        if self._instant:
+            return False
+        m = self.detail_mode
+        if m == "full":
+            return False
+        if m == "text":
+            return True
+        if m == "key":
+            return not self._is_highlight(ev)
+        return ev.get("type") in _DETAIL_EXTENDED_ROUTINE  # extended
+
     def _consume(self, ev):
+        if self._feed_only(ev):
+            prev, self._instant = self._instant, True
+            try:
+                self._consume_inner(ev)
+            finally:
+                self._instant = prev
+            return
+        self._consume_inner(ev)
+
+    def _consume_inner(self, ev):
         et = ev["type"]
         if et == "game_start":
             self._update_scoreboard(ev)
@@ -2045,7 +2247,7 @@ class PBPVisualSim(tk.Toplevel):
                 R=self._pname(ev.get("receiver")), extra=extra), ev=ev)
         else:
             self._feed(f"Pass by {self._pname(ev.get('passer'))} picked off by "
-                       f"{self._pname(ev.get('interceptor'))}!", tag="penalty", ev=ev)
+                       f"{self._pname(ev.get('interceptor'))}!", ev=ev)
 
     def _on_battle(self, ev):
         spot = ev.get("puck_spot") or (100.0, 42.5)
@@ -2401,7 +2603,10 @@ class PBPVisualSim(tk.Toplevel):
                     self._shake(mag=3.0, dur=0.35)
                 except Exception:
                     pass
-            self._feed(msg, ev=ev)
+            self._feed(msg,
+                       tag=("big" if (ev.get("impact") == "big"
+                                      and ev.get("story")) else None),
+                       ev=ev)
             side = self._player_side(ev.get("goalie"), ev, "defending_team")
             self._goalie_shot(side, goalie=ev.get("goalie"), scored=False)
             self._record_shotmap("save")
@@ -2981,7 +3186,9 @@ class PBPVisualSim(tk.Toplevel):
     # -- richer commentary helpers --------------------------------------
     def _goal_text(self, ev):
         S = self._pname(ev.get("shooter"))
-        score = f"{ev.get('home_score', 0)}-{ev.get('away_score', 0)}"
+        # Score always names the teams: "WPG 2, CAR 1" reads instantly.
+        score = (f"{_abbr(self.home_team.team_name)} {ev.get('home_score', 0)}, "
+                 f"{_abbr(self.away_team.team_name)} {ev.get('away_score', 0)}")
         if ev.get("empty_net"):
             return f"{S} scores into the EMPTY NET! {score}"
         ast = ev.get("assists") or []
@@ -3031,7 +3238,10 @@ class PBPVisualSim(tk.Toplevel):
         ht = ev.get("hit_type", "hit").replace("_", " ")
         self._feed(random.choice(_HIT_T).format(
             H=self._pname(ev.get("hitting_player")),
-            T=self._pname(ev.get("target_player")), ht=ht), ev=ev)
+            T=self._pname(ev.get("target_player")), ht=ht),
+            tag=("big" if (ev.get("impact") == "big"
+                            and ev.get("story")) else None),
+            ev=ev)
         # impact burst at the target; bigger hits shake the camera.
         # Prefer the engine's explicit impact tier; fall back to the old
         # heuristics for events from older engines.
@@ -3703,6 +3913,10 @@ class PBPVisualSim(tk.Toplevel):
         if (self.playing and now >= self.hold_until and self.events
                 and not self._faceoff_ceremony):
             eff = self._auto_speed() if self.auto_pace else self.speed
+            if self.detail_mode == "text":
+                # Text-only broadcast: the feed is the show -- run it fast
+                # enough to feel like a live wire, slow enough to read.
+                eff = max(eff, 1.0) * 25.0
             dt = self.TICK_DT * eff * self.GAME_RATE
             target = self.playhead + dt
             # don't run past un-simulated events; sim is fast so this rarely binds
