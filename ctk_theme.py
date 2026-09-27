@@ -1,0 +1,241 @@
+# ctk_theme.py
+# CustomTkinter theme setup + shared widgets for Puck Dynasty.
+# Call init_ctk_theme() once at startup before creating CTk windows.
+
+import os
+import sys
+
+import customtkinter as ctk
+
+# ---- Puck Dynasty palette (mirrors modern_ui.py) ----
+TEAL = "#00ceb8"
+TEAL_HOVER = "#00a896"
+TEAL_DARK = "#008f80"
+BG = "#0e0e11"          # window background
+PANEL = "#16161a"       # frames / panels
+CARD = "#1e1e24"        # cards, entry fields
+BORDER = "#2e2e38"      # subtle borders
+ROW_HOVER = "#26262e"
+ROW_SELECTED = "#0d2b28"
+TEXT = "#f4f4f5"
+TEXT_DIM = "#a1a1aa"
+TEXT_FAINT = "#71717a"
+GOLD = "#e8b93c"
+GREEN = "#3fb950"
+RED = "#e74c3c"
+BLUE = "#58a6ff"
+
+_THEME_APPLIED = False
+
+
+def _theme_path():
+    """Resolve assets/puck_dynasty_theme.json in dev tree and PyInstaller bundle."""
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "assets", "puck_dynasty_theme.json"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.join(here, "assets", "puck_dynasty_theme.json"))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def init_ctk_theme():
+    """Apply the Puck Dynasty CustomTkinter theme. Safe to call repeatedly."""
+    global _THEME_APPLIED
+    if _THEME_APPLIED:
+        return
+    ctk.set_appearance_mode("dark")
+    path = _theme_path()
+    if path:
+        try:
+            ctk.set_default_color_theme(path)
+        except Exception:
+            pass  # fall back to built-in dark-blue; widgets still get explicit colors
+    _THEME_APPLIED = True
+
+
+def primary_button(parent, text, command=None, **kw):
+    """Teal primary CTkButton."""
+    kw.setdefault("fg_color", TEAL)
+    kw.setdefault("hover_color", TEAL_HOVER)
+    kw.setdefault("text_color", BG)
+    kw.setdefault("corner_radius", 8)
+    kw.setdefault("font", ("Segoe UI", 12, "bold"))
+    return ctk.CTkButton(parent, text=text, command=command, **kw)
+
+
+def secondary_button(parent, text, command=None, **kw):
+    """Dark secondary CTkButton."""
+    kw.setdefault("fg_color", CARD)
+    kw.setdefault("hover_color", BORDER)
+    kw.setdefault("text_color", TEXT)
+    kw.setdefault("corner_radius", 8)
+    kw.setdefault("font", ("Segoe UI", 12))
+    return ctk.CTkButton(parent, text=text, command=command, **kw)
+
+
+def heading(parent, text, size=18, **kw):
+    kw.setdefault("font", ("Segoe UI", size, "bold"))
+    kw.setdefault("text_color", TEXT)
+    return ctk.CTkLabel(parent, text=text, **kw)
+
+
+def body(parent, text, size=12, dim=False, **kw):
+    kw.setdefault("font", ("Segoe UI", size))
+    kw.setdefault("text_color", TEXT_DIM if dim else TEXT)
+    return ctk.CTkLabel(parent, text=text, **kw)
+
+
+class CTkPlayerList(ctk.CTkScrollableFrame):
+    """Modern selectable player list — a CTk-native replacement for the
+    two-column (name / OVR) ttk.Treeview used in trade-style windows.
+
+    Usage:
+        lst = CTkPlayerList(parent)
+        lst.set_players(players)          # list of player objects
+        player = lst.get_selected()       # currently selected player or None
+        lst.set_players(...)              # re-populate (clears selection)
+    """
+
+    def __init__(self, parent, **kw):
+        kw.setdefault("fg_color", CARD)
+        kw.setdefault("corner_radius", 10)
+        super().__init__(parent, **kw)
+        self._players = []
+        self._rows = []          # (frame, player)
+        self._selected = None
+        self._selected_frame = None
+
+    def set_players(self, players):
+        for frame, _ in self._rows:
+            frame.destroy()
+        self._rows = []
+        self._players = list(players)
+        self._selected = None
+        self._selected_frame = None
+        for p in self._players:
+            self._add_row(p)
+
+    def _add_row(self, player):
+        row = ctk.CTkFrame(self, fg_color="transparent", corner_radius=6)
+        row.pack(fill="x", padx=4, pady=2)
+
+        name = getattr(player, "full_name", str(player))
+        try:
+            ovr = int(player.overall_rating())
+        except Exception:
+            ovr = 0
+        pos = ""
+        try:
+            pos = player.primary_position.name.replace("_", " ").title()
+        except Exception:
+            pass
+
+        name_lbl = ctk.CTkLabel(row, text=name, font=("Segoe UI", 12),
+                                text_color=TEXT, anchor="w")
+        name_lbl.pack(side="left", padx=(8, 4), pady=6)
+        if pos:
+            pos_lbl = ctk.CTkLabel(row, text=pos, font=("Segoe UI", 10),
+                                   text_color=TEXT_FAINT, anchor="w", width=90)
+            pos_lbl.pack(side="left", padx=4)
+
+        ovr_color = self._ovr_color(ovr)
+        ovr_lbl = ctk.CTkLabel(row, text=str(ovr), font=("Segoe UI", 12, "bold"),
+                               text_color=ovr_color, width=36, anchor="e")
+        ovr_lbl.pack(side="right", padx=8)
+
+        for w in (row, name_lbl, ovr_lbl):
+            w.bind("<Button-1>", lambda e, f=row, pl=player: self._select(f, pl))
+            w.bind("<Enter>", lambda e, f=row: self._hover(f, True))
+            w.bind("<Leave>", lambda e, f=row: self._hover(f, False))
+        self._rows.append((row, player))
+
+    @staticmethod
+    def _ovr_color(ovr):
+        if ovr >= 85:
+            return GREEN
+        if ovr >= 78:
+            return TEAL
+        if ovr >= 70:
+            return GOLD
+        return TEXT_DIM
+
+    def _hover(self, frame, on):
+        if frame is self._selected_frame:
+            return
+        frame.configure(fg_color=ROW_HOVER if on else "transparent")
+
+    def _select(self, frame, player):
+        if self._selected_frame is not None:
+            self._selected_frame.configure(fg_color="transparent")
+        self._selected = player
+        self._selected_frame = frame
+        frame.configure(fg_color=ROW_SELECTED)
+
+    def get_selected(self):
+        return self._selected
+
+    def clear_selection(self):
+        if self._selected_frame is not None:
+            self._selected_frame.configure(fg_color="transparent")
+        self._selected = None
+        self._selected_frame = None
+
+
+class CTkOfferList(ctk.CTkScrollableFrame):
+    """Selectable asset list for trade offer building (replaces tk.Listbox)."""
+
+    def __init__(self, parent, height=140, **kw):
+        kw.setdefault("fg_color", BG)
+        kw.setdefault("corner_radius", 8)
+        super().__init__(parent, height=height, **kw)
+        self._items = []        # (frame, label_text, payload_index)
+        self._selected_idx = None
+        self._selected_frame = None
+        self._empty_label = None
+
+    def set_items(self, labels):
+        """labels: list of display strings. Selection index maps 1:1."""
+        for frame, _, _ in self._items:
+            frame.destroy()
+        self._items = []
+        self._selected_idx = None
+        self._selected_frame = None
+        if self._empty_label is not None:
+            self._empty_label.destroy()
+            self._empty_label = None
+        if not labels:
+            self._empty_label = ctk.CTkLabel(
+                self, text="No assets added yet",
+                font=("Segoe UI", 11, "italic"), text_color=TEXT_FAINT)
+            self._empty_label.pack(padx=8, pady=8)
+            return
+        for i, text in enumerate(labels):
+            row = ctk.CTkFrame(self, fg_color="transparent", corner_radius=6)
+            row.pack(fill="x", padx=4, pady=1)
+            lbl = ctk.CTkLabel(row, text=text, font=("Segoe UI", 11),
+                               text_color=TEXT, anchor="w")
+            lbl.pack(side="left", padx=8, pady=4, fill="x", expand=True)
+            for w in (row, lbl):
+                w.bind("<Button-1>", lambda e, f=row, idx=i: self._select(f, idx))
+                w.bind("<Enter>", lambda e, f=row: self._hover(f, True))
+                w.bind("<Leave>", lambda e, f=row: self._hover(f, False))
+            self._items.append((row, text, i))
+
+    def _hover(self, frame, on):
+        if frame is self._selected_frame:
+            return
+        frame.configure(fg_color=ROW_HOVER if on else "transparent")
+
+    def _select(self, frame, idx):
+        if self._selected_frame is not None:
+            self._selected_frame.configure(fg_color="transparent")
+        self._selected_idx = idx
+        self._selected_frame = frame
+        frame.configure(fg_color=ROW_SELECTED)
+
+    def get_selected_index(self):
+        return self._selected_idx

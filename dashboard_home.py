@@ -10,9 +10,16 @@ import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
 
+import customtkinter as ctk
+
 from modern_ui import (
     AppColors, AppFonts, AppCard, StatCard,
-    PlayerRow, PillBadge, AppButton, apply_app_theme,
+    PlayerRow, PillBadge, apply_app_theme,
+)
+
+from ctk_theme import (
+    init_ctk_theme, TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+    TEXT, TEXT_DIM, TEXT_FAINT,
 )
 
 try:
@@ -23,68 +30,94 @@ except Exception:
                 5: "Okay", 4: "Okay", 3: "Poor", 2: "Poor"}.get(int(m), "Abysmal")
 
 
-class AppDropdown(ttk.Combobox):
+class AppDropdown(ctk.CTkComboBox):
     """Themed dropdown (combobox) matching the dark UI.
+
+    CTk-based replacement for the old ttk.Combobox version: rounded,
+    proper dark-mode dropdown list, teal selection. Keeps the same
+    constructor and get_value()/set_value() API.
 
     Use for view selectors (standings scope, leader category, schedule view).
     """
 
     def __init__(self, parent, values, initial=None, on_select=None, width=16):
-        self._var = tk.StringVar(value=initial or (values[0] if values else ""))
-        super().__init__(parent, textvariable=self._var, values=list(values),
-                         state="readonly", width=width,
-                         font=AppFonts.SMALL)
+        init_ctk_theme()
         self._on_select = on_select
-        self.bind("<<ComboboxSelected>>", self._handle_select)
-        self._style()
+        super().__init__(
+            parent,
+            values=list(values),
+            command=self._handle_select,
+            state="readonly",
+            width=max(120, int(width * 9)),
+            height=32,
+            corner_radius=8,
+            fg_color=CARD,
+            border_color=BORDER,
+            border_width=1,
+            button_color=CARD,
+            button_hover_color=BORDER,
+            dropdown_fg_color=CARD,
+            dropdown_hover_color=BORDER,
+            dropdown_text_color=TEXT,
+            text_color=TEXT,
+            font=("Segoe UI", 11),
+            dropdown_font=("Segoe UI", 11),
+        )
+        if initial:
+            self.set(initial)
+        elif values:
+            self.set(values[0])
 
-    def _style(self):
-        style = ttk.Style()
-        # Unique style name per instance to avoid clashes
-        name = f"AppDropdown_{id(self)}.TCombobox"
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-        style.configure(name,
-                        fieldbackground=AppColors.BG_ELEVATED,
-                        background=AppColors.BG_ELEVATED,
-                        foreground=AppColors.TEXT_PRIMARY,
-                        arrowcolor=AppColors.TEXT_SECONDARY,
-                        bordercolor=AppColors.BORDER,
-                        lightcolor=AppColors.BORDER,
-                        darkcolor=AppColors.BORDER,
-                        padding=6)
-        style.map(name,
-                  fieldbackground=[("readonly", AppColors.BG_ELEVATED),
-                                   ("disabled", AppColors.BG)],
-                  foreground=[("readonly", AppColors.TEXT_PRIMARY)],
-                  background=[("readonly", AppColors.BG_HOVER)],
-                  arrowcolor=[("readonly", AppColors.ACCENT)])
-        self.configure(style=name)
-        # Dropdown list colors
-        try:
-            self.tk.call("ttk::combobox::PopdownWindow", self)
-        except Exception:
-            pass
-        option = f"{self}._popdown.f.l"
-        try:
-            self.tk.call(option, "configure", "-background", AppColors.BG_ELEVATED,
-                         "-foreground", AppColors.TEXT_PRIMARY,
-                         "-selectbackground", AppColors.ACCENT_BG,
-                         "-selectforeground", AppColors.TEXT_PRIMARY)
-        except Exception:
-            pass
-
-    def _handle_select(self, _event=None):
+    def _handle_select(self, value):
         if self._on_select:
-            self._on_select(self._var.get())
+            self._on_select(value)
 
     def get_value(self):
-        return self._var.get()
+        return self.get()
 
     def set_value(self, value):
-        self._var.set(value)
+        self.set(value)
+
+
+class CtkAppButton(ctk.CTkButton):
+    """Modern CTk replacement for modern_ui.AppButton (canvas-drawn).
+
+    Keeps the AppButton-compatible API the dashboard relies on:
+    ``text=``/``command=``/``style="primary"|"secondary"``/``width``/``height``
+    constructor kwargs plus ``set_text()`` / ``set_enabled()``.
+    Gets real hover/pressed/disabled states from CustomTkinter.
+    """
+
+    def __init__(self, parent, text="", command=None,
+                 style="primary", width=120, height=40,
+                 font=None, **kwargs):
+        init_ctk_theme()
+        if style == "primary":
+            fg_color, hover_color, text_color = TEAL, TEAL_HOVER, BG
+        else:  # secondary
+            fg_color, hover_color, text_color = CARD, BORDER, TEXT
+        super().__init__(
+            parent,
+            text=text,
+            command=command,
+            width=width,
+            height=height,
+            fg_color=fg_color,
+            hover_color=hover_color,
+            text_color=text_color,
+            corner_radius=8,
+            font=font or ("Segoe UI", 12, "bold"),
+            cursor="hand2",
+            **kwargs
+        )
+
+    def set_text(self, text):
+        """Change the button label (AppButton-compatible)."""
+        self.configure(text=text)
+
+    def set_enabled(self, enabled):
+        """Enable/disable with proper disabled visuals (AppButton-compatible)."""
+        self.configure(state="normal" if enabled else "disabled")
 
 
 def _safe(fn, default=None):
@@ -101,11 +134,18 @@ class HomeDashboard:
     LEADER_CATS = ["Points", "Goals", "Assists", "+/-", "PIM", "Hits", "Shots"]
     SCHEDULE_VIEWS = ["Upcoming", "Results"]
 
-    def __init__(self, parent, game_manager, user_team, on_continue=None):
+    def __init__(self, parent, game_manager, user_team, on_continue=None,
+                 get_continue_state=None):
+        init_ctk_theme()
         self.parent = parent
         self.game_manager = game_manager
         self.user_team = user_team
         self.on_continue = on_continue
+        # Optional callback -> ("Continue"|"Next Day", [blocker dicts]).
+        # Supplied by the main app so the button label can be smart.
+        self.get_continue_state = get_continue_state
+        self.continue_btn = None
+        self._continue_status = None
         # Preserved across refreshes
         self._standings_scope = "Division"
         self._leaders_cat = "Points"
@@ -155,6 +195,8 @@ class HomeDashboard:
         self._create_stat_strip(content)
         self._create_section_nav(content)
         self._create_main_grid(content)
+        # Apply the smart Continue / Next Day label now the button exists.
+        self.refresh_continue_button()
         return main
 
     def _create_section_nav(self, parent):
@@ -177,13 +219,20 @@ class HomeDashboard:
             ("Inbox", "inbox"),
         ]
         for label, key in sections:
-            pill = tk.Label(nav, text=label, font=AppFonts.SMALL_BOLD,
-                            fg=AppColors.TEXT_SECONDARY, bg=AppColors.BG_ELEVATED,
-                            padx=12, pady=6, cursor="hand2")
+            pill = ctk.CTkButton(
+                nav, text=label,
+                command=lambda k=key: self._scroll_to(k),
+                fg_color="transparent",
+                hover_color=CARD,
+                text_color=AppColors.TEXT_SECONDARY,
+                corner_radius=14,
+                height=28,
+                border_width=1,
+                border_color=BORDER,
+                font=AppFonts.SMALL_BOLD,
+                cursor="hand2",
+            )
             pill.pack(side="left", padx=4)
-            pill.bind("<Button-1>", lambda _e, k=key: self._scroll_to(k))
-            pill.bind("<Enter>", lambda e: e.widget.config(fg=AppColors.ACCENT))
-            pill.bind("<Leave>", lambda e: e.widget.config(fg=AppColors.TEXT_SECONDARY))
 
     def _scroll_to(self, key):
         """Scroll the dashboard canvas so the named card is at the top."""
@@ -233,6 +282,56 @@ class HomeDashboard:
         lbl.bind("<Button-1>", lambda _e: self._nav(method_name))
         return lbl
 
+    def make_clickable_label(self, parent, text, command, font=None, fg=None, **kwargs):
+        """Label that looks and behaves like a link: hand cursor + underline on hover.
+
+        Used for player names (-> profile) and team names (-> standings/info).
+        """
+        bg = parent.cget("bg") if self._has_bg(parent) else AppColors.BG_ELEVATED
+        lbl = tk.Label(parent, text=text,
+                       font=font or AppFonts.SMALL_BOLD,
+                       fg=fg or AppColors.TEXT_PRIMARY,
+                       bg=kwargs.pop("bg", bg),
+                       cursor="hand2", **kwargs)
+        base_font = lbl.cget("font")
+        # Underline on hover to signal clickability
+        def _on_enter(_e):
+            try:
+                f = tk.font.Font(font=base_font)
+                f.configure(underline=True)
+                lbl.configure(font=f, fg=AppColors.ACCENT)
+            except Exception:
+                pass
+        def _on_leave(_e):
+            try:
+                lbl.configure(font=base_font, fg=fg or AppColors.TEXT_PRIMARY)
+            except Exception:
+                pass
+        lbl.bind("<Enter>", _on_enter)
+        lbl.bind("<Leave>", _on_leave)
+        lbl.bind("<Button-1>", lambda _e: command())
+        return lbl
+
+    def _open_player_profile(self, player):
+        """Open the full player profile window for a player object."""
+        try:
+            from ui_components import PlayerProfileWindow
+            PlayerProfileWindow(self.parent, player)
+        except Exception as e:
+            print(f"Could not open player profile: {e}")
+
+    def _open_team_info(self, team):
+        """Open team info: roster window for the user's team, standings for others."""
+        try:
+            me_name = getattr(self.user_team, "team_name", "")
+            team_name = getattr(team, "team_name", str(team))
+            if team_name == me_name:
+                self._nav("open_roster_window")
+            else:
+                self._nav("open_stats_standings_window")
+        except Exception as e:
+            print(f"Could not open team info: {e}")
+
     @staticmethod
     def _has_bg(widget):
         try:
@@ -271,9 +370,9 @@ class HomeDashboard:
 
     def _view_all_button(self, content, text, method_name):
         """Full-width button at the bottom of a card linking to the full window."""
-        btn = AppButton(content, text=text, style="secondary",
-                        command=lambda: self._nav(method_name),
-                        width=200, height=36)
+        btn = CtkAppButton(content, text=text, style="secondary",
+                           command=lambda: self._nav(method_name),
+                           width=200, height=36)
         btn.pack(fill="x", pady=(12, 0))
         return btn
 
@@ -563,8 +662,13 @@ class HomeDashboard:
                  fg=AppColors.TEXT_PRIMARY, bg=AppColors.BG).pack(anchor="e")
         tk.Label(date_frame, text=day_str, font=AppFonts.SMALL,
                  fg=AppColors.ACCENT, bg=AppColors.BG).pack(anchor="e")
-        AppButton(date_frame, text="Continue", command=self._on_continue,
-                  style="primary", width=140, height=40).pack(pady=(12, 0))
+        self.continue_btn = CtkAppButton(date_frame, text="Next Day", command=self._on_continue,
+                                         style="primary", width=140, height=40)
+        self.continue_btn.pack(pady=(12, 0))
+        # Small live status line shown under the button while the day simulates.
+        self._continue_status = tk.Label(date_frame, text="", font=AppFonts.SMALL,
+                                        fg=AppColors.TEXT_SECONDARY, bg=AppColors.BG)
+        self._continue_status.pack(pady=(6, 0))
 
     def _create_stat_strip(self, parent):
         strip = tk.Frame(parent, bg=AppColors.BG)
@@ -679,8 +783,9 @@ class HomeDashboard:
             row = tk.Frame(table, bg=row_bg)
             row.pack(fill="x", pady=1)
             fg = AppColors.TEXT_PRIMARY
-            tk.Label(row, text=f"{i}. {tm.team_name}", font=AppFonts.SMALL_BOLD,
-                     fg=fg, bg=row_bg, width=26, anchor="w").pack(side="left")
+            self.make_clickable_label(row, text=f"{i}. {tm.team_name}", font=AppFonts.SMALL_BOLD,
+                                      fg=fg, bg=row_bg, width=26, anchor="w",
+                                      command=lambda t=tm: self._open_team_info(t)).pack(side="left")
             for val, w in [(tm.games_played, 4), (tm.wins, 4), (tm.losses, 4),
                            (tm.ot_losses, 5), (self._team_points(tm), 5)]:
                 tk.Label(row, text=str(val), font=AppFonts.SMALL,
@@ -718,8 +823,9 @@ class HomeDashboard:
                      fg=AppColors.TEXT_TERTIARY, bg=bg, width=3).pack(side="left")
             name = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip() or "Player"
             pos = str(getattr(p, "primary_position", "")).split(".")[-1]
-            tk.Label(row, text=f"{name} ({pos})", font=AppFonts.SMALL_BOLD,
-                     fg=AppColors.TEXT_PRIMARY, bg=bg, anchor="w").pack(side="left", fill="x", expand=True)
+            self.make_clickable_label(row, text=f"{name} ({pos})", font=AppFonts.SMALL_BOLD,
+                                      fg=AppColors.TEXT_PRIMARY, bg=bg, anchor="w",
+                                      command=lambda pl=p: self._open_player_profile(pl)).pack(side="left", fill="x", expand=True)
             tk.Label(row, text=str(self._leader_value(p, self._leaders_cat)),
                      font=AppFonts.STAT_SMALL, fg=AppColors.ACCENT,
                      bg=bg).pack(side="right")
@@ -833,8 +939,9 @@ class HomeDashboard:
             row = tk.Frame(content, bg=bg)
             row.pack(fill="x", pady=2)
             name = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
-            tk.Label(row, text=name, font=AppFonts.SMALL_BOLD,
-                     fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+            self.make_clickable_label(row, text=name, font=AppFonts.SMALL_BOLD,
+                                      fg=AppColors.TEXT_PRIMARY, bg=bg,
+                                      command=lambda pl=p: self._open_player_profile(pl)).pack(side="left")
             tk.Label(row, text=f"{desc} ({games})", font=AppFonts.SMALL,
                      fg=AppColors.DANGER, bg=bg).pack(side="right")
         self._view_all_button(content, "View roster →",
@@ -932,8 +1039,9 @@ class HomeDashboard:
                       f"POT {getattr(p, 'potential_grade', '?')}")
             row = tk.Frame(content, bg=bg)
             row.pack(fill="x", pady=2)
-            tk.Label(row, text=name, font=AppFonts.SMALL_BOLD,
-                     fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+            self.make_clickable_label(row, text=name, font=AppFonts.SMALL_BOLD,
+                                      fg=AppColors.TEXT_PRIMARY, bg=bg,
+                                      command=lambda pl=p: self._open_player_profile(pl)).pack(side="left")
             tk.Label(row, text=detail, font=AppFonts.CAPTION,
                      fg=AppColors.TEXT_TERTIARY, bg=bg).pack(side="right")
 
@@ -956,25 +1064,26 @@ class HomeDashboard:
             pts = (getattr(p, "goals", 0) or 0) + (getattr(p, "assists", 0) or 0)
             for m in (25, 50, 75, 100):
                 if pts < m <= pts + 8:
-                    hits.append((m - pts, name, f"{m - pts} PTS from {m}"))
+                    hits.append((m - pts, name, f"{m - pts} PTS from {m}", p))
             cg = getattr(p, "career_games", 0) or 0
             for m in (500, 1000, 1500):
                 if cg < m <= cg + 10:
-                    hits.append((m - cg, name, f"{m - cg} GP from {m} career"))
+                    hits.append((m - cg, name, f"{m - cg} GP from {m} career", p))
         hits.sort(key=lambda h: h[0])
         if not hits:
             tk.Label(content, text="No milestones within reach.",
                      font=AppFonts.SMALL, fg=AppColors.TEXT_TERTIARY,
                      bg=bg).pack(anchor="w")
             return
-        for _gap, name, text in hits[:6]:
+        for _gap, name, text, pl in hits[:6]:
             row = tk.Frame(content, bg=bg)
             row.pack(fill="x", pady=2)
             tk.Label(row, text="●", font=AppFonts.CAPTION,
                      fg=AppColors.ACCENT, bg=bg).pack(side="left",
                                                      padx=(0, 6))
-            tk.Label(row, text=name, font=AppFonts.SMALL_BOLD,
-                     fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
+            self.make_clickable_label(row, text=name, font=AppFonts.SMALL_BOLD,
+                                      fg=AppColors.TEXT_PRIMARY, bg=bg,
+                                      command=lambda p=pl: self._open_player_profile(p)).pack(side="left")
             tk.Label(row, text=text, font=AppFonts.SMALL,
                      fg=AppColors.TEXT_SECONDARY, bg=bg).pack(side="right")
 
@@ -1041,9 +1150,9 @@ class HomeDashboard:
         grid = tk.Frame(content, bg=bg)
         grid.pack(fill="x")
         for i, (label, method) in enumerate(actions):
-            btn = AppButton(grid, text=label, style="secondary",
-                            command=lambda m=method: self._nav(m),
-                            width=120, height=36)
+            btn = CtkAppButton(grid, text=label, style="secondary",
+                               command=lambda m=method: self._nav(m),
+                               width=120, height=36)
             btn.grid(row=i // 2, column=i % 2, padx=4, pady=4, sticky="ew")
         grid.grid_columnconfigure(0, weight=1)
         grid.grid_columnconfigure(1, weight=1)
@@ -1053,3 +1162,54 @@ class HomeDashboard:
             self.on_continue()
         else:
             print("Continue clicked (no handler)")
+
+    # ------------------------------------------------------------------
+    # Smart Continue / Next Day button (Football Manager style)
+    # ------------------------------------------------------------------
+    def refresh_continue_button(self):
+        """Set the button label from the app's continue state.
+
+        "Continue" when pressing tasks block day advancement,
+        "Next Day" when the day can advance freely.
+        """
+        label = "Next Day"
+        try:
+            if self.get_continue_state:
+                label, _reasons = self.get_continue_state()
+        except Exception:
+            label = "Next Day"
+        try:
+            if self.continue_btn is not None:
+                self.continue_btn.set_text(label)
+        except Exception:
+            pass
+
+    def set_continue_busy(self, busy):
+        """Show/hide processing feedback on the Continue button.
+
+        While busy the button reads "Processing..." and ignores clicks;
+        when done the smart label is restored.
+        """
+        try:
+            if self.continue_btn is not None:
+                if busy:
+                    self.continue_btn.set_text("Processing...")
+                    self.continue_btn.set_enabled(False)
+                else:
+                    self.continue_btn.set_enabled(True)
+                    self.refresh_continue_button()
+            if not busy:
+                self.set_continue_status("")
+            # Force a real paint BEFORE the heavy simulation work starts.
+            self.parent.update()
+        except Exception:
+            pass
+
+    def set_continue_status(self, text):
+        """Update the small status line under the Continue button."""
+        try:
+            if self._continue_status is not None:
+                self._continue_status.config(text=text or "")
+                self.parent.update()
+        except Exception:
+            pass

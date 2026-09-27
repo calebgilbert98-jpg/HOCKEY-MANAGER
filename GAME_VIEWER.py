@@ -557,7 +557,7 @@ class RebuiltNHLGameViewer:
             self.canvas.create_text(
                 canvas_x, canvas_y,
                 text=str(i + 1), fill='white',
-                font=('Arial', 8, 'bold'),
+                font=('Segoe UI', 8, 'bold'),
                 tags=f"number home {player['id']}"
             )
             
@@ -582,7 +582,7 @@ class RebuiltNHLGameViewer:
             self.canvas.create_text(
                 canvas_x, canvas_y,
                 text=str(i + 1), fill='white',
-                font=('Arial', 8, 'bold'),
+                font=('Segoe UI', 8, 'bold'),
                 tags=f"number away {player['id']}"
             )
             

@@ -46,11 +46,11 @@ class ScoutingProfileDialog(tk.Toplevel):
 
         # -- left: profile list -------------------------------------------
         left = tk.LabelFrame(main, text="Profiles", bg=bg, fg=fg,
-                             font=("Helvetica", 10, "bold"))
+                             font=("Segoe UI", 10, "bold"))
         left.pack(side="left", fill="y", padx=(0, 10))
         self._list = tk.Listbox(left, width=26, height=24, bg="#141a24", fg=fg,
                                 selectbackground="#2f6fed",
-                                font=("Helvetica", 10))
+                                font=("Segoe UI", 10))
         self._list.pack(fill="y", expand=True, padx=6, pady=6)
         self._list.bind("<<ListboxSelect>>", self._on_select)
 
@@ -60,10 +60,10 @@ class ScoutingProfileDialog(tk.Toplevel):
 
         self._name_var = tk.StringVar()
         tk.Label(right, textvariable=self._name_var, bg=bg, fg=fg,
-                 font=("Helvetica", 14, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._desc_var = tk.StringVar()
         tk.Label(right, textvariable=self._desc_var, bg=bg, fg="#9aa4b5",
-                 font=("Helvetica", 10), wraplength=440,
+                 font=("Segoe UI", 10), wraplength=440,
                  justify="left").pack(anchor="w", pady=(0, 8))
 
         cols = ("Attribute", "Minimum")
@@ -77,30 +77,30 @@ class ScoutingProfileDialog(tk.Toplevel):
 
         self._pos_var = tk.StringVar()
         tk.Label(right, textvariable=self._pos_var, bg=bg, fg="#9aa4b5",
-                 font=("Helvetica", 10)).pack(anchor="w", pady=(0, 10))
+                 font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 10))
 
         # -- buttons --------------------------------------------------------
         btn = tk.Frame(right, bg=bg)
         btn.pack(fill="x", pady=(4, 0))
         self._new_btn = RoundedButton(btn, text="New Profile", command=self._new,
                                       bg="#2f6fed", fg="white",
-                                      font=("Helvetica", 10, "bold"),
+                                      font=("Segoe UI", 10, "bold"),
                                       radius=9, padx=14, pady=7)
         self._new_btn.pack(side="left", padx=(0, 6))
         self._edit_btn = RoundedButton(btn, text="Edit", command=self._edit,
                                        bg="#1e1e24", fg=fg,
-                                       font=("Helvetica", 10),
+                                       font=("Segoe UI", 10),
                                        radius=9, padx=14, pady=7)
         self._edit_btn.pack(side="left", padx=(0, 6))
         self._del_btn = RoundedButton(btn, text="Delete", command=self._delete,
                                       bg="#1e1e24", fg=fg,
-                                      font=("Helvetica", 10),
+                                      font=("Segoe UI", 10),
                                       radius=9, padx=14, pady=7)
         self._del_btn.pack(side="left", padx=(0, 6))
         self._apply_btn = RoundedButton(btn, text="Apply & Close",
                                         command=self._apply_close,
                                         bg="#1f9d55", fg="white",
-                                        font=("Helvetica", 10, "bold"),
+                                        font=("Segoe UI", 10, "bold"),
                                         radius=9, padx=16, pady=8)
         self._apply_btn.pack(side="right")
 
@@ -203,22 +203,22 @@ class ProfileEditorDialog(tk.Toplevel):
 
         # name + description
         tk.Label(main, text="Profile name:", bg=bg, fg=fg,
-                 font=("Helvetica", 10, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self._name = tk.StringVar(value=profile.name if profile else "")
         tk.Entry(main, textvariable=self._name, width=40,
-                 font=("Helvetica", 11)).pack(anchor="w", pady=(2, 8))
+                 font=("Segoe UI", 11)).pack(anchor="w", pady=(2, 8))
 
         tk.Label(main, text="Description:", bg=bg, fg=fg,
-                 font=("Helvetica", 10, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self._desc = tk.StringVar(
             value=profile.description if profile else "")
         tk.Entry(main, textvariable=self._desc, width=60,
-                 font=("Helvetica", 10)).pack(anchor="w", fill="x",
+                 font=("Segoe UI", 10)).pack(anchor="w", fill="x",
                                               pady=(2, 10))
 
         # position scope
         tk.Label(main, text="Position scope:", bg=bg, fg=fg,
-                 font=("Helvetica", 10, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self._pos_choice = tk.StringVar()
         pos_frame = tk.Frame(main, bg=bg)
         pos_frame.pack(anchor="w", pady=(2, 10))
@@ -236,14 +236,14 @@ class ProfileEditorDialog(tk.Toplevel):
 
         # attribute rows
         tk.Label(main, text="Attribute minimums:", bg=bg, fg=fg,
-                 font=("Helvetica", 10, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self._rows_frame = tk.Frame(main, bg=bg)
         self._rows_frame.pack(fill="both", expand=True, pady=(4, 8))
         self._rows = []  # (attr_var, min_var, row_frame)
 
         add_btn = RoundedButton(main, text="+ Add Attribute",
                                 command=self._add_row, bg="#1e1e24", fg=fg,
-                                font=("Helvetica", 10),
+                                font=("Segoe UI", 10),
                                 radius=9, padx=14, pady=7)
         add_btn.pack(anchor="w", pady=(0, 10))
 
@@ -261,11 +261,11 @@ class ProfileEditorDialog(tk.Toplevel):
         btn.pack(fill="x")
         RoundedButton(btn, text="Save Profile", command=self._save,
                       bg="#2f6fed", fg="white",
-                      font=("Helvetica", 10, "bold"),
+                      font=("Segoe UI", 10, "bold"),
                       radius=9, padx=14, pady=7).pack(side="left",
                                                      padx=(0, 8))
         RoundedButton(btn, text="Cancel", command=self.destroy,
-                      bg="#1e1e24", fg=fg, font=("Helvetica", 10),
+                      bg="#1e1e24", fg=fg, font=("Segoe UI", 10),
                       radius=9, padx=14, pady=7).pack(side="left")
 
     def _attr_options(self):
@@ -301,7 +301,7 @@ class ProfileEditorDialog(tk.Toplevel):
         spin.pack(side="left", padx=(4, 8))
         tk.Button(row, text="✕", command=lambda: self._remove_row(row),
                   bg=self._bg, fg="#e74c3c",
-                  font=("Helvetica", 10, "bold")).pack(side="left")
+                  font=("Segoe UI", 10, "bold")).pack(side="left")
         self._rows.append((attr_var, min_var, row))
 
     def _remove_row(self, row_frame):

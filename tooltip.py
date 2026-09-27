@@ -57,7 +57,7 @@ class ToolTip:
         label = tk.Label(frame, text=self.text, justify='left',
                         background='#2a2a2a', foreground='#ffffff',
                         relief='flat', borderwidth=0,
-                        font=("Arial", 9), wraplength=self.wraplength,
+                        font=("Segoe UI", 9), wraplength=self.wraplength,
                         padx=12, pady=8)
         label.pack()
         

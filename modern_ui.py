@@ -314,13 +314,27 @@ class AppButton(tk.Canvas):
         
         self.font = font or AppFonts.BODY_BOLD
         self.text = text
-        
+        self._enabled = True
+
         self._draw(self.bg_color)
-        
+
         self.bind("<Enter>", lambda e: self._draw(self.hover_color))
         self.bind("<Leave>", lambda e: self._draw(self.bg_color))
-        self.bind("<Button-1>", lambda e: command() if command else None)
+        self.bind("<Button-1>", lambda e: self.command() if (self.command and self._enabled) else None)
         self.configure(cursor="hand2" if command else "")
+
+    def set_text(self, text):
+        """Change the button label (canvas-based button: redraws)."""
+        self.text = text
+        self._draw(self.bg_color)
+
+    def set_enabled(self, enabled):
+        """Enable/disable click handling with a visual cursor cue."""
+        self._enabled = bool(enabled)
+        try:
+            self.configure(cursor="hand2" if self._enabled and self.command else ("watch" if not self._enabled else ""))
+        except Exception:
+            pass
     
     def _draw(self, bg_color):
         self.delete("all")

@@ -4,6 +4,13 @@
 import random
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
+import customtkinter as ctk
+from ctk_theme import (
+    init_ctk_theme, primary_button, secondary_button, heading,
+    CTkPlayerList,
+    TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT,
+    GOLD, GREEN, RED,
+)
 from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from game_classes import debug_print
@@ -3697,7 +3704,8 @@ class HockeyManagerGUI(tk.Tk):
                     parent=self,
                     game_manager=self.game_manager,
                     user_team=self.user_team,
-                    on_continue=self.simulate_day
+                    on_continue=self.simulate_day,
+                    get_continue_state=self.get_continue_state,
                 )
                 
                 # Create the dashboard UI in its own frame
@@ -3971,24 +3979,41 @@ class HockeyManagerGUI(tk.Tk):
                               tooltip="Settings: game settings and preferences (? shows keyboard shortcuts)")
     
     def _create_nav_pill(self, parent, text, command, side="left", tooltip=None):
-        """Create a pill-style navigation button for the top menu bar."""
-        # Use modern color scheme
+        """Create a pill-style navigation button for the top menu bar.
+
+        CTk-based (was canvas-drawn PillButton): real rounded pill with
+        proper hover/pressed states. Auto-sizes to the label text.
+        """
+        init_ctk_theme()
         try:
             from modern_ui import AppColors
-            bg = AppColors.BG
             fg = AppColors.TEXT_SECONDARY
             hover_bg = AppColors.BG_HOVER
-            accent = AppColors.ACCENT
-        except:
-            bg = '#0e0e11'
+        except Exception:
             fg = '#a1a1aa'
             hover_bg = '#1e1e24'
-            accent = '#00ceb8'
-        
-        pill = PillButton(parent, text=text, command=command,
-                         font=(self.FONT_FAMILY, 10, 'bold'),
-                         padx=14, pady=6, bg=bg,
-                         fg=fg, hover_bg=hover_bg)
+
+        # Size the pill to its text like the old PillButton did.
+        font = (self.FONT_FAMILY, 10, 'bold')
+        probe = tk.Label(parent, text=text, font=font)
+        try:
+            probe.update_idletasks()
+            w = probe.winfo_reqwidth() + 28
+            h = probe.winfo_reqheight() + 12
+        finally:
+            probe.destroy()
+
+        pill = ctk.CTkButton(
+            parent, text=text, command=command,
+            font=font, width=w, height=h,
+            fg_color="transparent",
+            hover_color=hover_bg,
+            text_color=fg,
+            corner_radius=h // 2,
+            border_width=1,
+            border_color=BORDER,
+            cursor="hand2",
+        )
         pill.pack(side=side, padx=4)
         if tooltip:
             _qol_add_tooltip(pill, tooltip)
@@ -4028,9 +4053,9 @@ class HockeyManagerGUI(tk.Tk):
                 dropdown_menu.post(x, y)
             except:
                 pass
-        
-        dropdown_btn.command = show_dropdown
-        
+
+        dropdown_btn.configure(command=show_dropdown)
+
         return dropdown_btn
 
     # ------------------------------------------------------------------
@@ -6294,15 +6319,46 @@ class HockeyManagerGUI(tk.Tk):
             import traceback
             traceback.print_exc()
 
-    def simulate_day(self):
-        """Completely reworked daily simulation that properly handles all scenarios"""
-        # CHECK FOR ACTIVE FANTASY DRAFT - PREVENT DAY ADVANCEMENT
-        if hasattr(self.game_manager, 'pending_fantasy_draft') and self.game_manager.pending_fantasy_draft:
+    def get_continue_state(self):
+        """Football Manager-style continue state.
+
+        Returns (label, blockers):
+          - ("Continue", [blockers]) when pressing tasks must be completed
+            before the day can advance.
+          - ("Next Day", []) when the day can advance freely.
+
+        Each blocker is a dict with 'id', 'title', 'detail' and an optional
+        'action' tuple (button label, callable) that takes the user to the
+        blocking task. Only REAL systems in this codebase are checked --
+        nothing is invented.
+        """
+        blockers = []
+        gm = getattr(self, 'game_manager', None)
+        # The one hard day-advancement blocker in the codebase: an active
+        # fantasy draft must be finished before the calendar can move.
+        if gm is not None and getattr(gm, 'pending_fantasy_draft', False):
+            blockers.append({
+                'id': 'fantasy_draft',
+                'title': 'Fantasy draft in progress',
+                'detail': ('You must complete the fantasy draft before '
+                           'advancing the day.'),
+                'action': ('Open Fantasy Draft', self.open_fantasy_draft_window),
+            })
+        if blockers:
+            return ("Continue", blockers)
+        return ("Next Day", [])
+
+    def _show_continue_blockers(self, blockers):
+        """Tell the user what is blocking day advancement and offer a jump
+        to the first blocking task. Never silently does nothing."""
+        try:
+            from modern_ui import AppColors, AppFonts, AppButton
+        except Exception:
             from tkinter import messagebox
-            messagebox.showwarning("Fantasy Draft Active", 
-                                 "🏒 Fantasy Draft in Progress!\n\n"
-                                 "You must complete the fantasy draft before advancing the day.\n"
-                                 "Go to Tools → Fantasy Draft to continue or complete the draft.")
+            messagebox.showwarning(
+                "Action Required",
+                "\n\n".join(b.get('title', '') + "\n" + b.get('detail', '')
+                            for b in blockers))
             return
 
         # MULTIPLAYER: never mutate game state while a snapshot worker is
@@ -6314,20 +6370,117 @@ class HockeyManagerGUI(tk.Tk):
             return
 
         # Prevent multiple clicks by disabling button during simulation
+        dlg = tk.Toplevel(self)
+        dlg.title("Action Required")
+        dlg.configure(bg=AppColors.BG)
+        dlg.transient(self)
+        try:
+            dlg.grab_set()
+        except Exception:
+            pass
+
+        tk.Label(dlg, text="Action Required Before Advancing",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=AppColors.BG).pack(padx=28, pady=(22, 6))
+        tk.Label(dlg, text="The following must be completed first:",
+                 font=AppFonts.BODY, fg=AppColors.TEXT_SECONDARY,
+                 bg=AppColors.BG).pack(padx=28, pady=(0, 12))
+
+        for b in blockers:
+            card = tk.Frame(dlg, bg=AppColors.BG_ELEVATED,
+                            highlightbackground=AppColors.BORDER,
+                            highlightthickness=1)
+            card.pack(fill='x', padx=28, pady=6)
+            tk.Label(card, text=b.get('title', 'Pending task'),
+                     font=AppFonts.BODY_BOLD, fg=AppColors.ACCENT,
+                     bg=AppColors.BG_ELEVATED).pack(anchor='w', padx=14, pady=(10, 2))
+            tk.Label(card, text=b.get('detail', ''),
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=AppColors.BG_ELEVATED,
+                     wraplength=420, justify='left').pack(anchor='w', padx=14, pady=(0, 10))
+
+        btn_row = tk.Frame(dlg, bg=AppColors.BG)
+        btn_row.pack(pady=(14, 22))
+        first = blockers[0] if blockers else {}
+        action = first.get('action')
+
+        def _go():
+            dlg.destroy()
+            if action:
+                try:
+                    action[1]()
+                except Exception as e:
+                    print(f"Blocker action failed: {e}")
+
+        if action:
+            AppButton(btn_row, text=action[0], command=_go,
+                      style="primary", width=180, height=38).pack(side='left', padx=6)
+        AppButton(btn_row, text="Close", command=dlg.destroy,
+                  style="secondary", width=120, height=38).pack(side='left', padx=6)
+
+        dlg.update_idletasks()
+        try:
+            x = self.winfo_x() + (self.winfo_width() - dlg.winfo_reqwidth()) // 2
+            y = self.winfo_y() + (self.winfo_height() - dlg.winfo_reqheight()) // 2
+            dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+
+    def _set_continue_feedback(self, busy, status=""):
+        """Drive the dashboard Continue button's processing feedback.
+
+        Falls back to the legacy button lookup when the modern dashboard
+        helper is unavailable.
+        """
+        dashboard = getattr(self, 'dashboard', None)
+        helper = getattr(dashboard, 'set_continue_busy', None)
+        if callable(helper):
+            if busy:
+                helper(True)
+                if status:
+                    dashboard.set_continue_status(status)
+            else:
+                helper(False)
+            return
+
+        # Legacy fallback: plain tk.Button-style widgets only.
+        # Prevent multiple clicks by disabling button during simulation
         continue_btn = None
         if hasattr(self, 'continue_btn'):
             continue_btn = self.continue_btn
-        elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'continue_btn'):
+        elif dashboard is not None and hasattr(dashboard, 'continue_btn'):
             continue_btn = self.dashboard.continue_btn
-        elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'widgets') and 'continue_btn' in self.dashboard.widgets:
+        elif (dashboard is not None and hasattr(dashboard, 'widgets')
+              and 'continue_btn' in dashboard.widgets):
             continue_btn = self.dashboard.widgets['continue_btn']
-            
-        if continue_btn and continue_btn['state'] == 'disabled':
+        if continue_btn is not None:
+            try:
+                if busy:
+                    continue_btn.config(state='disabled')
+                else:
+                    continue_btn.config(state='normal')
+                self.update()
+            except Exception:
+                pass
+
+    def simulate_day(self):
+        """Completely reworked daily simulation that properly handles all scenarios"""
+        # BLOCKERS FIRST: pressing tasks (e.g. an active fantasy draft) must
+        # be completed before the day advances. Show what is blocking and
+        # offer a jump to it -- never silently do nothing.
+        _label, blockers = self.get_continue_state()
+        if blockers:
+            self._show_continue_blockers(blockers)
+            return
+
+        # Prevent double-clicks: the dashboard helper also paints
+        # "Processing..." BEFORE the heavy work starts.
+        dashboard = getattr(self, 'dashboard', None)
+        if (dashboard is not None
+                and getattr(getattr(dashboard, 'continue_btn', None), '_enabled', True) is False):
             return  # Already processing, ignore this click
-            
-        if continue_btn:
-            continue_btn.config(state='disabled')
-            
+        self._set_continue_feedback(True, "Starting simulation...")
+
         try:
             # Check for season end by games completed (primary trigger).
             # The date cutoff is only a safety net set AFTER the last scheduled
@@ -6353,6 +6506,7 @@ class HockeyManagerGUI(tk.Tk):
                 return
 
             # Process daily maintenance tasks FIRST (before checking games)
+            self._set_continue_feedback(True, "Processing daily tasks...")
             self._process_daily_maintenance()
             
             # Get today's games - OPTIMIZED with early break and caching
@@ -6418,6 +6572,7 @@ class HockeyManagerGUI(tk.Tk):
                     oldest_key = min(self._schedule_cache.keys())
                     del self._schedule_cache[oldest_key]
             
+            self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
             if todays_games:
                 # Rosters/tactics can change daily (trades, injuries, user tweaks):
@@ -6426,6 +6581,7 @@ class HockeyManagerGUI(tk.Tk):
                     self._strength_cache.clear()
                 self._process_todays_games(todays_games)
             
+            self._set_continue_feedback(True, "Updating injuries...")
             # Process injury recovery: countdown runs in GAMES MISSED, so only
             # teams that played today tick down (and today's new injuries
             # start counting with the next game).
@@ -6443,6 +6599,7 @@ class HockeyManagerGUI(tk.Tk):
             teams_played.discard(None)
             self.game_manager._process_injury_recovery(teams_played or None)
             
+            self._set_continue_feedback(True, "Processing AI decisions...")
             # Process AI team decisions (trades, signings, etc.)
             # Only every 7 days (handled internally by ai_manager)
             try:
@@ -6483,6 +6640,7 @@ class HockeyManagerGUI(tk.Tk):
             # Update game_manager's current_date for dashboard synchronization
             self.game_manager.current_date = self.current_date
             
+            self._set_continue_feedback(True, "Updating dashboard...")
             # Refresh the atmospheric dashboard with updated data
             if hasattr(self, 'dashboard') and hasattr(self.dashboard, 'refresh_dashboard'):
                 self.dashboard.refresh_dashboard()
@@ -6531,17 +6689,10 @@ class HockeyManagerGUI(tk.Tk):
                 print(f"Multiplayer broadcast failed (non-fatal): {_mp_e}")
 
         finally:
-            # Re-enable continue button after simulation is complete
-            continue_btn = None
-            if hasattr(self, 'continue_btn'):
-                continue_btn = self.continue_btn
-            elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'continue_btn'):
-                continue_btn = self.dashboard.continue_btn
-            elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'widgets') and 'continue_btn' in self.dashboard.widgets:
-                continue_btn = self.dashboard.widgets['continue_btn']
-                
-            if continue_btn:
-                continue_btn.config(state='normal')
+            # Restore the Continue button: re-enable clicks, clear the
+            # "Processing..." state and re-apply the smart Continue/Next Day
+            # label (blockers may have appeared or cleared).
+            self._set_continue_feedback(False)
 
     # --- MULTIPLAYER (Phase 1): main-thread bridge ---------------------
     # Network threads NEVER touch widgets or game objects. They push plain
@@ -7157,8 +7308,8 @@ class HockeyManagerGUI(tk.Tk):
             'notable_events': notable_events,
             'player_ratings': player_ratings,
             'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
-            'overtime': away_score != home_score and len([e for e in notable_events if e['period'] > 3]) > 0,
-            'shootout': len([e for e in notable_events if e['period'] == 5]) > 0
+            'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
+            'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
         }
         
         self._record_game_result(game_result)
@@ -7234,11 +7385,14 @@ class HockeyManagerGUI(tk.Tk):
                     player.stats.penalties += 1
                     player.stats.penalties_in_minutes += 2
         
-        # Games played: all roster players get credit
-        # (In real NHL only dressed players get GP, but sim doesn't track scratches)
-        for team in [home_team, away_team]:
-            for player in team.roster:
-                player.stats.games_played += 1
+        # Games played: all roster players get credit -- but only when stats
+        # are derived from events (quick sim). GameSim already credited GP
+        # to dressed players itself; running this too would double-count.
+        if stats_from_events:
+            # (In real NHL only dressed players get GP, but sim doesn't track scratches)
+            for team in [home_team, away_team]:
+                for player in team.roster:
+                    player.stats.games_played += 1
         
         # Update news log for user team games
         if self.user_team in (home_team, away_team):
@@ -9358,7 +9512,8 @@ class HockeyManagerGUI(tk.Tk):
     def update_inbox_notification(self):
         """Update the inbox button notification."""
         if hasattr(self, 'inbox_btn'):
-            self.inbox_btn.config(text=self._get_inbox_button_text())
+            # CTk widgets only implement configure(), not config().
+            self.inbox_btn.configure(text=self._get_inbox_button_text())
             
     def send_email_to_user(self, message):
         """Send an email message to the user's inbox."""
@@ -10373,7 +10528,7 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
         messagebox.showinfo("Lines Updated", "Your team's best lines have been set!")
 
-class CleanEditLinesWindow(tk.Toplevel):
+class CleanEditLinesWindow(ctk.CTkToplevel):
     """Clean, simple, and intuitive line editor with proper contrast and readability"""
     
     def __init__(self, parent):
@@ -10381,7 +10536,7 @@ class CleanEditLinesWindow(tk.Toplevel):
         self.parent = parent
         self.title("Edit Lines")
         self.geometry("1440x920")
-        self.configure(bg=parent.BG_COLOR)
+        self.configure(fg_color=parent.BG_COLOR)
         self.resizable(True, True)
 
         # Sleeper-inspired palette for the line editor
@@ -14034,100 +14189,105 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter a valid number for salary.")
 
-class GMOptionsWindow(tk.Toplevel):
+class GMOptionsWindow(ctk.CTkToplevel):
+    """GM Options - executive management tools.
+
+    CustomTkinter rebuild: charcoal background, rounded section cards,
+    teal-accented buttons, CTkSegmentedButton for the game-presentation
+    mode picker. Every action from the ttk version is preserved
+    (shortlist, captains, GM dashboard, team analytics, season goals,
+    auto-negotiate extensions, inbox, mode pick) along with the
+    open_windows registration pattern used by the caller.
+    """
+
     def __init__(self, parent):
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title("GM Options")
-        self.geometry("500x720")
-        self.configure(bg=parent.BG_COLOR)
-        self.style = ttk.Style(self)
-        self.style.theme_use('clam')
-        self.style.configure('TButton', font=(parent.FONT_FAMILY, 11, 'bold'), foreground='white', background=parent.ACCENT_COLOR, padding=(10, 6), borderwidth=0)
-        self.style.map('TButton', background=[('active', parent.ACCENT_ACTIVE), ('hover', parent.ACCENT_HOVER)])
+        self.geometry("520x760")
+        self.configure(fg_color=BG)
+        self.resizable(True, True)
 
-        # Title bar
-        title_bar = ttk.Frame(self, padding=(20, 10))
-        title_bar.pack(fill="x")
-        ttk.Label(title_bar, text="GM Options", font=(parent.FONT_FAMILY, 16, 'bold'), 
-                 background=parent.BG_COLOR, foreground=parent.HEADER_COLOR).pack()
-        
-        # Subtitle
-        subtitle = ttk.Label(title_bar, text="Executive Management Tools", 
-                           font=(parent.FONT_FAMILY, 10), 
-                           background=parent.BG_COLOR, foreground=parent.TEXT_COLOR)
-        subtitle.pack(pady=(0, 5))
+        # Header - plain chrome, not a card
+        header = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        header.pack(fill="x", padx=24, pady=(20, 4))
+        heading(header, "GM Options", size=18).pack(anchor="w")
+        heading(header, "Executive Management Tools", size=11,
+                text_color=TEXT_DIM).pack(anchor="w", pady=(2, 0))
 
-        # Main content frame
-        content_frame = ttk.Frame(self, padding=20)
-        content_frame.pack(fill="both", expand=True)
+        # Scrollable content so nothing is clipped on small displays
+        content = ctk.CTkScrollableFrame(
+            self, fg_color="transparent", corner_radius=0)
+        content.pack(fill="both", expand=True, padx=16, pady=(8, 12))
 
-        # Player Management section
-        player_section = ttk.LabelFrame(content_frame, text="Player Management", padding=15)
-        player_section.pack(fill="x", pady=(0, 15))
-        
-        ttk.Button(player_section, text="Player Shortlist", 
-                  command=self.open_shortlist_window).pack(fill="x", pady=3)
-        ttk.Button(player_section, text="Set Captains", 
-                  command=parent.open_set_captains_window).pack(fill="x", pady=3)
-        
-        # Executive Actions section
-        exec_section = ttk.LabelFrame(content_frame, text="Executive Actions", padding=15)
-        exec_section.pack(fill="x", pady=(0, 15))
-        
-        ttk.Button(exec_section, text="GM Dashboard", 
-                  command=self.open_gm_dashboard).pack(fill="x", pady=3)
-        ttk.Button(exec_section, text="Team Analytics", 
-                  command=self.open_team_analytics).pack(fill="x", pady=3)
-        ttk.Button(exec_section, text="Season Goals", 
-                  command=self.open_season_goals).pack(fill="x", pady=3)
-        
-        # Quick Actions section
-        quick_section = ttk.LabelFrame(content_frame, text="Quick Actions", padding=15)
-        quick_section.pack(fill="x", pady=(0, 15))
-        
-        ttk.Button(quick_section, text="Auto-Negotiate Extensions", 
-                  command=self.auto_negotiate_extensions).pack(fill="x", pady=3)
-        ttk.Button(quick_section, text="Check Inbox", 
-                  command=parent.open_inbox_window).pack(fill="x", pady=3)
+        self._build_section(content, "Player Management", [
+            ("Player Shortlist", self.open_shortlist_window),
+            ("Set Captains", parent.open_set_captains_window),
+        ])
+        self._build_section(content, "Executive Actions", [
+            ("GM Dashboard", self.open_gm_dashboard),
+            ("Team Analytics", self.open_team_analytics),
+            ("Season Goals", self.open_season_goals),
+        ])
+        self._build_section(content, "Quick Actions", [
+            ("Auto-Negotiate Extensions", self.auto_negotiate_extensions),
+            ("Check Inbox", parent.open_inbox_window),
+        ])
+        self._build_presentation_section(content)
 
-        # Game Presentation section — how the user's games are presented:
-        # Quick Sim / Ask Each Game / Watch Live (moved off the crowded menu bar)
-        pres_section = ttk.LabelFrame(content_frame, text="Game Presentation", padding=15)
-        pres_section.pack(fill="x", pady=(0, 15))
-        ttk.Label(pres_section,
-                  text="Your games:").pack(anchor="w", pady=(0, 4))
-        try:
-            from modern_widgets import SegmentedControl
-        except Exception:
-            SegmentedControl = None
-        _labels = [lbl for lbl, _ in self.parent.GAME_MODE_LABELS]
-        _keys = [key for _, key in self.parent.GAME_MODE_LABELS]
-        _current = self.parent._get_user_game_mode()
-        if SegmentedControl is not None:
-            _initial_label = next(lbl for lbl, k in self.parent.GAME_MODE_LABELS
-                                  if k == _current)
-            self._mode_seg = SegmentedControl(
-                pres_section, options=_labels,
-                initial=_labels.index(_initial_label),
-                command=self._on_mode_pick)
-            self._mode_seg.pack(fill="x", pady=3)
-        else:  # fallback: plain buttons
-            self._mode_seg = None
-            for lbl, key in self.parent.GAME_MODE_LABELS:
-                ttk.Button(pres_section, text=lbl,
-                           command=lambda k=key: self._on_mode_pick(
-                               next(l for l, kk in self.parent.GAME_MODE_LABELS
-                                    if kk == k))).pack(fill="x", pady=2)
-        ttk.Label(pres_section,
-                  text="Quick Sim resolves instantly. Watch Live opens the "
-                       "real-time rink. Ask Each Game lets you choose on game day.",
-                  wraplength=380, justify="left",
-                  font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
+        # Close - primary pill pinned at the bottom
+        footer = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        footer.pack(fill="x", padx=24, pady=(0, 18))
+        primary_button(footer, "Close", command=self.destroy).pack(fill="x")
 
-        # Close button
-        ttk.Button(content_frame, text="Close", command=self.destroy).pack(fill="x", pady=(10, 0))
+    # ------------------------------------------------------------------
+    # Layout helpers
+    # ------------------------------------------------------------------
+    def _build_section(self, parent, title, buttons):
+        """Rounded card with a heading and full-width action buttons."""
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
+        card.pack(fill="x", pady=(0, 12), padx=4)
+        heading(card, title, size=13).pack(anchor="w", padx=16, pady=(12, 6))
+        for text, command in buttons:
+            secondary_button(card, text, command=command, anchor="w",
+                             border_width=1, border_color=BORDER).pack(
+                fill="x", padx=12, pady=3)
+        ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
 
+    def _build_presentation_section(self, parent):
+        """Game-presentation mode picker (Quick Sim / Ask Each Game / Watch Live)."""
+        from ctk_theme import TEAL_HOVER  # not in main.py's module import list
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
+        card.pack(fill="x", pady=(0, 12), padx=4)
+        heading(card, "Game Presentation", size=13).pack(
+            anchor="w", padx=16, pady=(12, 4))
+        heading(card, "Your games:", size=11, text_color=TEXT_DIM).pack(
+            anchor="w", padx=16)
+
+        labels = [lbl for lbl, _ in self.parent.GAME_MODE_LABELS]
+        current = self.parent._get_user_game_mode()
+        initial_label = next(
+            (lbl for lbl, key in self.parent.GAME_MODE_LABELS if key == current),
+            labels[0])
+        self._mode_seg = ctk.CTkSegmentedButton(
+            card, values=labels, command=self._on_mode_pick,
+            fg_color=PANEL, selected_color=TEAL, selected_hover_color=TEAL_HOVER,
+            unselected_color=PANEL, unselected_hover_color=BORDER,
+            text_color=TEXT,
+            corner_radius=8, border_width=1)
+        self._mode_seg.pack(fill="x", padx=16, pady=(8, 6))
+        self._mode_seg.set(initial_label)
+
+        heading(card,
+                "Quick Sim resolves instantly. Watch Live opens the real-time "
+                "rink. Ask Each Game lets you choose on game day.",
+                size=10, text_color=TEXT_DIM, wraplength=420, justify="left"
+                ).pack(anchor="w", padx=16, pady=(0, 14))
+
+    # ------------------------------------------------------------------
+    # Actions (logic unchanged from the ttk version)
+    # ------------------------------------------------------------------
     def _on_mode_pick(self, label):
         key = next((k for lbl, k in self.parent.GAME_MODE_LABELS if lbl == label),
                    'ask')
@@ -14139,57 +14299,66 @@ class GMOptionsWindow(tk.Toplevel):
         if 'shortlist' not in self.parent.open_windows or not self.parent.open_windows['shortlist'].winfo_exists():
             self.parent.open_windows['shortlist'] = ShortlistWindow(self.parent)
         self.parent.open_windows['shortlist'].focus_set()
-    
+
     def open_gm_dashboard(self):
         """Open GM dashboard with key team metrics"""
         from windows import GMDashboardWindow
         GMDashboardWindow(self.parent)
-    
+
     def open_team_analytics(self):
         """Open advanced team analytics"""
         from windows import TeamAnalyticsWindow
         TeamAnalyticsWindow(self.parent)
-    
+
     def open_season_goals(self):
         """Open season goals and objectives"""
         from windows import SeasonGoalsWindow
         SeasonGoalsWindow(self.parent)
-    
+
     def auto_negotiate_extensions(self):
         """Auto-negotiate contract extensions with expiring players"""
         expiring = []
         team = self.parent.user_team
-        
+
         # Find players with 1 year left on contract
         for player in team.roster + team.ahl_roster:
             years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 0))
             if years == 1:
                 expiring.append(player)
-        
+
         # Find staff with 1 year left on contract
         for staff in getattr(team, "staff", []):
             years = getattr(staff, "contract_years", getattr(staff, "years_remaining", 0))
             if years == 1:
                 expiring.append(staff)
-        
+
         if not expiring:
             messagebox.showinfo("No Extensions Needed", "No expiring contracts found.")
             return
-        
+
         # Confirm action
-        if not messagebox.askyesno("Confirm Auto-Negotiate", 
+        if not messagebox.askyesno("Confirm Auto-Negotiate",
                                  f"Automatically negotiate extensions with {len(expiring)} expiring contracts?"):
             return
-        
+
         results = []
         for person in expiring:
-            # Ensure salary and contract_years attributes exist
-            salary = getattr(person, "salary", getattr(person.contract, "salary", 750000))
+            # Ensure salary and contract_years attributes exist.
+            # Note: getattr's default is evaluated eagerly, so guard the
+            # contract lookup - Staff objects have salary/contract_years
+            # fields directly and never carry a .contract attribute.
+            contract = getattr(person, "contract", None)
+            if contract is not None:
+                salary = getattr(person, "salary", getattr(contract, "salary", 750000))
+                years = getattr(person, "contract_years", getattr(contract, "years_remaining", 1))
+            else:
+                salary = getattr(person, "salary", 750000)
+                years = getattr(person, "contract_years", 1)
             person.salary = salary
-            person.contract_years = getattr(person, "contract_years", getattr(person.contract, "years_remaining", 1))
+            person.contract_years = years
             accepted = self.parent.handle_contract_offer(person, extension=True)
             results.append(f"{getattr(person, 'full_name', getattr(person, 'name', 'Unknown'))}: {'Accepted' if accepted else 'Rejected'}")
-        
+
         msg = "Auto-Negotiation Results:\n" + "\n".join(results)
         messagebox.showinfo("Extension Results", msg)
 
