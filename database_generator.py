@@ -817,14 +817,14 @@ class DatabaseGenerator:
     def _set_enhanced_attributes(self, player: Player, age: int, quality_modifier: float):
         """Set realistic attributes based on age, position, and quality.
 
-        Uses the canonical ~50-point attribute scale (same as player_generator
-        and the sim engine): NHL-quality players land roughly 28-46 before
+        Uses the native 100-point attribute scale (same as player_generator
+        and the sim engine): NHL-quality players land roughly 56-92 before
         age adjustment.
         """
 
-        # Base attribute ranges adjusted by quality (50-point scale)
-        base_min = max(5, int(28 * quality_modifier))
-        base_max = min(50, int(44 * quality_modifier))
+        # Base attribute ranges adjusted by quality (100-point scale)
+        base_min = max(10, int(56 * quality_modifier))
+        base_max = min(100, int(88 * quality_modifier))
         
         # Age-based adjustments
         if age < 20:
@@ -852,16 +852,16 @@ class DatabaseGenerator:
         for attr in core_attributes:
             base_value = random.randint(base_min, base_max)
             adjusted_value = int(base_value * current_factor)
-            adjusted_value = max(1, min(50, adjusted_value))
+            adjusted_value = max(1, min(100, adjusted_value))
             setattr(player, attr, adjusted_value)
         
         # Position-specific attributes
         if player.primary_position == PlayerPosition.GOALIE:
             goalie_attrs = ['goaltending', 'reflexes', 'positioning', 'rebound_control', 'puck_handling']
             for attr in goalie_attrs:
-                base_value = random.randint(min(50, base_min + 4), min(50, base_max + 6))
+                base_value = random.randint(min(100, base_min + 8), min(100, base_max + 12))
                 adjusted_value = int(base_value * current_factor)
-                adjusted_value = max(1, min(50, adjusted_value))
+                adjusted_value = max(1, min(100, adjusted_value))
                 setattr(player, attr, adjusted_value)
         
         # Advanced attributes
@@ -875,7 +875,7 @@ class DatabaseGenerator:
             else:
                 base_value = random.randint(base_min, base_max)
                 value = int(base_value * current_factor)
-                value = max(1, min(50, value))
+                value = max(1, min(100, value))
             setattr(player, attr, value)
         
         # Set playing tendencies

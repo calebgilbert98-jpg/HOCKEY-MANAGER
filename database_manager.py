@@ -107,11 +107,11 @@ class DatabaseManager:
             target_team = teams_by_position_need[0]
             player.team_name = target_team.team_name
             
-            # Determine roster level based on overall rating (50-point scale)
+            # Determine roster level based on overall rating (100-point scale)
             overall = player.overall_rating()
-            if overall >= 44:
+            if overall >= 76:
                 target_team.add_player(player, "roster")
-            elif overall >= 40:
+            elif overall >= 70:
                 # Some go to AHL
                 if random.random() < 0.3:
                     target_team.add_player(player, "ahl")
@@ -413,10 +413,10 @@ class DatabaseManager:
             
             stats["age_distribution"][age_range] = count
         
-        # Overall rating distribution (50-point scale)
-        for rating_range in ["25-32", "33-39", "40-44", "45-49", "50+"]:
-            lo, hi = {"25-32": (25, 32), "33-39": (33, 39), "40-44": (40, 44),
-                      "45-49": (45, 49), "50+": (50, 99)}[rating_range]
+        # Overall rating distribution (100-point scale)
+        for rating_range in ["60-69", "70-79", "80-84", "85-89", "90+"]:
+            lo, hi = {"60-69": (60, 69), "70-79": (70, 79), "80-84": (80, 84),
+                      "85-89": (85, 89), "90+": (90, 99)}[rating_range]
             count = len([p for p in all_players_list if lo <= p.overall_rating() <= hi])
             stats["overall_distribution"][rating_range] = count
 

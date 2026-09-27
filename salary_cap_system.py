@@ -7,7 +7,7 @@ cap rises, new contract demands rise with it. Existing contracts are NOT
 retroactively changed (like the real NHL).
 
 Market-setting contracts: when a star (85+ OVR on the 1-100 display scale,
-i.e. ~42+ on the internal ~50 scale) signs a top-5 AAV deal, it "sets the
+i.e. ~85+ on the native 100 scale) signs a top-5 AAV deal, it "sets the
 market". For the next 2 seasons, comparable players (similar OVR, position
 group, age band) demand a 10-15% premium -- the McDavid effect.
 

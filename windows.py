@@ -3133,9 +3133,9 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Calculate the market value of a player."""
         base_value = 750000  # Minimum NHL salary
 
-        # Rating-based value
+        # Rating-based value (100-scale: 74 OVR starter -> (74/92)^2 ~= 0.65x)
         rating = player.overall_rating()
-        rating_multiplier = (rating / 50) ** 2  # Exponential scaling
+        rating_multiplier = (rating / 92) ** 2  # Exponential scaling
 
         # Age factor
         age = player.age
@@ -3165,7 +3165,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         age = player.age
         rating = player.overall_rating()
 
-        if age < 25 and rating > 40:
+        if age < 25 and rating > 75:
             return 6  # Young star, long term
         elif age < 28:
             return 5  # Prime player
@@ -8280,8 +8280,8 @@ class ContractExtensionsWindow(tk.Toplevel):
         
     def calculate_market_value(self, player):
         """Calculate a player's market value based on attributes, age, position, etc."""
-        # Base value determined by overall rating
-        base_value = player.overall_rating() * 100000
+        # Base value determined by overall rating (100-scale: 74 OVR starter -> $3.5M)
+        base_value = max(750000, (player.overall_rating() - 60) * 250000)
         
         # Age modifier - players in their prime (23-29) get premium
         age_modifier = 1.0
@@ -8299,7 +8299,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             position_modifier = 1.1
         elif player.primary_position == PlayerPosition.GOALIE:
             # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 47 else 0.9
+            position_modifier = 1.0 if player.overall_rating() >= 80 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0
@@ -8434,7 +8434,8 @@ class ContractExtensionsWindow(tk.Toplevel):
     def simulate_negotiation(self, player, salary_offer, years):
         """Simulate contract negotiation based on player expectations."""
         # Calculate minimum acceptable salary based on overall rating and age
-        min_salary = player.overall_rating() * 75000
+        # (100-scale: ~75% of the market-value base curve, NHL-minimum floor)
+        min_salary = max(750000, (player.overall_rating() - 60) * 187500)
         
         # Adjust for age
         if player.age >= 30:

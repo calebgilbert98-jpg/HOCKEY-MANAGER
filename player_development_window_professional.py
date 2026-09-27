@@ -1249,8 +1249,8 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
                                                  if 16 <= getattr(p, 'potential', 0) < 18 and p.age <= 23]),
             "Developing Players (B Potential)": len([p for p in all_players 
                                                    if 14 <= getattr(p, 'potential', 0) < 16 and p.age <= 25]),
-            "Veteran Contributors": len([p for p in all_players if p.age > 25 and p.overall_rating() >= 14]),
-            "Needs Development": len([p for p in all_players if p.overall_rating() < 12])
+            "Veteran Contributors": len([p for p in all_players if p.age > 25 and p.overall_rating() >= 72]),
+            "Needs Development": len([p for p in all_players if p.overall_rating() < 66])
         }
         
         for category, count in categories.items():

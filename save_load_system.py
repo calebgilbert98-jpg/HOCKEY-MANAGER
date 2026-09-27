@@ -576,7 +576,16 @@ class GameSaveManager:
             # Restore free agents
             if 'free_agents' in save_data:
                 self._restore_free_agents(save_data['free_agents'])
-            
+
+            # One-time migration: saves written before the 1-100 scale audit
+            # store player attributes on the legacy ~50 scale. Detect by
+            # league-wide attribute mean (legacy ~35, current ~72) and double
+            # the 100-scale fields. New-scale saves are never touched.
+            try:
+                self._migrate_legacy_attribute_scale()
+            except Exception as e:
+                print(f"Legacy scale migration skipped: {e}")
+
             # Restore settings
             if 'settings' in save_data:
                 self._restore_settings(save_data['settings'])
@@ -863,7 +872,7 @@ class GameSaveManager:
                 player = self._restore_player(player_data)
                 if player:
                     free_agents.append(player)
-            
+
             gm = self.game_manager
             if hasattr(gm, 'database_manager') and gm.database_manager is not None:
                 gm.database_manager.free_agents = free_agents
@@ -872,6 +881,73 @@ class GameSaveManager:
 
         except Exception as e:
             print(f"Error restoring free agents: {e}")
+
+    # Fields that live on the native 1-100 scale (intentional 1-20 / 1-10
+    # fields like injury_proneness, morale, staff attributes are excluded).
+    _SCALE_100_PLAYER_FIELDS = (
+        'acceleration', 'adaptability', 'aggressiveness', 'agility',
+        'anticipation', 'backhand', 'balance', 'bodycheck', 'breakaway_skill',
+        'breakout_passes', 'checking', 'coachability', 'composure',
+        'confidence', 'consistency', 'creativity', 'decision_making',
+        'defensive_awareness', 'deflections', 'deking', 'determination',
+        'discipline', 'durability', 'endurance', 'faceoff_wins', 'faceoffs',
+        'first_pass', 'flair', 'focus', 'forechecking', 'glove_hand',
+        'goaltending', 'hockey_iq', 'important_matches', 'leadership',
+        'loose_puck', 'off_the_puck', 'offensive_awareness', 'one_timer',
+        'passing', 'passing_accuracy', 'passing_creativity', 'pokecheck',
+        'positioning', 'pressure_player', 'puck_handling', 'puck_protection',
+        'rebound_control', 'reflexes', 'screen_shots', 'shooting',
+        'shooting_accuracy', 'shooting_power', 'shot_blocking', 'skating',
+        'slapshot', 'speed', 'stamina', 'stick_side', 'stickhandling',
+        'strength', 'teamwork', 'vision', 'work_ethic', 'wristshot',
+    )
+
+    def _migrate_legacy_attribute_scale(self):
+        """Double legacy ~50-scale attributes to the native 1-100 scale.
+
+        Saves written before the scale audit store attributes around 25-50.
+        Detection uses the league-wide mean of core attributes (legacy ~= 35,
+        current ~= 72), so a single weak prospect can never trigger it.
+        Runs once per load; already-migrated saves are detected as current.
+        """
+        gm = self.game_manager
+        league = getattr(gm, 'league', None)
+        if not league or not getattr(league, 'teams', None):
+            return
+        players = []
+        for team in league.teams:
+            for pool in ('roster', 'ahl_roster', 'prospects'):
+                players.extend(getattr(team, pool, None) or [])
+        dbm = getattr(gm, 'database_manager', None)
+        if dbm is not None:
+            players.extend(getattr(dbm, 'free_agents', None) or [])
+        else:
+            players.extend(getattr(league, 'free_agents', None) or [])
+        for dc in (getattr(gm, 'draft_classes', None) or {}).values():
+            players.extend(dc if isinstance(dc, list) else [])
+        players = [p for p in players if p is not None]
+        if len(players) < 20:
+            return
+        sample = []
+        for p in players[:400]:
+            for f in ('skating', 'shooting', 'passing'):
+                v = getattr(p, f, None)
+                if isinstance(v, (int, float)):
+                    sample.append(v)
+        if not sample:
+            return
+        mean = sum(sample) / len(sample)
+        if mean >= 58:
+            return  # current 1-100 scale; nothing to do
+        migrated = 0
+        for p in players:
+            for f in self._SCALE_100_PLAYER_FIELDS:
+                v = getattr(p, f, None)
+                if isinstance(v, (int, float)) and v < 62:
+                    setattr(p, f, min(100, int(round(v * 2))))
+                    migrated += 1
+        print(f"Migrated {len(players)} players from legacy attribute scale "
+              f"({migrated} fields doubled, mean was {mean:.1f})")
     
     def _restore_settings(self, settings_data: Dict[str, Any]):
         """Restore game settings"""
