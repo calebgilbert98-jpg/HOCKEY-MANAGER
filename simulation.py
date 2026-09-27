@@ -1945,6 +1945,10 @@ class GameSim:
         active_players = self.home_on_ice + self.away_on_ice
         
         for player in active_players:
+            # Degenerate rosters (no dressed goalie -> throwaway "Default Goalie"
+            # not present in either roster) must degrade, never crash the sim.
+            if player.id not in self.game_stats:
+                continue
             # Update development predictions
             self._predict_player_development(player)
             

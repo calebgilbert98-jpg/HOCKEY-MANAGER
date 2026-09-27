@@ -1527,6 +1527,34 @@ class EmailMessage:
         """Get the age of this email in days."""
         return (date.today() - self.date_sent).days
 
+    def to_dict(self) -> dict:
+        """Pickle-free dict form for save files and multiplayer snapshots."""
+        data = {}
+        for name in self.__dataclass_fields__:
+            value = getattr(self, name)
+            if isinstance(value, date):
+                value = value.isoformat()
+            data[name] = value
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        """Rebuild from to_dict(); tolerant of missing/extra keys (old saves)."""
+        try:
+            known = set(cls.__dataclass_fields__)
+            clean = {k: v for k, v in dict(data).items() if k in known}
+            for k in ("date_sent", "date_read", "response_deadline",
+                      "game_date_sent"):
+                v = clean.get(k)
+                if isinstance(v, str):
+                    try:
+                        clean[k] = date.fromisoformat(v)
+                    except ValueError:
+                        clean[k] = None
+            return cls(**clean)
+        except Exception:
+            return None
+
 @dataclass 
 class EmailInbox:
     """Manages the player's email inbox system, similar to EHM."""

@@ -147,6 +147,16 @@ class MultiplayerHost:
         with self._peers_lock:
             return len(self._peers)
 
+    def claimed_teams(self) -> List[str]:
+        """Team ids currently managed by a connected client.
+
+        Lets game logic (e.g. headline delivery) reach every human
+        manager, not just the host's local team.
+        """
+        with self._peers_lock:
+            return [p.team_id for p in self._peers.values()
+                    if p.handshake_done and p.team_id]
+
     def get_lobby(self) -> List[Dict[str, str]]:
         with self._peers_lock:
             return [{"session_id": p.session_id, "name": p.name,

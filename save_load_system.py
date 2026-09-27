@@ -139,6 +139,10 @@ class GameSaveManager:
                 'standings_position': getattr(team, 'standings_position', 0),
                 'board_expectation': getattr(team, 'board_expectation', None),
                 'buyout_cap_hits': dict(getattr(team, 'buyout_cap_hits', {}) or {}),
+                # Inbox (headlines, saved emails): must cross save/load and
+                # multiplayer snapshots so every manager keeps their mail.
+                'inbox': [m.to_dict() for m in
+                          getattr(getattr(team, 'inbox', None), 'messages', []) or []],
             }
             
             return team_data
@@ -671,7 +675,21 @@ class GameSaveManager:
             team.roster = [p for p in team.roster if p is not None]
             team.ahl_roster = [p for p in team.ahl_roster if p is not None]
             team.prospects = [p for p in team.prospects if p is not None]
-            
+
+            # Restore inbox. Absent in old saves -> fresh empty inbox.
+            try:
+                from game_classes import EmailMessage, EmailInbox
+                inbox = EmailInbox()
+                for md in team_data.get('inbox', []) or []:
+                    msg = EmailMessage.from_dict(md) if isinstance(md, dict) else None
+                    if msg is not None:
+                        inbox.messages.append(msg)
+                inbox.unread_count = sum(1 for m in inbox.messages if not m.is_read)
+                inbox.total_messages = len(inbox.messages)
+                team.inbox = inbox
+            except Exception:
+                pass
+
             return team
             
         except Exception as e:

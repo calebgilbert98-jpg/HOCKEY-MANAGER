@@ -177,18 +177,48 @@ def _daily_count(app, game_date) -> Tuple[dict, int]:
     return tracker, tracker["count"]
 
 
-def _user_team_name(app) -> str:
-    ut = getattr(app, "user_team", None)
-    return getattr(ut, "team_name", getattr(ut, "name", "")) if ut else ""
+def _team_name(team) -> str:
+    return getattr(team, "team_name", getattr(team, "name", "")) if team else ""
+
+
+def human_teams(app):
+    """Every human-managed team: the local user_team plus any teams claimed
+    by connected multiplayer clients. Single-player returns [user_team]."""
+    teams, seen = [], set()
+
+    def _add(t):
+        if t is None or id(t) in seen:
+            return
+        seen.add(id(t))
+        teams.append(t)
+
+    _add(getattr(app, "user_team", None))
+    claimed = []
+    host = getattr(app, "mp_host", None)
+    if host is not None:
+        try:
+            claimed = host.claimed_teams()
+        except Exception:
+            claimed = []
+    if claimed:
+        gm = getattr(app, "game_manager", None)
+        league = getattr(gm, "league", None) or getattr(app, "league", None)
+        for t in getattr(league, "teams", []) or []:
+            if _team_name(t) in claimed:
+                _add(t)
+    return teams
 
 
 def deliver(app, msg, involved=()) -> bool:
-    """Deliver a headline: news feed always, inbox for the user.
+    """Deliver a headline: news feed always, inbox for every human manager.
 
-    involved: team names touched by the event. If the user's team is among
-    them the email is flagged is_milestone (never auto-expires) and important.
+    involved: team names touched by the event. Each human manager whose team
+    is among them gets the email flagged is_milestone (never auto-expires)
+    and important; everyone else gets a normal 7-day copy.
     Returns True if delivered, False if the daily cap blocked it.
     """
+    import copy
+    import uuid
     from game_classes import EmailMessage
     if not isinstance(msg, EmailMessage):
         return False
@@ -197,12 +227,7 @@ def deliver(app, msg, involved=()) -> bool:
     if used >= DAILY_HEADLINE_CAP:
         return False
 
-    user_name = _user_team_name(app)
     involved = tuple(involved or ())
-    is_mine = bool(user_name) and user_name in involved
-    if is_mine:
-        msg.is_milestone = True
-        msg.is_important = True
 
     # News feed: the league-wide lore, one line.
     try:
@@ -211,13 +236,23 @@ def deliver(app, msg, involved=()) -> bool:
     except Exception:
         pass
 
-    # Inbox: the user's copy.
-    try:
-        inbox = app.user_team.inbox
-        inbox.add_message(msg)
-        tracker["count"] = used + 1
-    except Exception:
+    # Inbox: every human manager gets their own copy (per-team milestone).
+    delivered = 0
+    for team in human_teams(app):
+        try:
+            inbox = team.inbox
+            team_copy = copy.deepcopy(msg)
+            team_copy.id = str(uuid.uuid4())
+            if _team_name(team) in involved:
+                team_copy.is_milestone = True
+                team_copy.is_important = True
+            inbox.add_message(team_copy)
+            delivered += 1
+        except Exception:
+            continue
+    if not delivered:
         return False
+    tracker["count"] = used + 1
     return True
 
 

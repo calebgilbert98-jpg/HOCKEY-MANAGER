@@ -3372,9 +3372,47 @@ class HockeyManagerGUI(tk.Tk):
                 self.quit()
                 return
             
+    def _rebuild_news_log_from_stories(self):
+        """Rebuild the GUI news feed from the canonical news_stories list.
+
+        news_stories is the save/snapshot copy every manager (including
+        multiplayer clients) receives; the GUI news_log is the local view.
+        """
+        try:
+            from datetime import date as _date
+            stories = getattr(getattr(self, 'game_manager', None),
+                              'news_stories', None) or []
+            rebuilt = []
+            for item in stories:
+                if isinstance(item, dict):
+                    d = item.get('date')
+                    if isinstance(d, str):
+                        try:
+                            d = _date.fromisoformat(d)
+                        except ValueError:
+                            pass
+                    rebuilt.append({'date': d, 'story': item.get('story', '')})
+            self.news_log = rebuilt
+        except Exception:
+            pass
+
     def add_news(self, story):
         """Add a news item to the news log."""
         self.news_log.append({'date': self.current_date, 'story': story})
+        # Mirror into the canonical list that save files and multiplayer
+        # snapshots carry, so every manager sees the same league lore.
+        stories = None
+        try:
+            gm = getattr(self, 'game_manager', None)
+            stories = getattr(gm, 'news_stories', None)
+            if stories is None and gm is not None:
+                gm.news_stories = stories = []
+            if stories is not None:
+                d = self.current_date
+                stories.append({'date': d.isoformat() if hasattr(d, 'isoformat') else d,
+                                'story': story})
+        except Exception:
+            pass
         # Bound the feed: keep the most recent stories so the log (and the
         # save file) can't grow unbounded across seasons.
         try:
@@ -3382,6 +3420,8 @@ class HockeyManagerGUI(tk.Tk):
             cap = _hl.NEWS_LOG_CAP
         except Exception:
             cap = 500
+        if stories is not None and len(stories) > cap:
+            del stories[:len(stories) - cap]
         if len(self.news_log) > cap:
             del self.news_log[:len(self.news_log) - cap]
         # Update news window if it's open
@@ -6941,7 +6981,8 @@ class HockeyManagerGUI(tk.Tk):
                 self.user_team = self.game_manager.user_team
             self.update_all_views()
             if label:
-                self._mp_toast(f"Synced: {label}")
+                self._rebuild_news_log_from_stories()
+            self._mp_toast(f"Synced: {label}")
         except Exception as e:
             print(f"Snapshot view refresh failed (non-fatal): {e}")
 
@@ -10386,6 +10427,7 @@ class HockeyManagerGUI(tk.Tk):
     def on_game_loaded(self):
         """Called when a game is loaded from save file."""
         self.is_new_game = False
+        self._rebuild_news_log_from_stories()
         print("Game loaded from save - autosave enabled")
         
     def on_game_saved(self):
