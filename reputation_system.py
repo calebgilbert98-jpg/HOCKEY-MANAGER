@@ -121,6 +121,10 @@ def ensure_reputation_fields(entity: Any) -> None:
             entity.dynamics_log = []
         if not hasattr(entity, "line_control") or entity.line_control is None:
             entity.line_control = "coach"
+        if not hasattr(entity, "prev_roster_names") or entity.prev_roster_names is None:
+            entity.prev_roster_names = []
+        if not hasattr(entity, "roster_churn") or entity.roster_churn is None:
+            entity.roster_churn = 0.2
 
 
 def seed_player_reputation(player: Any) -> int:
@@ -3839,6 +3843,35 @@ def coach_development_factor(player: Any, coach: Any) -> float:
 SITUATION_XG_PER_POINT = 0.008  # +/-8% finishing at the extremes; the room
                                  # matters, but talent still decides most nights
 
+def snapshot_roster_churn(team: Any) -> float:
+    """Offseason roster-turnover snapshot for the situations factor.
+
+    Compares the current NHL roster (by name -- survives saves) against last
+    offseason's snapshot and stores the churn fraction (0-1) on
+    team.roster_churn. High churn = "new faces still gelling" penalty;
+    a kept core = "battle-tested" bonus. First run (old saves): league-
+    average 0.2. Call once per offseason for every team. Never raises.
+    """
+    try:
+        names = []
+        for p in getattr(team, "roster", None) or []:
+            fn = getattr(p, "first_name", "") or ""
+            ln = getattr(p, "last_name", "") or ""
+            full = f"{fn} {ln}".strip() or str(getattr(p, "full_name", "?"))
+            names.append(full)
+        prev = list(getattr(team, "prev_roster_names", None) or [])
+        if prev and names:
+            overlap = len(set(prev) & set(names))
+            churn = 1.0 - overlap / len(names)
+        else:
+            churn = 0.2
+        team.roster_churn = round(max(0.0, min(1.0, churn)), 3)
+        team.prev_roster_names = names
+        return team.roster_churn
+    except Exception:
+        return 0.2
+
+
 _ROOM_SCORE = {"Secure": 1.5, "Strain": -1.0, "Fracturing": -2.5, "Lost": -4.0}
 _BUYIN_SCORE = {"Bought in": 1.0, "Neutral": 0.0, "Tuning out": -1.0,
                 "Quit on coach": -1.5}
@@ -3888,6 +3921,26 @@ def situations_factor(team: Any, ctx: Optional[Dict[str, Any]] = None) -> Dict[s
         if roster:
             chem = team_chemistry(roster)
             add("Room chemistry", max(-2.0, min(2.0, (chem.get("score", 50) - 55) / 22.5)))
+    except Exception:
+        pass
+    # ---- CONTINUITY: years pass, players and staff change -----------------
+    # Summer turnover takes time to gel; a kept core becomes an identity.
+    # This is what makes each team's situation evolve year to year -- and
+    # differently in every playthrough, driven by actual roster decisions.
+    try:
+        churn = getattr(team, "roster_churn", None)
+        churn = 0.2 if churn is None else max(0.0, min(1.0, float(churn)))
+        if churn >= 0.35:
+            add("New faces still gelling", round(-churn * 3.0, 2))
+        elif churn <= 0.12:
+            add("Gelled, battle-tested core", 1.0)
+    except Exception:
+        pass
+    try:
+        if coach is not None:
+            ywt = getattr(coach, "years_with_team", 0) or 0
+            if ywt <= 1:
+                add("New voice behind the bench", 0.75)
     except Exception:
         pass
     try:

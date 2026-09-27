@@ -1955,6 +1955,11 @@ class Team:
     # Dressing-room dynamics (Morale screen): event feed + who picks the lines
     dynamics_log: List[dict] = field(default_factory=list)
     line_control: str = "coach"  # 'coach' | 'gm'
+    # Roster continuity for the situations factor: offseason snapshot of NHL
+    # roster names + measured summer turnover (0-1). High churn = gelling
+    # penalty; a kept core = battle-tested bonus. Ticked each offseason.
+    prev_roster_names: List[str] = field(default_factory=list)
+    roster_churn: float = 0.2
     # Forecheck: '2-1-2', '1-2-2', '1-4' (pressure scheme in the other team's end)
     tactic_forecheck: str = "2-1-2"
     # Offensive-zone formation: 'Overload', 'Umbrella', 'Spread', 'Crash the Net'

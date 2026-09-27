@@ -9209,6 +9209,12 @@ class HockeyManagerGUI(tk.Tk):
                 # Coach influence: recent success builds it, losing burns it.
                 rs.develop_coach_influence(s, win_pct=win_pct, is_champ=is_champ,
                                            roster=team.roster)
+            # Roster churn snapshot for next season's situations factor
+            # (gelling vs battle-tested core). Once per team per offseason.
+            try:
+                rs.snapshot_roster_churn(team)
+            except Exception:
+                pass
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
