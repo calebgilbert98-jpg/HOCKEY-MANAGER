@@ -169,7 +169,8 @@ class PlayerDevelopmentEngine:
         
         return base_rate
     
-    def calculate_attribute_development(self, player: Player, attribute: str) -> int:
+    def calculate_attribute_development(self, player: Player, attribute: str,
+                                            coach=None) -> int:
         """Calculate how much an attribute should change"""
         if not hasattr(player, 'potential'):
             return 0
@@ -196,6 +197,13 @@ class PlayerDevelopmentEngine:
         
         # Calculate development points
         development_points = base_rate * gap_modifier * variance
+        # The coach: influence, youth touch, personality, talent.
+        if coach is not None:
+            try:
+                import reputation_system as _rs
+                development_points *= _rs.coach_development_factor(player, coach)
+            except Exception:
+                pass
         
         # Convert to integer attribute change
         if development_points >= 1.0:
@@ -252,7 +260,7 @@ class PlayerDevelopmentEngine:
         
         return attribute_changes
     
-    def process_monthly_development(self, player: Player) -> Dict[str, int]:
+    def process_monthly_development(self, player: Player, coach=None) -> Dict[str, int]:
         """Process natural monthly development for a player"""
         if not hasattr(player, 'potential'):
             # Initialize potential if missing
@@ -274,7 +282,7 @@ class PlayerDevelopmentEngine:
         # Process each attribute
         for attribute in developable_attributes:
             if hasattr(player, attribute):
-                change = self.calculate_attribute_development(player, attribute)
+                change = self.calculate_attribute_development(player, attribute, coach=coach)
                 if change != 0:
                     current_value = getattr(player, attribute)
                     new_value = max(1, min(20, current_value + change))

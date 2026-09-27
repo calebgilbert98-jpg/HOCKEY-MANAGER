@@ -3296,3 +3296,43 @@ def develop_coach_influence(coach: Any, win_pct: Optional[float] = None,
             pass
     coach.influence = max(0, min(100, int(round(inf))))
     return coach.influence
+
+
+# ---------------------------------------------------------------------------
+# Coach influence on development: talent - personality - coaching
+# ---------------------------------------------------------------------------
+
+def coach_development_factor(player: Any, coach: Any) -> float:
+    """0.6..1.4: how much this coach accelerates (or stalls) this player's
+    growth. The voice's weight (influence), the youth touch, the player's
+    coachability and current buy-in -- but generational talent transcends
+    coaching: a McDavid develops under anyone, the right coach just
+    squeezes the last drops out."""
+    try:
+        if coach is None:
+            return 1.0
+        age = getattr(player, "age", 25) or 25
+        factor = 1.0
+        # 1. The voice's weight.
+        influence = getattr(coach, "influence", 70) or 70
+        factor *= 0.70 + (influence / 100.0) * 0.60
+        # 2. The youth touch, for young players.
+        if age <= 23:
+            wwy = getattr(coach, "working_with_youngsters", 10) or 10
+            factor *= 1.0 + (wwy - 10) / 10 * 0.25
+        # 3. Personality: raw coachability, then the current relationship.
+        cont = getattr(player, "controversy", 0) or 0
+        factor *= 1.0 - (cont / 100.0) * 0.25
+        try:
+            label = player_coach_response(player, coach).get("label", "")
+            factor *= {"Bought in": 1.15, "Neutral": 1.0,
+                       "Tuning out": 0.90, "Quit on coach": 0.75}.get(label, 1.0)
+        except Exception:
+            pass
+        # 4. Generational talent develops regardless -- damp toward 1.0.
+        pot = (getattr(player, "potential_grade", "") or "").upper()
+        if pot == "A" and age <= 23:
+            factor = 0.65 + 0.35 * factor
+        return round(max(0.6, min(1.4, factor)), 3)
+    except Exception:
+        return 1.0

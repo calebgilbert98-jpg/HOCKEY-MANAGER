@@ -1230,7 +1230,8 @@ NHL League Office""",
         for team in self.league.teams:
             for roster_name in ('roster', 'prospects'):
                 for player in getattr(team, roster_name, []) or []:
-                    changes = self._dev_engine.process_monthly_development(player)
+                    changes = self._dev_engine.process_monthly_development(
+                        player, coach=getattr(team, 'head_coach', None))
                     if not changes:
                         continue
                     # Refresh archetype as attributes develop (e.g. prospect
