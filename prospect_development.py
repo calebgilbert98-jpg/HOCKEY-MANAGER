@@ -570,18 +570,38 @@ def process_prospect_offseason(player: Any, league: Optional[str] = None,
 # ---------------------------------------------------------------------------
 # Situational readiness: is he ready *right now, here*?
 #
-# Talent (callup_readiness) is the base. The situation moves it -- sometimes
-# a lot, and fast:
-#   - Opportunity: an injured NHL regular at his position opens a door.
-#     A kid who is 60% ready with a top-6 hole is more ready than the same
-#     kid with no path to ice time.
-#   - Coach fit: the right coach for THIS kid (Bought in vs Quit on coach).
-#   - Line fit: the opening has to match his archetype -- a sniper does not
-#     belong in a checking hole.
-#   - The fast channel: his live NHL audition. Stamped at call-up time
-#     (main.call_up_to_nhl); production since then moves the number within
-#     days. Step up when a star goes down and the grade stops mattering.
+# Talent (callup_readiness) is the base. The situation moves it -- through a
+# LOT of small attribute-driven terms, not a few flat bumps. Two kids with
+# the same overall in the same injury crisis get different numbers because
+# composure, big-game temperament, experience, confidence, work ethic,
+# consistency, physical maturity, versatility, contract hunger, the coach's
+# fit, and the team's situation all weigh in. Same scenario, different kid,
+# different answer -- like real life.
+#
+# Legs:
+#   1. Opportunity: an injured NHL regular at his position opens a door.
+#      The bump scales with the hole's size AND how close this kid is to
+#      filling it, then ~10 personal terms shape it further.
+#   2. Line fit: the opening has to match his archetype -- scaled by the
+#      attributes that define his role, not a flat +4.
+#   3. Coach fit: response label plus the continuous fit score.
+#   4. Farm trend: the slope of his production, not just up/down.
+#   5. The fast channel: his live NHL audition (stamped at call-up in
+#      main.call_up_to_nhl). Produce and the old grade stops mattering.
+#   6. Room fit: chemistry with the group he'd join.
 # ---------------------------------------------------------------------------
+
+def _attr(player: Any, name: str, default: float = 50.0) -> float:
+    try:
+        v = getattr(player, name, default)
+        return float(default if v is None else v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
 
 def _pos_group(player: Any) -> str:
     pos = (getattr(getattr(player, "primary_position", None), "value", "")
@@ -597,27 +617,138 @@ def _skater_archetype(player: Any) -> str:
     """Rough role: what job does this skater do?"""
     if _is_goalie(player):
         return "goalie"
-    get = lambda a: float(getattr(player, a, 50) or 50)
     scores = {
-        "scorer": get("shooting") + get("hockey_iq"),
-        "playmaker": get("passing") + get("hockey_iq"),
-        "checker": get("checking") + get("strength"),
-        "shutdown": get("defense") + get("strength"),
-        "puck-mover": get("skating") + get("passing"),
+        "scorer": _attr(player, "shooting") + _attr(player, "hockey_iq"),
+        "playmaker": _attr(player, "passing") + _attr(player, "vision"),
+        "checker": _attr(player, "checking") + _attr(player, "strength"),
+        "shutdown": _attr(player, "defense") + _attr(player, "strength"),
+        "puck-mover": _attr(player, "skating") + _attr(player, "passing"),
     }
     return max(scores, key=scores.get)
+
+
+# The two attributes that define each archetype's toolbox.
+_ARCHETYPE_KEYS = {
+    "scorer": ("shooting", "hockey_iq"),
+    "playmaker": ("passing", "vision"),
+    "checker": ("checking", "strength"),
+    "shutdown": ("defense", "strength"),
+    "puck-mover": ("skating", "passing"),
+}
+
+
+def _hole_tag(star_ovr: float) -> str:
+    if star_ovr >= 80:
+        return "Major piece down"
+    if star_ovr >= 74:
+        return "Regular down"
+    return "Depth injury"
+
+
+def _moment_terms(player: Any, star_ovr: float, team: Any,
+                  out: List) -> None:
+    """The ~10 personal terms that make the same hole a different question
+    for every kid. Each is small; together they separate the league."""
+    terms = [
+        # The spotlight: some kids shrink, some grow.
+        ("Composure in the spotlight",
+         (_attr(player, "composure", 60) - 60) / 20.0 * 2.0),
+        ("Big-game temperament",
+         (_attr(player, "pressure_player", 50) - 50) / 25.0 * 2.0),
+        # What's he feeling right now?
+        ("Confidence right now",
+         (_attr(player, "morale", 70) - 70) * 0.05
+         + (_attr(player, "confidence", 60) - 60) * 0.04),
+        # Workers force their way into lineups.
+        ("Work ethic / determination",
+         ((_attr(player, "determination", 55)
+           + _attr(player, "work_ethic", 55)) / 2.0 - 55) * 0.06),
+        # Coaches trust kids who bring it every night.
+        ("Consistency coaches trust",
+         (_attr(player, "consistency", 55) - 55) * 0.05),
+        # Smart two-way kids slide up and down the lineup.
+        ("Versatility",
+         ((_attr(player, "hockey_iq", 55)
+           + _attr(player, "off_the_puck", 55)) / 2.0 - 60) * 0.05),
+        # Fragile kids are a gamble when the games matter.
+        ("Durability question",
+         -max(0.0, _attr(player, "injury_proneness", 50) - 55) * 0.06),
+    ]
+    # NHL experience: never played a shift vs been around.
+    g = _attr(player, "nhl_games_played", 0)
+    if g <= 0:
+        terms.append(("Never played an NHL shift", -2.0))
+    elif g >= 80:
+        terms.append(("Been around the league", 2.0))
+    elif g >= 20:
+        terms.append(("Has a taste of the NHL", 1.0))
+    # A top-six/top-four hole is a man's job -- boys get exposed.
+    if star_ovr >= 80:
+        terms.append(("Physical maturity for the role",
+                      ((_attr(player, "strength", 55)
+                        + _attr(player, "balance", 55)
+                        + _attr(player, "stamina", 55)) / 3.0 - 60) * 0.06))
+    # Contract-year hunger: playing for his next deal.
+    try:
+        if getattr(getattr(player, "contract", None), "years_remaining", 0) == 1:
+            terms.append(("Contract-year hunger", 1.5))
+    except Exception:
+        pass
+    # The team's situation sets the leash length.
+    try:
+        w = float(getattr(team, "wins", 0) or 0)
+        l = float(getattr(team, "losses", 0) or 0)
+        ot = float(getattr(team, "ot_losses", 0) or 0)
+        if w + l + ot >= 10:
+            pct = w / (w + l + ot)
+            if pct >= 0.600:
+                terms.append(("Contender -- short leash", -2.0))
+            elif pct <= 0.400:
+                terms.append(("Rebuild -- kids get runway", 2.0))
+    except Exception:
+        pass
+    for label, d in terms:
+        if abs(d) >= 0.5:
+            out.append((label, round(d, 1)))
+
+
+def _line_fit_terms(player: Any, star: Any, grp: str, out: List) -> None:
+    """Does the opening match his game? Scaled by the attributes behind
+    his archetype -- a 90-shooting sniper owns a scorer's hole in a way a
+    68-shooting 'scorer' doesn't."""
+    if grp == "G":
+        return
+    hole_arch = _skater_archetype(star)
+    kid_arch = _skater_archetype(player)
+    keys = _ARCHETYPE_KEYS.get(kid_arch, ("shooting", "hockey_iq"))
+    toolbox = (_attr(player, keys[0]) + _attr(player, keys[1])) / 2.0
+    if kid_arch == hole_arch:
+        d = max(0.0, toolbox - 62) * 0.15
+        if d >= 0.5:
+            out.append((f"Built for the {hole_arch} role", round(d, 1)))
+    elif {kid_arch, hole_arch} <= {"scorer", "playmaker"}:
+        d = max(0.0, toolbox - 64) * 0.10
+        if d >= 0.5:
+            out.append(("Skill game translates to the hole", round(d, 1)))
+    elif (kid_arch in ("checker", "shutdown")) != \
+            (hole_arch in ("checker", "shutdown")):
+        d = -max(1.0, (64 - toolbox) * 0.12)
+        out.append(("Wrong role for the opening", round(d, 1)))
 
 
 def situational_readiness(player: Any,
                           team: Any = None) -> Tuple[float, List]:
     """(score 0-100, breakdown [(label, delta), ...]).
 
-    team: the NHL club (needs .roster and .staff for the opportunity and
-    coach legs). Without it, returns the base talent score with no deltas.
+    team: the NHL club (needs .roster for the opportunity leg, .staff for
+    the coach leg, wins/losses for the situation leg). Without it, returns
+    the base talent score with farm-trend and audition legs only.
     Every leg is defensive -- missing data just means no adjustment.
     """
     base = callup_readiness(player)
-    deltas: list = []
+    deltas: List = []
+    if getattr(player, "is_injured", False):
+        return 0.0, [("Injured -- not an option", -round(base, 1))]
     grp = _pos_group(player)
 
     # 1. Opportunity: an injured regular at his position opens a door.
@@ -629,65 +760,66 @@ def situational_readiness(player: Any,
             if holes:
                 star = max(holes, key=_overall)
                 star_ovr = _overall(star)
+                kid_ovr = _overall(player)
+                # How big is the void...
+                hole = 3.0 + max(0.0, star_ovr - 70) * 0.35
+                # ...and how much of it can THIS kid fill?
+                gap = _clamp((kid_ovr - star_ovr + 10) / 14.0, 0.0, 1.0)
+                d = hole * (0.45 + 0.55 * gap)
                 name = getattr(star, "full_name",
                                getattr(star, "last_name", "A regular"))
-                if star_ovr >= 80:
-                    d, tag = 12, "Major piece down"
-                elif star_ovr >= 74:
-                    d, tag = 8, "Regular down"
-                else:
-                    d, tag = 5, "Depth injury"
-                deltas.append((f"{tag}: {name} out -- the door is open", d))
-                # ...but only if the opening fits his game.
-                if grp != "G":
-                    hole_arch = _skater_archetype(star)
-                    kid_arch = _skater_archetype(player)
-                    skill = {"scorer", "playmaker"}
-                    grind = {"checker", "shutdown"}
-                    if kid_arch == hole_arch or {kid_arch, hole_arch} <= skill:
-                        deltas.append((f"Fits the {hole_arch} hole", 4))
-                    elif (kid_arch in grind) != (hole_arch in grind):
-                        deltas.append(("Wrong role for the opening", -3))
+                deltas.append(
+                    (f"{_hole_tag(star_ovr)}: {name} out -- the door is open",
+                     round(d, 1)))
+                _moment_terms(player, star_ovr, team, deltas)
+                _line_fit_terms(player, star, grp, deltas)
         except Exception:
             pass
 
-    # 2. Coach fit: the right coach for THIS kid.
+    # 2. Coach fit: the right coach for THIS kid -- label plus the
+    # continuous fit underneath it.
     if team is not None:
         try:
             import reputation_system as _rs
             coach = _rs._head_coach_of(team)
             if coach is not None:
-                label = _rs.player_coach_response(player, coach).get("label", "")
-                bump = {"Bought in": 6, "Tuning out": -6,
-                        "Quit on coach": -12}.get(label, 0)
-                if bump:
-                    deltas.append((f"Coach fit: {label}", bump))
+                resp = _rs.player_coach_response(player, coach)
+                label = resp.get("label", "")
+                bump = {"Bought in": 5, "Tuning out": -5,
+                        "Quit on coach": -10}.get(label, 0)
+                fit = _rs.coach_player_fit(coach, player)
+                total = bump + fit * 4.0
+                if abs(total) >= 0.5:
+                    deltas.append((f"Coach fit: {label}"
+                                   + (f" ({fit:+.2f})" if fit else ""),
+                                   round(total, 1)))
         except Exception:
             pass
 
-    # 3. Farm trend: production heading the right way.
+    # 3. Farm trend: the SLOPE of his production, not just up/down.
     try:
         hist = getattr(player, "farm_history", None) or []
         if len(hist) >= 2:
             if _is_goalie(player):
                 now = float(hist[-1].get("sv_pct", 0) or 0)
                 prev = float(hist[-2].get("sv_pct", 0) or 0)
-                if now - prev >= 0.010:
-                    deltas.append(("Save % trending up", 5))
-                elif prev - now >= 0.012:
-                    deltas.append(("Save % slipping", -4))
+                d = _clamp((now - prev) * 400.0, -6.0, 6.0)
+                if abs(d) >= 0.5:
+                    deltas.append(("Save % trending " +
+                                   ("up" if d > 0 else "down"), round(d, 1)))
             else:
                 now, prev = _nhle_of_season(hist[-1]), _nhle_of_season(hist[-2])
-                if now - prev >= 0.08:
-                    deltas.append(("Production trending up", 6))
-                elif prev - now >= 0.10:
-                    deltas.append(("Production slipping", -4))
+                d = _clamp((now - prev) * 40.0, -8.0, 8.0)
+                if abs(d) >= 0.5:
+                    deltas.append(("Production trending " +
+                                   ("up" if d > 0 else "down"), round(d, 1)))
     except Exception:
         pass
 
     # 4. The fast channel: his live NHL audition. Production since the
     # call-up stamp moves the number within days -- step up for an injured
-    # star and the old grade stops mattering.
+    # star and the old grade stops mattering. Younger kids making the jump
+    # make a louder statement.
     try:
         aud = getattr(player, "nhl_audition", None)
         if isinstance(aud, dict):
@@ -699,14 +831,34 @@ def situational_readiness(player: Any,
                     - (aud.get("assists", 0) or 0))
             if dgp >= 3:
                 ppg = dpts / dgp
+                age = _attr(player, "age", 22)
+                statement = 1.0 + max(0.0, 23 - age) * 0.10
                 if ppg >= 0.60:
-                    deltas.append(("Showing he belongs", 12))
+                    d = 10.0 * statement
+                    deltas.append(("Showing he belongs", round(d, 1)))
                 elif ppg >= 0.35:
-                    deltas.append(("Holding his own", 6))
+                    deltas.append(("Holding his own", 6.0))
                 elif dgp >= 6 and ppg < 0.15:
-                    deltas.append(("Overmatched so far", -8))
+                    deltas.append(("Overmatched so far", -8.0))
+                streak = int(_attr(player, "current_point_streak", 0))
+                if streak >= 4 and ppg >= 0.35:
+                    deltas.append(("Riding a heater", 2.0))
     except Exception:
         pass
 
-    score = base + sum(d for _, d in deltas)
-    return round(max(0.0, min(100.0, score)), 1), deltas
+    # 5. Room fit: the group he'd be joining.
+    if team is not None:
+        try:
+            chem = _attr(player, "team_chemistry", 50)
+            if chem >= 70:
+                deltas.append(("Fits the room", 1.0))
+            elif chem <= 35:
+                deltas.append(("Room fit question", -1.5))
+        except Exception:
+            pass
+
+    # Sanity: the moment can swing a kid a lot, but not into absurdity.
+    total = sum(d for _, d in deltas)
+    total = _clamp(total, -32.0, 32.0)
+    score = _clamp(base + total, 0.0, 100.0)
+    return round(score, 1), deltas
