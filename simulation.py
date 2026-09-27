@@ -2158,9 +2158,15 @@ class GameSim:
 
         while self.clock > 0:
             time_elapsed = random.randint(8, 20)  # Slightly faster pace
+            tick_start_clock = self.clock
             self.clock -= time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
+            # Tick-local log indices: used below to spread this tick's
+            # elapsed game time across the events logged during the tick,
+            # so sequential plays get distinct chronological timestamps.
+            tick_log_start = len(self.game_log)
+            tick_elog_start = len(self.event_log)
 
             # Sudden-death OT: stop the period as soon as someone scores
             if getattr(self, '_ot_sudden_death', False) and self._ot_start_score is not None:
@@ -2222,6 +2228,12 @@ class GameSim:
                 self._emit_skate()
             except Exception:
                 pass
+
+            # EHM-style clock realism: spread this tick's elapsed time over
+            # its events so the PBP feed never shows a burst of plays all
+            # stamped with the exact same second.
+            self._spread_tick_timestamps(tick_start_clock, time_elapsed,
+                                         tick_log_start, tick_elog_start)
 
         # Rule 26: a delayed call can't survive the horn -- force the
         # whistle at the period boundary.
@@ -6306,6 +6318,44 @@ class GameSim:
             return round(float(value), 3)
         except (TypeError, ValueError):
             return str(value) if value is not None else None
+
+    def _spread_tick_timestamps(self, tick_start_clock, time_elapsed,
+                                  log_start, elog_start):
+        """Distribute a tick's elapsed game time across its logged events.
+
+        The tick loop advances the clock once per tick but a tick can log
+        several plays (pass -> shot -> save). Without this, every play in
+        the tick shares one timestamp and the PBP feed shows bursts like
+        five events at "P1 14:13". EHM-style realism: each action consumes
+        a slice of the tick's game time, so sequential plays get distinct,
+        chronologically ordered stamps.
+        """
+        import re
+        n = len(self.game_log) - log_start
+        if n > 0 and time_elapsed > 0:
+            for j in range(n):
+                ev_clock = max(0.0,
+                               tick_start_clock - (j + 1) * time_elapsed / n)
+                stamp = (f"[P{self.period} - {int(ev_clock // 60):02d}:"
+                         f"{int(ev_clock % 60):02d}]")
+                idx = log_start + j
+                self.game_log[idx] = re.sub(r'^\[P\d+ - \d{2}:\d{2}\]',
+                                            stamp, self.game_log[idx], count=1)
+        m = len(self.event_log) - elog_start
+        if m > 0 and time_elapsed > 0:
+            for j in range(m):
+                ev_clock = max(0.0,
+                               tick_start_clock - (j + 1) * time_elapsed / m)
+                elapsed = max(0.0, self._period_length - ev_clock)
+                e = self.event_log[elog_start + j]
+                try:
+                    e['timestamp'] = elapsed
+                    det = e.get('details')
+                    if isinstance(det, dict) and 'time_str' in det:
+                        det['time_str'] = (f"{int(elapsed // 60)}:"
+                                           f"{int(elapsed % 60):02d}")
+                except Exception:
+                    pass
 
     def _log_event(self, message, event_type="INFO"):
         """Adds an event to the game log with a timestamp."""
