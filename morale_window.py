@@ -122,6 +122,8 @@ class MoraleWindow(InGamePopup):
                                command=self._do_speech).pack(side='left', padx=6)
         self._secondary_button(coach_btns, text="Practice",
                                command=self._do_practice).pack(side='left', padx=6)
+        self._secondary_button(coach_btns, text="Back Room",
+                               command=self._do_back_room).pack(side='left', padx=6)
 
         watch_card = self._make_card(row1, "Watch List")
         watch_card.pack(side='left', fill='both', expand=True, padx=(6, 0))
@@ -282,6 +284,20 @@ class MoraleWindow(InGamePopup):
             if coach is None:
                 return
             rs.apply_great_practice(team, coach, list(team.roster))
+            self.refresh()
+        except Exception:
+            pass
+
+    def _do_back_room(self):
+        """GM goes on the record for his people. Small, honest lift."""
+        if self._mp_send("team_event", {"event": "gm_backing"}):
+            return
+        try:
+            import media_engine
+            team = self.parent.user_team
+            media_engine.gm_public_backing(
+                getattr(self.parent, 'league', None), team, "room",
+                user_triggered=True)
             self.refresh()
         except Exception:
             pass
