@@ -116,6 +116,8 @@ SUPPORTED_ACTIONS = {
     "unfeature_player", # params: {team_id, player_id}
     "team_event",       # params: {team_id, event: bag_skate|inspiring_speech|great_practice}
     "set_line_control", # params: {team_id, holder: coach|gm, approach?: discuss|seize}
+    "declare_rivalry",  # params: {team_id, target_team, target_kind: team|coach}
+    "renounce_rivalry", # params: {team_id, target_team, target_kind: team|coach}
 }
 
 

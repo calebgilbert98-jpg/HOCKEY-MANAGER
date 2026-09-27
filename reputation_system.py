@@ -1923,7 +1923,7 @@ RIVALRY_KINDS = ("coach_coach", "coach_player", "gm_coach", "gm_agent",
 
 RIVALRY_ORIGINS = ("brawl_game", "playoff_series", "major_injury", "firing",
                    "heavy_hits", "award_race", "regional", "mistreatment",
-                   "gm_power_struggle", "contract_dispute")
+                   "gm_power_struggle", "contract_dispute", "declared")
 
 # The classics. Regional hate never fully dies.
 REGIONAL_RIVALRIES = frozenset([
@@ -2035,8 +2035,10 @@ def decay_rivalries(rivalries: list, years: int = 1) -> int:
     removed = 0
     for r in list(rivalries):
         try:
-            # Regional hate has a floor: it never fully dies.
-            floor = 30 if r["origin"] == "regional" else 0
+            # Declared hate has a floor while the declaration stands;
+            # regional hate never fully dies either.
+            floor = int(r.get("declared_floor") or 0) if r.get("user_declared") \
+                else (30 if r["origin"] == "regional" else 0)
             base = 8 * years
             slow = (1 - r["grudge"] / 150.0) * (1 - r["career_cost"] / 200.0)
             r["intensity"] = max(floor, r["intensity"] - base * max(0.15, slow))
@@ -2055,6 +2057,115 @@ def bury_hatchet(rivalries: list, a: Any, b: Any, reason: str = "") -> bool:
         rivalries.remove(r)
         return True
     return False
+
+
+def gm_persona(team: Any) -> Any:
+    """The human GM as a rivalry entity. _ekey() reads this as
+    ('gm', team_name), distinct from the team itself."""
+    from types import SimpleNamespace
+    gm = getattr(team, "gm_name", "General Manager") or "General Manager"
+    tn = getattr(team, "team_name", "?") or "?"
+    return SimpleNamespace(gm_name=gm, team_name=tn,
+                           full_name=f"{gm} ({tn})")
+
+
+def declare_rivalry(league: Any, a: Any, b: Any, kind: str = "team_team",
+                    declared_by: str = "user") -> Dict[str, Any]:
+    """The human GM publicly declares a rival: another team (team_team) or a
+    person -- an opposing head coach (gm_coach).
+
+    A declaration sets heat to at least 70 and, while it stands, the rivalry
+    never cools below 40 and can never be buried by time. Only an explicit
+    renounce ends it. Merges with any existing record between the pair.
+    """
+    if kind not in RIVALRY_KINDS:
+        raise ValueError(f"unknown rivalry kind: {kind!r}")
+    rivalries = _rivalry_store(league)
+    an, bn = _ename(a), _ename(b)
+    if kind == "team_team":
+        story = (f"{an} publicly declared {bn} the enemy. Circle those "
+                 f"dates on the calendar.")
+    else:
+        story = (f"{an} publicly declared {bn} a personal rival. "
+                 f"This one is personal.")
+    r = add_rivalry(rivalries, a, b, kind, 70, "declared", story, grudge=80)
+    r["user_declared"] = True
+    r["declared_floor"] = 40
+    r["declared_by"] = declared_by
+    return r
+
+
+def renounce_rivalry(league: Any, a: Any, b: Any,
+                     kind: Optional[str] = None) -> bool:
+    """Take a declaration back. The record keeps its history but loses its
+    floor and starts decaying like any other bad blood."""
+    r = rivalry_between(_rivalry_store(league), a, b, kind)
+    if not r or not r.get("user_declared"):
+        return False
+    r["user_declared"] = False
+    r.pop("declared_floor", None)
+    r["story"] = (r.get("story", "")
+                  + " The declaration was renounced; the hate cools.").strip()
+    return True
+
+
+def _head_coach_of(team: Any) -> Optional[Any]:
+    try:
+        for stf in getattr(team, "staff", []) or []:
+            if "Head Coach" in str(getattr(getattr(stf, "role", None), "value", "")):
+                return stf
+    except Exception:
+        pass
+    return None
+
+
+def declare_rivalry_for_gm(league: Any, team: Any, target_team: Any,
+                           target_kind: str = "team") -> tuple:
+    """Resolve a GM's rivalry declaration and record it.
+
+    target_kind 'team' -> team_team vs target_team; 'coach' -> gm_coach vs
+    the target team's head coach. Returns (record, target_label).
+    Raises ValueError on bad input.
+    """
+    tname = getattr(team, "team_name", None)
+    if target_team is None or getattr(target_team, "team_name", None) in (None, tname):
+        raise ValueError("pick another team as your rival")
+    if target_kind == "team":
+        rec = declare_rivalry(league, team, target_team, kind="team_team")
+        return rec, getattr(target_team, "team_name", "?")
+    if target_kind == "coach":
+        coach = _head_coach_of(target_team)
+        if coach is None:
+            raise ValueError("they have no head coach to feud with")
+        rec = declare_rivalry(league, gm_persona(team), coach, kind="gm_coach")
+        return rec, getattr(coach, "full_name", "?")
+    raise ValueError("target_kind must be 'team' or 'coach'")
+
+
+def renounce_rivalry_for_gm(league: Any, team: Any, target_team: Any,
+                            target_kind: str = "team") -> bool:
+    """Renounce a live declaration. Returns True if one was renounced."""
+    tname = getattr(team, "team_name", None)
+    if target_team is None or getattr(target_team, "team_name", None) in (None, tname):
+        return False
+    if target_kind == "team":
+        return renounce_rivalry(league, team, target_team, kind="team_team")
+    if target_kind == "coach":
+        coach = _head_coach_of(target_team)
+        if coach is None:
+            return False
+        return renounce_rivalry(league, gm_persona(team), coach, kind="gm_coach")
+    return False
+
+
+def declared_rivalries_for(rivalries: list, team: Any) -> List[Dict[str, Any]]:
+    """Live user-declared rivalries involving this team or its GM persona."""
+    keys = {("team", getattr(team, "team_name", "?")),
+            ("gm", getattr(team, "team_name", "?"))}
+    return sorted(
+        [r for r in (rivalries or [])
+         if r.get("user_declared") and (r["a"] in keys or r["b"] in keys)],
+        key=lambda r: -r.get("intensity", 0))
 
 
 def seed_regional_rivalries(rivalries: list, teams: List[Any]) -> int:
@@ -2629,6 +2740,7 @@ def contract_loyalty(player: Any) -> float:  # noqa: F811
 # regional rivalry fades when the context changes.
 
 RIVALRY_ORIGIN_WEIGHT = {
+    "declared": 70,          # a public declaration carries real weight
     "major_injury": 90,      # personal, career-affecting -- never really dies
     "brawl_game": 75,        # personal escalation
     "mistreatment": 70,
@@ -2655,6 +2767,15 @@ def review_rivalries(rivalries: list, years: int = 3) -> List[Dict[str, Any]]:
             if isinstance(r.get("incidents"), list):
                 r["incidents"] = [i for i in r["incidents"]
                                   if _incident_games_ago(i) <= 164]
+            if r.get("user_declared"):
+                # A live declaration doesn't fade or get buried by time --
+                # only an explicit renounce ends it.
+                floor = int(r.get("declared_floor") or 40)
+                r["intensity"] = max(floor, r["intensity"] - 1 * years)
+                verdicts.append({"rivalry": r, "outcome": "declared",
+                                 "text": f"{r['a_name']} vs {r['b_name']}: declared "
+                                         f"rivalry, still burning ({r['intensity']:.0f})."})
+                continue
             if r.get("solidified"):
                 # Entrenched: barely cools, never dies on its own.
                 r["intensity"] = max(60, r["intensity"] - 1 * years)
@@ -3122,6 +3243,7 @@ INCIDENT_WEIGHTS = {
     "star_injured": 25,      # you hurt our best player -- we remember
     "player_injured": 12,
     "controversial_hit": 10,
+    "bad_call": 8,            # a missed call / uncalled infraction -- we remember
     "coach_comments": 8,     # he ran his mouth in the media
     "brawl": 15,
 }
