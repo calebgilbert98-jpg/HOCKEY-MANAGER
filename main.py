@@ -3965,7 +3965,6 @@ class HockeyManagerGUI(tk.Tk):
         # Transactions dropdown  
         self._create_dropdown_menu(left_menu_frame, "Transactions",
             tooltip="Transactions: trades, free agents, waivers, and the draft", menu_items={
-            "Fantasy Draft": self.open_fantasy_draft_window,
             "Free Agents": self.open_free_agency_window,
             "Free Agent Frenzy": self.open_free_agency_frenzy,  # Only visible on July 1
             "Trade Center": self.open_trade_window,

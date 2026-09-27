@@ -500,6 +500,14 @@ class GameSim:
         # Play-by-play visualizer hooks (additive; zero overhead when unused).
         # Listeners are callables receiving one event dict each.
         self.pbp_listeners = []
+        # Live-PBP tick buffer: while a tick runs, _emit_pbp stashes events
+        # here instead of dispatching immediately. At tick end
+        # _spread_tick_timestamps stamps each buffered event with its own
+        # slice of the tick's game time (like game_log/event_log) and
+        # flushes them in order, so the visualizer never sees a burst of
+        # plays sharing one timestamp.
+        self._pbp_tick_buffer = []
+        self._pbp_buffering = False
         # Sudden-death OT bookkeeping (set by _handle_overtime)
         self._ot_sudden_death = False
         self._ot_start_score = None
@@ -2167,6 +2175,13 @@ class GameSim:
             # so sequential plays get distinct chronological timestamps.
             tick_log_start = len(self.game_log)
             tick_elog_start = len(self.event_log)
+            # Live-PBP buffer scope: events emitted during this tick are
+            # held until _spread_tick_timestamps stamps + flushes them.
+            # Flush stragglers first (a previous tick that died mid-spread).
+            if getattr(self, "_pbp_tick_buffer", None):
+                self._flush_pbp_buffer()
+            tick_pbp_start = len(self._pbp_tick_buffer)
+            self._pbp_buffering = True
 
             # Sudden-death OT: stop the period as soon as someone scores
             if getattr(self, '_ot_sudden_death', False) and self._ot_start_score is not None:
@@ -2233,7 +2248,8 @@ class GameSim:
             # its events so the PBP feed never shows a burst of plays all
             # stamped with the exact same second.
             self._spread_tick_timestamps(tick_start_clock, time_elapsed,
-                                         tick_log_start, tick_elog_start)
+                                         tick_log_start, tick_elog_start,
+                                         tick_pbp_start)
 
         # Rule 26: a delayed call can't survive the horn -- force the
         # whistle at the period boundary.
@@ -6305,11 +6321,31 @@ class GameSim:
             "away_score": getattr(self, "away_score", 0),
         }
         ev.update(payload)
+        if getattr(self, "_pbp_buffering", False):
+            # Inside a tick: hold for end-of-tick timestamp spreading.
+            self._pbp_tick_buffer.append(ev)
+            return
+        # Defensive: never strand a previous tick's events if a tick died
+        # before its spread/flush ran.
+        if getattr(self, "_pbp_tick_buffer", None):
+            self._flush_pbp_buffer()
         for cb in list(self.pbp_listeners):
             try:
                 cb(ev)
             except Exception:
                 pass
+
+    def _flush_pbp_buffer(self):
+        """Deliver buffered tick events to listeners, in emission order."""
+        buf = self._pbp_tick_buffer
+        self._pbp_tick_buffer = []
+        self._pbp_buffering = False
+        for e in buf:
+            for cb in list(self.pbp_listeners):
+                try:
+                    cb(e)
+                except Exception:
+                    pass
 
     @staticmethod
     def _pbp_num(value):
@@ -6320,7 +6356,7 @@ class GameSim:
             return str(value) if value is not None else None
 
     def _spread_tick_timestamps(self, tick_start_clock, time_elapsed,
-                                  log_start, elog_start):
+                                  log_start, elog_start, pbp_start=0):
         """Distribute a tick's elapsed game time across its logged events.
 
         The tick loop advances the clock once per tick but a tick can log
@@ -6328,7 +6364,9 @@ class GameSim:
         the tick shares one timestamp and the PBP feed shows bursts like
         five events at "P1 14:13". EHM-style realism: each action consumes
         a slice of the tick's game time, so sequential plays get distinct,
-        chronologically ordered stamps.
+        chronologically ordered stamps. The live visualizer stream
+        (buffered during the tick) gets the same treatment, then flushes
+        to listeners in emission order.
         """
         import re
         n = len(self.game_log) - log_start
@@ -6356,6 +6394,27 @@ class GameSim:
                                            f"{int(elapsed % 60):02d}")
                 except Exception:
                     pass
+        # Live visualizer stream: stamp each buffered event with its own
+        # slice of the tick (emission order == chronological order), then
+        # flush to listeners. Ends the tick's buffering scope even when
+        # nothing was buffered.
+        try:
+            pb = self._pbp_tick_buffer
+            k = len(pb) - pbp_start
+            if k > 0 and time_elapsed > 0:
+                for j in range(k):
+                    ev_clock = max(0.0, tick_start_clock
+                                   - (j + 1) * time_elapsed / k)
+                    el = max(0.0, self._period_length - ev_clock)
+                    e = pb[pbp_start + j]
+                    try:
+                        e["clock"] = ev_clock
+                        e["elapsed"] = el
+                        e["t"] = ((max(1, self.period) - 1) * 1200 + el)
+                    except Exception:
+                        pass
+        finally:
+            self._flush_pbp_buffer()
 
     def _log_event(self, message, event_type="INFO"):
         """Adds an event to the game log with a timestamp."""
