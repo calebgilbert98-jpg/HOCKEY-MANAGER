@@ -4975,115 +4975,251 @@ class DraftWindow(ctk.CTkToplevel):
         self.show_grades()
 
 
-class ScheduleWindow(tk.Toplevel):
+class ScheduleWindow(ctk.CTkToplevel):
+    """League Schedule (CustomTkinter): tabbed My Team / League tables,
+    month-filter combo, color-coded game rows (win/loss/today), modern
+    action buttons. All schedule logic preserved."""
+
     def __init__(self, parent):
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_HOVER, ROW_SELECTED,
+        )
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
+                        RED=RED, BLUE=BLUE, ROW_HOVER=ROW_HOVER,
+                        ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title("League Schedule")
-        self.geometry("900x700")
-        self.configure(background=parent.BG_COLOR)
+        self.configure(fg_color=BG)
+        self.geometry("1000x750")
+        self.minsize(900, 650)
 
-        # Main container
-        main_container = ttk.Frame(self, style='Panel.TFrame')
-        main_container.pack(fill='both', expand=True, padx=10, pady=10)
+        ct = self._ct
+        main_container = ctk.CTkFrame(self, fg_color=ct['BG'], corner_radius=0)
+        main_container.pack(fill="both", expand=True, padx=15, pady=15)
 
-        schedule_notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
-        schedule_notebook.pack(fill='both', expand=True, pady=(0, 10))
-        self.schedule_notebook = schedule_notebook
+        # Header card: title + my-team record/legend
+        header = ctk.CTkFrame(main_container, fg_color=ct['CARD'], corner_radius=12)
+        header.pack(fill="x", pady=(0, 12))
+        heading(header, "League Schedule", size=20).pack(side="left", padx=16, pady=12)
+        self.my_sched_header = body(header, "", size=12, dim=True)
+        self.my_sched_header.pack(side="left", padx=8, pady=12)
 
-        # Month filter row (lets the user jump to any month of the season)
-        filter_frame = ttk.Frame(main_container, style='Panel.TFrame')
-        filter_frame.pack(fill='x', pady=(0, 8))
-        ttk.Label(filter_frame, text="Month:", style='Info.TLabel').pack(side='left', padx=(2, 6))
+        # Month filter card
+        filter_frame = ctk.CTkFrame(main_container, fg_color=ct['PANEL'],
+                                    corner_radius=10)
+        filter_frame.pack(fill="x", pady=(0, 12))
+        body(filter_frame, "Month:", size=12, dim=True).pack(
+            side="left", padx=(14, 6), pady=10)
         self.month_filter = tk.StringVar(master=self, value='All')
-        self.month_combo = ttk.Combobox(filter_frame, textvariable=self.month_filter,
-                                        state='readonly', width=14)
-        self.month_combo.pack(side='left')
-        self.month_combo.bind('<<ComboboxSelected>>', lambda e: self.update_views())
-        
-        columns = {'date': ('Date', 100), 'away': ('Away Team', 200), 'score': ('Score', 100), 'home': ('Home Team', 200), 'status': ('Status', 100)}
-        
-        my_team_frame = ttk.Frame(schedule_notebook, style='Panel.TFrame')
-        self.my_sched_header = ttk.Label(my_team_frame, text="", style='CardTitle.TLabel')
-        self.my_sched_header.pack(anchor='w', padx=8, pady=(8, 2))
-        self.my_schedule_tree = parent._create_treeview(my_team_frame, columns, 25)
-        self.my_schedule_tree.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Bind double-click event for my team games
+        self.month_combo = ctk.CTkComboBox(
+            filter_frame,
+            values=['All'],
+            command=self._on_month_selected,
+            width=160,
+            fg_color=ct['CARD'],
+            button_color=ct['CARD'],
+            button_hover_color=ct['BORDER'],
+            dropdown_fg_color=ct['CARD'],
+            dropdown_hover_color=ct['BORDER'],
+            dropdown_text_color=ct['TEXT'],
+            text_color=ct['TEXT'],
+            border_color=ct['BORDER'],
+            border_width=1,
+            corner_radius=8,
+        )
+        self.month_combo.pack(side="left", pady=10)
+        self.month_combo.set('All')
+
+        # Tabs: My Team Schedule / League Schedule
+        self.tabview = ctk.CTkTabview(
+            main_container,
+            fg_color=ct['PANEL'],
+            corner_radius=12,
+            border_width=1,
+            border_color=ct['BORDER'],
+            segmented_button_fg_color=ct['PANEL'],
+            segmented_button_selected_color=ct['TEAL'],
+            segmented_button_selected_hover_color=ct['TEAL_HOVER'],
+            segmented_button_unselected_color=ct['CARD'],
+            segmented_button_unselected_hover_color=ct['BORDER'],
+        )
+        self.tabview.pack(fill="both", expand=True, pady=(0, 12))
+        self.tabview.add("My Team Schedule")
+        self.tabview.add("League Schedule")
+
+        columns = {'date': ('Date', 120), 'away': ('Away Team', 220),
+                   'score': ('Score', 90), 'home': ('Home Team', 220),
+                   'status': ('Status', 110)}
+
+        my_team_frame = self.tabview.tab("My Team Schedule")
+        self.my_schedule_tree = self._create_schedule_treeview(my_team_frame, columns, 25)
         self.my_schedule_tree.bind('<Double-1>', self.on_game_double_click)
         self.my_schedule_tree.bind('<Button-3>', self.show_game_context_menu)
-        
-        self.schedule_notebook.add(my_team_frame, text='My Team Schedule')
-        
-        league_frame = ttk.Frame(schedule_notebook, style='Panel.TFrame')
-        self.league_schedule_tree = parent._create_treeview(league_frame, columns, 25)
-        self.league_schedule_tree.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Bind double-click event for league games
+
+        league_frame = self.tabview.tab("League Schedule")
+        self.league_schedule_tree = self._create_schedule_treeview(league_frame, columns, 25)
         self.league_schedule_tree.bind('<Double-1>', self.on_game_double_click)
         self.league_schedule_tree.bind('<Button-3>', self.show_game_context_menu)
-        
-        self.schedule_notebook.add(league_frame, text='League Schedule')
-        
+
         # Action buttons
         self.create_action_buttons(main_container)
-        
+
         # Store schedule data for game launching
         self.schedule_data = {}
-        
+
+        self._setup_tree_style()
         self.update_views()
 
+    # ------------------------------------------------------------------
+    # CTk styling helpers
+    # ------------------------------------------------------------------
+    def _setup_tree_style(self):
+        """Dark, flat styling for the schedule tables (styled ttk.Treeview,
+        per the migration guide -- the tables carry 5 sortable columns and
+        per-game color tags)."""
+        ct = self._ct
+        style = ttk.Style(self)
+        style.configure('Schedule.Treeview',
+                        background=ct['CARD'],
+                        fieldbackground=ct['CARD'],
+                        foreground=ct['TEXT'],
+                        borderwidth=0,
+                        relief='flat',
+                        rowheight=30,
+                        font=('Segoe UI', 10))
+        style.configure('Schedule.Treeview.Heading',
+                        background=ct['PANEL'],
+                        foreground=ct['TEXT'],
+                        font=('Segoe UI', 10, 'bold'),
+                        relief='flat',
+                        borderwidth=0)
+        style.map('Schedule.Treeview',
+                  background=[('selected', ct['ROW_SELECTED'])],
+                  foreground=[('selected', ct['TEXT'])])
+        style.layout('Schedule.Treeview',
+                     [('Treeview.treearea', {'sticky': 'nswe'})])
+        style.configure('Schedule.Vertical.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.configure('Schedule.Horizontal.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.map('Schedule.Vertical.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+        style.map('Schedule.Horizontal.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+
+        # Game-row color tags (applied to both tables)
+        for tree in (self.my_schedule_tree, self.league_schedule_tree):
+            tree.tag_configure('today', background=ct['ROW_SELECTED'],
+                               foreground=ct['TEXT'])
+            tree.tag_configure('completed', foreground=ct['TEXT_DIM'])
+            tree.tag_configure('win', foreground=ct['GREEN'])
+            tree.tag_configure('loss', foreground=ct['RED'])
+            tree.tag_configure('upcoming', foreground=ct['TEXT'])
+
+    def _create_schedule_treeview(self, parent, columns, height=25):
+        """Dark-styled game table inside a rounded card."""
+        ct = self._ct
+        table_frame = ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=10)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        tree = ttk.Treeview(table_frame, columns=list(columns.keys()),
+                            show='headings', style='Schedule.Treeview',
+                            height=height)
+        for col, (text, width) in columns.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col, t=tree: self.parent._sort_treeview_generic(t, c))
+            tree.column(col, width=width, anchor='center')
+
+        v_scroll = ttk.Scrollbar(table_frame, orient="vertical",
+                                 command=tree.yview,
+                                 style='Schedule.Vertical.TScrollbar')
+        h_scroll = ttk.Scrollbar(table_frame, orient="horizontal",
+                                 command=tree.xview,
+                                 style='Schedule.Horizontal.TScrollbar')
+        tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+        tree.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
+        v_scroll.pack(side="right", fill="y", padx=(0, 6), pady=10)
+        h_scroll.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
+        return tree
+
+    def _on_month_selected(self, value):
+        """Month combo callback: sync the filter var and rebuild the tables."""
+        self.month_filter.set(value)
+        self.update_views()
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
     def create_action_buttons(self, parent):
         """Create action buttons for schedule operations."""
-        button_frame = ttk.Frame(parent, style='Panel.TFrame')
-        button_frame.pack(fill='x', pady=(10, 0))
-        
+        ct = self._ct
+        button_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        button_frame.pack(fill='x', pady=(4, 0))
+
         # Watch Game button
-        self.watch_game_btn = ttk.Button(
+        self.watch_game_btn = self._primary_button(
             button_frame,
             text="Watch Game",
             command=self.watch_selected_game,
-            style='Accent.TButton'
         )
         self.watch_game_btn.pack(side='left', padx=(0, 10))
-        
+
         # Simulate Game button
-        self.simulate_game_btn = ttk.Button(
+        self.simulate_game_btn = self._secondary_button(
             button_frame,
-            text="Simulate Game", 
+            text="Simulate Game",
             command=self.simulate_selected_game,
-            style='TButton'
         )
         self.simulate_game_btn.pack(side='left', padx=(0, 10))
-        
+
         # Refresh button
-        ttk.Button(
+        self._secondary_button(
             button_frame,
             text="Refresh",
             command=self.update_views,
-            style='TButton'
         ).pack(side='right')
-        
+
     def on_game_double_click(self, event):
         """Handle double-click on a game - launch game viewer."""
         self.watch_selected_game()
-        
+
     def show_game_context_menu(self, event):
         """Show context menu for game operations."""
+        ct = self._ct
         tree = event.widget
         item = tree.identify_row(event.y)
         if not item:
             return
-            
-        menu = tk.Menu(self, tearoff=0, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+
+        menu = tk.Menu(self, tearoff=0, bg=ct['CARD'], fg=ct['TEXT'],
+                       activebackground=ct['TEAL'], activeforeground=ct['BG'])
         menu.add_command(label="Watch Game", command=self.watch_selected_game)
         menu.add_command(label="Simulate Game", command=self.simulate_selected_game)
         menu.add_separator()
         menu.add_command(label="Game Stats", command=self.view_game_stats)
         menu.add_command(label="Game Recap", command=self.view_game_recap)
-        
+
         menu.tk_popup(event.x_root, event.y_root)
-        
+
     def get_selected_game_data(self):
         """Get data for the currently selected game.
 
@@ -5093,7 +5229,7 @@ class ScheduleWindow(tk.Toplevel):
         """
         # Pick the treeview from the currently visible tab
         try:
-            if self.schedule_notebook.index(self.schedule_notebook.select()) == 1:
+            if self.tabview.get() == "League Schedule":
                 tree = self.league_schedule_tree
             else:
                 tree = self.my_schedule_tree
@@ -5126,7 +5262,7 @@ class ScheduleWindow(tk.Toplevel):
             'status': entry['status'],
             'has_been_played': entry['status'] == "Final",
         }
-        
+
     def watch_selected_game(self):
         """Launch the game viewer for the selected game."""
         game_data = self.get_selected_game_data()
@@ -5165,7 +5301,7 @@ class ScheduleWindow(tk.Toplevel):
             if not response:
                 return
             self._launch_game_viewer(game_data, commit=False)
-        
+
     def simulate_selected_game(self):
         """Simulate the selected game without watching.
 
@@ -5199,7 +5335,7 @@ class ScheduleWindow(tk.Toplevel):
         # Simulate the game
         self._simulate_game(game_data)
         self.update_views()
-        
+
     def _launch_game_viewer(self, game_data, commit=True):
         """Launch the game viewer for a specific game.
 
@@ -5282,7 +5418,7 @@ class ScheduleWindow(tk.Toplevel):
             'overtime': went_ot,
             'shootout': went_so,
         }
-            
+
     def _simulate_game(self, game_data):
         """Simulate a game and store the results."""
         try:
@@ -5348,7 +5484,7 @@ class ScheduleWindow(tk.Toplevel):
             # Ties shouldn't happen (GameSim resolves OT/shootout), but stay safe
             home_team.update_record("TIE")
             away_team.update_record("TIE")
-        
+
     def _find_game_result(self, game_data):
         """Find the stored result matching the selected game."""
         for gr in self.parent.game_results:
@@ -5433,6 +5569,28 @@ class ScheduleWindow(tk.Toplevel):
                 months.append(label)
         return months
 
+    def _game_row_tag(self, home, away, score, status):
+        """Color tag for a game row involving the user's team.
+
+        'win' (green) / 'loss' (red) for decided games, 'today' for today's
+        game, 'completed' (dimmed) for other past games, 'upcoming' otherwise.
+        Returns '' for games not involving the user's team.
+        """
+        if self.parent.user_team not in (home, away):
+            return ''
+        row_tag = 'completed'
+        if status == "Final" and "-" in score:
+            try:
+                a_s, h_s = (int(x) for x in score.split("-"))
+                mine = h_s if home == self.parent.user_team else a_s
+                theirs = a_s if home == self.parent.user_team else h_s
+                row_tag = 'win' if mine > theirs else 'loss'
+            except (ValueError, IndexError):
+                row_tag = 'completed'
+        elif status == "Today":
+            row_tag = 'today'
+        return row_tag
+
     def update_views(self):
         self.my_schedule_tree.delete(*self.my_schedule_tree.get_children())
         self.league_schedule_tree.delete(*self.league_schedule_tree.get_children())
@@ -5445,6 +5603,7 @@ class ScheduleWindow(tk.Toplevel):
         self.month_combo.configure(values=month_values)
         if self.month_filter.get() not in month_values:
             self.month_filter.set('All')
+            self.month_combo.set('All')
         selected_month = self.month_filter.get()
 
         for game_entry in self.parent.league.schedule:
@@ -5459,16 +5618,16 @@ class ScheduleWindow(tk.Toplevel):
                     continue
             except (AttributeError, ValueError):
                 pass
-            
+
             # Determine game status and score
             status = "Scheduled"
             score = "- : -"
-            
+
             if game_date < self.parent.current_date:
                 # Look for actual game result
                 for game_result in self.parent.game_results:
-                    if (game_result['date'] == game_date and 
-                        game_result['home_team'] == home and 
+                    if (game_result['date'] == game_date and
+                        game_result['home_team'] == home and
                         game_result['away_team'] == away):
                         score = f"{game_result['away_score']}-{game_result['home_score']}"
                         status = "Final"
@@ -5478,11 +5637,13 @@ class ScheduleWindow(tk.Toplevel):
                     status = "Simulated"
             elif game_date == self.parent.current_date:
                 status = "Today"
-            
+
             values = (game_date.strftime("%b %d, %Y"), away.team_name, score, home.team_name, status)
-            
-            # Store game data for easy access
-            game_key = f"{game_date}_{home.team_name}_{away.team_name}"
+
+            # Store game data for easy access (keyed the same way
+            # get_selected_game_data() looks it up: display date string +
+            # team names)
+            game_key = f"{game_date.strftime('%b %d, %Y')}_{home.team_name}_{away.team_name}"
             self.schedule_data[game_key] = {
                 'date': game_date,
                 'home': home,
@@ -5490,30 +5651,18 @@ class ScheduleWindow(tk.Toplevel):
                 'score': score,
                 'status': status
             }
-            
-            item_id = self.league_schedule_tree.insert('', 'end', values=values)
+
+            # Color tag for games involving the user's team (win/loss/today)
+            row_tag = self._game_row_tag(home, away, score, status)
+            league_tags = (row_tag,) if row_tag else ()
+            item_id = self.league_schedule_tree.insert('', 'end', values=values,
+                                                       tags=league_tags)
             if self.parent.user_team in (home, away):
-                row_tag = 'completed'
-                if status == "Final" and "-" in score:
-                    try:
-                        a_s, h_s = (int(x) for x in score.split("-"))
-                        mine = h_s if home == self.parent.user_team else a_s
-                        theirs = a_s if home == self.parent.user_team else h_s
-                        row_tag = 'win' if mine > theirs else 'loss'
-                    except (ValueError, IndexError):
-                        row_tag = 'completed'
-                elif status == "Today":
-                    row_tag = 'today'
                 my_item_id = self.my_schedule_tree.insert('', 'end', values=values,
                                                            tags=(row_tag,))
                 if self._first_upcoming is None and status in ("Today", "Scheduled"):
                     self._first_upcoming = my_item_id
-                    
-        # Configure tags for styling
-        self.my_schedule_tree.tag_configure('today', background='#0d2b28', foreground='#FFFFFF')
-        self.my_schedule_tree.tag_configure('completed', foreground='#8A8A8A')
-        self.my_schedule_tree.tag_configure('win', foreground='#7ED492')
-        self.my_schedule_tree.tag_configure('loss', foreground='#E07A7A')
+
         if self._first_upcoming:
             self.my_schedule_tree.see(self._first_upcoming)
             self.my_schedule_tree.selection_set(self._first_upcoming)

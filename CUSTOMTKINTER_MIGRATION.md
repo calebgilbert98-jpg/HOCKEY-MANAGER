@@ -15,6 +15,7 @@ the playbook for the rest.
 | Free Agency (`windows.py::FreeAgencyWindow`) | **Done** — CTk rebuild, dialogs modernized |
 | Dashboard controls (`dashboard_home.py`, `main.py` nav pills) | **Done** — CTk dropdowns/buttons/nav pills; cards unchanged |
 | Draft (`windows.py::DraftWindow`) | **Done** — CTk rebuild, styled board/ticker/shortlist, pill filters, CTk trade/grades dialogs |
+| Schedule (`windows.py::ScheduleWindow`) | **Done** — CTk rebuild, tabbed my-team/league tables, month combo, win/loss/today row tags; also fixed pre-existing broken game-selection key (selection never resolved) |
 | Everything else | Pending (priority order below) |
 
 ## Theme setup
