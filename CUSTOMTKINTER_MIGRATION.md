@@ -17,6 +17,7 @@ the playbook for the rest.
 | Draft (`windows.py::DraftWindow`) | **Done** — CTk rebuild, styled board/ticker/shortlist, pill filters, CTk trade/grades dialogs |
 | Schedule (`windows.py::ScheduleWindow`) | **Done** — CTk rebuild, tabbed my-team/league tables, month combo, win/loss/today row tags; also fixed pre-existing broken game-selection key (selection never resolved) |
 | Finances (`windows.py::FinancesWindow`) | **Done** — CTk rebuild, 5 CTkTabview tabs, stat cards with color-coded money, pill cap-utilization meter, dark treeviews with contract-status tags, CTkComboBox year picker, segmented report picker |
+| Inbox (`inbox_window.py::InboxWindow`) | **Done** — CTk rebuild, two-row filter pills with unread badges, dark treeview with unread/urgent/overdue row tags, dark CTkTextbox preview pane, docked toolbar |
 | Everything else | Pending (priority order below) |
 
 ## Theme setup
