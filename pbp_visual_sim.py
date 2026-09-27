@@ -92,7 +92,6 @@ _SAVE_T = [
     "{G} makes the stop on {S}{how}.",
     "{S} can't beat {G}{how}.",
     "{G} shuts the door on {S}{how}.",
-    "Big save! {G} turns away {S}{how}.",
 ]
 _BLOCK_T = [
     "{B} blocks the shot from {S}.",
@@ -112,8 +111,7 @@ _FACEOFF_T = [
     "{W} wins it back for his team.",
 ]
 _HIT_T = [
-    "{H} levels {T} with a {ht}.",
-    "Big hit! {H} catches {T}.",
+    "{H} catches {T} with a {ht}.",
     "{H} finishes his check on {T}.",
     "{H} drives {T} into the boards.",
 ]
@@ -133,6 +131,60 @@ _PENALTY_T = [
     "{P} heads to the box — {m} min for {inf} ({team}).",
     "Whistle: {P} ({team}) gets {m} for {inf}.",
 ]
+# Importance-scaled variants: the broadcast voice follows the impact
+# tier, so you can feel how big a play was from the language alone.
+# Tired plays get flat dismissal, big plays get the call of the night,
+# and normal plays use the base templates above. Words like "big" and
+# "huge" are reserved for the tier-2 pools -- the base sets never claim
+# a routine play was a big one.
+_SAVE_T2 = [
+    "What a stop by {G}! {S} is robbed{how}.",
+    "{G} says NO{how} — absolute robbery on {S}!",
+    "Unbelievable! {G} turns away {S}{how}.",
+    "Big save! {G} flashes the glove on {S}{how}!",
+]
+_SAVE_T0 = [
+    "{G} swallows it up — easy save{how}.",
+    "Routine stop for {G}{how}.",
+    "{S}'s weak effort is handled easily by {G}.",
+]
+_HIT_T2 = [
+    "{H} DESTROYS {T} with a {ht}!",
+    "What a hit! {H} levels {T}!",
+    "Big hit! {H} catches {T} flush!",
+    "{H} absolutely trucks {T} into the boards!",
+]
+_HIT_T0 = [
+    "{H} leans on {T} along the boards.",
+    "{H} gives {T} a bump — nothing more.",
+    "{H} rubs {T} out quietly.",
+]
+_MISS_T0 = [
+    "{S} fires it wide — never threatened{how}.",
+    "{S} misses badly{how}.",
+]
+_BLOCK_T2 = [
+    "What a block! {B} lays out to deny {S}!",
+    "{B} sacrifices everything — huge block on {S}!",
+]
+_GOAL_T2 = [  # story goals only: the biggest calls of the night
+    "WHAT A GOAL! {S} buries it{how}{ast}! {score}",
+    "WHAT A GOAL! {S} wires it home{how}{ast}! {score}",
+    "UNBELIEVABLE! {S} scores{how}{ast}! {score}",
+]
+
+
+def _tier_pick(base, electric, flat, ev):
+    """Pick a feed template matching the event's impact tier.
+
+    ev may predate the impact engine (no "impact" key) -- those fall
+    back to the base templates, never to the electric or flat pools."""
+    imp = (ev or {}).get("impact", "normal")
+    if imp == "big" and electric:
+        return random.choice(electric)
+    if imp == "tired" and flat:
+        return random.choice(flat)
+    return random.choice(base)
 _FIGHT_T = [
     "Fight! {P} drops the gloves!",
     "They're going! {P} in a fight at center ice.",
@@ -155,6 +207,10 @@ _OFFSIDE_T = [
 DETAIL_MODES = ("full", "extended", "key", "text")
 DETAIL_LABELS = {"full": "Full Game", "extended": "Extended",
                  "key": "Key Moments", "text": "Text Only"}
+# Short pill labels: the detail row shares the panel with the playback
+# controls, so the pills stay compact enough to never clip at 450px.
+DETAIL_SHORT = {"full": "Full", "extended": "Extended",
+                "key": "Key", "text": "Text"}
 # Event types that always earn on-ice treatment in key-moment mode.
 _DETAIL_HIGHLIGHT_TYPES = {
     "game_start", "period_start", "period_end", "game_end",
@@ -798,23 +854,32 @@ class PBPVisualSim(tk.Toplevel):
         tk.Label(drow, text="DETAIL", bg=CONTENT_BG, fg="#AEB6C8",
                  font=(FONT, 10, "bold")).pack(side="left", padx=(2, 4))
         for mode in DETAIL_MODES:
-            b = self._pill(drow, DETAIL_LABELS[mode],
-                           lambda m=mode: self._set_detail_mode(m), w=104)
+            b = self._pill(drow, DETAIL_SHORT[mode],
+                           lambda m=mode: self._set_detail_mode(m), w=84)
             self._detail_btns[mode] = b
+            # Share the row equally: the pills can never overflow the
+            # panel no matter how narrow the window gets.
+            b.pack_configure(fill="x", expand=True)
             self._refresh_toggle_btn(b, mode == self.detail_mode)
-        self.play_btn = self._pill(ctl, "Pause", self._toggle_play, w=72)
-        spd = tk.Frame(ctl, bg=CONTENT_BG)
+        # Playback controls, split over two rows so nothing ever clips
+        # at the panel edge: transport first, view toggles second.
+        prow = tk.Frame(ctl, bg=CONTENT_BG)
+        prow.pack(fill="x", pady=(0, 6))
+        self.play_btn = self._pill(prow, "Pause", self._toggle_play, w=72)
+        spd = tk.Frame(prow, bg=CONTENT_BG)
         spd.pack(side="left", padx=2)
         self.speed_btns = {}
         for label, val in (("1x", 1), ("2x", 2), ("4x", 4)):
             b = self._pill(spd, label, lambda v=val: self._set_speed(v), w=38)
             self.speed_btns[val] = b
-        self.auto_btn = self._pill(ctl, "Auto", self._toggle_auto, w=56)
-        self._pill(ctl, "End", self._sim_to_end, w=56)
-        self.shotmap_btn = self._pill(ctl, "Shot Map", self._toggle_shotmap, w=84)
-        self.cam_btn = self._pill(ctl, "Cam", self._toggle_cam, w=56)
+        self.auto_btn = self._pill(prow, "Auto", self._toggle_auto, w=56)
+        self._pill(prow, "End", self._sim_to_end, w=56)
+        vrow = tk.Frame(ctl, bg=CONTENT_BG)
+        vrow.pack(fill="x")
+        self.shotmap_btn = self._pill(vrow, "Shot Map", self._toggle_shotmap, w=84)
+        self.cam_btn = self._pill(vrow, "Cam", self._toggle_cam, w=56)
         self._refresh_toggle_btn(self.cam_btn, False)
-        self.sound_btn = self._pill(ctl, "Sound", self._toggle_sound, w=68)
+        self.sound_btn = self._pill(vrow, "Sound", self._toggle_sound, w=68)
         self._refresh_toggle_btn(self.sound_btn, self._sound_on)
 
         self.feed = tk.Text(right, bg="#0D1420", fg=TEXT, font=(FONT, 12),
@@ -2617,7 +2682,7 @@ class PBPVisualSim(tk.Toplevel):
         elif et == "blocked_shot":
             B = self._pname(ev.get("blocker"))
             S = self._pname(ev.get("shooter"))
-            self._feed(random.choice(_BLOCK_T).format(B=B, S=S), ev=ev)
+            self._feed(_tier_pick(_BLOCK_T, _BLOCK_T2, None, ev).format(B=B, S=S), ev=ev)
             self._record_shotmap("block")
             def_home = ev.get("defending_team") == self.home_team.team_name
             self.possession_home = def_home
@@ -2626,7 +2691,7 @@ class PBPVisualSim(tk.Toplevel):
             S = self._pname(ev.get("shooter"))
             st = (ev.get("shot_type") or "").replace("_", " ")
             how = f" {st}" if st else ""
-            self._feed(random.choice(_MISS_T).format(S=S, how=how), ev=ev)
+            self._feed(_tier_pick(_MISS_T, None, _MISS_T0, ev).format(S=S, how=how), ev=ev)
             self._record_shotmap("miss")
             att_home = ev.get("attacking_team") == self.home_team.team_name
             self.possession_home = att_home
@@ -3204,15 +3269,17 @@ class PBPVisualSim(tk.Toplevel):
             how = f" from the {loc}"
         else:
             how = ""
-        return random.choice(_GOAL_T).format(S=S, how=how, ast=ast_txt,
-                                             score=score)
+        pool = _GOAL_T2 if ev.get("story") else _GOAL_T
+        return random.choice(pool).format(S=S, how=how, ast=ast_txt,
+                                         score=score)
 
     def _save_text(self, ev):
         G = self._pname(ev.get("goalie"))
         S = self._pname(ev.get("shooter"))
         st = (ev.get("shot_type") or "").replace("_", " ")
         how = f" on the {st}" if st else ""
-        return random.choice(_SAVE_T).format(G=G, S=S, how=how)
+        return _tier_pick(_SAVE_T, _SAVE_T2, _SAVE_T0, ev).format(
+            G=G, S=S, how=how)
 
     def _on_hit(self, ev):
         h = self._dot_by_player(ev.get("hitting_player"))
@@ -3236,7 +3303,7 @@ class PBPVisualSim(tk.Toplevel):
         self._bump_stat(self._player_side(hp), "Hits")
         self._pstat(hp, "HIT")
         ht = ev.get("hit_type", "hit").replace("_", " ")
-        self._feed(random.choice(_HIT_T).format(
+        self._feed(_tier_pick(_HIT_T, _HIT_T2, _HIT_T0, ev).format(
             H=self._pname(ev.get("hitting_player")),
             T=self._pname(ev.get("target_player")), ht=ht),
             tag=("big" if (ev.get("impact") == "big"
