@@ -3633,28 +3633,37 @@ Analysis will be updated as the season progresses.
             
             # Get NHL records to compare against
             nhl_records = record_manager.nhl_records
-            
+
+            def _record_target(records_dict, key):
+                """Unwrap a SeasonRecord/CareerRecord to its target value."""
+                rec = records_dict.get(key)
+                if rec is None:
+                    return None
+                entry = getattr(rec, 'single_season', None) or getattr(rec, 'all_time', None)
+                return getattr(entry, 'value', None)
+
+            def _pstat(player, attr):
+                return getattr(getattr(player, 'stats', None), attr, 0) or 0
+
             # Track players approaching various records
             record_categories = [
-                ("single_season_goals", "Goals", lambda p: getattr(p, 'goals', 0)),
-                ("single_season_assists", "Assists", lambda p: getattr(p, 'assists', 0)),
-                ("single_season_points", "Points", lambda p: getattr(p, 'goals', 0) + getattr(p, 'assists', 0)),
-                ("single_season_wins", "Wins", lambda p: getattr(p, 'wins', 0) if hasattr(p, 'wins') else 0),
-                ("single_season_shutouts", "Shutouts", lambda p: getattr(p, 'shutouts', 0) if hasattr(p, 'shutouts') else 0),
+                ("single_season_goals", "Goals", lambda p: _pstat(p, 'goals')),
+                ("single_season_assists", "Assists", lambda p: _pstat(p, 'assists')),
+                ("single_season_points", "Points", lambda p: _pstat(p, 'points')),
+                ("single_season_wins", "Wins", lambda p: _pstat(p, 'wins')),
+                ("single_season_shutouts", "Shutouts", lambda p: _pstat(p, 'shutouts')),
             ]
             
             chase_data = []
             
             for record_type, display_name, stat_func in record_categories:
                 # Get the NHL record for this category
-                if record_type in nhl_records.season_records:
-                    record_info = nhl_records.season_records[record_type]
-                    target_value = record_info.value
-                    
+                target_value = _record_target(nhl_records.records, record_type)
+                if target_value:
                     # Find players with significant progress toward this record
                     for player, team in all_players:
                         current_value = stat_func(player)
-                        
+
                         if current_value > 0:  # Only consider players with some progress
                             percentage = (current_value / target_value) * 100
                             difference = target_value - current_value

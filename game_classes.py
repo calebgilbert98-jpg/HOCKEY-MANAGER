@@ -1472,7 +1472,15 @@ class EmailMessage:
     related_player_id: Optional[str] = None
     related_team: Optional[str] = None
     related_contract_id: Optional[str] = None
-    
+
+    # Interactive inbox actions (game-day bundle, press conferences, ...).
+    # action_type: None | "game_day" | "postmatch_presser"
+    # action_data: pickle-safe dict with the questions/options and answers.
+    # action_done: True once the user completed the interactive part.
+    action_type: Optional[str] = None
+    action_data: dict = field(default_factory=dict)
+    action_done: bool = False
+
     def mark_as_read(self):
         """Mark this email as read."""
         if not self.is_read:

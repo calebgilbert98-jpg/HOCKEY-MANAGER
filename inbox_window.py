@@ -278,6 +278,13 @@ class InboxWindow(ctk.CTkToplevel):
         self.content_text.pack(fill='both', expand=True, padx=12, pady=(0, 8))
         self.content_text.configure(state='disabled')
 
+        # Interactive action frame (game-day bundle, press conferences).
+        # Hidden unless the selected message carries an interactive action;
+        # it shares the content_text slot.
+        self.interactive_frame = ctk.CTkScrollableFrame(
+            parent, fg_color=ct['PANEL'], border_width=1,
+            border_color=ct['BORDER'], corner_radius=10)
+
         # Action buttons row
         action_frame = ctk.CTkFrame(parent, fg_color="transparent")
         action_frame.pack(fill='x', padx=12, pady=(0, 12))
@@ -526,22 +533,28 @@ class InboxWindow(ctk.CTkToplevel):
         self.preview_category_label.configure(
             text=f"Category: {message.category}")
 
-        # Update content
-        self.content_text.configure(state='normal')
-        self.content_text.delete(1.0, tk.END)
-        self.content_text.insert(1.0, message.content)
+        # Interactive inbox actions (game-day bundle, press conferences)
+        # render rich widgets in place of the plain text content.
+        if getattr(message, 'action_type', None) in ("game_day", "postmatch_presser"):
+            self._show_interactive_action(message)
+        else:
+            self._hide_interactive_action()
+            # Update content
+            self.content_text.configure(state='normal')
+            self.content_text.delete(1.0, tk.END)
+            self.content_text.insert(1.0, message.content)
 
-        # Add response info if needed
-        if message.requires_response:
-            self.content_text.insert(tk.END, "\n\n--- RESPONSE REQUIRED ---")
-            if message.response_deadline:
-                self.content_text.insert(
-                    tk.END,
-                    f"\nDeadline: {message.response_deadline.strftime('%B %d, %Y')}")
-            if message.is_overdue():
-                self.content_text.insert(tk.END, "\nOVERDUE")
+            # Add response info if needed
+            if message.requires_response:
+                self.content_text.insert(tk.END, "\n\n--- RESPONSE REQUIRED ---")
+                if message.response_deadline:
+                    self.content_text.insert(
+                        tk.END,
+                        f"\nDeadline: {message.response_deadline.strftime('%B %d, %Y')}")
+                if message.is_overdue():
+                    self.content_text.insert(tk.END, "\nOVERDUE")
 
-        self.content_text.configure(state='disabled')
+            self.content_text.configure(state='disabled')
 
         # Update button states
         self.mark_read_btn.configure(
@@ -606,6 +619,206 @@ class InboxWindow(ctk.CTkToplevel):
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not start fantasy draft: {e}")
+
+    # ------------------------------------------------------------------
+    # Interactive inbox actions: game-day bundle + press conferences.
+    # These replace the old modal popups (presser dialog, team-talk
+    # dialog, game-mode dialog) with widgets inside the inbox.
+    # ------------------------------------------------------------------
+
+    def focus_message(self, message_id) -> bool:
+        """Select and display the message with the given id."""
+        try:
+            mapping = {}
+            if hasattr(self.parent, 'tree_maps'):
+                mapping = self.parent.tree_maps.get('inbox_messages', {})
+            for item_id, message in mapping.items():
+                if getattr(message, 'id', None) == message_id:
+                    self.email_tree.selection_set(item_id)
+                    self.email_tree.see(item_id)
+                    self.email_tree.focus(item_id)
+                    self._on_email_select(None)
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _show_interactive_action(self, message):
+        """Swap the text content for the interactive action widgets."""
+        self.content_text.pack_forget()
+        self.interactive_frame.pack(fill='both', expand=True,
+                                    padx=12, pady=(0, 8))
+        for w in self.interactive_frame.winfo_children():
+            w.destroy()
+        if message.action_type == "game_day":
+            self._render_game_day_bundle(message)
+        elif message.action_type == "postmatch_presser":
+            self._render_postmatch_presser(message)
+
+    def _hide_interactive_action(self):
+        """Restore the plain text content view."""
+        try:
+            self.interactive_frame.pack_forget()
+        except Exception:
+            pass
+        try:
+            self.content_text.pack(fill='both', expand=True,
+                                   padx=12, pady=(0, 8))
+        except Exception:
+            pass
+
+    def _action_section(self, title):
+        ct = self._ct
+        self._heading(self.interactive_frame, title, size=13,
+                      wraplength=300, justify='left', anchor='w').pack(
+            anchor='w', padx=10, pady=(12, 4))
+        sep = ctk.CTkFrame(self.interactive_frame, height=1,
+                           fg_color=ct['BORDER'])
+        sep.pack(fill='x', padx=10, pady=(0, 6))
+
+    def _iwrap(self, text, size=11, dim=False, bold=False, padx=14, pady=2):
+        """Wrapped label for the interactive pane (preview is narrow)."""
+        if bold:
+            lbl = self._heading(self.interactive_frame, text, size=size,
+                                wraplength=270, justify='left', anchor='w')
+        else:
+            lbl = self._body(self.interactive_frame, text, size=size, dim=dim,
+                             wraplength=270, justify='left', anchor='w')
+        lbl.pack(anchor='w', padx=padx, pady=pady)
+        return lbl
+
+    def _render_game_day_bundle(self, message):
+        """Pre-match presser + team talk + Watch/Quick, all in the inbox."""
+        data = message.action_data or {}
+        app = self.parent
+        try:
+            today = app.current_date.isoformat()
+        except Exception:
+            today = ""
+        stale = bool(data.get("game_date")) and data.get("game_date") != today
+
+        self._iwrap(f"GAME DAY: {data.get('away', '')} @ {data.get('home', '')}",
+                    size=15, bold=True, padx=10, pady=(10, 2))
+        self._iwrap(message.content or "", size=11, dim=True, padx=10, pady=(0, 4))
+
+        if stale:
+            self._iwrap("This game has already been played -- these options "
+                        "are no longer available.", size=11, dim=True, padx=10)
+            return
+
+        # ---- Pre-match presser ----
+        self._action_section("PRE-MATCH PRESSER")
+        questions = data.get("presser") or []
+        answered = data.get("presser_answered") or []
+        reactions = data.get("presser_reactions") or {}
+        for qi, q in enumerate(questions):
+            is_answered = qi < len(answered) and answered[qi]
+            self._iwrap(f"Q{qi + 1}: {q.get('question', '')}", size=11,
+                        pady=(8, 2))
+            self._iwrap(f"\u2014 {q.get('journalist', '')}", size=10, dim=True)
+            if is_answered:
+                self._iwrap("\u2713 Answered", size=10, dim=True)
+                if reactions.get(qi):
+                    self._iwrap(f"\u201C{reactions.get(qi)}\u201D",
+                                size=10, dim=True, pady=(0, 4))
+            else:
+                for ai, ans in enumerate(q.get("answers") or []):
+                    self._secondary_button(
+                        self.interactive_frame, text=ans.get("label", ""),
+                        command=lambda qi=qi, ai=ai, m=message:
+                            self._on_bundle_presser_answer(m, qi, ai)
+                    ).pack(anchor='w', padx=14, pady=2)
+
+        # ---- Team talk ----
+        self._action_section("DRESSING ROOM: TEAM TALK")
+        talk_options = data.get("talk_options") or []
+        chosen = data.get("talk_chosen")
+        if chosen is not None:
+            opt = talk_options[chosen] if 0 <= chosen < len(talk_options) else {}
+            self._iwrap(f"\u2713 \u201C{opt.get('label', '')}\u201D",
+                        size=11, pady=(4, 2))
+            if data.get("talk_reaction"):
+                self._iwrap(f"\u201C{data.get('talk_reaction')}\u201D",
+                            size=10, dim=True, pady=(0, 4))
+        else:
+            self._iwrap("Rally the room before puck drop:",
+                        size=11, dim=True, pady=(4, 2))
+            for oi, opt in enumerate(talk_options):
+                fit_note = {"good": " \u2713 looks ideal",
+                            "risky": " \u26A0 risky"}.get(opt.get("fit"), "")
+                self._secondary_button(
+                    self.interactive_frame,
+                    text=str(opt.get("label", "")) + fit_note,
+                    command=lambda oi=oi, m=message:
+                        self._on_bundle_team_talk(m, oi)
+                ).pack(anchor='w', padx=14, pady=2)
+                self._iwrap(f"\u201C{opt.get('text', '')}\u201D",
+                            size=10, dim=True, padx=20)
+
+        # ---- Watch / Quick ----
+        self._action_section("HOW TO PLAY TONIGHT")
+        btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
+        btn_row.pack(fill='x', padx=10, pady=8)
+        self._primary_button(btn_row, text="\u25B6 WATCH LIVE",
+                             width=200, height=44,
+                             command=lambda: app._resolve_game_day(True)
+                             ).pack(side='left', padx=(0, 8))
+        self._secondary_button(btn_row, text="\u26A1 QUICK SIM",
+                               width=200, height=44,
+                               command=lambda: app._resolve_game_day(False)
+                               ).pack(side='left', padx=8)
+
+    def _render_postmatch_presser(self, message):
+        """Post-match presser Q&A inside the inbox (non-blocking)."""
+        data = message.action_data or {}
+        self._iwrap("POST-MATCH PRESSER", size=15, bold=True,
+                    padx=10, pady=(10, 2))
+        self._iwrap(message.content or "", size=11, dim=True,
+                    padx=10, pady=(0, 4))
+        questions = data.get("questions") or []
+        answered = data.get("answered") or []
+        reactions = data.get("reactions") or {}
+        for qi, q in enumerate(questions):
+            is_answered = qi < len(answered) and answered[qi]
+            self._iwrap(f"Q{qi + 1}: {q.get('question', '')}", size=11,
+                        pady=(8, 2))
+            self._iwrap(f"\u2014 {q.get('journalist', '')}", size=10, dim=True)
+            if is_answered:
+                self._iwrap("\u2713 Answered", size=10, dim=True)
+                if reactions.get(qi):
+                    self._iwrap(f"\u201C{reactions.get(qi)}\u201D",
+                                size=10, dim=True, pady=(0, 4))
+            else:
+                for ai, ans in enumerate(q.get("answers") or []):
+                    self._secondary_button(
+                        self.interactive_frame, text=ans.get("label", ""),
+                        command=lambda qi=qi, ai=ai, m=message:
+                            self._on_postmatch_answer(m, qi, ai)
+                    ).pack(anchor='w', padx=14, pady=2)
+        if answered and all(answered):
+            self._iwrap("Presser complete -- the story is filed.",
+                        size=11, dim=True, padx=10, pady=10)
+
+    def _on_bundle_presser_answer(self, message, qi, ai):
+        try:
+            self.parent._answer_bundle_presser(message, qi, ai)
+        except Exception:
+            pass
+        self._show_interactive_action(message)
+
+    def _on_bundle_team_talk(self, message, oi):
+        try:
+            self.parent._answer_bundle_team_talk(message, oi)
+        except Exception:
+            pass
+        self._show_interactive_action(message)
+
+    def _on_postmatch_answer(self, message, qi, ai):
+        try:
+            self.parent._answer_postmatch_presser(message, qi, ai)
+        except Exception:
+            pass
+        self._show_interactive_action(message)
 
     def _mark_current_important(self):
         """Toggle important status of current message."""

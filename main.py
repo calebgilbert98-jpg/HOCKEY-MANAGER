@@ -6346,6 +6346,15 @@ class HockeyManagerGUI(tk.Tk):
             })
         if blockers:
             return ("Continue", blockers)
+        # Game-day label: pressing it opens the game-day inbox bundle
+        # (presser + team talk + Watch/Quick choice) instead of simming.
+        try:
+            if (self._career_prompts_allowed()
+                    and not getattr(self, '_game_day_resolution', None)
+                    and self._is_user_game_day()):
+                return ("Game Day", [])
+        except Exception:
+            pass
         return ("Next Day", [])
 
     def _show_continue_blockers(self, blockers):
@@ -6481,6 +6490,13 @@ class HockeyManagerGUI(tk.Tk):
             return  # Already processing, ignore this click
         self._set_continue_feedback(True, "Starting simulation...")
 
+        # Resuming after the game-day inbox bundle: daily maintenance
+        # (scout report, career daily, ...) already ran before the bundle
+        # opened, so skip it -- the day must not double-process.
+        _resuming_after_bundle = bool(getattr(self, '_continue_after_bundle', False))
+        if _resuming_after_bundle:
+            self._continue_after_bundle = False
+
         try:
             # Check for season end by games completed (primary trigger).
             # The date cutoff is only a safety net set AFTER the last scheduled
@@ -6506,8 +6522,9 @@ class HockeyManagerGUI(tk.Tk):
                 return
 
             # Process daily maintenance tasks FIRST (before checking games)
-            self._set_continue_feedback(True, "Processing daily tasks...")
-            self._process_daily_maintenance()
+            if not _resuming_after_bundle:
+                self._set_continue_feedback(True, "Processing daily tasks...")
+                self._process_daily_maintenance()
             
             # Get today's games - OPTIMIZED with early break and caching
             todays_games = []
@@ -6572,6 +6589,12 @@ class HockeyManagerGUI(tk.Tk):
                     oldest_key = min(self._schedule_cache.keys())
                     del self._schedule_cache[oldest_key]
             
+            # Game-day inbox bundle: pre-match presser + team talk +
+            # Watch/Quick choice as one interactive inbox message instead
+            # of modals. When it opens, the day waits for the user's pick.
+            if not _resuming_after_bundle and self._maybe_open_game_day_bundle(todays_games):
+                return
+
             self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
             if todays_games:
@@ -7219,9 +7242,19 @@ class HockeyManagerGUI(tk.Tk):
             
             # How should this user game be presented? Quick sim, watch live,
             # or ask the GM each game day. Never ask during bulk sims.
+            # When the game-day inbox bundle resolved the choice, its stored
+            # answers (presser, team talk boost, watch/quick) are used --
+            # no modal popups.
             settings = self.get_settings()
             mode = self._get_user_game_mode()
-            if getattr(self, '_bulk_simming', False):
+            _bundle_res = getattr(self, '_game_day_resolution', None)
+            _bundle_active = (_bundle_res is not None
+                              and _bundle_res.get("date") == self.current_date)
+            if _bundle_active:
+                use_game_viewer = bool(_bundle_res.get("watch"))
+                _bundle_talk_boost = float(_bundle_res.get("talk_boost", 1.0) or 1.0)
+                self._game_day_resolution = None  # consume once
+            elif getattr(self, '_bulk_simming', False):
                 use_game_viewer = False
             elif mode == 'watch':
                 use_game_viewer = True
@@ -7242,7 +7275,10 @@ class HockeyManagerGUI(tk.Tk):
             else:
                 # FM-style pre-match team talk (interactive, skipped in bulk sim)
                 opponent = away_team if home_team == self.user_team else home_team
-                talk_boost = self._career_team_talk(opponent)
+                if _bundle_active:
+                    talk_boost = _bundle_talk_boost
+                else:
+                    talk_boost = self._career_team_talk(opponent)
                 # Standard full simulation for user games
                 sim_engine = AdvancedGameSim(home_team, away_team)
                 if talk_boost != 1.0 and self.user_team is not None:
@@ -8715,14 +8751,39 @@ class HockeyManagerGUI(tk.Tk):
         # (Re-enabled by _on_done when game_end plays.)
         win.protocol("WM_DELETE_WINDOW", lambda: None)
         # Failsafe: if the sim thread dies without emitting game_end, don't
-        # trap the user forever — allow close after 3 minutes.
-        win.after(180000, lambda: win.protocol("WM_DELETE_WINDOW", win.destroy))
+        # trap the user forever. Only release the close-block once the sim
+        # thread has actually finished — a healthy game runs ~7+ minutes at
+        # 1x, so a flat 3-minute timer would let the user close mid-game and
+        # we'd process a partial result as final.
+        def _failsafe():
+            try:
+                if getattr(win, 'sim_done', False):
+                    win.protocol("WM_DELETE_WINDOW", win.destroy)
+                    return
+            except Exception:
+                pass
+            try:
+                win.after(60000, _failsafe)
+            except Exception:
+                pass
+        win.after(180000, _failsafe)
+        # Absolute backstop: never trap the user longer than 12 minutes.
+        try:
+            win.after(720000,
+                      lambda: win.protocol("WM_DELETE_WINDOW", win.destroy))
+        except Exception:
+            pass
 
         self.wait_window(win)
 
-        sim = holder.get('sim', getattr(win, 'sim', None))
+        sim = holder.get('sim')
         if sim is None:
-            raise RuntimeError("PBP visual sim did not produce a result")
+            # Closed before the final whistle (backstop) or the sim thread
+            # died: the visual sim is partial/unusable. Fall back to a fast
+            # silent sim so the recorded result is always a valid full game.
+            from simulation import GameSim as _GameSim
+            sim = _GameSim(home_team, away_team)
+            sim.simulate_game()
 
         home_score = getattr(sim, 'home_score', 0)
         away_score = getattr(sim, 'away_score', 0)
@@ -9496,11 +9557,17 @@ class HockeyManagerGUI(tk.Tk):
         # Open stats window focused on records tab instead of separate window
         self.open_stats_standings_window(focus_tab='records')
         
-    def open_inbox_window(self):
-        """Open the Email Inbox window."""
+    def open_inbox_window(self, focus_message_id=None):
+        """Open the Email Inbox window, optionally focused on one message."""
         if 'inbox' not in self.open_windows or not self.open_windows['inbox'].winfo_exists():
             self.open_windows['inbox'] = InboxWindow(self)
-        self.open_windows['inbox'].focus_set()
+        window = self.open_windows['inbox']
+        window.focus_set()
+        if focus_message_id:
+            try:
+                window.focus_message(focus_message_id)
+            except Exception:
+                pass
         
     def _get_inbox_button_text(self):
         """Get the text for the inbox button with unread count."""
@@ -9806,16 +9873,181 @@ class HockeyManagerGUI(tk.Tk):
             subject=f"Opposition report: {report['team']}",
             content="\n".join(lines), date_sent=self.current_date,
             category="Scouting"))
-        # Pre-match presser (interactive)
-        if not self._career_prompts_allowed():
-            return
-        from manager_hub_window import PressConferenceDialog
+        # Pre-match presser now lives in the game-day inbox bundle
+        # (delivered when Continue is pressed) -- no modal popup here.
+
+    # ------------------------------------------------------------------
+    # Game-day inbox bundle: pre-match presser + team talk + Watch Live /
+    # Quick Sim choice delivered as ONE interactive inbox message instead
+    # of the old modal chain (presser popup, game-mode popup, team-talk
+    # popup). Post-match pressers arrive the same way. The gameplay
+    # events themselves are unchanged -- only the delivery moved.
+    # ------------------------------------------------------------------
+
+    def _is_user_game_day(self) -> bool:
+        """Cached check: does the user team play today?"""
+        try:
+            today = getattr(self, 'current_date', None)
+            if getattr(self, '_user_game_day_cache_date', None) == today:
+                return bool(getattr(self, '_user_game_day_cache', False))
+            val = self._career_user_game_today() is not None
+            self._user_game_day_cache = val
+            self._user_game_day_cache_date = today
+            return val
+        except Exception:
+            return False
+
+    def _game_day_bundle_id(self, game_date) -> str:
+        return f"game_day_{game_date.isoformat()}"
+
+    def _find_game_day_bundle(self, game_date):
+        """Return today's game-day bundle message if already delivered."""
+        bid = self._game_day_bundle_id(game_date)
+        try:
+            messages = self.user_team.inbox.messages
+        except Exception:
+            messages = []
+        for m in messages or []:
+            if (getattr(m, 'action_type', None) == 'game_day'
+                    and (getattr(m, 'action_data', None) or {}).get('bundle_id') == bid):
+                return m
+        return None
+
+    def _build_game_day_bundle(self, home, away):
+        """Create the interactive game-day inbox message."""
+        from game_classes import EmailMessage
+        opponent = away if home == self.user_team else home
         form_word = self._career_form_word()
-        ctx = {"form_word": form_word,
-               "opp": report["team"], "opp_word": report["danger_level"].lower()}
-        questions = manager_career.build_prematch_presser(self.user_team, opponent, ctx)
-        dlg = PressConferenceDialog(self, questions, title="Pre-Match Press Conference")
-        self._career_apply_press_answers(dlg.chosen, "pre-match")
+        report = manager_career.generate_opposition_report(
+            opponent, self.league.standings)
+        ctx = {"form_word": form_word, "opp": report["team"],
+               "opp_word": report["danger_level"].lower()}
+        questions = manager_career.build_prematch_presser(
+            self.user_team, opponent, ctx)
+        my_strength = self._career_team_strength(self.user_team)
+        opp_strength = self._career_team_strength(opponent)
+        situation = ("favorite" if my_strength > opp_strength + 5 else
+                     ("underdog" if opp_strength > my_strength + 5 else "even"))
+        talk_ctx = {"situation": situation,
+                    "opponent_name": getattr(opponent, "team_name", "the opposition")}
+        talk_options = manager_career.get_team_talk_options("prematch", talk_ctx)
+        home_name = getattr(home, 'team_name', str(home))
+        away_name = getattr(away, 'team_name', str(away))
+        return EmailMessage(
+            sender="Game Day Central", sender_type="League",
+            subject=f"GAME DAY: {away_name} @ {home_name}",
+            content=(f"It's game day -- {away_name} visit {home_name}.\n\n"
+                     "Handle your media duties and rally the dressing room "
+                     "below, then choose how to play tonight's game."),
+            date_sent=self.current_date, category="Media",
+            is_urgent=True, is_important=True, requires_response=True,
+            priority=4, action_type="game_day",
+            action_data={
+                "bundle_id": self._game_day_bundle_id(self.current_date),
+                "game_date": self.current_date.isoformat(),
+                "home": home_name, "away": away_name,
+                "presser": questions,
+                "presser_answered": [False] * len(questions),
+                "talk_options": talk_options,
+                "talk_context": talk_ctx,
+                "talk_chosen": None,
+                "talk_boost": 1.0,
+            })
+
+    def _maybe_open_game_day_bundle(self, todays_games) -> bool:
+        """Deliver/open the game-day bundle instead of simming.
+
+        Returns True when the day should NOT advance yet (the inbox is
+        now driving); the Watch/Quick buttons resume via _resolve_game_day.
+        """
+        if not self._career_prompts_allowed():
+            return False
+        if getattr(self, '_game_day_resolution', None):
+            return False  # already resolved; let the sim run
+        matchup = self._career_user_game_today()
+        if not matchup:
+            return False
+        msg = self._find_game_day_bundle(self.current_date)
+        if msg is None:
+            home, away = matchup
+            msg = self._build_game_day_bundle(home, away)
+            self.send_email_to_user(msg)
+        self._set_continue_feedback(False)
+        self.open_inbox_window(focus_message_id=msg.id)
+        return True
+
+    def _answer_bundle_presser(self, message, q_index: int, ans_index: int) -> str:
+        """Inbox callback: answer one pre-match presser question."""
+        try:
+            data = message.action_data or {}
+            ans = data["presser"][q_index]["answers"][ans_index]
+            self._career_apply_press_answers([ans], "pre-match")
+            answered = data.get("presser_answered") or []
+            if 0 <= q_index < len(answered):
+                answered[q_index] = True
+            reaction = ans.get("reaction", "")
+            data.setdefault("presser_reactions", {})[q_index] = reaction
+            return reaction
+        except Exception as e:
+            print(f"Bundle presser answer error (non-fatal): {e}")
+            return ""
+
+    def _answer_bundle_team_talk(self, message, opt_index: int) -> str:
+        """Inbox callback: deliver the pre-match team talk."""
+        try:
+            data = message.action_data or {}
+            opt = data["talk_options"][opt_index]
+            reaction, boost = manager_career.apply_team_talk(
+                self.user_team, opt, data.get("talk_context") or {})
+            data["talk_chosen"] = opt_index
+            data["talk_boost"] = float(boost)
+            data["talk_reaction"] = reaction
+            return reaction
+        except Exception as e:
+            print(f"Bundle team talk error (non-fatal): {e}")
+            return ""
+
+    def _resolve_game_day(self, watch: bool):
+        """Inbox callback: Watch Live / Quick Sim picked. Close the inbox
+        and run the day with the bundle's collected choices."""
+        try:
+            msg = self._find_game_day_bundle(self.current_date)
+            talk_boost = 1.0
+            if msg is not None:
+                talk_boost = float((msg.action_data or {}).get("talk_boost", 1.0) or 1.0)
+                msg.action_done = True
+            self._game_day_resolution = {
+                "watch": bool(watch), "talk_boost": talk_boost,
+                "date": self.current_date,
+            }
+            try:
+                w = self.open_windows.get('inbox')
+                if w is not None and w.winfo_exists():
+                    w.destroy()
+            except Exception:
+                pass
+            self._continue_after_bundle = True
+            self.simulate_day()
+        except Exception as e:
+            print(f"Game-day resolve error (non-fatal): {e}")
+
+    def _answer_postmatch_presser(self, message, q_index: int, ans_index: int) -> str:
+        """Inbox callback: answer one post-match presser question."""
+        try:
+            data = message.action_data or {}
+            ans = data["questions"][q_index]["answers"][ans_index]
+            self._career_apply_press_answers([ans], data.get("kind", "post-match"))
+            answered = data.get("answered") or []
+            if 0 <= q_index < len(answered):
+                answered[q_index] = True
+            if answered and all(answered):
+                message.action_done = True
+            reaction = ans.get("reaction", "")
+            data.setdefault("reactions", {})[q_index] = reaction
+            return reaction
+        except Exception as e:
+            print(f"Post-match presser answer error (non-fatal): {e}")
+            return ""
 
     def _career_form_word(self) -> str:
         b = self.career.board
@@ -9895,19 +10127,34 @@ class HockeyManagerGUI(tk.Tk):
                 self._career_handle_sack()
                 return
 
-            # Post-match presser (interactive)
+            # Post-match presser -> interactive inbox message (no modal).
+            # The press waits in the inbox; answers apply morale/board
+            # effects exactly as the old popup did.
             if self._career_prompts_allowed():
-                from manager_hub_window import PressConferenceDialog
+                from game_classes import EmailMessage
                 hs, aws = scores
                 score_str = f"{hs}-{aws}"
                 star = self._career_star_of_game(sim_engine, team)
                 ctx = {"n": "a few"}
                 questions = manager_career.build_postmatch_presser(
                     team, opp, user_won, went_ot, score_str, star, ctx)
-                dlg = PressConferenceDialog(
-                    self, questions,
-                    title="Post-Match Press Conference")
-                self._career_apply_press_answers(dlg.chosen, "post-match")
+                if questions:
+                    opp_name = getattr(opp, 'team_name', 'the opposition')
+                    self.send_email_to_user(EmailMessage(
+                        sender="Media Relations", sender_type="Media",
+                        subject=f"Post-match presser: {score_str} vs {opp_name}",
+                        content=(f"Final: {score_str}. The press wants a word. "
+                                 "Answer below -- your words move the dressing "
+                                 "room and the board."),
+                        date_sent=self.current_date, category="Media",
+                        requires_response=True, priority=3,
+                        action_type="postmatch_presser",
+                        action_data={
+                            "game_date": self.current_date.isoformat(),
+                            "questions": questions,
+                            "answered": [False] * len(questions),
+                            "kind": "post-match",
+                        }))
         except Exception as e:
             print(f"Career post-game error (non-fatal): {e}")
 

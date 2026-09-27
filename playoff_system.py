@@ -367,11 +367,29 @@ class PlayoffWindow(tk.Toplevel):
             messagebox.showinfo("Round Complete", "Current round is already complete!")
             return
         
-        # Simulate all incomplete series to completion
-        for series in incomplete_series:
-            while not series.is_complete:
-                home_score, away_score = self.playoff_bracket.simulate_playoff_game(series)
-                
+        # Heavy sim: warn, fallback-save, then show live progress.
+        import sim_progress
+        if not sim_progress.confirm_heavy_sim(
+                self, "Simulate Round",
+                f"This will simulate every remaining game of the "
+                f"{self.playoff_bracket.current_round} round."):
+            return
+        sim_progress.create_fallback_save(self.parent, "playoffs_round")
+        dlg = sim_progress.SimProgressDialog(
+            self, title="Simulating Playoff Round")
+        try:
+            games_done = 0
+            est_total = max(1, len(incomplete_series) * 7)
+            for si, series in enumerate(incomplete_series):
+                while not series.is_complete:
+                    home_score, away_score = self.playoff_bracket.simulate_playoff_game(series)
+                    games_done += 1
+                    dlg.update(games_done / est_total,
+                               f"Series {si + 1}/{len(incomplete_series)} "
+                               f"-- game {games_done} simulated")
+        finally:
+            dlg.close()
+
         # Advance to next round (bracket updates its own current_round)
         self.playoff_bracket.advance_to_next_round(self.playoff_bracket.current_round)
 
@@ -390,20 +408,52 @@ class PlayoffWindow(tk.Toplevel):
             messagebox.showwarning("Warning", "Please generate playoff bracket first")
             return
         
+        # Heavy sim: warn, fallback-save, then show live progress.
+        # (Also driven headless by season bulk-sim; the dialog degrades
+        # gracefully if no display is available.)
+        import sim_progress
+        try:
+            _headless = bool(getattr(self.parent, '_bulk_simming', False))
+        except Exception:
+            _headless = False
+        if not _headless and not sim_progress.confirm_heavy_sim(
+                self, "Simulate All Playoffs",
+                "This will simulate every remaining playoff game through "
+                "the Stanley Cup Final."):
+            return
+        sim_progress.create_fallback_save(self.parent, "playoffs_all")
+        dlg = None
+        if not _headless:
+            try:
+                dlg = sim_progress.SimProgressDialog(
+                    self, title="Simulating Stanley Cup Playoffs")
+            except Exception:
+                dlg = None
+
         round_order = PlayoffBracket.ROUND_ORDER
-        
-        for round_name in round_order:
-            self.playoff_bracket.current_round = round_name
-            current_series = self.playoff_bracket.playoff_series[round_name]
-            
-            # Simulate all series in this round
-            for series in current_series:
-                while not series.is_complete:
-                    self.playoff_bracket.simulate_playoff_game(series)
-            
-            # Advance winners to next round
-            self.playoff_bracket.advance_to_next_round(round_name)
-        
+        games_done = 0
+        try:
+            for round_name in round_order:
+                self.playoff_bracket.current_round = round_name
+                current_series = self.playoff_bracket.playoff_series[round_name]
+
+                # Simulate all series in this round
+                for si, series in enumerate(current_series):
+                    while not series.is_complete:
+                        self.playoff_bracket.simulate_playoff_game(series)
+                        games_done += 1
+                        if dlg is not None:
+                            dlg.update(games_done / 105.0,
+                                       f"{str(round_name).replace('_', ' ').title()}: "
+                                       f"series {si + 1}/{len(current_series)} "
+                                       f"-- game {games_done} simulated")
+
+                # Advance winners to next round
+                self.playoff_bracket.advance_to_next_round(round_name)
+        finally:
+            if dlg is not None:
+                dlg.close()
+
         self._update_status_display()
         self._display_bracket()
         

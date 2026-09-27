@@ -1767,13 +1767,20 @@ class PBPVisualSim(tk.Toplevel):
     def _award_carrier(self, carrier_dot_id):
         """Give the puck to a carrier without snapping: if his dot has
         skated away from the puck's current spot, glide it to his stick
-        via a settle flight instead of teleporting."""
+        via a settle flight instead of teleporting.
+        Settle flights are capped: if the receiver keeps outskating the
+        puck (gap never closes), we stop re-launching and award directly.
+        Without the cap, the flight-landing handler re-calls this forever,
+        the flight never clears, and event consumption blocks behind it --
+        the game soft-locks mid-period."""
         d = self.dots.get(carrier_dot_id) if carrier_dot_id else None
         if d is None:
             self.carrier_id = carrier_dot_id
+            self._settle_retries = 0
             return
         gap = math.hypot(d["x"] - self.puck["x"], d["y"] - self.puck["y"])
-        if gap > 6.0 and not self._instant:
+        if gap > 6.0 and not self._instant and self._settle_retries < 3:
+            self._settle_retries += 1
             self._launch_flight(self.puck["x"], self.puck["y"],
                                 d["x"] + 1.5, d["y"] + 1.5,
                                 self._loose_flight_gs(self.puck["x"], self.puck["y"],
@@ -1781,10 +1788,19 @@ class PBPVisualSim(tk.Toplevel):
                                 "settle")
             self._settle_carrier = d["id"]
         else:
+            # Gap closed, instant mode, or retries exhausted: award directly.
+            # A rare snap beats a stuck game.
+            self._settle_retries = 0
+            self._settle_carrier = None
             self.carrier_id = d["id"]
+            self.puck["x"], self.puck["y"] = d["x"] + 1.5, d["y"] + 1.5
         self.puck_target = None
 
     def _launch_flight(self, x0, y0, x1, y1, dur_gs, tag):
+        import time as _t
+        # Watchdog timestamp: if this flight lives too long (wall clock),
+        # _step force-clears it so consumption can't block forever.
+        self._flight_launched_wall = _t.time()
         """Start a game-clock puck flight from (x0, y0) to (x1, y1).
 
         One flight is in the air at a time: a new launch preempts any old
@@ -3518,6 +3534,20 @@ class PBPVisualSim(tk.Toplevel):
         # puck flight animation (game-clock: spans real game time, so the
         # puck glides touch-to-touch and is never preempted by the next event)
         if self.puck_flight:
+            # Watchdog: a flight living too long (wall clock) is stuck --
+            # force-clear it so event consumption (and game_end) can't block
+            # forever behind a visual glitch. A stuck visual beats a stuck game.
+            import time as _t2
+            _fw = getattr(self, "_flight_launched_wall", 0) or 0
+            if _fw and (_t2.time() - _fw) > 15:
+                print(f"VIZ WATCHDOG: force-cleared stuck '{self.puck_flight[6]}' "
+                      f"flight (ph={self.playhead:.0f})", flush=True)
+                self.puck_flight = None
+                self._settle_carrier = None
+                self._takeaway_arrival = None
+                self._pass_arrival = None
+                self.pending_outcome = None
+        if self.puck_flight:
             x0, y0, x1, y1, g0, g1, tag = self.puck_flight
             k = min(1.0, (self.playhead - g0) / max(0.001, g1 - g0))
             e = 1 - (1 - k) ** 2  # ease-out
@@ -3546,6 +3576,7 @@ class PBPVisualSim(tk.Toplevel):
                     # takeaway glide landed: the new carrier has it on his stick
                     ta = self._takeaway_arrival
                     self._takeaway_arrival = None
+                    self._settle_retries = 0
                     self._award_carrier(ta)
                 elif tag == "settle" and getattr(self, "_settle_carrier", None):
                     # settle glide landed: puck should be on the receiver's
