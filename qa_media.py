@@ -489,9 +489,10 @@ check("playoffs: stirrers don't poke narratives", pokes == 0)
 check("playoffs: no new narratives spawned", spawns == 0)
 
 # --- 11. Captain takes the bullet ------------------------------------------
-def make_captain(seed, leadership=82):
-    c = make_player(seed=seed, leadership=leadership, composure=80,
-                    controversy=15, overall_target=85)
+
+def make_captain(seed, leadership=82, controversy=15, composure=80):
+    c = make_player(seed=seed, leadership=leadership, composure=composure,
+                    controversy=controversy, overall_target=85)
     c.role = types.SimpleNamespace(value="Captain")
     c.nhl_games_played = 700
     return c
@@ -505,6 +506,7 @@ for p in cap_team.roster:
     p.morale = 60
 bullets = 0
 for t in range(40):
+    cap_team.media_moment_cd = {}  # isolate likelihood from cooldown
     lg = make_league()
     lg.media_narratives = [me.Narrative("leadership", "Toronto Maple Leafs",
                                         "Leadership questions", heat=50.0)]
@@ -522,6 +524,48 @@ check("leadership: narrative heat cooled by the stand",
 check("leadership: dynamics log records it",
       any(e["type"] == "leadership_stand"
           for e in cap_team.dynamics_log))
+
+# Personality gradient: the saint captain stands up far more than the
+# hothead leader wearing the C.
+saint = make_captain(2210, leadership=95, controversy=5, composure=90)
+hothead = make_captain(2211, leadership=78, controversy=70, composure=60)
+saint_team = make_team("Toronto Maple Leafs", [saint] + [
+    make_player(seed=2310 + i, overall_target=70) for i in range(19)])
+hot_team = make_team("Toronto Maple Leafs", [hothead] + [
+    make_player(seed=2320 + i, overall_target=70) for i in range(19)])
+check("personality: saint captain >> hothead leader on bullets",
+      me._bullet_likelihood(saint, saint_team, True) >
+      me._bullet_likelihood(hothead, hot_team, True) + 0.20,
+      f"{me._bullet_likelihood(saint, saint_team, True):.2f} vs "
+      f"{me._bullet_likelihood(hothead, hot_team, True):.2f}")
+sb = hb = 0
+for t in range(60):
+    for tm, acc in ((saint_team, "s"), (hot_team, "h")):
+        tm.media_moment_cd = {}
+        lg = make_league()
+        evs = me.cover_game(lg, tm, po_away, po_away, tm, (1, 5), False,
+                            date(2026, 10, 12),
+                            rng=random.Random(33000 + t))
+        n = sum(1 for e in evs if e["kind"] == "defense")
+        if acc == "s":
+            sb += n
+        else:
+            hb += n
+check("personality: saint stands up more often in games", sb > hb + 8,
+      f"saint={sb} hothead={hb} /60")
+
+# Cooldown: one stand-up buys ~8 quiet games, even for a saint.
+cd_team = make_team("Toronto Maple Leafs", [make_captain(2230)] + [
+    make_player(seed=2340 + i, overall_target=70) for i in range(19)])
+cdb = 0
+for t in range(40):
+    lg = make_league()
+    evs = me.cover_game(lg, cd_team, po_away, po_away, cd_team, (1, 5),
+                        False, date(2026, 10, 12),
+                        rng=random.Random(34000 + t))
+    cdb += sum(1 for e in evs if e["kind"] == "defense")
+check("cadence: bullet has a cooldown, not every loss", 1 <= cdb <= 6,
+      f"bullets={cdb}/40")
 
 # Non-leader interviewed after a loss: no bullet-taking.
 quiet = make_player(seed=2400, leadership=40, composure=80, controversy=15,
@@ -558,6 +602,7 @@ lg.reporters = [r for r in lg.reporters
                 if not (r.market == "Toronto Maple Leafs"
                         and r.archetype != "stirrer")]
 for t in range(40):
+    shield_team.media_moment_cd = {}
     lg.media_recent_faces = [getattr(p, "id", None)
                              for p in shield_team.roster[1:]]
     evs = me.cover_game(lg, shield_team, po_away, po_away, shield_team,
@@ -569,6 +614,23 @@ check("leadership: good coach shields the kid", shields >= 2,
 check("leadership: shield cools the narrative + lifts the kid",
       lg.media_narratives[0].heat < 60.0 and kid.morale > 60,
       f"heat={lg.media_narratives[0].heat:.0f} morale={kid.morale}")
+
+# Personality gradient on the shield, deterministic.
+hi_coach = make_coach(seed=64, name="Hi")
+hi_coach.man_management = 85
+hi_coach.leadership = 70
+lo_coach = make_coach(seed=65, name="Lo")
+lo_coach.man_management = 35
+lo_coach.leadership = 45
+veteran = make_player(seed=2601, age=30, overall_target=85)
+check("personality: players'-coach shields far more than the cold one",
+      me._shield_likelihood(hi_coach, kid) >
+      me._shield_likelihood(lo_coach, kid) + 0.20,
+      f"{me._shield_likelihood(hi_coach, kid):.2f} vs "
+      f"{me._shield_likelihood(lo_coach, kid):.2f}")
+check("personality: kids get covered more than veterans",
+      me._shield_likelihood(hi_coach, kid) >
+      me._shield_likelihood(hi_coach, veteran) + 0.10)
 
 # --- 13. GM public backing ---------------------------------------------------
 glg = make_league()
@@ -601,6 +663,17 @@ res = me.gm_public_backing(plg, pteam, tp, date(2026, 10, 14),
 check("gm: backing the player cools rumor + lifts him",
       plg.media_narratives[0].heat == 35.0 and tp.morale == 57)
 
+# Personality: steady GMs go on the record, volatile ones let guys twist.
+steady_gm = types.SimpleNamespace(controversy=15)
+wild_gm = types.SimpleNamespace(controversy=85)
+hot = me.Narrative("hot_seat", "Toronto Maple Leafs", "Hot seat",
+                   heat=80.0)
+check("personality: steady GM backs far more than the volatile one",
+      me._gm_backing_likelihood(steady_gm, hot) >
+      me._gm_backing_likelihood(wild_gm, None) * 3,
+      f"{me._gm_backing_likelihood(steady_gm, hot):.3f} vs "
+      f"{me._gm_backing_likelihood(wild_gm, None):.3f}")
+
 # User-triggered, no league at all: never crashes.
 res = me.gm_public_backing(None, pteam, "room", user_triggered=True)
 check("gm: user backing the room works standalone",
@@ -609,6 +682,7 @@ check("gm: user backing the room works standalone",
 # --- 14. Intermission rally --------------------------------------------------
 rally = 0
 for t in range(40):
+    cap_team.media_moment_cd = {}
     lg = make_league()
     evs = me.cover_game(lg, cap_team, po_away, cap_team, po_away, (3, 2),
                         False, date(2026, 10, 15),
@@ -616,6 +690,37 @@ for t in range(40):
     rally += sum(1 for e in evs if e["kind"] == "rally")
 check("leadership: intermission rally fires in tight games", rally >= 3,
       f"rallies={rally}/40")
+
+# Personality: the voice matters -- saint captain outranks a flat coach,
+# a great motivator outranks a weak captain, nobody means silence.
+flat_coach = make_coach(seed=66, name="Flat")
+flat_coach.motivating = 55
+voice_team = make_team("Toronto Maple Leafs", [saint] + [
+    make_player(seed=3100 + i, overall_target=70) for i in range(19)],
+    staff=[flat_coach])
+spk, _ = me._rally_speaker(voice_team)
+check("personality: saint captain is the room's voice",
+      spk is saint)
+mot_coach = make_coach(seed=67, name="Mot")
+mot_coach.motivating = 92
+weak_cap = make_captain(2240, leadership=50)
+weak_team = make_team("Toronto Maple Leafs", [weak_cap] + [
+    make_player(seed=3200 + i, overall_target=70) for i in range(19)],
+    staff=[mot_coach])
+spk2, _ = me._rally_speaker(weak_team)
+check("personality: great motivator outranks a weak captain",
+      spk2 is mot_coach)
+silent_cap = make_captain(2241, leadership=40)
+mute_coach = make_coach(seed=68, name="Mute")
+mute_coach.motivating = 50
+quiet_team2 = make_team("Toronto Maple Leafs", [silent_cap] + [
+    make_player(seed=3300 + i, overall_target=70) for i in range(19)],
+    staff=[mute_coach])
+spk3, _ = me._rally_speaker(quiet_team2)
+check("personality: no voice, no speech", spk3 is None)
+check("personality: better voice rallies more",
+      me._rally_likelihood(0.95, False, 70) >
+      me._rally_likelihood(0.60, False, 70) + 0.10)
 
 rally_blow = 0
 for t in range(30):
@@ -634,6 +739,46 @@ for t in range(30):
                         rng=random.Random(27000 + t))
     rally_g7 += sum(1 for e in evs if e["kind"] == "rally")
 check("leadership: no speeches needed in game 7", rally_g7 == 0)
+
+# --- 15. Key moments + cadence ------------------------------------------------
+plain_lg = make_league()
+base = me._key_moment_boost(plain_lg, cap_team, po_away, date(2026, 10, 5))
+check("cadence: random October Tuesday is 1.0x", base == 1.0, base)
+march = me._key_moment_boost(plain_lg, cap_team, po_away, date(2026, 3, 10))
+check("cadence: March push matters", march == 1.25, march)
+rival_lg = make_league()
+rival_lg.rivalries = [{"a": ("team", "Boston Bruins"),
+                       "b": ("team", "Toronto Maple Leafs"),
+                       "a_name": "Boston Bruins",
+                       "b_name": "Toronto Maple Leafs",
+                       "kind": "team_team", "intensity": 70}]
+rb = me._key_moment_boost(rival_lg, cap_team, po_away, date(2026, 10, 5))
+check("cadence: blood rivalry matters", rb == 1.4, rb)
+skid = make_team("Toronto Maple Leafs",
+                 [make_player(seed=3400 + i) for i in range(20)],
+                 wins=6, losses=22, ot_losses=2)
+skb = me._key_moment_boost(plain_lg, skid, po_away, date(2026, 10, 5))
+check("cadence: spiraling room matters", skb == 1.3, skb)
+story_lg = make_league()
+story_lg.media_narratives = [me.Narrative("hot_seat",
+                                          "Toronto Maple Leafs",
+                                          "Hot seat", heat=60.0)]
+stb = me._key_moment_boost(story_lg, cap_team, po_away, date(2026, 10, 5))
+check("cadence: active storyline matters", stb == 1.3, stb)
+combo = me._key_moment_boost(rival_lg, skid, po_away, date(2026, 3, 10))
+check("cadence: combined moments cap at 2.0x", combo == 2.0, combo)
+
+# Cooldown mechanics on the clock.
+t0 = make_team("X", [make_player(seed=1)])
+check("cadence: moment ready when never fired",
+      me._moment_ready(t0, "bullet"))
+me._mark_moment(t0, "bullet")
+check("cadence: not ready right after firing",
+      not me._moment_ready(t0, "bullet"))
+t0.media_games_covered = 8
+check("cadence: ready again after 8 games",
+      me._moment_ready(t0, "bullet"))
+
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

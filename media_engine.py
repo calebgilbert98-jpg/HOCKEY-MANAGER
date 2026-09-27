@@ -422,6 +422,165 @@ _STANDUP_QUOTES = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Personality-driven likelihoods. Who steps up is who they are, not a dice
+# roll: the same guy behaves the same way all season, and across the league
+# you get every shade -- the saint captain, the hothead leader, the
+# players' coach, the control freak who shields his kids. Flat chances are
+# gone; every probability below is built from attributes.
+# ---------------------------------------------------------------------------
+
+def _clamp_p(p: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, p))
+
+
+def _bullet_likelihood(player: Any, team: Any, heated_loss: bool) -> float:
+    """A leader takes the bullet when he's wired that way: high leadership,
+    low controversy (doesn't make it about himself), composure to face the
+    cameras. The C multiplies it -- that's literally the job. Hotheads get
+    discounted: the room knows they'd turn it into a show."""
+    lead = _f(player, "leadership", 50)
+    comp = _f(player, "composure", 50)
+    cont = _f(player, "controversy", 30)
+    p = (0.05 + 0.45 * (lead / 100.0) + 0.20 * ((100.0 - cont) / 100.0)
+         + 0.10 * (comp / 100.0))
+    if _captain_of(team) is player:
+        p *= 1.25
+    if heated_loss:
+        p *= 1.15  # the room needs it most after a bad one
+    if cont >= 60:
+        p *= 0.70  # guys tune out the hothead's noble act
+    return _clamp_p(p, 0.05, 0.80)
+
+
+def _shield_likelihood(coach: Any, player: Any) -> float:
+    """A coach steps in front of his guy when protecting people is his
+    nature: man-management first, then leadership, then the control freak's
+    instinct that nobody talks to his players but him. Kids get covered
+    far more than veterans."""
+    mm = _f(coach, "man_management", 50)
+    lead = _f(coach, "leadership", 50)
+    ctrl = _f(coach, "control_need", 50)
+    try:
+        age = int(getattr(player, "age", 26) or 26)
+    except Exception:
+        age = 26
+    p = (0.05 + 0.50 * (mm / 100.0) + 0.15 * (lead / 100.0)
+         + 0.10 * (ctrl / 100.0))
+    if age <= 23:
+        p += 0.20
+    return _clamp_p(p, 0.05, 0.90)
+
+
+def _rally_speaker(team: Any):
+    """Who gives the intermission word, by personality score. The best
+    voice in the room wins -- a saint captain outranks a flat coach."""
+    cap = _captain_of(team)
+    coach = _head_coach_of(team)
+    best, best_attr = None, 0.0
+    if cap is not None:
+        score = _f(cap, "leadership", 50) / 100.0 + 0.10
+        if score > best_attr:
+            best, best_attr = ("captain", cap), score
+    if coach is not None:
+        score = _f(coach, "motivating", 50) / 100.0
+        if score > best_attr:
+            best, best_attr = ("coach", coach), score
+    if best is None or best_attr < 0.55:
+        return None, 0.0
+    return best[1], best_attr
+
+
+def _rally_likelihood(speaker_attr: float, went_ot: bool,
+                      avg_morale: float) -> float:
+    """The better the voice, the more likely it speaks. Overtime and a
+    flat room pull it out of people."""
+    p = 0.05 + 0.50 * speaker_attr
+    if went_ot:
+        p *= 1.2
+    if avg_morale < 60:
+        p += 0.10  # someone has to say something
+    return _clamp_p(p, 0.05, 0.85)
+
+
+def _gm_backing_likelihood(gm: Any, narr: Any) -> float:
+    """Steady GMs go on the record for their people; volatile ones let
+    them twist. A burning hot-seat story forces even quiet GMs out."""
+    cont = _f(gm, "controversy", 40) if gm is not None else 40
+    heat = 0.0
+    try:
+        heat = float(getattr(narr, "heat", 0.0) or 0.0)
+    except Exception:
+        pass
+    p = (0.008 + 0.06 * (heat / 100.0)
+         + 0.025 * ((100.0 - cont) / 100.0))
+    return _clamp_p(p, 0.005, 0.12)
+
+
+# ---------------------------------------------------------------------------
+# Key moments + cooldowns. Leadership moments land on nights that matter --
+# blood rivalries, the March push, a room that's spiraling, a story hanging
+# over the team -- and then the room goes quiet for a while. Nobody gives a
+# speech every Tuesday.
+# ---------------------------------------------------------------------------
+
+_MOMENT_COOLDOWNS = {"bullet": 8, "rally": 10, "shield": 6, "backing": 25}
+
+
+def _moment_clock(team: Any) -> int:
+    return int(getattr(team, "media_games_covered", 0) or 0)
+
+
+def _moment_ready(team: Any, kind: str) -> bool:
+    try:
+        last = (getattr(team, "media_moment_cd", None) or {}).get(kind)
+        if last is None:
+            return True
+        return _moment_clock(team) - int(last) >= _MOMENT_COOLDOWNS[kind]
+    except Exception:
+        return True
+
+
+def _mark_moment(team: Any, kind: str) -> None:
+    try:
+        cd = getattr(team, "media_moment_cd", None)
+        if not isinstance(cd, dict):
+            cd = {}
+        cd[kind] = _moment_clock(team)
+        team.media_moment_cd = cd
+    except Exception:
+        pass
+
+
+def _key_moment_boost(league: Any, team: Any, opponent: Any,
+                      game_date: Any) -> float:
+    """1.0 on a random Tuesday; up to ~2x when the night matters."""
+    boost = 1.0
+    try:
+        import reputation_system as _rs
+        rivalries = getattr(league, "rivalries", None) or []
+        heat = _rs.get_rivalry_heat(rivalries, team, opponent).get(
+            "heat", 0)
+        if heat >= 50:
+            boost *= 1.4
+    except Exception:
+        pass
+    try:
+        month = getattr(game_date, "month", 0) or 0
+        if month in (3, 4):
+            boost *= 1.25  # the March/April push
+    except Exception:
+        pass
+    try:
+        if _spiraling(team):
+            boost *= 1.3  # a sinking room needs a voice
+        if _narrative_for(_team_name(team), league) is not None:
+            boost *= 1.3  # a story hanging over them
+    except Exception:
+        pass
+    return min(2.0, boost)
+
+
 def cover_game(league: Any, home_team: Any, away_team: Any,
                winner: Any, loser: Any,
                scores: Tuple[int, int], went_ot: bool,
@@ -469,7 +628,13 @@ def _cover_game_inner(league, home_team, away_team, winner, loser,
     playoffs = poctx is not None
     if big_game and rng.random() < 0.4:
         return events  # both rooms closed tonight
-    ctx = {"big_game": big_game, "playoffs": playoffs}
+    try:
+        home_team.media_games_covered = _moment_clock(home_team) + 1
+    except Exception:
+        pass
+    ctx = {"big_game": big_game, "playoffs": playoffs,
+           "key_boost": _key_moment_boost(league, home_team, away_team,
+                                          game_date)}
 
     # ---- 1. The interview ----
     interviewee = _pick_interviewee(home_team, league, rng,
@@ -499,9 +664,17 @@ def _cover_game_inner(league, home_team, away_team, winner, loser,
     _room_leadership_moment(league, home_team, home_won, diff, went_ot,
                             game_date, rng, events, ctx)
 
-    # ---- 5. The front office speaks: rare AI GM backing.
-    if not playoffs and rng.random() < 0.02:
-        _gm_backing(league, home_team, game_date, rng, events)
+    # ---- 5. The front office speaks: a steady GM with a burning story
+    # goes on the record. Personality-gated, never scheduled, and rare
+    # enough that it means something when it happens.
+    if not playoffs:
+        narr = _narrative_for(_team_name(home_team), league)
+        if (_moment_ready(home_team, "backing")
+                and rng.random()
+                < _gm_backing_likelihood(_gm_of(home_team), narr)
+                * ctx["key_boost"]):
+            _mark_moment(home_team, "backing")
+            _gm_backing(league, home_team, game_date, rng, events)
 
     return events
 
@@ -532,9 +705,15 @@ def _run_interview(league, team, player, reporter, won: bool,
         return
 
     # The captain takes the bullet: after a loss, a real leader doesn't
-    # let the room get carved up -- he stands in front of it.
+    # let the room get carved up -- he stands in front of it. Whether he
+    # does is personality, not luck (see _bullet_likelihood) -- and it
+    # doesn't happen every night (cooldown).
     if (not won and not ctx.get("playoffs") and _is_leader(player, team)
-            and rng.random() < 0.35):
+            and _moment_ready(team, "bullet")
+            and rng.random() < _bullet_likelihood(player, team,
+                                                  heated_loss)
+            * ctx.get("key_boost", 1.0)):
+        _mark_moment(team, "bullet")
         _leader_stands_up(league, team, player, pname, reporter,
                           game_date, rng, events)
         return
@@ -555,7 +734,7 @@ def _run_interview(league, team, player, reporter, won: bool,
             and reporter.archetype == "stirrer"
             and rng.random() < 0.15 + narr.heat / 400.0):
         _run_narrative_poke(league, team, player, pname, savvy,
-                            reporter, narr, game_date, rng, events)
+                            reporter, narr, game_date, rng, events, ctx)
         return
 
     # A normal night: the quote, shaped by who's holding the mic.
@@ -664,16 +843,19 @@ def _narrative_for(team_name: str, league: Any) -> Optional[Narrative]:
 
 
 def _run_narrative_poke(league, team, player, pname, savvy, reporter,
-                        narr, game_date, rng, events) -> None:
+                        narr, game_date, rng, events,
+                        ctx: Optional[Dict[str, Any]] = None) -> None:
     """The Draisaitl moment: a ridiculous narrative meets a composed player
     and dies on camera -- or meets a rattled one and grows legs.
 
     Before either, a good coach may step in front of his guy -- especially
-    a young one. That's what the good ones do."""
+    a young one. That's what the good ones do. Whether he does is who he
+    is (see _shield_likelihood), not a coin flip."""
     coach = _head_coach_of(team)
-    if (coach is not None and _f(coach, "man_management", 50) >= 65
-            and (int(getattr(player, "age", 26) or 26) <= 23
-                 or rng.random() < 0.5)):
+    kb = (ctx or {}).get("key_boost", 1.0)
+    if (coach is not None and _moment_ready(team, "shield")
+            and rng.random() < _shield_likelihood(coach, player) * kb):
+        _mark_moment(team, "shield")
         cname = getattr(coach, "full_name",
                         getattr(coach, "last_name", "The coach"))
         narr.heat = max(0, narr.heat - 10)
@@ -897,31 +1079,34 @@ def _room_leadership_moment(league, team, won: bool, diff: int,
         return
     if not (diff <= 2 or went_ot):
         return  # blowouts don't get speeches; they get bag skates
-    if rng.random() >= 0.30:
-        return
     roster = list(getattr(team, "roster", []) or [])
     if not roster:
         return
-    cap = _captain_of(team)
-    speaker, quote = None, ""
-    if cap is not None and _f(cap, "leadership", 50) >= 70:
-        speaker = getattr(cap, "full_name", getattr(cap, "last_name", "The captain"))
-        quote = ("Between periods, with the game on the line, "
-                 f"{speaker} stood up and told the room to empty the tank.")
-    else:
-        coach = _head_coach_of(team)
-        if coach is not None and _f(coach, "motivating", 50) >= 70:
-            speaker = getattr(coach, "full_name",
-                              getattr(coach, "last_name", "The coach"))
-            quote = (f"{speaker} said the quiet part out loud between "
-                     f"periods -- and the room responded.")
+    speaker, speaker_attr = _rally_speaker(team)
     if speaker is None:
         return
+    if not _moment_ready(team, "rally"):
+        return
+    avg_morale = sum(_f(p, "morale", 70) for p in roster) / len(roster)
+    if (rng.random() >= _rally_likelihood(speaker_attr, went_ot,
+                                          avg_morale)
+            * ctx.get("key_boost", 1.0)):
+        return
+    _mark_moment(team, "rally")
+    speaker_name = getattr(speaker, "full_name",
+                           getattr(speaker, "last_name", "The captain"))
+    if _captain_of(team) is speaker:
+        quote = ("Between periods, with the game on the line, "
+                 f"{speaker_name} stood up and told the room to empty "
+                 f"the tank.")
+    else:
+        quote = (f"{speaker_name} said the quiet part out loud between "
+                 f"periods -- and the room responded.")
     lift = 2 if won else 1
     _bump(roster, "happiness", lift)
     _record(team, "intermission_rally", quote, morale_delta=lift, tone="up")
     events.append({"kind": "rally", "team": _team_name(team),
-                   "speaker": speaker, "note": quote})
+                   "speaker": speaker_name, "note": quote})
 
 
 def gm_public_backing(league: Any, team: Any, target: str = "room",
