@@ -61,6 +61,7 @@ from player_development_system import PlayerDevelopmentEngine, initialize_player
 # Import optional Media System
 from media_system import MediaSystem
 from media_center_window import MediaCenterWindow
+from morale_window import MoraleWindow
 
 # Import Football Manager-style career systems
 import manager_career
@@ -3924,6 +3925,11 @@ class HockeyManagerGUI(tk.Tk):
         self._create_nav_pill(right_menu_frame, "Media",
                               self.open_media_center, side="right",
                               tooltip="Media Center: press conferences and media relations")
+
+        # Morale button (dressing-room health: chemistry, hierarchy, attitudes)
+        self._create_nav_pill(right_menu_frame, "Morale",
+                              self.open_morale_window, side="right",
+                              tooltip="Morale: team chemistry, hierarchy, and player attitudes")
 
         # Stats & Standings button
         self._create_nav_pill(right_menu_frame, "Stats",
@@ -8418,8 +8424,105 @@ class HockeyManagerGUI(tk.Tk):
                                    'event': 'overtime'})
         return winner, loser, scores, events, notable_events, sim
 
+    def _update_player_reputations(self):
+        """End-of-regular-season player reputation update.
+
+        Runs once per season (guarded by _reputation_updated_for_season, since
+        end_of_season can re-fire after the playoffs). Reads p.stats BEFORE
+        league.end_of_season() wipes them -- do not move this call later in
+        the season lifecycle.
+        """
+        if getattr(self, '_reputation_updated_for_season', None) == self.league.season_year:
+            return
+        try:
+            import reputation_system as rs
+        except ImportError:
+            return
+        all_players = [p for t in self.league.teams for p in t.roster]
+        if not all_players:
+            return
+        # Map award display names -> reputation_system award keys
+        awards = self._calculate_season_awards(all_players)
+        award_key_map = {
+            'Hart Trophy (MVP)': 'hart',
+            'Art Ross Trophy (Scoring Leader)': 'art_ross',
+            'Vezina Trophy (Best Goalie)': 'vezina',
+            'Norris Trophy (Best Defenseman)': 'norris',
+            'Calder Trophy (Rookie of the Year)': 'calder',
+        }
+        name_to_awards = {}
+        for display, key in award_key_map.items():
+            info = awards.get(display)
+            if info and info.get('name'):
+                name_to_awards.setdefault(info['name'], []).append(key)
+        # League-average points per game (skaters only)
+        skaters = [p for p in all_players
+                   if 'GOALIE' not in getattr(getattr(p, 'primary_position', None), 'name', '')]
+        total_pts = sum(getattr(getattr(p, 'stats', None), 'points', 0) or 0 for p in skaters)
+        total_gp = sum(getattr(getattr(p, 'stats', None), 'games_played', 0) or 0 for p in skaters)
+        league_avg_ppg = (total_pts / total_gp) if total_gp else 0.8
+        for team in self.league.teams:
+            for p in team.roster:
+                pstats = getattr(p, 'stats', None)
+                rs.update_player_reputation(
+                    p,
+                    season_points=getattr(pstats, 'points', 0) or 0,
+                    games_played=getattr(pstats, 'games_played', 0) or 0,
+                    league_avg_ppg=league_avg_ppg,
+                    awards=name_to_awards.get(p.full_name, []),
+                )
+        self._reputation_updated_for_season = self.league.season_year
+
+    def _update_offseason_reputations(self):
+        """Offseason rollover: controversy cooldown, staff rep, Cup bonus.
+
+        MUST run before league.end_of_season() -- standings (win%) are wiped
+        by initialize_standings() inside it.
+        """
+        try:
+            import reputation_system as rs
+        except ImportError:
+            return
+        # Resolve the Cup champion from the playoff window, if one was played.
+        champion_name = None
+        try:
+            pw = self.open_windows.get('playoffs')
+            if pw is not None and pw.winfo_exists():
+                bracket = getattr(pw, 'playoff_bracket', None)
+                champ = getattr(bracket, 'stanley_cup_champion', None)
+                champion_name = getattr(champ, 'team_name', None)
+        except Exception:
+            pass
+        season_start = f"{self.league.season_year}-09-01"
+        for team in self.league.teams:
+            st = self.league.standings.get(team.team_name, {})
+            w = st.get('W', st.get('Wins', 0))
+            l = st.get('L', st.get('Losses', 0))
+            otl = st.get('OTL', 0)
+            win_pct = w / max(1, w + l + otl)
+            is_champ = champion_name is not None and team.team_name == champion_name
+            for p in team.roster:
+                incidents = sum(
+                    1 for e in getattr(p, 'controversy_history', []) or []
+                    if isinstance(e, dict) and e.get('date', '') >= season_start
+                )
+                rs.decay_controversy(p, incidents_this_season=incidents)
+                if is_champ:
+                    rs.award_championship(p)  # +8, ratchet-safe
+            for s in getattr(team, 'staff', []) or []:
+                # +12 for a Cup on the 0-100 career scale; win% moves the rest
+                rs.update_staff_reputation(s, team_win_pct=win_pct,
+                                           championships=1 if is_champ else 0)
+                # Another year with the club: the shelf-life clock ticks.
+                try:
+                    s.years_with_team = (getattr(s, 'years_with_team', 0) or 0) + 1
+                except Exception:
+                    pass
+
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
+        # Bank regular-season reputations before anything else touches stats.
+        self._update_player_reputations()
         # Show season summary first (skip the modal dialog when bulk simming)
         if not getattr(self, '_bulk_simming', False):
             self._show_season_summary()
@@ -8691,6 +8794,9 @@ class HockeyManagerGUI(tk.Tk):
     
     def _start_offseason(self):
         """Start the offseason phase."""
+        # Controversy cooldown + staff rep + Cup bonus. Reads standings before
+        # league.end_of_season() wipes them.
+        self._update_offseason_reputations()
         # Age players and reset stats
         self.league.end_of_season()
 
@@ -9103,6 +9209,12 @@ class HockeyManagerGUI(tk.Tk):
         if 'media_center' not in self.open_windows or not self.open_windows['media_center'].winfo_exists():
             self.open_windows['media_center'] = MediaCenterWindow(self)
         self.open_windows['media_center'].focus_set()
+
+    def open_morale_window(self):
+        """Open the Team Morale tab (chemistry, hierarchy, social groups)."""
+        if 'morale' not in self.open_windows or not self.open_windows['morale'].winfo_exists():
+            self.open_windows['morale'] = MoraleWindow(self)
+        self.open_windows['morale'].focus_set()
         
     def open_stats_standings_window(self, focus_tab=None):
         """Open the comprehensive Stats and Standings window with optional tab focus."""
