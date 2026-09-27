@@ -555,19 +555,49 @@ class Player:
             )
         return max(1, min(99, int(rating)))
     def _potential_cap(self) -> int:
-        """Overall-rating ceiling implied by the player's potential grade (50-scale)."""
+        """Overall-rating ceiling implied by the player's potential grade.
+
+        Grades map onto the live overall scale (generated players sit
+        ~62-83; generational talents reach ~90). Tier gaps preserve the
+        original design's spacing (a full grade ~ 6-7 points).
+        """
         g = (self.potential_grade or 'C').strip().upper()
-        base = {'A': 48, 'B': 44, 'C': 40, 'D': 35, 'F': 30}
-        cap = base.get(g[:1], 40)
+        base = {'A': 87, 'B': 82, 'C': 76, 'D': 69, 'F': 62}
+        cap = base.get(g[:1], 76)
         if len(g) > 1:
             if g[1] == '+':
-                cap += 2
+                cap += 3
             elif g[1] == '-':
-                cap -= 2
+                cap -= 3
         return cap
 
     # Ordered grade ladder for dynamic potential movement
     POTENTIAL_LADDER = ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
+
+    # Development curves per potential grade. Higher-touted prospects
+    # develop faster but peak earlier; lower-touted types develop slower and
+    # peak later -- the late-bloomer shape (Zetterberg/Datsyuk). Values mirror
+    # the draft generator's grade table.
+    GRADE_DEVELOPMENT = {
+        "A+": {"development_speed": 1.5, "peak_age": 25},
+        "A":  {"development_speed": 1.4, "peak_age": 26},
+        "A-": {"development_speed": 1.3, "peak_age": 26},
+        "B+": {"development_speed": 1.2, "peak_age": 27},
+        "B":  {"development_speed": 1.1, "peak_age": 27},
+        "B-": {"development_speed": 1.0, "peak_age": 27},
+        "C+": {"development_speed": 0.9, "peak_age": 28},
+        "C":  {"development_speed": 0.8, "peak_age": 28},
+        "C-": {"development_speed": 0.7, "peak_age": 29},
+        "D":  {"development_speed": 0.6, "peak_age": 30},
+        "D+": {"development_speed": 0.6, "peak_age": 30},
+        "F":  {"development_speed": 0.5, "peak_age": 31},
+    }
+
+    def _grade_development(self) -> dict:
+        g = (self.potential_grade or "C").strip().upper()
+        return self.GRADE_DEVELOPMENT.get(g,
+               self.GRADE_DEVELOPMENT.get(g[:1], {"development_speed": 0.8,
+                                                 "peak_age": 28}))
 
     def update_potential_from_season(self):
         """Dynamically adjust potential_grade based on just-completed season.
@@ -644,10 +674,15 @@ class Player:
             self.contract.years_remaining -= 1
 
         potential_cap = self._potential_cap()
+        dev = self._grade_development()
 
-        if self.age < GameBalance.PEAK_AGE_START and self.overall_rating() < potential_cap:
-            # Development closes a fraction of the gap to the player's ceiling
-            # each year: prospects surge, established players refine slowly.
+        # Development closes a fraction of the gap to the player's ceiling
+        # each year: prospects surge, established players refine slowly.
+        # Higher-touted grades develop faster (development_speed) but stop
+        # earlier (peak_age); late-round types grow slower and longer.
+        # Peak age is the last developing year: a late-blooming grade keeps
+        # growing long after an early-peaking one has stopped.
+        if self.age <= dev["peak_age"] and self.overall_rating() < potential_cap:
             gap = potential_cap - self.overall_rating()
             if self.age <= 20:
                 frac = 0.25
@@ -657,9 +692,21 @@ class Player:
                 frac = 0.10
             else:
                 frac = 0.05
+            frac *= dev["development_speed"]
             frac *= random.uniform(0.8, 1.2)
-            # ~0.06 overall per attribute point (weighted average of ~20 attrs)
-            attr_points = min(120, max(1, int(gap * frac / 0.06)))
+            # Convert the desired overall gain into attribute points. A +1 to a
+            # random OVR attribute is worth ~1/len(ovr_attrs) overall, and 75%
+            # of development points land on OVR attributes (empirically ~0.9x
+            # after weight skew and flavor-list overlap).
+            gain = gap * frac
+            # Surge cap scales with the grade's development speed so elite
+            # teens can actually surge; floor keeps ceilings reachable
+            # instead of asymptoting forever short of them. Never overshoot.
+            gain = min(gain, 7.0 * dev["development_speed"])
+            gain = max(gain, 2.0 * dev["development_speed"])
+            gain = min(gain, gap)
+            per_point = 0.9 / max(1, len(self._ovr_attributes()))
+            attr_points = max(1, int(gain / per_point))
             for _ in range(attr_points):
                 self._change_random_attribute(1)
         elif self.age > GameBalance.PEAK_AGE_END:

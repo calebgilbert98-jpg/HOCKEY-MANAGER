@@ -161,10 +161,12 @@ class PlayerDevelopmentEngine:
         
         base_rate = stage_rates[stage]
         
-        # Apply potential modifiers based on player's work ethic and determination
+        # Apply potential modifiers based on player's work ethic and
+        # determination. Both live on the ~100-scale in the live game, so
+        # normalize to the 1-20 scale this formula was written for.
         if hasattr(player, 'work_ethic') and hasattr(player, 'determination'):
-            work_ethic_modifier = (player.work_ethic - 10) * 0.02
-            determination_modifier = (player.determination - 10) * 0.03
+            work_ethic_modifier = ((player.work_ethic / 5.0) - 10) * 0.02
+            determination_modifier = ((player.determination / 5.0) - 10) * 0.03
             base_rate += work_ethic_modifier + determination_modifier
         
         return base_rate
@@ -176,8 +178,16 @@ class PlayerDevelopmentEngine:
             return 0
         
         current_value = getattr(player, attribute, 10)
-        # Use player's overall potential as a base, modified by position and age
-        potential_value = min(player.potential + random.randint(-2, 2), 20)
+        # Ceiling: the player's touted potential grade, on the live
+        # attribute scale (attributes are 1-100 in the live game).
+        try:
+            _cap = int(player._potential_cap())
+        except Exception:
+            try:
+                _cap = int(getattr(player, 'potential', 13) or 13) * 5
+            except Exception:
+                _cap = 75
+        potential_value = min(_cap + random.randint(-5, 5), 99)
         
         # Don't develop if at or above potential
         if current_value >= potential_value:
@@ -190,7 +200,7 @@ class PlayerDevelopmentEngine:
         
         # Distance from potential affects development speed
         potential_gap = potential_value - current_value
-        gap_modifier = min(1.0, potential_gap / 5.0)  # Closer to potential = slower development
+        gap_modifier = min(1.0, potential_gap / 25.0)  # Closer to potential = slower development
         
         # Random variance
         variance = random.uniform(0.5, 1.5)
@@ -205,15 +215,15 @@ class PlayerDevelopmentEngine:
             except Exception:
                 pass
         
-        # Convert to integer attribute change
-        if development_points >= 1.0:
-            return 1
-        elif development_points <= -1.0:
-            return -1
-        elif abs(development_points) > 0.3 and random.random() < abs(development_points):
+        # Monthly roll of the annual expectation: development_points keeps
+        # the original formula (stage rates, work ethic/determination, gap
+        # slowdown, variance, coach factor) as expected ANNUAL movement per
+        # attribute; each month rolls 1/12th of it, so this pass is texture
+        # under the yearly age_one_year main curve.
+        if abs(development_points) > 0.05 \
+                and random.random() < abs(development_points) / 12.0:
             return 1 if development_points > 0 else -1
-        else:
-            return 0
+        return 0
     
     def apply_training_effects(self, player: Player, training: TrainingProgram) -> Dict[str, int]:
         """Apply training program effects to player attributes"""
@@ -285,7 +295,7 @@ class PlayerDevelopmentEngine:
                 change = self.calculate_attribute_development(player, attribute, coach=coach)
                 if change != 0:
                     current_value = getattr(player, attribute)
-                    new_value = max(1, min(20, current_value + change))
+                    new_value = max(1, min(100, current_value + change))
                     setattr(player, attribute, new_value)
                     attribute_changes[attribute] = change
                     
