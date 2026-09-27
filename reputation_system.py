@@ -2484,6 +2484,10 @@ def review_rivalries(rivalries: list, years: int = 3) -> List[Dict[str, Any]]:
     verdicts: List[Dict[str, Any]] = []
     for r in list(rivalries):
         try:
+            # Old wounds eventually stop mattering for the nightly tension.
+            if isinstance(r.get("incidents"), list):
+                r["incidents"] = [i for i in r["incidents"]
+                                  if _incident_games_ago(i) <= 164]
             if r.get("solidified"):
                 # Entrenched: barely cools, never dies on its own.
                 r["intensity"] = max(60, r["intensity"] - 1 * years)
@@ -2687,9 +2691,11 @@ def order_punishment(coach: Any, team: Any, game_state: Dict[str, Any],
         ordered = score >= 0.75
         cname = getattr(coach, "full_name", "Coach")
         if not ordered:
+            story = f"{cname} keeps it clean. No order sent."
+            if tension >= 60:
+                story += " The room remembers, but this isn't who they are."
             return {"ordered": False, "tendency": tendency, "score": round(score, 3),
-                    "reasons": reasons,
-                    "story": f"{cname} keeps it clean. No order sent."}
+                    "reasons": reasons, "tension": tension, "story": story}
         # It happened: the building knows, and so does the league.
         if rivalries is not None:
             try:
@@ -2744,9 +2750,17 @@ def respond_to_punishment(coach: Any, game_state: Optional[Dict[str, Any]] = Non
             return {"responds": True, "tone": "measured",
                     "retaliation_mod": 1.05, "tension_delta": 10,
                     "story": f"{cname} answers it -- measured, but they won't be pushed around."}
+        tension = (game_state or {}).get("tension", 0)
+        story = f"{cname} keeps the bench calm. 'We play hockey. We don't do that.'"
+        simmer = False
+        if tension >= 60:
+            # We won't forget -- but this group isn't the type to answer.
+            simmer = True
+            story += (" The room is seething, though. They won't forget this one.")
         return {"responds": False, "tone": "composed",
                 "retaliation_mod": 1.0, "tension_delta": 0,
-                "story": f"{cname} keeps the bench calm. 'We play hockey. We don't do that.'"}
+                "simmer": simmer, "carried_tension": tension if simmer else 0,
+                "story": story}
     except Exception:
         return {"responds": False, "tone": "composed", "retaliation_mod": 1.0,
                 "tension_delta": 0, "story": "No response."}
@@ -2801,3 +2815,108 @@ def rectify_coach_player_beef(rivalries: list, player: Any, coach: Any,
                 "reason": "not enough on-ice proof yet -- the beef survives"}
     except Exception:
         return {"rectified": False, "reason": "error"}
+
+
+# ---------------------------------------------------------------------------
+# Game tension drivers: fights, penalties, history, and recent wounds
+# ---------------------------------------------------------------------------
+# Tension is the room's MEMORY -- it can be sky-high even when the coach
+# would never order retaliation. You hurt our star last game? We won't
+# forget. But whether we ANSWER is a separate, personality-gated question.
+
+INCIDENT_WEIGHTS = {
+    "star_injured": 25,      # you hurt our best player -- we remember
+    "player_injured": 12,
+    "controversial_hit": 10,
+    "coach_comments": 8,     # he ran his mouth in the media
+    "brawl": 15,
+}
+
+
+def record_game_incident(rivalries: list, team_a: Any, team_b: Any,
+                         kind: str, detail: str = "") -> Dict[str, Any]:
+    """Log something these two teams won't forget. Stored on the team_team
+    rivalry record so it survives saves and follows the feud."""
+    try:
+        if kind not in INCIDENT_WEIGHTS:
+            return {"recorded": False, "reason": f"unknown kind {kind}"}
+        # Find or create the team_team record.
+        r = None
+        for cand in rivalries:
+            if cand["kind"] == "team_team":
+                names = {cand["a_name"], cand["b_name"]}
+                if ({getattr(team_a, "team_name", ""), getattr(team_b, "team_name", "")} <= names
+                        and len(names) == 2):
+                    r = cand
+                    break
+        if r is None:
+            r = add_rivalry(rivalries, team_a, team_b, "team_team", 15,
+                            "regional",
+                            f"{_ename(team_a)} vs {_ename(team_b)}: bad blood started here.")
+        log = r.get("incidents")
+        if not isinstance(log, list):
+            r["incidents"] = log = []
+        log.append({"kind": kind, "detail": detail,
+                    "date": date.today().isoformat()})
+        return {"recorded": True, "kind": kind, "detail": detail}
+    except Exception:
+        return {"recorded": False, "reason": "error"}
+
+
+def _incident_games_ago(inc: Dict[str, Any]) -> float:
+    try:
+        d = date.fromisoformat(inc.get("date", date.today().isoformat()))
+        days = (date.today() - d).days
+        return max(0.0, days / 3.0)  # roughly a game every 3 days
+    except Exception:
+        return 0.0
+
+
+def _rivalry_age_years(r: Dict[str, Any]) -> float:
+    try:
+        d = date.fromisoformat(r.get("date", date.today().isoformat()))
+        return max(0.0, (date.today() - d).days / 365.0)
+    except Exception:
+        return 0.0
+
+
+def game_tension(home_team: Any, away_team: Any, rivalries: list,
+                 is_playoff: bool = False, series_game: int = 0,
+                 recent_fights: int = 0, recent_pim: int = 0,
+                 extra_incidents: Optional[List[Dict[str, Any]]] = None) -> float:
+    """0-100: how much bad blood is in the building tonight.
+    Drivers: historic rivalry heat, recent fights, recent penalty minutes,
+    logged incidents (a star hurt last game spikes it), playoff stakes."""
+    try:
+        t = 0.0
+        hn = getattr(home_team, "team_name", "")
+        an = getattr(away_team, "team_name", "")
+        incidents: List[Dict[str, Any]] = list(extra_incidents or [])
+        for r in rivalries:
+            if r["kind"] != "team_team":
+                continue
+            names = {r["a_name"], r["b_name"]}
+            if not ({hn, an} <= names and len(names) == 2):
+                continue
+            contrib = r["intensity"] * 0.6
+            # Historic feuds weigh more than fresh ones at the same heat.
+            if r.get("solidified") or _rivalry_age_years(r) >= 5:
+                contrib = r["intensity"] * 0.75 + 5
+            t += contrib
+            for inc in (r.get("incidents") or []):
+                incidents.append(inc)
+        # Fights and penalty minutes: chippiness is measurable.
+        t += min(24.0, recent_fights * 6.0)
+        t += min(15.0, recent_pim * 0.3)
+        # Recent wounds decay -- last game matters, two months ago barely does.
+        for inc in incidents:
+            w = INCIDENT_WEIGHTS.get(inc.get("kind"), 0)
+            if not w:
+                continue
+            ago = inc.get("games_ago", _incident_games_ago(inc))
+            t += w * (0.75 ** max(0.0, ago))
+        if is_playoff:
+            t += 15 + max(0, series_game) * 2
+        return round(min(100.0, t), 1)
+    except Exception:
+        return 0.0
