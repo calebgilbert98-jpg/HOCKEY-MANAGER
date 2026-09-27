@@ -18,6 +18,7 @@
 # The module is headless-safe (no tkinter) so the sim engine can call it.
 
 import random
+import re
 from datetime import date
 from typing import List, Dict, Optional, Any
 
@@ -74,6 +75,13 @@ def ensure_reputation_fields(entity: Any) -> None:
         entity.reputation = 0
     if not hasattr(entity, "controversy"):
         entity.controversy = 0
+    # Locked identity: dealt once, never re-dealt. No recursion --
+    # _deal_base_controversy never calls ensure_reputation_fields.
+    if getattr(entity, "base_controversy", None) is None:
+        try:
+            _deal_base_controversy(entity)
+        except Exception:
+            entity.base_controversy = 15
     if not hasattr(entity, "controversy_history"):
         entity.controversy_history = []
     if not hasattr(entity, "reputation_history"):
@@ -251,9 +259,13 @@ def update_staff_reputation(staff: Any, team_win_pct: float = 0.5,
 def controversy_baseline(entity: Any) -> int:
     """Personality baseline controversy drifts back toward.
 
-    Low discipline / low teamwork players live hotter by default.
+    The locked base_controversy IS the baseline. Only entities that were
+    never dealt a personality fall back to the discipline/teamwork read.
     """
     try:
+        locked = getattr(entity, "base_controversy", None)
+        if isinstance(locked, int) and locked >= 0:
+            return locked
         discipline = getattr(entity, "discipline", 60) or 60
         teamwork = getattr(entity, "teamwork", 60) or 60
         # discipline 1..100 -> baseline 30..0 ; bad teammates add a little
@@ -299,18 +311,27 @@ def record_controversy_event(
     return entity.controversy
 
 
-def decay_controversy(entity: Any, incidents_this_season: int = 0) -> int:
-    """Cool controversy down after a clean season.
+def decay_controversy(entity: Any, incidents_this_season: int = 0,
+                      team: Any = None, coach: Any = None,
+                      win_pct: Optional[float] = None) -> int:
+    """Seasonal volatility development.
 
-    Unlike reputation, controversy fades -- but never below the
-    personality baseline. Called from the end-of-season hook.
+    Controversy eases halfway toward its scenario target
+    (locked base + scenario offset, clamped to +/-25 of base) -- no
+    whiplash, identity preserved. Incidents spike it first; then the
+    scenario pulls it back. Called from the end-of-season hook.
     """
     ensure_reputation_fields(entity)
-    if incidents_this_season == 0:
-        baseline = controversy_baseline(entity)
-        entity.controversy = max(
-            baseline, entity.controversy - CONTROVERSY_DECAY_PER_CLEAN_SEASON
-        )
+    base = controversy_baseline(entity)
+    if _is_staff_entity(entity):
+        offset, _ = _coach_volatility_offset(entity, team, coach, win_pct)
+    else:
+        offset, _ = _player_volatility_offset(entity, team, coach, win_pct)
+    target = max(0, min(100, base + offset))
+    cur = getattr(entity, "controversy", base) or 0
+    if incidents_this_season:
+        cur = min(100, cur + incidents_this_season * 3)
+    entity.controversy = int(round(max(0, min(100, cur + (target - cur) * 0.5))))
     return entity.controversy
 
 
@@ -1739,6 +1760,13 @@ def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]
     attrs["ambition"] = "hometown" if fav and _r.random() < 0.5 else "climb"
     attrs["control_need"] = max(10, min(90, int((getattr(player, "controversy", 30) or 30) * 0.8 + 20)))
     attrs["controversy"] = getattr(player, "controversy", 0) or 0
+    # The man's nature follows him behind the bench: a hothead player
+    # becomes a stubborn coach. And he keeps his pipeline -- the last
+    # sweater he wore is where his guys are.
+    generate_personality(player)
+    attrs["base_controversy"] = getattr(player, "base_controversy", 20)
+    last = getattr(player, "last_team_name", "") or getattr(player, "team_name", "")
+    attrs["connections"] = [last] if last else []
     return attrs
 
 
@@ -2922,3 +2950,243 @@ def game_tension(home_team: Any, away_team: Any, rivalries: list,
         return round(min(100.0, t), 1)
     except Exception:
         return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Personality: locked identity, living volatility
+# ---------------------------------------------------------------------------
+# base_controversy is dealt ONCE at generation and never changes -- it's who
+# the man IS. controversy is how much he's ACTING OUT right now, and it
+# drifts with scenario: mentors, coaching fit, adversity, happiness, money.
+# A base-80 hothead can learn to live at 55. He will never be a 10.
+# Identity is preserved; behavior is earned.
+
+def _deal_base_controversy(entity: Any, hothead_chance: float = 0.08) -> int:
+    """The actual deal. Never calls ensure_reputation_fields (no recursion)."""
+    roll = random.random()
+    if roll < 0.05:
+        base = random.randint(0, 8)     # saint
+    elif roll < 0.05 + hothead_chance:
+        base = random.randint(55, 85)   # hothead
+    else:
+        base = random.randint(8, 35)    # everyone else
+    entity.base_controversy = base
+    entity.controversy = base
+    return base
+
+
+def generate_personality(entity: Any, hothead_chance: float = 0.08) -> int:
+    """Deal a locked personality. Idempotent -- never re-deals a locked one."""
+    try:
+        ensure_reputation_fields(entity)
+        if isinstance(getattr(entity, "base_controversy", None), int):
+            return entity.base_controversy
+        return _deal_base_controversy(entity, hothead_chance)
+    except Exception:
+        return 20
+
+
+def _is_staff_entity(entity: Any) -> bool:
+    return not hasattr(entity, "primary_position")
+
+
+def _draft_overall(p: Any) -> Optional[int]:
+    try:
+        s = getattr(p, "draft_position", "") or ""
+        if "Round 1" in s:
+            m = re.search(r"Pick (\d+)", s)
+            if m:
+                return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
+def _golden_prospect(p: Any) -> bool:
+    """Won everything before the NHL: top-10 pick, or 'A' potential as a teen."""
+    ov = _draft_overall(p)
+    if ov is not None:
+        return ov <= 10
+    try:
+        return ((getattr(p, "potential_grade", "") or "").upper() == "A"
+                and (getattr(p, "age", 99) or 99) <= 21)
+    except Exception:
+        return False
+
+
+def _player_tier(p: Any, team: Any) -> str:
+    try:
+        if team is None:
+            return ""
+        tiers = team_hierarchy(getattr(team, "roster", []) or [])
+        pid = getattr(p, "id", None)
+        for name, members in tiers.items():
+            if any(getattr(m, "id", None) == pid for m in members):
+                return name
+    except Exception:
+        pass
+    return ""
+
+
+def _player_volatility_offset(p: Any, team: Any = None, coach: Any = None,
+                              win_pct: Optional[float] = None) -> tuple:
+    """Scenario offset for a player: negative calms, positive escalates."""
+    off = 0
+    reasons: List[str] = []
+    base = controversy_baseline(p)
+    age = getattr(p, "age", 27) or 27
+    happy = getattr(p, "happiness", 65) or 65
+
+    # Veteran mentorship: the room raises him right -- or nobody checks him.
+    mentors = 0
+    if team is not None:
+        for mate in getattr(team, "roster", []) or []:
+            if mate is p:
+                continue
+            if (getattr(mate, "leadership", 0) or 0) >= 75 \
+                    and (getattr(mate, "age", 0) or 0) >= 30:
+                mentors += 1
+    if mentors:
+        d = -min(8, 3 * mentors)
+        off += d
+        reasons.append(f"{mentors} veteran mentor(s) steadying him ({d})")
+    elif base >= 50:
+        off += 2
+        reasons.append("no veteran presence to check him (+2)")
+
+    # The right coaching -- or the wrong one.
+    if coach is not None:
+        try:
+            label = player_coach_response(p, coach).get("label", "")
+            if label == "Bought in":
+                off -= 4
+                reasons.append("right coach for him (-4)")
+            elif label == "Tuning out":
+                off += 3
+                reasons.append("tuning the coach out (+3)")
+            elif label == "Quit on coach":
+                off += 6
+                reasons.append("quit on the coach (+6)")
+        except Exception:
+            pass
+
+    # Golden-prospect adversity shock: won everything, never faced it until now.
+    # McDavid prevails. Not every prospect is built like that.
+    if _golden_prospect(p) and (getattr(p, "nhl_games_played", 999) or 999) < 100:
+        adversity = (win_pct is not None and win_pct < 0.45) or happy < 45 \
+            or _player_tier(p, team) in ("Fringe", "Squad Players")
+        if adversity:
+            character = (getattr(p, "leadership", 50) or 50) + (100 - base)
+            if character >= 140:
+                off -= 4
+                reasons.append("golden prospect met real adversity and prevailed (-4)")
+            else:
+                off += 7
+                reasons.append("entitlement meets reality: first real adversity (+7)")
+
+    # Tough early years humble a young hothead who wasn't handed everything.
+    if age <= 23 and base >= 50 and not _golden_prospect(p):
+        if (win_pct is not None and win_pct < 0.50) or happy < 55:
+            off -= 4
+            reasons.append("tough rookie years humbled him (-4)")
+
+    # Knows his place: happy and winning vs miserable on a loser.
+    if happy >= 65 and win_pct is not None and win_pct >= 0.55:
+        off -= 3
+        reasons.append("happy and winning (-3)")
+    if happy < 45 and win_pct is not None and win_pct < 0.45:
+        off += 6
+        reasons.append("miserable on a loser (+6)")
+
+    # Just got paid -- security calms. Underpaid and knows it -- doesn't.
+    try:
+        ovr = p.overall_rating() if hasattr(p, "overall_rating") else 40
+        salary = getattr(p, "salary", 0) or 0
+        expected = max(750_000, (ovr - 38) * 750_000)
+        if salary >= expected * 1.2:
+            off -= 2
+            reasons.append("paid and secure (-2)")
+        elif salary < expected * 0.7 and ovr >= 42:
+            off += 3
+            reasons.append("underpaid and knows it (+3)")
+    except Exception:
+        pass
+
+    # Age mellows everyone, even hotheads.
+    if age >= 30:
+        off -= 3
+        reasons.append("veteran perspective (-3)")
+    elif age >= 24:
+        off -= 2
+        reasons.append("maturing (-2)")
+
+    return max(-25, min(25, off)), reasons
+
+
+def _coach_volatility_offset(c: Any, team: Any = None, coach: Any = None,
+                             win_pct: Optional[float] = None) -> tuple:
+    """Scenario offset for a coach."""
+    off = 0
+    reasons: List[str] = []
+    base = controversy_baseline(c)
+    ywt = getattr(c, "years_with_team", 0) or 0
+    if win_pct is not None and win_pct < 0.450:
+        off -= 5
+        reasons.append("losing humbled him (-5)")
+    if ywt <= 1 and base >= 50:
+        off -= 6
+        reasons.append("new organization, changing his ways (-6)")
+    if win_pct is not None and win_pct >= 0.600 \
+            and (getattr(c, "controversy", 0) or 0) >= 50:
+        off += 4
+        reasons.append("winning lets him get away with it (+4)")
+    return max(-25, min(25, off)), reasons
+
+
+def volatility_drivers(entity: Any, team: Any = None, coach: Any = None,
+                       win_pct: Optional[float] = None) -> List[str]:
+    """Human-readable reasons behind this year's volatility drift."""
+    try:
+        ensure_reputation_fields(entity)
+        if _is_staff_entity(entity):
+            return _coach_volatility_offset(entity, team, coach, win_pct)[1]
+        return _player_volatility_offset(entity, team, coach, win_pct)[1]
+    except Exception:
+        return []
+
+
+def coach_market_appeal(coach: Any, hiring_org: tuple = ()) -> Dict[str, Any]:
+    """How badly does the league want this coach? Record talks, controversy
+    costs -- unless someone in the hiring org vouches for him. A stubborn,
+    controversial coach who isn't winning needs friends to pipeline him."""
+    try:
+        ensure_reputation_fields(coach)
+        rep = getattr(coach, "reputation", 50) or 50
+        cont = getattr(coach, "controversy", 20) or 20
+        tax = cont * 0.4
+        vouched = any(v in (getattr(coach, "connections", None) or [])
+                      for v in (hiring_org or ()))
+        if vouched:
+            tax *= 0.5
+        score = max(0, min(100, rep * 0.7 - tax + 15))
+        return {"appeal": round(score, 1), "reputation": rep,
+                "controversy_tax": round(tax, 1), "vouched": vouched,
+                "story": (f"{_ename(coach)}: appeal {score:.0f} "
+                          f"(rep {rep}, controversy tax {tax:.0f}"
+                          f"{', vouched by a friend in the org' if vouched else ''}).")}
+    except Exception:
+        return {"appeal": 50.0, "reputation": 50, "controversy_tax": 0,
+                "vouched": False, "story": "Appeal unavailable."}
+
+
+def volatility_trade_discount(player: Any) -> float:
+    """Talent-personality-volatility balance for trade value: hotheads cost
+    less, but a superstar is worth the headache."""
+    try:
+        c = getattr(player, "controversy", 0) or 0
+        ovr = player.overall_rating() if hasattr(player, "overall_rating") else 40
+        star = max(0.0, min(1.0, (ovr - 40) / 24.0))
+        discount = (c / 100.0) * 0.25 * (1.15 - star)
+        return round(max(0.70, 1 - discount), 3)
+    except Exception:
+        return 1.0

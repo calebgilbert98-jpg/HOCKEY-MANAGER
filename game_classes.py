@@ -999,6 +999,7 @@ class Staff:
     controversy: int = 0
     reputation_history: list = field(default_factory=list)
     controversy_history: list = field(default_factory=list)
+    connections: list = field(default_factory=list)  # allies who vouch for him: team names where his guys are
     
     @property
     def full_name(self) -> str:

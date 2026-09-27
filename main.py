@@ -8899,7 +8899,10 @@ class HockeyManagerGUI(tk.Tk):
                     1 for e in getattr(p, 'controversy_history', []) or []
                     if isinstance(e, dict) and e.get('date', '') >= season_start
                 )
-                rs.decay_controversy(p, incidents_this_season=incidents)
+                rs.decay_controversy(p, incidents_this_season=incidents,
+                                     team=team,
+                                     coach=getattr(team, 'head_coach', None),
+                                     win_pct=win_pct)
                 if is_champ:
                     rs.award_championship(p)  # +8, ratchet-safe
             for s in getattr(team, 'staff', []) or []:
@@ -8911,6 +8914,8 @@ class HockeyManagerGUI(tk.Tk):
                     s.years_with_team = (getattr(s, 'years_with_team', 0) or 0) + 1
                 except Exception:
                     pass
+                # Coach volatility: losing humbles, a new sweater reforms.
+                rs.decay_controversy(s, team=team, win_pct=win_pct)
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""

@@ -51,6 +51,13 @@ def player_trade_value(player) -> int:
     elif salary < expected * 0.6 and ovr >= 50:
         base *= 1.1  # bargain deal
 
+    # Volatility tax: hotheads cost less, but a superstar is worth the headache.
+    try:
+        import reputation_system as _rs
+        base *= _rs.volatility_trade_discount(player)
+    except Exception:
+        pass
+
     # Goalies: fewer roster spots, slight premium for starters
     try:
         from game_classes import PlayerPosition

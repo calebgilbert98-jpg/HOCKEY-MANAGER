@@ -382,7 +382,14 @@ class PlayerGenerator:
         player.shooting_tendency = random.randint(30, 70)
         player.hitting_tendency = random.randint(30, 70)
         player.nhl_games_played = random.randint(0, min(age * 40, 1000)) if age > 18 else 0
-        
+
+        # Deal a locked personality: identity is forever, volatility is scenario.
+        try:
+            import reputation_system as _rs
+            _rs.generate_personality(player)
+        except Exception:
+            pass
+
         return player
     
     def generate_rookie_class(self, size: int = 224) -> List[Player]:
