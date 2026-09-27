@@ -2849,7 +2849,9 @@ def record_game_incident(rivalries: list, team_a: Any, team_b: Any,
                         and len(names) == 2):
                     r = cand
                     break
-        if r is None:
+        if not r:
+            if _ekey(team_a) == _ekey(team_b):
+                return {"recorded": False, "reason": "a team cannot feud with itself"}
             r = add_rivalry(rivalries, team_a, team_b, "team_team", 15,
                             "regional",
                             f"{_ename(team_a)} vs {_ename(team_b)}: bad blood started here.")
