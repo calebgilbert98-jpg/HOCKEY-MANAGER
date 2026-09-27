@@ -1248,6 +1248,12 @@ def coach_player_fit(coach: Any, player: Any) -> float:
         # Good communicators smooth every edge; bad ones sharpen them.
         mm = getattr(coach, "man_management", 10) or 10
         fit += (mm - 10) / 10 * 0.25
+        # A developer's touch lives in the attribute, not just the style
+        # label: even a motivator with an 18 youth rating reaches kids.
+        wwy = getattr(coach, "working_with_youngsters", 10) or 10
+        if eng in ("needs_guidance", "fragile_confidence") \
+                and (getattr(player, "age", 26) or 26) <= 23:
+            fit += (wwy - 10) / 10 * 0.3
         # Brash player + weak communicator = oil and water.
         if (player.controversy or 0) >= 60 and mm < 10:
             fit -= 0.2
@@ -3100,6 +3106,17 @@ def _player_volatility_offset(p: Any, team: Any = None, coach: Any = None,
         except Exception:
             pass
 
+    # Working with youngsters: a developer calms young volatility; a coach
+    # who can't reach kids makes a young hothead worse.
+    if age <= 23 and coach is not None and base >= 45:
+        wwy = getattr(coach, "working_with_youngsters", 10) or 10
+        if wwy >= 15:
+            off -= 3
+            reasons.append("a developer who reaches young players (-3)")
+        elif wwy <= 8:
+            off += 2
+            reasons.append("coach can't reach young players (+2)")
+
     # Golden-prospect adversity shock: won everything, never faced it until now.
     # McDavid prevails. Not every prospect is built like that.
     if _golden_prospect(p) and (getattr(p, "nhl_games_played", 999) or 999) < 100:
@@ -3111,8 +3128,15 @@ def _player_volatility_offset(p: Any, team: Any = None, coach: Any = None,
                 off -= 4
                 reasons.append("golden prospect met real adversity and prevailed (-4)")
             else:
-                off += 7
-                reasons.append("entitlement meets reality: first real adversity (+7)")
+                wwy = 10
+                if coach is not None:
+                    wwy = getattr(coach, "working_with_youngsters", 10) or 10
+                if wwy >= 15:
+                    off += 4
+                    reasons.append("entitlement meets reality, but the coach reaches him (+4)")
+                else:
+                    off += 7
+                    reasons.append("entitlement meets reality: first real adversity (+7)")
 
     # Tough early years humble a young hothead who wasn't handed everything.
     if age <= 23 and base >= 50 and not _golden_prospect(p):
