@@ -1100,8 +1100,13 @@ class RosterWindow(ctk.CTkToplevel):
                 values.extend([readiness, development])
             elif roster_type == 'prospects':
                 draft_year = getattr(player, 'draft_year', 'Undrafted')
-                draft_round = getattr(player, 'draft_round', 'FA')
-                league = getattr(player, 'current_league', 'Amateur')
+                # draft_round is stamped by the draft generator (prospect
+                # development engine); 0/empty means undrafted / free agent.
+                draft_round = getattr(player, 'draft_round', 0) or 'FA'
+                # farm_league is where the engine actually simmed him last
+                # season (prospect_development); fall back to legacy fields.
+                league = (getattr(player, 'farm_league', '') or
+                          getattr(player, 'current_league', '') or 'Amateur')
                 development = self.calculate_development_trend(player)
                 eta = self.calculate_eta(player)
                 # Remove salary and contract columns for prospects, add prospect-specific data
@@ -1143,7 +1148,17 @@ class RosterWindow(ctk.CTkToplevel):
         return f"{performance}"
 
     def calculate_nhl_readiness(self, player):
-        """Calculate NHL readiness percentage for AHL players."""
+        """NHL readiness percentage for AHL players.
+
+        Uses the prospect-development engine (overall vs the NHL bar,
+        age-adjusted, plus recent farm production trend) -- the same logic
+        that drives development, so the column agrees with the sim.
+        """
+        try:
+            import prospect_development as _pd
+            return f"{_pd.callup_readiness(player):.0f}%"
+        except Exception:
+            pass
         readiness = min(100, max(0, (player.overall_rating() - 35) * 5))
         return f"{readiness:.0f}%"
 

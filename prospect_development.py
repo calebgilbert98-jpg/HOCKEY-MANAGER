@@ -157,7 +157,8 @@ def _sticky_league(player: Any) -> Optional[str]:
     return None
 
 
-def assign_prospect_league(player: Any, current_assignment: Optional[str] = None) -> str:
+def assign_prospect_league(player: Any, current_assignment: Optional[str] = None,
+                          rng: Any = random) -> str:
     """Pick the age/nationality-appropriate league for a prospect's season.
 
     Respects an explicit current assignment (AHL roster -> AHL). Otherwise:
@@ -171,18 +172,18 @@ def assign_prospect_league(player: Any, current_assignment: Optional[str] = None
 
     if age <= 20:
         if "canada" in nat or "canadian" in nat:
-            return random.choice(["OHL", "WHL", "QMJHL"])
+            return rng.choice(["OHL", "WHL", "QMJHL"])
         if "usa" in nat or "united states" in nat or "american" in nat:
             return "USHL" if age <= 18 else "NCAA"
         if "russia" in nat:
-            return "KHL" if age >= 20 else random.choice(["OHL", "WHL"])
+            return "KHL" if age >= 20 else rng.choice(["OHL", "WHL"])
         if "sweden" in nat or "swed" in nat:
             return "SHL"
         if "finland" in nat or "finn" in nat:
             return "Liiga"
         if "czech" in nat:
             return "NL"
-        return random.choice(["OHL", "WHL", "QMJHL", "USHL"])
+        return rng.choice(["OHL", "WHL", "QMJHL", "USHL"])
     # 21+: pro hockey
     if "russia" in nat:
         return "KHL"
@@ -218,7 +219,7 @@ def simulate_prospect_season(player: Any, league: Optional[str] = None,
         # it is still age-appropriate (a CHL kid does not hop OHL -> WHL ->
         # QMJHL every summer -- his junior club holds his rights).
         league = _sticky_league(player)
-    league = assign_prospect_league(player, league)
+    league = assign_prospect_league(player, league, rng)
     env = LEAGUE_ENVIRONMENTS[league]
     age = getattr(player, "age", 19) or 19
     ovr = _overall(player)
