@@ -3936,7 +3936,7 @@ def situations_factor(team: Any, ctx: Optional[Dict[str, Any]] = None) -> Dict[s
         if roster:
             kids = [p for p in roster if (getattr(p, "age", 27) or 27) <= 23]
             if kids:
-                hungry = sum(1 for p in kids if (getattr(p, "morale", 5) or 5) >= 7)
+                hungry = sum(1 for p in kids if (getattr(p, "morale", 70) or 70) >= 70)
                 add("Hungry young legs", round(hungry / len(kids) * 2.0, 2))
             sour = sum(1 for p in roster if (getattr(p, "happiness", 70) or 70) <= 35)
             if sour:

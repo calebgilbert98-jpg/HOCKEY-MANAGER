@@ -8405,6 +8405,12 @@ class HockeyManagerGUI(tk.Tk):
         # (Replaces the old squad-morale modifier, which situations subsumes.)
         home_goal_expectation *= self._situation_goal_mult(home_team)
         away_goal_expectation *= self._situation_goal_mult(away_team)
+
+        # FM-style squad confidence: raw morale average nudges expectations
+        # +/-3% (own channel -- situations reads room structure, this reads
+        # the squad's raw confidence level).
+        home_goal_expectation *= self._career_morale_modifier(home_team)
+        away_goal_expectation *= self._career_morale_modifier(away_team)
         
         # Generate goals with realistic NHL distribution
         # Use round() not int() to avoid truncation bias (~0.5 goals lost per team)
@@ -10083,13 +10089,20 @@ class HockeyManagerGUI(tk.Tk):
             return 1.0
 
     def _career_morale_modifier(self, team) -> float:
-        """Subtle goal-expectation modifier from squad morale (0.97-1.03)."""
+        """FM-style squad-confidence modifier from average morale (0.97-1.03).
+
+        Native 1-100 morale: 70 is neutral, each point moves expectations
+        0.1% -- the original +/-3% intent, rescaled from the old 1-10 math.
+        Own channel next to the situations factor: situations reads room
+        structure, bench buy-in and hunger counts; this reads the squad's
+        raw confidence level. Applied only in the lightweight quick-sim.
+        """
         try:
             roster = getattr(team, "roster", []) or []
             if not roster:
                 return 1.0
-            avg = sum((getattr(p, "morale", 7) or 7) for p in roster) / len(roster)
-            return 1.0 + (avg - 7) * 0.01
+            avg = sum((getattr(p, "morale", 70) or 70) for p in roster) / len(roster)
+            return max(0.97, min(1.03, 1.0 + (avg - 70) * 0.001))
         except Exception:
             return 1.0
 
