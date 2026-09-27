@@ -1,13 +1,19 @@
 """
 Enhanced Stats and Standings Window for Hockey Manager
 Comprehensive view with advanced analytics, historical data, and interactive features
+
+CustomTkinter rebuild: CTkToplevel chrome, CTkTabview tab sets, CTkComboBox
+filters, dark styled multi-column treeviews. All data/logic methods are
+unchanged from the legacy build -- this is a UI rebuild only.
 """
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from typing import Dict, List, Optional
 import random
 from datetime import datetime, timedelta
+
+import customtkinter as ctk
 
 # Import our advanced analytics system
 try:
@@ -26,17 +32,44 @@ except ImportError:
         except (TypeError, ValueError):
             return 50
 
-class StatsStandingsWindow(tk.Toplevel):
+class StatsStandingsWindow(ctk.CTkToplevel):
     """Advanced Stats and Standings window with deep analytics and multiple view modes"""
-    
+
+    # Tab names in order -- kept as lists so tab-name <-> index mapping stays
+    # correct everywhere (on_tab_changed, refresh_all_data, set_focus_tab).
+    MAIN_TABS = ["Standings", "Team Analytics", "Player Leaders",
+                 "Analytics & Trends", "Division Analysis", "Divisions"]
+    LEADER_TABS = ["Scoring Leaders", "Advanced Stats", "Goaltending",
+                   "Breakout Players", "Milestone Watch", "NHL Records"]
+    ANALYTICS_TABS = ["Dashboard", "Trends", "Insights"]
+    RECORD_TABS = ["Season Records", "Career Records", "Current Leaders",
+                   "Record Chase", "Achievements"]
+
     def __init__(self, parent):
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_HOVER, ROW_SELECTED,
+        )
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
+                        RED=RED, BLUE=BLUE, ROW_HOVER=ROW_HOVER,
+                        ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        self._ff = "Segoe UI"
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title("Advanced League Analytics & Standings - Hockey Manager")
-        self.configure(background=parent.BG_COLOR)
+        self.configure(fg_color=self._ct['BG'])
         self.geometry("1600x1000")
         self.minsize(1400, 800)
-        
+
         # Enhanced state tracking
         self.selected_tab = 0
         self.historical_data = {}
@@ -46,18 +79,162 @@ class StatsStandingsWindow(tk.Toplevel):
             'team_filter': 'All Teams',
             'stat_type': 'Overall'
         }
-        
+
         # Initialize analytics engine if available
         self.analytics_engine = None
         if ANALYTICS_AVAILABLE:
             self.analytics_engine = RealTimeStatsEngine()
             self._initialize_analytics_from_game_data()
-        
+
+        # Dark styling for the multi-column tables (styled ttk.Treeview,
+        # per the migration guide)
+        self._setup_tree_style()
+
         # Create the enhanced interface
         self.create_interface()
-        
+
         # Track window
         self.parent.open_windows['stats_standings'] = self
+
+    # ------------------------------------------------------------------
+    # CTk styling helpers
+    # ------------------------------------------------------------------
+    def _setup_tree_style(self):
+        """Dark, flat styling for the stat tables (styled ttk.Treeview per
+        the migration guide -- the tables carry up to 12 columns and use
+        playoff/average row tags)."""
+        ct = self._ct
+        style = ttk.Style(self)
+        style.configure('Stats.Treeview',
+                        background=ct['CARD'],
+                        fieldbackground=ct['CARD'],
+                        foreground=ct['TEXT'],
+                        borderwidth=0,
+                        relief='flat',
+                        rowheight=28,
+                        font=(self._ff, 10))
+        style.configure('Stats.Treeview.Heading',
+                        background=ct['PANEL'],
+                        foreground=ct['TEXT'],
+                        font=(self._ff, 10, 'bold'),
+                        relief='flat',
+                        borderwidth=0)
+        style.map('Stats.Treeview',
+                  background=[('selected', ct['ROW_SELECTED'])],
+                  foreground=[('selected', ct['TEXT'])])
+        style.layout('Stats.Treeview',
+                     [('Treeview.treearea', {'sticky': 'nswe'})])
+        style.configure('Stats.Vertical.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.map('Stats.Vertical.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+
+    def _card(self, parent, **kw):
+        """Rounded dark card frame (selective rounding per theme rules)."""
+        kw.setdefault('fg_color', self._ct['CARD'])
+        kw.setdefault('corner_radius', 10)
+        return ctk.CTkFrame(parent, **kw)
+
+    def _make_tabview(self, parent):
+        """CTkTabview styled like the other migrated screens."""
+        ct = self._ct
+        return self._SafeTabview(
+            parent,
+            fg_color=ct['PANEL'],
+            corner_radius=12,
+            border_width=1,
+            border_color=ct['BORDER'],
+            segmented_button_fg_color=ct['PANEL'],
+            segmented_button_selected_color=ct['TEAL'],
+            segmented_button_selected_hover_color=ct['TEAL_HOVER'],
+            segmented_button_unselected_color=ct['CARD'],
+            segmented_button_unselected_hover_color=ct['BORDER'],
+            text_color=ct['TEXT'],
+        )
+
+    def _combo(self, parent, variable, values, command, width=150):
+        """Dark styled CTkComboBox for the filter rows."""
+        ct = self._ct
+        return ctk.CTkComboBox(
+            parent, variable=variable, values=values, command=command,
+            width=width,
+            fg_color=ct['PANEL'], border_color=ct['BORDER'],
+            button_color=ct['CARD'], button_hover_color=ct['TEAL'],
+            text_color=ct['TEXT'],
+            dropdown_fg_color=ct['PANEL'],
+            dropdown_hover_color=ct['BORDER'],
+            dropdown_text_color=ct['TEXT'],
+            font=(self._ff, 11))
+
+    def _check(self, parent, text, variable, command):
+        """Dark styled CTkCheckBox."""
+        ct = self._ct
+        return ctk.CTkCheckBox(
+            parent, text=text, variable=variable, command=command,
+            fg_color=ct['TEAL'], hover_color=ct['TEAL_HOVER'],
+            text_color=ct['TEXT'], border_color=ct['BORDER'],
+            font=(self._ff, 11))
+
+    def _make_tree(self, parent, columns, height=15, padx=0, pady=0):
+        """Dark styled multi-column table with scrollbar, packed to fill.
+
+        Mirrors the legacy raw ttk.Treeview construction (no click sorting;
+        tables that had parent-bound sorting keep using _pack_parent_tree).
+        """
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        tree = ttk.Treeview(frame, columns=list(columns.keys()),
+                            show='headings', height=height,
+                            style='Stats.Treeview')
+        for col_id, (header, width) in columns.items():
+            tree.heading(col_id, text=header, anchor='center')
+            tree.column(col_id, width=width, anchor='center')
+        scrollbar = ttk.Scrollbar(frame, orient="vertical",
+                                  command=tree.yview,
+                                  style='Stats.Vertical.TScrollbar')
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        frame.pack(fill="both", expand=True, padx=padx, pady=pady)
+        return tree
+
+    def _pack_parent_tree(self, parent, columns, height=15, padx=0, pady=0):
+        """Table built via parent._create_treeview (keeps the legacy column
+        sorting and the player context menu), dark-styled, with a scrollbar,
+        packed to fill.
+
+        This also fixes the legacy bug where the milestone/records trees
+        were created but never packed, rendering them invisible.
+        """
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        tree = self.parent._create_treeview(frame, columns, height=height)
+        tree.configure(style='Stats.Treeview')
+        scrollbar = ttk.Scrollbar(frame, orient="vertical",
+                                  command=tree.yview,
+                                  style='Stats.Vertical.TScrollbar')
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        frame.pack(fill="both", expand=True, padx=padx, pady=pady)
+        return tree
+
+    def _scroll_area(self, parent, padx=10, pady=10):
+        """CTkScrollableFrame + inner content frame.
+
+        The inner frame is what repopulate methods clear (winfo_children on
+        a CTkScrollableFrame would return its internal canvas/scrollbar).
+        """
+        ct = self._ct
+        scroll = ctk.CTkScrollableFrame(
+            parent, fg_color=ct['PANEL'], corner_radius=10,
+            border_width=1, border_color=ct['BORDER'])
+        scroll.pack(fill="both", expand=True, padx=padx, pady=pady)
+        inner = ctk.CTkFrame(scroll, fg_color="transparent")
+        inner.pack(fill="both", expand=True)
+        return inner
         
     def _initialize_analytics_from_game_data(self):
         """Initialize analytics engine with current game data"""
@@ -122,102 +299,147 @@ class StatsStandingsWindow(tk.Toplevel):
         except Exception as e:
             print(f"Warning: Could not initialize analytics from game data: {e}")
     
+    # ------------------------------------------------------------------
+    # Tabview with a guard for the CTk 6.0.0 deferred grid-forget race.
+    # CTkTabview.set() schedules _grid_forget_all_tabs 100 ms out; rapid
+    # programmatic .set() calls (or .set() while the event loop is not
+    # pumping) can leave a stale forget callback that grid-forgets the
+    # currently selected tab and blanks the content area. Re-asserting the
+    # current tab shortly after heals it. Physical clicks are unaffected
+    # (they grid synchronously via _segmented_button_callback).
+    # ------------------------------------------------------------------
+    class _SafeTabview(ctk.CTkTabview):
+        def set(self, name):
+            super().set(name)
+            self.after(150, lambda n=name: self._heal_tab(n))
+
+        def _heal_tab(self, name):
+            try:
+                if self.winfo_exists() and self.get() == name:
+                    super().set(name)
+            except Exception:
+                pass
+
     def set_focus_tab(self, tab_name):
-        """Set focus to a specific tab - for external navigation"""
+        """Set focus to a specific tab - for external navigation.
+
+        Fixed: 'records' previously mapped to nothing (the records UI lives
+        under Player Leaders -> NHL Records), so the achievement popup's
+        "View Records" button silently did nothing. It now navigates there.
+
+        Note: CTkTabview.set() does not fire the tabview command (unlike
+        ttk.Notebook's <<NotebookTabChanged>> on .select()), so the change
+        handler is invoked explicitly to keep selected_tab/load state in
+        sync for programmatic navigation.
+        """
         tab_map = {
-            'standings': 0,
-            'team_stats': 1,
-            'player_leaders': 2,
-            'analytics': 3,
-            'divisions': 4
+            'standings': "Standings",
+            'team_stats': "Team Analytics",
+            'player_leaders': "Player Leaders",
+            'analytics': "Analytics & Trends",
+            'divisions': "Division Analysis",
         }
         if tab_name in tab_map:
-            self.notebook.select(tab_map[tab_name])
+            self.tabview.set(tab_map[tab_name])
+            self._on_main_tab_selected(tab_map[tab_name])
+        elif tab_name == 'records':
+            self.tabview.set("Player Leaders")
+            self._on_main_tab_selected("Player Leaders")
+            if hasattr(self, 'leaders_tabview'):
+                try:
+                    self.leaders_tabview.set("NHL Records")
+                except Exception:
+                    pass
     
     def create_interface(self):
         """Create the enhanced interface with advanced features"""
-        # Main container with enhanced styling
-        main_frame = ttk.Frame(self, style='Panel.TFrame', padding=15)
-        main_frame.pack(fill='both', expand=True)
-        
-        # Enhanced title bar with analytics indicators
-        title_frame = ttk.Frame(main_frame, style='TitleBar.TFrame', padding=15)
-        title_frame.pack(fill='x', pady=(0, 15))
-        
-        # Title with live update indicator
-        title_container = ttk.Frame(title_frame, style='TitleBar.TFrame')
-        title_container.pack(side='left', fill='x', expand=True)
-        
-        title_label = ttk.Label(title_container, text="Advanced League Analytics & Standings", 
-                               style='Title.TLabel')
-        title_label.pack(side='left')
-        
-        # Live data indicator
-        self.live_indicator = ttk.Label(title_container, text="LIVE", 
-                                       style='Success.TLabel', font=('Segoe UI', 9, 'bold'))
-        self.live_indicator.pack(side='left', padx=(10, 0))
-        
-        # Global filters
-        filters_frame = ttk.Frame(title_frame, style='TitleBar.TFrame')
-        filters_frame.pack(side='right', padx=(10, 0))
-        
-        ttk.Label(filters_frame, text="Period:", style='TLabel').pack(side='left', padx=(0, 5))
-        self.period_var = tk.StringVar(value="Season")
-        period_combo = ttk.Combobox(filters_frame, textvariable=self.period_var,
-                                   values=["Last 10 Games", "Last Month", "Season", "All Time"],
-                                   state="readonly", width=12)
-        period_combo.pack(side='left', padx=(0, 10))
-        period_combo.bind('<<ComboboxSelected>>', self.on_filter_change)
-        
-        # Close button
-        close_btn = ttk.Button(filters_frame, text="Close", style='TButton',
-                              command=self.destroy)
-        close_btn.pack(side='left', padx=(10, 0))
-        
-        # Create enhanced notebook with more tabs
-        self.notebook = ttk.Notebook(main_frame)
-        self.notebook.pack(fill='both', expand=True, pady=(0, 15))
-        
-        # Create enhanced tabs (streamlined and organized)
+        ct = self._ct
+        # Main container
+        main_frame = ctk.CTkFrame(self, fg_color=ct['BG'], corner_radius=0)
+        main_frame.pack(fill='both', expand=True, padx=12, pady=12)
+
+        # Title card with live indicator and global filters
+        title_card = self._card(main_frame)
+        title_card.pack(fill='x', pady=(0, 12))
+
+        title_row = ctk.CTkFrame(title_card, fg_color="transparent")
+        title_row.pack(fill='x', padx=16, pady=12)
+
+        self._heading(title_row, text="Advanced League Analytics & Standings",
+                      size=20).pack(side='left')
+
+        # LIVE pill
+        live_pill = ctk.CTkFrame(title_row, fg_color=ct['TEAL'],
+                                 corner_radius=10)
+        live_pill.pack(side='left', padx=(12, 0))
+        ctk.CTkLabel(live_pill, text="LIVE",
+                     font=(self._ff, 10, 'bold'),
+                     text_color=ct['BG']).pack(padx=10, pady=2)
+
+        # Global filters (right side)
+        filters_frame = ctk.CTkFrame(title_row, fg_color="transparent")
+        filters_frame.pack(side='right')
+
+        self._body(filters_frame, text="Period:", dim=True,
+                   size=11).pack(side='left', padx=(0, 6))
+        self.period_combo = self._combo(
+            filters_frame, variable=None,
+            values=["Last 10 Games", "Last Month", "Season", "All Time"],
+            command=self.on_filter_change, width=130)
+        self.period_combo.set("Season")
+        self.period_combo.pack(side='left', padx=(0, 12))
+
+        self._secondary_button(filters_frame, text="Close",
+                               command=self.destroy).pack(side='left')
+
+        # Main tabs
+        self.tabview = self._make_tabview(main_frame)
+        self.tabview.configure(command=self._on_main_tab_selected)
+        self.tabview.pack(fill='both', expand=True, pady=(0, 12))
+        for name in self.MAIN_TABS:
+            self.tabview.add(name)
+
+        # Create the tabs (same content as the legacy build, new chrome)
         self.create_enhanced_standings_tab()
         self.create_advanced_team_stats_tab()
         self.create_enhanced_player_leaders_tab()
-        self.create_comprehensive_analytics_tab()  # Combines analytics, trends, and insights
+        self.create_comprehensive_analytics_tab()
         self.create_division_analysis_tab()
         self.create_divisions_grid_tab()
-        
-        # Enhanced status bar
-        status_frame = ttk.Frame(main_frame, style='Panel.TFrame')
-        status_frame.pack(fill='x')
-        
-        # Refresh controls
-        refresh_frame = ttk.Frame(status_frame, style='Panel.TFrame')
-        refresh_frame.pack(side='right')
-        
-        ttk.Button(refresh_frame, text="Refresh All", style='TButton',
-                  command=self.refresh_all_data).pack(side='right', padx=5)
-        
-        ttk.Button(refresh_frame, text="Export Data", style='TButton',
-                  command=self.export_data).pack(side='right', padx=5)
-        
-        # Status info
-        status_info = ttk.Frame(status_frame, style='Panel.TFrame')
-        status_info.pack(side='left', fill='x', expand=True)
-        
-        self.status_label = ttk.Label(status_info, text="Ready - Real game data loaded successfully", 
-                                     style='Muted.TLabel')
+
+        # Status bar
+        status_card = self._card(main_frame)
+        status_card.pack(fill='x')
+
+        status_row = ctk.CTkFrame(status_card, fg_color="transparent")
+        status_row.pack(fill='x', padx=16, pady=10)
+
+        self.status_label = self._body(
+            status_row, text="Ready - Real game data loaded successfully",
+            dim=True, size=11)
         self.status_label.pack(side='left')
-        
-        # Data summary
-        self.data_summary_label = ttk.Label(status_info, text="", 
-                                           style='Muted.TLabel')
+
+        self.data_summary_label = self._body(status_row, text="",
+                                             dim=True, size=11)
         self.data_summary_label.pack(side='left', padx=(20, 0))
-        
-        # Bind tab change event
-        self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_changed)
-        
+
+        btn_row = ctk.CTkFrame(status_row, fg_color="transparent")
+        btn_row.pack(side='right')
+        self._secondary_button(btn_row, text="Export Data",
+                               command=self.export_data).pack(side='right',
+                                                             padx=(6, 0))
+        self._secondary_button(btn_row, text="Refresh All",
+                               command=self.refresh_all_data).pack(side='right')
+
         # Update data summary
         self.update_data_summary()
+
+    def _on_main_tab_selected(self, tab_name):
+        """CTkTabview selection callback -> legacy tab-change handling."""
+        try:
+            self.on_tab_changed()
+        except Exception as e:
+            print(f"Error handling tab change: {e}")
     
     def update_data_summary(self):
         """Update the data summary in the status bar"""
@@ -232,183 +454,167 @@ class StatsStandingsWindow(tk.Toplevel):
                         total_players += len(team.roster)
                 
                 summary = f"{team_count} teams • {total_players:,} players • Analytics: {'Active' if self.analytics_engine else 'Unavailable'}"
-                self.data_summary_label.config(text=summary)
+                self.data_summary_label.configure(text=summary)
             else:
-                self.data_summary_label.config(text="No league data available")
+                self.data_summary_label.configure(text="No league data available")
         except Exception as e:
-            self.data_summary_label.config(text=f"Data error: {str(e)}")
+            self.data_summary_label.configure(text=f"Data error: {str(e)}")
     
     def create_enhanced_standings_tab(self):
         """Create enhanced standings tab with playoff race and momentum indicators"""
-        standings_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(standings_frame, text="Standings")
-        
-        # Enhanced controls with more options
-        controls_frame = ttk.Frame(standings_frame, style='Panel.TFrame')
-        controls_frame.pack(fill='x', pady=(0, 15))
-        
+        ct = self._ct
+        standings_frame = self.tabview.tab("Standings")
+        standings_frame.configure(fg_color=ct['PANEL'])
+
+        # Controls card
+        controls = self._card(standings_frame)
+        controls.pack(fill='x', padx=10, pady=(10, 8))
+        row = ctk.CTkFrame(controls, fg_color="transparent")
+        row.pack(fill='x', padx=12, pady=10)
+
         # View options
-        ttk.Label(controls_frame, text="View:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        self._body(row, text="View:", dim=True, size=11).pack(side='left',
+                                                              padx=(0, 6))
         self.standings_view = tk.StringVar(value="League Overview")
-        view_combo = ttk.Combobox(controls_frame, textvariable=self.standings_view,
-                                 values=["League Overview", "Eastern Conference", "Western Conference", 
-                                        "Wild Card Race", "Division Leaders", "Playoff Picture"],
-                                 state="readonly", width=20)
-        view_combo.pack(side='left', padx=(0, 15))
-        view_combo.bind('<<ComboboxSelected>>', self.update_standings_view)
-        
+        self._combo(row, variable=self.standings_view,
+                    values=["League Overview", "Eastern Conference",
+                            "Western Conference", "Wild Card Race",
+                            "Division Leaders", "Playoff Picture"],
+                    command=self.update_standings_view,
+                    width=180).pack(side='left', padx=(0, 15))
+
         # Sort options
-        ttk.Label(controls_frame, text="Sort by:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        self._body(row, text="Sort by:", dim=True, size=11).pack(side='left',
+                                                                 padx=(0, 6))
         self.standings_sort = tk.StringVar(value="Points")
-        sort_combo = ttk.Combobox(controls_frame, textvariable=self.standings_sort,
-                                 values=["Points", "Wins", "Goal Differential"],
-                                 state="readonly", width=15)
-        sort_combo.pack(side='left', padx=(0, 15))
-        sort_combo.bind('<<ComboboxSelected>>', self.update_standings_view)
-        
+        self._combo(row, variable=self.standings_sort,
+                    values=["Points", "Wins", "Goal Differential"],
+                    command=self.update_standings_view,
+                    width=150).pack(side='left', padx=(0, 15))
+
         # Toggle advanced metrics
         self.show_advanced = tk.BooleanVar(value=True)
-        ttk.Checkbutton(controls_frame, text="Advanced Metrics", variable=self.show_advanced,
-                       command=self.update_standings_view).pack(side='left', padx=(0, 10))
-        
+        self._check(row, text="Advanced Metrics",
+                    variable=self.show_advanced,
+                    command=self.update_standings_view).pack(side='left')
+
         # Main standings area with scrolling
-        standings_container = ttk.Frame(standings_frame, style='Panel.TFrame')
-        standings_container.pack(fill='both', expand=True)
-        
-        # Create scrollable area
-        canvas = tk.Canvas(standings_container, bg=self.parent.BG_COLOR, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(standings_container, orient="vertical", command=canvas.yview)
-        self.standings_scrollable = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        self.standings_scrollable.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=self.standings_scrollable, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        self.standings_canvas = canvas
+        self.standings_scrollable = self._scroll_area(standings_frame)
         self.populate_enhanced_standings()
-    
+
     def create_advanced_team_stats_tab(self):
         """Create advanced team statistics with comparative analysis"""
-        stats_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(stats_frame, text="Team Analytics")
-        
-        # Advanced controls
-        controls_frame = ttk.Frame(stats_frame, style='Panel.TFrame')
-        controls_frame.pack(fill='x', pady=(0, 15))
-        
+        ct = self._ct
+        stats_frame = self.tabview.tab("Team Analytics")
+        stats_frame.configure(fg_color=ct['PANEL'])
+
+        # Controls card
+        controls = self._card(stats_frame)
+        controls.pack(fill='x', padx=10, pady=(10, 8))
+        row = ctk.CTkFrame(controls, fg_color="transparent")
+        row.pack(fill='x', padx=12, pady=10)
+
         # Category selection with more options
-        ttk.Label(controls_frame, text="Category:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        self._body(row, text="Category:", dim=True, size=11).pack(side='left',
+                                                                  padx=(0, 6))
         self.stats_category = tk.StringVar(value="Overall Performance")
-        category_combo = ttk.Combobox(controls_frame, textvariable=self.stats_category,
-                                     values=["Overall Performance", "Offensive Stats", "Defensive Stats",
-                                            "Goaltending", "Advanced Analytics"],
-                                     state="readonly", width=20)
-        category_combo.pack(side='left', padx=(0, 15))
-        category_combo.bind('<<ComboboxSelected>>', self.update_team_stats_view)
-        
+        self._combo(row, variable=self.stats_category,
+                    values=["Overall Performance", "Offensive Stats",
+                            "Defensive Stats", "Goaltending",
+                            "Advanced Analytics"],
+                    command=self.update_team_stats_view,
+                    width=180).pack(side='left', padx=(0, 15))
+
         # Comparison mode
-        ttk.Label(controls_frame, text="View Mode:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        self._body(row, text="View Mode:", dim=True, size=11).pack(side='left',
+                                                                   padx=(0, 6))
         self.stats_mode = tk.StringVar(value="League Rankings")
-        mode_combo = ttk.Combobox(controls_frame, textvariable=self.stats_mode,
-                                 values=["League Rankings", "vs League Average"],
-                                 state="readonly", width=15)
-        mode_combo.pack(side='left', padx=(0, 15))
-        mode_combo.bind('<<ComboboxSelected>>', self.update_team_stats_view)
-        
+        self._combo(row, variable=self.stats_mode,
+                    values=["League Rankings", "vs League Average"],
+                    command=self.update_team_stats_view,
+                    width=150).pack(side='left', padx=(0, 15))
+
         # Team filter
-        ttk.Label(controls_frame, text="Teams:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        self._body(row, text="Teams:", dim=True, size=11).pack(side='left',
+                                                               padx=(0, 6))
         self.team_filter = tk.StringVar(value="All Teams")
-        team_combo = ttk.Combobox(controls_frame, textvariable=self.team_filter,
-                                 values=["All Teams", "Eastern Conference", "Western Conference", 
-                                        "Division Rivals", "Playoff Teams"],
-                                 state="readonly", width=15)
-        team_combo.pack(side='left')
-        team_combo.bind('<<ComboboxSelected>>', self.update_team_stats_view)
-        
+        self._combo(row, variable=self.team_filter,
+                    values=["All Teams", "Eastern Conference",
+                            "Western Conference", "Division Rivals",
+                            "Playoff Teams"],
+                    command=self.update_team_stats_view,
+                    width=150).pack(side='left')
+
         # Stats display area
-        self.team_stats_container = ttk.Frame(stats_frame, style='Panel.TFrame')
-        self.team_stats_container.pack(fill='both', expand=True)
-        
+        self.team_stats_container = ctk.CTkFrame(stats_frame,
+                                                 fg_color="transparent")
+        self.team_stats_container.pack(fill='both', expand=True,
+                                       padx=10, pady=(0, 10))
+
         self.populate_advanced_team_stats()
     
     def create_enhanced_player_leaders_tab(self):
         """Create enhanced player leaders with advanced filtering"""
-        leaders_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(leaders_frame, text="Player Leaders")
-        
-        # Enhanced controls
-        controls_frame = ttk.Frame(leaders_frame, style='Panel.TFrame')
-        controls_frame.pack(fill='x', pady=(0, 15))
-        
+        ct = self._ct
+        leaders_frame = self.tabview.tab("Player Leaders")
+        leaders_frame.configure(fg_color=ct['PANEL'])
+
+        # Controls card
+        controls = self._card(leaders_frame)
+        controls.pack(fill='x', padx=10, pady=(10, 8))
+        row = ctk.CTkFrame(controls, fg_color="transparent")
+        row.pack(fill='x', padx=12, pady=10)
+
         # Position filter
-        ttk.Label(controls_frame, text="Position:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        self._body(row, text="Position:", dim=True, size=11).pack(side='left',
+                                                                  padx=(0, 6))
         self.position_filter = tk.StringVar(value="All Positions")
-        pos_combo = ttk.Combobox(controls_frame, textvariable=self.position_filter,
-                                values=["All Positions", "Forwards", "Defensemen", "Goalies", 
-                                       "Centers", "Wingers", "Rookies", "Veterans"],
-                                state="readonly", width=15)
-        pos_combo.pack(side='left', padx=(0, 15))
-        pos_combo.bind('<<ComboboxSelected>>', self.update_player_leaders)
-        
-        # Minimum games filter
-        ttk.Label(controls_frame, text="Min Games:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        self._combo(row, variable=self.position_filter,
+                    values=["All Positions", "Forwards", "Defensemen",
+                            "Goalies", "Centers", "Wingers", "Rookies",
+                            "Veterans"],
+                    command=self.update_player_leaders,
+                    width=140).pack(side='left', padx=(0, 15))
+
+        # Minimum games filter (kept as a spinbox: bounded numeric input)
+        self._body(row, text="Min Games:", dim=True, size=11).pack(side='left',
+                                                                    padx=(0, 6))
         self.min_games = tk.IntVar(value=10)
-        games_spin = tk.Spinbox(controls_frame, from_=1, to=82, textvariable=self.min_games,
-                               width=5, command=self.update_player_leaders)
+        games_spin = tk.Spinbox(row, from_=1, to=82,
+                                textvariable=self.min_games,
+                                width=5, command=self.update_player_leaders,
+                                bg=ct['CARD'], fg=ct['TEXT'],
+                                buttonbackground=ct['CARD'],
+                                highlightthickness=1,
+                                highlightbackground=ct['BORDER'],
+                                relief='flat')
         games_spin.pack(side='left', padx=(0, 15))
-        
+
         # Show per-game stats
         self.show_per_game = tk.BooleanVar(value=False)
-        ttk.Checkbutton(controls_frame, text="Per Game Stats", variable=self.show_per_game,
-                       command=self.update_player_leaders).pack(side='left')
-        
-        # Create enhanced sub-tabs
-        self.leaders_notebook = ttk.Notebook(leaders_frame)
-        self.leaders_notebook.pack(fill='both', expand=True)
-        
-        # Enhanced scoring leaders
-        scoring_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
-        self.leaders_notebook.add(scoring_frame, text="Scoring Leaders")
-        self.create_enhanced_player_section(scoring_frame, "scoring")
-        
-        # Advanced stats
-        advanced_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
-        self.leaders_notebook.add(advanced_frame, text="Advanced Stats")
-        self.create_enhanced_player_section(advanced_frame, "advanced")
-        
-        # Goalie leaders with more depth
-        goalie_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
-        self.leaders_notebook.add(goalie_frame, text="Goaltending")
-        self.create_enhanced_player_section(goalie_frame, "goaltending")
-        
-        # Breakout players
-        breakout_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
-        self.leaders_notebook.add(breakout_frame, text="Breakout Players")
-        self.create_enhanced_player_section(breakout_frame, "breakout")
+        self._check(row, text="Per Game Stats",
+                    variable=self.show_per_game,
+                    command=self.update_player_leaders).pack(side='left')
 
-        # Milestone watch - players approaching career milestones
-        milestone_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
-        self.leaders_notebook.add(milestone_frame, text="Milestone Watch")
-        self.create_milestone_watch_section(milestone_frame)
+        # Sub-tabs
+        self.leaders_tabview = self._make_tabview(leaders_frame)
+        self.leaders_tabview.pack(fill='both', expand=True,
+                                  padx=10, pady=(0, 10))
+        for name in self.LEADER_TABS:
+            self.leaders_tabview.add(name)
 
-        # Records section - accessible from player leaders
-        records_frame = ttk.Frame(self.leaders_notebook, style='Panel.TFrame', padding=10)
-        self.leaders_notebook.add(records_frame, text="NHL Records")
-        self.create_records_section(records_frame)
+        self.create_enhanced_player_section(
+            self.leaders_tabview.tab("Scoring Leaders"), "scoring")
+        self.create_enhanced_player_section(
+            self.leaders_tabview.tab("Advanced Stats"), "advanced")
+        self.create_enhanced_player_section(
+            self.leaders_tabview.tab("Goaltending"), "goaltending")
+        self.create_enhanced_player_section(
+            self.leaders_tabview.tab("Breakout Players"), "breakout")
+        self.create_milestone_watch_section(
+            self.leaders_tabview.tab("Milestone Watch"))
+        self.create_records_section(
+            self.leaders_tabview.tab("NHL Records"))
 
     # Career milestone definitions: (career attr, season attr, label, milestones, within)
     MILESTONE_WATCH_SKATERS = [
@@ -430,19 +636,17 @@ class StatsStandingsWindow(tk.Toplevel):
         career_wins/shutouts for goalies). Shows an honest empty state when no
         player is close to a milestone yet.
         """
-        header_frame = ttk.Frame(parent_frame, style='Panel.TFrame')
-        header_frame.pack(fill='x', pady=(0, 10))
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
+        header_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        header_frame.pack(fill='x', padx=10, pady=(10, 8))
 
-        ttk.Label(header_frame,
-                  text="Players nearing career milestones",
-                  font=(self.parent.FONT_FAMILY, 12, 'bold'),
-                  foreground=self.parent.ACCENT_COLOR,
-                  background=self.parent.BG_COLOR).pack(anchor='w')
-        ttk.Label(header_frame,
-                  text="Real career totals - showing players within striking distance of their next milestone.",
-                  font=(self.parent.FONT_FAMILY, 9),
-                  foreground='#9a9aa3',
-                  background=self.parent.BG_COLOR).pack(anchor='w', pady=(2, 0))
+        self._heading(header_frame,
+                      text="Players nearing career milestones",
+                      size=13, text_color=ct['TEAL']).pack(anchor='w')
+        self._body(header_frame,
+                   text="Real career totals - showing players within striking distance of their next milestone.",
+                   dim=True, size=10).pack(anchor='w', pady=(2, 0))
 
         columns = {
             'player': ('Player', 190),
@@ -453,7 +657,11 @@ class StatsStandingsWindow(tk.Toplevel):
             'needed': ('Needed', 80),
             'season': ('This Season', 100),
         }
-        self.milestone_tree = self.parent._create_treeview(parent_frame, columns, height=20)
+        # Packed (with scrollbar) -- the legacy build created this tree but
+        # never packed it, so it was invisible.
+        self.milestone_tree = self._pack_parent_tree(parent_frame, columns,
+                                                     height=20,
+                                                     padx=10, pady=(0, 10))
         self._populate_milestone_watch()
 
     def _position_abbr(self, player):
@@ -537,10 +745,14 @@ class StatsStandingsWindow(tk.Toplevel):
     
     def create_records_section(self, parent_frame):
         """Create records section within player leaders tab"""
-        # Records notebook for different categories
-        self.records_notebook = ttk.Notebook(parent_frame)
-        self.records_notebook.pack(fill='both', expand=True)
-        
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
+        self.records_tabview = self._make_tabview(parent_frame)
+        self.records_tabview.pack(fill='both', expand=True,
+                                  padx=10, pady=(0, 10))
+        for name in self.RECORD_TABS:
+            self.records_tabview.add(name)
+
         # Create record category tabs
         self._create_season_records_tab()
         self._create_career_records_tab()
@@ -550,26 +762,36 @@ class StatsStandingsWindow(tk.Toplevel):
     
     def create_comprehensive_analytics_tab(self):
         """Create comprehensive analytics tab combining analytics, trends, and insights"""
-        analytics_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(analytics_frame, text="Analytics & Trends")
-        
-        # Create sub-notebook for different analytics views
-        self.analytics_notebook = ttk.Notebook(analytics_frame)
-        self.analytics_notebook.pack(fill='both', expand=True)
-        
+        ct = self._ct
+        analytics_frame = self.tabview.tab("Analytics & Trends")
+        analytics_frame.configure(fg_color=ct['PANEL'])
+
+        # Sub-tabs for different analytics views
+        self.analytics_tabview = self._make_tabview(analytics_frame)
+        self.analytics_tabview.pack(fill='both', expand=True,
+                                    padx=10, pady=10)
+        for name in self.ANALYTICS_TABS:
+            self.analytics_tabview.add(name)
+
         # Analytics Dashboard
-        dashboard_frame = ttk.Frame(self.analytics_notebook, style='Panel.TFrame', padding=10)
-        self.analytics_notebook.add(dashboard_frame, text="Dashboard")
+        dashboard_frame = self.analytics_tabview.tab("Dashboard")
+        dashboard_frame.configure(fg_color=ct['PANEL'])
         self.create_analytics_dashboard_content(dashboard_frame)
-        
+
+    def _analytics_tab(self, name):
+        """Return the content frame for an analytics sub-tab."""
+        frame = self.analytics_tabview.tab(name)
+        frame.configure(fg_color=self._ct['PANEL'])
+        return frame
+
         # Trends Analysis
-        trends_frame = ttk.Frame(self.analytics_notebook, style='Panel.TFrame', padding=10)
-        self.analytics_notebook.add(trends_frame, text="Trends")
+        trends_frame = self.analytics_tabview.tab("Trends")
+        trends_frame.configure(fg_color=ct['PANEL'])
         self.create_trends_analysis_content(trends_frame)
-        
+
         # Performance Insights
-        insights_frame = ttk.Frame(self.analytics_notebook, style='Panel.TFrame', padding=10)
-        self.analytics_notebook.add(insights_frame, text="Insights")
+        insights_frame = self.analytics_tabview.tab("Insights")
+        insights_frame.configure(fg_color=ct['PANEL'])
         self.create_performance_insights_content(insights_frame)
     
     def create_records_tab(self):
@@ -667,58 +889,36 @@ class StatsStandingsWindow(tk.Toplevel):
         
     def _create_season_records_tab(self):
         """Create season records tab"""
-        season_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(season_frame, text="Season Records")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(season_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(season_frame, orient="vertical", command=canvas.yview)
-        self.season_scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        self.season_scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=self.season_scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
+        ct = self._ct
+        season_frame = self.records_tabview.tab("Season Records")
+        season_frame.configure(fg_color=ct['PANEL'])
+
+        # Scrollable content (inner frame is what gets repopulated)
+        self.season_scrollable_frame = self._scroll_area(season_frame)
+
         # Populate with season records
         self._populate_season_records()
-        
+
     def _create_career_records_tab(self):
         """Create career records tab"""
-        career_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(career_frame, text="Career Records")
-        
-        # Create scrollable frame
-        canvas = tk.Canvas(career_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(career_frame, orient="vertical", command=canvas.yview)
-        self.career_scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
-        
-        self.career_scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=self.career_scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
+        ct = self._ct
+        career_frame = self.records_tabview.tab("Career Records")
+        career_frame.configure(fg_color=ct['PANEL'])
+
+        # Scrollable content (inner frame is what gets repopulated)
+        self.career_scrollable_frame = self._scroll_area(career_frame)
+
         # Populate with career records
         self._populate_career_records()
-        
+
     def _create_current_leaders_tab(self):
         """Create current season leaders tab"""
-        leaders_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(leaders_frame, text="Current Leaders")
-        
-        # Create treeview for current leaders
+        ct = self._ct
+        leaders_frame = self.records_tabview.tab("Current Leaders")
+        leaders_frame.configure(fg_color=ct['PANEL'])
+
+        # Create treeview for current leaders (packed -- the legacy build
+        # created this tree but never packed it, so it was invisible)
         columns = {
             'rank': ('Rank', 50),
             'player': ('Player', 180),
@@ -727,29 +927,28 @@ class StatsStandingsWindow(tk.Toplevel):
             'stat': ('Stat', 100),
             'value': ('Value', 80)
         }
-        
-        self.current_leaders_tree = self.parent._create_treeview(leaders_frame, columns, height=20)
-        
+
+        self.current_leaders_tree = self._pack_parent_tree(
+            leaders_frame, columns, height=20, padx=10, pady=10)
+
         # Populate with current season leaders
         self._populate_current_leaders()
-        
+
     def _create_record_chase_tab(self):
         """Create record chase tracking tab"""
-        chase_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(chase_frame, text="Record Chase")
-        
+        ct = self._ct
+        chase_frame = self.records_tabview.tab("Record Chase")
+        chase_frame.configure(fg_color=ct['PANEL'])
+
         # Header with explanation
-        header_frame = ttk.Frame(chase_frame, style='Panel.TFrame')
-        header_frame.pack(fill='x', pady=(0, 10))
-        
-        explanation_label = ttk.Label(header_frame,
-                                     text="Players currently chasing NHL records (25%+ progress toward record)",
-                                     font=(self.parent.FONT_FAMILY, 10),
-                                     foreground='#B0B0B0',
-                                     background=self.parent.BG_COLOR)
-        explanation_label.pack(anchor='w')
-        
-        # Create treeview for record chase
+        header_frame = ctk.CTkFrame(chase_frame, fg_color="transparent")
+        header_frame.pack(fill='x', padx=10, pady=(10, 8))
+
+        self._body(header_frame,
+                   text="Players currently chasing NHL records (25%+ progress toward record)",
+                   dim=True, size=11).pack(anchor='w')
+
+        # Create treeview for record chase (packed -- invisible in legacy)
         columns = {
             'rank': ('Rank', 50),
             'player': ('Player', 180),
@@ -761,18 +960,20 @@ class StatsStandingsWindow(tk.Toplevel):
             'needed': ('Needed', 80),
             'progress': ('Progress', 80)
         }
-        
-        self.record_chase_tree = self.parent._create_treeview(chase_frame, columns, height=18)
-        
+
+        self.record_chase_tree = self._pack_parent_tree(
+            chase_frame, columns, height=18, padx=10, pady=(0, 10))
+
         # Populate with record chase data
         self._populate_record_chase()
-        
+
     def _create_achievements_tab(self):
         """Create achievements and recent records tab"""
-        achievements_frame = ttk.Frame(self.records_notebook, style='Panel.TFrame', padding=10)
-        self.records_notebook.add(achievements_frame, text="Achievements")
-        
-        # Create treeview for achievements
+        ct = self._ct
+        achievements_frame = self.records_tabview.tab("Achievements")
+        achievements_frame.configure(fg_color=ct['PANEL'])
+
+        # Create treeview for achievements (packed -- invisible in legacy)
         columns = {
             'date': ('Date', 100),
             'player': ('Player', 180),
@@ -781,9 +982,10 @@ class StatsStandingsWindow(tk.Toplevel):
             'value': ('New Value', 100),
             'previous': ('Previous', 100)
         }
-        
-        self.achievements_tree = self.parent._create_treeview(achievements_frame, columns, height=20)
-        
+
+        self.achievements_tree = self._pack_parent_tree(
+            achievements_frame, columns, height=20, padx=10, pady=10)
+
         # Populate with achievements
         self._populate_achievements()
     
@@ -840,42 +1042,48 @@ class StatsStandingsWindow(tk.Toplevel):
     
     def create_division_analysis_tab(self):
         """Create enhanced division analysis tab"""
-        division_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(division_frame, text="Division Analysis")
-        
-        # Division selector
-        div_controls = ttk.Frame(division_frame, style='Panel.TFrame')
-        div_controls.pack(fill='x', pady=(0, 15))
-        
-        ttk.Label(div_controls, text="Division:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        ct = self._ct
+        division_frame = self.tabview.tab("Division Analysis")
+        division_frame.configure(fg_color=ct['PANEL'])
+
+        # Controls card
+        controls = self._card(division_frame)
+        controls.pack(fill='x', padx=10, pady=(10, 8))
+        row = ctk.CTkFrame(controls, fg_color="transparent")
+        row.pack(fill='x', padx=12, pady=10)
+
+        self._body(row, text="Division:", dim=True, size=11).pack(side='left',
+                                                                  padx=(0, 6))
         self.division_view = tk.StringVar(value="All Divisions")
-        div_combo = ttk.Combobox(div_controls, textvariable=self.division_view,
-                                values=["All Divisions", "Atlantic", "Metropolitan", "Central", "Pacific"],
-                                state="readonly", width=15)
-        div_combo.pack(side='left', padx=(0, 15))
-        div_combo.bind('<<ComboboxSelected>>', self.update_division_analysis)
-        
+        self._combo(row, variable=self.division_view,
+                    values=["All Divisions", "Atlantic", "Metropolitan",
+                            "Central", "Pacific"],
+                    command=self.update_division_analysis,
+                    width=150).pack(side='left', padx=(0, 15))
+
         # Analysis type
-        ttk.Label(div_controls, text="Analysis:", style='TLabel').pack(side='left', padx=(0, 5))
-        
+        self._body(row, text="Analysis:", dim=True, size=11).pack(side='left',
+                                                                   padx=(0, 6))
         self.div_analysis_type = tk.StringVar(value="Standings")
-        analysis_combo = ttk.Combobox(div_controls, textvariable=self.div_analysis_type,
-                                     values=["Standings", "Head-to-Head", "Strength of Schedule", "Division vs League"],
-                                     state="readonly", width=20)
-        analysis_combo.pack(side='left')
-        analysis_combo.bind('<<ComboboxSelected>>', self.update_division_analysis)
-        
+        self._combo(row, variable=self.div_analysis_type,
+                    values=["Standings", "Head-to-Head",
+                            "Strength of Schedule", "Division vs League"],
+                    command=self.update_division_analysis,
+                    width=180).pack(side='left')
+
         # Division analysis display
-        self.division_container = ttk.Frame(division_frame, style='Panel.TFrame')
-        self.division_container.pack(fill='both', expand=True)
-        
+        self.division_container = ctk.CTkFrame(division_frame,
+                                               fg_color="transparent")
+        self.division_container.pack(fill='both', expand=True,
+                                     padx=10, pady=(0, 10))
+
         self.populate_division_analysis()
 
     def create_divisions_grid_tab(self):
         """Create 2x2 grid tab showing all 4 divisions"""
-        division_frame = ttk.Frame(self.notebook, style='Panel.TFrame', padding=10)
-        self.notebook.add(division_frame, text="Divisions")
+        ct = self._ct
+        division_frame = self.tabview.tab("Divisions")
+        division_frame.configure(fg_color=ct['PANEL'])
 
         # Create a grid layout for all 4 divisions
         self.create_division_grid(division_frame)
@@ -1017,49 +1225,58 @@ class StatsStandingsWindow(tk.Toplevel):
     def create_division_grid(self, parent):
         """Create a 2x2 grid showing all 4 NHL divisions"""
         # Main grid frame
-        grid_frame = ttk.Frame(parent, style='Panel.TFrame')
+        grid_frame = ctk.CTkFrame(parent, fg_color="transparent")
         grid_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
+
         # Configure grid weights
         grid_frame.grid_rowconfigure(0, weight=1)
         grid_frame.grid_rowconfigure(1, weight=1)
         grid_frame.grid_columnconfigure(0, weight=1)
         grid_frame.grid_columnconfigure(1, weight=1)
-        
+
         # Eastern Conference divisions
         self.create_division_panel(grid_frame, "Eastern - Atlantic", 0, 0)
         self.create_division_panel(grid_frame, "Eastern - Metropolitan", 0, 1)
-        
-        # Western Conference divisions  
+
+        # Western Conference divisions
         self.create_division_panel(grid_frame, "Western - Central", 1, 0)
         self.create_division_panel(grid_frame, "Western - Pacific", 1, 1)
-    
+
     def create_division_panel(self, parent, division_name, row, col):
         """Create a panel for a single division"""
-        # Panel frame
-        panel = ttk.LabelFrame(parent, text=division_name, style='Card.TFrame', padding=10)
+        ct = self._ct
+        # Rounded card panel with teal division title
+        panel = self._card(parent)
         panel.grid(row=row, column=col, sticky='nsew', padx=5, pady=5)
-        
+
+        self._heading(panel, text=division_name, size=13,
+                      text_color=ct['TEAL']).grid(row=0, column=0, columnspan=4,
+                                                 sticky='w', padx=12,
+                                                 pady=(10, 6))
+
         # Get division data
         standings_data = self.get_standings_data()
         division_teams = standings_data.get(division_name, [])
-        
+
         # Create mini standings table
         for i, team in enumerate(division_teams[:8]):  # Limit to 8 teams per division
+            r = i + 1
             # Team rank and name
-            rank_label = ttk.Label(panel, text=f"{i+1}.", style='TLabel')
-            rank_label.grid(row=i, column=0, sticky='w', padx=(0, 5))
-            
-            team_label = ttk.Label(panel, text=team['name'][:20], style='TLabel')
-            team_label.grid(row=i, column=1, sticky='w', padx=(0, 10))
-            
+            self._body(panel, text=f"{i+1}.", dim=True,
+                       size=11).grid(row=r, column=0, sticky='w',
+                                     padx=(12, 4))
+            self._body(panel, text=team['name'][:20],
+                       size=11).grid(row=r, column=1, sticky='w',
+                                     padx=(0, 10))
             # Record
-            record_label = ttk.Label(panel, text=team['record'], style='TLabel')
-            record_label.grid(row=i, column=2, sticky='w', padx=(0, 5))
-            
+            self._body(panel, text=team['record'], dim=True,
+                       size=11).grid(row=r, column=2, sticky='w',
+                                     padx=(0, 5))
             # Points
-            points_label = ttk.Label(panel, text=f"{team['points']}pts", style='TLabel')
-            points_label.grid(row=i, column=3, sticky='e')
+            self._body(panel, text=f"{team['points']}pts",
+                       size=11).grid(row=r, column=3, sticky='e',
+                                     padx=(0, 12))
+            panel.grid_rowconfigure(r, pad=2)
     
     def get_standings_data(self):
         """Get standings data from the parent application"""
@@ -1608,32 +1825,40 @@ class StatsStandingsWindow(tk.Toplevel):
         """Refresh all data in the window"""
         try:
             # Update current status
-            self.status_label.config(text="Refreshing data...")
+            self.status_label.configure(text="Refreshing data...")
             self.update()
-            
-            # Refresh based on current tab
-            current_tab = self.notebook.index(self.notebook.select())
+
+            # Refresh based on current tab.
+            # Fixed: tab indices 4/5 were miswired (4 refreshed Trends while
+            # showing Division Analysis, 5 refreshed Division Analysis while
+            # showing the static Divisions grid).
+            current_tab = self.MAIN_TABS.index(self.tabview.get())
             if current_tab == 0:  # Standings
                 self.populate_enhanced_standings()
-            elif current_tab == 1:  # Team Stats
+            elif current_tab == 1:  # Team Analytics
                 self.populate_advanced_team_stats()
             elif current_tab == 2:  # Player Leaders
                 self.update_player_leaders()
                 if hasattr(self, 'milestone_tree'):
                     self._populate_milestone_watch()
-            elif current_tab == 3:  # Analytics
-                self.refresh_analytics_dashboard()
-            elif current_tab == 4:  # Trends
-                self.update_trends_analysis()
-            elif current_tab == 5:  # Divisions
+            elif current_tab == 3:  # Analytics & Trends
+                self.create_analytics_dashboard_content(
+                    self._analytics_tab("Dashboard"))
+                self.create_trends_analysis_content(
+                    self._analytics_tab("Trends"))
+                self.create_performance_insights_content(
+                    self._analytics_tab("Insights"))
+            elif current_tab == 4:  # Division Analysis
                 self.update_division_analysis()
-                
+            elif current_tab == 5:  # Divisions (static grid, populated at creation)
+                pass
+
             # Update timestamp
             current_time = datetime.now().strftime("%H:%M:%S")
-            self.status_label.config(text=f"Last updated: {current_time}")
-            
+            self.status_label.configure(text=f"Last updated: {current_time}")
+
         except Exception as e:
-            self.status_label.config(text=f"Error refreshing data: {str(e)}")
+            self.status_label.configure(text=f"Error refreshing data: {str(e)}")
     
     def export_data(self):
         """Export current data to file"""
@@ -1641,14 +1866,14 @@ class StatsStandingsWindow(tk.Toplevel):
             from datetime import datetime
             import csv
             import os
-            
+
             # Get current tab and data
-            current_tab = self.notebook.tab(self.notebook.select(), "text")
-            
+            current_tab = self.tabview.get()
+
             # Define export filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"hockey_stats_{current_tab.lower().replace(' ', '_')}_{timestamp}.csv"
-            
+
             # Get the appropriate data based on current tab
             if current_tab == "League Leaders":
                 data = self.get_current_leaders_data()
@@ -1663,28 +1888,28 @@ class StatsStandingsWindow(tk.Toplevel):
                 # General export for other tabs
                 data = self.get_current_view_data()
                 headers = ["Data exported from", current_tab]
-            
+
             if data:
                 # Create exports directory if it doesn't exist
                 exports_dir = "exports"
                 if not os.path.exists(exports_dir):
                     os.makedirs(exports_dir)
-                
+
                 filepath = os.path.join(exports_dir, filename)
-                
+
                 with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
                     writer = csv.writer(csvfile)
                     writer.writerow(headers)
                     writer.writerows(data)
-                
-                tk.messagebox.showinfo("Export Successful", 
-                                     f"Data exported to:\n{filepath}\n\n{len(data)} records exported.")
+
+                messagebox.showinfo("Export Successful",
+                                    f"Data exported to:\n{filepath}\n\n{len(data)} records exported.")
             else:
-                tk.messagebox.showwarning("Export Warning", "No data available to export.")
-                
+                messagebox.showwarning("Export Warning", "No data available to export.")
+
         except Exception as e:
             print(f"Error exporting data: {e}")
-            tk.messagebox.showerror("Export Error", f"Failed to export data:\n{str(e)}")
+            messagebox.showerror("Export Error", f"Failed to export data:\n{str(e)}")
     
     def get_current_leaders_data(self):
         """Get current leaders data for export"""
@@ -1772,17 +1997,20 @@ class StatsStandingsWindow(tk.Toplevel):
     
     def on_tab_changed(self, event=None):
         """Handle tab change events"""
-        current_tab = self.notebook.index(self.notebook.select())
+        try:
+            current_tab = self.MAIN_TABS.index(self.tabview.get())
+        except (ValueError, AttributeError):
+            current_tab = 0
         self.selected_tab = current_tab
-        
+
         # Load data for the selected tab if not already loaded
         self.load_tab_data(current_tab)
-    
-    def on_filter_change(self, event=None):
+
+    def on_filter_change(self, value=None):
         """Handle global filter changes"""
         # Update filters dictionary
-        self.filters['time_period'] = self.period_var.get()
-        
+        self.filters['time_period'] = self.period_combo.get()
+
         # Refresh current tab data
         self.refresh_all_data()
     
@@ -1844,25 +2072,12 @@ class StatsStandingsWindow(tk.Toplevel):
                 'pt_pct': ('PT%', 55),
                 'diff': ('+/-', 50),
             }
-        
-        # Create treeview
-        tree = ttk.Treeview(parent, columns=list(columns.keys()), 
-                           show='headings', height=25)
-        
-        # Configure columns
-        for col_id, (header, width) in columns.items():
-            tree.heading(col_id, text=header, anchor='center')
-            tree.column(col_id, width=width, anchor='center')
-        
+
+        # Dark styled table
+        tree = self._make_tree(parent, columns, height=25)
+
         # Use real data with fallback
         self.add_enhanced_standings_data(tree, view_type, self.show_advanced.get())
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-        
-        tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
     
     def _standings_teams(self):
         """NHL teams for standings, with real-team fallback."""
@@ -2058,25 +2273,12 @@ class StatsStandingsWindow(tk.Toplevel):
     def create_advanced_stats_table(self, parent, category, mode):
         """Create advanced statistics table"""
         columns = self.get_advanced_stats_columns(category)
-        
-        # Create treeview
-        tree = ttk.Treeview(parent, columns=list(columns.keys()), 
-                           show='headings', height=20)
-        
-        # Configure columns
-        for col_id, (header, width) in columns.items():
-            tree.heading(col_id, text=header, anchor='center')
-            tree.column(col_id, width=width, anchor='center')
-        
+
+        # Dark styled table
+        tree = self._make_tree(parent, columns, height=20)
+
         # Use real advanced statistics data
         self.add_advanced_stats_data(tree, category, mode)
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-        
-        tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
     
     def get_advanced_stats_columns(self, category):
         """Get column definitions for advanced stats (all backed by real data)"""
@@ -2275,10 +2477,12 @@ class StatsStandingsWindow(tk.Toplevel):
     
     def create_enhanced_player_section(self, parent, category):
         """Create enhanced player leaders section with pagination"""
+        ct = self._ct
+        parent.configure(fg_color=ct['PANEL'])
         # Initialize pagination data for this category if not exists
         if not hasattr(self, 'pagination_data'):
             self.pagination_data = {}
-        
+
         if category not in self.pagination_data:
             self.pagination_data[category] = {
                 'current_page': 1,
@@ -2286,103 +2490,95 @@ class StatsStandingsWindow(tk.Toplevel):
                 'total_players': 0,
                 'all_players': []
             }
-        
+
         # Create main container
-        main_container = ttk.Frame(parent)
+        main_container = ctk.CTkFrame(parent, fg_color="transparent")
         main_container.pack(fill="both", expand=True)
-        
+
         # Create pagination controls at top
-        pagination_frame = ttk.Frame(main_container)
-        pagination_frame.pack(fill="x", padx=10, pady=(5, 10))
-        
+        pagination_frame = ctk.CTkFrame(main_container, fg_color="transparent")
+        pagination_frame.pack(fill="x", padx=10, pady=(10, 6))
+
         # Page info and controls
         self.create_pagination_controls(pagination_frame, category)
-        
+
         # Create treeview container
-        tree_container = ttk.Frame(main_container)
+        tree_container = ctk.CTkFrame(main_container, fg_color="transparent")
         tree_container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        
+
         columns = self.get_enhanced_player_columns(category)
-        
-        # Create treeview with enhanced features
-        tree = ttk.Treeview(tree_container, columns=list(columns.keys()), 
-                           show='headings', height=20)
-        
-        # Configure columns
-        for col_id, (header, width) in columns.items():
-            tree.heading(col_id, text=header, anchor='center')
-            tree.column(col_id, width=width, anchor='center')
-        
+
+        # Dark styled table with pagination
+        tree = self._make_tree(tree_container, columns, height=20)
+
         # Store tree reference for pagination updates
         self.pagination_data[category]['tree'] = tree
-        
+
         # Add keyboard bindings for pagination
         tree.bind('<Prior>', lambda e: self.go_to_page(category, self.pagination_data[category]['current_page'] - 1))  # Page Up
         tree.bind('<Next>', lambda e: self.go_to_page(category, self.pagination_data[category]['current_page'] + 1))   # Page Down
         tree.bind('<Home>', lambda e: self.go_to_page(category, 1))  # Home key
         tree.bind('<End>', lambda e: self.go_to_last_page(category))  # End key
         tree.focus_set()  # Allow tree to receive keyboard events
-        
+
         # Load and display first page of data
         self.load_all_players_data(category)
         self.update_page_display(category)
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-        
-        tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-    
+
     def create_pagination_controls(self, parent, category):
         """Create pagination controls for player stats"""
         # Left side - page info
-        info_frame = ttk.Frame(parent)
+        info_frame = ctk.CTkFrame(parent, fg_color="transparent")
         info_frame.pack(side="left")
-        
-        page_label = ttk.Label(info_frame, text="", style='TLabel')
+
+        page_label = self._body(info_frame, text="", dim=True, size=11)
         page_label.pack(side="left", padx=(0, 20))
-        
+
         # Store reference for updates
         self.pagination_data[category]['page_label'] = page_label
-        
+
         # Center - navigation buttons
-        nav_frame = ttk.Frame(parent)
+        nav_frame = ctk.CTkFrame(parent, fg_color="transparent")
         nav_frame.pack(side="left", expand=True)
-        
+
         # First page button
-        first_btn = ttk.Button(nav_frame, text="First",
-                              command=lambda: self.go_to_page(category, 1))
+        first_btn = self._secondary_button(nav_frame, text="First", width=64,
+                                           command=lambda: self.go_to_page(category, 1))
         first_btn.pack(side="left", padx=2)
 
         # Previous page button
-        prev_btn = ttk.Button(nav_frame, text="Previous",
-                             command=lambda: self.go_to_page(category,
-                             self.pagination_data[category]['current_page'] - 1))
+        prev_btn = self._secondary_button(nav_frame, text="Previous", width=80,
+                                          command=lambda: self.go_to_page(category,
+                                          self.pagination_data[category]['current_page'] - 1))
         prev_btn.pack(side="left", padx=2)
-        
+
         # Page number entry
-        page_entry_frame = ttk.Frame(nav_frame)
+        page_entry_frame = ctk.CTkFrame(nav_frame, fg_color="transparent")
         page_entry_frame.pack(side="left", padx=10)
-        
-        ttk.Label(page_entry_frame, text="Page:", style='TLabel').pack(side="left")
-        page_entry = ttk.Entry(page_entry_frame, width=4, justify='center')
+
+        self._body(page_entry_frame, text="Page:", dim=True,
+                   size=11).pack(side="left")
+        page_entry = ctk.CTkEntry(page_entry_frame, width=44, justify='center',
+                                  fg_color=self._ct['PANEL'],
+                                  border_color=self._ct['BORDER'],
+                                  text_color=self._ct['TEXT'],
+                                  font=(self._ff, 11))
         page_entry.pack(side="left", padx=(5, 0))
         page_entry.bind('<Return>', lambda e: self.go_to_page_from_entry(category, page_entry))
-        
+
         self.pagination_data[category]['page_entry'] = page_entry
-        
+
         # Next page button
-        next_btn = ttk.Button(nav_frame, text="Next",
-                             command=lambda: self.go_to_page(category,
-                             self.pagination_data[category]['current_page'] + 1))
+        next_btn = self._secondary_button(nav_frame, text="Next", width=64,
+                                          command=lambda: self.go_to_page(category,
+                                          self.pagination_data[category]['current_page'] + 1))
         next_btn.pack(side="left", padx=2)
 
         # Last page button
-        last_btn = ttk.Button(nav_frame, text="Last",
-                             command=lambda: self.go_to_last_page(category))
+        last_btn = self._secondary_button(nav_frame, text="Last", width=64,
+                                          command=lambda: self.go_to_last_page(category))
         last_btn.pack(side="left", padx=2)
-        
+
         # Store button references for enabling/disabling
         self.pagination_data[category]['buttons'] = {
             'first': first_btn,
@@ -2390,20 +2586,20 @@ class StatsStandingsWindow(tk.Toplevel):
             'next': next_btn,
             'last': last_btn
         }
-        
+
         # Right side - players per page selector
-        per_page_frame = ttk.Frame(parent)
+        per_page_frame = ctk.CTkFrame(parent, fg_color="transparent")
         per_page_frame.pack(side="right")
-        
-        ttk.Label(per_page_frame, text="Per page:", style='TLabel').pack(side="left")
+
+        self._body(per_page_frame, text="Per page:", dim=True,
+                   size=11).pack(side="left")
         per_page_var = tk.StringVar(value="50")  # Default to 50 players per page
-        per_page_combo = ttk.Combobox(per_page_frame, textvariable=per_page_var,
-                                     values=["10", "25", "50", "100", "All"], 
-                                     width=5, state="readonly")
+        per_page_combo = self._combo(per_page_frame, variable=per_page_var,
+                                     values=["10", "25", "50", "100", "All"],
+                                     command=lambda v: self.change_per_page(category, v),
+                                     width=80)
         per_page_combo.pack(side="left", padx=(5, 0))
-        per_page_combo.bind('<<ComboboxSelected>>', 
-                           lambda e: self.change_per_page(category, per_page_var.get()))
-        
+
         self.pagination_data[category]['per_page_var'] = per_page_var
     
     def get_enhanced_player_columns(self, category):
@@ -2816,9 +3012,6 @@ Current data sources:
 
 Analysis will be updated as the season progresses.
 """
-        
-        trends_text.insert('1.0', trends_content)
-        trends_text.config(state='disabled')
     
     def populate_division_analysis(self):
         """Populate division analysis tab"""
@@ -2844,26 +3037,26 @@ Analysis will be updated as the season progresses.
         division_teams = []
         try:
             if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'teams'):
-                all_teams = [team for team in self.parent.league.teams 
+                all_teams = [team for team in self.parent.league.teams
                            if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
-                
+
                 # For now, take any NHL teams and group them by division placeholder
                 # In a real implementation, teams would have division attributes
                 division_teams = all_teams[:4]  # Take first 4 for this division
-            
+
             if not division_teams:
                 fallback_teams = self.get_fallback_teams()
                 division_teams = fallback_teams[:4]
-                
+
         except Exception as e:
             print(f"Error getting division teams: {e}")
             division_teams = self.get_fallback_teams()[:4]
-        
+
         # Convert teams to standings format
         divisions_data = {
             division: []
         }
-        
+
         for team in division_teams:
             team_data = (
                 team.team_name,
@@ -2873,11 +3066,11 @@ Analysis will be updated as the season progresses.
                 team.wins * 2 + getattr(team, 'ot_losses', 0)  # Points
             )
             divisions_data[division].append(team_data)
-        
+
         # Sort by points
         divisions_data[division].sort(key=lambda x: x[4], reverse=True)
-        
-        # Create table
+
+        # Create dark styled table
         columns = {
             'team': ('Team', 200),
             'w': ('W', 50),
@@ -2885,67 +3078,59 @@ Analysis will be updated as the season progresses.
             'otl': ('OTL', 50),
             'pts': ('PTS', 60)
         }
-        
-        tree = ttk.Treeview(parent, columns=list(columns.keys()), 
-                           show='headings', height=15)
-        
-        for col_id, (header, width) in columns.items():
-            tree.heading(col_id, text=header, anchor='center')
-            tree.column(col_id, width=width, anchor='center')
-        
+
+        tree = self._make_tree(parent, columns, height=15, padx=10, pady=10)
+
         # Add data
         if division in divisions_data:
             for team_data in divisions_data[division]:
                 tree.insert('', 'end', values=team_data)
-        
-        tree.pack(fill='both', expand=True, padx=10, pady=10)
-    
+
     def create_head_to_head_analysis(self, parent, division):
         """Create head-to-head analysis with real division data"""
+        ct = self._ct
         try:
             # Create container for head-to-head matrix
-            container = ttk.Frame(parent)
+            container = ctk.CTkFrame(parent, fg_color="transparent")
             container.pack(fill='both', expand=True, padx=10, pady=10)
-            
+
             # Title
-            title_label = ttk.Label(container, text=f"{division} Head-to-Head Records", 
-                                   style='Title.TLabel')
-            title_label.pack(pady=(0, 10))
-            
+            self._heading(container, text=f"{division} Head-to-Head Records",
+                          size=15).pack(pady=(0, 10))
+
             # Get teams from this division
             division_teams = []
             for team in self.parent.league.teams:
                 if (hasattr(team, 'league_name') and team.league_name == "National Hockey League" and
                     hasattr(team, 'division') and division.lower() in team.division.lower()):
                     division_teams.append(team)
-            
+
             if not division_teams:
                 # Fallback: show a few NHL teams
-                division_teams = [team for team in self.parent.league.teams 
+                division_teams = [team for team in self.parent.league.teams
                                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League"][:4]
-            
+
             if division_teams:
                 # Create simple head-to-head grid
                 info_text = f"Teams in division: {len(division_teams)}\n\n"
                 info_text += "Season Records:\n"
-                
+
                 for team in division_teams[:6]:  # Limit to 6 teams for display
                     record = team.record_string
                     points = team.points
                     info_text += f"• {team.team_name}: {record} ({points} pts)\n"
-                
+
                 info_text += f"\nNote: Detailed head-to-head matchup data will be available as the season progresses."
-                
-                info_label = ttk.Label(container, text=info_text, style='TLabel', justify='left')
-                info_label.pack(anchor='w', padx=20)
+
+                self._body(container, text=info_text, size=11).pack(anchor='w', padx=20)
             else:
-                ttk.Label(container, text="Division data loading...", 
-                         style='TLabel').pack(expand=True)
-                         
+                self._body(container, text="Division data loading...",
+                            dim=True).pack(expand=True)
+
         except Exception as e:
             print(f"Error creating head-to-head analysis: {e}")
-            ttk.Label(parent, text="Head-to-head analysis initializing...", 
-                     style='TLabel').pack(expand=True)
+            self._body(parent, text="Head-to-head analysis initializing...",
+                        dim=True).pack(expand=True)
     
     def _is_goalie(self, player):
         """True if the player is a goalie (value-based, no substring matching)."""
@@ -3041,7 +3226,7 @@ Analysis will be updated as the season progresses.
         
         # Update page label
         page_text = f"Showing {start_idx + 1}-{end_idx} of {total_players} players"
-        data['page_label'].config(text=page_text)
+        data['page_label'].configure(text=page_text)
         
         # Update page entry
         data['page_entry'].delete(0, tk.END)
@@ -3113,38 +3298,39 @@ Analysis will be updated as the season progresses.
         
         self.update_page_display(category)
     
-    def update_player_leaders(self, event=None):
+    def update_player_leaders(self, value=None):
         """Update player leaders based on current filter settings"""
         try:
-            # Get current tab
-            current_tab = self.leaders_notebook.tab(self.leaders_notebook.select(), "text")
-            
+            # Get current sub-tab
+            current_tab = self.leaders_tabview.get()
+
             # Determine category from tab name
             category_map = {
                 "Scoring Leaders": "scoring",
-                "Advanced Stats": "advanced", 
+                "Advanced Stats": "advanced",
                 "Breakout Players": "breakout",
                 "Goaltending": "goaltending"
             }
-            
+
             category = category_map.get(current_tab, "scoring")
-            
+
             # Reload data and refresh pagination
             if hasattr(self, 'pagination_data') and category in self.pagination_data:
                 self.load_all_players_data(category)
                 self.update_page_display(category)
-                
+
                 # Update status with current filter info
                 if hasattr(self, 'status_label'):
                     filter_text = "All Players"
                     if hasattr(self, 'position_filter') and self.position_filter.get() != "All":
                         filter_text = f"{self.position_filter.get()} Players"
-                    
+
                     total_players = self.pagination_data[category]['total_players']
-                    self.status_label.config(text=f"Player Leaders - {current_tab} ({filter_text}) - {total_players} total players")
-                    
+                    self.status_label.configure(text=f"Player Leaders - {current_tab} ({filter_text}) - {total_players} total players")
+
         except Exception as e:
             print(f"Error updating player leaders: {e}")
+            # Don't crash the UI if there's an error
             # Don't crash the UI if there's an error
     
     def update_trends_analysis(self, event=None):
@@ -3565,29 +3751,33 @@ Analysis will be updated as the season progresses.
 
     def create_analytics_dashboard_content(self, parent_frame):
         """Create analytics dashboard content"""
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
         # Title
-        title_frame = ttk.Frame(parent_frame, style='Panel.TFrame')
-        title_frame.pack(fill='x', pady=(0, 15))
-        
-        title_label = ttk.Label(title_frame, text="League Analytics Dashboard", 
-                               style='Title.TLabel', font=(self.parent.FONT_FAMILY, 18, 'bold'))
-        title_label.pack(side='left')
-        
+        title_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        title_frame.pack(fill='x', padx=10, pady=(10, 4))
+
+        self._heading(title_frame, text="League Analytics Dashboard",
+                      size=18).pack(side='left')
+
         # Key metrics frame
-        metrics_frame = ttk.Frame(parent_frame, style='Panel.TFrame')
-        metrics_frame.pack(fill='x', pady=(0, 15))
+        metrics_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        metrics_frame.pack(fill='x', padx=10, pady=(0, 8))
         self._metrics_frame = metrics_frame
 
         # Calculate league-wide statistics
         self._fill_metric_cards(metrics_frame)
 
-        # Charts placeholder
-        charts_frame = ttk.LabelFrame(parent_frame, text="Performance Charts", style='Panel.TLabelframe')
-        charts_frame.pack(fill='both', expand=True, pady=(10, 0))
+        # Charts placeholder card
+        charts_card = self._card(parent_frame)
+        charts_card.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
-        chart_label = ttk.Label(charts_frame, text="Advanced charts and visualizations would appear here",
-                               style='Content.TLabel')
-        chart_label.pack(pady=50)
+        self._heading(charts_card, text="Performance Charts", size=13,
+                      text_color=ct['TEAL']).pack(anchor='w', padx=14,
+                                                 pady=(10, 4))
+        self._body(charts_card,
+                   text="Advanced charts and visualizations would appear here",
+                   dim=True).pack(pady=50)
 
     def _fill_metric_cards(self, metrics_frame):
         """Fill the analytics metric cards from real league data."""
@@ -3615,23 +3805,28 @@ Analysis will be updated as the season progresses.
     
     def create_trends_analysis_content(self, parent_frame):
         """Create trends analysis content"""
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
         # Title
-        title_frame = ttk.Frame(parent_frame, style='Panel.TFrame')
-        title_frame.pack(fill='x', pady=(0, 15))
-        
-        title_label = ttk.Label(title_frame, text="League Trends Analysis", 
-                               style='Title.TLabel', font=(self.parent.FONT_FAMILY, 18, 'bold'))
-        title_label.pack(side='left')
-        
-        # Trends content
-        trends_frame = ttk.LabelFrame(parent_frame, text="Current Trends", style='Panel.TLabelframe')
-        trends_frame.pack(fill='both', expand=True, pady=(10, 0))
-        
-        trends_text = tk.Text(trends_frame, height=20, wrap='word', 
-                             bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                             font=(self.parent.FONT_FAMILY, 10), relief='flat',
-                             highlightthickness=0)
-        trends_text.pack(fill='both', expand=True, padx=10, pady=10)
+        title_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        title_frame.pack(fill='x', padx=10, pady=(10, 4))
+
+        self._heading(title_frame, text="League Trends Analysis",
+                      size=18).pack(side='left')
+
+        # Trends content card
+        trends_card = self._card(parent_frame)
+        trends_card.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+
+        self._heading(trends_card, text="Current Trends", size=13,
+                      text_color=ct['TEAL']).pack(anchor='w', padx=14,
+                                                 pady=(10, 4))
+
+        trends_text = tk.Text(trends_card, height=20, wrap='word',
+                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                              font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                              highlightthickness=0)
+        trends_text.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
         # Real trends content from league data
         trends_text.insert('1.0', self.generate_real_trends_analysis())
@@ -3640,37 +3835,41 @@ Analysis will be updated as the season progresses.
     
     def create_performance_insights_content(self, parent_frame):
         """Create performance insights content"""
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
         # Title
-        title_frame = ttk.Frame(parent_frame, style='Panel.TFrame')
-        title_frame.pack(fill='x', pady=(0, 15))
-        
-        title_label = ttk.Label(title_frame, text="Performance Insights", 
-                               style='Title.TLabel', font=(self.parent.FONT_FAMILY, 18, 'bold'))
-        title_label.pack(side='left')
-        
-        # Insights notebook
-        insights_notebook = ttk.Notebook(parent_frame)
-        insights_notebook.pack(fill='both', expand=True)
-        
+        title_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        title_frame.pack(fill='x', padx=10, pady=(10, 4))
+
+        self._heading(title_frame, text="Performance Insights",
+                      size=18).pack(side='left')
+
+        # Insights tabs
+        self.insights_tabview = self._make_tabview(parent_frame)
+        self.insights_tabview.pack(fill='both', expand=True,
+                                   padx=10, pady=(0, 10))
+        for name in ("Team Analysis", "Player Analysis"):
+            self.insights_tabview.add(name)
+
         # Team insights
-        team_insights_frame = ttk.Frame(insights_notebook, style='Panel.TFrame', padding=10)
-        insights_notebook.add(team_insights_frame, text="Team Analysis")
-        
+        team_insights_frame = self.insights_tabview.tab("Team Analysis")
+        team_insights_frame.configure(fg_color=ct['PANEL'])
+
         team_text = tk.Text(team_insights_frame, height=15, wrap='word',
-                           bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                           font=(self.parent.FONT_FAMILY, 10), relief='flat',
-                           highlightthickness=0)
-        team_text.pack(fill='both', expand=True)
+                            bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                            font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                            highlightthickness=0)
+        team_text.pack(fill='both', expand=True, padx=10, pady=10)
 
         # Player insights
-        player_insights_frame = ttk.Frame(insights_notebook, style='Panel.TFrame', padding=10)
-        insights_notebook.add(player_insights_frame, text="Player Analysis")
+        player_insights_frame = self.insights_tabview.tab("Player Analysis")
+        player_insights_frame.configure(fg_color=ct['PANEL'])
 
         player_text = tk.Text(player_insights_frame, height=15, wrap='word',
-                             bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                             font=(self.parent.FONT_FAMILY, 10), relief='flat',
-                             highlightthickness=0)
-        player_text.pack(fill='both', expand=True)
+                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                              font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                              highlightthickness=0)
+        player_text.pack(fill='both', expand=True, padx=10, pady=10)
 
         # Real insights from league data
         team_content, player_content = self._generate_real_insights()
@@ -3758,13 +3957,11 @@ Analysis will be updated as the season progresses.
     
     def _create_metric_card(self, parent, title, value, color):
         """Create a metric card widget"""
-        card_frame = ttk.Frame(parent, style='Panel.TFrame', relief='solid')
+        card_frame = self._card(parent)
         card_frame.pack(side='left', padx=5, pady=5, fill='both', expand=True)
-        
-        title_label = ttk.Label(card_frame, text=title, style='Content.TLabel', 
-                               font=(self.parent.FONT_FAMILY, 10))
-        title_label.pack(pady=(10, 0))
-        
-        value_label = ttk.Label(card_frame, text=value, style='Title.TLabel',
-                               font=(self.parent.FONT_FAMILY, 16, 'bold'))
-        value_label.pack(pady=(0, 10))
+
+        self._body(card_frame, text=title, dim=True, size=11).pack(pady=(10, 0))
+
+        ctk.CTkLabel(card_frame, text=value,
+                     font=(self._ff, 16, 'bold'),
+                     text_color=color).pack(pady=(0, 10))
