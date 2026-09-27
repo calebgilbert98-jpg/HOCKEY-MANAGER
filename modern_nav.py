@@ -1,9 +1,9 @@
-# sleeper_nav.py
+# modern_nav.py
 # modern navigation bar.
 # Clean, minimal, with clear active states.
 
 import tkinter as tk
-from sleeper_ui import AppColors, AppFonts
+from modern_ui import AppColors, AppFonts
 
 
 class NavBar(tk.Frame):

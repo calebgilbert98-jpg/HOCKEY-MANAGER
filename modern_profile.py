@@ -1,4 +1,4 @@
-# sleeper_profile.py
+# modern_profile.py
 # modern player profile.
 # Clean, modern, no white text boxes.
 
@@ -122,14 +122,12 @@ class PlayerProfile(tk.Toplevel):
                                  fg=AppColors.TEXT_SECONDARY)
             age_pill.pack(side="left", padx=(0, 8))
             
-            # Overall
-            overall = getattr(self.player, 'overall', 0)
-            if isinstance(overall, (int, float)) and overall < 30:
-                try:
-                    from game_classes import to_100_scale
-                    overall = int(to_100_scale(overall))
-                except:
-                    overall = int(overall)
+            # Overall (1-100 display scale)
+            try:
+                from game_classes import to_100_scale
+                overall = to_100_scale(self.player.overall_rating())
+            except Exception:
+                overall = '?'
             ovr_pill = PillBadge(pills, text=f"{overall} OVR",
                                  bg=AppColors.BG_ELEVATED,
                                  fg=AppColors.TEXT_PRIMARY)
@@ -216,7 +214,7 @@ class PlayerProfile(tk.Toplevel):
                     ("Shooting", getattr(self.player, 'shooting', 0)),
                     ("Skating", getattr(self.player, 'skating', 0)),
                     ("Passing", getattr(self.player, 'passing', 0)),
-                    ("Defense", getattr(self.player, 'defense', 0)),
+                    ("Defense", getattr(self.player, 'defensive_awareness', 0)),
                 ]
         except:
             attrs = []
@@ -240,30 +238,20 @@ class PlayerProfile(tk.Toplevel):
         bar_bg = tk.Frame(row, bg=AppColors.BG, height=8)
         bar_bg.pack(side="left", fill="x", expand=True, padx=12)
         
-        # Convert to 0-100 if needed
+        # Convert internal scale to 1-100 display scale.
+        # to_100_scale already handles both scales (doubles <55, passes through the rest).
         try:
-            if value < 30:
-                from game_classes import to_100_scale
-                pct = to_100_scale(value) / 100
-            else:
-                pct = min(value / 100, 1.0)
-        except:
-            pct = 0.5
-        
+            from game_classes import to_100_scale
+            display_val = int(to_100_scale(value))
+        except Exception:
+            display_val = 50
+        pct = max(0.0, min(1.0, display_val / 100))
+
         # Bar fill
         bar_fill = tk.Frame(bar_bg, bg=AppColors.ACCENT, height=8)
         bar_fill.place(relx=0, rely=0, relwidth=pct, relheight=1)
-        
+
         # Value
-        try:
-            if value < 30:
-                from game_classes import to_100_scale
-                display_val = int(to_100_scale(value))
-            else:
-                display_val = int(value)
-        except:
-            display_val = 0
-        
         val_label = tk.Label(row, text=str(display_val),
                             font=AppFonts.SMALL_BOLD,
                             fg=AppColors.TEXT_PRIMARY,

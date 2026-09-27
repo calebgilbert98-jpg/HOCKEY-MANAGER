@@ -1,4 +1,4 @@
-# sleeper_roster.py
+# modern_roster.py
 # modern card-based roster view.
 # Replaces Excel-like tables with modern player cards.
 
@@ -233,12 +233,11 @@ class RosterView(tk.Frame):
         try:
             pos_short = pos.split('.')[-1][:2] if '.' in pos else pos[:2]
             age = getattr(player, 'age', '?')
-            overall = getattr(player, 'overall', '?')
-            # Convert overall to 1-100 if needed
-            if isinstance(overall, (int, float)) and overall < 30:
-                # Likely internal scale, convert
+            try:
                 from game_classes import to_100_scale
-                overall = to_100_scale(overall)
+                overall = to_100_scale(player.overall_rating())
+            except Exception:
+                overall = '?'
             detail_text = f"{pos_short} • Age {age} • {overall} OVR"
         except:
             detail_text = ""
