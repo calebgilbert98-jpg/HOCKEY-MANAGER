@@ -221,6 +221,12 @@ class Player:
 
     # Football Manager-style career fields (happiness, squad status, chats)
     happiness: int = 70  # 0-100, how happy the player is at the club
+
+    # Reputation system (ratchet 0-100; visible attitude/volatility 0-100)
+    reputation: int = 0
+    controversy: int = 0
+    reputation_history: list = field(default_factory=list)
+    controversy_history: list = field(default_factory=list)
     squad_status: str = "Rotation"  # Star Player / Key Player / Regular Starter / Rotation / Prospect / Surplus
     playing_time_concern: int = 0  # 0-100, worry about lack of ice time
     transfer_requested: bool = False
@@ -953,6 +959,7 @@ class Staff:
     man_management: int = field(default_factory=lambda: random.randint(8, 18))
     motivating: int = field(default_factory=lambda: random.randint(8, 18))
     discipline: int = field(default_factory=lambda: random.randint(8, 18))
+    leadership: int = field(default_factory=lambda: random.randint(8, 18))
     
     # Scouting Abilities
     judging_player_ability: int = field(default_factory=lambda: random.randint(8, 18))
@@ -980,6 +987,13 @@ class Staff:
     # Performance Tracking
     reputation: int = field(default_factory=lambda: random.randint(5, 15))
     experience: int = field(default_factory=lambda: random.randint(1, 30))  # Years of experience
+    years_with_team: int = field(default_factory=lambda: random.randint(0, 4))  # Tenure with current team (room-status shelf life)
+    gm_trust: int = 70  # 0-100 GM-coach trust; evolves as advice is taken/ignored
+    # Reputation system (0-100 career standing; visible attitude/volatility 0-100)
+    career_reputation: int = 0
+    controversy: int = 0
+    reputation_history: list = field(default_factory=list)
+    controversy_history: list = field(default_factory=list)
     
     @property
     def full_name(self) -> str:
@@ -1806,6 +1820,9 @@ class Team:
     tactic_penalty_kill: str = "Defensive"
     # Line matching: 'Aggressive', 'Standard', 'Conservative'
     tactic_line_matching: str = "Standard"
+    # Dressing-room dynamics (Morale screen): event feed + who picks the lines
+    dynamics_log: List[dict] = field(default_factory=list)
+    line_control: str = "coach"  # 'coach' | 'gm'
     # Forecheck: '2-1-2', '1-2-2', '1-4' (pressure scheme in the other team's end)
     tactic_forecheck: str = "2-1-2"
     # Offensive-zone formation: 'Overload', 'Umbrella', 'Spread', 'Crash the Net'
