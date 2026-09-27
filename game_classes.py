@@ -334,6 +334,17 @@ class Player:
     hitting_tendency: int = field(default_factory=lambda: random.randint(0, 100))
 
     potential_grade: str = field(default_factory=lambda: random.choice(['A', 'B', 'C', 'D', 'F']))
+    # Prospect development (prospect_development.py): the hidden TRUTH vs the
+    # scouted belief. Development grows toward true_potential_grade;
+    # potential_grade is what the world believes. Old saves backfill truth =
+    # belief in ensure_reputation_fields.
+    true_potential_grade: str = ""
+    farm_league: str = ""
+    farm_season: dict = field(default_factory=dict)
+    farm_history: list = field(default_factory=list)
+    # Draft pedigree: round picked + the soft bust floor (Lafreniere cushion).
+    draft_round: int = 0
+    pedigree_floor: str = ""
     
     contract: Contract = field(default_factory=Contract)
     stats: PlayerStats = field(default_factory=PlayerStats)
@@ -560,8 +571,13 @@ class Player:
         Grades map onto the live overall scale (generated players sit
         ~62-83; generational talents reach ~90). Tier gaps preserve the
         original design's spacing (a full grade ~ 6-7 points).
+
+        Uses the TRUE (hidden) grade: a late-round gem develops toward what
+        he really is, not what the scouts think. Falls back to the displayed
+        grade for old saves.
         """
-        g = (self.potential_grade or 'C').strip().upper()
+        g = ((getattr(self, "true_potential_grade", "") or
+              self.potential_grade) or 'C').strip().upper()
         base = {'A': 87, 'B': 82, 'C': 76, 'D': 69, 'F': 62}
         cap = base.get(g[:1], 76)
         if len(g) > 1:
@@ -594,7 +610,10 @@ class Player:
     }
 
     def _grade_development(self) -> dict:
-        g = (self.potential_grade or "C").strip().upper()
+        # True grade drives the curve too: a hidden gem develops on a star's
+        # schedule (faster, earlier peak), not a grinder's.
+        g = ((getattr(self, "true_potential_grade", "") or
+              self.potential_grade) or "C").strip().upper()
         return self.GRADE_DEVELOPMENT.get(g,
                self.GRADE_DEVELOPMENT.get(g[:1], {"development_speed": 0.8,
                                                  "peak_age": 28}))
@@ -664,11 +683,25 @@ class Player:
             if random.random() < 0.65:  # 65% chance breakout sticks
                 self.potential_grade = self.POTENTIAL_LADDER[idx + 1]
         elif bust and idx > 0:
-            if random.random() < 0.45:  # 45% chance bust drops potential
+            _bust_p = 0.45  # 45% chance bust drops potential
+            try:
+                # Pedigree cushion: high picks get a long leash even in the
+                # NHL -- the floor is soft, not a wall.
+                import prospect_development as _pd
+                if idx - 1 < _pd.pedigree_floor_index(self):
+                    _bust_p *= 0.3
+            except Exception:
+                pass
+            if random.random() < _bust_p:
                 self.potential_grade = self.POTENTIAL_LADDER[idx - 1]
 
-    def age_one_year(self):
-        """Handles player aging, development, and decline."""
+    def age_one_year(self, env_factor: float = 1.0):
+        """Handles player aging, development, and decline.
+
+        env_factor: the prospect-development environment multiplier
+        (prospect_development.development_environment_factor) -- age window,
+        league quality, morale, role. Defaults to 1.0 (old behavior).
+        """
         self.age += 1
         if self.contract.years_remaining > 0:
             self.contract.years_remaining -= 1
@@ -693,6 +726,12 @@ class Player:
             else:
                 frac = 0.05
             frac *= dev["development_speed"]
+            # Farm/junior environment: the 17-20 window, league quality,
+            # morale, and opportunity compound here (EHM on steroids).
+            try:
+                frac *= max(0.5, min(1.6, float(env_factor)))
+            except Exception:
+                pass
             frac *= random.uniform(0.8, 1.2)
             # Convert the desired overall gain into attribute points. A +1 to a
             # random OVR attribute is worth ~1/len(ovr_attrs) overall, and 75%
@@ -1350,12 +1389,28 @@ class ScoutingReport:
         jpp = scout.judging_player_potential
         
         potential_grades = ["F", "D", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
-        true_index = potential_grades.index(player.potential_grade) if hasattr(player, 'potential_grade') else 5
+        # Scouts see through to the TRUE grade (hidden gem mechanic): a great
+        # scout's report centers on what the kid really is, not the label.
+        _true_g = (getattr(player, "true_potential_grade", "") or
+                   getattr(player, "potential_grade", "C") or "C").strip().upper()
+        if _true_g not in potential_grades:
+            _true_g = {"D+": "D"}.get(_true_g, _true_g[:1])
+        true_index = potential_grades.index(_true_g) if _true_g in potential_grades else 5
         
         # Variance decreases with higher JPP
         variance = max(1, 4 - (jpp // 5))
         scouted_index = max(0, min(len(potential_grades)-1, true_index + random.randint(-variance, variance)))
         self.scouted_potential = potential_grades[scouted_index]
+
+        # The org learns: a good report nudges the displayed grade toward the
+        # truth. This is what makes assigning your best scout to a late-round
+        # kid rewarding -- he finds the Zetterberg before the box scores do.
+        try:
+            if getattr(player, "age", 99) < 25:
+                import prospect_development as _pd
+                _pd.scout_reveal_step(player, scout_jpp=jpp)
+        except Exception:
+            pass
         
         # Project ceiling and floor
         base_overall = player.overall_rating() if hasattr(player, 'overall_rating') else 50
@@ -4602,15 +4657,52 @@ class League:
 
     def end_of_season(self):
         """Handles all end-of-season logic like aging players and resetting stats."""
+        # Prospect development (EHM on steroids): farm/junior seasons are
+        # simulated statistically and evaluated BEFORE aging, so breakout
+        # years reshape the growth curve. NHL-roster players keep the
+        # existing NHL-stat evaluation; everyone else with real NHL games
+        # (call-ups) does too.
+        try:
+            import prospect_development as _pd
+        except Exception:
+            _pd = None
+        nhl_ids = set()
+        ahl_ids = set()
+        try:
+            for _t in self.teams:
+                for _p in _t.roster:
+                    nhl_ids.add(_p.id)
+                for _p in getattr(_t, "ahl_roster", []):
+                    ahl_ids.add(_p.id)
+        except Exception:
+            pass
         all_players = self.get_all_players()
         for player in all_players:
-            # Dynamic potential: breakout/bust seasons adjust the ceiling
-            # BEFORE stats are wiped and aging is applied.
             try:
-                player.update_potential_from_season()
+                _age = getattr(player, "age", 99) or 99
+                _nhl_gp = getattr(getattr(player, "stats", None),
+                                  "games_played", 0) or 0
+                if _pd is not None and _nhl_gp < 15 and _age < 27 \
+                        and player.id not in nhl_ids:
+                    # Farm/junior track: simulate the season in an
+                    # age-appropriate league, evaluate breakout/bust.
+                    _league = "AHL" if player.id in ahl_ids else None
+                    _pd.process_prospect_offseason(player, league=_league)
+                else:
+                    # Dynamic potential: breakout/bust seasons adjust the
+                    # ceiling BEFORE stats are wiped and aging is applied.
+                    player.update_potential_from_season()
             except Exception:
                 pass
-            player.age_one_year()
+            try:
+                _on_nhl = player.id in nhl_ids
+                _env = _pd.development_environment_factor(
+                    player, league="NHL" if _on_nhl else None) \
+                    if (_pd is not None and (getattr(player, "age", 99) or 99) <= 26) \
+                    else 1.0
+            except Exception:
+                _env = 1.0
+            player.age_one_year(env_factor=_env)
             player.stats = PlayerStats()
         
         self.season_year += 1

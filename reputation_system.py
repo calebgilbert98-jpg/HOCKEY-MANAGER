@@ -125,6 +125,36 @@ def ensure_reputation_fields(entity: Any) -> None:
             entity.prev_roster_names = []
         if not hasattr(entity, "roster_churn") or entity.roster_churn is None:
             entity.roster_churn = 0.2
+    # Prospect-development fields (prospect_development.py). Old saves predate
+    # them; hidden truth defaults to the displayed belief (no phantom gems in
+    # old saves -- they must earn it through production).
+    if hasattr(entity, "primary_position") and not hasattr(entity, "role"):
+        if not getattr(entity, "true_potential_grade", ""):
+            entity.true_potential_grade = getattr(entity, "potential_grade", "C") or "C"
+        if not hasattr(entity, "farm_league"):
+            entity.farm_league = ""
+        if not hasattr(entity, "farm_season") or entity.farm_season is None:
+            entity.farm_season = {}
+        if not hasattr(entity, "farm_history") or entity.farm_history is None:
+            entity.farm_history = []
+        if not hasattr(entity, "draft_round"):
+            entity.draft_round = 0
+        # Pedigree floor for old saves: young players get a mild cushion
+        # (3 steps below truth); veterans don't need one (evaluation stops
+        # at 27 anyway).
+        if not getattr(entity, "pedigree_floor", ""):
+            try:
+                import prospect_development as _pd
+                _lad = _pd._ladder()
+                _ti = _pd._ladder_index(
+                    getattr(entity, "true_potential_grade", "") or
+                    getattr(entity, "potential_grade", "C") or "C")
+                if (getattr(entity, "age", 99) or 99) < 27:
+                    entity.pedigree_floor = _lad[max(0, _ti - 3)]
+                else:
+                    entity.pedigree_floor = ""
+            except Exception:
+                entity.pedigree_floor = ""
 
 
 def seed_player_reputation(player: Any) -> int:
