@@ -3320,8 +3320,16 @@ class HockeyManagerGUI(tk.Tk):
                                      bg='#2A2A2A', fg='#FFFFFF',
                                      selectbackground='#f85149')
             
-            for team_name in team_names:
+            for _i, team_name in enumerate(team_names):
                 team_listbox.insert(tk.END, team_name)
+                # Team-true row colors so every club is recognizable
+                try:
+                    from team_identity_system import accent_for_team
+                    _bg, _hover, _fg = accent_for_team(team_name)
+                    team_listbox.itemconfig(_i, bg=_bg, fg=_fg,
+                                            selectbackground=_hover)
+                except Exception:
+                    pass
             
             team_listbox.pack(pady=10, padx=20, fill='both', expand=True)
             team_listbox.selection_set(0)  # Select first team by default

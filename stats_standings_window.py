@@ -24,6 +24,13 @@ except ImportError:
     print("Warning: Advanced analytics system not available, using fallback data")
 
 try:
+    from team_identity_system import (jersey_chip as _jersey_chip,
+                                      accent_for_team as _accent_for_team)
+except Exception:
+    _jersey_chip = None
+    _accent_for_team = None
+
+try:
     from game_classes import to_100_scale
 except ImportError:
     def to_100_scale(v):
@@ -61,6 +68,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         self._secondary_button = secondary_button
         self._heading = heading
         self._body = body
+        self._teamcolor_tags = set()  # Treeview tags already configured
         self._ff = "Segoe UI"
         init_ctk_theme()
         super().__init__(parent)
@@ -1152,7 +1160,15 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                 style = 'Title.TLabel' if team['name'] == getattr(self.parent, 'user_team', {}).get('team_name', '') else 'TLabel'
                 
                 ttk.Label(scrollable_frame, text=str(rank), style=style).grid(row=row, column=0, sticky='w', padx=5)
-                ttk.Label(scrollable_frame, text=team['name'], style=style).grid(row=row, column=1, sticky='w', padx=5)
+                # Team identity chip + name
+                _name_cell = ttk.Frame(scrollable_frame)
+                _name_cell.grid(row=row, column=1, sticky='w', padx=5)
+                if _jersey_chip is not None:
+                    try:
+                        _jersey_chip(_name_cell, team['name']).pack(side='left', padx=(0, 6))
+                    except Exception:
+                        pass
+                ttk.Label(_name_cell, text=team['name'], style=style).pack(side='left')
                 ttk.Label(scrollable_frame, text=str(team['games_played']), style=style).grid(row=row, column=2, sticky='w', padx=5)
                 ttk.Label(scrollable_frame, text=str(team['wins']), style=style).grid(row=row, column=3, sticky='w', padx=5)
                 ttk.Label(scrollable_frame, text=str(team['losses']), style=style).grid(row=row, column=4, sticky='w', padx=5)
@@ -1265,9 +1281,16 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             self._body(panel, text=f"{i+1}.", dim=True,
                        size=11).grid(row=r, column=0, sticky='w',
                                      padx=(12, 4))
-            self._body(panel, text=team['name'][:20],
-                       size=11).grid(row=r, column=1, sticky='w',
-                                     padx=(0, 10))
+            # Team identity chip + name
+            _mini_cell = ctk.CTkFrame(panel, fg_color="transparent")
+            _mini_cell.grid(row=r, column=1, sticky='w', padx=(0, 10))
+            if _jersey_chip is not None:
+                try:
+                    _jersey_chip(_mini_cell, team['name'], w=34, h=20).pack(side='left', padx=(0, 6))
+                except Exception:
+                    pass
+            self._body(_mini_cell, text=team['name'][:20],
+                       size=11).pack(side='left')
             # Record
             self._body(panel, text=team['record'], dim=True,
                        size=11).grid(row=r, column=2, sticky='w',
@@ -2202,18 +2225,25 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                         f"{goal_diff:+d}",  # +/- (calculated from real data)
                     )
 
-                # Color coding for playoff positions
-                if team.team_name in playoff_names:
-                    tree.insert('', 'end', values=values, tags=('playoff',))
-                else:
-                    tree.insert('', 'end', values=values)
+                # Team-true row colors: every row wears its club's identity.
+                # (Replaces the flat playoff-green band; playoff status
+                # still reads in the Playoff column.)
+                _tag = "tm_" + "".join(
+                    ch if ch.isalnum() else "_" for ch in team.team_name)
+                if _tag not in self._teamcolor_tags:
+                    self._teamcolor_tags.add(_tag)
+                    if _accent_for_team is not None:
+                        try:
+                            _bg, _, _fg = _accent_for_team(team.team_name)
+                            tree.tag_configure(_tag, background=_bg,
+                                               foreground=_fg)
+                        except Exception:
+                            pass
+                tree.insert('', 'end', values=values, tags=(_tag,))
 
             except Exception as e:
                 print(f"Error processing team {team.team_name}: {e}")
                 continue
-
-        # Configure tag colors
-        tree.tag_configure('playoff', background='#166534', foreground='#FFFFFF')  # Dark green with white text
     
     def get_fallback_teams(self):
         """Get teams from alternative data sources if main source fails"""

@@ -537,8 +537,8 @@ class PBPVisualSim(tk.Toplevel):
         super().__init__(parent)
         self.title(f"Live Sim — {home_team.team_name} vs {away_team.team_name}")
         self.configure(bg=BG)
-        self.geometry("1280x630")
-        self.minsize(1100, 580)
+        self.geometry("1280x800")
+        self.minsize(1100, 700)
 
         self.sim = sim
         self.home_team = home_team
@@ -955,6 +955,59 @@ class PBPVisualSim(tk.Toplevel):
         tk.Label(gcell, textvariable=self._goalie_away_var, font=(FONT, 10, "bold"),
                  bg=CONTENT_BG, fg=self._away_fg).pack(side="right", padx=(0, 10))
 
+        # Advanced team-stats row, live from the sim: PP / PK / FO% / Blocks.
+        # Coach's view of where the game is being won or lost. One spanning
+        # row with four uniform cells so it never inherits row 0's widths.
+        self._adv_vars = {}
+        advrow = tk.Frame(strip, bg=CONTENT_BG)
+        advrow.grid(row=1, column=0, columnspan=5, sticky="ew", pady=(4, 0))
+        for _c in range(4):
+            advrow.columnconfigure(_c, weight=1, uniform="adv")
+        for i, (label, key) in enumerate((("PP", "PP"), ("PK", "PK"),
+                                         ("FO%", "FOP"), ("Blocks", "BLK"))):
+            acell = tk.Frame(advrow, bg=CONTENT_BG)
+            acell.grid(row=0, column=i, sticky="ew", padx=3)
+            hv = tk.StringVar(value="–")
+            av = tk.StringVar(value="–")
+            self._adv_vars[key] = (hv, av)
+            tk.Label(acell, textvariable=hv, font=(FONT, 11, "bold"),
+                     bg=CONTENT_BG, fg=self._home_fg).pack(side="left", padx=(10, 0))
+            tk.Label(acell, text=label, font=(FONT, 9),
+                     bg=CONTENT_BG, fg=MUTED).pack(side="left", padx=6)
+            tk.Label(acell, textvariable=av, font=(FONT, 11, "bold"),
+                     bg=CONTENT_BG, fg=self._away_fg).pack(side="right", padx=(0, 10))
+
+        # Players to watch: hottest / coldest skaters by live game rating
+        # (EHM-style 1-10, recomputed from the sim's per-player game stats).
+        watch = tk.Frame(rink_frame, bg=BG)
+        watch.pack(fill="x", padx=4, pady=(4, 6))
+        tk.Label(watch, text="PLAYERS TO WATCH", bg=BG, fg=MUTED,
+                 font=(FONT, 9, "bold")).pack(anchor="w", padx=6)
+        wcols = tk.Frame(watch, bg=BG)
+        wcols.pack(fill="x", pady=(2, 0))
+        hotf = tk.Frame(wcols, bg=CONTENT_BG)
+        hotf.pack(side="left", fill="both", expand=True, padx=(0, 3))
+        coldf = tk.Frame(wcols, bg=CONTENT_BG)
+        coldf.pack(side="left", fill="both", expand=True, padx=(3, 0))
+        tk.Label(hotf, text="▲ ON FIRE", bg=CONTENT_BG, fg="#7CFC98",
+                 font=(FONT, 9, "bold")).pack(anchor="w", padx=8, pady=(4, 0))
+        tk.Label(coldf, text="▼ STRUGGLING", bg=CONTENT_BG, fg="#FF8A7A",
+                 font=(FONT, 9, "bold")).pack(anchor="w", padx=8, pady=(4, 0))
+        self._watch_hot_rows = []
+        self._watch_cold_rows = []
+        for _ in range(3):
+            for _rows, _fg in ((self._watch_hot_rows, "#7CFC98"),
+                               (self._watch_cold_rows, "#FF8A7A")):
+                _parent = hotf if _rows is self._watch_hot_rows else coldf
+                nv, rv = tk.StringVar(value="–"), tk.StringVar(value="")
+                _row = tk.Frame(_parent, bg=CONTENT_BG)
+                _row.pack(fill="x", padx=8)
+                tk.Label(_row, textvariable=nv, font=(FONT, 10),
+                         bg=CONTENT_BG, fg=TEXT).pack(side="left")
+                tk.Label(_row, textvariable=rv, font=(FONT, 10, "bold"),
+                         bg=CONTENT_BG, fg=_fg).pack(side="right")
+                _rows.append((nv, rv))
+
         # Right panel: feed + controls (width adapts to the window; see
         # _on_window_configure). Crucial details stay legible at any size.
         right = tk.Frame(main, bg=CONTENT_BG, width=320)
@@ -1342,6 +1395,119 @@ class PBPVisualSim(tk.Toplevel):
         hv, av = self._stat_vars[key]
         hv.set(str(self.team_stats["home"][key]))
         av.set(str(self.team_stats["away"][key]))
+
+    def _refresh_advanced_stats(self):
+        """Advanced team stats row, read live from the sim's team_stats:
+        PP (goals/opps + %), PK (kills/opps + %), FO%, blocked shots.
+        Never raises."""
+        try:
+            ts = getattr(self.sim, "team_stats", None) or {}
+            h = ts.get(self.home_team.team_name) or {}
+            a = ts.get(self.away_team.team_name) or {}
+
+            def _pct(n, d):
+                return (100.0 * n / d) if d else 0.0
+
+            hpp = f"{h.get('power_play_goals', 0)}/{h.get('power_play_opportunities', 0)} " \
+                  f"{_pct(h.get('power_play_goals', 0), h.get('power_play_opportunities', 0)):.0f}%"
+            app = f"{a.get('power_play_goals', 0)}/{a.get('power_play_opportunities', 0)} " \
+                  f"{_pct(a.get('power_play_goals', 0), a.get('power_play_opportunities', 0)):.0f}%"
+            hk = h.get('penalty_kill_opportunities', 0) - h.get('penalty_kill_goals_against', 0)
+            ak = a.get('penalty_kill_opportunities', 0) - a.get('penalty_kill_goals_against', 0)
+            hpk = f"{hk}/{h.get('penalty_kill_opportunities', 0)} " \
+                  f"{_pct(hk, h.get('penalty_kill_opportunities', 0)):.0f}%"
+            apk = f"{ak}/{a.get('penalty_kill_opportunities', 0)} " \
+                  f"{_pct(ak, a.get('penalty_kill_opportunities', 0)):.0f}%"
+            hfo = _pct(h.get('faceoffs_won', 0),
+                       h.get('faceoffs_won', 0) + h.get('faceoffs_lost', 0))
+            afo = _pct(a.get('faceoffs_won', 0),
+                       a.get('faceoffs_won', 0) + a.get('faceoffs_lost', 0))
+            vals = {
+                "PP": (hpp, app),
+                "PK": (hpk, apk),
+                "FOP": (f"{hfo:.0f}%", f"{afo:.0f}%"),
+                "BLK": (str(h.get('blocked_shots_by_team', 0)),
+                        str(a.get('blocked_shots_by_team', 0))),
+            }
+            for key, (hv, av) in self._adv_vars.items():
+                try:
+                    hv.set(vals[key][0])
+                    av.set(vals[key][1])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _live_rating(self, pid):
+        """EHM-style 1-10 live game rating for a player, from the sim's
+        per-player game_stats. None when the player has seen no action."""
+        try:
+            gs = (getattr(self.sim, "game_stats", None) or {}).get(pid)
+            if not gs:
+                return None
+            pos = getattr(gs.get("player"), "position", "") or ""
+            if pos == "G":
+                sa = gs.get("shots_against", 0) or 0
+                if not sa:
+                    return None
+                svp = (gs.get("saves", 0) or 0) / sa
+                r = (6.0 + (svp - 0.890) * 25.0
+                     + 0.20 * (gs.get("high_danger_saves", 0) or 0))
+            else:
+                g = gs.get("g", 0) or 0
+                ag = gs.get("a", 0) or 0
+                sog = gs.get("shots_on_goal", 0) or 0
+                hits = gs.get("hits", 0) or 0
+                tk = gs.get("takeaways", 0) or 0
+                gv = gs.get("giveaways", 0) or 0
+                blk = gs.get("blocked_shots_by", 0) or 0
+                fo = gs.get("faceoffs_won", 0) or 0
+                pen = gs.get("physical_penalties", 0) or 0
+                if not (g + ag + sog + hits + fo + tk + gv + blk + pen
+                        + (gs.get("faceoffs_taken", 0) or 0)):
+                    return None
+                r = (6.0 + 1.5 * g + 1.0 * ag + 0.12 * sog + 0.10 * hits
+                     + 0.20 * tk + 0.10 * blk + 0.05 * fo
+                     - 0.40 * gv - 0.30 * pen)
+            return max(1.0, min(10.0, round(r, 1)))
+        except Exception:
+            return None
+
+    def _refresh_watch_list(self):
+        """Players-to-watch panel: 3 hottest / 3 coldest by live rating.
+        Never raises."""
+        try:
+            gs_all = getattr(self.sim, "game_stats", None) or {}
+            rated = []
+            for pid in gs_all:
+                r = self._live_rating(pid)
+                if r is None:
+                    continue
+                p = gs_all[pid].get("player")
+                name = (getattr(p, "last_name", None)
+                        or str(getattr(p, "name", "?")).split()[-1])
+                rated.append((name, r))
+            rated.sort(key=lambda t: t[1], reverse=True)
+            # Absolute gates so the labels stay honest: "on fire" means
+            # genuinely hot, "struggling" genuinely cold. Empty sides show -.
+            hot = [t for t in rated if t[1] > 6.5][:3]
+            cold = [t for t in rated if t[1] < 6.5][-3:][::-1]
+            for i, (nv, rv) in enumerate(self._watch_hot_rows):
+                if i < len(hot):
+                    nv.set(hot[i][0])
+                    rv.set(f"{hot[i][1]:.1f}")
+                else:
+                    nv.set("–")
+                    rv.set("")
+            for i, (nv, rv) in enumerate(self._watch_cold_rows):
+                if i < len(cold):
+                    nv.set(cold[i][0])
+                    rv.set(f"{cold[i][1]:.1f}")
+                else:
+                    nv.set("–")
+                    rv.set("")
+        except Exception:
+            pass
 
     def _side_of(self, team_name):
         return "home" if team_name == self.home_team.team_name else "away"
@@ -2546,15 +2712,26 @@ class PBPVisualSim(tk.Toplevel):
                 self._sfx.whistle()
             except Exception:
                 pass
+        # Neutral-zone draws are routine: run a half-length ceremony so the
+        # game flows; offensive/defensive-zone draws keep the full TV
+        # treatment. Presentation-only -- sim timing is untouched.
+        _z = str(ev.get("zone", ""))
+        _scale = 0.5 if _z in ("neutral_zone", "neutral zone") else 1.0
         self._faceoff_ceremony = {
             "el": 0.0, "phase": "whistle",
             "dx": dx, "dy": dy,
             "winner_is_home": winner_is_home,
             "ev": ev,
             "puck_from": (self.puck["x"], self.puck["y"]),
+            "t_whistle": self._FO_WHISTLE * _scale,
+            "t_lineup": self._FO_LINEUP * _scale,
+            "t_set": self._FO_SET * _scale,
+            "t_drop": self._FO_DROP,
         }
+        _fo_total = ((self._FO_WHISTLE + self._FO_LINEUP + self._FO_SET)
+                     * _scale + self._FO_DROP)
         self.hold_until = max(self.hold_until,
-                              self._now() + self._FO_TOTAL + 0.2)
+                              self._now() + _fo_total + 0.2)
 
     def _cancel_faceoff_ceremony(self):
         """Drop ceremony state (jump/sim-to-end); dots keep current targets."""
@@ -2571,7 +2748,11 @@ class PBPVisualSim(tk.Toplevel):
             return
         c["el"] += 0.05
         el = c["el"]
-        if el < self._FO_WHISTLE:
+        t_whistle = c.get("t_whistle", self._FO_WHISTLE)
+        t_lineup = c.get("t_lineup", self._FO_LINEUP)
+        t_set = c.get("t_set", self._FO_SET)
+        t_drop = c.get("t_drop", self._FO_DROP)
+        if el < t_whistle:
             return  # whistle freeze: everyone stopped
         if c["phase"] == "whistle":
             # skate to the dot with a slow deliberate glide
@@ -2586,21 +2767,21 @@ class PBPVisualSim(tk.Toplevel):
             c["phase"] = "lineup"
         elif c["phase"] == "lineup":
             # linesman carries the puck to the dot
-            k = min(1.0, (el - self._FO_WHISTLE) / self._FO_LINEUP)
+            k = min(1.0, (el - t_whistle) / t_lineup)
             fx, fy = c["puck_from"]
             self.puck["x"] = fx + (c["dx"] - fx) * k
             self.puck["y"] = fy + (c["dy"] - fy) * k
-            if el >= self._FO_WHISTLE + self._FO_LINEUP:
+            if el >= t_whistle + t_lineup:
                 c["phase"] = "set"
                 for d in self.dots.values():
                     d["ceremony_glide"] = False
         elif c["phase"] == "set":
-            if el >= self._FO_WHISTLE + self._FO_LINEUP + self._FO_SET:
+            if el >= t_whistle + t_lineup + t_set:
                 c["phase"] = "drop"
         elif c["phase"] == "drop":
             # puck-drop hop, then the winner takes possession
-            k = ((el - self._FO_WHISTLE - self._FO_LINEUP - self._FO_SET)
-                 / self._FO_DROP)
+            k = ((el - t_whistle - t_lineup - t_set)
+                 / t_drop)
             if k < 1.0:
                 self.puck["x"] = c["dx"]
                 self.puck["y"] = c["dy"] - math.sin(k * math.pi) * 2.5
@@ -4100,6 +4281,18 @@ class PBPVisualSim(tk.Toplevel):
 
         # tactic phase indicators: what each unit is executing right now
         self._update_phase_indicators()
+
+        # coach's corner: advanced stats + players-to-watch, ~1Hz throttle
+        if now - getattr(self, "_last_coach_refresh", 0.0) >= 1.0:
+            self._last_coach_refresh = now
+            try:
+                self._refresh_advanced_stats()
+            except Exception:
+                pass
+            try:
+                self._refresh_watch_list()
+            except Exception:
+                pass
 
         # lower-third banner animation + broadcast card expiry
         self._step_banner(now)

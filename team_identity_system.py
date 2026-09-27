@@ -407,3 +407,37 @@ def dot_colors_for_team(team_name) -> tuple:
         return colors.primary, colors.secondary
     except Exception:
         return None, None
+
+
+def jersey_chip(parent, team_name, w=46, h=26):
+    """Small jersey-stripe chip: a tk.Canvas in the team's two primary
+    colors (primary body, secondary hem stripe with trim pinstripes),
+    for standings rows, lists and anywhere a team identity mark helps.
+
+    Unknown or missing names fall back to a neutral chip. Never raises.
+    """
+    import tkinter as tk
+    cv = tk.Canvas(parent, width=w, height=h, highlightthickness=0, bd=0)
+    try:
+        colors = nhl_identity.get_team_colors(team_name)
+        if colors is None and team_name:
+            key = str(team_name).strip().lower()
+            for name, c in nhl_identity.team_colors.items():
+                if name.lower() == key:
+                    colors = c
+                    break
+        body = colors.primary if colors else "#2a2e35"
+        stripe = colors.secondary if colors else "#00ceb8"
+        trim = (colors.text_on_secondary if colors
+                else "#ffffff")
+        if trim.lower() == stripe.lower():
+            trim = body if body.lower() != stripe.lower() else "#ffffff"
+        cv.configure(bg=body)
+        cv.create_rectangle(0, 0, w, h, fill=body, outline="")
+        y0 = h - 9
+        cv.create_rectangle(0, y0, w, y0 + 2, fill=trim, outline="")
+        cv.create_rectangle(0, y0 + 2, w, y0 + 7, fill=stripe, outline="")
+        cv.create_rectangle(0, y0 + 7, w, y0 + 9, fill=trim, outline="")
+    except Exception:
+        pass
+    return cv
