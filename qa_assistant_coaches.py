@@ -187,6 +187,50 @@ check("dud slows learning vs nobody",
       t_dud.tactics_familiarity < t_none.tactics_familiarity,
       f"{t_dud.tactics_familiarity} vs {t_none.tactics_familiarity}")
 
+# --- development: modest, specialty-based, head coach stays main ---
+print("--- development ---")
+
+
+def dskater(pos="LD", age=20):
+    return SimpleNamespace(primary_position=pos, age=age, morale=70,
+                           team_name="Edmonton Oilers")
+
+
+kid_d = dskater("LD", 20)
+tm_dev = team_of(coach(), roster=[kid_d])  # 92 D-coaching, eff ~82.6
+dd = ac.assistant_development_deltas(kid_d, tm_dev)
+check("young D gets a modest bump", len(dd) == 1 and 0.5 <= dd[0][1] < 4.0,
+      str(dd))
+check("head coach still the main voice (bump < 4)",
+      dd[0][1] < 4.0, str(dd[0][1]))
+
+icon_dev = coach(icon_team="Edmonton Oilers", icon_level="icon")
+tm_icon_dev = team_of(icon_dev, roster=[kid_d])
+di = ac.assistant_development_deltas(kid_d, tm_icon_dev)
+check("icon edge is small, not unbalanced",
+      1.0 < di[0][1] / dd[0][1] < 1.35,
+      f"{di[0][1]:.2f} vs {dd[0][1]:.2f}")
+
+hot = coach(assistant_effect=90.0)
+cold = coach(assistant_effect=40.0)
+dh = ac.assistant_development_deltas(kid_d, team_of(hot, roster=[kid_d]))[0][1]
+dc = ac.assistant_development_deltas(kid_d, team_of(cold, roster=[kid_d]))[0][1]
+check("in-form assistant develops more than a stale one", dh > dc,
+      f"{dh:.2f} vs {dc:.2f}")
+
+check("veterans don't get the kid bump",
+      ac.assistant_development_deltas(dskater("LD", 30), tm_dev) == [])
+check("forwards don't learn from the D coach",
+      ac.assistant_development_deltas(dskater("C", 20), tm_dev) == [])
+gen_c = coach(defensive_coaching=55, attacking_coaching=55, coaching_goalies=55)
+check("generalist develops nobody",
+      ac.assistant_development_deltas(kid_d, team_of(gen_c)) == [])
+gk = dskater("GOALIE", 20)
+gcoach = coach(defensive_coaching=50, attacking_coaching=50, coaching_goalies=95)
+dg = ac.assistant_development_deltas(gk, team_of(gcoach, roster=[gk]))
+check("goalie coach develops goalies", len(dg) == 1 and dg[0][1] > 0.5,
+      str(dg))
+
 # --- hire hook ---
 print("--- hire ---")
 news = []

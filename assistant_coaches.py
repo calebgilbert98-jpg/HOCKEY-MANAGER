@@ -84,6 +84,59 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
+def _position_group(player: Any) -> str:
+    try:
+        pos = str(getattr(player, "primary_position", "")).upper()
+        if "GOALIE" in pos:
+            return "goalie"
+        if "DEFENSE" in pos or pos in ("D", "LD", "RD"):
+            return "defense"
+        return "offense"
+    except Exception:
+        return "offense"
+
+
+def assistant_development_deltas(player: Any, team: Any) -> List[Tuple[str, float]]:
+    """Development-engine terms: assistants grow the kids at their position.
+
+    Head coaches are the main influence -- assistant bumps are deliberately
+    modest. The specialty attribute sets the ceiling, current effectiveness
+    (results, mesh, shelf life) scales it, and a franchise icon adds only a
+    small edge (1.25x / 1.15x): status matters, but it never unbalances.
+    Returns [(label, points)] for the deltas list.
+    """
+    deltas: List[Tuple[str, float]] = []
+    try:
+        age = getattr(player, "age", 99) or 99
+        if age > 26:
+            return deltas
+        pgroup = _position_group(player)
+        for ac in _assistants_of(team):
+            spec = assistant_specialty(ac)
+            if spec == "general" or spec != pgroup:
+                continue
+            attr = {"defense": "defensive_coaching",
+                    "offense": "attacking_coaching",
+                    "goalie": "coaching_goalies"}[spec]
+            skill = float(getattr(ac, attr, 50) or 50)
+            pts = (skill - 50.0) / 100.0 * 5.0            # -2.5..+2.5
+            young = float(getattr(ac, "working_with_youngsters", 50) or 50)
+            pts *= 0.8 + (young / 100.0) * 0.4             # 0.8..1.2
+            pts *= _clamp(assistant_effect(ac) / 75.0, 0.5, 1.2)  # form matters
+            name = (f"{getattr(ac, 'first_name', '')} "
+                    f"{getattr(ac, 'last_name', '')}").strip()
+            if is_franchise_icon(ac, team):
+                pts *= 1.25 if icon_level(ac) == "icon" else 1.15
+                label = f"Learning from {name} (franchise icon)"
+            else:
+                label = f"{spec.title()} assistant: {name or 'coach'}"
+            if abs(pts) >= 0.5:
+                deltas.append((label, round(pts, 1)))
+    except Exception:
+        pass
+    return deltas
+
+
 def assistant_prowess(staff: Any) -> float:
     """0-100: how good a coach this is, from attributes and pedigree.
 

@@ -796,6 +796,17 @@ def situational_readiness(player: Any,
         except Exception:
             pass
 
+    # 2b. Assistant coaches: specialists develop the kids at their position.
+    # Deliberately modest -- the head coach is the main influence; a
+    # franchise icon adds only a small edge (never unbalanced).
+    if team is not None:
+        try:
+            import assistant_coaches as _ac
+            for _alabel, _apts in _ac.assistant_development_deltas(player, team):
+                deltas.append((_alabel, _apts))
+        except Exception:
+            pass
+
 
     # 3. Farm trend: the SLOPE of his production, not just up/down.
     try:
