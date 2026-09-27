@@ -6943,6 +6943,9 @@ class HockeyManagerGUI(tk.Tk):
             return False, f"unknown team: {team_id}"
         if action in ("set_lines", "set_tactics"):
             return False, "lines & tactics are managed locally in Phase 1"
+        if action in ("advise_coach", "unfeature_player", "team_event",
+                      "set_line_control"):
+            return self._apply_morale_action(action, params, team)
         if action in ("sign_free_agent", "propose_trade", "release_player",
                       "send_to_minors", "call_up"):
             # TODO(Phase-1b): implement against the canonical Team objects.
@@ -6951,6 +6954,100 @@ class HockeyManagerGUI(tk.Tk):
             # docs/MULTIPLAYER_MERGE_GUIDE.md section 3.
             return False, f"{action} is not implemented yet (Phase 1b)"
         return False, f"unsupported action: {action}"
+
+    # -- morale / coaching-room actions (host side) ----------------------
+    def _mp_team_context(self, team):
+        """Host-side equivalent of the Morale window's team context."""
+        ctx = {"win_pct": 0.5, "room_leadership": 50, "losing_streak": 0}
+        try:
+            import reputation_system as rs
+            st = (getattr(getattr(self, "league", None), "standings", None)
+                  or {}).get(getattr(team, "team_name", ""), {})
+            w = st.get("W", st.get("Wins", 0))
+            l = st.get("L", st.get("Losses", 0))
+            otl = st.get("OTL", 0)
+            ctx["win_pct"] = w / max(1, w + l + otl)
+            ctx["losing_streak"] = int(st.get("losing_streak", st.get("streak", 0)) or 0)
+            leaders = rs.team_hierarchy(list(getattr(team, "roster", []) or [])
+                                        ).get("Team Leaders", [])
+            if leaders:
+                ctx["room_leadership"] = sum(
+                    getattr(p, "leadership", 50) or 50 for p in leaders) / len(leaders)
+        except Exception:
+            pass
+        return ctx
+
+    def _mp_head_coach(self, team):
+        try:
+            for stf in getattr(team, "staff", []) or []:
+                if "Head Coach" in str(getattr(getattr(stf, "role", None), "value", "")):
+                    return stf
+        except Exception:
+            pass
+        return None
+
+    def _apply_morale_action(self, action, params, team):
+        """Apply a client's morale/coaching-room intent to canonical state.
+
+        Runs on the host's main thread. net_host already verified the client
+        owns team_id; here we validate shapes/values and run the same
+        reputation_system functions the host's own Morale window uses, so a
+        remote GM gets identical behavior. Returns (ok, detail).
+        """
+        import reputation_system as rs
+        coach = self._mp_head_coach(team)
+        if coach is None:
+            return False, "no head coach on staff"
+        roster = list(getattr(team, "roster", []) or [])
+
+        def _find_player(pid):
+            for pl in roster:
+                if str(getattr(pl, "id", "")) == str(pid):
+                    return pl
+            return None
+
+        try:
+            if action == "advise_coach":
+                key = str(params.get("advice_type", ""))
+                if key not in rs.ADVICE_TYPES:
+                    return False, f"unknown advice: {key!r}"
+                target = None
+                if key == "feature_player":
+                    target = _find_player(params.get("target_player_id"))
+                    if target is None:
+                        return False, "player not on your roster"
+                out = rs.advise_coach(coach, key, team, roster,
+                                      target_player=target)
+            elif action == "unfeature_player":
+                pl = _find_player(params.get("player_id"))
+                if pl is None:
+                    return False, "player not on your roster"
+                out = rs.unfeature_player(coach, pl, team)
+            elif action == "team_event":
+                ev = str(params.get("event", ""))
+                fn = {"bag_skate": rs.apply_bag_skate,
+                      "inspiring_speech": rs.apply_inspiring_speech,
+                      "great_practice": rs.apply_great_practice}.get(ev)
+                if fn is None:
+                    return False, f"unknown team event: {ev!r}"
+                out = fn(team, coach, roster)
+            elif action == "set_line_control":
+                holder = str(params.get("holder", ""))
+                if holder not in ("coach", "gm"):
+                    return False, "holder must be coach or gm"
+                approach = str(params.get("approach", "seize"))
+                if approach not in ("discuss", "seize"):
+                    return False, "approach must be discuss or seize"
+                out = rs.set_line_control(team, holder,
+                                          self._mp_team_context(team),
+                                          roster, coach=coach,
+                                          approach=approach)
+            else:
+                return False, f"unsupported action: {action}"
+        except Exception as e:
+            return False, f"action failed: {e}"
+        text = out.get("text", "") if isinstance(out, dict) else ""
+        return True, (text[:300] if text else "done")
 
     def _apply_multiplayer_snapshot(self, save_bytes, label=""):
         """Replace local state with the host's snapshot (main thread)."""

@@ -219,10 +219,33 @@ class MoraleWindow(ctk.CTkToplevel):
             pass
         return None
 
+    def _mp_send(self, action, params):
+        """Route a GM action to the multiplayer host when this is a client.
+
+        Returns True when routed (the caller must NOT mutate local state --
+        the host applies it and the next STATE_SYNC refreshes this window).
+        The host is always local (mp_client is None) and keeps working
+        exactly as before.
+        """
+        try:
+            client = getattr(self.parent, "mp_client", None)
+            if client is None:
+                return False
+            params = dict(params or {})
+            team = getattr(self.parent, "user_team", None)
+            params.setdefault("team_id",
+                              getattr(team, "team_name", "") if team else "")
+            client.send_action(action, params)
+            return True
+        except Exception:
+            return False
+
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
     def _do_bag_skate(self):
+        if self._mp_send("team_event", {"event": "bag_skate"}):
+            return
         try:
             team = self.parent.user_team
             coach = self._head_coach(team)
@@ -234,6 +257,8 @@ class MoraleWindow(ctk.CTkToplevel):
             pass
 
     def _do_speech(self):
+        if self._mp_send("team_event", {"event": "inspiring_speech"}):
+            return
         try:
             team = self.parent.user_team
             coach = self._head_coach(team)
@@ -245,6 +270,8 @@ class MoraleWindow(ctk.CTkToplevel):
             pass
 
     def _do_practice(self):
+        if self._mp_send("team_event", {"event": "great_practice"}):
+            return
         try:
             team = self.parent.user_team
             coach = self._head_coach(team)
@@ -261,6 +288,8 @@ class MoraleWindow(ctk.CTkToplevel):
             current = getattr(team, 'line_control', 'coach') or 'coach'
             if current == 'gm':
                 # Giving the pen back is always amicable.
+                if self._mp_send("set_line_control", {"holder": "coach"}):
+                    return
                 rs.set_line_control(team, 'coach', self._team_context(),
                                     list(team.roster))
                 self.refresh()
@@ -458,6 +487,8 @@ class AdviseCoachPopup(ctk.CTkToplevel):
         self._team = team
         self._roster = roster
         self._on_done = on_done
+        # parent_win is the Morale window; its parent is the app (host or MP client).
+        self._app = getattr(parent_win, 'parent', None)
 
         cname = getattr(coach, 'full_name', 'Coach')
         style = rs.coach_style(coach)
@@ -504,10 +535,31 @@ class AdviseCoachPopup(ctk.CTkToplevel):
                 return p
         return None
 
+    def _mp_send(self, action, params, note="Sent to the host -- the room will react after the next sync."):
+        """Route to the MP host when this machine is a client; True = routed."""
+        try:
+            client = getattr(self._app, "mp_client", None)
+            if client is None:
+                return False
+            params = dict(params or {})
+            params.setdefault("team_id", getattr(self._team, "team_name", ""))
+            client.send_action(action, params)
+            try:
+                from ctk_theme import TEXT_DIM
+                self.result.configure(text=note, text_color=TEXT_DIM)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     def _request_feature(self):
         from ctk_theme import GREEN, RED
         p = self._picked_player()
         if p is None:
+            return
+        if self._mp_send("advise_coach", {"advice_type": "feature_player",
+                                          "target_player_id": str(getattr(p, "id", ""))}):
             return
         try:
             out = rs.advise_coach(self._coach, "feature_player", self._team,
@@ -526,6 +578,8 @@ class AdviseCoachPopup(ctk.CTkToplevel):
         p = self._picked_player()
         if p is None:
             return
+        if self._mp_send("unfeature_player", {"player_id": str(getattr(p, "id", ""))}):
+            return
         try:
             out = rs.unfeature_player(self._coach, p, self._team)
             self.result.configure(text=out["text"], text_color=GREEN)
@@ -536,6 +590,8 @@ class AdviseCoachPopup(ctk.CTkToplevel):
 
     def _give_advice(self, key):
         from ctk_theme import GREEN, RED
+        if self._mp_send("advise_coach", {"advice_type": key}):
+            return
         try:
             out = rs.advise_coach(self._coach, key, self._team, self._roster)
             color = GREEN if out["listened"] else RED
@@ -567,6 +623,27 @@ class LineControlPopup(ctk.CTkToplevel):
         self._on_done = on_done
         self._GREEN = GREEN
         self._RED = RED
+        self._app = getattr(parent_win, 'parent', None)
+
+    def _mp_send(self, action, params):
+        """Route to the MP host when this machine is a client; True = routed."""
+        try:
+            client = getattr(self._app, "mp_client", None)
+            if client is None:
+                return False
+            params = dict(params or {})
+            params.setdefault("team_id", getattr(self._team, "team_name", ""))
+            client.send_action(action, params)
+            try:
+                from ctk_theme import TEXT_DIM
+                self.result.configure(
+                    text="Sent to the host -- the room will react after the next sync.",
+                    text_color=TEXT_DIM)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
         cname = getattr(coach, 'full_name', 'Coach')
         preview = rs.preview_line_control_discussion(coach, ctx)
@@ -590,6 +667,8 @@ class LineControlPopup(ctk.CTkToplevel):
         self.result.pack(padx=16, pady=12)
 
     def _discuss(self):
+        if self._mp_send("set_line_control", {"holder": "gm", "approach": "discuss"}):
+            return
         try:
             out = rs.set_line_control(self._team, 'gm', self._ctx, self._roster,
                                       coach=self._coach, approach='discuss')
@@ -600,6 +679,8 @@ class LineControlPopup(ctk.CTkToplevel):
             pass
 
     def _seize(self):
+        if self._mp_send("set_line_control", {"holder": "gm", "approach": "seize"}):
+            return
         try:
             out = rs.set_line_control(self._team, 'gm', self._ctx, self._roster,
                                       coach=self._coach, approach='seize')

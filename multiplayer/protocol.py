@@ -110,6 +110,12 @@ SUPPORTED_ACTIONS = {
     "release_player",   # params: {team_id, player_id}
     "send_to_minors",   # params: {team_id, player_id}
     "call_up",          # params: {team_id, player_id}
+    # Morale / coaching-room actions (Phase 2): mutate the canonical room
+    # state on the host; every manager sees the effects via STATE_SYNC.
+    "advise_coach",     # params: {team_id, advice_type, target_player_id?}
+    "unfeature_player", # params: {team_id, player_id}
+    "team_event",       # params: {team_id, event: bag_skate|inspiring_speech|great_practice}
+    "set_line_control", # params: {team_id, holder: coach|gm, approach?: discuss|seize}
 }
 
 
