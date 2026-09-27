@@ -18,6 +18,7 @@ the playbook for the rest.
 | Schedule (`windows.py::ScheduleWindow`) | **Done** — CTk rebuild, tabbed my-team/league tables, month combo, win/loss/today row tags; also fixed pre-existing broken game-selection key (selection never resolved) |
 | Finances (`windows.py::FinancesWindow`) | **Done** — CTk rebuild, 5 CTkTabview tabs, stat cards with color-coded money, pill cap-utilization meter, dark treeviews with contract-status tags, CTkComboBox year picker, segmented report picker |
 | Inbox (`inbox_window.py::InboxWindow`) | **Done** — CTk rebuild, two-row filter pills with unread badges, dark treeview with unread/urgent/overdue row tags, dark CTkTextbox preview pane, docked toolbar |
+| News (`windows.py::NewsWindow`) | **Done** — CTk rebuild, two-pane article cards + reading pane, category pill filters with keyword categorization, search, emoji stripping; also fixed pre-existing `populate_news` AttributeError (main.add_news called a method that didn't exist) |
 | Everything else | Pending (priority order below) |
 
 ## Theme setup

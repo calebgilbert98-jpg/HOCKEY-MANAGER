@@ -7051,7 +7051,14 @@ ROSTER BREAKDOWN
 
 
 
-class NewsWindow(tk.Toplevel):
+class NewsWindow(ctk.CTkToplevel):
+    """League news feed — modern CTk rebuild.
+
+    Two-pane layout: a scrollable feed of rounded article cards (headline,
+    category chip, date, preview) on the left and a dark reading pane on the
+    right. Category pill filters + text search narrow the feed.
+    """
+
     # Emoji ranges stripped from story text before display (stories are
     # written by the sim in main.py and may contain emoji).
     _EMOJI_RE = re.compile(
@@ -7066,62 +7073,300 @@ class NewsWindow(tk.Toplevel):
         "]+"
     )
 
+    # (category, keywords) — first match wins, order matters.
+    _CATEGORY_KEYWORDS = (
+        ("Injuries", ("injur", "hurt", "sidelined", "out for", "healthy scratch")),
+        ("Trades", ("trade", "acquir", "trade block")),
+        ("Signings", ("sign", "contract", "extension", "deal", "waiver", "claim")),
+        ("Development", ("development", "improv", "scout")),
+        ("Draft", ("draft", "lottery")),
+        ("Scores", ("defeat", " shutout", "overtime", "shootout", " final", "beat ")),
+        ("League", ("breaking", "suspend", "fine", "award", "trophy", "record",
+                    "milestone", "streak", "hired", "hiring", "general manager")),
+    )
+    _CATEGORY_COLORS = {
+        "All": "#00ceb8",
+        "Injuries": "#e74c3c",
+        "Trades": "#58a6ff",
+        "Signings": "#3fb950",
+        "Development": "#00ceb8",
+        "Draft": "#e8b93c",
+        "Scores": "#ff9e64",
+        "League": "#b392f0",
+        "Other": "#71717a",
+    }
+
     def __init__(self, parent):
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_HOVER, ROW_SELECTED,
+        )
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN, RED=RED,
+                        BLUE=BLUE, ROW_HOVER=ROW_HOVER, ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title("League News")
-        self.geometry("800x600")
-        self.configure(background=parent.BG_COLOR)
+        self.configure(fg_color=BG)
+        self.geometry("1200x750")
+        self.minsize(1000, 600)
 
-        header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
-        header.pack(fill='x', padx=10, pady=(10, 0))
-        ttk.Label(header, text="LEAGUE NEWS",
-                  font=(parent.FONT_FAMILY, 16, 'bold'),
-                  style='Heading.TLabel').pack(side='left')
-        ttk.Button(header, text="Refresh",
-                   command=self.refresh_news).pack(side='right')
+        ct = self._ct
+        self._filter = "All"
+        self._search = ""
+        self._articles = []       # (clean_story, date_str, category)
+        self._cards = []          # (frame, index)
+        self._selected_idx = None
+        self._selected_frame = None
+        self._pill_buttons = {}
 
-        text_frame = ttk.Frame(self, style='Panel.TFrame', padding=2)
-        text_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        # ---- Header card ----
+        header = ctk.CTkFrame(self, fg_color=CARD, corner_radius=12)
+        header.pack(fill="x", padx=12, pady=(12, 0))
+        heading(header, text="League News", size=20).pack(side="left", padx=16, pady=12)
+        self._count_lbl = body(header, text="", dim=True)
+        self._count_lbl.pack(side="left", padx=(4, 0), pady=12)
+        self._refresh_btn = secondary_button(header, text="Refresh",
+                                             command=self.populate_news, width=110)
+        self._refresh_btn.pack(side="right", padx=16, pady=10)
+        self._search_entry = ctk.CTkEntry(
+            header, placeholder_text="Search stories...", width=220,
+            fg_color=BG, border_color=BORDER, text_color=TEXT,
+            placeholder_text_color=TEXT_FAINT, corner_radius=8)
+        self._search_entry.pack(side="right", padx=(0, 8), pady=10)
+        self._search_entry.bind("<KeyRelease>", self._on_search)
 
-        self.news_text = tk.Text(text_frame, wrap='word',
-                                 bg=parent.CONTENT_BG, fg=parent.TEXT_COLOR,
-                                 font=(parent.FONT_FAMILY, 10), borderwidth=0,
-                                 selectbackground='#0d2b28',
-                                 insertbackground=parent.TEXT_COLOR,
-                                 highlightthickness=1, highlightbackground='#2e2e38',
-                                 padx=10, pady=10)
-        v_scroll = ttk.Scrollbar(text_frame, orient='vertical',
-                                 command=self.news_text.yview)
-        self.news_text.configure(yscrollcommand=v_scroll.set)
-        self.news_text.pack(side='left', fill='both', expand=True)
-        v_scroll.pack(side='right', fill='y')
+        # ---- Category pill row ----
+        pill_row = ctk.CTkFrame(self, fg_color="transparent")
+        pill_row.pack(fill="x", padx=12, pady=(10, 0))
+        categories = ["All"] + [c for c, _ in self._CATEGORY_KEYWORDS] + ["Other"]
+        for cat in categories:
+            btn = ctk.CTkButton(
+                pill_row, text=cat, width=0, height=28, corner_radius=14,
+                fg_color=CARD, hover_color=BORDER, text_color=TEXT_DIM,
+                font=("Segoe UI", 11),
+                command=lambda c=cat: self._set_filter(c))
+            btn.pack(side="left", padx=(0, 8))
+            self._pill_buttons[cat] = btn
+        self._mark_pill_selected()
 
-        self.refresh_news()
+        # ---- Two-pane content ----
+        content = ctk.CTkFrame(self, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=12, pady=10)
+        content.grid_columnconfigure(0, weight=3)
+        content.grid_columnconfigure(1, weight=2)
+        content.grid_rowconfigure(0, weight=1)
 
+        self._feed = ctk.CTkScrollableFrame(content, fg_color=PANEL,
+                                            corner_radius=12)
+        self._feed.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+
+        reader = ctk.CTkFrame(content, fg_color=CARD, corner_radius=12)
+        reader.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        self._reader_meta = body(reader, text="", size=11, dim=True)
+        self._reader_meta.pack(anchor="w", padx=16, pady=(14, 4))
+        self._reader_headline = heading(reader, text="", size=15)
+        self._reader_headline.pack(anchor="w", padx=16, pady=(0, 8))
+        self._reader_text = ctk.CTkTextbox(reader, wrap="word",
+                                           fg_color=BG, text_color=TEXT,
+                                           border_color=BORDER, border_width=1,
+                                           corner_radius=8,
+                                           font=("Segoe UI", 12))
+        self._reader_text.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+
+        self.populate_news()
+
+    # ------------------------------------------------------------------
+    # Data helpers
+    # ------------------------------------------------------------------
     @classmethod
     def _clean_story(cls, story):
         """Strip emoji and tidy whitespace for display."""
         text = cls._EMOJI_RE.sub("", str(story or ""))
         return " ".join(text.split())
 
+    @classmethod
+    def _categorize(cls, story):
+        lowered = story.lower()
+        for cat, keywords in cls._CATEGORY_KEYWORDS:
+            if any(k in lowered for k in keywords):
+                return cat
+        return "Other"
+
+    @staticmethod
+    def _headline(story, limit=110):
+        """First sentence, truncated — used as the card headline."""
+        first = story.split(". ")[0].strip()
+        if len(first) > limit:
+            first = first[:limit].rsplit(" ", 1)[0] + "..."
+        return first
+
+    # ------------------------------------------------------------------
+    # Filtering / rendering
+    # ------------------------------------------------------------------
+    def _set_filter(self, category):
+        self._filter = category
+        self._mark_pill_selected()
+        self._render_feed()
+
+    def _mark_pill_selected(self):
+        ct = self._ct
+        for cat, btn in self._pill_buttons.items():
+            if cat == self._filter:
+                btn.configure(fg_color=ct["TEAL"], text_color=ct["BG"],
+                              hover_color=ct["TEAL_HOVER"],
+                              font=("Segoe UI", 11, "bold"))
+            else:
+                btn.configure(fg_color=ct["CARD"], text_color=ct["TEXT_DIM"],
+                              hover_color=ct["BORDER"],
+                              font=("Segoe UI", 11))
+
+    def _on_search(self, _event=None):
+        self._search = self._search_entry.get().strip().lower()
+        self._render_feed()
+
+    def _load_articles(self):
+        """Read the parent's news log into (story, date_str, category) tuples."""
+        news_log = getattr(self.parent, "news_log", None) or []
+        articles = []
+        for item in reversed(news_log):
+            if isinstance(item, dict):
+                date = item.get("date")
+                story = self._clean_story(item.get("story"))
+            else:
+                date, story = None, self._clean_story(item)
+            if not story:
+                continue
+            date_str = date.strftime("%b %d, %Y") if hasattr(date, "strftime") else ""
+            articles.append((story, date_str, self._categorize(story)))
+        return articles
+
+    def populate_news(self):
+        """Re-render the news feed from the current news_log.
+
+        Also called by main.add_news() while the window is open — this name
+        is the live-update entry point (refresh_news is kept as an alias).
+        """
+        self._articles = self._load_articles()
+        self._render_feed()
+
     def refresh_news(self):
-        """Re-render the news feed from the current news_log."""
-        self.news_text.config(state='normal')
-        self.news_text.delete('1.0', tk.END)
+        """Backwards-compatible alias for populate_news."""
+        self.populate_news()
 
-        news_log = getattr(self.parent, 'news_log', None) or []
-        if not news_log:
-            self.news_text.insert('1.0', "No news yet. Advance the season to generate league news.")
-        else:
-            for item in reversed(news_log):
-                date = item.get('date') if isinstance(item, dict) else None
-                date_str = date.strftime('%b %d') if hasattr(date, 'strftime') else ""
-                story = self._clean_story(item.get('story') if isinstance(item, dict) else item)
-                prefix = f"({date_str}) " if date_str else ""
-                self.news_text.insert('1.0', f"{prefix}{story}\n\n")
+    def _filtered(self):
+        out = []
+        for i, (story, date_str, cat) in enumerate(self._articles):
+            if self._filter != "All" and cat != self._filter:
+                continue
+            if self._search and self._search not in story.lower():
+                continue
+            out.append((i, story, date_str, cat))
+        return out
 
-        self.news_text.config(state='disabled')
+    def _render_feed(self):
+        ct = self._ct
+        for frame, _ in self._cards:
+            frame.destroy()
+        self._cards = []
+        self._selected_idx = None
+        self._selected_frame = None
+
+        items = self._filtered()
+        total = len(self._articles)
+        shown = len(items)
+        self._count_lbl.configure(
+            text=f"{shown} of {total} stories" if total else "")
+
+        if not items:
+            msg = ("No news yet. Advance the season to generate league news."
+                   if not self._articles
+                   else "No stories match the current filter.")
+            empty = self._body(self._feed, text=msg, dim=True, size=13)
+            empty.pack(padx=20, pady=60)
+            self._cards.append((empty, -1))
+            self._show_article(None)
+            return
+
+        for idx, story, date_str, cat in items:
+            card = ctk.CTkFrame(self._feed, fg_color=ct["CARD"],
+                                corner_radius=10, border_width=1,
+                                border_color=ct["BORDER"])
+            card.pack(fill="x", padx=10, pady=6)
+
+            top = ctk.CTkFrame(card, fg_color="transparent")
+            top.pack(fill="x", padx=14, pady=(10, 0))
+            chip = ctk.CTkLabel(top, text=cat, font=("Segoe UI", 10, "bold"),
+                                text_color=self._CATEGORY_COLORS.get(cat, ct["TEXT_FAINT"]),
+                                fg_color=ct["BG"], corner_radius=10)
+            chip.pack(side="left", padx=8, pady=2)
+            if date_str:
+                self._body(top, text=date_str, size=10, dim=True).pack(side="right")
+
+            self._heading(card, text=self._headline(story), size=13,
+                                wraplength=400, justify="left").pack(
+                anchor="w", padx=14, pady=(6, 2))
+            preview = story if len(story) <= 170 else story[:170].rsplit(" ", 1)[0] + "..."
+            self._body(card, text=preview, size=11, dim=True, wraplength=400,
+                 justify="left").pack(anchor="w", padx=14, pady=(0, 10))
+
+            for w in (card, top, chip):
+                w.bind("<Button-1>", lambda e, i=idx, f=card: self._select(i, f))
+                w.bind("<Enter>", lambda e, f=card: self._hover(f, True))
+                w.bind("<Leave>", lambda e, f=card: self._hover(f, False))
+            self._cards.append((card, idx))
+
+        # Auto-select the newest story.
+        first_card, first_idx = self._cards[0]
+        if first_idx >= 0:
+            self._select(first_idx, first_card)
+
+    # ------------------------------------------------------------------
+    # Selection / reading pane
+    # ------------------------------------------------------------------
+    def _hover(self, frame, on):
+        if frame is self._selected_frame:
+            return
+        frame.configure(border_color=self._ct["TEAL"] if on else self._ct["BORDER"])
+
+    def _select(self, idx, frame):
+        ct = self._ct
+        if self._selected_frame is not None and self._selected_frame is not frame:
+            self._selected_frame.configure(border_color=ct["BORDER"])
+        self._selected_idx = idx
+        self._selected_frame = frame
+        frame.configure(border_color=ct["TEAL"])
+        story, date_str, cat = self._articles[idx]
+        self._show_article((story, date_str, cat))
+
+    def _show_article(self, article):
+        if article is None:
+            self._reader_meta.configure(text="")
+            self._reader_headline.configure(text="Select a story to read")
+            self._reader_text.configure(state="normal")
+            self._reader_text.delete("1.0", "end")
+            self._reader_text.configure(state="disabled")
+            return
+        story, date_str, cat = article
+        color = self._CATEGORY_COLORS.get(cat, self._ct["TEXT_FAINT"])
+        self._reader_meta.configure(text=f"{cat}  •  {date_str}" if date_str else cat,
+                                    text_color=color)
+        reader_headline = self._headline(story, limit=160)
+        self._reader_headline.configure(
+            text="" if reader_headline == story else reader_headline)
+        self._reader_text.configure(state="normal")
+        self._reader_text.delete("1.0", "end")
+        self._reader_text.insert("1.0", story)
+        self._reader_text.configure(state="disabled")
+
 
 class GMOptionsWindow(tk.Toplevel):
     def __init__(self, parent):
