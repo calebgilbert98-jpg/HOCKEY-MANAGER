@@ -1101,8 +1101,13 @@ class RosterWindow(InGamePopup):
                 values.extend([readiness, development])
             elif roster_type == 'prospects':
                 draft_year = getattr(player, 'draft_year', 'Undrafted')
-                draft_round = getattr(player, 'draft_round', 'FA')
-                league = getattr(player, 'current_league', 'Amateur')
+                # draft_round is stamped by the draft generator (prospect
+                # development engine); 0/empty means undrafted / free agent.
+                draft_round = getattr(player, 'draft_round', 0) or 'FA'
+                # farm_league is where the engine actually simmed him last
+                # season (prospect_development); fall back to legacy fields.
+                league = (getattr(player, 'farm_league', '') or
+                          getattr(player, 'current_league', '') or 'Amateur')
                 development = self.calculate_development_trend(player)
                 eta = self.calculate_eta(player)
                 # Remove salary and contract columns for prospects, add prospect-specific data
@@ -1144,7 +1149,24 @@ class RosterWindow(InGamePopup):
         return f"{performance}"
 
     def calculate_nhl_readiness(self, player):
-        """Calculate NHL readiness percentage for AHL players."""
+        """NHL readiness for AHL players: talent grade adjusted by the
+        situation -- injury openings, coach fit, line fit, farm trend, and
+        his live NHL audition. The arrows flag a number the moment is
+        moving (▲ up / ▼ down)."""
+        try:
+            import prospect_development as _pd
+            team = getattr(self.parent, 'user_team', None)
+            score, deltas = _pd.situational_readiness(player, team)
+            net = sum(d for _, d in deltas)
+            tag = " ▲" if net >= 8 else (" ▼" if net <= -8 else "")
+            return f"{score:.0f}%{tag}"
+        except Exception:
+            pass
+        try:
+            import prospect_development as _pd
+            return f"{_pd.callup_readiness(player):.0f}%"
+        except Exception:
+            pass
         readiness = min(100, max(0, (player.overall_rating() - 35) * 5))
         return f"{readiness:.0f}%"
 

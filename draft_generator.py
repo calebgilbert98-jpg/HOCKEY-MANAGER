@@ -634,7 +634,18 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal") -> l
     
     # Sort prospects by draft ranking for convenience
     prospects.sort(key=lambda p: p.draft_ranking, reverse=True)
-    
+
+    # Hidden gems: a few later picks secretly carry a higher TRUE ceiling
+    # than their displayed grade (the Zetterberg/Datsyuk/Kucherov seeds).
+    # Scouting -- or loud farm production -- reveals them.
+    try:
+        import prospect_development as _pd
+        _per_round = 32
+        for _i, _p in enumerate(prospects):
+            _pd.seed_true_potential(_p, draft_round=_i // _per_round + 1)
+    except Exception:
+        pass
+
     print(f"Generated a new draft class with {len(prospects)} prospects (quality: {quality}).")
     print(f"Potential distribution: {potential_counts}")
     

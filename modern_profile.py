@@ -59,6 +59,7 @@ class PlayerProfile(InGamePopup):
         self._create_stats(content)
         self._create_attributes(content)
         self._create_dynamics(content)
+        self._create_readiness(content)
     
     def _create_header(self, parent):
         """Player header with avatar and basic info."""
@@ -286,6 +287,43 @@ class PlayerProfile(InGamePopup):
                          wraplength=800, justify="left").pack(anchor="w", pady=2)
         except Exception as e:
             tk.Label(body, text=f"Dynamics unavailable ({e})",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=AppColors.BG_ELEVATED).pack(anchor="w")
+
+    def _create_readiness(self, parent):
+        """NHL readiness: talent grade plus what the moment is doing to it.
+
+        The number on the AHL tab is situational -- this card shows why:
+        the base talent read, then every live adjustment (injury opening,
+        coach fit, line fit, farm trend, his NHL audition).
+        """
+        import prospect_development as pd
+        p = self.player
+        team = getattr(getattr(self, "parent_app", None), "user_team", None)
+
+        card = tk.Frame(parent, bg=AppColors.BG_ELEVATED)
+        card.pack(fill="x", pady=(0, 16))
+        tk.Label(card, text="NHL Readiness",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=AppColors.BG_ELEVATED).pack(anchor="w", padx=16, pady=(12, 4))
+        body = tk.Frame(card, bg=AppColors.BG_ELEVATED)
+        body.pack(fill="x", padx=16, pady=(0, 12))
+
+        try:
+            base = pd.callup_readiness(p)
+            score, deltas = pd.situational_readiness(p, team)
+            lines = [f"Right now  {score:.0f}%   (talent grade {base:.0f}%)"]
+            for label, d in deltas:
+                sign = "+" if d > 0 else ""
+                lines.append(f"  {sign}{d:.0f}   {label}")
+            if not deltas:
+                lines.append("  No situational adjustments -- straight talent read.")
+            for ln in lines:
+                tk.Label(body, text=ln, font=AppFonts.SMALL,
+                         fg=AppColors.TEXT_SECONDARY, bg=AppColors.BG_ELEVATED,
+                         wraplength=800, justify="left").pack(anchor="w", pady=2)
+        except Exception as e:
+            tk.Label(body, text=f"Readiness unavailable ({e})",
                      font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                      bg=AppColors.BG_ELEVATED).pack(anchor="w")
 

@@ -50,6 +50,9 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "coaching_change": _coaching_change_headline,
         "rivalry_declared": _rivalry_declared_headline,
         "controversial_call": _controversial_call_headline,
+        "media_fine": _media_fine_headline,
+        "media_beef": _media_beef_headline,
+        "narrative_shutdown": _narrative_shutdown_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -239,6 +242,69 @@ def _controversial_call_headline(game_date, event="disallowed_goal",
         content=content,
         category="League",
         priority=2,
+    )
+
+
+def _media_fine_headline(game_date, name="", team="", amount=0,
+                         reason="", role="player", **kw):
+    from game_classes import EmailMessage
+    amt = f"${int(amount):,}"
+    who = f"{role} {name}" if role == "coach" else name
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"💸 FINED: {name} ({team}) -- {amt}",
+        content=(
+            f"The league has fined {who} {amt} for {reason}.\n\n"
+            f"No suspension -- just the wallet getting lighter. The {team} "
+            f"had no further comment."
+        ),
+        category="League",
+        priority=3,
+        is_important=True,
+    )
+
+
+def _media_beef_headline(game_date, coach="", reporter="", team="",
+                         level=1, **kw):
+    from game_classes import EmailMessage
+    heat = {1: ("TESTY", "Things got testy"),
+            2: ("HEATED", "It got heated"),
+            3: ("CIRCUS", "Full circus")}[min(3, int(level))]
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🎙️ {heat[0]}: {coach} vs {reporter}",
+        content=(
+            f"{heat[1]} between {team} coach {coach} and reporter "
+            f"{reporter} after the game. The exchange lasted well past the "
+            f"usual two questions, and neither side was smiling walking "
+            f"away.\n\n"
+            f"This is the latest chapter in a running feud -- the room is "
+            f"starting to notice."
+        ),
+        category="League",
+        priority=3,
+        is_important=True,
+    )
+
+
+def _narrative_shutdown_headline(game_date, player="", team="",
+                                 reporter="", narrative="", quote="",
+                                 **kw):
+    from game_classes import EmailMessage
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🎙️ {player} shuts down the {narrative} talk",
+        content=(
+            f"Asked about the {narrative} story by {reporter}, {player} "
+            f"({team}) ended it on the spot:\n\n{quote}\n\n"
+            f"The clip is everywhere tonight. That narrative is dead."
+        ),
+        category="League",
+        priority=2,
+        is_important=True,
     )
 
 
