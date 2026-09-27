@@ -19,6 +19,7 @@ the playbook for the rest.
 | Finances (`windows.py::FinancesWindow`) | **Done** — CTk rebuild, 5 CTkTabview tabs, stat cards with color-coded money, pill cap-utilization meter, dark treeviews with contract-status tags, CTkComboBox year picker, segmented report picker |
 | Inbox (`inbox_window.py::InboxWindow`) | **Done** — CTk rebuild, two-row filter pills with unread badges, dark treeview with unread/urgent/overdue row tags, dark CTkTextbox preview pane, docked toolbar |
 | News (`windows.py::NewsWindow`) | **Done** — CTk rebuild, two-pane article cards + reading pane, category pill filters with keyword categorization, search, emoji stripping; also fixed pre-existing `populate_news` AttributeError (main.add_news called a method that didn't exist) |
+| Staff (`staff_management_window.py::StaffManagementWindow`) | **Done** — CTk rebuild, CTkTabview tabs (Current Staff / Hire Staff redirect / Organization), dark filter card with CTkComboBox/CTkEntry, styled dark treeview with rating-tier (16+/13+/10+ staff scale) + morale tags, CTk details/negotiation/reassign/report dialogs; fixed dead Hire-Staff redirect (FA no longer has `notebook` — now uses FA tabview API) |
 | Everything else | Pending (priority order below) |
 
 ## Theme setup
