@@ -399,5 +399,154 @@ check("no champion -> no copies",
           rng=RiggedRng(0.0)) == [])
 
 print()
+
+# ---------------------------------------------------------------- whiteboard
+# control
+print("--- tactics control: suggest / enforce / take over ---")
+import reputation_system as rs
+from unittest.mock import patch
+
+
+def tcoach(**kw):
+    base = dict(full_name="Test Coach", control_need=50, gm_trust=70,
+                adaptability=50, first_nhl_chair=False, years_with_team=3,
+                controversy=30, reputation=60, leadership=60, happiness=70,
+                morale=70, discipline=65, motivating=65, man_management=65,
+                tactical_knowledge=65, game_preparation=65,
+                working_with_youngsters=50, player_development=50)
+    base.update(kw)
+    c = SimpleNamespace(**base)
+    c.role = SimpleNamespace(value="Head Coach")
+    c.id = kw.get("id", 1)
+    return c
+
+
+def wteam(coach):
+    t = fake_team(team_name="Test Club", roster=[], staff=[coach],
+                  tactics_control="coach")
+    tx.ensure_team_tactics(t)
+    return t
+
+
+check("control defaults to coach", tx.get_tactics_control(fake_team()) == "coach")
+t0 = fake_team()
+tx.set_tactics_control(t0, "gm")
+check("control roundtrips", tx.get_tactics_control(t0) == "gm")
+
+rookie = tcoach(first_nhl_chair=True, years_with_team=1)
+prev = rs.preview_tactics_discussion(rookie, {"offense": "rush_attack"})
+check("rookie welcomes suggestions", prev["tone"] == "welcomes" and prev["accept_p"] >= 0.7,
+      f"{prev['tone']} p={prev['accept_p']:.2f}")
+
+torts = tcoach(control_need=95, gm_trust=40, adaptability=20)
+prev = rs.preview_tactics_discussion(torts, {"offense": "rush_attack", "defense": "neutral_trap", "philosophy": "offense_first"})
+check("authoritarian hates overhaul", prev["tone"] == "furious" and prev["accept_p"] < 0.35,
+      f"{prev['tone']} p={prev['accept_p']:.2f} trust{prev['trust_delta']}")
+
+coop = tcoach(control_need=25, gm_trust=85, adaptability=70)
+prev_dry = rs.preview_tactics_discussion(coop, {"pp": "umbrella"},
+                                         {"win_pct": 0.35, "losing_streak": 4})
+prev_ok = rs.preview_tactics_discussion(coop, {"pp": "umbrella"},
+                                        {"win_pct": 0.65, "losing_streak": 0})
+check("dry spell raises acceptance", prev_dry["accept_p"] > prev_ok["accept_p"],
+      f"{prev_dry['accept_p']:.2f} vs {prev_ok['accept_p']:.2f}")
+
+# suggest: accept path
+c_acc = tcoach()
+tm = wteam(c_acc)
+with patch.object(rs.random, "random", return_value=0.0):
+    res = rs.suggest_tactics_to_coach(tm, {"offense": "rush_attack"})
+check("suggest accepted applies + trust up",
+      res["applied"] and tm.tactics["offense"] == "rush_attack" and c_acc.gm_trust == 73,
+      res["text"][:60])
+
+# suggest: reject path
+c_rej = tcoach()
+tm2 = wteam(c_rej)
+old_off = tm2.tactics["offense"]
+with patch.object(rs.random, "random", return_value=0.99):
+    res = rs.suggest_tactics_to_coach(tm2, {"offense": "rush_attack"})
+check("suggest rejected keeps systems, trust dips",
+      not res["applied"] and tm2.tactics["offense"] == old_off and c_rej.gm_trust == 68,
+      res["text"][:60])
+
+# enforce: authoritarian hurt more than collaborator
+c_auth = tcoach(control_need=95)
+c_col = tcoach(control_need=20)
+tm3, tm4 = wteam(c_auth), wteam(c_col)
+rs.enforce_tactics(tm3, {"defense": "neutral_trap"}, {"win_pct": 0.5})
+rs.enforce_tactics(tm4, {"defense": "neutral_trap"}, {"win_pct": 0.5})
+check("enforce lands, authoritarian hit harder",
+      tm3.tactics["defense"] == "neutral_trap" and c_auth.gm_trust < c_col.gm_trust,
+      f"auth {c_auth.gm_trust} vs collab {c_col.gm_trust}")
+
+# take over / hand back
+c_to = tcoach(control_need=90)
+tm5 = wteam(c_to)
+res = rs.take_over_tactics(tm5, {"win_pct": 0.5})
+check("takeover: gm owns whiteboard, authoritarian livid",
+      tx.get_tactics_control(tm5) == "gm" and c_to.gm_trust == 60,
+      res["text"][:60])
+res = rs.hand_back_tactics(tm5)
+check("handback restores coach + trust",
+      tx.get_tactics_control(tm5) == "coach" and c_to.gm_trust == 64,
+      res["text"][:60])
+
+c_rk = tcoach(first_nhl_chair=True, years_with_team=1)
+tm6 = wteam(c_rk)
+rs.take_over_tactics(tm6, {"win_pct": 0.5})
+check("rookie welcomes takeover", c_rk.gm_trust == 73, str(c_rk.gm_trust))
+
+# coach installs his systems on hire
+c_new = tcoach(id=99, discipline=95, motivating=70, man_management=50)  # drill sergeant
+tm7 = wteam(tcoach(id=7))
+tm7.tactics_installed_by = 7
+installed = tx.install_coach_systems(tm7, c_new, reason="hired")
+check("new coach installs his systems",
+      bool(installed) and tm7.tactics_installed_by == 99 and tm7.tactics_familiarity == 55,
+      str(installed))
+check("no install under GM control",
+      tx.install_coach_systems(tm7, tcoach(id=100)) == {}
+      if (tx.set_tactics_control(tm7, "gm"), True)[1] else False)
+
+tm8 = wteam(tcoach(id=8))
+tm8.tactics_installed_by = 8
+check("maybe_install no-op when same coach",
+      tx.maybe_install_coach_systems(tm8) == {})
+tm8.staff = [tcoach(id=9, discipline=95)]
+check("maybe_install fires on coach change",
+      bool(tx.maybe_install_coach_systems(tm8)) and tm8.tactics_installed_by == 9)
+
+# intermission AI
+c_ai = tcoach(adaptability=95)
+tm9 = wteam(c_ai)
+hits = [tx.ai_intermission_adjustment(tm9, -3) for _ in range(20)]
+got = [h for h in hits if h]
+check("losing adaptable coach adjusts",
+      bool(got) and all(h["category"] in ("philosophy", "offense") for h in got),
+      f"{len(got)}/20 adjusted")
+check("no adjustment when GM controls",
+      tx.ai_intermission_adjustment(tm9, -3) is None
+      if (tx.set_tactics_control(tm9, "gm"), True)[1] else False)
+tx.set_tactics_control(tm9, "coach")
+c_serg = tcoach(adaptability=90, discipline=98, motivating=70, man_management=50)
+tm10 = wteam(c_serg)
+tm10.tactics["philosophy"] = "offense_first"
+lead_hits = [tx.ai_intermission_adjustment(tm10, 4) for _ in range(30)]
+check("defensive mind protects a big lead",
+      any(h and h["new_key"] in ("defense_first", "neutral_trap", "trap_131")
+          for h in lead_hits),
+      f"{sum(1 for h in lead_hits if h)}/30 locked down")
+
+# preferred tactics
+tm11 = wteam(tcoach())
+tx.save_preferred_tactics(tm11)
+check("preferred save/load roundtrip",
+      tx.get_preferred_tactics(tm11) == tx.team_tactics(tm11))
+check("tradeoffs line non-empty",
+      bool(tx.system_tradeoffs("offense", "rush_attack")),
+      tx.system_tradeoffs("offense", "rush_attack"))
+
+print()
 print(f"{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

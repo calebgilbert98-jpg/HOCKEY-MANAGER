@@ -559,7 +559,8 @@ class PBPVisualSim(InGamePopup):
 
     def __init__(self, parent, sim, home_team, away_team,
                  home_line=None, away_line=None, on_complete=None,
-                 rivalries=None, is_playoff=False, series_game=0):
+                 rivalries=None, is_playoff=False, series_game=0,
+                 user_team=None):
         super().__init__(parent)
         self.title(f"Live Sim — {home_team.team_name} vs {away_team.team_name}")
         self.configure(bg=BG)
@@ -569,6 +570,11 @@ class PBPVisualSim(InGamePopup):
         self.sim = sim
         self.home_team = home_team
         self.away_team = away_team
+        self.user_team = user_team
+        # Tactics tab state (EHM-style in-game whiteboard).
+        self._tac_tab = "pbp"
+        self._tac_pending = {}
+        self._tac_response_text = ""
         # True NHL colors for both clubs (score bug, banners); the UI
         # accent follows the team the user controls (ctk_theme, themed by
         # the app when a team is picked).
@@ -1058,8 +1064,13 @@ class PBPVisualSim(InGamePopup):
         self._right_w = 320
         self.bind("<Configure>", self._on_window_configure)
 
-        tk.Label(right, text="PLAY BY PLAY", bg=CONTENT_BG, fg=self._ui_accent,
-                 font=(FONT, 13, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+        tabbar = tk.Frame(right, bg=CONTENT_BG)
+        tabbar.pack(fill="x", padx=8, pady=(8, 2))
+        self._tab_pbp_btn = self._pill(tabbar, "PBP",
+                                       lambda: self._show_tac_tab("pbp"), w=76)
+        self._tab_tac_btn = self._pill(tabbar, "Tactics",
+                                       lambda: self._show_tac_tab("tactics"), w=100)
+        self._refresh_toggle_btn(self._tab_pbp_btn, True)
 
         # Controls (packed before the feed so they always keep their space)
         ctl = tk.Frame(right, bg=CONTENT_BG)
@@ -1098,10 +1109,16 @@ class PBPVisualSim(InGamePopup):
         self.sound_btn = self._pill(vrow, "Sound", self._toggle_sound, w=68)
         self._refresh_toggle_btn(self.sound_btn, self._sound_on)
 
-        self.feed = tk.Text(right, bg="#0D1420", fg=TEXT, font=(FONT, 12),
+        # PBP tab frame: the classic feed, untouched.
+        self._pbp_frame = tk.Frame(right, bg=CONTENT_BG)
+        self._pbp_frame.pack(fill="both", expand=True)
+        self.feed = tk.Text(self._pbp_frame, bg="#0D1420", fg=TEXT, font=(FONT, 12),
                             wrap="word", relief="flat", highlightthickness=0,
                             padx=10, pady=8, height=22, spacing1=2, spacing3=3)
         self.feed.pack(fill="both", expand=True, padx=8, pady=4)
+        # Tactics tab frame: EHM-style in-game whiteboard (built on first open).
+        self._tactics_frame = tk.Frame(right, bg=CONTENT_BG)
+        self._tactics_built = False
         self.feed.tag_config("goal", foreground="#7CFC98", font=(FONT, 13, "bold"))
         self.feed.tag_config("period", foreground=self._ui_accent, font=(FONT, 12, "bold"))
         self.feed.tag_config("penalty", foreground="#FFD166", font=(FONT, 12, "bold"))
@@ -1114,6 +1131,269 @@ class PBPVisualSim(InGamePopup):
 
         self._update_goalie_labels()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ------------------------------------------------------------------
+    # Tactics tab: EHM-style in-game whiteboard
+    # ------------------------------------------------------------------
+    def _my_team(self):
+        """The user's club in this game (falls back to home)."""
+        try:
+            un = getattr(self.user_team, "team_name", None)
+            if un == self.home_team.team_name:
+                return self.home_team
+            if un == self.away_team.team_name:
+                return self.away_team
+        except Exception:
+            pass
+        return self.home_team
+
+    def _opp_team(self):
+        my = self._my_team()
+        return self.away_team if my is self.home_team else self.home_team
+
+    def _tac_ctx(self):
+        """In-game context for the coach's response: losing big = dry spell."""
+        ctx = {"win_pct": 0.5, "losing_streak": 0}
+        try:
+            hs, aws = self._cur_score
+            my = self._my_team()
+            diff = (hs - aws) if my is self.home_team else (aws - hs)
+            if diff <= -2:
+                ctx["losing_streak"] = 3
+        except Exception:
+            pass
+        return ctx
+
+    def _show_tac_tab(self, which):
+        self._tac_tab = which
+        try:
+            self._refresh_toggle_btn(self._tab_pbp_btn, which == "pbp")
+            self._refresh_toggle_btn(self._tab_tac_btn, which == "tactics")
+            if which == "tactics":
+                self._pbp_frame.pack_forget()
+                self._tactics_frame.pack(fill="both", expand=True)
+                self._refresh_tactics_tab()
+            else:
+                self._tactics_frame.pack_forget()
+                self._pbp_frame.pack(fill="both", expand=True)
+        except Exception:
+            pass
+
+    def _on_tac_pick(self, cat, display_name, key_of):
+        try:
+            import tactics as _tx
+            my = self._my_team()
+            key = key_of.get(display_name)
+            if not key:
+                return
+            cur = _tx.team_tactics(my).get(cat)
+            if key == cur:
+                self._tac_pending.pop(cat, None)
+            elif _tx.get_tactics_control(my) == "gm":
+                _tx.set_team_system(my, cat, key, mid_game=True)
+                self._tac_pending.pop(cat, None)
+                self._tac_response_text = ""
+            else:
+                self._tac_pending[cat] = key
+            self._refresh_tactics_tab()
+        except Exception:
+            pass
+
+    def _refresh_tactics_tab(self):
+        f = self._tactics_frame
+        for w in f.winfo_children():
+            w.destroy()
+        try:
+            import tactics as _tx
+            import reputation_system as _rs
+        except Exception:
+            tk.Label(f, text="Tactics unavailable.", bg=CONTENT_BG, fg=TEXT,
+                     font=(FONT, 11)).pack(padx=10, pady=10)
+            return
+        my, opp = self._my_team(), self._opp_team()
+        try:
+            _tx.ensure_team_tactics(my)
+            _tx.ensure_team_tactics(opp)
+        except Exception:
+            pass
+        my_abbr, opp_abbr = _abbr(my.team_name), _abbr(opp.team_name)
+        control = _tx.get_tactics_control(my)
+        coach = None
+        try:
+            for stf in getattr(my, "staff", []) or []:
+                if "Head Coach" in str(getattr(getattr(stf, "role", None), "value", "")):
+                    coach = stf
+                    break
+        except Exception:
+            pass
+
+        hdr = tk.Frame(f, bg=CONTENT_BG)
+        hdr.pack(fill="x", padx=10, pady=(8, 2))
+        tk.Label(hdr, text="TACTICS", bg=CONTENT_BG, fg=self._ui_accent,
+                 font=(FONT, 12, "bold")).pack(side="left")
+        badge = "YOU CALL IT" if control == "gm" else "COACH IN CONTROL"
+        tk.Label(hdr, text=badge, bg=CONTENT_BG,
+                 fg="#FFD166" if control == "gm" else "#AEB6C8",
+                 font=(FONT, 10, "bold")).pack(side="right")
+
+        tk.Label(f, text=f"{my_abbr} -- YOUR WHITEBOARD", bg=CONTENT_BG,
+                 fg=TEXT, font=(FONT, 11, "bold")).pack(anchor="w", padx=10)
+        cats = [("offense", "Offense", "OFFENSIVE_SYSTEMS"),
+                ("defense", "Defense", "DEFENSIVE_SYSTEMS"),
+                ("pp", "Power Play", "POWERPLAY_SYSTEMS"),
+                ("pk", "Penalty Kill", "PENALTY_KILL_SYSTEMS"),
+                ("philosophy", "Philosophy", "PHILOSOPHIES")]
+        cur = _tx.team_tactics(my)
+        for cat, short, attr in cats:
+            catalog = getattr(_tx, attr)
+            row = tk.Frame(f, bg=CONTENT_BG)
+            row.pack(fill="x", padx=10, pady=1)
+            tk.Label(row, text=short, bg=CONTENT_BG, fg="#AEB6C8",
+                     font=(FONT, 10, "bold"), width=9, anchor="w").pack(side="left")
+            names = [v.get("name", k) for k, v in catalog.items()]
+            key_of = {v.get("name", k): k for k, v in catalog.items()}
+            shown_key = self._tac_pending.get(cat, cur.get(cat))
+            var = tk.StringVar(value=catalog.get(shown_key, {}).get("name", names[0]))
+            om = tk.OptionMenu(row, var, *names)
+            om.configure(bg="#232E44", fg=TEXT, activebackground="#2E3B55",
+                         activeforeground=TEXT, highlightthickness=0, relief="flat",
+                         font=(FONT, 10), width=20, anchor="w")
+            try:
+                om["menu"].configure(bg="#232E44", fg=TEXT,
+                                     activebackground="#2E3B55", font=(FONT, 10))
+            except Exception:
+                pass
+            om.pack(side="left", fill="x", expand=True)
+            var.trace_add("write", lambda *a, c=cat, v=var,
+                          ko=key_of: self._on_tac_pick(c, v.get(), ko))
+
+        fam = float(getattr(my, "tactics_familiarity", 85) or 85)
+        tk.Label(f, text=f"Familiarity {fam:.0f}% -- changes take effect "
+                         f"live (new reads are messy mid-game).",
+                 bg=CONTENT_BG, fg="#AEB6C8", font=(FONT, 10),
+                 wraplength=290, justify="left").pack(anchor="w", padx=10, pady=(4, 0))
+        try:
+            ident = " / ".join(_tx.describe_team_tactics(my))
+        except Exception:
+            ident = ""
+        tk.Label(f, text=ident, bg=CONTENT_BG, fg=TEXT, font=(FONT, 10),
+                 wraplength=290, justify="left").pack(anchor="w", padx=10)
+
+        if self._tac_response_text:
+            tk.Label(f, text=self._tac_response_text, bg=CONTENT_BG, fg="#FFD166",
+                     font=(FONT, 10, "italic"), wraplength=290,
+                     justify="left").pack(anchor="w", padx=10, pady=(4, 0))
+
+        brow = tk.Frame(f, bg=CONTENT_BG)
+        brow.pack(fill="x", padx=10, pady=(6, 2))
+        if control == "coach" and self._tac_pending:
+            self._pill(brow, "Suggest", self._on_tac_suggest, w=76)
+            self._pill(brow, "Enforce", self._on_tac_enforce, w=76)
+            self._pill(brow, "Take over", self._on_tac_takeover, w=96)
+        elif control == "gm":
+            self._pill(brow, "Hand back", self._on_tac_handback, w=96)
+
+        sep = tk.Frame(f, bg="#2A3648", height=1)
+        sep.pack(fill="x", padx=10, pady=(8, 6))
+        tk.Label(f, text=f"{opp_abbr} -- OPPONENT (AI)", bg=CONTENT_BG,
+                 fg=self._ui_accent, font=(FONT, 11, "bold")).pack(anchor="w", padx=10)
+        ocur = _tx.team_tactics(opp)
+        onames = {
+            "offense": getattr(_tx, "OFFENSIVE_SYSTEMS").get(ocur.get("offense"), {}).get("name", "--"),
+            "defense": getattr(_tx, "DEFENSIVE_SYSTEMS").get(ocur.get("defense"), {}).get("name", "--"),
+            "pp": getattr(_tx, "POWERPLAY_SYSTEMS").get(ocur.get("pp"), {}).get("name", "--"),
+            "pk": getattr(_tx, "PENALTY_KILL_SYSTEMS").get(ocur.get("pk"), {}).get("name", "--"),
+            "philosophy": getattr(_tx, "PHILOSOPHIES").get(ocur.get("philosophy"), {}).get("name", "--"),
+        }
+        for lbl, val in (("Off", onames["offense"]), ("Def", onames["defense"]),
+                         ("PP", onames["pp"]), ("PK", onames["pk"]),
+                         ("Phil", onames["philosophy"])):
+            r = tk.Frame(f, bg=CONTENT_BG)
+            r.pack(fill="x", padx=10)
+            tk.Label(r, text=lbl, bg=CONTENT_BG, fg="#AEB6C8",
+                     font=(FONT, 10, "bold"), width=5, anchor="w").pack(side="left")
+            tk.Label(r, text=val, bg=CONTENT_BG, fg=TEXT,
+                     font=(FONT, 10), anchor="w").pack(side="left")
+        ofam = float(getattr(opp, "tactics_familiarity", 85) or 85)
+        cname = ""
+        try:
+            for stf in getattr(opp, "staff", []) or []:
+                if "Head Coach" in str(getattr(getattr(stf, "role", None), "value", "")):
+                    cname = getattr(stf, "full_name", "")
+                    break
+        except Exception:
+            pass
+        tk.Label(f, text=f"Familiarity {ofam:.0f}%"
+                         + (f" -- coached by {cname}" if cname else ""),
+                 bg=CONTENT_BG, fg="#AEB6C8", font=(FONT, 10),
+                 wraplength=290, justify="left").pack(anchor="w", padx=10, pady=(2, 8))
+
+    def _on_tac_suggest(self):
+        try:
+            from tkinter import messagebox as _mb
+            import tactics as _tx
+            import reputation_system as _rs
+            my = self._my_team()
+            if not self._tac_pending:
+                return
+            res = _rs.suggest_tactics_to_coach(my, dict(self._tac_pending),
+                                               self._tac_ctx(), mid_game=True)
+            if res.get("applied"):
+                self._tac_pending.clear()
+            self._tac_response_text = res.get("text", "")
+            self._refresh_tactics_tab()
+        except Exception:
+            pass
+
+    def _on_tac_enforce(self):
+        try:
+            from tkinter import messagebox as _mb
+            import tactics as _tx
+            import reputation_system as _rs
+            my = self._my_team()
+            if not self._tac_pending:
+                return
+            if not _mb.askyesno("Enforce Tactics",
+                                "Overrule your head coach and enforce these "
+                                "systems right now? He won't forget it."):
+                return
+            res = _rs.enforce_tactics(my, dict(self._tac_pending),
+                                      self._tac_ctx(), mid_game=True)
+            if res.get("applied"):
+                self._tac_pending.clear()
+            self._tac_response_text = res.get("text", "")
+            self._refresh_tactics_tab()
+        except Exception:
+            pass
+
+    def _on_tac_takeover(self):
+        try:
+            from tkinter import messagebox as _mb
+            import tactics as _tx
+            import reputation_system as _rs
+            my = self._my_team()
+            if not _mb.askyesno("Take Over Whiteboard",
+                                "Take permanent control of tactics from your "
+                                "head coach?"):
+                return
+            res = _rs.take_over_tactics(my, self._tac_ctx())
+            if res.get("changed"):
+                for cat, key in list(self._tac_pending.items()):
+                    _tx.set_team_system(my, cat, key, mid_game=True)
+                self._tac_pending.clear()
+            self._tac_response_text = res.get("text", "")
+            self._refresh_tactics_tab()
+        except Exception:
+            pass
+
+    def _on_tac_handback(self):
+        try:
+            import reputation_system as _rs
+            res = _rs.hand_back_tactics(self._my_team())
+            self._tac_response_text = res.get("text", "")
+            self._refresh_tactics_tab()
+        except Exception:
+            pass
 
     def _toggle_cam(self):
         self._set_camera(not self._cam["on"])
@@ -2313,6 +2593,8 @@ class PBPVisualSim(InGamePopup):
             self._feed(f"{ev.get('coach', 'The coach')} has sent his guys out -- "
                        f"the {ev.get('team', '')} are looking to punish.",
                        tag="info", ev=ev)
+        elif et == "tactics_change":
+            self._feed(f"TACTICS: {ev.get('text', '')}", tag="info", ev=ev)
         elif et == "brawl":
             pairs = ev.get("pairs", []) or []
             desc = ", ".join(f"{h.split()[-1]} vs {a.split()[-1]}" for h, a in pairs)
@@ -4935,7 +5217,8 @@ class PBPVisualSim(InGamePopup):
 # Entry point
 # ----------------------------------------------------------------------------
 def open_pbp_window(parent, home_team, away_team, on_complete=None,
-                    rivalries=None, is_playoff=False, series_game=0):
+                    rivalries=None, is_playoff=False, series_game=0,
+                    user_team=None):
     """Open the visual play-by-play simulator for a game.
 
     parent: tk widget (usually the main app root)
@@ -4953,5 +5236,6 @@ def open_pbp_window(parent, home_team, away_team, on_complete=None,
                        away_line=_best_line(away_team),
                        on_complete=on_complete,
                        rivalries=rivalries, is_playoff=is_playoff,
-                       series_game=series_game)
+                       series_game=series_game,
+                       user_team=user_team)
     return win

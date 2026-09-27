@@ -62,6 +62,7 @@ from player_development_system import PlayerDevelopmentEngine, initialize_player
 from media_system import MediaSystem
 from media_center_window import MediaCenterWindow
 from morale_window import MoraleWindow
+from tactics_window import TacticsWindow
 
 # Import Football Manager-style career systems
 import manager_career
@@ -4273,6 +4274,11 @@ class HockeyManagerGUI(tk.Tk):
         self._create_nav_pill(right_menu_frame, "Morale",
                               self.open_morale_window, side="right",
                               tooltip="Morale: team chemistry, hierarchy, and player attitudes")
+
+        # Tactics button (systems, familiarity, fit -- the whiteboard)
+        self._create_nav_pill(right_menu_frame, "Tactics",
+                              self.open_tactics_window, side="right",
+                              tooltip="Tactics: systems, familiarity, roster/coach fit")
 
         # Stats & Standings button
         self._create_nav_pill(right_menu_frame, "Stats",
@@ -9571,7 +9577,8 @@ class HockeyManagerGUI(tk.Tk):
 
         win = open_pbp_window(self, home_team, away_team, on_complete=_on_done,
                               rivalries=getattr(getattr(self, "league", None),
-                                                "rivalries", []))
+                                                "rivalries", []),
+                              user_team=getattr(self, "user_team", None))
         win_ref['win'] = win
         # Prevent closing before the sim finishes: the result is needed below.
         # (Re-enabled by _on_done when game_end plays.)
@@ -10510,6 +10517,12 @@ class HockeyManagerGUI(tk.Tk):
         if 'morale' not in self.open_windows or not self.open_windows['morale'].winfo_exists():
             self.open_windows['morale'] = MoraleWindow(self)
         self.open_windows['morale'].focus_set()
+
+    def open_tactics_window(self):
+        """Open the Team Tactics screen (systems, familiarity, fit)."""
+        if 'tactics' not in self.open_windows or not self.open_windows['tactics'].winfo_exists():
+            self.open_windows['tactics'] = TacticsWindow(self)
+        self.open_windows['tactics'].focus_set()
         
     def open_stats_standings_window(self, focus_tab=None):
         """Open the comprehensive Stats and Standings window with optional tab focus."""

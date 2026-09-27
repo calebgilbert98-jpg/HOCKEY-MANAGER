@@ -1247,6 +1247,33 @@ class StaffManagementWindow(InGamePopup):
                             _ac.on_assistant_hired(user_team, staff, app=_app)
                         except Exception:
                             pass
+                        # New head coach, new whiteboard: he installs HIS
+                        # systems (unless the GM owns tactics).
+                        try:
+                            _role = str(getattr(getattr(staff, "role", None),
+                                                "value", ""))
+                            if "Head Coach" in _role:
+                                import tactics as _tx
+                                _app = getattr(self, "app", None) or getattr(
+                                    self, "master", None)
+                                if _tx.get_tactics_control(user_team) == "coach":
+                                    installed = _tx.install_coach_systems(
+                                        user_team, staff, reason="hired")
+                                    if installed and _app is not None:
+                                        _cname = (f"{getattr(staff, 'first_name', '')} "
+                                                  f"{getattr(staff, 'last_name', '')}").strip()
+                                        _bits = ", ".join(
+                                            f"{c}: {k.replace('_', ' ')}"
+                                            for c, k in installed.items())
+                                        try:
+                                            _app.add_news(
+                                                f"{_cname} is installing his systems "
+                                                f"({len(installed)} changes: {_bits}). "
+                                                f"The room starts learning -- familiarity reset.")
+                                        except Exception:
+                                            pass
+                        except Exception:
+                            pass
                         if staff in self.available_staff:
                             self.available_staff.remove(staff)
                 else:

@@ -500,6 +500,11 @@ def ensure_team_tactics(team: Any) -> Dict[str, str]:
         if not getattr(team, "tactics", None):
             name = getattr(team, "team_name", "") or ""
             team.tactics = dict(NHL_TEAM_TACTICS.get(name, DEFAULT_TACTICS))
+            try:
+                _c = _coach_for(team)
+                team.tactics_installed_by = getattr(_c, "id", None) if _c else None
+            except Exception:
+                pass
         if getattr(team, "tactics_familiarity", None) is None:
             team.tactics_familiarity = 85
         _bust_tactics_cache(team)
@@ -515,8 +520,13 @@ def _bust_tactics_cache(team: Any) -> None:
         pass
 
 
-def set_team_system(team: Any, category: str, system_key: str) -> bool:
-    """Change one of the five systems. New systems take time to learn."""
+def set_team_system(team: Any, category: str, system_key: str,
+                  mid_game: bool = False) -> bool:
+    """Change one of the five systems. New systems take time to learn.
+
+    mid_game=True: a softer familiarity hit for intermission adjustments --
+    the room is already warm, but new reads mid-game are still messy.
+    """
     catalog = {"offense": OFFENSIVE_SYSTEMS, "defense": DEFENSIVE_SYSTEMS,
                "pp": POWERPLAY_SYSTEMS, "pk": PENALTY_KILL_SYSTEMS,
                "philosophy": PHILOSOPHIES}.get(category)
@@ -529,14 +539,176 @@ def set_team_system(team: Any, category: str, system_key: str) -> bool:
         team.tactics[category] = system_key
         # Learning curve: the room has to re-learn its reads.
         fam = _get(team, "tactics_familiarity", 85)
-        phil = team_tactics(team).get("philosophy")
-        floor = 55 if phil == "pragmatist" else 45
-        team.tactics_familiarity = max(
-            floor, min(fam, 45) if fam > 45 else fam - 10)
+        if mid_game:
+            team.tactics_familiarity = max(35.0, fam - 12)
+        else:
+            phil = team_tactics(team).get("philosophy")
+            floor = 55 if phil == "pragmatist" else 45
+            team.tactics_familiarity = max(
+                floor, min(fam, 45) if fam > 45 else fam - 10)
         _bust_tactics_cache(team)
     except Exception:
         return False
     return True
+
+
+def get_tactics_control(team: Any) -> str:
+    """Who owns the whiteboard: 'coach' (default) or 'gm'."""
+    try:
+        c = getattr(team, "tactics_control", None)
+        return c if c in ("coach", "gm") else "coach"
+    except Exception:
+        return "coach"
+
+
+def set_tactics_control(team: Any, who: str) -> None:
+    try:
+        team.tactics_control = "gm" if who == "gm" else "coach"
+    except Exception:
+        pass
+
+
+def install_coach_systems(team: Any, coach: Any,
+                          reason: str = "hired") -> Dict[str, str]:
+    """A new voice installs HIS systems. The room starts learning (fam 55).
+
+    Used on head-coach hires and as the lazy backstop for AI teams.
+    Never fires while the GM owns the whiteboard.
+    """
+    installed: Dict[str, str] = {}
+    try:
+        if get_tactics_control(team) != "coach":
+            return installed
+        prefs = ensure_coach_tactics(coach)
+        ensure_team_tactics(team)
+        for cat in ("offense", "defense", "pp", "pk", "philosophy"):
+            if prefs.get(cat) and team.tactics.get(cat) != prefs[cat]:
+                team.tactics[cat] = prefs[cat]
+                installed[cat] = prefs[cat]
+        team.tactics_familiarity = 55.0
+        try:
+            team.tactics_installed_by = getattr(coach, "id", None)
+        except Exception:
+            pass
+        _bust_tactics_cache(team)
+    except Exception:
+        pass
+    return installed
+
+
+def maybe_install_coach_systems(team: Any) -> Dict[str, str]:
+    """Backstop: if the head coach changed since systems were installed,
+    the new coach puts his stamp on the whiteboard (AI teams included)."""
+    try:
+        coach = _coach_for(team)
+        if coach is None:
+            return {}
+        if getattr(team, "tactics_installed_by", None) == getattr(coach, "id", None):
+            return {}
+        return install_coach_systems(team, coach, reason="new_voice")
+    except Exception:
+        return {}
+
+
+def save_preferred_tactics(team: Any) -> Dict[str, str]:
+    """The GM's saved template: one click to get back to his hockey."""
+    try:
+        ensure_team_tactics(team)
+        team.preferred_tactics = dict(team_tactics(team))
+        return dict(team.preferred_tactics)
+    except Exception:
+        return {}
+
+
+def get_preferred_tactics(team: Any) -> Optional[Dict[str, str]]:
+    try:
+        p = getattr(team, "preferred_tactics", None)
+        return dict(p) if p else None
+    except Exception:
+        return None
+
+
+def system_tradeoffs(category: str, system_key: str) -> str:
+    """One-line expected tradeoff vs league average, e.g. 'Pace +12% . Shots +10% . Physical -18%'."""
+    catalog = {"offense": OFFENSIVE_SYSTEMS, "defense": DEFENSIVE_SYSTEMS,
+               "pp": POWERPLAY_SYSTEMS, "pk": PENALTY_KILL_SYSTEMS,
+               "philosophy": PHILOSOPHIES}.get(category, {})
+    sys = catalog.get(system_key)
+    if not sys:
+        return ""
+    labels = [("pace", "Pace"), ("shot_vol", "Shots"), ("shot_qual", "Quality"),
+              ("attack", "Attack"), ("suppress", "Suppress"), ("physical", "Physical"),
+              ("pp_conv", "PP"), ("pk_kill", "PK"), ("sh_threat", "SH threat")]
+    bits = []
+    for key, label in labels:
+        v = sys.get(key)
+        if v is None:
+            continue
+        pct = round((v - 1.0) * 100)
+        if abs(pct) >= 3:
+            bits.append(f"{label} {'+' if pct > 0 else ''}{pct}%")
+    return " . ".join(bits) if bits else "Balanced profile"
+
+
+def ai_intermission_adjustment(team: Any, score_diff: int) -> Optional[Dict[str, str]]:
+    """Between periods, a coach who owns the whiteboard may adjust.
+
+    Personality-gated: adaptable coaches chase the game when losing;
+    defensive minds protect a big lead. Returns
+    {category, old_key, new_key, line} or None.
+    """
+    try:
+        import random as _random
+        coach = _coach_for(team)
+        if coach is None:
+            return None
+        if get_tactics_control(team) != "coach":
+            return None
+        try:
+            import reputation_system as _rs
+            style = _rs.coach_style(coach).get("label", "Balanced")
+        except Exception:
+            style = "Balanced"
+        adapt = float(getattr(coach, "adaptability", 50) or 50)
+        tk = team_tactics(team)
+        cname = str(getattr(coach, "full_name", "Coach")).split()[-1]
+        tname = getattr(team, "team_name", "the club")
+
+        if score_diff <= -2:
+            # Chasing the game: open it up, once the room has seen a period.
+            p = 0.15 + adapt / 250.0
+            if _random.random() > p:
+                return None
+            if tk.get("philosophy") != "offense_first":
+                return {"category": "philosophy", "old_key": tk["philosophy"],
+                        "new_key": "offense_first",
+                        "line": (f"{tname} are opening it up -- {cname} has switched "
+                                 f"to an attack-first philosophy chasing the game.")}
+            if tk.get("offense") != "rush_attack":
+                return {"category": "offense", "old_key": tk["offense"],
+                        "new_key": "rush_attack",
+                        "line": (f"{cname} is stretching the ice -- {tname} "
+                                 f"to an up-tempo rush attack.")}
+            return None
+        if score_diff >= 3 and style in ("Tactician", "Drill Sergeant"):
+            # Protecting a lead: a defensive mind locks it down.
+            p = 0.10 + adapt / 400.0
+            if _random.random() > p:
+                return None
+            if tk.get("philosophy") != "defense_first":
+                return {"category": "philosophy", "old_key": tk["philosophy"],
+                        "new_key": "defense_first",
+                        "line": (f"{cname} is locking it down -- {tname} "
+                                 f"to a defense-first shell protecting the lead.")}
+            if tk.get("defense") not in ("neutral_trap", "trap_131"):
+                return {"category": "defense", "old_key": tk["defense"],
+                        "new_key": "neutral_trap",
+                        "line": (f"{tname} are clogging the neutral zone -- "
+                                 f"{cname} has gone to the trap.")}
+            return None
+        return None
+    except Exception:
+        return None
 
 
 def tick_tactics_familiarity(team: Any, amount: float = 4.0) -> None:
