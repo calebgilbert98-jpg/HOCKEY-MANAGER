@@ -1229,6 +1229,22 @@ NHL League Office""",
         
         notable = []
         for team in self.league.teams:
+            # Assistant coaches: effectiveness drifts with results, mesh and
+            # shelf life (icons exempt -- legacy cemented); the room feels it
+            # through morale. See assistant_coaches.
+            try:
+                import assistant_coaches as _ac
+                _st = (getattr(self.league, "standings", None) or {}).get(
+                    getattr(team, "team_name", ""), {}) or {}
+                _g = ((_st.get("W", 0) or 0) + (_st.get("L", 0) or 0)
+                      + (_st.get("OTL", 0) or 0))
+                _wp = (((_st.get("W", 0) or 0)
+                        + 0.5 * (_st.get("OTL", 0) or 0)) / _g) if _g else None
+                for _line in _ac.assistants_monthly_tick(team, win_pct=_wp):
+                    if team == self.user_team:
+                        notable.append("\U0001f4cb " + _line)
+            except Exception:
+                pass
             for roster_name in ('roster', 'prospects'):
                 for player in getattr(team, roster_name, []) or []:
                     changes = self._dev_engine.process_monthly_development(

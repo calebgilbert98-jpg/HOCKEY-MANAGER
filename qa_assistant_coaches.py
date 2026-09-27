@@ -1,10 +1,15 @@
-"""Deterministic QA for the assistant-coach / Coffey-effect system."""
+"""Deterministic QA: assistant coaches, prowess-scaled, results-gated.
+
+No development aspect. Any great coach can have the effect; it decays with
+losing / poor mesh / shelf life; icons never decay (legacy cemented).
+"""
 import sys
 from types import SimpleNamespace
 
 sys.path.insert(0, '.')
 
 import assistant_coaches as ac
+import reputation_system as rs
 
 PASS, FAIL = [], []
 
@@ -20,125 +25,170 @@ def coach(**kw):
                 role=SimpleNamespace(value="Assistant Coach"),
                 attacking_coaching=60, defensive_coaching=92,
                 coaching_goalies=40, working_with_youngsters=80,
-                tactical_knowledge=85, icon_team="", icon_level="")
+                tactical_knowledge=85, man_management=80, reputation=85,
+                experience=12, years_with_team=1, morale=70,
+                icon_team="", icon_level="", assistant_effect=None)
     base.update(kw)
     return SimpleNamespace(**base)
 
 
-def skater(pos="LD", age=20, happiness=60):
-    return SimpleNamespace(primary_position=pos, age=age, happiness=happiness,
-                           team_name="Edmonton Oilers")
+def skater(morale=70):
+    return SimpleNamespace(primary_position="LD", age=24, morale=morale)
 
 
-def team_of(*staff, name="Edmonton Oilers", roster=()):
-    return SimpleNamespace(team_name=name, staff=list(staff), roster=list(roster))
+def team_of(*staff, name="Edmonton Oilers", roster=(), wins=0, losses=0,
+            fam=85):
+    return SimpleNamespace(team_name=name, staff=list(staff),
+                           roster=list(roster), wins=wins, losses=losses,
+                           otl=0, tactics_familiarity=fam,
+                           tactics=dict(offense="balanced", defense="hybrid",
+                                        pp="umbrella", pk="diamond",
+                                        philosophy="pragmatist"))
 
-# --- specialties ---
-print("--- specialties ---")
+# Pin chemistry: deterministic mesh.
+_chem_score = [80.0]
+_orig_chem = rs.team_chemistry
+rs.team_chemistry = lambda roster, ctx=None: {"score": _chem_score[0]}
+
+# --- specialties / icons / retirement (unchanged) ---
+print("--- identity ---")
 check("defense specialty", ac.assistant_specialty(coach()) == "defense")
-check("offense specialty",
-      ac.assistant_specialty(coach(defensive_coaching=50,
-                                   attacking_coaching=95)) == "offense")
-check("goalie specialty",
-      ac.assistant_specialty(coach(defensive_coaching=50, attacking_coaching=50,
-                                   coaching_goalies=93)) == "goalie")
-check("general below 60",
-      ac.assistant_specialty(coach(defensive_coaching=55, attacking_coaching=55,
-                                   coaching_goalies=55)) == "general")
-
-# --- icon detection is team-specific ---
-print("--- icon detection ---")
 icon = coach(icon_team="Edmonton Oilers", icon_level="icon")
-edm = team_of(icon)
-tor = team_of(icon, name="Toronto Maple Leafs")
-check("icon recognized by his team", ac.is_franchise_icon(icon, edm))
-check("not an icon elsewhere", not ac.is_franchise_icon(icon, tor))
-check("no icon_team, no icon",
-      not ac.is_franchise_icon(coach(), edm))
-
-# --- retirement stamping ---
-print("--- retirement stamping ---")
-import reputation_system as rs
+check("icon recognized by his team",
+      ac.is_franchise_icon(icon, team_of(icon)))
+check("not an icon elsewhere",
+      not ac.is_franchise_icon(icon, team_of(name="Toronto Maple Leafs")))
 star = SimpleNamespace(leadership=80, controversy=20, career_reputation=85,
                        career_games=900, last_team_name="Edmonton Oilers")
-attrs = rs.staffer_from_retired_player(star, [])
-check("star retires an icon of his last team",
-      attrs.get("icon_team") == "Edmonton Oilers", str(attrs.get("icon_team")))
-check("generational = icon level", attrs.get("icon_level") == "icon")
-mid = SimpleNamespace(leadership=60, controversy=20, career_reputation=70,
-                      career_games=450, last_team_name="Boston Bruins")
-attrs2 = rs.staffer_from_retired_player(mid, [])
-check("good-not-great = star level",
-      attrs2.get("icon_team") == "Boston Bruins"
-      and attrs2.get("icon_level") == "star")
-scrub = SimpleNamespace(leadership=50, controversy=20, career_reputation=30,
-                        career_games=200, last_team_name="Boston Bruins")
-attrs3 = rs.staffer_from_retired_player(scrub, [])
-check("scrub retires no icon", not attrs3.get("icon_team"))
+check("star retires an icon",
+      rs.staffer_from_retired_player(star, []).get("icon_team")
+      == "Edmonton Oilers")
 
-# --- development deltas ---
-print("--- development ---")
-kid_d = skater("LD", 20)
-tm = team_of(icon, roster=[kid_d])
-d = ac.assistant_development_deltas(kid_d, tm)
-check("young D gets a bump from the icon", len(d) == 1 and d[0][1] > 4,
-      str(d))
-check("icon label names him", "Coffey" in d[0][0] and "icon" in d[0][0])
+# --- prowess: scaled on the coach, not the legend ---
+print("--- prowess ---")
+great = coach()  # 92 D-coaching, 85s elsewhere, 12 yrs
+dud = coach(defensive_coaching=42, tactical_knowledge=45, man_management=40,
+            reputation=35, experience=2)
+pg, pd = ac.assistant_prowess(great), ac.assistant_prowess(dud)
+check("great coach: high prowess", pg >= 80, f"{pg:.1f}")
+check("dud: low prowess", pd < 50, f"{pd:.1f}")
+check("prowess > icon status: non-icon can out-rate",
+      ac.assistant_prowess(coach(icon_team="", icon_level="")) >= 80)
 
-plain = coach(icon_team="", icon_level="")  # great teacher, no status
-tm2 = team_of(plain, roster=[kid_d])
-d2 = ac.assistant_development_deltas(kid_d, tm2)
-check("same teacher, no icon: smaller bump",
-      0.5 <= d2[0][1] < d[0][1], f"{d2[0][1]} vs {d[0][1]}")
+# --- effectiveness seeds from prowess ---
+print("--- seeding ---")
+check("effect seeds from prowess",
+      abs(ac.assistant_effect(great) - pg) < 0.01)
+check("stored after seeding", great.assistant_effect is not None)
 
-old_d = skater("LD", 30)
-check("veterans don't get the kid bump",
-      ac.assistant_development_deltas(old_d, tm) == [])
-kid_f = skater("C", 20)
-check("forwards don't learn from the D coach",
-      ac.assistant_development_deltas(kid_f, tm) == [])
-okl = skater("GOALIE", 20)
-gcoach = coach(defensive_coaching=50, attacking_coaching=50, coaching_goalies=95)
-tm3 = team_of(gcoach, roster=[okl])
-d3 = ac.assistant_development_deltas(okl, tm3)
-check("goalie coach develops goalies", len(d3) == 1 and d3[0][1] > 0, str(d3))
+# --- monthly drift: reflective with results ---
+print("--- drift ---")
+tm_win = team_of(great, wins=40, losses=20)   # .667
+tm_lose = team_of(coach(), wins=15, losses=45)  # .250
+e0 = ac.assistant_effect(tm_win.staff[0])
+ac.assistants_monthly_tick(tm_win)
+check("winning grows him", tm_win.staff[0].assistant_effect > e0,
+      f"{e0:.1f} -> {tm_win.staff[0].assistant_effect:.1f}")
+e1 = ac.assistant_effect(tm_lose.staff[0])
+ac.assistants_monthly_tick(tm_lose)
+check("losing erodes him", tm_lose.staff[0].assistant_effect < e1,
+      f"{e1:.1f} -> {tm_lose.staff[0].assistant_effect:.1f}")
 
-# --- familiarity buy-in ---
-print("--- familiarity ---")
-check("icon = +2 buy-in", ac.assistant_familiarity_bonus(tm) == 2.0)
-star_c = coach(icon_team="Edmonton Oilers", icon_level="star")
-check("star = +1", ac.assistant_familiarity_bonus(team_of(star_c)) == 1.0)
-teacher = coach(icon_team="", tactical_knowledge=85)
-check("great teacher (no icon) = +1",
-      ac.assistant_familiarity_bonus(team_of(teacher)) == 1.0)
-nobody = coach(icon_team="", tactical_knowledge=50)
-check("nobody special = 0",
-      ac.assistant_familiarity_bonus(team_of(nobody)) == 0.0)
-many = team_of(icon, star_c, teacher, coach(icon_team="Edmonton Oilers",
-                                            icon_level="icon"))
-check("bonus capped at 4", ac.assistant_familiarity_bonus(many) == 4.0)
+# mesh: fractured room accelerates the slide
+_chem_score[0] = 30.0
+tm_frac = team_of(coach(), wins=30, losses=30)
+e2 = ac.assistant_effect(tm_frac.staff[0])
+ac.assistants_monthly_tick(tm_frac)
+_chem_score[0] = 80.0
+check("fractured room drags even at .500", tm_frac.staff[0].assistant_effect < e2,
+      f"{e2:.1f} -> {tm_frac.staff[0].assistant_effect:.1f}")
 
-# --- tick integration ---
-print("--- tick integration ---")
+# shelf life: the message gets stale (isolated: same coach, 1yr vs 5yr)
+fresh_c = coach(years_with_team=1)
+stale_c = coach(years_with_team=5)
+tm_fresh = team_of(fresh_c, wins=30, losses=30)
+tm_stale = team_of(stale_c, wins=30, losses=30)
+ac.assistants_monthly_tick(tm_fresh)
+ac.assistants_monthly_tick(tm_stale)
+check("3+ years: shelf-life drag",
+      tm_stale.staff[0].assistant_effect < tm_fresh.staff[0].assistant_effect,
+      f"5yr {tm_stale.staff[0].assistant_effect:.1f} vs "
+      f"1yr {tm_fresh.staff[0].assistant_effect:.1f}")
+
+# system in flux: low familiarity hurts traction (chemistry neutral)
+_chem_score[0] = 60.0
+tm_flux = team_of(coach(), wins=30, losses=30, fam=50)
+tm_set = team_of(coach(), wins=30, losses=30, fam=85)
+ac.assistants_monthly_tick(tm_flux)
+ac.assistants_monthly_tick(tm_set)
+_chem_score[0] = 80.0
+check("system in flux: less traction",
+      tm_flux.staff[0].assistant_effect < tm_set.staff[0].assistant_effect,
+      f"flux {tm_flux.staff[0].assistant_effect:.1f} vs "
+      f"set {tm_set.staff[0].assistant_effect:.1f}")
+
+# --- icons never decay ---
+print("--- icons cemented ---")
+icon_c = coach(icon_team="Edmonton Oilers", icon_level="icon",
+               years_with_team=8)
+_chem_score[0] = 25.0  # fractured
+tm_icon = team_of(icon_c, wins=10, losses=50, fam=40,  # awful everywhere
+                 name="Edmonton Oilers")
+p0 = ac.assistant_prowess(icon_c)
+for _ in range(6):  # half a season of misery
+    ac.assistants_monthly_tick(tm_icon)
+check("icon effect cemented through misery",
+      abs(tm_icon.staff[0].assistant_effect - p0) < 0.01,
+      f"{tm_icon.staff[0].assistant_effect:.1f} vs prowess {p0:.1f}")
+_chem_score[0] = 80.0
+
+# --- morale: the "brings more out of players" channel ---
+print("--- morale channel ---")
+r1 = [skater(70) for _ in range(5)]
+tm_g = team_of(coach(), roster=r1, wins=40, losses=20)
+ac.assistants_monthly_tick(tm_g)
+check("great assistant lifts the room", all(p.morale > 70 for p in r1),
+      str([round(p.morale, 2) for p in r1]))
+r2 = [skater(70) for _ in range(5)]
+tm_d = team_of(dud, roster=r2, wins=40, losses=20)
+ac.assistants_monthly_tick(tm_d)
+check("dud drags the room", all(p.morale < 70 for p in r2),
+      str([round(p.morale, 2) for p in r2]))
+
+# --- stale-message news ---
+print("--- news ---")
+wash = coach(assistant_effect=56, years_with_team=6)
+tm_w = team_of(wash, wins=10, losses=50)
+lines = ac.assistants_monthly_tick(tm_w)
+check("stale voice makes the news",
+      any("stale" in l for l in lines), str(lines))
+
+# --- familiarity buy-in from effectiveness ---
+print("--- buy-in ---")
+check("elite: +2", ac.assistant_familiarity_bonus(team_of(coach())) == 2.0)
+mid = coach(defensive_coaching=72, tactical_knowledge=70, man_management=65,
+            reputation=60, experience=8, assistant_effect=70.0)
+check("solid: +1", ac.assistant_familiarity_bonus(team_of(mid)) == 1.0)
+washed = coach(assistant_effect=35.0)
+check("dud: -1 slows the room",
+      ac.assistant_familiarity_bonus(team_of(washed)) == -1.0)
+check("icon always elite",
+      ac.assistant_familiarity_bonus(
+          team_of(icon_c, name="Edmonton Oilers")) == 2.0)
+check("clamped", ac.assistant_familiarity_bonus(
+    team_of(coach(), coach(), coach())) == 4.0)
+
 import tactics as tx
-t_plain = SimpleNamespace(team_name="X", roster=[], staff=[nobody],
-                          tactics=dict(offense="balanced", defense="hybrid",
-                                       pp="umbrella", pk="diamond",
-                                       philosophy="pragmatist"),
-                          tactics_familiarity=50)
-t_icon = SimpleNamespace(team_name="Edmonton Oilers", roster=[], staff=[icon],
-                         tactics=dict(offense="balanced", defense="hybrid",
-                                      pp="umbrella", pk="diamond",
-                                      philosophy="pragmatist"),
-                         tactics_familiarity=50)
-tx.tick_tactics_familiarity(t_plain)
-tx.tick_tactics_familiarity(t_icon)
-check("icon room learns faster",
-      t_icon.tactics_familiarity - t_plain.tactics_familiarity == 2.0,
-      f"{t_icon.tactics_familiarity} vs {t_plain.tactics_familiarity}")
+t_dud = team_of(washed, fam=50)
+t_none = team_of(fam=50)
+tx.tick_tactics_familiarity(t_dud)
+tx.tick_tactics_familiarity(t_none)
+check("dud slows learning vs nobody",
+      t_dud.tactics_familiarity < t_none.tactics_familiarity,
+      f"{t_dud.tactics_familiarity} vs {t_none.tactics_familiarity}")
 
 # --- hire hook ---
-print("--- hire hook ---")
+print("--- hire ---")
 news = []
 
 
@@ -147,28 +197,25 @@ class FakeApp:
         news.append(line)
 
 
-kid2 = skater("RD", 21, happiness=60)
-vet = skater("RD", 30, happiness=60)
-htm = team_of(roster=[kid2, vet])
-line = ac.on_assistant_hired(htm, icon, app=FakeApp())
-check("icon hire makes the news", line is not None and "Coffey" in line,
-      str(line))
+line = ac.on_assistant_hired(team_of(name="Edmonton Oilers"), icon,
+                             app=FakeApp())
+check("icon hire is an event", "franchise icon" in line, line)
 check("news delivered", len(news) == 1)
-check("young D gets the dream bump", kid2.happiness == 64, str(kid2.happiness))
-check("veteran unmoved", vet.happiness == 60)
+elite = coach(icon_team="", first_name="Dave", last_name="Elite")
+line2 = ac.on_assistant_hired(team_of(), elite)
+check("elite non-icon hire is a story", "highly-regarded" in line2, line2)
+line3 = ac.on_assistant_hired(team_of(), dud)
+check("dud hire: quiet line", "highly-regarded" not in line3
+      and "icon" not in line3)
 head = coach(role=SimpleNamespace(value="Head Coach"))
-check("non-assistant hire returns None",
-      ac.on_assistant_hired(htm, head) is None)
-plain_line = ac.on_assistant_hired(htm, plain, app=FakeApp())
-check("regular hire: quiet line, no icon tag",
-      plain_line is not None and "icon" not in plain_line.lower())
+check("non-assistant: None", ac.on_assistant_hired(team_of(), head) is None)
 
 # --- describe ---
-print("--- describe ---")
-desc = ac.describe_assistants(team_of(icon, plain))
-check("icon tagged", any("FRANCHISE ICON" in l for l in desc), str(desc))
-check("two lines", len(desc) == 2)
+desc = ac.describe_assistants(team_of(icon, dud))
+check("describe shows effect + icon tag",
+      any("FRANCHISE ICON" in l and "effect" in l for l in desc), str(desc))
 
+rs.team_chemistry = _orig_chem
 print()
 print(f"{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

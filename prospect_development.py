@@ -796,15 +796,6 @@ def situational_readiness(player: Any,
         except Exception:
             pass
 
-    # 2b. Assistant coaches: the specialists develop the kids at their
-    # position, and a franchise icon multiplies it (the Coffey effect).
-    if team is not None:
-        try:
-            import assistant_coaches as _ac
-            for _alabel, _apts in _ac.assistant_development_deltas(player, team):
-                deltas.append((_alabel, _apts))
-        except Exception:
-            pass
 
     # 3. Farm trend: the SLOPE of his production, not just up/down.
     try:
