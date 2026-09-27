@@ -542,20 +542,30 @@ def create_prospect(age: int = 18,
         player.plus_minus = 0
         player.avg_toi = "0:00"
     
-    # Set common attributes (every player gets these) - 100-point scale
-    for attr in ['skating', 'shooting', 'passing', 'checking', 'faceoffs',
-                'determination', 'teamwork', 'leadership', 'discipline', 'flair',
-                'offensive_awareness', 'defensive_awareness', 'deking', 'strength']:
+    # Set EVERY overall-relevant attribute explicitly at prospect range.
+    # (Dataclass defaults are valid 100-scale adult fallbacks; prospects must
+    # never inherit them — an 18-year-old is not an NHL-average player.)
+    _PROSPECT_BASE_ATTRS = [
+        'skating', 'shooting', 'passing', 'checking', 'faceoffs', 'faceoff_wins',
+        'determination', 'teamwork', 'leadership', 'discipline', 'flair',
+        'offensive_awareness', 'defensive_awareness', 'deking', 'strength',
+        'vision', 'stickhandling', 'shooting_accuracy', 'shooting_power',
+        'passing_accuracy', 'passing_creativity', 'puck_protection', 'stamina',
+        'shot_blocking', 'hockey_iq', 'composure', 'aggressiveness', 'work_rate',
+        'anticipation', 'decision_making', 'focus', 'confidence', 'acceleration',
+        'balance', 'endurance', 'agility', 'speed', 'durability', 'off_the_puck',
+        'wristshot', 'slapshot', 'pokecheck', 'bodycheck', 'one_timer',
+        'backhand', 'screen_shots', 'loose_puck', 'creativity', 'pressure_player',
+        'puck_control',
+    ]
+    for attr in _PROSPECT_BASE_ATTRS:
         setattr(player, attr, get_base_attribute_value(24, 60))
 
     # Set goalie-specific attributes
     if position == PlayerPosition.GOALIE:
-        for attr in ['goaltending', 'reflexes', 'positioning', 'rebound_control', 'puck_handling']:
+        for attr in ['goaltending', 'reflexes', 'positioning', 'rebound_control',
+                     'puck_handling', 'glove_hand', 'stick_side', 'breakaway_skill']:
             setattr(player, attr, get_base_attribute_value(24, 60))
-
-    # Set advanced attributes
-    for attr in ['vision', 'puck_control', 'shooting_accuracy', 'puck_protection', 'stamina', 'shot_blocking']:
-        setattr(player, attr, get_base_attribute_value(24, 60))
     
     # Set tendencies with defaults
     player.shooting_tendency = random.randint(30, 70)
@@ -566,7 +576,7 @@ def create_prospect(age: int = 18,
         # Get a random value in the archetype's range
         value = random.randint(min_val, max_val)
         # Apply potential-based adjustment (better potential = higher chance of good attributes)
-        # Archetype ranges are 20-scale; convert to the 50-point scale first
+        # Archetype ranges are doubled 20-scale values; x2.0 lands them on the 100-scale
         potential_factor = DEVELOPMENT_PROFILES[potential]["ceiling_modifier"]
         adjusted_value = int(value * 2.0 * potential_factor)
         # Ensure it stays within valid bounds

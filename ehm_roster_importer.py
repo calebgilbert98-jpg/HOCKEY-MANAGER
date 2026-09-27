@@ -220,7 +220,8 @@ _INVERT_BASE = 30.0
 
 
 def ehm_to_pd_scale(ehm_value: Any) -> Optional[float]:
-    """Convert an EHM 1-20 attribute to Puck Dynasty's internal ~50 scale.
+    """Convert an EHM 1-20 attribute to Puck Dynasty's intermediate ~50 scale
+    (callers double it to the native 100-scale).
 
     Mapping: 1 -> 12, 10 -> 30, 15 -> 40, 20 -> 50.
     Returns None for missing/invalid values.
@@ -944,17 +945,21 @@ def import_league_from_db(path: str,
                     pd_pos = PlayerPosition.CENTER
                 p = Player(first_name=fn, last_name=ln, age=age,
                            primary_position=pd_pos)
-                # attributes
+                # attributes (blended values are ~50 scale; double to native 100)
                 blended = _blend_attributes(row, probe.attribute_columns)
                 for f_, v in blended.items():
                     try:
-                        setattr(p, f_, int(round(max(1, min(60, v)))))
+                        if f_ == "injury_proneness":
+                            # 1-100 scale (higher = more prone); blended ~50 -> *2
+                            setattr(p, f_, int(round(max(5, min(100, v * 2)))))
+                        else:
+                            setattr(p, f_, int(round(max(2, min(100, v * 2)))))
                     except (AttributeError, TypeError):
                         pass
-                # morale is 1-10 on PD
+                # morale is 1-100 on PD (blended ~50 scale -> *2)
                 if "morale" in blended:
-                    p.morale = max(1, min(10, int(
-                        round(blended["morale"] / 2))))
+                    p.morale = max(1, min(100, int(
+                        round(blended["morale"] * 2))))
                 if col_ca and row[col_ca]:
                     try:
                         p.peak_rating = max(
@@ -1046,7 +1051,7 @@ def import_league_from_db(path: str,
                     if col and row[col] is not None:
                         try:
                             setattr(s, pd_f, max(
-                                1, min(20, int(round(float(row[col]))))))
+                                5, min(100, int(round(float(row[col])) * 5))))
                         except (TypeError, ValueError, AttributeError):
                             pass
                 if col_nat and row[col_nat] is not None:
@@ -1138,11 +1143,12 @@ def preview_players(path: str, probe: SchemaProbe,
     Each entry: name, club, position, age, overall (display 1-100 scale),
     plus a few headline attributes.  Never raises — returns [] on failure.
     """
-    try:
-        from game_classes import to_100_scale
-    except Exception:
-        def to_100_scale(v):
+    def _ehm_to_display(v):
+        """Blended EHM values are 12-50 scale; double to the native 100-scale."""
+        try:
             return max(1, min(100, int(round(float(v) * 2))))
+        except (TypeError, ValueError):
+            return 50
     out: List[Dict[str, Any]] = []
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -1189,7 +1195,7 @@ def preview_players(path: str, probe: SchemaProbe,
                     ("skating", "shooting", "passing", "deking",
                      "offensive_awareness", "defensive_awareness",
                      "checking")]
-            overall = to_100_scale(sum(core) / len(core)) if core else 50
+            overall = _ehm_to_display(sum(core) / len(core)) if core else 50
             club_col = fm.get("club_contracted") or fm.get("club_playing")
             club = club_names.get(row[club_col]) if club_col else None
             out.append({
@@ -1197,9 +1203,9 @@ def preview_players(path: str, probe: SchemaProbe,
                 "club": club or "Free Agent",
                 "pos": _primary_position(row, probe.position_columns),
                 "overall": overall,
-                "skating": to_100_scale(blended.get("skating", 30)),
-                "shooting": to_100_scale(blended.get("shooting", 30)),
-                "passing": to_100_scale(blended.get("passing", 30)),
+                "skating": _ehm_to_display(blended.get("skating", 30)),
+                "shooting": _ehm_to_display(blended.get("shooting", 30)),
+                "passing": _ehm_to_display(blended.get("passing", 30)),
             })
         return out
     except sqlite3.Error:

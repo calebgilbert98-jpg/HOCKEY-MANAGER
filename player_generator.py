@@ -251,14 +251,14 @@ class PlayerGenerator:
         overall = player.overall_rating()
         age = player.age
         
-        # Determine contract category
-        if age <= 22 and overall < 44:
+        # Determine contract category (overall on the native 100-point scale)
+        if age <= 22 and overall < 68:
             contract_type = "ENTRY_LEVEL"
-        elif age <= 25 and overall < 47:
+        elif age <= 25 and overall < 72:
             contract_type = "BRIDGE"
-        elif overall >= 52:
+        elif overall >= 85:
             contract_type = "SUPERSTAR"
-        elif overall >= 49:
+        elif overall >= 80:
             contract_type = "PREMIUM"
         elif age >= 33:
             contract_type = "VETERAN"
@@ -266,12 +266,12 @@ class PlayerGenerator:
             contract_type = "AHL"
         else:
             contract_type = "STANDARD"
-        
+
         contract_info = CONTRACT_VALUES[contract_type]
-        
+
         # Calculate salary based on overall rating
         salary_range = contract_info["max"] - contract_info["min"]
-        salary_factor = (overall - 30) / 25  # Normalize to 0-1 range
+        salary_factor = (overall - 62) / 28  # Normalize to 0-1 range
         salary_factor = max(0, min(1, salary_factor))
         
         base_salary = contract_info["min"] + (salary_range * salary_factor)

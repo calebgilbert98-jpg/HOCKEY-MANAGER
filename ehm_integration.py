@@ -15,6 +15,14 @@ from position_specific_attributes import PlayerV2
 from LIVE_GAME_VIEWER import LiveGameViewer
 import random
 
+def _to_20(value):
+    """Normalize a native 1-100 Puck Dynasty attribute to the EHM engine's 1-20 scale."""
+    try:
+        return max(1, min(20, int(round(float(value) / 5))))
+    except (TypeError, ValueError):
+        return 10
+
+
 class EHMGameIntegration:
     """Integration layer between EHM simulation and existing game systems"""
     
@@ -127,52 +135,52 @@ class EHMGameIntegration:
             last_name=player.last_name,
             age=player.age,
             primary_position=player.primary_position,
-            overall=player.overall_rating(),
+            overall=_to_20(player.overall_rating()),
             
             # Convert basic attributes
-            skating=player.skating,
-            shooting=player.shooting,
-            passing=player.passing,
-            checking=player.checking,
-            goaltending=player.goaltending,
+            skating=_to_20(player.skating),
+            shooting=_to_20(player.shooting),
+            passing=_to_20(player.passing),
+            checking=_to_20(player.checking),
+            goaltending=_to_20(player.goaltending),
             
             # Add enhanced attributes with intelligent defaults
-            stickhandling=player.passing + random.randint(-3, 3),
-            shooting_accuracy=player.shooting + random.randint(-5, 5),
-            shooting_power=player.shooting + random.randint(-3, 3),
-            passing_accuracy=player.passing + random.randint(-3, 3),
-            passing_vision=player.passing + random.randint(-5, 5),
-            body_checking=player.checking + random.randint(-3, 3),
+            stickhandling=_to_20(player.passing + random.randint(-15, 15)),
+            shooting_accuracy=_to_20(player.shooting + random.randint(-25, 25)),
+            shooting_power=_to_20(player.shooting + random.randint(-15, 15)),
+            passing_accuracy=_to_20(player.passing + random.randint(-15, 15)),
+            passing_vision=_to_20(player.passing + random.randint(-25, 25)),
+            body_checking=_to_20(player.checking + random.randint(-15, 15)),
             
             # Goalie attributes
-            reflexes=player.goaltending + random.randint(-5, 5) if player.primary_position == PlayerPosition.GOALIE else random.randint(5, 15),
-            positioning=player.goaltending + random.randint(-3, 3) if player.primary_position == PlayerPosition.GOALIE else random.randint(5, 15),
-            rebound_control=player.goaltending + random.randint(-4, 4) if player.primary_position == PlayerPosition.GOALIE else random.randint(5, 15),
+            reflexes=_to_20(player.goaltending + random.randint(-25, 25)) if player.primary_position == PlayerPosition.GOALIE else random.randint(5, 15),
+            positioning=_to_20(player.goaltending + random.randint(-15, 15)) if player.primary_position == PlayerPosition.GOALIE else random.randint(5, 15),
+            rebound_control=_to_20(player.goaltending + random.randint(-20, 20)) if player.primary_position == PlayerPosition.GOALIE else random.randint(5, 15),
             
             # Skating attributes
-            skating_speed=player.skating + random.randint(-3, 3),
-            skating_agility=player.skating + random.randint(-3, 3),
+            skating_speed=_to_20(player.skating + random.randint(-15, 15)),
+            skating_agility=_to_20(player.skating + random.randint(-15, 15)),
             
             # Mental attributes based on overall rating
-            mental_toughness=max(5, player.overall_rating() + random.randint(-8, 8)),
-            consistency=max(5, player.overall_rating() + random.randint(-10, 10)),
-            pressure_handling=max(5, player.overall_rating() + random.randint(-8, 8)),
-            big_game_performance=max(5, player.overall_rating() + random.randint(-6, 6)),
-            clutch_factor=max(5, player.overall_rating() + random.randint(-8, 8)),
-            focus=max(5, player.overall_rating() + random.randint(-8, 8)),
-            anticipation=max(5, player.overall_rating() + random.randint(-6, 6)),
-            offensive_read=max(5, player.overall_rating() + random.randint(-8, 8)),
-            defensive_read=max(5, player.overall_rating() + random.randint(-8, 8)),
+            mental_toughness=max(5, _to_20(player.overall_rating() + random.randint(-40, 40))),
+            consistency=max(5, _to_20(player.overall_rating() + random.randint(-50, 50))),
+            pressure_handling=max(5, _to_20(player.overall_rating() + random.randint(-40, 40))),
+            big_game_performance=max(5, _to_20(player.overall_rating() + random.randint(-30, 30))),
+            clutch_factor=max(5, _to_20(player.overall_rating() + random.randint(-40, 40))),
+            focus=max(5, _to_20(player.overall_rating() + random.randint(-40, 40))),
+            anticipation=max(5, _to_20(player.overall_rating() + random.randint(-30, 30))),
+            offensive_read=max(5, _to_20(player.overall_rating() + random.randint(-40, 40))),
+            defensive_read=max(5, _to_20(player.overall_rating() + random.randint(-40, 40))),
             
             # Physical attributes
-            strength=max(5, player.checking + random.randint(-5, 10)),
+            strength=max(5, _to_20(player.checking + random.randint(-25, 50))),
             stamina=random.randint(12, 18),
             injury_resistance=random.randint(8, 16),
             size=random.randint(8, 18),
             reach=random.randint(8, 18),
             
             # Personality attributes
-            leadership=random.randint(8, 18) if player.overall_rating() > 44 else random.randint(5, 12),
+            leadership=random.randint(8, 18) if player.overall_rating() > 76 else random.randint(5, 12),
             teamwork=random.randint(10, 18),
             selfishness=random.randint(5, 15),
             aggression=random.randint(8, 16),
@@ -185,7 +193,7 @@ class EHMGameIntegration:
             travel_fatigue_resistance=random.randint(8, 16),
             rivalry_motivation=random.randint(10, 18),
             playoff_experience=random.randint(5, 15),
-            positioning_iq=max(5, player.overall_rating() + random.randint(-5, 5)),
+            positioning_iq=max(5, _to_20(player.overall_rating() + random.randint(-25, 25))),
             system_adaptability=random.randint(8, 16),
             
             # Assign personality type based on attributes

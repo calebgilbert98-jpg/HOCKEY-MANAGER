@@ -23,7 +23,8 @@ everything else falls back to sensible defaults::
 
 * ``team`` matches a ``team_name`` from teams.csv (blank = free agent).
 * ``position`` is one of C, LW, RW, LD, RD, D, G (case-insensitive).
-* Attributes are Puck Dynasty's internal ~50 scale (roughly 1-60).
+* Attributes are the ~50 scale (roughly 1-60); doubled to the native
+* 100-scale on import.
 * ``height`` may be like ``6'1"`` or centimetres; ``weight`` in lbs.
 
 Use :func:`write_templates` to generate starter files with an example row.
@@ -42,7 +43,8 @@ PLAYER_HEADERS = [
     "first_name", "last_name", "team", "position", "age", "nationality",
     "height", "weight", "handedness", "jersey_number", "salary",
     "contract_years", "potential",
-    # core attributes (internal ~50 scale)
+    # core attributes (CSV files use the ~50 scale; doubled to the native
+    # 100-scale on import below)
     "skating", "shooting", "passing", "deking", "offensive_awareness",
     "defensive_awareness", "checking", "faceoffs", "strength",
     "goaltending",
@@ -197,8 +199,9 @@ def import_league_from_csv(teams_path: str, players_path: str,
             if raw == "":
                 continue
             try:
+                # CSV attributes are ~50 scale; double to the native 100-scale.
                 setattr(p, attr,
-                        max(1, min(99, _to_int(raw, 30))))
+                        max(1, min(99, _to_int(raw, 30) * 2)))
             except AttributeError:
                 pass
         if (pr.get("nationality") or "").strip():

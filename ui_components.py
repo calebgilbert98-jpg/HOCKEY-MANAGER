@@ -411,7 +411,7 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Weight:", "200 lbs"),     # Placeholder
             ("Potential:", self.player.potential_grade),
             ("NHL Games:", str(self.player.nhl_games_played)),
-            ("Morale:", f"{self.player.morale}/20"),
+            ("Morale:", f"{self.player.morale}/100"),
             ("Waiver Status:", "Exempt" if self.player.nhl_games_played < 160 else "Required")
         ]
         
@@ -1206,8 +1206,8 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Form", "Good"),
             ("Consistency", f"{_to_100_scale(self.player.consistency)}"),
             ("Big Game Player", f"{_to_100_scale(self.player.important_matches)}"),
-            ("Injury History", "Clean" if self.player.injury_proneness < 10 else "Concerning"),
-            ("Morale", f"{self.player.morale}/20"),
+            ("Injury History", "Clean" if self.player.injury_proneness < 50 else "Concerning"),
+            ("Morale", f"{self.player.morale}/100"),
             ("Development", "Improving" if self.player.age < 25 else "Stable"),
             ("Work Rate", f"{_to_100_scale(self.player.work_rate)}"),
             ("Leadership", f"{_to_100_scale(self.player.leadership)}")
@@ -1867,7 +1867,7 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Acceleration", getattr(self.player, 'acceleration', 10)),
             ("Balance", getattr(self.player, 'balance', 10)),
             ("Stamina", getattr(self.player, 'stamina', 10)),
-            ("Durability", 20 - getattr(self.player, 'injury_proneness', 10)),
+            ("Durability", 100 - getattr(self.player, 'injury_proneness', 50)),
         ]
         
         for i, (label, value) in enumerate(physical_attrs):
@@ -1905,11 +1905,11 @@ class PlayerProfileWindow(tk.Toplevel):
         health_grid.grid_columnconfigure(1, weight=1)
         
         # Health information
-        injury_prone = getattr(self.player, 'injury_proneness', 10)
-        durability = 20 - injury_prone
+        injury_prone = getattr(self.player, 'injury_proneness', 50)
+        durability = 100 - injury_prone
         
         health_info = [
-            ("Injury Proneness:", f"{injury_prone}/20 ({'Low' if injury_prone <= 5 else 'Medium' if injury_prone <= 10 else 'High'})"),
+            ("Injury Proneness:", f"{injury_prone}/100 ({'Low' if injury_prone <= 25 else 'Medium' if injury_prone <= 55 else 'High'})"),
             ("Current Health:", "100%" if not getattr(self.player, 'is_injured', False) else "Injured"),
             ("Days Missed (Season):", f"{getattr(self.player, 'days_missed', 0)} days"),
             ("Career Games Missed:", f"{getattr(self.player, 'career_games_missed', 0)} games"),
@@ -2643,8 +2643,8 @@ class PlayerProfileWindow(tk.Toplevel):
     def _calculate_consistency_index(self):
         """Calculate consistency based on determination and discipline."""
         consistency = (self.player.determination + self.player.discipline + 
-                      getattr(self.player, 'composure', 10)) / 3
-        return min(10.0, max(1.0, consistency / 2.0))
+                      getattr(self.player, 'composure', 50)) / 3
+        return min(10.0, max(1.0, consistency / 10.0))
 
     def _calculate_development_potential(self):
         """Calculate development potential based on age and potential grade."""
@@ -2666,11 +2666,11 @@ class PlayerProfileWindow(tk.Toplevel):
 
     def _calculate_injury_risk(self):
         """Calculate injury risk factor."""
-        injury_proneness = getattr(self.player, 'injury_proneness', 10)
+        injury_proneness = getattr(self.player, 'injury_proneness', 50)
         age = self.player.age
         
         # Higher injury proneness and age = higher risk
-        base_risk = injury_proneness / 2.0
+        base_risk = injury_proneness / 10.0
         
         if age >= 30:
             age_factor = 1.3

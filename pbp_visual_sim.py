@@ -591,6 +591,18 @@ class PBPVisualSim(tk.Toplevel):
         except Exception:
             self._tension_base = {"tension": 0.0, "drivers": []}
 
+        # -- situations factor: the room, the bench, and the kids, compounded
+        #    into each side's pre-game finishing edge (own channel) --
+        self._situation = {"home": None, "away": None}
+        try:
+            if _reputation:
+                self._situation["home"] = _reputation.situations_factor(
+                    home_team, {"is_playoff": is_playoff})
+                self._situation["away"] = _reputation.situations_factor(
+                    away_team, {"is_playoff": is_playoff})
+        except Exception:
+            pass
+
         # -- event stream state --
         self.events = []          # filled by sim thread via listener
         self.cursor = 0
@@ -4079,6 +4091,36 @@ class PBPVisualSim(tk.Toplevel):
                      anchor="e").pack(side="left")
             tk.Label(row, text=d.get("label", ""), bg=CONTENT_BG, fg=TEXT,
                      font=(FONT, 9), anchor="w").pack(side="left", padx=(8, 0))
+
+        # Situations channel: each side's pre-game edge and what's driving it.
+        try:
+            sit = getattr(self, "_situation", None) or {}
+            shown = False
+            for key in ("home", "away"):
+                bd = sit.get(key)
+                if not bd:
+                    continue
+                if not shown:
+                    tk.Label(lst, text="SITUATIONS -- finishing edge",
+                             bg=CONTENT_BG, fg=MUTED,
+                             font=(FONT, 8, "bold")).pack(anchor="w",
+                                                          padx=4, pady=(6, 0))
+                    shown = True
+                sc = bd.get("score", 0)
+                fg = "#ff9f5c" if sc > 0 else ("#7bc96f" if sc < 0 else MUTED)
+                sign = "+" if sc > 0 else ""
+                tk.Label(lst, text=f"{bd.get('team', key)}: {sign}{sc:g}",
+                         bg=CONTENT_BG, fg=fg,
+                         font=(FONT, 9, "bold")).pack(anchor="w", padx=4)
+                for drv in (bd.get("drivers") or [])[:4]:
+                    v = drv.get("value", 0)
+                    fg2 = "#ff9f5c" if v > 0 else "#7bc96f"
+                    s2 = "+" if v > 0 else ""
+                    tk.Label(lst, text=f"    {s2}{v:g}  {drv.get('label', '')}",
+                             bg=CONTENT_BG, fg=fg2,
+                             font=(FONT, 8)).pack(anchor="w", padx=4)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------

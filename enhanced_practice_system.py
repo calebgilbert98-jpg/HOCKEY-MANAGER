@@ -213,7 +213,7 @@ class PracticeEngine:
                 )
                 
                 if improvement > 0:
-                    new_value = min(50, current_value + improvement)  # internal ~50 scale (100 display)
+                    new_value = min(100, current_value + improvement)  # native 100-scale cap
                     setattr(player, attribute, new_value)
                     skill_gains[attribute] = improvement
         
@@ -261,10 +261,10 @@ class PracticeEngine:
         # Player age factor (younger players learn faster)
         age_mult = self._get_age_multiplier(player.age)
         
-        # Player work ethic (if available)
+        # Player work ethic (if available); work_rate is native 1-100.
         work_ethic_mult = 1.0
         if hasattr(player, 'work_rate'):
-            work_ethic_mult = 0.7 + (player.work_rate / 50) * 0.6
+            work_ethic_mult = 0.7 + (player.work_rate / 100) * 0.6
         
         # Random factor for realism
         random_mult = random.uniform(0.8, 1.2)
@@ -277,12 +277,12 @@ class PracticeEngine:
     def _calculate_skill_improvement(self, current_value: int, effectiveness: float, age: int) -> float:
         """Calculate actual skill point improvement with diminishing returns"""
         
-        # Diminishing returns - harder to improve high attributes
-        if current_value >= 45:
+        # Diminishing returns - harder to improve high attributes (100-scale)
+        if current_value >= 90:
             effectiveness *= 0.2
-        elif current_value >= 38:
+        elif current_value >= 76:
             effectiveness *= 0.5
-        elif current_value >= 30:
+        elif current_value >= 60:
             effectiveness *= 0.8
         
         # Age factor for skill retention
@@ -644,9 +644,9 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         total_players = len(all_players)
         avg_overall = sum(p.overall_rating() for p in all_players) / total_players
         
-        elite_players = [p for p in all_players if p.overall_rating() >= 16]
-        good_players = [p for p in all_players if 13 <= p.overall_rating() < 16]
-        developing_players = [p for p in all_players if p.overall_rating() < 13]
+        elite_players = [p for p in all_players if p.overall_rating() >= 85]
+        good_players = [p for p in all_players if 75 <= p.overall_rating() < 85]
+        developing_players = [p for p in all_players if p.overall_rating() < 75]
         
         # Practice analysis
         active_practitioners = []
@@ -908,7 +908,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             elif filter_value == "Under 25":
                 all_players = [p for p in all_players if p.age < 25]
             elif filter_value == "Needs Development":
-                all_players = [p for p in all_players if p.overall_rating() < 14]
+                all_players = [p for p in all_players if p.overall_rating() < 70]
         
         # Apply sorting
         sort_type = getattr(self, 'sort_var', None)
@@ -1178,7 +1178,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             ("Strength", getattr(player, 'strength', 10)),
             ("Speed", getattr(player, 'speed', 10)),
             ("Stamina", getattr(player, 'stamina', 10)),
-            ("Injury Prone", getattr(player, 'injury_proneness', 10)),
+            ("Injury Prone", getattr(player, 'injury_proneness', 50)),
             ("Aggression", getattr(player, 'aggression', 10)),
             ("Bravery", getattr(player, 'bravery', 10))
         ]

@@ -1955,6 +1955,10 @@ class AdvancedGameSim:
         # FM team-talk boost: team_name -> multiplier (default 1.0)
         self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
 
+        # Situations factor: pre-game room/bench/hunger edge per side,
+        # computed once here (the per-shot loop only reads the multiplier).
+        self._init_situations()
+
         # Initialize performance cache
         from performance_optimizations import get_global_cache
         self.cache = get_global_cache()
@@ -2016,6 +2020,37 @@ class AdvancedGameSim:
     def set_team_talk_boost(self, team_name: str, multiplier: float):
         """FM-style: apply a team-talk/morale multiplier to a team's scoring."""
         self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
+
+    def _init_situations(self):
+        """Per-team pre-game situational finishing edge (own channel).
+
+        Compounds room state, coaching buy-in and youth hunger into one xG
+        multiplier per side (+/-8% at the extremes). Computed ONCE per team
+        per game here in __init__ -- the per-shot hot loop below only reads
+        the stored multiplier, so the factor costs ~1ms per game total.
+        Never raises; inert (1.0) when unused.
+        """
+        self._situation_edge = {
+            self.home_team.team_name: 1.0, self.away_team.team_name: 1.0}
+        self._situation_breakdown = {}
+        try:
+            from reputation_system import situations_factor as _sf
+            _ctx = {"is_playoff": bool(getattr(self, "is_playoff", False))}
+            for _team in (self.home_team, self.away_team):
+                _bd = _sf(_team, _ctx)
+                self._situation_breakdown[_team.team_name] = _bd
+                self._situation_edge[_team.team_name] = float(
+                    _bd.get("xg_mult", 1.0))
+        except Exception:
+            pass
+
+    def _situation_edge_for(self, team_name: str) -> float:
+        """Finishing multiplier for the attacking side from the situations
+        factor. Read per shot; computed per game."""
+        try:
+            return self._situation_edge.get(team_name, 1.0)
+        except Exception:
+            return 1.0
 
     def _select_lines(self, team_name, fatigue=False):
         lineup = self.lineups[team_name]
@@ -2499,7 +2534,7 @@ class AdvancedGameSim:
             shooting_base = slapshot_val
             shot_type = "slap shot"
             
-        # Shooter skill on 1-20 scale (no multiplicative inflation)
+        # Shooter skill on the native 1-100 scale (no multiplicative inflation)
         # Fatigue reduces effectiveness; pressure/position are situational, not skill multipliers
         shooter_skill = (
             shooting_base * 0.3 +
@@ -2599,6 +2634,11 @@ class AdvancedGameSim:
 
         # FM team-talk / morale boost (set via set_team_talk_boost)
         shot_chance *= self.team_boost.get(puck_team_name, 1.0)
+
+        # Situations channel: the room, the bench, and the kids move
+        # finishing a few percent either way. Own channel, like the
+        # controversy momentum channel -- not part of any capped budget.
+        shot_chance *= self._situation_edge_for(puck_team_name)
         shot_chance = max(0.04, min(0.16, shot_chance))
 
         # Shot blocking check
@@ -8399,7 +8439,17 @@ class HockeyManagerGUI(tk.Tk):
         home_goal_expectation += home_own + away_opp
         away_goal_expectation += away_own + home_opp
 
-        # FM-style squad morale modifier (subtle: +/-3%)
+        # Situations channel: room + bench + hunger move goal expectation a
+        # few percent either way -- the same factor the detailed engines
+        # (GameSim, AdvancedGameSim) apply per shot. Computed once per team
+        # per game here; applies to every team in the league, user or AI.
+        # (Replaces the old squad-morale modifier, which situations subsumes.)
+        home_goal_expectation *= self._situation_goal_mult(home_team)
+        away_goal_expectation *= self._situation_goal_mult(away_team)
+
+        # FM-style squad confidence: raw morale average nudges expectations
+        # +/-3% (own channel -- situations reads room structure, this reads
+        # the squad's raw confidence level).
         home_goal_expectation *= self._career_morale_modifier(home_team)
         away_goal_expectation *= self._career_morale_modifier(away_team)
         
@@ -9200,6 +9250,12 @@ class HockeyManagerGUI(tk.Tk):
                 # Coach influence: recent success builds it, losing burns it.
                 rs.develop_coach_influence(s, win_pct=win_pct, is_champ=is_champ,
                                            roster=team.roster)
+            # Roster churn snapshot for next season's situations factor
+            # (gelling vs battle-tested core). Once per team per offseason.
+            try:
+                rs.snapshot_roster_churn(team)
+            except Exception:
+                pass
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
@@ -10068,14 +10124,32 @@ class HockeyManagerGUI(tk.Tk):
         b = self.career.board
         return b.season_wins + b.season_losses + b.season_otl
 
+    def _situation_goal_mult(self, team) -> float:
+        """Quick-sim goal-expectation multiplier from the situations factor
+        (room state, coaching buy-in, youth hunger). Same 0.92-1.08 range the
+        detailed engines use; computed once per team per game. Never raises.
+        """
+        try:
+            from reputation_system import situations_factor as _sf
+            return float(_sf(team, {}).get("xg_mult", 1.0))
+        except Exception:
+            return 1.0
+
     def _career_morale_modifier(self, team) -> float:
-        """Subtle goal-expectation modifier from squad morale (0.97-1.03)."""
+        """FM-style squad-confidence modifier from average morale (0.97-1.03).
+
+        Native 1-100 morale: 70 is neutral, each point moves expectations
+        0.1% -- the original +/-3% intent, rescaled from the old 1-10 math.
+        Own channel next to the situations factor: situations reads room
+        structure, bench buy-in and hunger counts; this reads the squad's
+        raw confidence level. Applied only in the lightweight quick-sim.
+        """
         try:
             roster = getattr(team, "roster", []) or []
             if not roster:
                 return 1.0
-            avg = sum((getattr(p, "morale", 7) or 7) for p in roster) / len(roster)
-            return 1.0 + (avg - 7) * 0.01
+            avg = sum((getattr(p, "morale", 70) or 70) for p in roster) / len(roster)
+            return max(0.97, min(1.03, 1.0 + (avg - 70) * 0.001))
         except Exception:
             return 1.0
 
@@ -10094,8 +10168,8 @@ class HockeyManagerGUI(tk.Tk):
         fx = self.career.training.weekly_effects()
         if fx["morale_delta"]:
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
-                p.morale = max(1, min(10, m + (1 if fx["morale_delta"] > 0 else -1)))
+                m = getattr(p, "morale", 70) or 70
+                p.morale = max(1, min(100, m + (5 if fx["morale_delta"] > 0 else -5)))
         import random as _r
         if _r.random() < 0.02 * fx["injury_risk_mult"]:
             candidates = [p for p in (getattr(team, "roster", []) or [])
@@ -10472,8 +10546,8 @@ class HockeyManagerGUI(tk.Tk):
         total_board = sum(a.get("board_effect", 0) for a in answers)
         if total_morale:
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
-                p.morale = max(1, min(10, m + (1 if total_morale > 0 else -1)))
+                m = getattr(p, "morale", 70) or 70
+                p.morale = max(1, min(100, m + (5 if total_morale > 0 else -5)))
         if total_board:
             self.career.board.confidence = max(0, min(100, self.career.board.confidence + total_board))
         summary = f"{kind}: " + "; ".join(a.get("label", "") for a in answers)
@@ -10516,13 +10590,13 @@ class HockeyManagerGUI(tk.Tk):
 
             # Dressing room mood swing
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
+                m = getattr(p, "morale", 70) or 70
                 h = getattr(p, "happiness", 70) or 70
                 if user_won:
-                    p.morale = min(10, m + 1)
+                    p.morale = min(100, m + 5)
                     p.happiness = min(100, h + 3)
                 else:
-                    p.morale = max(1, m - 1)
+                    p.morale = max(1, m - 5)
                     p.happiness = max(0, h - 3)
 
             if self.career.board.sacked:
@@ -11130,6 +11204,7 @@ class HockeyManagerGUI(tk.Tk):
             person.contract.salary = person.salary
             person.contract.years_remaining = person.contract_years
             # Track market-setting contracts (star + top-5 AAV)
+            _set_market = False
             try:
                 if _cap_sys is not None:
                     _season = getattr(getattr(self, 'league', None),
@@ -11143,6 +11218,20 @@ class HockeyManagerGUI(tk.Tk):
                             'story': (f"{person.full_name}'s "
                                       f"${person.salary:,} deal sets the market "
                                       f"-- comparable stars will demand more.")})
+            except Exception:
+                pass
+            # Contract-decision fallout: overpay verdict, fan beef, GM rep,
+            # and GM-GM heat when the deal resets the market. The salary
+            # engine itself (SalaryCapSystem) is untouched.
+            try:
+                from reputation_system import evaluate_contract_decision
+                _cd = evaluate_contract_decision(
+                    person, person.salary, asking_price,
+                    team=self.user_team, league=self.league,
+                    market_setter=bool(_set_market))
+                if _cd.get("story"):
+                    self.news_log.append({'date': self.current_date,
+                                          'story': _cd["story"]})
             except Exception:
                 pass
             if not extension:
@@ -14036,7 +14125,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             
             # Determine morale status for display
             morale_str = ""
-            if player.morale >= 15:
+            if player.morale >= 75:
                 morale_str = "Very Happy"
                 morale_tag = "high_morale"
             elif player.morale >= 10:

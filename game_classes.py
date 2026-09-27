@@ -40,13 +40,13 @@ class GameBalance:
 def to_100_scale(value):
     """DEPRECATED: Attributes are now native 100-scale. This is kept for
     backward compatibility with old saves and external callers.
+
+    Now a clamp-only passthrough. The old heuristic (doubling values < 55)
+    corrupted legitimate native sub-55 ratings, e.g. prospects displayed
+    at twice their real overall in scouting windows.
     """
     try:
-        v = float(value)
-        # If value looks like old 50-scale (< 55), convert; otherwise passthrough
-        if v < 55:
-            return max(1, min(100, int(round(v * 2))))
-        return max(1, min(100, int(round(v))))
+        return max(1, min(100, int(round(float(value)))))
     except (TypeError, ValueError):
         return 50
 
@@ -217,7 +217,7 @@ class Player:
     
     consistency: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     important_matches: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
-    morale: int = 10
+    morale: int = 70  # 1-100 scale (form/confidence)
 
     # Football Manager-style career fields (happiness, squad status, chats)
     happiness: int = 70  # 0-100, how happy the player is at the club
@@ -250,9 +250,9 @@ class Player:
     games_remaining_injured: int = 0
     
     # Development attributes
-    coachability: int = field(default_factory=lambda: random.randint(25, 45))
-    work_ethic: int = field(default_factory=lambda: random.randint(25, 45))
-    adaptability: int = field(default_factory=lambda: random.randint(25, 45))
+    coachability: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    work_ethic: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    adaptability: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     team_chemistry: int = field(default_factory=lambda: random.randint(10, 20))
 
     # Traits: exceptional abilities (e.g. 'big_hitter', 'speedster') inferred
@@ -314,21 +314,21 @@ class Player:
     waiver_days: int = 0
     nhl_games_played: int = field(default_factory=lambda: random.randint(0, 500))
 
-    skating: int = field(default_factory=lambda: random.randint(25, 45))
-    strength: int = field(default_factory=lambda: random.randint(25, 45))
-    injury_proneness: int = field(default_factory=lambda: random.randint(1, 20))
+    skating: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    strength: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    injury_proneness: int = field(default_factory=lambda: max(5, min(98, int(random.gauss(45, 20)))))  # 1-100; higher = more prone
 
-    shooting: int = field(default_factory=lambda: random.randint(25, 45))
-    passing: int = field(default_factory=lambda: random.randint(25, 45))
-    deking: int = field(default_factory=lambda: random.randint(25, 45))
+    shooting: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    passing: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    deking: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
 
-    offensive_awareness: int = field(default_factory=lambda: random.randint(25, 45))
-    defensive_awareness: int = field(default_factory=lambda: random.randint(25, 45))
+    offensive_awareness: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    defensive_awareness: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     
-    checking: int = field(default_factory=lambda: random.randint(25, 45))
-    faceoffs: int = field(default_factory=lambda: random.randint(25, 45))
+    checking: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    faceoffs: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     
-    goaltending: int = field(default_factory=lambda: random.randint(25, 45))
+    goaltending: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     
     shoot_pass_tendency: int = field(default_factory=lambda: random.randint(0, 100))
     hitting_tendency: int = field(default_factory=lambda: random.randint(0, 100))
@@ -343,57 +343,57 @@ class Player:
     y: int = 0  # Y position on ice
 
     # New attributes (all initialized 5-20)
-    stickhandling: int = field(default_factory=lambda: random.randint(25, 45))
-    vision: int = field(default_factory=lambda: random.randint(25, 45))
-    shooting_accuracy: int = field(default_factory=lambda: random.randint(25, 45))
-    shooting_power: int = field(default_factory=lambda: random.randint(25, 45))
-    passing_accuracy: int = field(default_factory=lambda: random.randint(25, 45))
-    passing_creativity: int = field(default_factory=lambda: random.randint(25, 45))
-    first_pass: int = field(default_factory=lambda: random.randint(25, 45))
-    breakout_passes: int = field(default_factory=lambda: random.randint(25, 45))
-    forechecking: int = field(default_factory=lambda: random.randint(25, 45))
-    puck_protection: int = field(default_factory=lambda: random.randint(25, 45))
-    deflections: int = field(default_factory=lambda: random.randint(25, 45))
-    shot_blocking: int = field(default_factory=lambda: random.randint(25, 45))
-    hockey_iq: int = field(default_factory=lambda: random.randint(25, 45))
-    composure: int = field(default_factory=lambda: random.randint(25, 45))
-    aggressiveness: int = field(default_factory=lambda: random.randint(25, 45))
-    work_rate: int = field(default_factory=lambda: random.randint(25, 45))
-    anticipation: int = field(default_factory=lambda: random.randint(25, 45))
-    decision_making: int = field(default_factory=lambda: random.randint(25, 45))
-    focus: int = field(default_factory=lambda: random.randint(25, 45))
-    confidence: int = field(default_factory=lambda: random.randint(25, 45))
-    acceleration: int = field(default_factory=lambda: random.randint(25, 45))
-    balance: int = field(default_factory=lambda: random.randint(25, 45))
-    endurance: int = field(default_factory=lambda: random.randint(25, 45))
-    agility: int = field(default_factory=lambda: random.randint(25, 45))
-    speed: int = field(default_factory=lambda: random.randint(25, 45))
-    stamina: int = field(default_factory=lambda: random.randint(25, 45))
-    durability: int = field(default_factory=lambda: random.randint(25, 45))
+    stickhandling: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    vision: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    shooting_accuracy: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    shooting_power: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    passing_accuracy: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    passing_creativity: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    first_pass: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    breakout_passes: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    forechecking: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    puck_protection: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    deflections: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    shot_blocking: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    hockey_iq: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    composure: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    aggressiveness: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    work_rate: int = field(default_factory=lambda: random.randint(50, 85))
+    anticipation: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    decision_making: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    focus: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    confidence: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    acceleration: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    balance: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    endurance: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    agility: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    speed: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    stamina: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    durability: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     
     # New attributes replacing pace and offensive_read
-    off_the_puck: int = field(default_factory=lambda: random.randint(25, 45))  # Movement without puck
+    off_the_puck: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))  # Movement without puck
     
     # Physical and tactical attributes
-    wristshot: int = field(default_factory=lambda: random.randint(25, 45))
-    slapshot: int = field(default_factory=lambda: random.randint(25, 45))
-    pokecheck: int = field(default_factory=lambda: random.randint(25, 45))
-    bodycheck: int = field(default_factory=lambda: random.randint(25, 45))
-    one_timer: int = field(default_factory=lambda: random.randint(25, 45))
-    backhand: int = field(default_factory=lambda: random.randint(25, 45))
-    faceoff_wins: int = field(default_factory=lambda: random.randint(25, 45))
-    screen_shots: int = field(default_factory=lambda: random.randint(25, 45))
-    loose_puck: int = field(default_factory=lambda: random.randint(25, 45))
-    creativity: int = field(default_factory=lambda: random.randint(25, 45))
-    pressure_player: int = field(default_factory=lambda: random.randint(25, 45))  # Performance under pressure
+    wristshot: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    slapshot: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    pokecheck: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    bodycheck: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    one_timer: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    backhand: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    faceoff_wins: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    screen_shots: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    loose_puck: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    creativity: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    pressure_player: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))  # Performance under pressure
     # Goalie-specific attributes
-    reflexes: int = field(default_factory=lambda: random.randint(25, 45))
-    positioning: int = field(default_factory=lambda: random.randint(25, 45))
-    rebound_control: int = field(default_factory=lambda: random.randint(25, 45))
-    puck_handling: int = field(default_factory=lambda: random.randint(25, 45))
-    glove_hand: int = field(default_factory=lambda: random.randint(25, 45))
-    stick_side: int = field(default_factory=lambda: random.randint(25, 45))
-    breakaway_skill: int = field(default_factory=lambda: random.randint(25, 45))
+    reflexes: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    positioning: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    rebound_control: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    puck_handling: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    glove_hand: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    stick_side: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
+    breakaway_skill: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     
     # Waiver attributes
     on_waivers: bool = False
@@ -555,19 +555,49 @@ class Player:
             )
         return max(1, min(99, int(rating)))
     def _potential_cap(self) -> int:
-        """Overall-rating ceiling implied by the player's potential grade (50-scale)."""
+        """Overall-rating ceiling implied by the player's potential grade.
+
+        Grades map onto the live overall scale (generated players sit
+        ~62-83; generational talents reach ~90). Tier gaps preserve the
+        original design's spacing (a full grade ~ 6-7 points).
+        """
         g = (self.potential_grade or 'C').strip().upper()
-        base = {'A': 48, 'B': 44, 'C': 40, 'D': 35, 'F': 30}
-        cap = base.get(g[:1], 40)
+        base = {'A': 87, 'B': 82, 'C': 76, 'D': 69, 'F': 62}
+        cap = base.get(g[:1], 76)
         if len(g) > 1:
             if g[1] == '+':
-                cap += 2
+                cap += 3
             elif g[1] == '-':
-                cap -= 2
+                cap -= 3
         return cap
 
     # Ordered grade ladder for dynamic potential movement
     POTENTIAL_LADDER = ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
+
+    # Development curves per potential grade. Higher-touted prospects
+    # develop faster but peak earlier; lower-touted types develop slower and
+    # peak later -- the late-bloomer shape (Zetterberg/Datsyuk). Values mirror
+    # the draft generator's grade table.
+    GRADE_DEVELOPMENT = {
+        "A+": {"development_speed": 1.5, "peak_age": 25},
+        "A":  {"development_speed": 1.4, "peak_age": 26},
+        "A-": {"development_speed": 1.3, "peak_age": 26},
+        "B+": {"development_speed": 1.2, "peak_age": 27},
+        "B":  {"development_speed": 1.1, "peak_age": 27},
+        "B-": {"development_speed": 1.0, "peak_age": 27},
+        "C+": {"development_speed": 0.9, "peak_age": 28},
+        "C":  {"development_speed": 0.8, "peak_age": 28},
+        "C-": {"development_speed": 0.7, "peak_age": 29},
+        "D":  {"development_speed": 0.6, "peak_age": 30},
+        "D+": {"development_speed": 0.6, "peak_age": 30},
+        "F":  {"development_speed": 0.5, "peak_age": 31},
+    }
+
+    def _grade_development(self) -> dict:
+        g = (self.potential_grade or "C").strip().upper()
+        return self.GRADE_DEVELOPMENT.get(g,
+               self.GRADE_DEVELOPMENT.get(g[:1], {"development_speed": 0.8,
+                                                 "peak_age": 28}))
 
     def update_potential_from_season(self):
         """Dynamically adjust potential_grade based on just-completed season.
@@ -644,10 +674,15 @@ class Player:
             self.contract.years_remaining -= 1
 
         potential_cap = self._potential_cap()
+        dev = self._grade_development()
 
-        if self.age < GameBalance.PEAK_AGE_START and self.overall_rating() < potential_cap:
-            # Development closes a fraction of the gap to the player's ceiling
-            # each year: prospects surge, established players refine slowly.
+        # Development closes a fraction of the gap to the player's ceiling
+        # each year: prospects surge, established players refine slowly.
+        # Higher-touted grades develop faster (development_speed) but stop
+        # earlier (peak_age); late-round types grow slower and longer.
+        # Peak age is the last developing year: a late-blooming grade keeps
+        # growing long after an early-peaking one has stopped.
+        if self.age <= dev["peak_age"] and self.overall_rating() < potential_cap:
             gap = potential_cap - self.overall_rating()
             if self.age <= 20:
                 frac = 0.25
@@ -657,9 +692,21 @@ class Player:
                 frac = 0.10
             else:
                 frac = 0.05
+            frac *= dev["development_speed"]
             frac *= random.uniform(0.8, 1.2)
-            # ~0.06 overall per attribute point (weighted average of ~20 attrs)
-            attr_points = min(120, max(1, int(gap * frac / 0.06)))
+            # Convert the desired overall gain into attribute points. A +1 to a
+            # random OVR attribute is worth ~1/len(ovr_attrs) overall, and 75%
+            # of development points land on OVR attributes (empirically ~0.9x
+            # after weight skew and flavor-list overlap).
+            gain = gap * frac
+            # Surge cap scales with the grade's development speed so elite
+            # teens can actually surge; floor keeps ceilings reachable
+            # instead of asymptoting forever short of them. Never overshoot.
+            gain = min(gain, 7.0 * dev["development_speed"])
+            gain = max(gain, 2.0 * dev["development_speed"])
+            gain = min(gain, gap)
+            per_point = 0.9 / max(1, len(self._ovr_attributes()))
+            attr_points = max(1, int(gain / per_point))
             for _ in range(attr_points):
                 self._change_random_attribute(1)
         elif self.age > GameBalance.PEAK_AGE_END:
@@ -932,6 +979,13 @@ class Player:
         }
         return stat_mapping.get(stat_type, 0)
 
+def _staff_attr_100() -> int:
+    """Lifelike 1-100 staff attribute: bell curve around 65 (NHL-calibre
+    competence), clamped 30-99. True 90+ elites and sub-40 liabilities are
+    rare -- the granularity the sim engine deserves."""
+    return max(30, min(99, int(random.gauss(65, 12))))
+
+
 @dataclass
 class Staff:
     """Represents a non-player staff member with detailed EHM-style attributes."""
@@ -943,50 +997,50 @@ class Staff:
     nationality: str = field(default_factory=lambda: random.choice(['USA', 'Canada', 'Russia', 'Sweden', 'Finland', 'Czech Republic']))
     
     # Core Coaching Attributes (1-20 scale)
-    coaching_forwards: int = field(default_factory=lambda: random.randint(8, 18))
-    coaching_defensemen: int = field(default_factory=lambda: random.randint(8, 18))
-    coaching_goalies: int = field(default_factory=lambda: random.randint(8, 18))
+    coaching_forwards: int = field(default_factory=lambda: _staff_attr_100())
+    coaching_defensemen: int = field(default_factory=lambda: _staff_attr_100())
+    coaching_goalies: int = field(default_factory=lambda: _staff_attr_100())
     
     # Tactical Knowledge
-    tactical_knowledge: int = field(default_factory=lambda: random.randint(8, 18))
-    game_preparation: int = field(default_factory=lambda: random.randint(8, 18))
-    match_preparation: int = field(default_factory=lambda: random.randint(8, 18))
+    tactical_knowledge: int = field(default_factory=lambda: _staff_attr_100())
+    game_preparation: int = field(default_factory=lambda: _staff_attr_100())
+    match_preparation: int = field(default_factory=lambda: _staff_attr_100())
     
     # Player Development
-    working_with_youngsters: int = field(default_factory=lambda: random.randint(8, 18))
-    player_development: int = field(default_factory=lambda: random.randint(8, 18))
+    working_with_youngsters: int = field(default_factory=lambda: _staff_attr_100())
+    player_development: int = field(default_factory=lambda: _staff_attr_100())
     
     # Management Skills
-    man_management: int = field(default_factory=lambda: random.randint(8, 18))
-    motivating: int = field(default_factory=lambda: random.randint(8, 18))
-    discipline: int = field(default_factory=lambda: random.randint(8, 18))
-    leadership: int = field(default_factory=lambda: random.randint(8, 18))
+    man_management: int = field(default_factory=lambda: _staff_attr_100())
+    motivating: int = field(default_factory=lambda: _staff_attr_100())
+    discipline: int = field(default_factory=lambda: _staff_attr_100())
+    leadership: int = field(default_factory=lambda: _staff_attr_100())
     
     # Scouting Abilities
-    judging_player_ability: int = field(default_factory=lambda: random.randint(8, 18))
-    judging_player_potential: int = field(default_factory=lambda: random.randint(8, 18))
+    judging_player_ability: int = field(default_factory=lambda: _staff_attr_100())
+    judging_player_potential: int = field(default_factory=lambda: _staff_attr_100())
     
     # Communication & Relationships
-    media_handling: int = field(default_factory=lambda: random.randint(8, 18))
-    determination: int = field(default_factory=lambda: random.randint(8, 18))
-    adaptability: int = field(default_factory=lambda: random.randint(8, 18))
+    media_handling: int = field(default_factory=lambda: _staff_attr_100())
+    determination: int = field(default_factory=lambda: _staff_attr_100())
+    adaptability: int = field(default_factory=lambda: _staff_attr_100())
     
     # Specialized Skills (position-dependent)
-    level_of_discipline: int = field(default_factory=lambda: random.randint(8, 18))
-    attacking_coaching: int = field(default_factory=lambda: random.randint(8, 18))
-    defensive_coaching: int = field(default_factory=lambda: random.randint(8, 18))
-    mental_coaching: int = field(default_factory=lambda: random.randint(8, 18))
-    technical_coaching: int = field(default_factory=lambda: random.randint(8, 18))
+    level_of_discipline: int = field(default_factory=lambda: _staff_attr_100())
+    attacking_coaching: int = field(default_factory=lambda: _staff_attr_100())
+    defensive_coaching: int = field(default_factory=lambda: _staff_attr_100())
+    mental_coaching: int = field(default_factory=lambda: _staff_attr_100())
+    technical_coaching: int = field(default_factory=lambda: _staff_attr_100())
 
-    # Morale (1-20 scale, display-only; the sim engine does not read staff morale)
-    morale: int = field(default_factory=lambda: random.randint(5, 17))
+    # Morale (1-100 scale, display-only; the sim engine does not read staff morale)
+    morale: int = field(default_factory=lambda: max(10, min(99, int(random.gauss(60, 15)))))
     
     # Contract Information
     salary: int = field(default_factory=lambda: random.randint(75000, 500000))
     contract_years: int = field(default_factory=lambda: random.randint(1, 5))
     
-    # Performance Tracking
-    reputation: int = field(default_factory=lambda: random.randint(5, 15))
+    # Performance Tracking (reputation on the 1-100 scale)
+    reputation: int = field(default_factory=lambda: max(10, min(95, int(random.gauss(50, 15)))))
     experience: int = field(default_factory=lambda: random.randint(1, 30))  # Years of experience
     years_with_team: int = field(default_factory=lambda: random.randint(0, 4))  # Tenure with current team (room-status shelf life)
     gm_trust: int = 70  # 0-100 GM-coach trust; evolves as advice is taken/ignored
@@ -1901,6 +1955,11 @@ class Team:
     # Dressing-room dynamics (Morale screen): event feed + who picks the lines
     dynamics_log: List[dict] = field(default_factory=list)
     line_control: str = "coach"  # 'coach' | 'gm'
+    # Roster continuity for the situations factor: offseason snapshot of NHL
+    # roster names + measured summer turnover (0-1). High churn = gelling
+    # penalty; a kept core = battle-tested bonus. Ticked each offseason.
+    prev_roster_names: List[str] = field(default_factory=list)
+    roster_churn: float = 0.2
     # Forecheck: '2-1-2', '1-2-2', '1-4' (pressure scheme in the other team's end)
     tactic_forecheck: str = "2-1-2"
     # Offensive-zone formation: 'Overload', 'Umbrella', 'Spread', 'Crash the Net'
@@ -1929,8 +1988,8 @@ class Team:
         """Calculates team chemistry based on player morale and leadership."""
         if not self.roster:
             return 50
-        # morale is 1-10 -> 10-100; leadership is internal ~50 scale -> 1-100
-        avg_morale = sum(p.morale for p in self.roster) / len(self.roster) * 10
+        # morale and leadership are both native 1-100
+        avg_morale = sum(p.morale for p in self.roster) / len(self.roster)
         avg_leadership = sum(to_100_scale(p.leadership) for p in self.roster) / len(self.roster)
         return max(1, min(100, int(avg_morale * 0.6 + avg_leadership * 0.4)))
     
