@@ -3353,6 +3353,15 @@ class HockeyManagerGUI(tk.Tk):
     def add_news(self, story):
         """Add a news item to the news log."""
         self.news_log.append({'date': self.current_date, 'story': story})
+        # Bound the feed: keep the most recent stories so the log (and the
+        # save file) can't grow unbounded across seasons.
+        try:
+            import headlines as _hl
+            cap = _hl.NEWS_LOG_CAP
+        except Exception:
+            cap = 500
+        if len(self.news_log) > cap:
+            del self.news_log[:len(self.news_log) - cap]
         # Update news window if it's open
         if 'news' in self.open_windows and self.open_windows['news'].winfo_exists():
             self.open_windows['news'].populate_news()
@@ -6654,6 +6663,14 @@ class HockeyManagerGUI(tk.Tk):
             
             # ALWAYS advance date and update UI (whether games existed or not)
             self.current_date += timedelta(days=1)
+
+            # Headline hygiene (cheap, once a day): expire inbox news older
+            # than 7 game-days unless the user saved it or it's a milestone
+            # for their team.
+            try:
+                self.user_team.inbox.prune_expired(self.current_date)
+            except Exception:
+                pass
             
             # Clear caches periodically to prevent memory bloat
             if self.current_date.day == 1:  # First day of each month
@@ -6666,6 +6683,13 @@ class HockeyManagerGUI(tk.Tk):
                     self.game_manager._process_monthly_development()
                 except Exception as e:
                     print(f"Player development error (non-fatal): {e}")
+                # Monthly headline check: rare trade requests (risk-model
+                # driven, capped league-wide so it stays rare).
+                try:
+                    import headlines
+                    headlines.monthly_trade_request_check(self)
+                except Exception as e:
+                    print(f"Trade-request check error (non-fatal): {e}")
             
             # Update game_manager's current_date for dashboard synchronization
             self.game_manager.current_date = self.current_date
@@ -7297,6 +7321,12 @@ class HockeyManagerGUI(tk.Tk):
             # Update league standings and store game result for user team games
             self._process_single_game_result(game_date, home_team, away_team, winner, loser, scores, events, notable_events, sim_engine,
                                              stats_from_events=stats_from_events)
+            # Lore: deliver headlines from the watched game (line brawl, ...).
+            try:
+                import headlines
+                headlines.drain_sim_headlines(self, sim_engine)
+            except Exception:
+                pass
             # FM-style: board, profile, morale, post-match presser
             went_ot = len([e for e in (notable_events or []) if isinstance(e, dict) and e.get('period', 0) > 3]) > 0
             self._career_after_user_game(winner, loser, scores, home_team, away_team, went_ot, sim_engine)
@@ -7975,6 +8005,15 @@ class HockeyManagerGUI(tk.Tk):
         # Store minimal game results for performance
         for game_date, home_team, away_team, winner, loser, scores, went_to_ot, full_sim in batch_results:
             home_score, away_score = scores
+
+            # Lore: deliver any headlines the sim collected (line brawls,
+            # ...), including CPU-vs-CPU games.
+            if full_sim is not None:
+                try:
+                    import headlines
+                    headlines.drain_sim_headlines(self, full_sim)
+                except Exception:
+                    pass
 
             # Store minimal game result
             game_result = {

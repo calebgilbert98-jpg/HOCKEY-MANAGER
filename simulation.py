@@ -535,6 +535,10 @@ class GameSim:
         self.notable_events = []
         self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
         self.pbp_listeners = []
+        # Headline specs for the lore system (drained by the caller after the
+        # game via headlines.drain_sim_headlines). Brawls are rare enough
+        # that one list-append per game is the entire overhead.
+        self.pending_headlines = []
         # Pre-game punishment orders need score/period fields set first.
         self._evaluate_punishment_orders()
 
@@ -5457,6 +5461,24 @@ class GameSim:
                            home_team=self.home_team.team_name,
                            away_team=self.away_team.team_name)
             self._live_heat = min(40.0, self._live_heat + 10.0)
+            # Lore: a line brawl is headline news everywhere it happens.
+            # Spec only -- the caller builds/delivers via headlines.py.
+            try:
+                self.pending_headlines.append({
+                    "kind": "line_brawl",
+                    "home": getattr(self.home_team, "team_name", "Home"),
+                    "away": getattr(self.away_team, "team_name", "Away"),
+                    "pairs": [(h.full_name, a.full_name) for h, a in pairs],
+                    "home_score": getattr(self, "home_score", 0),
+                    "away_score": getattr(self, "away_score", 0),
+                    "period": getattr(self, "period", 3),
+                    "involved": (
+                        getattr(self.home_team, "team_name", ""),
+                        getattr(self.away_team, "team_name", ""),
+                    ),
+                })
+            except Exception:
+                pass
             try:
                 from reputation_system import record_game_incident
                 record_game_incident(self.rivalries, self.home_team,

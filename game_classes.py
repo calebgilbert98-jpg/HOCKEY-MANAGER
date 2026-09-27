@@ -1487,6 +1487,16 @@ class EmailMessage:
     requires_response: bool = False
     response_deadline: Optional[date] = None
     priority: int = 1  # 1=Low, 2=Medium, 3=High, 4=Urgent
+
+    # Headline / lore system: rare league news (brawls, trade requests, ...)
+    # expires after news_ttl_days GAME-days unless the user saved it
+    # (is_saved, "save for later") or it marks a major milestone for the
+    # user's own team (is_milestone). game_date_sent anchors the TTL to the
+    # game calendar instead of the wall clock.
+    is_saved: bool = False
+    is_milestone: bool = False
+    news_ttl_days: Optional[int] = None
+    game_date_sent: Optional[date] = None
     
     # Related game objects (for context)
     related_player_id: Optional[str] = None
@@ -1564,6 +1574,40 @@ class EmailInbox:
     def get_unread_messages(self) -> List[EmailMessage]:
         """Get all unread messages."""
         return [msg for msg in self.messages if not msg.is_read]
+
+    def prune_expired(self, game_date) -> int:
+        """Remove headline/news messages older than their TTL (game-days).
+
+        Saved messages (is_saved) and milestones for the user's team
+        (is_milestone) never expire. Only messages carrying news_ttl_days
+        are touched -- everything else keeps the 365-day backstop. Runs
+        once per day-advance; O(n) over the inbox.
+        Returns the number of messages removed.
+        """
+        if game_date is None:
+            return 0
+        kept: List[EmailMessage] = []
+        removed_unread = 0
+        for msg in self.messages:
+            ttl = getattr(msg, "news_ttl_days", None)
+            sent = getattr(msg, "game_date_sent", None)
+            if (ttl is not None and sent is not None
+                    and not getattr(msg, "is_saved", False)
+                    and not getattr(msg, "is_milestone", False)):
+                try:
+                    age = (game_date - sent).days
+                except Exception:
+                    age = 0
+                if age > ttl:
+                    if not msg.is_read:
+                        removed_unread += 1
+                    continue
+            kept.append(msg)
+        removed = len(self.messages) - len(kept)
+        if removed:
+            self.messages = kept
+            self.unread_count = max(0, self.unread_count - removed_unread)
+        return removed
     
     def get_urgent_messages(self) -> List[EmailMessage]:
         """Get all urgent messages."""

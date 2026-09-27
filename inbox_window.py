@@ -19,6 +19,7 @@ class InboxWindow(ctk.CTkToplevel):
         ("All", "all"),
         ("Unread", "unread"),
         ("Urgent", "urgent"),
+        ("Saved", "saved"),
         ("Trade", "Trade"),
         ("Scouting", "Scouting"),
         ("Contracts", "Contracts"),
@@ -164,7 +165,8 @@ class InboxWindow(ctk.CTkToplevel):
         category_row = ctk.CTkFrame(pill_card, fg_color="transparent")
         category_row.pack(fill='x', padx=8, pady=(2, 8))
         for label, filter_type in self._FILTERS:
-            row = (status_row if filter_type in ("all", "unread", "urgent")
+            row = (status_row if filter_type in ("all", "unread", "urgent",
+                                                "saved")
                    else category_row)
             btn = ctk.CTkButton(
                 row, text=label,
@@ -304,6 +306,13 @@ class InboxWindow(ctk.CTkToplevel):
             command=self._delete_current, width=90)
         self.delete_btn.pack(side='left', padx=3)
 
+        # Save for later: pinned messages never auto-expire (headline news
+        # otherwise leaves the inbox after 7 game-days).
+        self.save_btn = self._secondary_button(
+            action_frame, text="📌 Save",
+            command=self._toggle_save_current, width=90)
+        self.save_btn.pack(side='left', padx=3)
+
         # Special action button (initially hidden)
         self.special_action_btn = self._primary_button(
             action_frame, text="", command=None, width=180)
@@ -352,6 +361,8 @@ class InboxWindow(ctk.CTkToplevel):
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Mark as Important",
                                       command=self._mark_current_important)
+        self.context_menu.add_command(label="📌 Save / Unsave",
+                                      command=self._toggle_save_current)
         self.context_menu.add_command(label="Delete",
                                       command=self._delete_current)
 
@@ -414,6 +425,8 @@ class InboxWindow(ctk.CTkToplevel):
         status = "New" if not message.is_read else "Read"
         if message.is_overdue():
             status = "Overdue"
+        if getattr(message, "is_saved", False):
+            status = f"📌 {status}"
 
         # Date formatting
         date_str = message.date_sent.strftime("%m/%d")
@@ -463,6 +476,9 @@ class InboxWindow(ctk.CTkToplevel):
             filtered_messages = self.inbox.get_unread_messages()
         elif filter_type == "urgent":
             filtered_messages = self.inbox.get_urgent_messages()
+        elif filter_type == "saved":
+            filtered_messages = [m for m in self.inbox.messages
+                                 if getattr(m, "is_saved", False)]
         else:
             # Category filter
             filtered_messages = self.inbox.get_messages_by_category(filter_type)
@@ -554,6 +570,22 @@ class InboxWindow(ctk.CTkToplevel):
                 if message.is_overdue():
                     self.content_text.insert(tk.END, "\nOVERDUE")
 
+            # Headline retention note (FM24/EHM-style transparency)
+            ttl = getattr(message, "news_ttl_days", None)
+            if ttl is not None:
+                if getattr(message, "is_milestone", False):
+                    self.content_text.insert(
+                        tk.END, "\n\n⭐ MILESTONE for your club -- kept "
+                               "permanently.")
+                elif getattr(message, "is_saved", False):
+                    self.content_text.insert(
+                        tk.END, "\n\n📌 SAVED by you -- kept until you "
+                               "unsave or delete it.")
+                else:
+                    self.content_text.insert(
+                        tk.END, f"\n\n📰 League news -- leaves your inbox "
+                               f"after {ttl} days unless you save it.")
+
             self.content_text.configure(state='disabled')
 
         # Update button states
@@ -561,9 +593,25 @@ class InboxWindow(ctk.CTkToplevel):
             text="Mark as Unread" if message.is_read else "Mark as Read")
         self.reply_btn.configure(
             state='normal' if message.requires_response else 'disabled')
+        self.save_btn.configure(
+            text="📌 Unsave" if getattr(message, "is_saved", False)
+            else "📌 Save")
 
         # Handle fantasy draft special button
         self._handle_fantasy_draft_button(message)
+
+    def _toggle_save_current(self):
+        """Pin/unpin the selected message ("save for later").
+
+        Saved messages are exempt from the 7-day headline expiry.
+        """
+        if self.selected_message:
+            self.selected_message.is_saved = not getattr(
+                self.selected_message, "is_saved", False)
+            self.save_btn.configure(
+                text="📌 Unsave" if self.selected_message.is_saved
+                else "📌 Save")
+            self._refresh_inbox()
 
     def _mark_current_read(self):
         """Mark current message as read."""

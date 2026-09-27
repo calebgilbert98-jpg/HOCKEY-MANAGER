@@ -229,7 +229,20 @@ class PlayoffBracket:
                            rivalries=getattr(getattr(self, "league", None),
                                              "rivalries", None))
         result = game_sim.simulate_game()
-        
+
+        # Stash headline specs (brawls, ...) for the lore system; the playoff
+        # window drains them via headlines.drain_bracket_headlines().
+        try:
+            pending = list(getattr(game_sim, "pending_headlines", None) or [])
+            if pending:
+                stash = getattr(self, "_pending_headlines", None)
+                if not isinstance(stash, list):
+                    stash = []
+                    self._pending_headlines = stash
+                stash.extend(pending)
+        except Exception:
+            pass
+
         home_score = result.get('home_score', 0)
         away_score = result.get('away_score', 0)
         
@@ -395,6 +408,13 @@ class PlayoffWindow(tk.Toplevel):
         finally:
             dlg.close()
 
+        # Lore: deliver any headlines stashed during the round (brawls, ...).
+        try:
+            import headlines
+            headlines.drain_bracket_headlines(self.parent, self.playoff_bracket)
+        except Exception:
+            pass
+
         # Advance to next round (bracket updates its own current_round)
         self.playoff_bracket.advance_to_next_round(self.playoff_bracket.current_round)
 
@@ -458,6 +478,13 @@ class PlayoffWindow(tk.Toplevel):
         finally:
             if dlg is not None:
                 dlg.close()
+
+        # Lore: deliver any headlines stashed during the tournament.
+        try:
+            import headlines
+            headlines.drain_bracket_headlines(self.parent, self.playoff_bracket)
+        except Exception:
+            pass
 
         self._update_status_display()
         self._display_bracket()
