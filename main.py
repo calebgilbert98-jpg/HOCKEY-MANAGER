@@ -13473,100 +13473,105 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter a valid number for salary.")
 
-class GMOptionsWindow(tk.Toplevel):
+class GMOptionsWindow(ctk.CTkToplevel):
+    """GM Options - executive management tools.
+
+    CustomTkinter rebuild: charcoal background, rounded section cards,
+    teal-accented buttons, CTkSegmentedButton for the game-presentation
+    mode picker. Every action from the ttk version is preserved
+    (shortlist, captains, GM dashboard, team analytics, season goals,
+    auto-negotiate extensions, inbox, mode pick) along with the
+    open_windows registration pattern used by the caller.
+    """
+
     def __init__(self, parent):
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title("GM Options")
-        self.geometry("500x720")
-        self.configure(bg=parent.BG_COLOR)
-        self.style = ttk.Style(self)
-        self.style.theme_use('clam')
-        self.style.configure('TButton', font=(parent.FONT_FAMILY, 11, 'bold'), foreground='white', background=parent.ACCENT_COLOR, padding=(10, 6), borderwidth=0)
-        self.style.map('TButton', background=[('active', parent.ACCENT_ACTIVE), ('hover', parent.ACCENT_HOVER)])
+        self.geometry("520x760")
+        self.configure(fg_color=BG)
+        self.resizable(True, True)
 
-        # Title bar
-        title_bar = ttk.Frame(self, padding=(20, 10))
-        title_bar.pack(fill="x")
-        ttk.Label(title_bar, text="GM Options", font=(parent.FONT_FAMILY, 16, 'bold'), 
-                 background=parent.BG_COLOR, foreground=parent.HEADER_COLOR).pack()
-        
-        # Subtitle
-        subtitle = ttk.Label(title_bar, text="Executive Management Tools", 
-                           font=(parent.FONT_FAMILY, 10), 
-                           background=parent.BG_COLOR, foreground=parent.TEXT_COLOR)
-        subtitle.pack(pady=(0, 5))
+        # Header - plain chrome, not a card
+        header = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        header.pack(fill="x", padx=24, pady=(20, 4))
+        heading(header, "GM Options", size=18).pack(anchor="w")
+        heading(header, "Executive Management Tools", size=11,
+                text_color=TEXT_DIM).pack(anchor="w", pady=(2, 0))
 
-        # Main content frame
-        content_frame = ttk.Frame(self, padding=20)
-        content_frame.pack(fill="both", expand=True)
+        # Scrollable content so nothing is clipped on small displays
+        content = ctk.CTkScrollableFrame(
+            self, fg_color="transparent", corner_radius=0)
+        content.pack(fill="both", expand=True, padx=16, pady=(8, 12))
 
-        # Player Management section
-        player_section = ttk.LabelFrame(content_frame, text="Player Management", padding=15)
-        player_section.pack(fill="x", pady=(0, 15))
-        
-        ttk.Button(player_section, text="Player Shortlist", 
-                  command=self.open_shortlist_window).pack(fill="x", pady=3)
-        ttk.Button(player_section, text="Set Captains", 
-                  command=parent.open_set_captains_window).pack(fill="x", pady=3)
-        
-        # Executive Actions section
-        exec_section = ttk.LabelFrame(content_frame, text="Executive Actions", padding=15)
-        exec_section.pack(fill="x", pady=(0, 15))
-        
-        ttk.Button(exec_section, text="GM Dashboard", 
-                  command=self.open_gm_dashboard).pack(fill="x", pady=3)
-        ttk.Button(exec_section, text="Team Analytics", 
-                  command=self.open_team_analytics).pack(fill="x", pady=3)
-        ttk.Button(exec_section, text="Season Goals", 
-                  command=self.open_season_goals).pack(fill="x", pady=3)
-        
-        # Quick Actions section
-        quick_section = ttk.LabelFrame(content_frame, text="Quick Actions", padding=15)
-        quick_section.pack(fill="x", pady=(0, 15))
-        
-        ttk.Button(quick_section, text="Auto-Negotiate Extensions", 
-                  command=self.auto_negotiate_extensions).pack(fill="x", pady=3)
-        ttk.Button(quick_section, text="Check Inbox", 
-                  command=parent.open_inbox_window).pack(fill="x", pady=3)
+        self._build_section(content, "Player Management", [
+            ("Player Shortlist", self.open_shortlist_window),
+            ("Set Captains", parent.open_set_captains_window),
+        ])
+        self._build_section(content, "Executive Actions", [
+            ("GM Dashboard", self.open_gm_dashboard),
+            ("Team Analytics", self.open_team_analytics),
+            ("Season Goals", self.open_season_goals),
+        ])
+        self._build_section(content, "Quick Actions", [
+            ("Auto-Negotiate Extensions", self.auto_negotiate_extensions),
+            ("Check Inbox", parent.open_inbox_window),
+        ])
+        self._build_presentation_section(content)
 
-        # Game Presentation section — how the user's games are presented:
-        # Quick Sim / Ask Each Game / Watch Live (moved off the crowded menu bar)
-        pres_section = ttk.LabelFrame(content_frame, text="Game Presentation", padding=15)
-        pres_section.pack(fill="x", pady=(0, 15))
-        ttk.Label(pres_section,
-                  text="Your games:").pack(anchor="w", pady=(0, 4))
-        try:
-            from modern_widgets import SegmentedControl
-        except Exception:
-            SegmentedControl = None
-        _labels = [lbl for lbl, _ in self.parent.GAME_MODE_LABELS]
-        _keys = [key for _, key in self.parent.GAME_MODE_LABELS]
-        _current = self.parent._get_user_game_mode()
-        if SegmentedControl is not None:
-            _initial_label = next(lbl for lbl, k in self.parent.GAME_MODE_LABELS
-                                  if k == _current)
-            self._mode_seg = SegmentedControl(
-                pres_section, options=_labels,
-                initial=_labels.index(_initial_label),
-                command=self._on_mode_pick)
-            self._mode_seg.pack(fill="x", pady=3)
-        else:  # fallback: plain buttons
-            self._mode_seg = None
-            for lbl, key in self.parent.GAME_MODE_LABELS:
-                ttk.Button(pres_section, text=lbl,
-                           command=lambda k=key: self._on_mode_pick(
-                               next(l for l, kk in self.parent.GAME_MODE_LABELS
-                                    if kk == k))).pack(fill="x", pady=2)
-        ttk.Label(pres_section,
-                  text="Quick Sim resolves instantly. Watch Live opens the "
-                       "real-time rink. Ask Each Game lets you choose on game day.",
-                  wraplength=380, justify="left",
-                  font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
+        # Close - primary pill pinned at the bottom
+        footer = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        footer.pack(fill="x", padx=24, pady=(0, 18))
+        primary_button(footer, "Close", command=self.destroy).pack(fill="x")
 
-        # Close button
-        ttk.Button(content_frame, text="Close", command=self.destroy).pack(fill="x", pady=(10, 0))
+    # ------------------------------------------------------------------
+    # Layout helpers
+    # ------------------------------------------------------------------
+    def _build_section(self, parent, title, buttons):
+        """Rounded card with a heading and full-width action buttons."""
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
+        card.pack(fill="x", pady=(0, 12), padx=4)
+        heading(card, title, size=13).pack(anchor="w", padx=16, pady=(12, 6))
+        for text, command in buttons:
+            secondary_button(card, text, command=command, anchor="w",
+                             border_width=1, border_color=BORDER).pack(
+                fill="x", padx=12, pady=3)
+        ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
 
+    def _build_presentation_section(self, parent):
+        """Game-presentation mode picker (Quick Sim / Ask Each Game / Watch Live)."""
+        from ctk_theme import TEAL_HOVER  # not in main.py's module import list
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
+        card.pack(fill="x", pady=(0, 12), padx=4)
+        heading(card, "Game Presentation", size=13).pack(
+            anchor="w", padx=16, pady=(12, 4))
+        heading(card, "Your games:", size=11, text_color=TEXT_DIM).pack(
+            anchor="w", padx=16)
+
+        labels = [lbl for lbl, _ in self.parent.GAME_MODE_LABELS]
+        current = self.parent._get_user_game_mode()
+        initial_label = next(
+            (lbl for lbl, key in self.parent.GAME_MODE_LABELS if key == current),
+            labels[0])
+        self._mode_seg = ctk.CTkSegmentedButton(
+            card, values=labels, command=self._on_mode_pick,
+            fg_color=PANEL, selected_color=TEAL, selected_hover_color=TEAL_HOVER,
+            unselected_color=PANEL, unselected_hover_color=BORDER,
+            text_color=TEXT,
+            corner_radius=8, border_width=1)
+        self._mode_seg.pack(fill="x", padx=16, pady=(8, 6))
+        self._mode_seg.set(initial_label)
+
+        heading(card,
+                "Quick Sim resolves instantly. Watch Live opens the real-time "
+                "rink. Ask Each Game lets you choose on game day.",
+                size=10, text_color=TEXT_DIM, wraplength=420, justify="left"
+                ).pack(anchor="w", padx=16, pady=(0, 14))
+
+    # ------------------------------------------------------------------
+    # Actions (logic unchanged from the ttk version)
+    # ------------------------------------------------------------------
     def _on_mode_pick(self, label):
         key = next((k for lbl, k in self.parent.GAME_MODE_LABELS if lbl == label),
                    'ask')
@@ -13578,57 +13583,66 @@ class GMOptionsWindow(tk.Toplevel):
         if 'shortlist' not in self.parent.open_windows or not self.parent.open_windows['shortlist'].winfo_exists():
             self.parent.open_windows['shortlist'] = ShortlistWindow(self.parent)
         self.parent.open_windows['shortlist'].focus_set()
-    
+
     def open_gm_dashboard(self):
         """Open GM dashboard with key team metrics"""
         from windows import GMDashboardWindow
         GMDashboardWindow(self.parent)
-    
+
     def open_team_analytics(self):
         """Open advanced team analytics"""
         from windows import TeamAnalyticsWindow
         TeamAnalyticsWindow(self.parent)
-    
+
     def open_season_goals(self):
         """Open season goals and objectives"""
         from windows import SeasonGoalsWindow
         SeasonGoalsWindow(self.parent)
-    
+
     def auto_negotiate_extensions(self):
         """Auto-negotiate contract extensions with expiring players"""
         expiring = []
         team = self.parent.user_team
-        
+
         # Find players with 1 year left on contract
         for player in team.roster + team.ahl_roster:
             years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 0))
             if years == 1:
                 expiring.append(player)
-        
+
         # Find staff with 1 year left on contract
         for staff in getattr(team, "staff", []):
             years = getattr(staff, "contract_years", getattr(staff, "years_remaining", 0))
             if years == 1:
                 expiring.append(staff)
-        
+
         if not expiring:
             messagebox.showinfo("No Extensions Needed", "No expiring contracts found.")
             return
-        
+
         # Confirm action
-        if not messagebox.askyesno("Confirm Auto-Negotiate", 
+        if not messagebox.askyesno("Confirm Auto-Negotiate",
                                  f"Automatically negotiate extensions with {len(expiring)} expiring contracts?"):
             return
-        
+
         results = []
         for person in expiring:
-            # Ensure salary and contract_years attributes exist
-            salary = getattr(person, "salary", getattr(person.contract, "salary", 750000))
+            # Ensure salary and contract_years attributes exist.
+            # Note: getattr's default is evaluated eagerly, so guard the
+            # contract lookup - Staff objects have salary/contract_years
+            # fields directly and never carry a .contract attribute.
+            contract = getattr(person, "contract", None)
+            if contract is not None:
+                salary = getattr(person, "salary", getattr(contract, "salary", 750000))
+                years = getattr(person, "contract_years", getattr(contract, "years_remaining", 1))
+            else:
+                salary = getattr(person, "salary", 750000)
+                years = getattr(person, "contract_years", 1)
             person.salary = salary
-            person.contract_years = getattr(person, "contract_years", getattr(person.contract, "years_remaining", 1))
+            person.contract_years = years
             accepted = self.parent.handle_contract_offer(person, extension=True)
             results.append(f"{getattr(person, 'full_name', getattr(person, 'name', 'Unknown'))}: {'Accepted' if accepted else 'Rejected'}")
-        
+
         msg = "Auto-Negotiation Results:\n" + "\n".join(results)
         messagebox.showinfo("Extension Results", msg)
 
