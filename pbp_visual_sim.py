@@ -514,10 +514,15 @@ def _build_lines(team):
 class PBPVisualSim(InGamePopup):
     GAME_RATE = 8.0  # game-seconds per real second at 1x
     TICK_DT = 1.0 / 30.0  # real seconds per animation frame (~30fps)
-    # Smooth-skating speeds in rink-feet per real second. Dots glide toward
-    # their targets at constant velocity (no exponential rubber-banding), so
-    # motion reads as continuous skating instead of choppy teleporting.
-    SKATE_SPEED = 30.0   # skaters: brisk but natural on the broadcast view
+    # Dot skating speeds in rink-feet per GAME-second. Like puck flights,
+    # dots move in game-time (scaled by playback speed) so they track the
+    # sim's discrete positions at any speed: at 1x a skater covers ~80
+    # ft per wall-second, fast enough to reach reception spots during a
+    # pass flight instead of lagging a full zone behind (which forced
+    # cross-ice settle glides -- the teleport look).
+    SKATE_SPEED = 30.0   # legacy real-time constant (kept for reference)
+    SKATE_GS = 10.0      # skaters: tracks the sim's p90 positional speed
+    GOALIE_GS = 4.0      # goalies shuffle; they rarely leave the crease
     # Puck flights are measured in game-seconds (playhead), not wall seconds,
     # so the puck always glides between touches no matter the playback speed.
     # At 1x (8 game-sec per wall-sec) a pass reads as ~0.28s of glide.
@@ -525,14 +530,23 @@ class PBPVisualSim(InGamePopup):
     # breakout and a 20-ft dish both travel at believable speeds instead of
     # the long pass becoming a rocket. Speeds in ft per game-second at the
     # 8x playback rate: pass ~64 ft/s real, shot ~96 ft/s real, loose ~24 ft/s.
-    PASS_SPEED_FTGS = 8.0     # pass glide speed
-    SHOT_SPEED_FTGS = 12.0    # shot speed
-    LOOSE_SPEED_FTGS = 3.0    # takeaway / rebound / scatter slide speed
-    MIN_PASS_GS = 0.8
-    MIN_SHOT_GS = 0.5
-    MIN_LOOSE_GS = 0.4
+    PASS_SPEED_FTGS = 16.0    # pass glide speed
+    SHOT_SPEED_FTGS = 24.0    # shot speed
+    LOOSE_SPEED_FTGS = 6.0    # takeaway / rebound / scatter slide speed
+    # Event types that move the puck or stop play: a flight must land
+    # before the next one of these fires, so the puck visibly rests on a
+    # stick between touches instead of living permanently mid-flight
+    # (the "bouncing back and forth on a string" look).
+    _PUCK_TOUCH_TYPES = frozenset({
+        "pass", "shot", "faceoff", "goal", "save", "blocked_shot",
+        "missed_shot", "battle", "takeaway", "penalty", "icing",
+        "offside", "goalie_freeze", "delayed_penalty", "fight",
+    })
+    MIN_PASS_GS = 1.0
+    MIN_SHOT_GS = 1.0
+    MIN_LOOSE_GS = 1.2
     SHOOTOUT_FLIGHT_GS = 2.5
-    GOALIE_SPEED = 14.0  # goalies shuffle; they rarely leave the crease
+    GOALIE_SPEED = 14.0  # legacy real-time constant (kept for reference)
     CEREMONY_SPEED = 6.0  # faceoff glide to the dot: slow and deliberate
     # Quick faceoff beats (no ceremony every whistle): brief whistle freeze,
     # glide to the dot, set, drop. ~1.5s total so stoppages read as breaks
@@ -653,7 +667,10 @@ class PBPVisualSim(InGamePopup):
         # New flights always launch from the puck's current rendered spot, so
         # even an overlap redirects mid-glide instead of snapping (teleport).
         self.puck_flight = None
+        self._flight_cut_short = False
         self.pending_outcome = None
+        self._post_ping = False    # shot flight aimed at the iron
+        self._aimed_miss = False   # shot flight already aimed wide
         self.possession_home = None   # True/False/None
         self.carrier_id = None
         self.penalty_box = set()      # dot_ids
@@ -1752,7 +1769,11 @@ class PBPVisualSim(InGamePopup):
             if teleport:
                 self._move_dot(d, x, y)
             d["tx"], d["ty"] = x, y
-        self.puck["x"], self.puck["y"] = dx, dy
+        if teleport:
+            # Game init only: place the puck on the dot. Everywhere else the
+            # puck glides to the dot via the faceoff ceremony -- snapping it
+            # here (e.g. at a period start) reads as a teleport.
+            self.puck["x"], self.puck["y"] = dx, dy
         # Flush any in-flight shot outcome first: a faceoff always follows a
         # goal, and silently discarding the pending outcome would lose goals.
         if self.pending_outcome is not None and not self._instant:
@@ -2470,7 +2491,18 @@ class PBPVisualSim(InGamePopup):
             self.puck["x"], self.puck["y"] = d["x"] + 1.5, d["y"] + 1.5
         self.puck_target = None
 
-    def _launch_flight(self, x0, y0, x1, y1, dur_gs, tag):
+    def _next_puck_gap(self, t0):
+        """Game-seconds from t0 until the next puck-moving or play-stopping
+        event still ahead in the stream, or None if none is scheduled."""
+        for i in range(self.cursor, len(self.events)):
+            ev = self.events[i]
+            if ev.get("type") in self._PUCK_TOUCH_TYPES:
+                t = ev.get("t", t0)
+                if t > t0 + 0.05:
+                    return t - t0
+        return None
+
+    def _launch_flight(self, x0, y0, x1, y1, dur_gs, tag, cap_to_next=True):
         import time as _t
         # Watchdog timestamp: if this flight lives too long (wall clock),
         # _step force-clears it so consumption can't block forever.
@@ -2481,9 +2513,37 @@ class PBPVisualSim(InGamePopup):
         one, so the old flight's pending handoff is dropped here. Without
         this, a preempted flight's stale arrival state could fire when the
         new flight lands and hand possession to the wrong player.
+
+        The flight is capped so it lands (with the puck resting on the
+        stick) before the sim's next puck touch: a glide that overruns
+        the next event reads as the puck bouncing on a string.
         """
         g0 = self.playhead
+        cut_short = False
+        if cap_to_next and tag != "shot":
+            # Shots always fly their full physical duration: the outcome was
+            # pre-consumed and must apply with the puck at its aimed target
+            # (net/goalie/post/wide). The blocking loop delays the next
+            # event until it lands -- a few game-seconds of lag that
+            # self-corrects at the next sparse stretch.
+            gap = self._next_puck_gap(g0)
+            if gap is not None:
+                allowed = max(1.0, gap)
+                if dur_gs > allowed:
+                    # The sim's next touch comes before the puck could
+                    # physically arrive: truncate instead of compressing.
+                    # The puck travels at true speed for the available
+                    # time and stops short -- reads as a cut-off pass /
+                    # interception, never a teleport. The next event
+                    # picks the puck up from exactly where it is, and
+                    # the arrival handoff is skipped (see landing).
+                    frac = allowed / dur_gs
+                    x1 = x0 + (x1 - x0) * frac
+                    y1 = y0 + (y1 - y0) * frac
+                    dur_gs = allowed
+                    cut_short = True
         self.puck_flight = (x0, y0, x1, y1, g0, g0 + dur_gs, tag)
+        self._flight_cut_short = cut_short
         if tag != "pass":
             self._pass_arrival = None
         if tag != "takeaway":
@@ -2492,6 +2552,10 @@ class PBPVisualSim(InGamePopup):
             self._shootout_pending = None
         if tag != "settle":
             self._settle_carrier = None
+        if tag != "shot":
+            # A preempted shot never lands: drop its aimed-miss/post state.
+            self._post_ping = False
+            self._aimed_miss = False
 
     def _glide_puck_to(self, carrier_dot_id, dur_gs, arrival_kind=None):
         """Start a game-clock puck glide to a dot; the carrier takes over
@@ -2752,8 +2816,14 @@ class PBPVisualSim(InGamePopup):
         else:
             self.puck_flight = None
             self.pending_outcome = None
+        # A goal replay started by the flushed outcome must not run over the
+        # faceoff ceremony -- they both drive the puck and would fight.
+        self._cancel_replay()
         self.carrier_id = None
         self.possession_home = None
+        # The ceremony owns the puck: a stale puck_target from before the
+        # whistle would fight the linesman's glide and pop the puck around.
+        self.puck_target = None
         if self._sound_on and self._sfx is not None:
             try:
                 self._sfx.whistle()
@@ -2956,23 +3026,70 @@ class PBPVisualSim(InGamePopup):
                 gd["glunge"] = (lx, ly, lunge_t)
 
     def _fire_shot(self, sx, sy, nx, outcome):
-        """Launch the puck flight once the shooter has his lane."""
+        """Launch the puck flight once the shooter has his lane.
+
+        The flight is aimed by the already-peeked outcome, so the net is
+        a physical barrier: goals fly inside the mouth, saves die on the
+        goalie, blocks die on the blocker, misses sail wide (or ping the
+        iron) -- the puck never flies through the net without a goal.
+        """
         # Launch from the puck's current spot (on the shooter's stick in the
         # normal case) so the release never snaps.
         sx, sy = self.puck["x"], self.puck["y"]
-        self._launch_flight(sx, sy, nx, 42.5,
-                            self._shot_flight_gs(sx, sy, nx, 42.5), "shot")
+        toward_away = nx > 100  # shooting at AWAY_NET_X=189 or HOME_NET_X=11
+        dirn = 1 if toward_away else -1
+        otype = outcome.get("type") if outcome else None
+        self._post_ping = False
+        self._aimed_miss = False
+        if otype == "goal":
+            # Inside the mouth, off-center: it visibly crosses the line.
+            tx, ty = nx + 0.7 * dirn, 42.5 + random.uniform(-1.1, 1.1)
+        elif otype == "save":
+            gd = self._dot_by_id(self._cur_goalie.get(
+                "away" if toward_away else "home"))
+            if gd is not None:
+                tx, ty = gd["x"], gd["y"]
+            else:
+                tx, ty = nx, 42.5 + random.uniform(-1.2, 1.2)
+        elif otype == "blocked_shot":
+            bd = self._dot_by_player(outcome.get("blocker"))
+            if bd is not None:
+                tx, ty = bd["x"], bd["y"]
+            else:
+                tx, ty = (sx + nx) / 2.0, (sy + 42.5) / 2.0
+        elif otype == "missed_shot":
+            if random.random() < 0.22:
+                # Off the iron: dead on the drawn post, then a deflection.
+                tx, ty = nx, 42.5 + random.choice((-1.6, 1.6))
+                self._post_ping = True
+            else:
+                # Wide of the post: past the goal line but outside the net.
+                tx, ty = (nx + 6.0 * dirn,
+                          42.5 + random.choice((-1.0, 1.0))
+                          * random.uniform(4.5, 8.5))
+                self._aimed_miss = True
+        else:
+            tx, ty = nx, 42.5
+        self._launch_flight(sx, sy, tx, ty,
+                            self._shot_flight_gs(sx, sy, tx, ty), "shot")
         self.pending_outcome = outcome
 
     def _step_pending_shot(self, now):
         ps = self._pending_shot
         if ps is None:
             return
-        if now >= ps["fire_at"] or self._faceoff_ceremony:
+        if self._faceoff_ceremony:
+            # Whistle blew while the shooter was skating in: the play is
+            # dead. Discard the shot -- its outcome was already flushed and
+            # applied by _on_faceoff. Firing it now would fight the
+            # ceremony's puck glide and pop the puck across the ice.
+            self._pending_shot = None
+            return
+        if now >= ps["fire_at"]:
             d = self.dots.get(ps["shooter_id"])
             if d is not None:
                 gap = math.hypot(d["x"] - ps["sx"], d["y"] - ps["sy"])
-                if gap > 3.0 and not self._faceoff_ceremony:
+                if gap > 3.0:
                     # Not there yet -- keep skating, don't snap him (or the
                     # puck on his stick) across the ice. Re-check shortly.
                     ps["fire_at"] = now + 0.1
@@ -4401,6 +4518,7 @@ class PBPVisualSim(InGamePopup):
             while (self.cursor < len(self.events)
                    and self.events[self.cursor].get("t", 0) <= target
                    and not self._replay
+                   and not self._faceoff_ceremony
                    and self.puck_flight is None):
                 ev = self.events[self.cursor]
                 self.cursor += 1
@@ -4439,17 +4557,36 @@ class PBPVisualSim(InGamePopup):
         if self.puck_flight:
             x0, y0, x1, y1, g0, g1, tag = self.puck_flight
             k = min(1.0, (self.playhead - g0) / max(0.001, g1 - g0))
-            e = 1 - (1 - k) ** 2  # ease-out
-            self.puck["x"] = x0 + (x1 - x0) * e
-            self.puck["y"] = y0 + (y1 - y0) * e
+            # Constant velocity: a real puck glides on ice at steady pace.
+            # (Ease-out made every flight decelerate into its target like
+            # the puck was magnet-drawn -- the "on a string" look.)
+            self.puck["x"] = x0 + (x1 - x0) * k
+            self.puck["y"] = y0 + (y1 - y0) * k
             if k >= 1.0:
                 self.puck_flight = None
-                if self.pending_outcome is not None:
+                cut = self._flight_cut_short
+                self._flight_cut_short = False
+                if cut:
+                    # Truncated flight: the sim's next touch arrived before
+                    # the puck could physically get there. It stops where
+                    # it is -- no arrival handoff (the receiver never got
+                    # it), no scatter. The imminent next event claims the
+                    # puck from exactly this spot.
+                    pass
+                elif self.pending_outcome is not None:
                     oc = self.pending_outcome
                     self.pending_outcome = None
-                    self._apply_outcome(oc)
-                    # puck ends: goal -> in net; save -> corner; block -> loose; miss -> behind net
-                    self._scatter_puck(oc)
+                    if self._post_ping and oc.get("type") == "missed_shot":
+                        self._post_ping = False
+                        self._apply_outcome(oc)
+                        self._deflect_off_post(oc)
+                    else:
+                        self._apply_outcome(oc)
+                        # puck ends: goal -> stays in the net (the flight
+                        # aimed it inside the mouth); save -> rebound off
+                        # the goalie; block -> loose off the blocker;
+                        # aimed wide miss -> already loose, no extra glide.
+                        self._scatter_puck(oc)
                 elif getattr(self, "_pass_arrival", None):
                     pa = self._pass_arrival
                     self._pass_arrival = None
@@ -4541,15 +4678,19 @@ class PBPVisualSim(InGamePopup):
                 # smooth skating: constant-velocity glide toward the target.
                 # No exponential easing -- dots skate like players, covering
                 # ground at a steady pace instead of zooming then crawling.
+                # Game-time: scaled by playback speed like puck flights, so
+                # dots track the sim's discrete positions at 1x and 4x alike.
+                dt_gs = self.TICK_DT * (self._auto_speed()
+                                        if self.auto_pace else self.speed) \
+                    * self.GAME_RATE
                 if d.get("ceremony_glide"):
-                    spd = self.CEREMONY_SPEED
+                    step = self.CEREMONY_SPEED * self.TICK_DT  # broadcast beat
                 elif d["role"] == "G":
-                    spd = self.GOALIE_SPEED
+                    step = self.GOALIE_GS * dt_gs
                 elif now < d.get("rush_until", 0):
-                    spd = self.SKATE_SPEED * 1.7  # bursting into the shot lane
+                    step = self.SKATE_GS * 1.7 * dt_gs  # bursting to the lane
                 else:
-                    spd = self.SKATE_SPEED
-                step = spd * self.TICK_DT
+                    step = self.SKATE_GS * dt_gs
                 dx, dy = d["tx"] - x, d["ty"] - y
                 dist = math.hypot(dx, dy)
                 if dist <= step + 0.15:
@@ -4645,12 +4786,23 @@ class PBPVisualSim(InGamePopup):
             if not self.puck_flight:
                 if self.carrier_id and self.carrier_id in self.dots:
                     c = self.dots[self.carrier_id]
-                    self.puck["x"], self.puck["y"] = c["x"] + 1.5, c["y"] + 1.5
-                elif self.puck_target:
+                    if math.hypot(self.puck["x"] - c["x"],
+                                  self.puck["y"] - c["y"]) > 12.0:
+                        # Carrier is far from the puck (e.g. faceoff winner
+                        # not yet at the dot): glide it to him instead of
+                        # snapping it across the ice.
+                        self.puck_target = (c["x"] + 1.5, c["y"] + 1.5)
+                    else:
+                        self.puck["x"], self.puck["y"] = c["x"] + 1.5, c["y"] + 1.5
+                elif self.puck_target and not self._faceoff_ceremony:
                     tx, ty = self.puck_target
                     pdx, pdy = tx - self.puck["x"], ty - self.puck["y"]
                     pdist = math.hypot(pdx, pdy)
-                    pstep = 40.0 * self.TICK_DT
+                    # game-time like everything else (was real-time: froze
+                    # relative to the sim at higher playback speeds)
+                    pstep = 5.0 * self.TICK_DT * (
+                        self._auto_speed() if self.auto_pace
+                        else self.speed) * self.GAME_RATE
                     if pdist <= pstep:
                         self.puck["x"], self.puck["y"] = tx, ty
                     elif pdist > 0:
@@ -4730,13 +4882,22 @@ class PBPVisualSim(InGamePopup):
             label = f"OT{p - 3}" if p > 3 else f"P{p}"
             self.clock_var.set(f"{label} {int(clk // 60):02d}:{int(clk % 60):02d}")
 
+    def _deflect_off_post(self, oc):
+        """The shot hit the iron: ping it loose with a feed call."""
+        S = self._pname(oc.get("shooter"))
+        self._feed(f"{S} rings it off the post!", tag="shot", ev=oc)
+        px, py = self.puck["x"], self.puck["y"]
+        tx, ty = clamp_boards(px + random.uniform(-16, 16),
+                              py + random.uniform(-12, 12))
+        self._launch_flight(px, py, tx, ty,
+                            self._loose_flight_gs(px, py, tx, ty), "scatter")
+
     def _scatter_puck(self, ev):
         et = ev["type"]
         att_home = (ev.get("attacking_team") or ev.get("scoring_team")
                     or getattr(ev.get("shooter"), "team_name", None)) == self.home_team.team_name
         if et == "goal":
-            nx = AWAY_NET_X if att_home else HOME_NET_X
-            self.puck["x"], self.puck["y"] = nx, 42.5
+            # The flight already put it inside the mouth: leave it there.
             return
         # Rebounds glide instead of snapping -- a save/block/miss reads as
         # the puck bouncing loose, not teleporting.
@@ -4751,6 +4912,10 @@ class PBPVisualSim(InGamePopup):
             d = self._dot_by_player(ev.get("blocker"))
             tx, ty = (d["x"], d["y"]) if d else (self.puck["x"], self.puck["y"])
         elif et == "missed_shot":
+            if self._aimed_miss:
+                # Already sailed wide and loose: no second glide.
+                self._aimed_miss = False
+                return
             nx = AWAY_NET_X if att_home else HOME_NET_X
             tx, ty = nx + (8 if att_home else -8), 42.5 + random.uniform(-14, 14)
         elif et == "shootout_attempt":

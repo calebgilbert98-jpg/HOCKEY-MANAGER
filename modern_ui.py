@@ -1,4 +1,4 @@
-# sleeper_ui.py
+# modern_ui.py
 # modern modern UI design system for Puck Dynasty.
 # 
 # Design principles borrowed from modern sports apps:

@@ -10,6 +10,7 @@ import math
 from datetime import datetime, timedelta
 from player_development_system import PlayerDevelopmentEngine, initialize_player_potential
 from game_classes import Player, PlayerPosition, to_100_scale
+from player_context_menu import PlayerContextMenu
 
 class PlayerDevelopmentWindowProfessional(InGamePopup):
     def __init__(self, parent):
@@ -1297,62 +1298,14 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
                 
         if not selected_player:
             return
-            
-        # Create context menu
-        context_menu = tk.Menu(self, tearoff=0)
-        context_menu.configure(bg=self.parent.CONTENT_BG, 
-                             fg=self.parent.TEXT_COLOR,
-                             activebackground=self.parent.ACCENT_COLOR,
-                             activeforeground='white',
-                             font=('Segoe UI', 9))
-        
-        # Menu options
-        context_menu.add_command(
-            label=f"View {selected_player.full_name}'s Profile",
-            command=lambda: self._view_player_profile(selected_player)
-        )
-        
-        context_menu.add_separator()
-        
-        context_menu.add_command(
-            label="Scout Player",
-            command=lambda: self._scout_player(selected_player)
-        )
-        
-        context_menu.add_command(
-            label="Add to Shortlist",
-            command=lambda: self._add_to_shortlist(selected_player)
-        )
-        
-        context_menu.add_command(
-            label="Compare with Another Player",
-            command=lambda: self._compare_players(selected_player)
-        )
-        
-        context_menu.add_separator()
-        
-        context_menu.add_command(
-            label="Assign Training Focus",
-            command=lambda: self._assign_individual_training(selected_player)
-        )
-        
-        context_menu.add_command(
-            label="View Development History",
-            command=lambda: self._view_development_history(selected_player)
-        )
-        
-        context_menu.add_separator()
-        
-        context_menu.add_command(
-            label="Contract Details",
-            command=lambda: self._view_contract_details(selected_player)
-        )
-        
-        # Show menu
-        try:
-            context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            context_menu.grab_release()
+
+        # Full universal player menu + dev-specific training action.
+        PlayerContextMenu(self.parent).show_context_menu(
+            event, selected_player,
+            additional_options=[
+                ("Assign Training Focus",
+                 lambda: self._assign_individual_training(selected_player)),
+            ])
     
     def _view_player_profile(self, player):
         """Open player profile window"""
@@ -1577,29 +1530,9 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
     
     def _show_details_context_menu(self, event, player):
         """Show context menu for player in details panel"""
-        context_menu = tk.Menu(self, tearoff=0)
-        context_menu.configure(bg=self.parent.CONTENT_BG, 
-                             fg=self.parent.TEXT_COLOR,
-                             activebackground=self.parent.ACCENT_COLOR,
-                             activeforeground='white',
-                             font=('Segoe UI', 9))
-        
-        context_menu.add_command(
-            label=f"View Full Profile",
-            command=lambda: self._view_player_profile(player)
-        )
-        
-        context_menu.add_command(
-            label="Quick Training Assignment", 
-            command=lambda: self._assign_individual_training(player)
-        )
-        
-        context_menu.add_command(
-            label="Compare with Another Player",
-            command=lambda: self._compare_players(player)
-        )
-        
-        try:
-            context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            context_menu.grab_release()
+        PlayerContextMenu(self.parent).show_context_menu(
+            event, player,
+            additional_options=[
+                ("Quick Training Assignment",
+                 lambda: self._assign_individual_training(player)),
+            ])

@@ -1960,6 +1960,10 @@ class AdvancedGameSim:
         # computed once here (the per-shot loop only reads the multiplier).
         self._init_situations()
 
+        # Installed NHL systems (tactics.py): per-game matchup edge per
+        # side, computed once here -- the per-shot loop only reads.
+        self._init_systems_edge()
+
         # Initialize performance cache
         from performance_optimizations import get_global_cache
         self.cache = get_global_cache()
@@ -2050,6 +2054,43 @@ class AdvancedGameSim:
         factor. Read per shot; computed per game."""
         try:
             return self._situation_edge.get(team_name, 1.0)
+        except Exception:
+            return 1.0
+
+    def _init_systems_edge(self):
+        """Installed NHL systems (tactics.py): your attack vs their
+        structure, your power play vs their kill. Computed ONCE per game
+        here in __init__ -- the per-shot hot loop below only reads the
+        stored multiplier. Never raises; inert (1.0) when unused."""
+        self._systems_matchup = {"home_goals": 1.0, "away_goals": 1.0,
+                                 "pace": 1.0, "home_pp": 1.0, "away_pp": 1.0,
+                                 "home_sh_threat": 1.0,
+                                 "away_sh_threat": 1.0}
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(self.home_team)
+            _tx.ensure_team_tactics(self.away_team)
+            self._systems_matchup = _tx.matchup_modifiers(self.home_team,
+                                                          self.away_team)
+        except Exception:
+            pass
+
+    def _systems_edge_for(self, team_name: str) -> float:
+        """Systems multiplier for the shooting side. Read per shot;
+        computed per game. On the power play this is your PP system vs
+        their kill (the defending kill used to be ignored entirely);
+        shorthanded it folds in counterattack threat."""
+        try:
+            m = self._systems_matchup or {}
+            home = team_name == self.home_team.team_name
+            if getattr(self, "pp_team", None) == team_name:
+                return m.get("home_pp" if home else "away_pp", 1.0)
+            base = m.get("home_goals" if home else "away_goals", 1.0)
+            if getattr(self, "pk_team", None) == team_name:
+                sh = m.get("home_sh_threat" if home else "away_sh_threat",
+                           1.0)
+                return base * (1.0 + (sh - 1.0) * 0.4)
+            return base
         except Exception:
             return 1.0
 
@@ -2349,7 +2390,15 @@ class AdvancedGameSim:
         # NHL rules: 5-minute 3v3 sudden-death OT, then shootout
         overtime_limit = 300  # 5 minutes OT (NHL regular season)
         shootout_rounds = 3  # Initial shootout rounds, then sudden death
-        
+
+        # Fresh game: no stale last-passer carried over from a previous game
+        for _t in (self.home_team, self.away_team):
+            for _p in getattr(_t, 'roster', []) or []:
+                try:
+                    _p.assist_potential = None
+                except Exception:
+                    pass
+
         # Regulation: 60 minutes
         while self.time < 3600:
             self._simulate_shift()
@@ -2509,6 +2558,44 @@ class AdvancedGameSim:
 
             print(f"🏥 Injury: {injured.first_name} {injured.last_name} - {injured.injury_type} ({injured.games_remaining_injured} games)")
 
+    def _credit_assists(self, shooter, team_name):
+        """Credit primary/secondary assists for a goal.
+
+        Primary goes to the last successful passer to the shooter
+        (tracked as assist_potential when passes complete). Secondary is a
+        random on-ice teammate. Returns (assist_ids, assist_players).
+        """
+        assist_ids, assist_players = [], []
+        team = self.home_team if team_name == self.home_team.team_name else self.away_team
+        by_id = {p.id: p for p in getattr(team, 'roster', [])}
+
+        primary_id = getattr(shooter, 'assist_potential', None)
+        if primary_id and primary_id != shooter.id and primary_id in by_id:
+            assist_ids.append(primary_id)
+            assist_players.append(by_id[primary_id])
+            st = self.stats[team_name].get(primary_id)
+            if st is not None:
+                st['assists'] = st.get('assists', 0) + 1
+        # Never carry a stale passer into the next goal
+        try:
+            shooter.assist_potential = None
+        except Exception:
+            pass
+
+        # Secondary assist: another on-ice teammate (~45% of the time)
+        if random.random() < 0.45:
+            on_ice = self.on_ice.get(team_name, {})
+            candidates = [p for p in (on_ice.get('Forwards', []) + on_ice.get('Defense', []))
+                          if p is not None and p.id not in (shooter.id, *assist_ids)]
+            if candidates:
+                second = random.choice(candidates)
+                assist_ids.append(second.id)
+                assist_players.append(second)
+                st = self.stats[team_name].get(second.id)
+                if st is not None:
+                    st['assists'] = st.get('assists', 0) + 1
+        return assist_ids, assist_players
+
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
         """Enhanced shot resolution using multiple attributes"""
         # Determine shot type based on position and situation
@@ -2640,6 +2727,9 @@ class AdvancedGameSim:
         # finishing a few percent either way. Own channel, like the
         # controversy momentum channel -- not part of any capped budget.
         shot_chance *= self._situation_edge_for(puck_team_name)
+        # Installed NHL systems: your attack vs their structure, your
+        # power play vs their kill. Own channel, precomputed per game.
+        shot_chance *= self._systems_edge_for(puck_team_name)
         shot_chance = max(0.04, min(0.16, shot_chance))
 
         # Shot blocking check
@@ -2656,8 +2746,34 @@ class AdvancedGameSim:
             self.score[puck_team_name] += 1
             # Update stats
             self.stats[puck_team_name][shooter.id]['goals'] = self.stats[puck_team_name][shooter.id].get('goals', 0) + 1
+            # Assists: primary = last successful passer to the shooter
+            # (tracked as assist_potential on passes); secondary = a random
+            # on-ice teammate, the way real scoring works.
+            assist_ids, assist_players = self._credit_assists(shooter, puck_team_name)
             # Add goal event
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Goal'})
+            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name,
+                                'player': shooter, 'event': 'Goal', 'assists': assist_players})
+            if self.pp_team == puck_team_name:
+                _strength = 'PP'
+            elif self.pk_team == puck_team_name:
+                _strength = 'SH'
+            else:
+                _strength = 'EV'
+            _in_period = max(0.0, self.time - 1200 * (self.period - 1))
+            self.event_log.append({
+                'timestamp': self.time,
+                'duration': 1.0,
+                'type': 'GOAL_ADVANCED',
+                'details': {
+                    'scorer_id': shooter.id,
+                    'assist_ids': assist_ids,
+                    'goaltender_id': goalie.id if goalie else None,
+                    'goal_type': shot_type,
+                    'period': self.period,
+                    'strength': _strength,
+                    'time_str': f"{int(_in_period // 60)}:{int(_in_period % 60):02d}",
+                }
+            })
             # PP ends when the PP team scores (NHL rule)
             if self.pp_team == puck_team_name:
                 self.pp_team = None
@@ -4106,7 +4222,6 @@ class HockeyManagerGUI(tk.Tk):
         # Transactions dropdown  
         self._create_dropdown_menu(left_menu_frame, "Transactions",
             tooltip="Transactions: trades, free agents, waivers, and the draft", menu_items={
-            "Fantasy Draft": self.open_fantasy_draft_window,
             "Free Agents": self.open_free_agency_window,
             "Free Agent Frenzy": self.open_free_agency_frenzy,  # Only visible on July 1
             "Trade Center": self.open_trade_window,
@@ -7943,6 +8058,32 @@ class HockeyManagerGUI(tk.Tk):
         
         # Store game result for later viewing
         player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
+        game_stats = getattr(sim_engine, 'game_stats', None) or {}
+        if not game_stats:
+            # AdvancedGameSim keeps per-game stats as {team_name: {pid: {...}}};
+            # flatten to the {pid: {...}} shape the box score expects.
+            by_id = {}
+            for _tm in (home_team, away_team):
+                for _p in getattr(_tm, 'roster', []) or []:
+                    by_id[_p.id] = _p
+            for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
+                if not isinstance(_pmap, dict):
+                    continue
+                for _pid, _st in _pmap.items():
+                    if not isinstance(_st, dict) or _pid not in by_id:
+                        continue
+                    game_stats[_pid] = {
+                        'player': by_id[_pid],
+                        'g': _st.get('goals', 0), 'a': _st.get('assists', 0),
+                        'shots_on_goal': _st.get('shots', 0),
+                        'saves': _st.get('saves', 0),
+                        'shots_against': 0,  # derived in the box score
+                        'goals_against': 0,
+                        'hits': _st.get('hits', 0),
+                        'blocked_shots': _st.get('blocked_shots', 0),
+                        'faceoffs_won': _st.get('faceoffs_won', 0),
+                        'faceoffs_lost': _st.get('faceoffs_lost', 0),
+                    }
         game_result = {
             'date': game_date,
             'home_team': home_team,
@@ -7954,6 +8095,8 @@ class HockeyManagerGUI(tk.Tk):
             'notable_events': notable_events,
             'player_ratings': player_ratings,
             'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
+            'game_stats': game_stats,  # Per-player game stats (g/a/shots/...), normalized
+            'team_stats': getattr(sim_engine, 'team_stats', {}),  # Per-team game stats
             'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
             'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
         }
@@ -8580,6 +8723,14 @@ class HockeyManagerGUI(tk.Tk):
                     media_engine.route_events(self, _mev, game_date)
                 except Exception:
                     pass
+
+                # Tactics: rooms learn their systems one game at a time.
+                try:
+                    import tactics as _tx
+                    _tx.tick_tactics_familiarity(home_team)
+                    _tx.tick_tactics_familiarity(away_team)
+                except Exception:
+                    pass
                 
             except Exception as e:
                 print(f"Error in batch simulation: {e}")
@@ -8618,6 +8769,8 @@ class HockeyManagerGUI(tk.Tk):
                 game_result['event_log'] = getattr(full_sim, 'event_log', []) or []
                 game_result['notable_events'] = getattr(full_sim, 'notable_events', []) or []
                 game_result['events'] = getattr(full_sim, 'game_log', []) or []
+                game_result['game_stats'] = getattr(full_sim, 'game_stats', {}) or {}
+                game_result['team_stats'] = getattr(full_sim, 'team_stats', {}) or {}
             
             # Add to game results (keeps the date/matchup indexes in sync)
             self._record_game_result(game_result)
@@ -8742,6 +8895,22 @@ class HockeyManagerGUI(tk.Tk):
         away_own, away_opp = _tactic_shifts(getattr(away_team, 'tactic_even_strength', 'Balanced'))
         home_goal_expectation += home_own + away_opp
         away_goal_expectation += away_own + home_opp
+
+        # Installed NHL systems (tactics.py): layered under the old
+        # sliders. Your attack vs their structure; pace moves total goals;
+        # PP/PK systems nudge season-level expectations (there is no
+        # per-man-advantage state in the lightweight path).
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(home_team)
+            _tx.ensure_team_tactics(away_team)
+            _mm = _tx.matchup_modifiers(home_team, away_team)
+            home_goal_expectation *= _mm["home_goals"] * _mm["pace"]
+            away_goal_expectation *= _mm["away_goals"] * _mm["pace"]
+            home_goal_expectation *= 1.0 + (_mm["home_pp"] - 1.0) * 0.15
+            away_goal_expectation *= 1.0 + (_mm["away_pp"] - 1.0) * 0.15
+        except Exception:
+            pass
 
         # Situations channel: room + bench + hunger move goal expectation a
         # few percent either way -- the same factor the detailed engines
@@ -9882,6 +10051,25 @@ class HockeyManagerGUI(tk.Tk):
         # Controversy cooldown + staff rep + Cup bonus. Reads standings before
         # league.end_of_season() wipes them.
         self._update_offseason_reputations()
+        # Copycat league: AI teams steal the Cup champion's systems.
+        # (Familiarity cost included -- copying isn't free.)
+        try:
+            import tactics as _tx
+            _CAT_LABEL = {"pp": "power play", "pk": "penalty kill",
+                          "offense": "offensive system",
+                          "defense": "defensive system"}
+            for _tn, _cat, _sys in _tx.offseason_copycat(
+                    getattr(self, 'league', None)):
+                _sysname = {"pp": _tx.POWERPLAY_SYSTEMS,
+                            "pk": _tx.PENALTY_KILL_SYSTEMS,
+                            "offense": _tx.OFFENSIVE_SYSTEMS,
+                            "defense": _tx.DEFENSIVE_SYSTEMS}[_cat][_sys]["name"]
+                self.add_news(
+                    f"Copycat league: {_tn} install the {_sysname} "
+                    f"{_CAT_LABEL[_cat]} after watching the champions "
+                    f"win with it.")
+        except Exception:
+            pass
         # Age players and reset stats
         self.league.end_of_season()
 
@@ -10347,7 +10535,7 @@ class HockeyManagerGUI(tk.Tk):
     def update_inbox_notification(self):
         """Update the inbox button notification."""
         if hasattr(self, 'inbox_btn'):
-            # CTk widgets only implement configure(), not config().
+            # CTk widgets use configure(), not config()
             self.inbox_btn.configure(text=self._get_inbox_button_text())
             
     def send_email_to_user(self, message):

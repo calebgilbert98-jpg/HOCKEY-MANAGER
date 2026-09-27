@@ -497,6 +497,13 @@ class GameSim:
         self.away_team = away_team
         self.is_playoff = is_playoff
         self.rivalries = rivalries if rivalries is not None else []
+        # Installed NHL systems: every team skates an identity.
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(home_team)
+            _tx.ensure_team_tactics(away_team)
+        except Exception:
+            pass
         self.series_game = series_game
         # --- Tension / punishment / brawl state (additive; inert when unused) ---
         # Base tension comes from the same breakdown the visualizer's meter
@@ -557,6 +564,14 @@ class GameSim:
         # Play-by-play visualizer hooks (additive; zero overhead when unused).
         # Listeners are callables receiving one event dict each.
         # (pbp_listeners is initialized earlier, before pre-game orders.)
+        # Live-PBP tick buffer: while a tick runs, _emit_pbp stashes events
+        # here instead of dispatching immediately. At tick end
+        # _spread_tick_timestamps stamps each buffered event with its own
+        # slice of the tick's game time (like game_log/event_log) and
+        # flushes them in order, so the visualizer never sees a burst of
+        # plays sharing one timestamp.
+        self._pbp_tick_buffer = []
+        self._pbp_buffering = False
         # Sudden-death OT bookkeeping (set by _handle_overtime)
         self._ot_sudden_death = False
         self._ot_start_score = None
@@ -2229,9 +2244,22 @@ class GameSim:
 
         while self.clock > 0:
             time_elapsed = random.randint(8, 20)  # Slightly faster pace
+            tick_start_clock = self.clock
             self.clock -= time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
+            # Tick-local log indices: used below to spread this tick's
+            # elapsed game time across the events logged during the tick,
+            # so sequential plays get distinct chronological timestamps.
+            tick_log_start = len(self.game_log)
+            tick_elog_start = len(self.event_log)
+            # Live-PBP buffer scope: events emitted during this tick are
+            # held until _spread_tick_timestamps stamps + flushes them.
+            # Flush stragglers first (a previous tick that died mid-spread).
+            if getattr(self, "_pbp_tick_buffer", None):
+                self._flush_pbp_buffer()
+            tick_pbp_start = len(self._pbp_tick_buffer)
+            self._pbp_buffering = True
 
             # Sudden-death OT: stop the period as soon as someone scores
             if getattr(self, '_ot_sudden_death', False) and self._ot_start_score is not None:
@@ -2300,6 +2328,13 @@ class GameSim:
                 self._emit_skate()
             except Exception:
                 pass
+
+            # EHM-style clock realism: spread this tick's elapsed time over
+            # its events so the PBP feed never shows a burst of plays all
+            # stamped with the exact same second.
+            self._spread_tick_timestamps(tick_start_clock, time_elapsed,
+                                         tick_log_start, tick_elog_start,
+                                         tick_pbp_start)
 
         # Rule 26: a delayed call can't survive the horn -- force the
         # whistle at the period boundary.
@@ -4624,17 +4659,32 @@ class GameSim:
                 self._handle_goal(attacking_team, shooter, assists, shot_type, location)
             
                 # Log advanced goal details
+                defending_team = (self.away_team if attacking_team == self.home_team
+                                  else self.home_team)
+                if defending_team.team_name in getattr(self, "goalie_pulled", set()):
+                    _goal_strength = 'EN'
+                elif self._is_team_on_power_play(attacking_team):
+                    _goal_strength = 'PP'
+                elif self._is_team_on_penalty_kill(attacking_team):
+                    _goal_strength = 'SH'
+                else:
+                    _goal_strength = 'EV'
+                _elapsed = max(0.0, self._period_length - self.clock)
                 self.event_log.append({
-                    'timestamp': self._period_length - self.clock,
+                    'timestamp': _elapsed,
                     'duration': 1.0,
                     'type': 'GOAL_ADVANCED',
                     'details': {
                         'scorer_id': shooter.id,
+                        'assist_ids': [p.id for p in assists],
                         'goaltender_id': goalie.id,
                         'goal_type': goal_type.value,
                         'expected_goal': round(expected_goal, 3),
                         'save_probability': round(adjusted_save_prob, 3),
-                        'shot_quality': quality
+                        'shot_quality': quality,
+                        'period': self.period,
+                        'strength': _goal_strength,
+                        'time_str': f"{int(_elapsed // 60)}:{int(_elapsed % 60):02d}",
                     }
                 })
         else:
@@ -5161,7 +5211,24 @@ class GameSim:
     def _select_formation(self, team, situation):
         """
         Stage 3: Select appropriate formation based on situation.
+
+        The team's installed PP/PK system (tactics.py) -- a coaching
+        decision, not a dice roll. Falls back to the old random pick
+        when no system is installed.
         """
+        try:
+            import tactics as _tx
+            tk = _tx.team_tactics(team)
+            if situation == SpecialSituation.POWER_PLAY:
+                key = tk.get("pp", "umbrella")
+                if key in _tx.POWERPLAY_SYSTEMS:
+                    return ("pp", key)
+            elif situation == SpecialSituation.PENALTY_KILL:
+                key = tk.get("pk", "diamond")
+                if key in _tx.PENALTY_KILL_SYSTEMS:
+                    return ("pk", key)
+        except Exception:
+            pass
         if situation == SpecialSituation.POWER_PLAY:
             formations = list(PowerPlayFormation)
             return random.choice(formations)
@@ -5179,13 +5246,30 @@ class GameSim:
         
         if situation == SpecialSituation.POWER_PLAY:
             modifier = 2.0  # ~2x: real power plays generate far more shot volume
-            if formation == PowerPlayFormation.UMBRELLA:
+            if isinstance(formation, tuple) and formation[0] == "pp":
+                try:
+                    import tactics as _tx
+                    modifier *= _tx.POWERPLAY_SYSTEMS[formation[1]].get(
+                        "pp_shots", 1.0)
+                except Exception:
+                    pass
+            elif formation == PowerPlayFormation.UMBRELLA:
                 modifier += 0.1  # Extra 10% for umbrella formation
             elif formation == PowerPlayFormation.OVERLOAD:
                 modifier += 0.05  # Extra 5% for overload
         elif situation == SpecialSituation.PENALTY_KILL:
             modifier = 0.6  # 40% reduction for penalty kill
-            if formation == PenaltyKillFormation.DIAMOND:
+            if isinstance(formation, tuple) and formation[0] == "pk":
+                # The shorthanded team's own system: an aggressive kill
+                # hunts shorthanded rushes, a passive box just survives.
+                try:
+                    import tactics as _tx
+                    _sh = _tx.PENALTY_KILL_SYSTEMS[formation[1]].get(
+                        "sh_threat", 1.0)
+                    modifier *= 0.7 + 0.3 * _sh
+                except Exception:
+                    pass
+            elif formation == PenaltyKillFormation.DIAMOND:
                 modifier += 0.1  # Better defense with diamond
             elif formation == PenaltyKillFormation.BOX:
                 modifier += 0.05  # Slight improvement with box
@@ -6095,7 +6179,22 @@ class GameSim:
         
         # Apply special situation modifiers (Stage 3)
         shot_chance = self._apply_situation_modifiers(shot_chance, current_situation, formation)
-        
+
+        # Installed NHL systems (tactics.py): pace + PK suppression.
+        # Pace is the geometric mean of both teams' tempo -- a trap team
+        # drags even a rush team into a slower game, and vice versa.
+        try:
+            import tactics as _tx
+            _att = _tx.resolve_team_tactics(attacking_team)
+            _dfn = _tx.resolve_team_tactics(defending_team)
+            shot_chance *= (_att["pace"] * _dfn["pace"]) ** 0.5
+            if (current_situation == SpecialSituation.POWER_PLAY
+                    and self._is_team_on_power_play(attacking_team)):
+                # A good kill smothers PP shot volume, not just finishing.
+                shot_chance *= (2.0 - _dfn["pk"])
+        except Exception:
+            pass
+
         # Track formation usage
         if formation:
             if not hasattr(self, 'formation_usage'):
@@ -6707,6 +6806,24 @@ class GameSim:
         self._handle_goal(team_with_puck, scorer, [],
                           shot_type=ShotType.WRIST_SHOT,
                           location=ShotLocation.CREASE, empty_net=True)
+        _en_elapsed = max(0.0, self._period_length - self.clock)
+        self.event_log.append({
+            'timestamp': _en_elapsed,
+            'duration': 1.0,
+            'type': 'GOAL_ADVANCED',
+            'details': {
+                'scorer_id': scorer.id,
+                'assist_ids': [],
+                'goaltender_id': None,
+                'goal_type': 'empty_net',
+                'expected_goal': 1.0,
+                'save_probability': 0.0,
+                'shot_quality': 'high',
+                'period': self.period,
+                'strength': 'EN',
+                'time_str': f"{int(_en_elapsed // 60)}:{int(_en_elapsed % 60):02d}",
+            }
+        })
 
     def _emit_pbp(self, event_type, **payload):
         """Emit a play-by-play event to registered listeners (no-op if none)."""
@@ -6727,11 +6844,31 @@ class GameSim:
             "away_score": getattr(self, "away_score", 0),
         }
         ev.update(payload)
+        if getattr(self, "_pbp_buffering", False):
+            # Inside a tick: hold for end-of-tick timestamp spreading.
+            self._pbp_tick_buffer.append(ev)
+            return
+        # Defensive: never strand a previous tick's events if a tick died
+        # before its spread/flush ran.
+        if getattr(self, "_pbp_tick_buffer", None):
+            self._flush_pbp_buffer()
         for cb in list(self.pbp_listeners):
             try:
                 cb(ev)
             except Exception:
                 pass
+
+    def _flush_pbp_buffer(self):
+        """Deliver buffered tick events to listeners, in emission order."""
+        buf = self._pbp_tick_buffer
+        self._pbp_tick_buffer = []
+        self._pbp_buffering = False
+        for e in buf:
+            for cb in list(self.pbp_listeners):
+                try:
+                    cb(e)
+                except Exception:
+                    pass
 
     @staticmethod
     def _pbp_num(value):
@@ -6740,6 +6877,67 @@ class GameSim:
             return round(float(value), 3)
         except (TypeError, ValueError):
             return str(value) if value is not None else None
+
+    def _spread_tick_timestamps(self, tick_start_clock, time_elapsed,
+                                  log_start, elog_start, pbp_start=0):
+        """Distribute a tick's elapsed game time across its logged events.
+
+        The tick loop advances the clock once per tick but a tick can log
+        several plays (pass -> shot -> save). Without this, every play in
+        the tick shares one timestamp and the PBP feed shows bursts like
+        five events at "P1 14:13". EHM-style realism: each action consumes
+        a slice of the tick's game time, so sequential plays get distinct,
+        chronologically ordered stamps. The live visualizer stream
+        (buffered during the tick) gets the same treatment, then flushes
+        to listeners in emission order.
+        """
+        import re
+        n = len(self.game_log) - log_start
+        if n > 0 and time_elapsed > 0:
+            for j in range(n):
+                ev_clock = max(0.0,
+                               tick_start_clock - (j + 1) * time_elapsed / n)
+                stamp = (f"[P{self.period} - {int(ev_clock // 60):02d}:"
+                         f"{int(ev_clock % 60):02d}]")
+                idx = log_start + j
+                self.game_log[idx] = re.sub(r'^\[P\d+ - \d{2}:\d{2}\]',
+                                            stamp, self.game_log[idx], count=1)
+        m = len(self.event_log) - elog_start
+        if m > 0 and time_elapsed > 0:
+            for j in range(m):
+                ev_clock = max(0.0,
+                               tick_start_clock - (j + 1) * time_elapsed / m)
+                elapsed = max(0.0, self._period_length - ev_clock)
+                e = self.event_log[elog_start + j]
+                try:
+                    e['timestamp'] = elapsed
+                    det = e.get('details')
+                    if isinstance(det, dict) and 'time_str' in det:
+                        det['time_str'] = (f"{int(elapsed // 60)}:"
+                                           f"{int(elapsed % 60):02d}")
+                except Exception:
+                    pass
+        # Live visualizer stream: stamp each buffered event with its own
+        # slice of the tick (emission order == chronological order), then
+        # flush to listeners. Ends the tick's buffering scope even when
+        # nothing was buffered.
+        try:
+            pb = self._pbp_tick_buffer
+            k = len(pb) - pbp_start
+            if k > 0 and time_elapsed > 0:
+                for j in range(k):
+                    ev_clock = max(0.0, tick_start_clock
+                                   - (j + 1) * time_elapsed / k)
+                    el = max(0.0, self._period_length - ev_clock)
+                    e = pb[pbp_start + j]
+                    try:
+                        e["clock"] = ev_clock
+                        e["elapsed"] = el
+                        e["t"] = ((max(1, self.period) - 1) * 1200 + el)
+                    except Exception:
+                        pass
+        finally:
+            self._flush_pbp_buffer()
 
     def _log_event(self, message, event_type="INFO"):
         """Adds an event to the game log with a timestamp."""
@@ -6992,6 +7190,15 @@ class GameSim:
         inside and play continues from the resulting faceoff.)
         """
         hit_chance = base_chance * self.physical_intensity
+        try:
+            # Installed systems (tactics.py): heavy teams finish checks,
+            # skill teams angle off. Normalized, so the league average is
+            # untouched -- only the identity moves.
+            import tactics as _tx
+            _phys = _tx.resolve_team_tactics(hitting_team)["physical"]
+            hit_chance *= max(0.8, min(1.3, _phys))
+        except Exception:
+            pass
         try:
             # Enforcer deterrence: carriers skate freer with a tough guy
             # on the ice alongside them.
@@ -7912,7 +8119,20 @@ class GameSim:
             factor *= {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
                        'Aggressive': 1.02}.get(pk, 0.97)
 
-        return max(0.8, min(1.25, factor))
+        # Installed NHL systems (tactics.py): layered under the old
+        # aggression sliders. Your attack against their structure; your
+        # power play against their kill.
+        try:
+            import tactics as _tx
+            _att = _tx.resolve_team_tactics(attacking_team)
+            _dfn = _tx.resolve_team_tactics(defending_team)
+            factor *= _att["attack"] * _dfn["defense"]
+            if sit_att == SpecialSituation.POWER_PLAY:
+                factor *= _att["pp"] * (2.0 - _dfn["pk"])
+        except Exception:
+            pass
+
+        return max(0.75, min(1.35, factor))
 
     def _get_tactical_system_bonus(self, team, situation):
         """
