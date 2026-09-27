@@ -14,6 +14,7 @@ the playbook for the rest.
 | Roster (`windows.py::RosterWindow`) | **Done** — CTk chrome + styled dark treeviews |
 | Free Agency (`windows.py::FreeAgencyWindow`) | **Done** — CTk rebuild, dialogs modernized |
 | Dashboard controls (`dashboard_home.py`, `main.py` nav pills) | **Done** — CTk dropdowns/buttons/nav pills; cards unchanged |
+| Draft (`windows.py::DraftWindow`) | **Done** — CTk rebuild, styled board/ticker/shortlist, pill filters, CTk trade/grades dialogs |
 | Everything else | Pending (priority order below) |
 
 ## Theme setup

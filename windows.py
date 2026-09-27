@@ -4230,21 +4230,41 @@ class ScoutingWindow(tk.Toplevel):
         self._refresh_board()
 
 
-class DraftWindow(tk.Toplevel):
+class DraftWindow(ctk.CTkToplevel):
     """Draft night war room: live board, ticker, shortlist, draft-day trades, grades."""
 
+    # Map any potential-grade variant onto a draft_night.grade_color key.
+    _GRADE_BASE = {'A+': 'A+', 'A': 'A', 'A-': 'A', 'B+': 'B+', 'B': 'B',
+                   'B-': 'B', 'C+': 'C', 'C': 'C', 'C-': 'C',
+                   'D+': 'D', 'D': 'D', 'D-': 'D', 'F': 'F'}
+
     def __init__(self, parent):
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_SELECTED,
+        )
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
+                        RED=RED, BLUE=BLUE, ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        init_ctk_theme()
         super().__init__(parent)
         self.parent = parent
         self.title("NHL Entry Draft")
         self.geometry("1280x800")
-        self.configure(background=parent.BG_COLOR)
+        self.configure(fg_color=BG)
 
         # Slim branded banner strip (decorative; never breaks the window)
         try:
             from branding import SlimBanner
             SlimBanner(self, 'draft_banner.png', height=84,
-                       bg=parent.BG_COLOR).pack(fill='x', padx=10, pady=(10, 0))
+                       bg=BG).pack(fill='x', padx=10, pady=(10, 0))
         except Exception:
             pass
 
@@ -4265,130 +4285,215 @@ class DraftWindow(tk.Toplevel):
         self.pos_filter_var = tk.StringVar(master=self, value="All Positions")
         self._ai_after_id = None
 
+        ct = self._ct
+
         # ---- Header ----
-        header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
+        header = ctk.CTkFrame(self, fg_color=ct['PANEL'], corner_radius=10)
         header.pack(fill='x', padx=10, pady=(10, 0))
-        title_box = ttk.Frame(header, style='Panel.TFrame')
-        title_box.pack(side='left')
-        ttk.Label(title_box, text="NHL Entry Draft",
-                  font=(parent.FONT_FAMILY, 18, 'bold'),
-                  style='Heading.TLabel').pack(anchor='w')
-        self.draft_status_label = ttk.Label(title_box, text="Draft Night",
-                                            style='Secondary.TLabel')
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.pack(side='left', padx=14, pady=10)
+        self._heading(title_box, text="NHL Entry Draft", size=18).pack(anchor='w')
+        self.draft_status_label = self._body(title_box, text="Draft Night", dim=True)
         self.draft_status_label.pack(anchor='w')
         # On-the-clock spotlight
-        self.clock_frame = ttk.Frame(header, style='Card.TFrame', padding=(16, 6))
-        self.clock_frame.pack(side='right', padx=10)
-        ttk.Label(self.clock_frame, text="ON THE CLOCK",
-                  style='Card.TLabel', font=(parent.FONT_FAMILY, 9, 'bold')).pack()
-        self.clock_label = ttk.Label(self.clock_frame, text="—",
-                                     style='Card.TLabel',
-                                     font=(parent.FONT_FAMILY, 15, 'bold'))
-        self.clock_label.pack()
-        self.pick_info_label = ttk.Label(self.clock_frame, text="",
-                                         style='Card.TLabel')
-        self.pick_info_label.pack()
+        self.clock_frame = ctk.CTkFrame(header, fg_color=ct['CARD'],
+                                       corner_radius=10)
+        self.clock_frame.pack(side='right', padx=14, pady=10)
+        ctk.CTkLabel(self.clock_frame, text="ON THE CLOCK",
+                     font=("Segoe UI", 9, 'bold'),
+                     text_color=ct['TEXT_DIM']).pack(pady=(8, 0), padx=16)
+        self.clock_label = ctk.CTkLabel(self.clock_frame, text="—",
+                                       font=("Segoe UI", 15, 'bold'),
+                                       text_color=ct['TEXT'])
+        self.clock_label.pack(padx=16)
+        self.pick_info_label = self._body(self.clock_frame, text="", dim=True)
+        self.pick_info_label.pack(padx=16, pady=(0, 8))
 
-        # ---- 3 columns ----
-        main_pane = ttk.PanedWindow(self, orient='horizontal')
+        # ---- 3 columns (grid; CTk has no PanedWindow) ----
+        main_pane = ctk.CTkFrame(self, fg_color="transparent")
         main_pane.pack(fill='both', expand=True, padx=10, pady=8)
+        main_pane.grid_columnconfigure(0, weight=2)
+        main_pane.grid_columnconfigure(1, weight=1)
+        main_pane.grid_columnconfigure(2, weight=1)
+        main_pane.grid_rowconfigure(0, weight=1)
 
         # LEFT: draft board
-        left = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
-        main_pane.add(left, weight=2)
-        ttk.Label(left, text="DRAFT BOARD", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
-        self.draft_results_tree = parent._create_treeview(
-            left, {'pick': ('#', 40), 'team': ('Team', 130),
-                   'player': ('Player', 150), 'pos': ('Pos', 40),
-                   'pot': ('Pot', 60)}, height=30)
-        self.draft_results_tree.pack(fill='both', expand=True)
+        left = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
+        left.grid(row=0, column=0, sticky='nsew', padx=(0, 4))
+        ctk.CTkLabel(left, text="DRAFT BOARD",
+                     font=("Segoe UI", 10, 'bold'),
+                     text_color=ct['TEXT_DIM']).pack(anchor='w',
+                                                     padx=12, pady=(10, 4))
+        self._setup_tree_style()
+        board_card = ctk.CTkFrame(left, fg_color=ct['CARD'], corner_radius=8)
+        board_card.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        self.draft_results_tree = self._create_draft_board(board_card)
 
         # CENTER: war room
-        center = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
-        main_pane.add(center, weight=1)
+        center = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
+        center.grid(row=0, column=1, sticky='nsew', padx=4)
+        ctk.CTkLabel(center, text="WAR ROOM",
+                     font=("Segoe UI", 10, 'bold'),
+                     text_color=ct['TEXT_DIM']).pack(anchor='w',
+                                                     padx=12, pady=(10, 4))
+        self.next_pick_label = ctk.CTkLabel(center, text="",
+                                            font=("Segoe UI", 11, 'bold'),
+                                            text_color=ct['TEXT'])
+        self.next_pick_label.pack(anchor='w', padx=12, pady=(0, 4))
 
-        ttk.Label(center, text="WAR ROOM", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
-        self.next_pick_label = ttk.Label(center, text="", style='TLabel',
-                                         font=(parent.FONT_FAMILY, 11, 'bold'))
-        self.next_pick_label.pack(anchor='w', pady=(0, 4))
-
-        strat_row = ttk.Frame(center, style='Panel.TFrame')
-        strat_row.pack(fill='x', pady=(0, 4))
-        ttk.Label(strat_row, text="Strategy:", style='Secondary.TLabel').pack(side='left')
+        # Strategy pills (PillButton is canvas-drawn: needs a plain tk parent
+        # for its bg lookup, so each row gets a tk.Frame wrapper tinted to
+        # match the panel)
         self._draft_pill_groups = []
-        try:
-            _dbg = ttk.Style().lookup('Panel.TFrame', 'background') or '#0e0e11'
-        except Exception:
-            _dbg = '#0e0e11'
-        self._draft_pill_bg = _dbg
-        for sval, stext in (("BPA", "Best Available"), ("Need", "Positional Need")):
-            b = PillButton(strat_row, text=stext, bg=_dbg,
-                           font=(parent.FONT_FAMILY, 9, 'bold'),
-                           padx=11, pady=4,
-                           command=lambda v=sval: self._draft_set_pill(self.strategy_var, v))
-            b.pack(side='left', padx=3)
-            self._draft_pill_groups.append((self.strategy_var, sval, b))
+        strat_row = ctk.CTkFrame(center, fg_color="transparent")
+        strat_row.pack(fill='x', padx=12, pady=(0, 4))
+        ctk.CTkLabel(strat_row, text="Strategy:",
+                     font=("Segoe UI", 10, 'bold'),
+                     text_color=ct['TEXT_DIM'], width=70,
+                     anchor="w").pack(side='left', padx=(0, 6))
+        strat_wrap = tk.Frame(strat_row, bg=ct['PANEL'])
+        strat_wrap.pack(side='left')
+        strat_btns = make_pill_group(
+            strat_wrap,
+            [("BPA", "Best Available"), ("Need", "Positional Need")],
+            lambda v: self._draft_set_pill(self.strategy_var, v))
+        self._draft_pill_groups.append((self.strategy_var, strat_btns))
 
-        filt_row = ttk.Frame(center, style='Panel.TFrame')
-        filt_row.pack(fill='x', pady=(0, 4))
-        ttk.Label(filt_row, text="Show:", style='Secondary.TLabel').pack(side='left')
-        for pval, ptext in (("All Positions", "All"), ("Forwards", "Forwards"),
-                            ("Defensemen", "Defense"), ("Goalies", "Goalies")):
-            b = PillButton(filt_row, text=ptext, bg=_dbg,
-                           font=(parent.FONT_FAMILY, 9, 'bold'),
-                           padx=11, pady=4,
-                           command=lambda v=pval: self._draft_set_pill(self.pos_filter_var, v))
-            b.pack(side='left', padx=3)
-            self._draft_pill_groups.append((self.pos_filter_var, pval, b))
+        filt_row = ctk.CTkFrame(center, fg_color="transparent")
+        filt_row.pack(fill='x', padx=12, pady=(0, 4))
+        ctk.CTkLabel(filt_row, text="Show:",
+                     font=("Segoe UI", 10, 'bold'),
+                     text_color=ct['TEXT_DIM'], width=70,
+                     anchor="w").pack(side='left', padx=(0, 6))
+        filt_wrap = tk.Frame(filt_row, bg=ct['PANEL'])
+        filt_wrap.pack(side='left')
+        filt_btns = make_pill_group(
+            filt_wrap,
+            [("All Positions", "All"), ("Forwards", "Forwards"),
+             ("Defensemen", "Defense"), ("Goalies", "Goalies")],
+            lambda v: self._draft_set_pill(self.pos_filter_var, v))
+        self._draft_pill_groups.append((self.pos_filter_var, filt_btns))
         self._draft_paint_pills()
 
-        ttk.Label(center, text="SHORTLIST", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(4, 2))
+        ctk.CTkLabel(center, text="SHORTLIST",
+                     font=("Segoe UI", 10, 'bold'),
+                     text_color=ct['TEXT_DIM']).pack(anchor='w',
+                                                     padx=12, pady=(4, 2))
         self.shortlist = tk.Listbox(center, height=14, activestyle='none',
-                                    bg='#232a3a', fg='#ffffff',
-                                    selectbackground='#0d2b28', relief='flat',
+                                    bg=ct['CARD'], fg=ct['TEXT'],
+                                    selectbackground=ct['ROW_SELECTED'],
+                                    relief='flat',
                                     highlightthickness=1,
-                                    highlightbackground='#2e2e38')
-        self.shortlist.pack(fill='x', pady=(0, 4))
+                                    highlightbackground=ct['BORDER'])
+        self.shortlist.pack(fill='x', padx=12, pady=(0, 4))
         self.shortlist.bind('<<ListboxSelect>>', self._on_shortlist_select)
 
-        self.selected_label = ttk.Label(center, text="No prospect selected",
-                                        style='Secondary.TLabel', wraplength=300)
-        self.selected_label.pack(anchor='w', pady=(0, 6))
+        self.selected_label = self._body(center, text="No prospect selected",
+                                   dim=True)
+        self.selected_label.configure(wraplength=300)
+        self.selected_label.pack(anchor='w', padx=12, pady=(0, 6))
 
-        btn_col = ttk.Frame(center, style='Panel.TFrame')
-        btn_col.pack(fill='x')
-        self.draft_button = ttk.Button(btn_col, text="Draft Selected",
-                                       command=self.make_user_pick, style='TButton')
+        btn_col = ctk.CTkFrame(center, fg_color="transparent")
+        btn_col.pack(fill='x', padx=12, pady=(0, 10))
+        self.draft_button = self._primary_button(btn_col, text="Draft Selected",
+                                           command=self.make_user_pick)
         self.draft_button.pack(fill='x', pady=2)
-        self.auto_button = ttk.Button(btn_col, text="Auto Pick (My Board)",
-                                      command=self.auto_pick,
-                                      style='Secondary.TButton')
+        self.auto_button = self._secondary_button(btn_col,
+                                            text="Auto Pick (My Board)",
+                                            command=self.auto_pick)
         self.auto_button.pack(fill='x', pady=2)
-        self.trade_pick_button = ttk.Button(btn_col, text="Trade This Pick",
-                                            command=self.trade_current_pick,
-                                            style='Secondary.TButton')
+        self.trade_pick_button = self._secondary_button(btn_col,
+                                                  text="Trade This Pick",
+                                                  command=self.trade_current_pick)
         self.trade_pick_button.pack(fill='x', pady=2)
 
         # RIGHT: ticker
-        right = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
-        main_pane.add(right, weight=1)
-        ttk.Label(right, text="DRAFT TICKER", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
-        self.ticker = tk.Listbox(right, activestyle='none', bg='#141a26',
-                                 fg='#c8d2e3', relief='flat', height=30,
-                                 highlightthickness=1,
-                                 highlightbackground='#2e2e38')
-        self.ticker.pack(fill='both', expand=True)
-        self.grades_button = ttk.Button(right, text="Draft Grades",
-                                        command=self.show_grades,
-                                        style='Secondary.TButton',
-                                        state='disabled')
-        self.grades_button.pack(fill='x', pady=(6, 0))
+        right = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
+        right.grid(row=0, column=2, sticky='nsew', padx=(4, 0))
+        ctk.CTkLabel(right, text="DRAFT TICKER",
+                     font=("Segoe UI", 10, 'bold'),
+                     text_color=ct['TEXT_DIM']).pack(anchor='w',
+                                                     padx=12, pady=(10, 4))
+        ticker_card = ctk.CTkFrame(right, fg_color=ct['CARD'], corner_radius=8)
+        ticker_card.pack(fill='both', expand=True, padx=10, pady=(0, 6))
+        self.ticker = tk.Listbox(ticker_card, activestyle='none',
+                                 bg=ct['CARD'], fg=ct['TEXT_DIM'],
+                                 relief='flat', height=30,
+                                 highlightthickness=0)
+        self.ticker.pack(fill='both', expand=True, padx=8, pady=8)
+        self.grades_button = self._secondary_button(right, text="Draft Grades",
+                                              command=self.show_grades,
+                                              state='disabled')
+        self.grades_button.pack(fill='x', padx=10, pady=(0, 10))
 
         self.start_draft()
+
+    # ------------------------------------------------------------------
+    def _setup_tree_style(self):
+        """Dark, flat styling for the draft board (styled ttk.Treeview, per
+        the migration guide -- the board carries sortable columns)."""
+        ct = self._ct
+        style = ttk.Style(self)
+        style.configure('Draft.Treeview',
+                        background=ct['CARD'],
+                        fieldbackground=ct['CARD'],
+                        foreground=ct['TEXT'],
+                        borderwidth=0,
+                        relief='flat',
+                        rowheight=28,
+                        font=('Segoe UI', 10))
+        style.configure('Draft.Treeview.Heading',
+                        background=ct['PANEL'],
+                        foreground=ct['TEXT'],
+                        font=('Segoe UI', 10, 'bold'),
+                        relief='flat',
+                        borderwidth=0)
+        style.map('Draft.Treeview',
+                  background=[('selected', ct['ROW_SELECTED'])],
+                  foreground=[('selected', ct['TEXT'])])
+        style.layout('Draft.Treeview',
+                     [('Treeview.treearea', {'sticky': 'nswe'})])
+        style.configure('Draft.Vertical.TScrollbar',
+                        background=ct['CARD'],
+                        troughcolor=ct['BG'],
+                        borderwidth=0,
+                        relief='flat',
+                        arrowcolor=ct['TEXT_DIM'])
+        style.map('Draft.Vertical.TScrollbar',
+                  background=[('active', ct['BORDER'])])
+
+    def _create_draft_board(self, parent):
+        """Dark-styled draft board table inside a rounded card."""
+        ct = self._ct
+        columns = {'pick': ('#', 40), 'team': ('Team', 130),
+                   'player': ('Player', 150), 'pos': ('Pos', 40),
+                   'pot': ('Pot', 60)}
+        tree = ttk.Treeview(parent, columns=list(columns.keys()),
+                            show='headings', style='Draft.Treeview',
+                            height=30)
+        for col, (text, width) in columns.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col, t=tree:
+                         self.parent._sort_treeview_generic(t, c))
+            tree.column(col, width=width, anchor='center')
+        # Potential-grade row colors (same scale as the other CTk screens)
+        for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
+            tree.tag_configure(f"pot_{g}",
+                               foreground=self.dn.grade_color(g))
+        self.parent._bind_player_context_menu(tree, 'default', False)
+        v_scroll = ttk.Scrollbar(parent, orient="vertical",
+                                 command=tree.yview,
+                                 style='Draft.Vertical.TScrollbar')
+        tree.configure(yscrollcommand=v_scroll.set)
+        tree.pack(side="left", fill="both", expand=True,
+                  padx=(10, 0), pady=10)
+        v_scroll.pack(side="right", fill="y", padx=(0, 6), pady=10)
+        return tree
+
+    def _pot_color(self, grade):
+        """Foreground color for a potential grade (A+ green ... F red)."""
+        g = (str(grade) if grade is not None else 'C').strip()
+        return self.dn.grade_color(self._GRADE_BASE.get(g, 'C'))
 
     # ------------------------------------------------------------------
     def start_draft(self):
@@ -4449,8 +4554,10 @@ class DraftWindow(tk.Toplevel):
         self._refresh_shortlist()
 
     def _draft_paint_pills(self):
-        for var, value, btn in getattr(self, '_draft_pill_groups', []):
-            btn.set_selected(var.get() == value)
+        for var, btns in getattr(self, '_draft_pill_groups', []):
+            current = var.get()
+            for value, btn in btns.items():
+                btn.set_selected(value == current)
 
     def _refresh_shortlist(self):
         self.shortlist.delete(0, tk.END)
@@ -4477,7 +4584,11 @@ class DraftWindow(tk.Toplevel):
                 pos = p.primary_position.value
             except Exception:
                 pos = "?"
+            idx = self.shortlist.size()
             self.shortlist.insert(tk.END, f"{p.full_name}  ({pos})  {pot}")
+            self.shortlist.itemconfig(
+                idx, foreground=self._pot_color(
+                    getattr(p, 'potential_grade', 'C')))
             self._shortlist_players.append(p)
             count += 1
             if count >= 30:
@@ -4497,7 +4608,7 @@ class DraftWindow(tk.Toplevel):
             pos = p.primary_position.value
         except Exception:
             pos = "?"
-        self.selected_label.config(
+        self.selected_label.configure(
             text=f"Selected: {p.full_name} ({pos}, {p.age}) — Potential {pot}")
 
     # ------------------------------------------------------------------
@@ -4512,27 +4623,27 @@ class DraftWindow(tk.Toplevel):
         pick_in_round = (self.current_pick %
                          max(1, len(self.parent.league.teams))) + 1
 
-        self.draft_status_label.config(
+        self.draft_status_label.configure(
             text=f"Round {round_num} of {self.total_rounds}")
-        self.clock_label.config(text=team_on_clock.team_name)
-        self.pick_info_label.config(
+        self.clock_label.configure(text=team_on_clock.team_name)
+        self.pick_info_label.configure(
             text=f"Pick #{overall}  (Round {round_num}, #{pick_in_round} in round)")
 
         is_user = team_on_clock == self.parent.user_team
         state = 'normal' if is_user else 'disabled'
-        self.draft_button.config(state=state)
-        self.auto_button.config(state=state)
-        self.trade_pick_button.config(state=state)
+        self.draft_button.configure(state=state)
+        self.auto_button.configure(state=state)
+        self.trade_pick_button.configure(state=state)
 
         # Your next pick info
         nxt = next((i for i in range(self.current_pick, len(self.draft_order))
                     if self.draft_order[i][1] == self.parent.user_team), None)
         if nxt is not None:
             r = self.draft_order[nxt][0]
-            self.next_pick_label.config(
+            self.next_pick_label.configure(
                 text=f"Your next pick: #{nxt + 1} (Round {r})")
         else:
-            self.next_pick_label.config(text="No picks remaining")
+            self.next_pick_label.configure(text="No picks remaining")
 
         if not is_user:
             if self._ai_after_id:
@@ -4627,9 +4738,12 @@ class DraftWindow(tk.Toplevel):
             pos = player.primary_position.value
         except Exception:
             pos = "?"
+        pot_grade = self._GRADE_BASE.get(
+            str(getattr(player, 'potential_grade', 'C')).strip(), 'C')
         self.draft_results_tree.insert('', 0, values=(
             overall, team.team_name, player.full_name, pos,
-            getattr(player, 'potential_grade', '?')))
+            getattr(player, 'potential_grade', '?')),
+            tags=(f"pot_{pot_grade}",))
         self._ticker(self.dn.ticker_line(overall, team.team_name, player,
                                          round_num, reach=reach, steal=steal))
         self.picks_made.append((team.team_name, overall, player))
@@ -4642,7 +4756,7 @@ class DraftWindow(tk.Toplevel):
             pass
         self.current_pick += 1
         self.selected_prospect = None
-        self.selected_label.config(text="No prospect selected")
+        self.selected_label.configure(text="No prospect selected")
         self._refresh_shortlist()
         # Keep the board scrolled to the newest pick
         kids = self.draft_results_tree.get_children()
@@ -4653,35 +4767,26 @@ class DraftWindow(tk.Toplevel):
     # ------------------------------------------------------------------
     def trade_current_pick(self):
         """Draft-day trade: swap your current pick with a partner's pick."""
+        ct = self._ct
         if self.current_pick >= len(self.draft_order):
             return
         _r, team_on_clock, user_pick = self.draft_order[self.current_pick]
         if team_on_clock != self.parent.user_team:
             messagebox.showinfo("Not Your Pick", "You can only trade your own pick.")
             return
-        dlg = tk.Toplevel(self)
+        dlg = ctk.CTkToplevel(self)
         dlg.title("Trade this pick")
-        dlg.geometry("480x420")
-        dlg.configure(background=self.parent.BG_COLOR)
+        dlg.geometry("480x460")
+        dlg.configure(fg_color=ct['BG'])
         dlg.transient(self)
         overall = self.current_pick + 1
-        ttk.Label(dlg, text=f"Your pick: #{overall} (Round {_r})",
-                  font=(self.parent.FONT_FAMILY, 12, 'bold'),
-                  style='TLabel').pack(pady=(12, 4))
-        ttk.Label(dlg, text="Select a partner and one of their upcoming picks:",
-                  style='Secondary.TLabel').pack(pady=(0, 8))
+        self._heading(dlg, text=f"Your pick: #{overall} (Round {_r})",
+                size=13).pack(pady=(14, 4))
+        self._body(dlg, text="Select a partner and one of their upcoming picks:",
+             dim=True).pack(pady=(0, 8))
 
         teams = sorted(t.team_name for t in self.parent.league.teams
                        if t != self.parent.user_team)
-        pvar = tk.StringVar(master=dlg)
-        combo = ttk.Combobox(dlg, textvariable=pvar, values=teams,
-                             state='readonly', width=30)
-        combo.pack(pady=4)
-
-        lb = tk.Listbox(dlg, height=10, bg='#232a3a', fg='#ffffff',
-                        selectbackground='#0d2b28', relief='flat',
-                        highlightthickness=1, highlightbackground='#2e2e38')
-        lb.pack(fill='both', expand=True, padx=14, pady=6)
 
         def _partner_picks(name):
             team = next((t for t in self.parent.league.teams
@@ -4693,40 +4798,49 @@ class DraftWindow(tk.Toplevel):
                     out.append((i, dp, r))
             return team, out
 
-        def _refresh_lb(event=None):
+        def _store():
+            dlg._picks = _partner_picks(combo.get())[1]
+
+        def _refresh_lb(_value=None):
             lb.delete(0, tk.END)
-            _t, picks = _partner_picks(pvar.get())
+            _t, picks = _partner_picks(combo.get())
             for i, dp, r in picks:
                 val = self.te.pick_trade_value(dp)
                 lb.insert(tk.END, f"#{i + 1} (Round {r}) — value {val}")
-            _store(event)
-
-        def _store(event=None):
-            dlg._picks = _partner_picks(pvar.get())[1]
+            _store()
 
         dlg._picks = []
-        combo.bind("<<ComboboxSelected>>", _refresh_lb)
+        combo = ctk.CTkComboBox(dlg, values=teams, state='readonly',
+                                width=280, command=_refresh_lb)
+        combo.pack(pady=4)
 
-        info = ttk.Label(dlg, text="", style='TLabel', wraplength=440,
-                         justify='center')
+        picks_card = ctk.CTkFrame(dlg, fg_color=ct['CARD'], corner_radius=8)
+        picks_card.pack(fill='both', expand=True, padx=14, pady=6)
+        lb = tk.Listbox(picks_card, height=10, bg=ct['CARD'], fg=ct['TEXT'],
+                        selectbackground=ct['ROW_SELECTED'], relief='flat',
+                        highlightthickness=0, activestyle='none')
+        lb.pack(fill='both', expand=True, padx=8, pady=8)
+
+        info = self._body(dlg, text="", dim=True)
+        info.configure(wraplength=440, justify='center')
         info.pack(pady=4)
 
         def _update_info(event=None):
             sel = lb.curselection()
             if not sel or not dlg._picks:
-                info.config(text="")
+                info.configure(text="")
                 return
             i, dp, r = dlg._picks[sel[0]]
             uv = self.dn.pick_slot_value(overall)
             tv = self.dn.pick_slot_value(i + 1)
             if uv > tv:
-                info.config(text=f"You give #{overall} (slot value {uv}), "
-                                 f"get #{i + 1} (slot value {tv}). They may want more.")
+                info.configure(text=f"You give #{overall} (slot value {uv}), "
+                                     f"get #{i + 1} (slot value {tv}). They may want more.")
             elif tv > uv:
-                info.config(text=f"You give #{overall} (slot value {uv}), "
-                                 f"get #{i + 1} (slot value {tv}). Good value for you.")
+                info.configure(text=f"You give #{overall} (slot value {uv}), "
+                                     f"get #{i + 1} (slot value {tv}). Good value for you.")
             else:
-                info.config(text="Even swap on paper.")
+                info.configure(text="Even swap on paper.")
 
         lb.bind('<<ListboxSelect>>', _update_info)
 
@@ -4736,7 +4850,7 @@ class DraftWindow(tk.Toplevel):
                 return
             j, partner_pick, _r2 = dlg._picks[sel[0]]
             partner = next(t for t in self.parent.league.teams
-                           if t.team_name == pvar.get())
+                           if t.team_name == combo.get())
             resp = self.te.ai_consider_trade(
                 partner, [user_pick], [partner_pick],
                 user_team=self.parent.user_team)
@@ -4757,8 +4871,8 @@ class DraftWindow(tk.Toplevel):
             messagebox.showinfo("Trade Complete", "Pick swap completed.")
             self.process_draft_pick()
 
-        ttk.Button(dlg, text="Propose Swap", command=_propose,
-                   style='TButton').pack(pady=10)
+        self._primary_button(dlg, text="Propose Swap",
+                       command=_propose).pack(pady=10)
 
     def _swap_pick_owner(self, draft_pick, new_team):
         """Point a draft pick (and its draft-order slot) at a new owner."""
@@ -4816,31 +4930,32 @@ class DraftWindow(tk.Toplevel):
 
     # ------------------------------------------------------------------
     def show_grades(self):
+        ct = self._ct
         grades = self.dn.draft_grades(self.picks_made)
-        dlg = tk.Toplevel(self)
+        dlg = ctk.CTkToplevel(self)
         dlg.title("Draft Grades")
-        dlg.geometry("420x520")
-        dlg.configure(background=self.parent.BG_COLOR)
+        dlg.geometry("420x540")
+        dlg.configure(fg_color=ct['BG'])
         dlg.transient(self)
-        ttk.Label(dlg, text="Draft Grades",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='Heading.TLabel').pack(pady=12)
-        lb = tk.Listbox(dlg, bg='#232a3a', fg='#ffffff', relief='flat',
-                        font=(self.parent.FONT_FAMILY, 11),
-                        selectbackground='#0d2b28', highlightthickness=1,
-                        highlightbackground='#2e2e38')
-        lb.pack(fill='both', expand=True, padx=14, pady=6)
+        self._heading(dlg, text="Draft Grades", size=16).pack(pady=14)
+        grades_card = ctk.CTkFrame(dlg, fg_color=ct['CARD'], corner_radius=8)
+        grades_card.pack(fill='both', expand=True, padx=14, pady=6)
+        lb = tk.Listbox(grades_card, bg=ct['CARD'], fg=ct['TEXT'],
+                        relief='flat', font=("Segoe UI", 11),
+                        selectbackground=ct['ROW_SELECTED'],
+                        highlightthickness=0, activestyle='none')
+        lb.pack(fill='both', expand=True, padx=8, pady=8)
         user_grade = None
         for team, grade, ratio in grades:
             lb.insert(tk.END, f"  {grade}   {team}")
-            lb.itemconfig(tk.END, foreground=self.dn.grade_color(grade))
+            lb.itemconfig(tk.END, foreground=self._pot_color(grade))
             if team == self.parent.user_team.team_name:
                 user_grade = grade
         if user_grade:
-            ttk.Label(dlg, text=f"Your draft grade: {user_grade}",
-                      font=(self.parent.FONT_FAMILY, 13, 'bold'),
-                      style='TLabel',
-                      foreground=self.dn.grade_color(user_grade)).pack(pady=10)
+            ug = ctk.CTkLabel(dlg, text=f"Your draft grade: {user_grade}",
+                              font=("Segoe UI", 13, 'bold'),
+                              text_color=self._pot_color(user_grade))
+            ug.pack(pady=10)
 
     def end_draft(self):
         if self._ai_after_id:
@@ -4849,13 +4964,13 @@ class DraftWindow(tk.Toplevel):
             except Exception:
                 pass
         self._ai_after_id = None
-        self.draft_status_label.config(text="Draft Complete")
-        self.clock_label.config(text="—")
-        self.pick_info_label.config(text="All 7 rounds complete")
-        self.draft_button.config(state='disabled')
-        self.auto_button.config(state='disabled')
-        self.trade_pick_button.config(state='disabled')
-        self.grades_button.config(state='normal')
+        self.draft_status_label.configure(text="Draft Complete")
+        self.clock_label.configure(text="—")
+        self.pick_info_label.configure(text="All 7 rounds complete")
+        self.draft_button.configure(state='disabled')
+        self.auto_button.configure(state='disabled')
+        self.trade_pick_button.configure(state='disabled')
+        self.grades_button.configure(state='normal')
         self._ticker("That's a wrap on draft night.")
         self.show_grades()
 
