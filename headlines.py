@@ -48,6 +48,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "star_injury": _star_injury_headline,
         "blockbuster_trade": _blockbuster_headline,
         "coaching_change": _coaching_change_headline,
+        "rivalry_declared": _rivalry_declared_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -162,6 +163,55 @@ def _coaching_change_headline(game_date, team_name, coach_name,
         category="League",
         priority=2,
     )
+
+
+def _rivalry_declared_headline(game_date, declarer_name, target_name,
+                               target_kind="team", **kw):
+    from game_classes import EmailMessage
+    if target_kind == "coach":
+        subject = (f"\U0001f525 {declarer_name} GM publicly declares "
+                   f"{target_name} a personal rival")
+        content = (
+            f"The {declarer_name} general manager didn't mince words today, "
+            f"publicly declaring {target_name} a personal rival.\n\n"
+            f"\"It's not about the standings. It's about him. Every time we "
+            f"play his team, my guys will know.\"\n\n"
+            f"Coaches around the league called it \"rare and spicy\". The next "
+            f"meeting just got a lot more interesting."
+        )
+    else:
+        subject = (f"\U0001f525 {declarer_name} declares {target_name} "
+                   f"the enemy")
+        content = (
+            f"The {declarer_name} general manager drew a line in the sand "
+            f"today, publicly declaring the {target_name} the team's sworn "
+            f"rivals.\n\n"
+            f"\"Circle those dates. Our fans deserve games that mean "
+            f"something, and from now on, these do.\"\n\n"
+            f"Ticket offices on both sides are already reporting a spike for "
+            f"the next meeting."
+        )
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=subject,
+        content=content,
+        category="League",
+        priority=2,
+    )
+
+
+def announce_rivalry_declaration(app, declarer_team_name, target_team_name,
+                                 target_label, target_kind="team") -> bool:
+    """Build + deliver the 'declared rival' headline. Both GMs involved get
+    milestone copies; every human manager gets the news. Returns delivered."""
+    game_date = getattr(app, "current_date", None) or date.today()
+    msg = make_headline("rivalry_declared", game_date,
+                        declarer_name=declarer_team_name,
+                        target_name=target_label, target_kind=target_kind)
+    if msg is None:
+        return False
+    return deliver(app, msg, involved=(declarer_team_name, target_team_name))
 
 
 # ---------------------------------------------------------------------------

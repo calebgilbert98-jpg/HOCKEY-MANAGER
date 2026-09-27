@@ -173,7 +173,10 @@ class MoraleWindow(ctk.CTkToplevel):
         riv_card.pack(fill='x')
         self.riv_body = ctk.CTkLabel(riv_card, text="", justify='left',
                                      font=('Segoe UI', 10), wraplength=380)
-        self.riv_body.pack(anchor='w', padx=12, pady=(0, 8))
+        self.riv_body.pack(anchor='w', padx=12, pady=(0, 6))
+        self._secondary_button(riv_card, text="Declare Rival",
+                               command=self._open_declare_rival_popup).pack(
+                                   anchor='w', padx=12, pady=(0, 10))
 
         # Footer
         footer = ctk.CTkFrame(main, fg_color=ct['BG'])
@@ -299,6 +302,14 @@ class MoraleWindow(ctk.CTkToplevel):
                 return
             LineControlPopup(self, coach, team, list(team.roster),
                              self._team_context(), on_done=self.refresh)
+        except Exception:
+            pass
+
+    def _open_declare_rival_popup(self):
+        try:
+            team = self.parent.user_team
+            DeclareRivalPopup(self, team, self.parent.league,
+                              on_done=self.refresh)
         except Exception:
             pass
 
@@ -458,6 +469,10 @@ class MoraleWindow(ctk.CTkToplevel):
             beefs.sort(key=lambda r: -r['intensity'])
             for r in beefs[:2]:
                 lines.append(f"\U0001f94a {r['a_name']} vs {r['b_name']}: {r['intensity']:.0f}")
+            my_keys = {("team", team.team_name), ("gm", team.team_name)}
+            for r in rs.declared_rivalries_for(rivalries, team):
+                other = r['b_name'] if r['a'] in my_keys else r['a_name']
+                lines.append(f"\U0001f4e2 Declared rival: {other} ({r['intensity']:.0f})")
         self.riv_body.configure(
             text="\n".join(lines) if lines else "No bad blood on record. Yet.")
 
@@ -685,6 +700,200 @@ class LineControlPopup(ctk.CTkToplevel):
             out = rs.set_line_control(self._team, 'gm', self._ctx, self._roster,
                                       coach=self._coach, approach='seize')
             self.result.configure(text=out['text'], text_color=self._RED)
+            if self._on_done:
+                self._on_done()
+        except Exception:
+            pass
+
+
+class DeclareRivalPopup(ctk.CTkToplevel):
+    """Name your enemy: declare a team rival or a personal beef with an
+    opposing head coach. Declarations never fade until renounced."""
+
+    def __init__(self, parent_win, team, league, on_done=None):
+        from ctk_theme import (init_ctk_theme, secondary_button, heading,
+                               BG, PANEL, TEXT_DIM, GREEN, RED)
+        init_ctk_theme()
+        super().__init__(parent_win)
+        self.title("Declare Rival")
+        self.configure(fg_color=BG)
+        self.geometry("540x620")
+        self.minsize(480, 540)
+        self._team = team
+        self._league = league
+        self._on_done = on_done
+        self._GREEN = GREEN
+        self._RED = RED
+        # parent_win is the Morale window; its parent is the app.
+        self._app = getattr(parent_win, 'parent', None)
+
+        heading(self, text="Declare a rival").pack(anchor='w', padx=16, pady=(12, 2))
+        ctk.CTkLabel(self,
+                     text=("Name your enemy. A declaration sets the heat to 70, "
+                           "makes those games genuinely hostile, and never fades "
+                           "until you renounce it. The league will hear about it."),
+                     font=('Segoe UI', 11), text_color=TEXT_DIM,
+                     justify='left', wraplength=500).pack(anchor='w', padx=16, pady=(0, 10))
+
+        self._team_names = sorted(
+            getattr(t, 'team_name', '') for t in (getattr(league, 'teams', []) or [])
+            if getattr(t, 'team_name', '') and getattr(t, 'team_name', '') != getattr(team, 'team_name', ''))
+        # coach display -> team name
+        self._coach_map = {}
+        for t in (getattr(league, 'teams', []) or []):
+            tn = getattr(t, 'team_name', '')
+            if not tn or tn == getattr(team, 'team_name', ''):
+                continue
+            for stf in getattr(t, 'staff', []) or []:
+                if 'Head Coach' in str(getattr(getattr(stf, 'role', None), 'value', '')):
+                    disp = f"{getattr(stf, 'full_name', 'Coach')} ({tn})"
+                    self._coach_map[disp] = tn
+                    break
+
+        # -- team rival --
+        tframe = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
+        tframe.pack(fill='x', padx=16, pady=(0, 10))
+        ctk.CTkLabel(tframe, text="Team rival -- circle those dates:",
+                     font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(8, 2))
+        self._team_pick = ctk.CTkOptionMenu(tframe,
+                                            values=self._team_names or ["(no other teams)"])
+        self._team_pick.pack(fill='x', padx=10, pady=4)
+        secondary_button(tframe, text="Declare team rival",
+                         command=lambda: self._declare("team")).pack(
+                             anchor='w', padx=10, pady=(0, 8))
+
+        # -- personal rival --
+        pframe = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
+        pframe.pack(fill='x', padx=16, pady=(0, 10))
+        ctk.CTkLabel(pframe, text="Personal rival -- an opposing head coach:",
+                     font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(8, 2))
+        self._coach_pick = ctk.CTkOptionMenu(pframe,
+                                             values=sorted(self._coach_map) or ["(no coaches)"])
+        self._coach_pick.pack(fill='x', padx=10, pady=4)
+        secondary_button(pframe, text="Declare personal rival",
+                         command=lambda: self._declare("coach")).pack(
+                             anchor='w', padx=10, pady=(0, 8))
+
+        # -- renounce --
+        rframe = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
+        rframe.pack(fill='x', padx=16, pady=(0, 10))
+        ctk.CTkLabel(rframe, text="Live declarations -- take one back:",
+                     font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(8, 2))
+        self._renounce_frame = rframe
+        self._rebuild_renounce_list()
+
+        self.result = ctk.CTkLabel(self, text="", font=('Segoe UI', 11),
+                                   wraplength=500, justify='left')
+        self.result.pack(padx=16, pady=(0, 12))
+
+    # ------------------------------------------------------------------
+    def _mp_send(self, action, params):
+        """Route to the MP host when this machine is a client; True = routed."""
+        try:
+            client = getattr(self._app, "mp_client", None)
+            if client is None:
+                return False
+            params = dict(params or {})
+            params.setdefault("team_id", getattr(self._team, "team_name", ""))
+            client.send_action(action, params)
+            try:
+                from ctk_theme import TEXT_DIM
+                self.result.configure(
+                    text="Sent to the host -- the league will hear about it after the next sync.",
+                    text_color=TEXT_DIM)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def _find_team(self, name):
+        for t in (getattr(self._league, 'teams', []) or []):
+            if getattr(t, 'team_name', '') == name:
+                return t
+        return None
+
+    def _declare(self, kind):
+        if kind == "team":
+            target_team_name = self._team_pick.get()
+        else:
+            target_team_name = self._coach_map.get(self._coach_pick.get(), "")
+        if not target_team_name:
+            return
+        if self._mp_send("declare_rivalry",
+                         {"target_team": target_team_name, "target_kind": kind}):
+            return
+        try:
+            target_team = self._find_team(target_team_name)
+            rec, label = rs.declare_rivalry_for_gm(self._league, self._team,
+                                                   target_team, kind)
+            import headlines as hl
+            hl.announce_rivalry_declaration(
+                self._app, getattr(self._team, 'team_name', '?'),
+                target_team_name, label, kind)
+            self.result.configure(
+                text=f"Declared: {label} (heat {rec['intensity']:.0f}). "
+                     f"Those games just got personal.",
+                text_color=self._GREEN)
+            self._rebuild_renounce_list()
+            if self._on_done:
+                self._on_done()
+        except ValueError as e:
+            self.result.configure(text=str(e), text_color=self._RED)
+        except Exception:
+            pass
+
+    def _rebuild_renounce_list(self):
+        from ctk_theme import secondary_button
+        for w in list(self._renounce_frame.winfo_children())[1:]:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        try:
+            rivalries = getattr(self._league, 'rivalries', []) or []
+            declared = rs.declared_rivalries_for(rivalries, self._team)
+        except Exception:
+            declared = []
+        if not declared:
+            ctk.CTkLabel(self._renounce_frame, text="None. Pick a fight above.",
+                         font=('Segoe UI', 11)).pack(anchor='w', padx=10, pady=(0, 8))
+            return
+        my_keys = {("team", getattr(self._team, 'team_name', '')),
+                   ("gm", getattr(self._team, 'team_name', ''))}
+        for r in declared:
+            other = r['b_name'] if r['a'] in my_keys else r['a_name']
+            kind = "team" if r['kind'] == "team_team" else "coach"
+            # Resolve the target team for renounce.
+            target_team_name = None
+            if kind == "team":
+                target_team_name = r['b_name'] if r['a'] in my_keys else r['a_name']
+            else:
+                for disp, tn in self._coach_map.items():
+                    if disp.rsplit(" (", 1)[0] == other:
+                        target_team_name = tn
+                        break
+            btn = secondary_button(
+                self._renounce_frame, text=f"Renounce vs {other}",
+                command=lambda k=kind, tn=target_team_name:
+                    self._renounce(k, tn))
+            btn.pack(anchor='w', padx=10, pady=2)
+
+    def _renounce(self, kind, target_team_name):
+        if not target_team_name:
+            return
+        if self._mp_send("renounce_rivalry",
+                         {"target_team": target_team_name, "target_kind": kind}):
+            return
+        try:
+            target_team = self._find_team(target_team_name)
+            ok = rs.renounce_rivalry_for_gm(self._league, self._team,
+                                            target_team, kind)
+            self.result.configure(
+                text=("Renounced. The hate cools from here."
+                      if ok else "Nothing to renounce."),
+                text_color=self._GREEN if ok else self._RED)
+            self._rebuild_renounce_list()
             if self._on_done:
                 self._on_done()
         except Exception:

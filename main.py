@@ -6946,6 +6946,8 @@ class HockeyManagerGUI(tk.Tk):
         if action in ("advise_coach", "unfeature_player", "team_event",
                       "set_line_control"):
             return self._apply_morale_action(action, params, team)
+        if action in ("declare_rivalry", "renounce_rivalry"):
+            return self._apply_rivalry_action(action, params, team)
         if action in ("sign_free_agent", "propose_trade", "release_player",
                       "send_to_minors", "call_up"):
             # TODO(Phase-1b): implement against the canonical Team objects.
@@ -7048,6 +7050,42 @@ class HockeyManagerGUI(tk.Tk):
             return False, f"action failed: {e}"
         text = out.get("text", "") if isinstance(out, dict) else ""
         return True, (text[:300] if text else "done")
+
+    # -- rivalry declarations (host side) --------------------------------
+    def _apply_rivalry_action(self, action, params, team):
+        """Apply a client's rivalry declaration/renounce to canonical state.
+
+        The league's rivalry list syncs to every manager via STATE_SYNC, so a
+        declared hate is immediately everyone's problem.
+        """
+        import reputation_system as rs
+        import headlines as hl
+        league = getattr(self, "league", None)
+        if league is None:
+            return False, "no league loaded"
+        target_team = self._mp_find_team(str(params.get("target_team", "")))
+        kind = str(params.get("target_kind", "team"))
+        if kind not in ("team", "coach"):
+            return False, "target_kind must be team or coach"
+        try:
+            if action == "declare_rivalry":
+                rec, label = rs.declare_rivalry_for_gm(league, team,
+                                                       target_team, kind)
+                try:
+                    hl.announce_rivalry_declaration(
+                        self, getattr(team, "team_name", "?"),
+                        getattr(target_team, "team_name", "?"), label, kind)
+                except Exception:
+                    pass
+                return True, (f"Rivalry declared vs {label} "
+                              f"(heat {rec['intensity']:.0f})")
+            ok = rs.renounce_rivalry_for_gm(league, team, target_team, kind)
+            return (True, "Declaration renounced; the hate cools.") if ok else \
+                (False, "no live declaration to renounce")
+        except ValueError as e:
+            return False, str(e)
+        except Exception as e:
+            return False, f"action failed: {e}"
 
     def _apply_multiplayer_snapshot(self, save_bytes, label=""):
         """Replace local state with the host's snapshot (main thread)."""
