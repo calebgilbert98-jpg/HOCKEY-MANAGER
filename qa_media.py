@@ -1,0 +1,402 @@
+# qa_media.py — press-ecosystem checks: markets, reporters, interviews,
+# narratives, fines, coach-media beefs. Rare drama by construction.
+
+import random
+import sys
+import types
+from datetime import date
+
+sys.path.insert(0, ".")
+from game_classes import Player, PlayerPosition
+import media_engine as me
+
+PASS, FAIL = [], []
+
+
+def check(name, cond, info=""):
+    (PASS if cond else FAIL).append(name)
+    print(("PASS: " if cond else "FAIL: ") + name +
+          (f" -- {info}" if info and not cond else ""))
+
+
+def make_player(age=26, overall_target=78, seed=1, pos=PlayerPosition.CENTER,
+                **kw):
+    random.seed(seed)
+    p = Player(first_name="Test", last_name=f"P{seed}", age=age,
+               primary_position=pos)
+    p.nationality = "Canada"
+    for a in ("skating", "shooting", "passing", "hockey_iq", "strength",
+              "checking", "defense"):
+        if hasattr(p, a):
+            setattr(p, a, overall_target)
+    for k, v in kw.items():
+        if hasattr(p, k):
+            setattr(p, k, v)
+    p.overall_rating = lambda _o=overall_target: float(_o)
+    return p
+
+
+def make_coach(seed=1, controversy=40, control_need=50, name="Coach"):
+    random.seed(9000 + seed)
+    c = types.SimpleNamespace(
+        id=seed, full_name=f"{name} C{seed}", last_name=f"C{seed}",
+        role=types.SimpleNamespace(value="Head Coach"),
+        controversy=controversy, control_need=control_need,
+        media_stonewalls=0)
+    return c
+
+
+def make_team(name, roster, staff=None, wins=25, losses=25, ot_losses=6):
+    return types.SimpleNamespace(team_name=name, roster=list(roster),
+                                 staff=list(staff or []), wins=wins,
+                                 losses=losses, ot_losses=ot_losses)
+
+
+def make_league():
+    lg = types.SimpleNamespace()
+    me.ensure_media_state(lg)
+    return lg
+
+
+# --- 1. Markets ------------------------------------------------------------
+tor = me.market_of("Toronto Maple Leafs")
+uta = me.market_of("Utah Hockey Club")
+mtl = me.market_of("Montréal Canadiens")
+check("mkt: Toronto is a fishbowl", tor["intensity"] == 95, f"{tor}")
+check("mkt: Utah is quiet", uta["intensity"] < 50, f"{uta}")
+check("mkt: Montreal adversarial", mtl["adversarial"] >= 65, f"{mtl}")
+check("mkt: unknown team -> sane default",
+      me.market_of("Nope") == {"intensity": 55, "adversarial": 45,
+                               "loyalty": 65, "patience": 65})
+
+# --- 2. Reporters ----------------------------------------------------------
+lg = make_league()
+check("rep: 3 per market x 32", len(lg.reporters) == 96, len(lg.reporters))
+tor_reps = me.reporters_for("Toronto Maple Leafs", lg)
+archs = {r.archetype for r in tor_reps}
+check("rep: every market has stirrer+loyalist+neutral", archs == {
+      "stirrer", "loyalist", "neutral"}, archs)
+check("rep: ids stable across ensure calls",
+      len({r.id for r in lg.reporters}) == 96)
+lg2 = types.SimpleNamespace()
+me.ensure_media_state(lg2)
+check("rep: names deterministic per market",
+      [r.name for r in me.reporters_for("Toronto Maple Leafs", lg2)] ==
+      [r.name for r in tor_reps])
+
+# --- 3. Media savvy --------------------------------------------------------
+vet = make_player(seed=11, composure=85, controversy=10, leadership=80,
+                  nhl_games_played=600, pressure_player=80)
+kid = make_player(seed=12, age=19, composure=40, controversy=55,
+                  leadership=30, nhl_games_played=0, pressure_player=35)
+check("savvy: composed vet >> rattled kid",
+      me.media_savvy(vet) > me.media_savvy(kid) + 25,
+      f"{me.media_savvy(vet):.1f} vs {me.media_savvy(kid):.1f}")
+check("savvy: bounded 0-100", 0 <= me.media_savvy(kid) <= 100)
+
+# --- 4. cover_game smoke ---------------------------------------------------
+coach = make_coach()
+home = make_team("Toronto Maple Leafs",
+                 [make_player(seed=i, overall_target=70 + (i % 15))
+                  for i in range(20)], staff=[coach])
+away = make_team("Utah Hockey Club",
+                 [make_player(seed=100 + i) for i in range(20)])
+evs = me.cover_game(lg, home, away, home, away, (4, 2), False,
+                    date(2026, 10, 5), rng=random.Random(1))
+check("cover: returns event list, no crash", isinstance(evs, list))
+check("cover: interview happened in Toronto",
+      any(e["kind"] == "quote" for e in evs), f"{[e['kind'] for e in evs]}")
+
+bare = types.SimpleNamespace()  # nothing on it
+evs2 = me.cover_game(make_league(), bare, bare, bare, bare, (0, 0), False,
+                     date(2026, 10, 5), rng=random.Random(2))
+check("cover: bare-bones teams never crash", isinstance(evs2, list))
+
+# Quiet markets often have no scrum at all.
+quiet = make_team("Utah Hockey Club",
+                  [make_player(seed=200 + i) for i in range(20)])
+loud = make_team("Toronto Maple Leafs",
+                 [make_player(seed=300 + i) for i in range(20)])
+q_n = sum(1 for t in range(60)
+          if me.cover_game(make_league(), quiet, loud, quiet, loud, (3, 2),
+                           False, date(2026, 10, 5),
+                           rng=random.Random(1000 + t)))
+l_n = sum(1 for t in range(60)
+          if me.cover_game(make_league(), loud, quiet, loud, quiet, (3, 2),
+                           False, date(2026, 10, 5),
+                           rng=random.Random(2000 + t)))
+check("cover: Toronto covered far more often than Utah", l_n > q_n * 1.5,
+      f"TOR={l_n} UTA={q_n}")
+
+# --- 5. Hot-headed outburst (rare, gated) ----------------------------------
+hothead = make_player(seed=21, controversy=85, composure=45)
+hothead.nhl_games_played = 200
+loser_team = make_team("Edmonton Oilers", [hothead] + [
+    make_player(seed=400 + i, overall_target=60) for i in range(3)],
+    wins=8, losses=20, ot_losses=2)  # spiraling
+winner_team = make_team("Toronto Maple Leafs",
+                        [make_player(seed=500 + i) for i in range(20)])
+lg3 = make_league()
+outs = fines = 0
+for t in range(150):
+    evs = me.cover_game(lg3, loser_team, winner_team, winner_team,
+                        loser_team, (1, 6), False, date(2026, 10, 6),
+                        rng=random.Random(3000 + t))
+    for e in evs:
+        if e["kind"] in ("fine", "outburst_room"):
+            outs += 1
+        if e["kind"] == "fine" and e.get("role", "player") == "player":
+            fines += 1
+check("drama: hot head in a blowout loss sometimes pops off",
+      1 <= outs <= 60, f"outbursts in 200 games: {outs}")
+check("drama: pop-offs can mean a real fine",
+      fines >= 1 and all(f["amount"] in (2500, 5000)
+                         for f in lg3.media_fines), f"fines={fines}")
+check("drama: fine ledger records it",
+      any("officiating" in f["reason"] for f in lg3.media_fines))
+
+# The same situation with a composed pro: no outbursts.
+pro = make_player(seed=22, controversy=15, composure=88)
+pro.nhl_games_played = 500
+calm_team = make_team("Edmonton Oilers", [pro] + [
+    make_player(seed=600 + i) for i in range(19)],
+    wins=8, losses=20, ot_losses=2)
+outs_calm = 0
+for t in range(120):
+    # force the interview onto our composed pro every time
+    lgx = make_league()
+    lgx.media_recent_faces = [getattr(p, "id", None)
+                              for p in calm_team.roster[1:]]
+    evs = me.cover_game(lgx, calm_team, winner_team, winner_team,
+                        calm_team, (1, 6), False, date(2026, 10, 6),
+                        rng=random.Random(4000 + t))
+    outs_calm += sum(1 for e in evs
+                     if e["kind"] in ("fine", "outburst_room"))
+check("drama: composed pro never pops off", outs_calm == 0,
+      f"outbursts={outs_calm}")
+
+# Outburst effects stay small.
+p_mess = make_player(seed=23, controversy=85, composure=40)
+p_mess.team_chemistry = 70
+chem0 = p_mess.team_chemistry
+mess_team = make_team("Philadelphia Flyers", [p_mess] + [
+    make_player(seed=700 + i) for i in range(19)],
+    wins=8, losses=20, ot_losses=2)
+for t in range(60):
+    lgm = make_league()
+    lgm.media_recent_faces = [getattr(p, "id", None)
+                              for p in mess_team.roster[1:]]
+    me.cover_game(lgm, mess_team, winner_team, winner_team, mess_team,
+                  (2, 5), False, date(2026, 10, 6),
+                  rng=random.Random(5000 + t))
+    if p_mess.team_chemistry < chem0:
+        break
+check("drama: room-callout costs at most 2 chemistry",
+      chem0 - p_mess.team_chemistry <= 2,
+      f"{chem0} -> {p_mess.team_chemistry}")
+
+# --- 6. Tortorella: stonewall -> fine --------------------------------------
+torts = make_coach(seed=31, controversy=92, control_need=95,
+                   name="John Tortorella")
+torts_team = make_team("Philadelphia Flyers",
+                       [make_player(seed=800 + i) for i in range(20)],
+                       staff=[torts])
+lg4 = make_league()
+stonewalled = coach_fined = 0
+for t in range(40):
+    evs = me.cover_game(lg4, torts_team, winner_team, winner_team,
+                        torts_team, (2, 3), False, date(2026, 10, 7),
+                        rng=random.Random(6000 + t))
+    for e in evs:
+        if e["kind"] == "quote" and "done here" in e.get("quote", ""):
+            stonewalled += 1
+        if e["kind"] == "fine" and e.get("role") == "coach":
+            coach_fined += 1
+            check("drama: coach media fine is $25k", e["amount"] == 25000,
+                  f"{e['amount']}")
+check("drama: prickly coach stonewalls sometimes", stonewalled >= 1,
+      f"stonewalls={stonewalled}")
+check("drama: third stonewall -> league fine", coach_fined >= 1,
+      f"coach fines={coach_fined}")
+
+# Easygoing coach: no stonewalls, no fines.
+nice = make_coach(seed=32, controversy=20, control_need=25, name="Nice")
+nice_team = make_team("Seattle Kraken",
+                      [make_player(seed=900 + i) for i in range(20)],
+                      staff=[nice])
+lg5 = make_league()
+nice_fines = 0
+for t in range(60):
+    evs = me.cover_game(lg5, nice_team, winner_team, nice_team,
+                        winner_team, (4, 1), False, date(2026, 10, 7),
+                        rng=random.Random(7000 + t))
+    nice_fines += sum(1 for e in evs if e["kind"] == "fine"
+                      and e.get("role") == "coach")
+check("drama: easygoing coach never fined for media", nice_fines == 0)
+
+# --- 7. Coach vs stirrer beef ----------------------------------------------
+prickly = make_coach(seed=33, controversy=75, control_need=60,
+                     name="Prickly")
+beef_team = make_team("Toronto Maple Leafs",
+                      [make_player(seed=950 + i) for i in range(20)],
+                      staff=[prickly])
+lg6 = make_league()
+# Force stirrer interviews: only stirrers on this test league's Toronto beat.
+lg6.reporters = [r for r in lg6.reporters
+                 if not (r.market == "Toronto Maple Leafs"
+                         and r.archetype != "stirrer")]
+morale0 = None
+for t in range(80):
+    evs = me.cover_game(lg6, beef_team, winner_team, winner_team,
+                        beef_team, (2, 4), False, date(2026, 10, 8),
+                        rng=random.Random(8000 + t))
+    if lg6.coach_media_beefs and morale0 is None:
+        morale0 = [p.morale for p in beef_team.roster]
+beefs = lg6.coach_media_beefs
+check("drama: stirrer + prickly coach -> beef", len(beefs) >= 1,
+      f"beefs={len(beefs)}")
+if beefs:
+    b = beefs[0]
+    check("drama: beef escalates to full circus", b.level == 3,
+          f"level={b.level}")
+    check("drama: level-3 circus costs 1 morale, no more",
+          all(m0 - p.morale <= 1
+              for m0, p in zip(morale0, beef_team.roster)),
+          "morale drop too big")
+
+# --- 8. Narratives: spawn, poke, shutdown, decay ----------------------------
+lg7 = make_league()
+skid_team = make_team("Vancouver Canucks",
+                      [make_player(seed=1000 + i) for i in range(20)],
+                      staff=[make_coach(seed=41, name="Hotseat")],
+                      wins=6, losses=22, ot_losses=2)
+spawned = 0
+for t in range(120):
+    evs = me.cover_game(lg7, skid_team, winner_team, winner_team,
+                        skid_team, (1, 4), False, date(2026, 10, 9),
+                        rng=random.Random(9000 + t))
+    spawned += sum(1 for e in evs if e["kind"] == "narrative_spawn")
+check("drama: spiraling team grows a narrative", spawned >= 1,
+      f"spawns={spawned}")
+check("drama: narratives capped league-wide",
+      len(lg7.media_narratives) <= 6, len(lg7.media_narratives))
+narr = lg7.media_narratives[0]
+check("drama: one storyline per team at a time",
+      sum(1 for n in lg7.media_narratives
+          if n.team_name == "Vancouver Canucks") == 1)
+
+# The Draisaitl: composed star kills it on camera.
+star = make_player(seed=51, composure=90, controversy=20, leadership=75,
+                   nhl_games_played=400, overall_target=92)
+star_team = make_team("Edmonton Oilers", [star] + [
+    make_player(seed=1100 + i) for i in range(19)],
+    wins=6, losses=22, ot_losses=2)
+lg8 = make_league()
+lg8.media_narratives = [me.Narrative("leadership", "Edmonton Oilers",
+                                     "Questions about the leadership in Edmonton",
+                                     heat=60.0)]
+stirrer = next(r for r in lg8.reporters
+               if r.market == "Edmonton Oilers" and r.archetype == "stirrer")
+cred0, appr0 = stirrer.credibility, stirrer.fan_approval
+shut = 0
+for t in range(40):
+    lg8.media_recent_faces = [getattr(p, "id", None)
+                              for p in star_team.roster[1:]]
+    # force the stirrer: temporarily sideline the others
+    keep = [r for r in lg8.reporters if r.market != "Edmonton Oilers"]
+    lg8.reporters = keep + [stirrer]
+    evs = me.cover_game(lg8, star_team, winner_team, winner_team,
+                        star_team, (2, 5), False, date(2026, 10, 10),
+                        rng=random.Random(10000 + t))
+    shut += sum(1 for e in evs if e["kind"] == "shutdown")
+    if not lg8.media_narratives:
+        break
+check("drama: composed star shuts the narrative down", shut >= 1,
+      f"shutdowns={shut}")
+check("drama: shutdown kills the narrative",
+      not any(n.team_name == "Edmonton Oilers"
+              for n in lg8.media_narratives))
+check("drama: wrong reporter loses credibility + fan approval",
+      stirrer.credibility < cred0 and stirrer.fan_approval < appr0,
+      f"{cred0:.0f}->{stirrer.credibility:.0f} / "
+      f"{appr0:.0f}->{stirrer.fan_approval:.0f}")
+
+# Rattled kid fumbles it and the story grows.
+rattled = make_player(seed=52, age=20, composure=35, controversy=40,
+                      leadership=30, nhl_games_played=10)
+rattled_team = make_team("Edmonton Oilers", [rattled] + [
+    make_player(seed=1200 + i) for i in range(19)],
+    wins=6, losses=22, ot_losses=2)
+lg9 = make_league()
+n0 = me.Narrative("leadership", "Edmonton Oilers",
+                  "Questions about the leadership in Edmonton", heat=50.0)
+lg9.media_narratives = [n0]
+stirrer9 = next(r for r in lg9.reporters
+                if r.market == "Edmonton Oilers" and r.archetype == "stirrer")
+grew = False
+for t in range(60):
+    lg9.media_recent_faces = [getattr(p, "id", None)
+                              for p in rattled_team.roster[1:]]
+    keep = [r for r in lg9.reporters if r.market != "Edmonton Oilers"]
+    lg9.reporters = keep + [stirrer9]
+    me.cover_game(lg9, rattled_team, winner_team, winner_team,
+                  rattled_team, (2, 5), False, date(2026, 10, 10),
+                  rng=random.Random(11000 + t))
+    if n0.heat > 55:
+        grew = True
+        break
+check("drama: rattled kid fumbles -> story grows", grew,
+      f"heat={n0.heat:.0f}")
+
+# Daily tick: everything cools.
+lg9b = make_league()
+n = me.Narrative("hot_seat", "Toronto Maple Leafs", "Hot seat", heat=25.0)
+lg9b.media_narratives = [n]
+me.media_daily_tick(lg9b)
+check("drama: narrative heat decays daily", n.heat == 15.0, n.heat)
+for _ in range(3):
+    me.media_daily_tick(lg9b)
+check("drama: dead narratives are removed",
+      len(lg9b.media_narratives) == 0)
+b = me.CoachMediaBeef("C", "r", "R", "T")
+lg9b.coach_media_beefs = [b]
+for _ in range(7):
+    me.media_daily_tick(lg9b)
+check("drama: quiet beefs expire", len(lg9b.coach_media_beefs) == 0)
+
+# --- 9. Rotation + routing -------------------------------------------------
+lg10 = make_league()
+rot_team = make_team("Toronto Maple Leafs",
+                     [make_player(seed=1300 + i, overall_target=75)
+                      for i in range(20)])
+faces = set()
+for t in range(8):
+    me.cover_game(lg10, rot_team, away, rot_team, away, (3, 2), False,
+                  date(2026, 10, 11), rng=random.Random(12000 + t))
+    faces.add(lg10.media_recent_faces[-1] if lg10.media_recent_faces else None)
+check("drama: different player every night", len(faces) >= 5,
+      f"unique faces in 8 games: {len(faces)}")
+
+
+class FakeApp:
+    def __init__(self):
+        self.news = []
+
+    def add_news(self, line):
+        self.news.append(line)
+
+
+app = FakeApp()
+n = me.route_events(app, [{"kind": "quote", "team": "Leafs", "player": "P",
+                           "reporter": "R", "archetype": "neutral",
+                           "outcome": "bland", "question": "Q?",
+                           "quote": "A."},
+                          {"kind": "narrative_spawn", "team": "Leafs",
+                           "narrative": "Hot seat"}])
+check("route: quotes + spawns -> news feed", n == 2 and len(app.news) == 2,
+      app.news)
+check("route: garbage never raises",
+      me.route_events(FakeApp(), [{"kind": "bogus"}]) == 0)
+
+print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+sys.exit(1 if FAIL else 0)

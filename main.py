@@ -6813,6 +6813,13 @@ class HockeyManagerGUI(tk.Tk):
                 self.user_team.inbox.prune_expired(self.current_date)
             except Exception:
                 pass
+
+            # Media engine daily tick: narratives cool, beefs go quiet.
+            try:
+                import media_engine
+                media_engine.media_daily_tick(getattr(self, 'league', None))
+            except Exception:
+                pass
             
             # Clear caches periodically to prevent memory bloat
             if self.current_date.day == 1:  # First day of each month
@@ -7606,6 +7613,15 @@ class HockeyManagerGUI(tk.Tk):
                 headlines.drain_sim_headlines(self, sim_engine)
             except Exception:
                 pass
+            # Media engine: post-game interviews, narratives, fines, beefs.
+            try:
+                import media_engine
+                _mev = media_engine.cover_game(
+                    getattr(self, 'league', None), home_team, away_team,
+                    winner, loser, scores, went_ot, game_date)
+                media_engine.route_events(self, _mev, game_date)
+            except Exception:
+                pass
             # FM-style: board, profile, morale, post-match presser
             went_ot = len([e for e in (notable_events or []) if isinstance(e, dict) and e.get('period', 0) > 3]) > 0
             self._career_after_user_game(winner, loser, scores, home_team, away_team, went_ot, sim_engine)
@@ -8276,6 +8292,16 @@ class HockeyManagerGUI(tk.Tk):
                 
                 # Update standings immediately (no batch delay)
                 self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot)
+
+                # Media engine: post-game coverage (cheap, additive).
+                try:
+                    import media_engine
+                    _mev = media_engine.cover_game(
+                        getattr(self, 'league', None), home_team, away_team,
+                        winner, loser, scores, went_to_ot, game_date)
+                    media_engine.route_events(self, _mev, game_date)
+                except Exception:
+                    pass
                 
             except Exception as e:
                 print(f"Error in batch simulation: {e}")
