@@ -340,6 +340,88 @@ def _spiraling(team: Any) -> bool:
     return _games_played(team) >= 10 and _win_pct(team) <= 0.400
 
 
+def _playoff_context(league: Any, home_team: Any,
+                     away_team: Any) -> Optional[Dict[str, Any]]:
+    """None in the regular season; otherwise round / game number /
+    elimination flags. Defensive: any missing piece -> regular season."""
+    try:
+        bracket = getattr(league, "playoff_bracket", None)
+        series_map = getattr(bracket, "playoff_series", None)
+        if not series_map:
+            return None
+        hn, an = _team_name(home_team), _team_name(away_team)
+        for round_key, series_list in series_map.items():
+            for s in series_list or []:
+                names = {_team_name(getattr(s, "team1", None)),
+                         _team_name(getattr(s, "team2", None))}
+                if {hn, an} <= names and not getattr(s, "is_complete", True):
+                    w1 = int(getattr(s, "team1_wins", 0) or 0)
+                    w2 = int(getattr(s, "team2_wins", 0) or 0)
+                    gp = int(getattr(s, "games_played", 0) or 0)
+                    elim = (w1 == 3 or w2 == 3)
+                    return {"round": getattr(s, "round_name", round_key),
+                            "game_number": gp + 1,
+                            "is_elimination": elim,
+                            "is_game_7": gp == 6}
+    except Exception:
+        pass
+    return None
+
+
+def _gm_of(team: Any) -> Optional[Any]:
+    """Best-effort GM lookup; None is fine (we write around it)."""
+    try:
+        for stf in getattr(team, "staff", []) or []:
+            if "General Manager" in str(
+                    getattr(getattr(stf, "role", None), "value", "")):
+                return stf
+    except Exception:
+        pass
+    return None
+
+
+def _bump(roster: List[Any], attr: str, delta: float,
+          predicate=None) -> None:
+    for p in roster or []:
+        try:
+            if predicate is not None and not predicate(p):
+                continue
+            cur = _f(p, attr, 70)
+            setattr(p, attr, max(1, min(100, cur + delta)))
+        except Exception:
+            continue
+
+
+def _record(team: Any, event_type: str, text: str,
+            morale_delta: int = 0, tone: str = "neutral") -> None:
+    try:
+        import reputation_system as _rs
+        _rs.record_team_event(team, event_type, text,
+                              morale_delta=morale_delta, tone=tone)
+    except Exception:
+        pass
+
+
+def _is_leader(player: Any, team: Any) -> bool:
+    if _captain_of(team) is player:
+        return True
+    return _f(player, "leadership", 50) >= 75
+
+
+_PLAYOFF_QUOTES = [
+    "“It's the playoffs. Nothing else matters but the next one.”",
+    "“We knew it would be tight. We'll be ready for the next one.”",
+    "“Full credit to them. We've got to be better.”",
+    "“You don't get style points this time of year.”",
+]
+
+_STANDUP_QUOTES = [
+    "“That's on all of us in here. You don't hang that on one guy.”",
+    "“We win together, we lose together. That's the room we've got.”",
+    "“Ask me about our team. I'm not pointing fingers at anyone.”",
+]
+
+
 def cover_game(league: Any, home_team: Any, away_team: Any,
                winner: Any, loser: Any,
                scores: Tuple[int, int], went_ot: bool,
@@ -378,48 +460,99 @@ def _cover_game_inner(league, home_team, away_team, winner, loser,
     heated_loss = diff >= 4 or (went_ot and not home_won)
     loser_spiraling = _spiraling(loser)
 
+    # Context matters. In an elimination game / Game 7 the rooms close:
+    # no narrative pokes, no beefs, no stonewalls, no pop-offs -- just
+    # brief, respectful scrums. Earlier playoff rounds are muted too.
+    poctx = _playoff_context(league, home_team, away_team)
+    big_game = bool(poctx and (poctx["is_elimination"]
+                               or poctx["is_game_7"]))
+    playoffs = poctx is not None
+    if big_game and rng.random() < 0.4:
+        return events  # both rooms closed tonight
+    ctx = {"big_game": big_game, "playoffs": playoffs}
+
     # ---- 1. The interview ----
     interviewee = _pick_interviewee(home_team, league, rng,
                                     loser_side=(not home_won and heated_loss))
     if interviewee is not None:
         reporter = _pick_reporter(
             home_name, league, rng,
-            adversarial_boost=(not home_won and loser_spiraling))
+            adversarial_boost=(not home_won and loser_spiraling
+                               and not playoffs))
         if reporter is not None:
             _run_interview(league, home_team, interviewee, reporter,
                            home_won, heated_loss, loser_spiraling,
-                           game_date, rng, events)
+                           game_date, rng, events, ctx)
 
     # ---- 2. Coach availability ----
     _run_coach_availability(league, home_team, home_name, reporter,
                             heated_loss, loser_spiraling, game_date,
-                            rng, events)
+                            rng, events, ctx)
 
-    # ---- 3. Narrative watch: losing teams grow storylines (rare) ----
-    _maybe_spawn_narrative(league, loser, game_date, rng, events)
+    # ---- 3. Narrative watch: regular season only. Playoffs freeze the
+    # silly stuff -- nobody starts a goalie controversy in May.
+    if not playoffs:
+        _maybe_spawn_narrative(league, loser, game_date, rng, events)
+
+    # ---- 4. Between-periods leadership: fully simmed, never interrupts.
+    # A captain's/coach's intermission word in a tight game lifts the room.
+    _room_leadership_moment(league, home_team, home_won, diff, went_ot,
+                            game_date, rng, events, ctx)
+
+    # ---- 5. The front office speaks: rare AI GM backing.
+    if not playoffs and rng.random() < 0.02:
+        _gm_backing(league, home_team, game_date, rng, events)
 
     return events
 
 
 def _run_interview(league, team, player, reporter, won: bool,
                    heated_loss: bool, spiraling: bool,
-                   game_date, rng, events) -> None:
+                   game_date, rng, events,
+                   ctx: Optional[Dict[str, Any]] = None) -> None:
+    ctx = ctx or {}
     pname = getattr(player, "full_name",
                     getattr(player, "last_name", "A player"))
     savvy = media_savvy(player)
     hot_head = _f(player, "controversy", 30) >= 60
 
+    # Game 7 / elimination: brief and respectful. Nobody pops off, nobody
+    # gets cute. Just hockey clichés, the way it really is.
+    if ctx.get("big_game"):
+        events.append({
+            "kind": "quote",
+            "team": _team_name(team),
+            "player": pname,
+            "reporter": reporter.name,
+            "archetype": "neutral",
+            "outcome": "bland",
+            "question": "“How do you sum this one up?”",
+            "quote": rng.choice(_PLAYOFF_QUOTES),
+        })
+        return
+
+    # The captain takes the bullet: after a loss, a real leader doesn't
+    # let the room get carved up -- he stands in front of it.
+    if (not won and not ctx.get("playoffs") and _is_leader(player, team)
+            and rng.random() < 0.35):
+        _leader_stands_up(league, team, player, pname, reporter,
+                          game_date, rng, events)
+        return
+
     # The frustration override: hot head + bad situation + heated loss.
     # Rare even then -- most guys just give a bland answer and leave.
+    # Muted in the playoffs (everyone bites their tongue in May).
+    outburst_p = 0.35 * (0.3 if ctx.get("playoffs") else 1.0)
     if (hot_head and not won and (heated_loss or spiraling)
-            and rng.random() < 0.35):
+            and rng.random() < outburst_p):
         _run_outburst(league, team, player, pname, reporter,
                       game_date, rng, events)
         return
 
-    # Narrative poke: a stirrer smells blood.
+    # Narrative poke: a stirrer smells blood. Not in the playoffs.
     narr = _narrative_for(_team_name(team), league)
-    if (narr is not None and reporter.archetype == "stirrer"
+    if (narr is not None and not ctx.get("playoffs")
+            and reporter.archetype == "stirrer"
             and rng.random() < 0.15 + narr.heat / 400.0):
         _run_narrative_poke(league, team, player, pname, savvy,
                             reporter, narr, game_date, rng, events)
@@ -496,6 +629,34 @@ def _run_outburst(league, team, player, pname, reporter,
         reporter.credibility = min(100, reporter.credibility + 4)
 
 
+def _leader_stands_up(league, team, player, pname, reporter,
+                     game_date, rng, events) -> None:
+    """A leader takes the bullet for the room. The guys notice."""
+    team_name = _team_name(team)
+    roster = list(getattr(team, "roster", []) or [])
+    _bump(roster, "happiness", 1)
+    # The kids who are struggling feel it most.
+    low = sorted(roster, key=lambda p: _f(p, "morale", 70))[:2]
+    for p in low:
+        _bump([p], "morale", 1)
+    narr = _narrative_for(team_name, league)
+    if narr is not None:
+        narr.heat = max(0, narr.heat - 15)
+    _record(team, "leadership_stand",
+            f"{pname} stood in front of the room after the loss and took "
+            f"every question himself. The guys noticed.", morale_delta=1,
+            tone="up")
+    events.append({
+        "kind": "defense",
+        "team": team_name,
+        "player": pname,
+        "reporter": reporter.name if reporter else "beat",
+        "quote": rng.choice(_STANDUP_QUOTES),
+        "note": (f"{pname} took the bullet for the room -- no fingers "
+                 f"pointed anywhere but at himself."),
+    })
+
+
 def _narrative_for(team_name: str, league: Any) -> Optional[Narrative]:
     narrs = [n for n in (getattr(league, "media_narratives", []) or [])
              if n.team_name == team_name]
@@ -505,7 +666,33 @@ def _narrative_for(team_name: str, league: Any) -> Optional[Narrative]:
 def _run_narrative_poke(league, team, player, pname, savvy, reporter,
                         narr, game_date, rng, events) -> None:
     """The Draisaitl moment: a ridiculous narrative meets a composed player
-    and dies on camera -- or meets a rattled one and grows legs."""
+    and dies on camera -- or meets a rattled one and grows legs.
+
+    Before either, a good coach may step in front of his guy -- especially
+    a young one. That's what the good ones do."""
+    coach = _head_coach_of(team)
+    if (coach is not None and _f(coach, "man_management", 50) >= 65
+            and (int(getattr(player, "age", 26) or 26) <= 23
+                 or rng.random() < 0.5)):
+        cname = getattr(coach, "full_name",
+                        getattr(coach, "last_name", "The coach"))
+        narr.heat = max(0, narr.heat - 10)
+        _bump([player], "morale", 2)
+        _record(team, "coach_shield",
+                f"{cname} cut off the {narr.title.lower()} questions and "
+                f"took them himself. {pname} didn't have to say a word.",
+                morale_delta=1, tone="up")
+        events.append({
+            "kind": "shield",
+            "team": _team_name(team),
+            "coach": cname,
+            "player": pname,
+            "reporter": reporter.name,
+            "narrative": narr.title,
+            "quote": ("“You're asking about a kid. Ask me about our team "
+                      "game -- that's my job, not his.”"),
+        })
+        return
     if savvy >= 65:
         # Shut down. Cold.
         try:
@@ -549,7 +736,9 @@ def _run_narrative_poke(league, team, player, pname, savvy, reporter,
 
 def _run_coach_availability(league, team, team_name, reporter,
                             heated_loss, spiraling, game_date,
-                            rng, events) -> None:
+                            rng, events,
+                            ctx: Optional[Dict[str, Any]] = None) -> None:
+    ctx = ctx or {}
     coach = _head_coach_of(team)
     if coach is None:
         return
@@ -557,6 +746,10 @@ def _run_coach_availability(league, team, team_name, reporter,
                     getattr(coach, "last_name", "The coach"))
     controversy = _f(coach, "controversy", 40)
     control = _f(coach, "control_need", 50)
+
+    # Even the prickliest coach shows up for a Game 7 scrum.
+    if ctx.get("big_game"):
+        return
 
     # The Tortorella: stonewalls the scrum, eventually gets fined for it.
     stonewall = controversy / 100.0 * 0.5 + control / 100.0 * 0.5
@@ -598,8 +791,10 @@ def _run_coach_availability(league, team, team_name, reporter,
         return
 
     # Coach vs stirrer: arguments that escalate across meetings.
+    # Nobody's fighting the press in the playoffs -- too much at stake.
+    beef_p = 0.30 * (0.5 if ctx.get("playoffs") else 1.0)
     if (reporter is not None and reporter.archetype == "stirrer"
-            and controversy >= 55 and rng.random() < 0.30):
+            and controversy >= 55 and rng.random() < beef_p):
         beef = next((b for b in league.coach_media_beefs
                      if b.reporter_id == reporter.id
                      and b.coach_name == cname), None)
@@ -686,6 +881,134 @@ def _maybe_spawn_narrative(league, loser, game_date, rng, events) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Between-periods leadership + the front office speaking up.
+# Fully simmed, never interrupts: these resolve inside the sim and land
+# as room effects + a line in the news feed.
+# ---------------------------------------------------------------------------
+
+def _room_leadership_moment(league, team, won: bool, diff: int,
+                            went_ot: bool, game_date, rng, events,
+                            ctx: Dict[str, Any]) -> None:
+    """The intermission word. In a tight game, somebody stands up between
+    periods and says the thing the room needs. No cameras, no drama --
+    just a small lift the guys feel. Never in an elimination game: the
+    stakes already have everyone's full attention."""
+    if ctx.get("big_game"):
+        return
+    if not (diff <= 2 or went_ot):
+        return  # blowouts don't get speeches; they get bag skates
+    if rng.random() >= 0.30:
+        return
+    roster = list(getattr(team, "roster", []) or [])
+    if not roster:
+        return
+    cap = _captain_of(team)
+    speaker, quote = None, ""
+    if cap is not None and _f(cap, "leadership", 50) >= 70:
+        speaker = getattr(cap, "full_name", getattr(cap, "last_name", "The captain"))
+        quote = ("Between periods, with the game on the line, "
+                 f"{speaker} stood up and told the room to empty the tank.")
+    else:
+        coach = _head_coach_of(team)
+        if coach is not None and _f(coach, "motivating", 50) >= 70:
+            speaker = getattr(coach, "full_name",
+                              getattr(coach, "last_name", "The coach"))
+            quote = (f"{speaker} said the quiet part out loud between "
+                     f"periods -- and the room responded.")
+    if speaker is None:
+        return
+    lift = 2 if won else 1
+    _bump(roster, "happiness", lift)
+    _record(team, "intermission_rally", quote, morale_delta=lift, tone="up")
+    events.append({"kind": "rally", "team": _team_name(team),
+                   "speaker": speaker, "note": quote})
+
+
+def gm_public_backing(league: Any, team: Any, target: str = "room",
+                      game_date: Optional[date] = None,
+                      rng: Optional[random.Random] = None,
+                      user_triggered: bool = False) -> Dict[str, Any]:
+    """A GM goes on the record for his people. target: 'room' | 'coach' |
+    a Player (backs that player). Public so the Morale window can offer it
+    to the user; the AI path calls it rarely on its own.
+
+    Effects are deliberately small: a public vote of confidence steadies
+    a room, it doesn't fix a broken team.
+    """
+    rng = rng or random
+    team_name = _team_name(team)
+    roster = list(getattr(team, "roster", []) or [])
+    gm = _gm_of(team)
+    gm_name = (getattr(gm, "full_name", getattr(gm, "last_name", None))
+               if gm is not None else None) or f"the {team_name} GM"
+    result: Dict[str, Any] = {"ok": True, "target": target}
+    if target == "coach":
+        coach = _head_coach_of(team)
+        cname = (getattr(coach, "full_name",
+                         getattr(coach, "last_name", "the coach"))
+                 if coach is not None else "the coach")
+        narr = next((n for n in (getattr(league, "media_narratives", []) or [])
+                     if n.team_name == team_name and n.kind == "hot_seat"),
+                    None)
+        if narr is not None:
+            narr.heat = max(0, narr.heat - 20)
+        if coach is not None:
+            try:
+                coach.gm_trust = max(0, min(100,
+                                           _f(coach, "gm_trust", 70) + 3))
+            except Exception:
+                pass
+        _bump(roster, "happiness", 1)
+        _record(team, "gm_backing",
+                f"{gm_name} gave {cname} an unequivocal public vote of "
+                f"confidence. The hot-seat talk cooled.",
+                morale_delta=1, tone="up")
+        result.update({"coach": cname,
+                       "quote": ("“Let me be clear: this is our coach. "
+                                 "The noise stops here.”")})
+    elif target == "room":
+        _bump(roster, "happiness", 2)
+        _bump(roster, "morale", 1)
+        _record(team, "gm_backing",
+                f"{gm_name} went on the record for the room: the group "
+                f"in there is the group he believes in.",
+                morale_delta=2, tone="up")
+        result.update({"quote": ("“I believe in the twenty-three guys in "
+                                 "that room. That's my statement.”")})
+    else:
+        # A specific player.
+        player = target
+        pname = getattr(player, "full_name",
+                        getattr(player, "last_name", "the player"))
+        _bump([player], "morale", 2)
+        _bump([player], "happiness", 2)
+        for n in (getattr(league, "media_narratives", []) or []):
+            if (n.team_name == team_name
+                    and getattr(player, "id", None) in (n.subjects or [])):
+                n.heat = max(0, n.heat - 15)
+        _record(team, "gm_backing",
+                f"{gm_name} publicly backed {pname}: “He's part of what "
+                f"we're building here.”", morale_delta=1, tone="up")
+        result.update({"player": pname,
+                       "quote": ("“He's part of what we're building here. "
+                                 "I'm not entertaining anything else.”")})
+    result["event"] = {"kind": "backing", "team": team_name,
+                       "gm": gm_name, "quote": result["quote"]}
+    return result
+
+
+def _gm_backing(league, team, game_date, rng, events) -> None:
+    """Rare AI front-office statement, routed into the news feed."""
+    try:
+        narr = _narrative_for(_team_name(team), league)
+        target = "coach" if (narr is not None and narr.kind == "hot_seat") else "room"
+        res = gm_public_backing(league, team, target, game_date, rng)
+        events.append(res["event"])
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Daily decay: stories cool, beefs go quiet, reporters drift to the middle
 # ---------------------------------------------------------------------------
 
@@ -733,7 +1056,8 @@ def route_events(app: Any, events: List[Dict[str, Any]],
                 if headlines.deliver_spec(app, spec):
                     n += 1
             elif kind in ("quote", "outburst_room", "narrative_spawn",
-                          "narrative_poke"):
+                          "narrative_poke", "defense", "shield",
+                          "backing", "rally"):
                 add = getattr(app, "add_news", None)
                 if add is not None:
                     add(_news_line(ev))
@@ -756,4 +1080,14 @@ def _news_line(ev: Dict[str, Any]) -> str:
     if kind == "narrative_poke":
         return (f"{ev.get('reporter')} pressed {ev.get('player')} on the "
                 f"{ev.get('narrative')} story. {ev.get('note')}")
+    if kind == "defense":
+        return (f"{ev.get('player')} ({ev.get('team')}) stood up for the "
+                f"room: {ev.get('quote')} {ev.get('note')}")
+    if kind == "shield":
+        return (f"{ev.get('coach')} ({ev.get('team')}) stepped in front of "
+                f"{ev.get('player')}: {ev.get('quote')}")
+    if kind == "backing":
+        return (f"{ev.get('gm')} goes on the record: {ev.get('quote')}")
+    if kind == "rally":
+        return f"Room note ({ev.get('team')}): {ev.get('note')}"
     return "Media: something happened."
