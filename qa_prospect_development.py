@@ -445,5 +445,152 @@ check("backfill: pedigree fields set",
       old.true_potential_grade == "B" and old.pedigree_floor != "",
       f"true={old.true_potential_grade} floor={old.pedigree_floor}")
 
+
+
+# --- 12. Situational readiness -------------------------------------------
+import types
+import reputation_system as rs
+
+
+def make_team(roster, staff=None):
+    return types.SimpleNamespace(roster=list(roster), staff=list(staff or []))
+
+
+def make_star(ovr=84, pos=PlayerPosition.CENTER, seed=900):
+    s = make_player(age=28, overall_target=ovr, grade="A-", pos=pos, seed=seed)
+    for attr in ("skating", "shooting", "passing", "hockey_iq", "strength",
+                 "checking", "defense"):
+        if hasattr(s, attr):
+            setattr(s, attr, ovr)
+    # Pin the number overall_rating() would otherwise dilute with the
+    # player's other randomized attributes -- the tests need a known star.
+    s.overall_rating = lambda _o=ovr: float(_o)
+    return s
+
+
+kid = make_player(age=21, overall_target=74, grade="B", seed=101)
+base, d0 = pd.situational_readiness(kid, None)
+check("sit: no team -> base score, no deltas",
+      d0 == [] and base == pd.callup_readiness(kid),
+      f"base={base} deltas={d0}")
+
+star = make_star()
+team = make_team([star, kid])
+s1, d1 = pd.situational_readiness(kid, team)
+check("sit: healthy roster -> no opportunity bump",
+      all("door is open" not in lab for lab, _ in d1),
+      f"deltas={d1}")
+
+star.is_injured = True
+s2, d2 = pd.situational_readiness(kid, team)
+opp = [x for x in d2 if "door is open" in x[0]]
+check("sit: star injured -> major-piece bump named",
+      opp and opp[0][1] == 12 and star.last_name in opp[0][0],
+      f"deltas={d2}")
+check("sit: opportunity raises the number", s2 > s1, f"{s1} -> {s2}")
+
+# Line fit: scorer kid into a scorer's hole vs checker kid
+sniper = make_player(age=21, overall_target=74, grade="B", seed=102)
+sniper.shooting = 90; sniper.hockey_iq = 80; sniper.checking = 55
+grinder = make_player(age=21, overall_target=74, grade="B", seed=103)
+grinder.checking = 90; grinder.strength = 85; grinder.shooting = 60
+_, d_sn = pd.situational_readiness(sniper, team)
+_, d_gr = pd.situational_readiness(grinder, team)
+check("sit: scorer fits scorer hole",
+      any("Fits the" in lab and d == 4 for lab, d in d_sn), f"{d_sn}")
+check("sit: checker in scorer hole -> wrong role",
+      any("Wrong role" in lab and d == -3 for lab, d in d_gr), f"{d_gr}")
+
+# Depth injury: smaller bump
+mid = make_star(ovr=75, seed=901); mid.is_injured = True
+team2 = make_team([mid, kid])
+_, d_mid = pd.situational_readiness(kid, team2)
+check("sit: depth injury -> +8, not +12",
+      any("door is open" in lab and d == 8 for lab, d in d_mid), f"{d_mid}")
+
+# Other position's injury does not open his door
+d_star = make_star(ovr=86, pos=PlayerPosition.DEFENSE, seed=902)
+d_star.is_injured = True
+team3 = make_team([d_star, kid])
+_, d_d = pd.situational_readiness(kid, team3)
+check("sit: D injury -> no bump for a forward",
+      all("door is open" not in lab for lab, _ in d_d), f"{d_d}")
+
+# Coach fit leg (monkeypatched response -- tests OUR wiring, not theirs)
+coach = types.SimpleNamespace(id=7, role=types.SimpleNamespace(value="Head Coach"))
+team_c = make_team([kid], staff=[coach])
+orig_resp = rs.player_coach_response
+try:
+    rs.player_coach_response = lambda pl, c: {"label": "Bought in"}
+    _, d_bi = pd.situational_readiness(kid, team_c)
+    rs.player_coach_response = lambda pl, c: {"label": "Quit on coach"}
+    _, d_q = pd.situational_readiness(kid, team_c)
+    rs.player_coach_response = lambda pl, c: {"label": "Neutral"}
+    _, d_n = pd.situational_readiness(kid, team_c)
+finally:
+    rs.player_coach_response = orig_resp
+check("sit: coach Bought in -> +6",
+      any("Coach fit" in lab and d == 6 for lab, d in d_bi), f"{d_bi}")
+check("sit: coach Quit on coach -> -12",
+      any("Coach fit" in lab and d == -12 for lab, d in d_q), f"{d_q}")
+check("sit: coach Neutral -> no delta",
+      all("Coach fit" not in lab for lab, _ in d_n), f"{d_n}")
+
+# Farm trend leg
+trend = make_player(age=21, overall_target=74, grade="B", seed=104)
+trend.farm_history = [{"league": "AHL", "ppg": 0.50},
+                      {"league": "AHL", "ppg": 0.95}]
+_, d_t = pd.situational_readiness(trend, None)
+check("sit: rising farm production -> +6",
+      any("trending up" in lab and d == 6 for lab, d in d_t), f"{d_t}")
+cold = make_player(age=21, overall_target=74, grade="B", seed=105)
+cold.farm_history = [{"league": "AHL", "ppg": 0.95},
+                     {"league": "AHL", "ppg": 0.50}]
+_, d_c = pd.situational_readiness(cold, None)
+check("sit: slipping farm production -> -4",
+      any("slipping" in lab and d == -4 for lab, d in d_c), f"{d_c}")
+
+# Fast channel: the NHL audition
+aud = make_player(age=21, overall_target=74, grade="B", seed=106)
+aud.nhl_audition = {"goals": 10, "assists": 12, "games_played": 40}
+aud.goals, aud.assists, aud.games_played = 14, 16, 45  # 8 pts in 5 GP
+s_a, d_a = pd.situational_readiness(aud, None)
+check("sit: hot audition -> 'Showing he belongs' +12",
+      any("Showing he belongs" in lab and d == 12 for lab, d in d_a),
+      f"score={s_a} deltas={d_a}")
+aud2 = make_player(age=21, overall_target=74, grade="B", seed=107)
+aud2.nhl_audition = {"goals": 10, "assists": 12, "games_played": 40}
+aud2.goals, aud2.assists, aud2.games_played = 10, 13, 48  # 1 pt in 8 GP
+s_a2, d_a2 = pd.situational_readiness(aud2, None)
+check("sit: cold audition -> 'Overmatched' -8",
+      any("Overmatched" in lab and d == -8 for lab, d in d_a2),
+      f"score={s_a2} deltas={d_a2}")
+aud3 = make_player(age=21, overall_target=74, grade="B", seed=108)
+aud3.nhl_audition = {"goals": 10, "assists": 12, "games_played": 40}
+aud3.goals, aud3.assists, aud3.games_played = 10, 12, 41  # only 1 game
+_, d_a3 = pd.situational_readiness(aud3, None)
+check("sit: tiny sample -> no audition judgement",
+      all("belongs" not in lab and "Overmatched" not in lab for lab, _ in d_a3),
+      f"{d_a3}")
+
+# Goalie path: starter down -> goalie kid gets the bump
+gkid = make_player(age=22, overall_target=76, grade="B",
+                   pos=PlayerPosition.GOALIE, seed=109)
+gstar = make_star(ovr=88, pos=PlayerPosition.GOALIE, seed=903)
+gstar.is_injured = True
+team_g = make_team([gstar, gkid])
+_, d_g = pd.situational_readiness(gkid, team_g)
+check("sit: starter down -> goalie prospect bumped",
+      any("door is open" in lab and d == 12 for lab, d in d_g), f"{d_g}")
+
+# Clamp: stacked good news never exceeds 100
+lucky = make_player(age=24, overall_target=88, grade="A", seed=110)
+lucky.farm_history = [{"league": "AHL", "ppg": 0.5}, {"league": "AHL", "ppg": 1.4}]
+lucky.nhl_audition = {"goals": 0, "assists": 0, "games_played": 0}
+lucky.goals, lucky.assists, lucky.games_played = 6, 6, 10
+star2 = make_star(ovr=90, seed=904); star2.is_injured = True
+s_l, _ = pd.situational_readiness(lucky, make_team([star2, lucky]))
+check("sit: score clamps at 100", 0 <= s_l <= 100, f"score={s_l}")
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

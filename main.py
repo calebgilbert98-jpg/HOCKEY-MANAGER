@@ -11119,11 +11119,26 @@ class HockeyManagerGUI(tk.Tk):
     def send_to_ahl(self, player):
         self.user_team.roster.remove(player)
         self.user_team.ahl_roster.append(player)
+        # Audition over -- the next call-up starts a fresh one.
+        try:
+            player.nhl_audition = None
+        except Exception:
+            pass
         self.update_all_views()
 
     def call_up_to_nhl(self, player):
         self.user_team.ahl_roster.remove(player)
         self.user_team.roster.append(player)
+        # Stamp the audition baseline: production from this point on is his
+        # live NHL audition -- situational readiness reacts to it within days.
+        try:
+            player.nhl_audition = {
+                "goals": getattr(player, "goals", 0) or 0,
+                "assists": getattr(player, "assists", 0) or 0,
+                "games_played": getattr(player, "games_played", 0) or 0,
+            }
+        except Exception:
+            player.nhl_audition = None
         self.update_all_views()
         
     def open_contract_negotiation_window(self, player, is_extension=False):

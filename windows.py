@@ -1148,12 +1148,19 @@ class RosterWindow(ctk.CTkToplevel):
         return f"{performance}"
 
     def calculate_nhl_readiness(self, player):
-        """NHL readiness percentage for AHL players.
-
-        Uses the prospect-development engine (overall vs the NHL bar,
-        age-adjusted, plus recent farm production trend) -- the same logic
-        that drives development, so the column agrees with the sim.
-        """
+        """NHL readiness for AHL players: talent grade adjusted by the
+        situation -- injury openings, coach fit, line fit, farm trend, and
+        his live NHL audition. The arrows flag a number the moment is
+        moving (▲ up / ▼ down)."""
+        try:
+            import prospect_development as _pd
+            team = getattr(self.parent, 'user_team', None)
+            score, deltas = _pd.situational_readiness(player, team)
+            net = sum(d for _, d in deltas)
+            tag = " ▲" if net >= 8 else (" ▼" if net <= -8 else "")
+            return f"{score:.0f}%{tag}"
+        except Exception:
+            pass
         try:
             import prospect_development as _pd
             return f"{_pd.callup_readiness(player):.0f}%"

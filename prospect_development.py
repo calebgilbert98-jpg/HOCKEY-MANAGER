@@ -26,7 +26,7 @@ season is generated statistically (no game-by-game sim). Zero per-game cost.
 
 import math
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # League environments.
@@ -264,16 +264,20 @@ def simulate_prospect_season(player: Any, league: Optional[str] = None,
     return season
 
 
-def farm_nhle_ppg(player: Any) -> float:
-    """NHL-equivalent points per game for the just-simulated farm season."""
-    season = getattr(player, "farm_season", None) or {}
-    if _is_goalie(player) or not season:
-        return 0.0
-    league = season.get("league", "")
+def _nhle_of_season(season: Dict[str, Any]) -> float:
+    """NHLe PPG for one stored farm-season dict."""
+    league = (season or {}).get("league", "")
     env = LEAGUE_ENVIRONMENTS.get(league)
     if not env:
         return 0.0
-    return float(season.get("ppg", 0.0) or 0.0) * env["nhle"]
+    return float((season or {}).get("ppg", 0.0) or 0.0) * env["nhle"]
+
+
+def farm_nhle_ppg(player: Any) -> float:
+    """NHL-equivalent points per game for the just-simulated farm season."""
+    if _is_goalie(player):
+        return 0.0
+    return _nhle_of_season(getattr(player, "farm_season", None) or {})
 
 
 # ---------------------------------------------------------------------------
@@ -561,3 +565,148 @@ def process_prospect_offseason(player: Any, league: Optional[str] = None,
     return {"league": season.get("league"), "gp": season.get("gp"),
             "result": result,
             "true": true_grade(player), "displayed": displayed_grade(player)}
+
+
+# ---------------------------------------------------------------------------
+# Situational readiness: is he ready *right now, here*?
+#
+# Talent (callup_readiness) is the base. The situation moves it -- sometimes
+# a lot, and fast:
+#   - Opportunity: an injured NHL regular at his position opens a door.
+#     A kid who is 60% ready with a top-6 hole is more ready than the same
+#     kid with no path to ice time.
+#   - Coach fit: the right coach for THIS kid (Bought in vs Quit on coach).
+#   - Line fit: the opening has to match his archetype -- a sniper does not
+#     belong in a checking hole.
+#   - The fast channel: his live NHL audition. Stamped at call-up time
+#     (main.call_up_to_nhl); production since then moves the number within
+#     days. Step up when a star goes down and the grade stops mattering.
+# ---------------------------------------------------------------------------
+
+def _pos_group(player: Any) -> str:
+    pos = (getattr(getattr(player, "primary_position", None), "value", "")
+           or "").upper()
+    if pos == "G":
+        return "G"
+    if pos == "D":
+        return "D"
+    return "F"
+
+
+def _skater_archetype(player: Any) -> str:
+    """Rough role: what job does this skater do?"""
+    if _is_goalie(player):
+        return "goalie"
+    get = lambda a: float(getattr(player, a, 50) or 50)
+    scores = {
+        "scorer": get("shooting") + get("hockey_iq"),
+        "playmaker": get("passing") + get("hockey_iq"),
+        "checker": get("checking") + get("strength"),
+        "shutdown": get("defense") + get("strength"),
+        "puck-mover": get("skating") + get("passing"),
+    }
+    return max(scores, key=scores.get)
+
+
+def situational_readiness(player: Any,
+                          team: Any = None) -> Tuple[float, List]:
+    """(score 0-100, breakdown [(label, delta), ...]).
+
+    team: the NHL club (needs .roster and .staff for the opportunity and
+    coach legs). Without it, returns the base talent score with no deltas.
+    Every leg is defensive -- missing data just means no adjustment.
+    """
+    base = callup_readiness(player)
+    deltas: list = []
+    grp = _pos_group(player)
+
+    # 1. Opportunity: an injured regular at his position opens a door.
+    if team is not None:
+        try:
+            holes = [p for p in (getattr(team, "roster", []) or [])
+                     if getattr(p, "is_injured", False)
+                     and _pos_group(p) == grp and p is not player]
+            if holes:
+                star = max(holes, key=_overall)
+                star_ovr = _overall(star)
+                name = getattr(star, "full_name",
+                               getattr(star, "last_name", "A regular"))
+                if star_ovr >= 80:
+                    d, tag = 12, "Major piece down"
+                elif star_ovr >= 74:
+                    d, tag = 8, "Regular down"
+                else:
+                    d, tag = 5, "Depth injury"
+                deltas.append((f"{tag}: {name} out -- the door is open", d))
+                # ...but only if the opening fits his game.
+                if grp != "G":
+                    hole_arch = _skater_archetype(star)
+                    kid_arch = _skater_archetype(player)
+                    skill = {"scorer", "playmaker"}
+                    grind = {"checker", "shutdown"}
+                    if kid_arch == hole_arch or {kid_arch, hole_arch} <= skill:
+                        deltas.append((f"Fits the {hole_arch} hole", 4))
+                    elif (kid_arch in grind) != (hole_arch in grind):
+                        deltas.append(("Wrong role for the opening", -3))
+        except Exception:
+            pass
+
+    # 2. Coach fit: the right coach for THIS kid.
+    if team is not None:
+        try:
+            import reputation_system as _rs
+            coach = _rs._head_coach_of(team)
+            if coach is not None:
+                label = _rs.player_coach_response(player, coach).get("label", "")
+                bump = {"Bought in": 6, "Tuning out": -6,
+                        "Quit on coach": -12}.get(label, 0)
+                if bump:
+                    deltas.append((f"Coach fit: {label}", bump))
+        except Exception:
+            pass
+
+    # 3. Farm trend: production heading the right way.
+    try:
+        hist = getattr(player, "farm_history", None) or []
+        if len(hist) >= 2:
+            if _is_goalie(player):
+                now = float(hist[-1].get("sv_pct", 0) or 0)
+                prev = float(hist[-2].get("sv_pct", 0) or 0)
+                if now - prev >= 0.010:
+                    deltas.append(("Save % trending up", 5))
+                elif prev - now >= 0.012:
+                    deltas.append(("Save % slipping", -4))
+            else:
+                now, prev = _nhle_of_season(hist[-1]), _nhle_of_season(hist[-2])
+                if now - prev >= 0.08:
+                    deltas.append(("Production trending up", 6))
+                elif prev - now >= 0.10:
+                    deltas.append(("Production slipping", -4))
+    except Exception:
+        pass
+
+    # 4. The fast channel: his live NHL audition. Production since the
+    # call-up stamp moves the number within days -- step up for an injured
+    # star and the old grade stops mattering.
+    try:
+        aud = getattr(player, "nhl_audition", None)
+        if isinstance(aud, dict):
+            dgp = ((getattr(player, "games_played", 0) or 0)
+                   - (aud.get("games_played", 0) or 0))
+            dpts = ((getattr(player, "goals", 0) or 0)
+                    + (getattr(player, "assists", 0) or 0)
+                    - (aud.get("goals", 0) or 0)
+                    - (aud.get("assists", 0) or 0))
+            if dgp >= 3:
+                ppg = dpts / dgp
+                if ppg >= 0.60:
+                    deltas.append(("Showing he belongs", 12))
+                elif ppg >= 0.35:
+                    deltas.append(("Holding his own", 6))
+                elif dgp >= 6 and ppg < 0.15:
+                    deltas.append(("Overmatched so far", -8))
+    except Exception:
+        pass
+
+    score = base + sum(d for _, d in deltas)
+    return round(max(0.0, min(100.0, score)), 1), deltas
