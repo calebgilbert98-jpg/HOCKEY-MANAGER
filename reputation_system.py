@@ -1262,6 +1262,45 @@ def coach_player_fit(coach: Any, player: Any) -> float:
         return 0.0
 
 
+# Archetype families: what a coach's system does and doesn't value.
+_ARCHETYPE_FAMILY = {
+    "Sniper": "skill", "Playmaker": "skill",
+    "Offensive Defenseman": "skill", "Puck-Moving Defenseman": "skill",
+    "Power Forward": "power",
+    "Grinder": "grind", "Two-Way Forward": "grind",
+    "Defensive Defenseman": "grind", "Two-Way Defenseman": "grind",
+    "Physical Defenseman": "grind", "Enforcer": "grind",
+}
+_STYLE_VALUES = {
+    "drill_sergeant": {"skill": 0.90, "grind": 1.15, "power": 1.05},
+    "players_coach": {"skill": 1.15, "grind": 0.85, "power": 1.00},
+    "tactician": {"skill": 1.00, "grind": 1.05, "power": 1.00},
+    "motivator": {"skill": 1.10, "grind": 0.95, "power": 1.05},
+    "developer": {"skill": 1.00, "grind": 1.00, "power": 1.00},
+    "balanced": {"skill": 1.00, "grind": 1.00, "power": 1.00},
+}
+
+
+def coach_archetype_valuation(coach: Any, player: Any) -> float:
+    """0.5..1.15: how much this coach's system credits this player's
+    archetype. A skill-first coach undervalues a generational grinder --
+    the player doesn't stop being elite, he just stops being *seen*."""
+    try:
+        arch = getattr(player, "archetype", "") or ""
+        family = _ARCHETYPE_FAMILY.get(str(arch), None)
+        if family is None:
+            return 1.0
+        style = coach_style(coach)["key"]
+        val = _STYLE_VALUES.get(style, {}).get(family, 1.0)
+        # An unproven young coach leans even harder into his bias.
+        rep = getattr(coach, "reputation", 50) or 50
+        if rep < 45 and style in ("players_coach", "motivator") and family == "grind":
+            val -= 0.05
+        return round(max(0.5, min(1.15, val)), 3)
+    except Exception:
+        return 1.0
+
+
 def player_coach_response(player: Any, coach: Any,
                           team_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """How THIS player is responding to the coach: bought in -> quit."""
@@ -1278,6 +1317,15 @@ def player_coach_response(player: Any, coach: Any,
         score = fit * 0.6 + (happy - 65) / 100 * 0.4
         # Influence: an icon's voice carries (+0.10); a lame duck's doesn't.
         score += ((getattr(coach, "influence", 70) or 70) - 70) * 0.004
+        # Credit: a coach whose system doesn't value your archetype costs
+        # you -- unless you're laid back, in which case it doesn't matter
+        # to you at all.
+        valuation = coach_archetype_valuation(coach, player)
+        base = getattr(player, "base_controversy", 50)
+        if base is None:
+            base = controversy_baseline(player)
+        if valuation < 0.9 and base >= 30:
+            score -= 0.08
         if score >= 0.30:
             label = "Bought in"
         elif score >= -0.05:
@@ -1287,7 +1335,8 @@ def player_coach_response(player: Any, coach: Any,
         else:
             label = "Quit on coach"
         return {"score": round(score, 3), "label": label,
-                "fit": fit, "engagement": engagement_style(player)["label"]}
+                "fit": fit, "engagement": engagement_style(player)["label"],
+                "valuation": coach_archetype_valuation(coach, player)}
     except Exception:
         return {"score": 0.0, "label": "Neutral", "fit": 0.0,
                 "engagement": "Steady Professional"}
@@ -1459,6 +1508,29 @@ def detect_dynamics_issues(team: Any, team_context: Optional[Dict[str, Any]],
         if getattr(team, "line_control", "coach") == "gm" and win_pct >= 0.58:
             issues.append({"key": "gm_overstep", "severity": "medium",
                            "text": "GM is picking the lines on a winning team -- strong personalities are bristling."})
+        for p in roster:
+            try:
+                val = coach_archetype_valuation(coach, p)
+                ovr = p.overall_rating() if hasattr(p, "overall_rating") else 60
+                rep = getattr(p, "reputation", 50) or 50
+                pot = (getattr(p, "potential_grade", "") or "").upper()
+                elite = ovr >= 70 or rep >= 60 or pot == "A"
+                if elite and val < 0.9:
+                    base = getattr(p, "base_controversy", 50)
+                    if base is None:
+                        base = controversy_baseline(p)
+                    name = getattr(p, "full_name", "A player")
+                    arch = getattr(p, "archetype", "player") or "player"
+                    if base < 30:
+                        issues.append({
+                            "key": "underutilized", "severity": "low",
+                            "text": f"{name} ({arch}) isn't credited by this system -- but he's laid back, so it doesn't matter to him. The fans and the league still see the draw; he could be utilized better."})
+                    else:
+                        issues.append({
+                            "key": "underutilized", "severity": "medium",
+                            "text": f"{name} ({arch}) is being undervalued in this system -- and he knows it. The fans and the league still see the draw; he could be utilized better."})
+            except Exception:
+                continue
         return issues
     except Exception:
         return issues
