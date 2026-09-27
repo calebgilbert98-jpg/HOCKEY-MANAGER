@@ -5,7 +5,8 @@ Features: Player database, scout management, draft prospects, assignments, and r
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from typing import Dict, List, Optional, Any
 import datetime
 import random
@@ -14,7 +15,7 @@ from game_classes import debug_print
 from ui_widgets import PillButton
 
 
-class ProfessionalScoutingWindow(tk.Toplevel):
+class ProfessionalScoutingWindow(InGamePopup):
     """Professional scouting management interface with comprehensive features"""
     
     def __init__(self, parent):
@@ -1080,7 +1081,7 @@ class ProfessionalScoutingWindow(tk.Toplevel):
     
     def _show_scout_assignment_dialog(self, player, scouts):
         """Show dialog for assigning scout to player"""
-        dialog = tk.Toplevel(self)
+        dialog = InGamePopup(self)
         dialog.title(f"Assign Scout - {player.full_name}")
         dialog.geometry("400x300")
         dialog.configure(bg=self.parent.CONTENT_BG)

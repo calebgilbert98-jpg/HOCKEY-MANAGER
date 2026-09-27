@@ -4,7 +4,8 @@ Comprehensive launcher with full NHL teams, advanced game setup, and background 
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
+from popup_system import messagebox, InGamePopup
 import os
 import sys
 from pathlib import Path
@@ -101,7 +102,15 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
     def __init__(self):
         print("Initializing Enhanced Puck Dynasty Launcher...")
         super().__init__()
-        
+
+        # In-game popup system: dialogs render as overlay cards in the
+        # launcher window instead of floating OS popups.
+        try:
+            from popup_system import register as _register_popups
+            _register_popups(self)
+        except Exception:
+            pass
+
         # All NHL teams organized by division
         self.nhl_teams = {
             # Eastern Conference
@@ -523,7 +532,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
 
     def _host_multiplayer(self):
         """Host flow: display name + port, then normal new-game setup."""
-        dlg = tk.Toplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Host Multiplayer Game")
         dlg.geometry("400x300")
         dlg.transient(self)
@@ -601,7 +610,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                                  f"Could not start host:\n{e}")
 
     def _show_host_lobby(self, app, host, port):
-        lobby = tk.Toplevel(app)
+        lobby = InGamePopup(app)
         lobby.title("Multiplayer Lobby - Hosting")
         lobby.geometry("440x440")
         tk.Label(lobby, text="HOSTING MULTIPLAYER",
@@ -649,7 +658,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
 
     def _join_multiplayer(self):
         """Join flow: connect dialog, then lobby."""
-        dlg = tk.Toplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Join Multiplayer Game")
         dlg.geometry("400x320")
         dlg.transient(self)
@@ -690,7 +699,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         """Connect in a worker thread (connect() blocks); lobby on success."""
         import threading
         from multiplayer.net_client import MultiplayerClient
-        wait = tk.Toplevel(self)
+        wait = InGamePopup(self)
         wait.title("Connecting")
         wait.geometry("280x100")
         wait.transient(self)
@@ -729,7 +738,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         """Pre-game lobby: claim a team, wait for the host to start."""
         self._mp_client = client
         self._mp_lobby_started = False
-        lobby = tk.Toplevel(self)
+        lobby = InGamePopup(self)
         lobby.title("Multiplayer Lobby")
         lobby.geometry("460x520")
         self._mp_lobby = lobby

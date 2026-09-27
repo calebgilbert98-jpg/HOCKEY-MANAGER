@@ -82,7 +82,8 @@ from __future__ import annotations
 
 import random
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 
 try:
     from modern_widgets import (
@@ -257,7 +258,7 @@ def make_config(mode="quick", database_size="medium", leagues=None,
 # Wizard UI
 # ---------------------------------------------------------------------------
 
-class NewGameSetupWizard(tk.Toplevel):
+class NewGameSetupWizard(InGamePopup):
     """New-career setup wizard. Calls on_start(config) then closes."""
 
     def __init__(self, parent, on_start_callback):
@@ -624,7 +625,7 @@ class NewGameSetupWizard(tk.Toplevel):
         try:
             from roster_import_wizard import open_roster_import_wizard
         except Exception as exc:
-            from tkinter import messagebox
+            from popup_system import messagebox
             messagebox.showerror("Import Rosters",
                                  f"Could not open the import wizard:\n{exc}")
             return

@@ -6,7 +6,8 @@ the scouting_profiles logic module.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from modern_widgets import RoundedButton
 
 from scouting_profiles import (
@@ -23,7 +24,7 @@ POSITION_GROUPS = [
 ]
 
 
-class ScoutingProfileDialog(tk.Toplevel):
+class ScoutingProfileDialog(InGamePopup):
     """Browse, create, edit and delete scouting profiles."""
 
     def __init__(self, parent, on_apply=None):
@@ -183,7 +184,7 @@ class ScoutingProfileDialog(tk.Toplevel):
         self.destroy()
 
 
-class ProfileEditorDialog(tk.Toplevel):
+class ProfileEditorDialog(InGamePopup):
     """Create or edit a single custom scouting profile."""
 
     def __init__(self, parent, bg, fg, profile=None, on_save=None):

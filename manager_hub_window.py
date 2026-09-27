@@ -5,14 +5,15 @@ Dialogs: TeamTalkDialog, PressConferenceDialog, OppositionReportDialog.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from datetime import date
 from typing import List, Optional
 
 import manager_career as mc
 
 
-class ManagerHubWindow(tk.Toplevel):
+class ManagerHubWindow(InGamePopup):
     """FM-style manager hub with tabbed career screens."""
 
     def __init__(self, parent):
@@ -426,7 +427,7 @@ class ManagerHubWindow(tk.Toplevel):
 # Dialogs
 # ---------------------------------------------------------------------------
 
-class TeamTalkDialog(tk.Toplevel):
+class TeamTalkDialog(InGamePopup):
     """Modal team talk picker. Result: (option_dict_or_None, reaction_text, boost)."""
 
     def __init__(self, parent, team, when: str, context: dict):
@@ -478,7 +479,7 @@ class TeamTalkDialog(tk.Toplevel):
         self.destroy()
 
 
-class PressConferenceDialog(tk.Toplevel):
+class PressConferenceDialog(InGamePopup):
     """Modal press conference. Result: list of chosen answer dicts."""
 
     def __init__(self, parent, questions: List[dict], title: str = "Press Conference"):
@@ -523,7 +524,7 @@ class PressConferenceDialog(tk.Toplevel):
         self._show_question()
 
 
-class OppositionReportDialog(tk.Toplevel):
+class OppositionReportDialog(InGamePopup):
     """Read-only pre-match scout report."""
 
     def __init__(self, parent, report: dict):

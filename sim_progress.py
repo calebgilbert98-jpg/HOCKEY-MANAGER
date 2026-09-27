@@ -5,6 +5,7 @@
 
 import os
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 from datetime import datetime
 
@@ -28,7 +29,7 @@ class SimProgressDialog:
                  warning=("This can take a minute or two. The app may appear "
                           "frozen while it works -- this is normal.")):
         self._closed = False
-        self.root = tk.Toplevel(parent)
+        self.root = InGamePopup(parent)
         self.root.title(title)
         self.root.configure(bg="#0e0e11")
         self.root.resizable(False, False)
@@ -120,7 +121,7 @@ def create_fallback_save(app, context: str):
 
 def confirm_heavy_sim(parent, title, detail):
     """Yes/No gate with the unresponsiveness warning. Returns True to proceed."""
-    from tkinter import messagebox
+    from popup_system import messagebox
     return messagebox.askyesno(
         title,
         f"{detail}\n\n"

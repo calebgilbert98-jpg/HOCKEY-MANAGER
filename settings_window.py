@@ -2,6 +2,7 @@
 # Settings & preferences — modern dark UI matching the rest of Puck Dynasty.
 
 import tkinter as tk
+from popup_system import messagebox, InGamePopup
 from tkinter import ttk
 import json
 import os
@@ -176,7 +177,7 @@ class SettingsDropdown(ttk.Combobox):
             pass
 
 
-class SettingsWindow(tk.Toplevel):
+class SettingsWindow(InGamePopup):
     """Settings & preferences window in the modern dark UI."""
 
     def __init__(self, parent):
@@ -655,7 +656,7 @@ class SettingsWindow(tk.Toplevel):
 
     def _reset_to_defaults(self):
         """Reset all settings to defaults"""
-        result = tk.messagebox.askyesno(
+        result = messagebox.askyesno(
             "Reset Settings",
             "Are you sure you want to reset all settings to defaults?\n\n"
             "This cannot be undone.",
@@ -669,7 +670,7 @@ class SettingsWindow(tk.Toplevel):
         """Apply settings without saving to file"""
         self._collect_current_values()
         self._notify_parent_of_changes()
-        tk.messagebox.showinfo(
+        messagebox.showinfo(
             "Settings Applied",
             "Settings have been applied for this session.", parent=self)
 
@@ -687,7 +688,7 @@ class SettingsWindow(tk.Toplevel):
             self._notify_parent_of_changes()
 
             # Show success message
-            tk.messagebox.showinfo(
+            messagebox.showinfo(
                 "Settings Saved",
                 "Settings have been saved successfully.", parent=self)
 
@@ -698,13 +699,13 @@ class SettingsWindow(tk.Toplevel):
                 self.title("Settings - Hockey Manager")  # Remove * indicator
 
         except Exception as e:
-            tk.messagebox.showerror(
+            messagebox.showerror(
                 "Error", f"Failed to save settings:\n{e}", parent=self)
 
     def _cancel(self):
         """Cancel changes and close window"""
         if self.title().endswith('*'):  # Check if there are unsaved changes
-            result = tk.messagebox.askyesnocancel(
+            result = messagebox.askyesnocancel(
                 "Unsaved Changes",
                 "You have unsaved changes. Do you want to save before "
                 "closing?",

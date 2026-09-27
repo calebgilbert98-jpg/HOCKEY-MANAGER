@@ -5,7 +5,8 @@ player pools, draft visualization, and comprehensive draft management.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 import random
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -341,7 +342,7 @@ class FantasyDraftManager:
               
         return selected_player
 
-class FantasyDraftWindow(tk.Toplevel):
+class FantasyDraftWindow(InGamePopup):
     """Modern Interactive Fantasy Draft Window"""
     
     def __init__(self, parent, game_manager):
@@ -3198,7 +3199,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         total_picks = remaining_picks
         
         # Show progress dialog for long simulation
-        progress_window = tk.Toplevel(self)
+        progress_window = InGamePopup(self)
         progress_window.title("Simulating Draft...")
         progress_window.geometry("400x150")
         progress_window.configure(background=self.parent.BG_COLOR)

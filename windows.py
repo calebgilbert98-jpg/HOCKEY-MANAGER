@@ -2,7 +2,8 @@
 # Contains the classes for all the major pop-up windows in the application.
 
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup, simpledialog
 import customtkinter as ctk
 from game_classes import StaffRole, PlayerPosition, ScoutingReport, to_100_scale
 from datetime import timedelta
@@ -135,7 +136,7 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     Returns True when the user confirms, False otherwise.
     """
     result = {'ok': False}
-    dlg = tk.Toplevel(parent)
+    dlg = InGamePopup(parent)
     dlg.title(title)
     dlg.transient(parent)
     dlg.resizable(False, False)
@@ -189,7 +190,7 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     return result['ok']
 
 
-class RosterWindow(ctk.CTkToplevel):
+class RosterWindow(InGamePopup):
     """Roster Management (CustomTkinter): dark cards, modern tab bar,
     pill filters, styled stat tables, depth-chart tiles, cap tab."""
 
@@ -1358,7 +1359,7 @@ class RosterWindow(ctk.CTkToplevel):
         selected_ids = self.selected_players[from_roster].copy()
 
         if not selected_ids:
-            tk.messagebox.showinfo("No Selection", "Please select players to move.")
+            messagebox.showinfo("No Selection", "Please select players to move.")
             return
 
         # Get source and destination lists
@@ -1407,9 +1408,9 @@ class RosterWindow(ctk.CTkToplevel):
 
         if player not in self.parent.trade_block:
             self.parent.trade_block.append(player)
-            tk.messagebox.showinfo("Trade Block", f"{player.full_name} added to trade block.")
+            messagebox.showinfo("Trade Block", f"{player.full_name} added to trade block.")
         else:
-            tk.messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
+            messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
 
     def open_lines_editor(self):
         """Open the live lines editor."""
@@ -1510,7 +1511,7 @@ class RosterWindow(ctk.CTkToplevel):
                 writer.writerow(headers)
                 writer.writerows(roster_data)
 
-            tk.messagebox.showinfo("Export Successful",
+            messagebox.showinfo("Export Successful",
                                  f"Roster exported successfully!\n\n"
                                  f"File: {filename}\n"
                                  f"Location: {exports_dir}\n"
@@ -1518,7 +1519,7 @@ class RosterWindow(ctk.CTkToplevel):
 
         except Exception as e:
             print(f"Error exporting roster: {e}")
-            tk.messagebox.showerror("Export Error", f"Failed to export roster:\n{str(e)}")
+            messagebox.showerror("Export Error", f"Failed to export roster:\n{str(e)}")
 
     def update_views(self):
         """Update all roster views."""
@@ -1570,7 +1571,7 @@ class RosterWindow(ctk.CTkToplevel):
         except (AttributeError, tk.TclError):
             pass
 
-class FreeAgencyWindow(ctk.CTkToplevel):
+class FreeAgencyWindow(InGamePopup):
     """Free Agency Market (CustomTkinter): dark cards, pill filters,
     styled stat tables, CTk dialogs for contracts/comparison/analysis."""
 
@@ -2506,7 +2507,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Sign the selected player."""
         selection = self.fa_player_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a player to sign.")
+            messagebox.showwarning("No Selection", "Please select a player to sign.")
             return
 
         player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
@@ -2517,7 +2518,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Hire the selected staff member via a real contract offer."""
         selection = self.fa_staff_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a staff member to hire.")
+            messagebox.showwarning("No Selection", "Please select a staff member to hire.")
             return
 
         staff = self.parent.tree_maps.get('fa_staff', {}).get(selection[0])
@@ -2553,7 +2554,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """View the selected player's profile."""
         selection = self.fa_player_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a player to view.")
+            messagebox.showwarning("No Selection", "Please select a player to view.")
             return
 
         player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
@@ -2564,7 +2565,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """View the selected staff member's profile."""
         selection = self.fa_staff_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a staff member to view.")
+            messagebox.showwarning("No Selection", "Please select a staff member to view.")
             return
 
         staff = self.parent.tree_maps.get('fa_staff', {}).get(selection[0])
@@ -2577,7 +2578,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
     def _open_staff_contract_dialog(self, staff):
         """Negotiate a real contract offer with a free-agent staff member."""
         ct = self._ct
-        dlg = ctk.CTkToplevel(self)
+        dlg = InGamePopup(self)
         dlg.title(f"Contract Offer - {staff.full_name}")
         dlg.configure(fg_color=ct['BG'])
         dlg.geometry("480x420")
@@ -2671,22 +2672,22 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         if self.parent.game_manager.sign_free_agent_staff(staff, salary, years):
             import random
             if random.random() < chance:
-                tk.messagebox.showinfo("Offer Accepted",
+                messagebox.showinfo("Offer Accepted",
                                        f"{staff.full_name} has accepted your offer!")
                 self.populate_filtered_staff()
                 self.refresh_market_overview_data()
                 dlg.destroy()
             else:
-                tk.messagebox.showinfo("Offer Declined",
+                messagebox.showinfo("Offer Declined",
                                        f"{staff.full_name} has declined your offer. "
                                        f"Consider offering a better salary.")
         else:
-            tk.messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
+            messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
 
     def _open_staff_profile_dialog(self, staff):
         """View a free-agent staff member's profile (CTk)."""
         ct = self._ct
-        dlg = ctk.CTkToplevel(self)
+        dlg = InGamePopup(self)
         dlg.title(f"Staff Profile - {staff.full_name}")
         dlg.configure(fg_color=ct['BG'])
         dlg.geometry("460x500")
@@ -2749,7 +2750,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Compare multiple selected players."""
         selection = self.fa_player_tree.selection()
         if len(selection) < 2:
-            tk.messagebox.showwarning("Selection Required",
+            messagebox.showwarning("Selection Required",
                                        "Please select at least 2 players to compare.")
             return
 
@@ -2760,7 +2761,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                 players.append(player)
 
         if len(players) < 2:
-            tk.messagebox.showwarning("Error", "Could not find selected players.")
+            messagebox.showwarning("Error", "Could not find selected players.")
             return
 
         self.create_player_comparison_window(players)
@@ -2768,7 +2769,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
     def create_player_comparison_window(self, players):
         """Create a window comparing multiple players (CTk)."""
         ct = self._ct
-        compare_window = ctk.CTkToplevel(self)
+        compare_window = InGamePopup(self)
         compare_window.title(f"Player Comparison ({len(players)} players)")
         compare_window.configure(fg_color=ct['BG'])
         compare_window.geometry("900x700")
@@ -2897,7 +2898,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Compare multiple selected staff members."""
         selection = self.fa_staff_tree.selection()
         if len(selection) < 2:
-            tk.messagebox.showwarning("Selection Required",
+            messagebox.showwarning("Selection Required",
                                        "Please select at least 2 staff members to compare.")
             return
 
@@ -2908,7 +2909,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                 staff_list.append(staff)
 
         if len(staff_list) < 2:
-            tk.messagebox.showwarning("Error", "Could not find selected staff members.")
+            messagebox.showwarning("Error", "Could not find selected staff members.")
             return
 
         self.create_staff_comparison_window(staff_list)
@@ -2916,7 +2917,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
     def create_staff_comparison_window(self, staff_list):
         """Create a window comparing multiple staff members (CTk)."""
         ct = self._ct
-        compare_window = ctk.CTkToplevel(self)
+        compare_window = InGamePopup(self)
         compare_window.title(f"Staff Comparison ({len(staff_list)} staff)")
         compare_window.configure(fg_color=ct['BG'])
         compare_window.geometry("800x600")
@@ -2983,7 +2984,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Show market analysis for the selected player."""
         selection = self.fa_player_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection",
+            messagebox.showwarning("No Selection",
                                        "Please select a player for market analysis.")
             return
 
@@ -2994,7 +2995,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
     def create_market_analysis_window(self, player):
         """Create a market analysis window for a player (CTk)."""
         ct = self._ct
-        analysis_window = ctk.CTkToplevel(self)
+        analysis_window = InGamePopup(self)
         analysis_window.title(f"Market Analysis - {player.full_name}")
         analysis_window.configure(fg_color=ct['BG'])
         analysis_window.geometry("700x600")
@@ -3249,7 +3250,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
             self._build_market_overview(tab)
         except Exception:
             pass
-        tk.messagebox.showinfo("Market Refreshed",
+        messagebox.showinfo("Market Refreshed",
                                "Free agency market data has been refreshed.")
 
     def update_views(self):
@@ -3302,10 +3303,10 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                                          staff.age, to_100_scale(staff.overall_rating),
                                          staff.salary, staff.contract_years, staff.nationality])
 
-                tk.messagebox.showinfo("Export Complete",
+                messagebox.showinfo("Export Complete",
                                        f"Free agent data exported to {filename}")
             except Exception as e:
-                tk.messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
+                messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
 
     def show_help(self):
         """Show help information."""
@@ -3341,9 +3342,9 @@ Right-click for additional options and analysis tools.
 
 The Market Overview tab provides analytics and top available talent.
 """
-        tk.messagebox.showinfo("Free Agency Help", help_text)
+        messagebox.showinfo("Free Agency Help", help_text)
 
-class TradeWindow(ctk.CTkToplevel):
+class TradeWindow(InGamePopup):
     """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
 
     METER_W = 280
@@ -3629,7 +3630,7 @@ class TradeWindow(ctk.CTkToplevel):
         if not picks:
             messagebox.showinfo("No picks", f"{team.team_name} has no tradeable picks.")
             return
-        dlg = ctk.CTkToplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Add draft pick")
         dlg.geometry("420x360")
         dlg.configure(fg_color=BG)
@@ -3685,7 +3686,7 @@ class TradeWindow(ctk.CTkToplevel):
 
     def _counter_dialog(self, partner, user_assets, partner_assets, resp):
         from ctk_theme import secondary_button, primary_button, heading, body, BG, PANEL
-        dlg = ctk.CTkToplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Counter-offer")
         dlg.geometry("460x280")
         dlg.configure(fg_color=BG)
@@ -3765,7 +3766,7 @@ class TradeWindow(ctk.CTkToplevel):
         self._history_visible = True
 
 
-class ScoutingWindow(tk.Toplevel):
+class ScoutingWindow(InGamePopup):
     """Modern Scouting Department: fog-of-war prospects, regional scouts, draft board."""
 
     def __init__(self, parent):
@@ -4230,7 +4231,7 @@ class ScoutingWindow(tk.Toplevel):
         self._refresh_board()
 
 
-class DraftWindow(ctk.CTkToplevel):
+class DraftWindow(InGamePopup):
     """Draft night war room: live board, ticker, shortlist, draft-day trades, grades."""
 
     # Map any potential-grade variant onto a draft_night.grade_color key.
@@ -4774,7 +4775,7 @@ class DraftWindow(ctk.CTkToplevel):
         if team_on_clock != self.parent.user_team:
             messagebox.showinfo("Not Your Pick", "You can only trade your own pick.")
             return
-        dlg = ctk.CTkToplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Trade this pick")
         dlg.geometry("480x460")
         dlg.configure(fg_color=ct['BG'])
@@ -4932,7 +4933,7 @@ class DraftWindow(ctk.CTkToplevel):
     def show_grades(self):
         ct = self._ct
         grades = self.dn.draft_grades(self.picks_made)
-        dlg = ctk.CTkToplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Draft Grades")
         dlg.geometry("420x540")
         dlg.configure(fg_color=ct['BG'])
@@ -4975,7 +4976,7 @@ class DraftWindow(ctk.CTkToplevel):
         self.show_grades()
 
 
-class ScheduleWindow(ctk.CTkToplevel):
+class ScheduleWindow(InGamePopup):
     """League Schedule (CustomTkinter): tabbed My Team / League tables,
     month-filter combo, color-coded game rows (win/loss/today), modern
     action buttons. All schedule logic preserved."""
@@ -5267,7 +5268,7 @@ class ScheduleWindow(ctk.CTkToplevel):
         """Launch the game viewer for the selected game."""
         game_data = self.get_selected_game_data()
         if not game_data:
-            tk.messagebox.showwarning("No Game Selected", "Please select a game to watch.")
+            messagebox.showwarning("No Game Selected", "Please select a game to watch.")
             return
 
         if game_data['has_been_played']:
@@ -5285,7 +5286,7 @@ class ScheduleWindow(ctk.CTkToplevel):
             is_past_game = False
 
         if is_past_game:
-            response = tk.messagebox.askyesno(
+            response = messagebox.askyesno(
                 "Game Not Played",
                 "This game hasn't been played yet.\n\n"
                 "Would you like to simulate and watch it?\n"
@@ -5294,7 +5295,7 @@ class ScheduleWindow(ctk.CTkToplevel):
                 return
             self._launch_game_viewer(game_data, commit=True)
         else:
-            response = tk.messagebox.askyesno(
+            response = messagebox.askyesno(
                 "Future Game",
                 "This game is scheduled for today or the future.\n\n"
                 "Watch a preview simulation? It will not affect your season.")
@@ -5311,11 +5312,11 @@ class ScheduleWindow(ctk.CTkToplevel):
         """
         game_data = self.get_selected_game_data()
         if not game_data:
-            tk.messagebox.showwarning("No Game Selected", "Please select a game to simulate.")
+            messagebox.showwarning("No Game Selected", "Please select a game to simulate.")
             return
 
         if game_data['has_been_played']:
-            tk.messagebox.showinfo("Game Already Played", "This game has already been played.")
+            messagebox.showinfo("Game Already Played", "This game has already been played.")
             return
 
         try:
@@ -5324,7 +5325,7 @@ class ScheduleWindow(ctk.CTkToplevel):
             is_past_game = False
 
         if not is_past_game:
-            tk.messagebox.showinfo(
+            messagebox.showinfo(
                 "Future Game",
                 "This game is scheduled for today or the future.\n"
                 "It will be played automatically when you advance the season.\n\n"
@@ -5382,7 +5383,7 @@ class ScheduleWindow(ctk.CTkToplevel):
                                parent=self)
 
         except Exception as e:
-            tk.messagebox.showerror("Game Viewer Error",
+            messagebox.showerror("Game Viewer Error",
                                     f"Failed to launch game viewer:\n{str(e)}")
             print(f"Game viewer launch error: {e}")
 
@@ -5433,7 +5434,7 @@ class ScheduleWindow(ctk.CTkToplevel):
 
             # Don't store a duplicate if one was recorded meanwhile
             if self._find_game_result(game_data):
-                tk.messagebox.showinfo("Already Recorded",
+                messagebox.showinfo("Already Recorded",
                                        "A result for this game is already recorded.")
                 self.update_views()
                 return
@@ -5447,12 +5448,12 @@ class ScheduleWindow(ctk.CTkToplevel):
             self._update_team_stats_from_game(game_result)
 
             # Show result
-            tk.messagebox.showinfo("Game Simulated",
+            messagebox.showinfo("Game Simulated",
                                    f"Game Result:\n\n"
                                    f"{away_team.team_name} {sim.away_score} - {sim.home_score} {home_team.team_name}")
 
         except Exception as e:
-            tk.messagebox.showerror("Simulation Error",
+            messagebox.showerror("Simulation Error",
                                     f"Failed to simulate game:\n{str(e)}")
 
     def _update_team_stats_from_game(self, game_result):
@@ -5502,12 +5503,12 @@ class ScheduleWindow(ctk.CTkToplevel):
         """View detailed stats for the selected game."""
         game_data = self.get_selected_game_data()
         if not game_data:
-            tk.messagebox.showwarning("No Game Selected",
+            messagebox.showwarning("No Game Selected",
                                       "Please select a game first.")
             return
         result = self._find_game_result(game_data)
         if not result:
-            tk.messagebox.showinfo("No Data",
+            messagebox.showinfo("No Data",
                                    "This game hasn't been played yet — no stats available.")
             return
         GameDetailWindow(self.parent, result, initial_tab="stats")
@@ -5516,12 +5517,12 @@ class ScheduleWindow(ctk.CTkToplevel):
         """View game recap and highlights."""
         game_data = self.get_selected_game_data()
         if not game_data:
-            tk.messagebox.showwarning("No Game Selected",
+            messagebox.showwarning("No Game Selected",
                                       "Please select a game first.")
             return
         result = self._find_game_result(game_data)
         if not result:
-            tk.messagebox.showinfo("No Data",
+            messagebox.showinfo("No Data",
                                    "This game hasn't been played yet — no recap available.")
             return
         GameDetailWindow(self.parent, result, initial_tab="recap")
@@ -5685,7 +5686,7 @@ class ScheduleWindow(ctk.CTkToplevel):
         set_tree_empty_state(self.my_schedule_tree, "No games scheduled for your team")
         set_tree_empty_state(self.league_schedule_tree, "No league games scheduled")
 
-class FinancesWindow(ctk.CTkToplevel):
+class FinancesWindow(InGamePopup):
     """Comprehensive financial management window with detailed breakdown and projections.
 
     Rebuilt with CustomTkinter (Sept 2026): CTkToplevel shell, CTkTabview
@@ -7059,7 +7060,7 @@ ROSTER BREAKDOWN
 
 
 
-class NewsWindow(ctk.CTkToplevel):
+class NewsWindow(InGamePopup):
     """League news feed — modern CTk rebuild.
 
     Two-pane layout: a scrollable feed of rounded article cards (headline,
@@ -7376,7 +7377,7 @@ class NewsWindow(ctk.CTkToplevel):
         self._reader_text.configure(state="disabled")
 
 
-class GMOptionsWindow(tk.Toplevel):
+class GMOptionsWindow(InGamePopup):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -7413,7 +7414,7 @@ class GMOptionsWindow(tk.Toplevel):
             self.parent.open_windows['contract_extensions'] = ContractExtensionsWindow(self.parent)
         self.parent.open_windows['contract_extensions'].focus_set()
 
-class ContractNegotiationWindow(tk.Toplevel):
+class ContractNegotiationWindow(InGamePopup):
     def __init__(self, parent, player, is_extension=False):
         super().__init__(parent)
         self.parent = parent
@@ -7524,7 +7525,7 @@ class ContractNegotiationWindow(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter valid numbers for salary and years.")
 
-class TradeBlockWindow(tk.Toplevel):
+class TradeBlockWindow(InGamePopup):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -7703,7 +7704,7 @@ class TradeBlockWindow(tk.Toplevel):
     
     def create_player_selection_dialog(self):
         """Create dialog to select players for trade block."""
-        dialog = tk.Toplevel(self)
+        dialog = InGamePopup(self)
         dialog.title("Add Player to Trade Block")
         dialog.geometry("600x400")
         dialog.configure(background=self.parent.BG_COLOR)
@@ -7765,7 +7766,7 @@ class TradeBlockWindow(tk.Toplevel):
         """Remove selected player from trade block."""
         selection = self.block_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a player to remove.")
+            messagebox.showwarning("No Selection", "Please select a player to remove.")
             return
         
         for item in selection:
@@ -7780,7 +7781,7 @@ class TradeBlockWindow(tk.Toplevel):
     def generate_trade_interest(self):
         """Generate interest from other teams."""
         if not hasattr(self.parent.user_team, 'trade_block') or not self.parent.user_team.trade_block:
-            tk.messagebox.showinfo("No Players", "Add players to your trade block first.")
+            messagebox.showinfo("No Players", "Add players to your trade block first.")
             return
         
         import random
@@ -7802,7 +7803,7 @@ class TradeBlockWindow(tk.Toplevel):
                     })
         
         self.update_interest_display()
-        tk.messagebox.showinfo("Interest Generated", "Trade interest has been generated for your players!")
+        messagebox.showinfo("Interest Generated", "Trade interest has been generated for your players!")
     
     def update_trade_block_display(self):
         """Update the trade block display."""
@@ -7913,7 +7914,7 @@ class TradeBlockWindow(tk.Toplevel):
             values = self.other_tree.item(item)['values']
             team_name, player_name = values[0], values[1]
             
-            tk.messagebox.showinfo("Interest Expressed", 
+            messagebox.showinfo("Interest Expressed", 
                                  f"You have expressed interest in {player_name} from {team_name}.\n\n"
                                  f"The team will consider your interest and may respond with trade proposals.")
     
@@ -7921,13 +7922,13 @@ class TradeBlockWindow(tk.Toplevel):
         """Start trade negotiation."""
         selection = self.interest_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select an interest to negotiate.")
+            messagebox.showwarning("No Selection", "Please select an interest to negotiate.")
             return
         
         values = self.interest_tree.item(selection[0])['values']
         player_name, team_name = values[0], values[1]
         
-        tk.messagebox.showinfo("Trade Negotiation", 
+        messagebox.showinfo("Trade Negotiation", 
                              f"Starting trade negotiation for {player_name} with {team_name}.\n\n"
                              f"This would open the trade negotiation interface.")
     
@@ -7935,14 +7936,14 @@ class TradeBlockWindow(tk.Toplevel):
         """Decline trade interest."""
         selection = self.interest_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select an interest to decline.")
+            messagebox.showwarning("No Selection", "Please select an interest to decline.")
             return
         
         # Remove from interest tracking
         self.interest_tree.delete(selection[0])
-        tk.messagebox.showinfo("Interest Declined", "Trade interest has been declined.")
+        messagebox.showinfo("Interest Declined", "Trade interest has been declined.")
 
-class WaiversWindow(tk.Toplevel):
+class WaiversWindow(InGamePopup):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -8176,7 +8177,7 @@ class WaiversWindow(tk.Toplevel):
                 if 'roster' in self.parent.open_windows and self.parent.open_windows['roster'].winfo_exists():
                     self.parent.open_windows['roster'].populate_trees()
 
-class ContractExtensionsWindow(tk.Toplevel):
+class ContractExtensionsWindow(InGamePopup):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -8412,7 +8413,7 @@ class ContractExtensionsWindow(tk.Toplevel):
                 result_messages.append(f"{player.full_name}: Rejected {years} years at ${salary_offer:,}")
         
         # Show results
-        result_window = tk.Toplevel(self)
+        result_window = InGamePopup(self)
         result_window.title("Auto-Negotiation Results")
         result_window.geometry("500x400")
         result_window.configure(background=self.parent.BG_COLOR)
@@ -8472,7 +8473,7 @@ class ContractExtensionsWindow(tk.Toplevel):
         # Final result
         return random.random() < max(0.05, min(0.95, acceptance_chance))
 
-class ExtensionNegotiationWindow(tk.Toplevel):
+class ExtensionNegotiationWindow(InGamePopup):
     def __init__(self, parent, player, market_value, max_years):
         super().__init__(parent)
         self.parent = parent
@@ -8734,7 +8735,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         # Cap the chance between 5% and 95%
         return max(0.05, min(0.95, chance))
 
-class SetCaptainsWindow(tk.Toplevel):
+class SetCaptainsWindow(InGamePopup):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -8798,7 +8799,7 @@ class SetCaptainsWindow(tk.Toplevel):
         self.destroy()
 
 # --- Drag-and-Drop Edit Lines Window ---
-class GMDashboardWindow(tk.Toplevel):
+class GMDashboardWindow(InGamePopup):
     """GM Dashboard: record, cap, contracts, top performers, vitals, staff."""
 
     def __init__(self, parent):
@@ -8955,7 +8956,7 @@ class GMDashboardWindow(tk.Toplevel):
         self._fill_cards(team, league, st, w, l, otl, pts, w + l + otl)
 
 
-class SeasonGoalsWindow(tk.Toplevel):
+class SeasonGoalsWindow(InGamePopup):
     """Season Goals: board expectation, live progress, milestones, youth watch."""
 
     EXPECTATIONS = [
@@ -9123,7 +9124,7 @@ class SeasonGoalsWindow(tk.Toplevel):
             _mkline(self.mile_lines, f"{mark}  {label}")
 
 
-class TeamAnalyticsWindow(tk.Toplevel):
+class TeamAnalyticsWindow(InGamePopup):
     """Team Analytics: offense, defense, goalies, scoring mix, discipline."""
 
     def __init__(self, parent):
@@ -9252,7 +9253,7 @@ class TeamAnalyticsWindow(tk.Toplevel):
         self._fill(self.parent.user_team)
 
 
-class SalaryAnalyticsWindow(tk.Toplevel):
+class SalaryAnalyticsWindow(InGamePopup):
     """Salary Analytics: payroll mix by position, top cap hits, expiring money."""
 
     def __init__(self, parent):
@@ -9367,7 +9368,7 @@ def buyout_schedule(player):
     return total_cost, annual, buyout_years, rows
 
 
-class BuyoutCalculatorWindow(tk.Toplevel):
+class BuyoutCalculatorWindow(InGamePopup):
     """Buyout Calculator: real NHL buyout math with execute."""
 
     def __init__(self, parent):
@@ -9487,7 +9488,7 @@ class BuyoutCalculatorWindow(tk.Toplevel):
             self._line(self.active_box, "No active buyouts.", secondary=True)
 
     def _execute_buyout(self):
-        from tkinter import messagebox
+        from popup_system import messagebox
         p = self._selected
         if not p:
             return
@@ -9533,7 +9534,7 @@ class BuyoutCalculatorWindow(tk.Toplevel):
         self._render_active_buyouts()
 
 
-class GameDetailWindow(tk.Toplevel):
+class GameDetailWindow(InGamePopup):
     """Game Recap / Game Stats: scoring summary, team stats, three stars."""
 
     def __init__(self, parent, game_result, initial_tab="recap"):

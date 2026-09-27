@@ -4,13 +4,14 @@ Modern, polished interface with enhanced functionality and visual design
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 import math
 from datetime import datetime, timedelta
 from player_development_system import PlayerDevelopmentEngine, initialize_player_potential
 from game_classes import Player, PlayerPosition, to_100_scale
 
-class PlayerDevelopmentWindowProfessional(tk.Toplevel):
+class PlayerDevelopmentWindowProfessional(InGamePopup):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -1393,7 +1394,7 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
     def _compare_players(self, player):
         """Compare players functionality"""
         # Create a simple comparison window
-        compare_window = tk.Toplevel(self)
+        compare_window = InGamePopup(self)
         compare_window.title(f"Compare Players - {player.full_name}")
         compare_window.geometry("600x400")
         compare_window.configure(bg=self.parent.BG_COLOR)
@@ -1503,7 +1504,7 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
     
     def _view_development_history(self, player):
         """View player development history"""
-        history_window = tk.Toplevel(self)
+        history_window = InGamePopup(self)
         history_window.title(f"Development History - {player.full_name}")
         history_window.geometry("500x400")
         history_window.configure(bg=self.parent.BG_COLOR)
@@ -1539,7 +1540,7 @@ class PlayerDevelopmentWindowProfessional(tk.Toplevel):
     
     def _view_contract_details(self, player):
         """View player contract details"""
-        contract_window = tk.Toplevel(self)
+        contract_window = InGamePopup(self)
         contract_window.title(f"Contract Details - {player.full_name}")
         contract_window.geometry("400x300")
         contract_window.configure(bg=self.parent.BG_COLOR)

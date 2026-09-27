@@ -16,6 +16,7 @@ import math
 import random
 import threading
 import tkinter as tk
+from popup_system import InGamePopup
 from collections import deque
 from tkinter import ttk
 
@@ -510,7 +511,7 @@ def _build_lines(team):
 # ----------------------------------------------------------------------------
 # The visualizer window
 # ----------------------------------------------------------------------------
-class PBPVisualSim(tk.Toplevel):
+class PBPVisualSim(InGamePopup):
     GAME_RATE = 8.0  # game-seconds per real second at 1x
     TICK_DT = 1.0 / 30.0  # real seconds per animation frame (~30fps)
     # Smooth-skating speeds in rink-feet per real second. Dots glide toward
@@ -3502,7 +3503,7 @@ class PBPVisualSim(tk.Toplevel):
         pid = getattr(p, "id", None)
         win = self._card_win
         if win is None or not win.winfo_exists():
-            win = tk.Toplevel(self)
+            win = InGamePopup(self)
             win.title("Player")
             win.configure(bg="#16161a")
             win.geometry("260x300")
@@ -3583,7 +3584,7 @@ class PBPVisualSim(tk.Toplevel):
         if not stars:
             return
         self._stars = stars
-        win = tk.Toplevel(self)
+        win = InGamePopup(self)
         win.title("Three Stars")
         win.configure(bg="#16161a")
         win.geometry("340x430")

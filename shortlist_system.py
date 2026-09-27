@@ -10,7 +10,8 @@ A comprehensive player shortlist system for tracking:
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from datetime import datetime
@@ -163,7 +164,7 @@ class ShortlistManager:
             print(f"Error loading shortlist: {e}")
             self.entries = []
 
-class ShortlistWindow(tk.Toplevel):
+class ShortlistWindow(InGamePopup):
     """Main shortlist management window"""
     
     def __init__(self, parent):
@@ -453,7 +454,7 @@ class ShortlistWindow(tk.Toplevel):
             entry = self.parent.tree_maps[self.shortlist_tree][item]
             ChangePriorityDialog(self, entry, self.shortlist_manager)
 
-class AddPlayerDialog(tk.Toplevel):
+class AddPlayerDialog(InGamePopup):
     """Dialog for adding a player to shortlist"""
     
     def __init__(self, parent_window, shortlist_manager):
@@ -604,7 +605,7 @@ class AddPlayerDialog(tk.Toplevel):
         
         return None
 
-class EditNotesDialog(tk.Toplevel):
+class EditNotesDialog(InGamePopup):
     """Dialog for editing shortlist entry notes"""
     
     def __init__(self, parent_window, entry, shortlist_manager):
@@ -663,7 +664,7 @@ class EditNotesDialog(tk.Toplevel):
         messagebox.showinfo("Saved", "Notes updated successfully!")
         self.destroy()
 
-class ChangePriorityDialog(tk.Toplevel):
+class ChangePriorityDialog(InGamePopup):
     """Dialog for changing shortlist entry priority"""
     
     def __init__(self, parent_window, entry, shortlist_manager):

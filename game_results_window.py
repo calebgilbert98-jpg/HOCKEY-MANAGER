@@ -1,8 +1,9 @@
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 from datetime import date, timedelta
 
-class GameResultsWindow(tk.Toplevel):
+class GameResultsWindow(InGamePopup):
     """Simple, clean game results window"""
     
     def __init__(self, parent, results_data):

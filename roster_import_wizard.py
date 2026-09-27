@@ -21,7 +21,8 @@ import queue
 import sqlite3
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
+from popup_system import messagebox, InGamePopup
 from typing import Any, Callable, Dict, List, Optional
 
 from modern_ui import AppButton, AppCard, AppColors, AppFonts
@@ -41,7 +42,7 @@ HOW_TO_GET_ECK = (
 )
 
 
-class RosterImportWizard(tk.Toplevel):
+class RosterImportWizard(InGamePopup):
     """Step-by-step importer.  Calls on_complete(league, team, gm) at the end."""
 
     def __init__(self, parent,

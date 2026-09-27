@@ -388,7 +388,7 @@ class AutomatedSeasonFlow:
         """Show notification for important milestones"""
         try:
             import tkinter as tk
-            from tkinter import messagebox
+            from popup_system import messagebox
             
             messagebox.showinfo(
                 f"Season Milestone: {milestone.name}",

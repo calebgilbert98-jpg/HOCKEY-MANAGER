@@ -4,7 +4,7 @@ Reliable splash screen that shows background and launches enhanced launcher
 """
 
 import tkinter as tk
-from tkinter import messagebox
+from popup_system import messagebox
 from PIL import Image, ImageTk
 import os
 import sys

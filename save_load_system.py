@@ -7,7 +7,8 @@ import pickle
 import json
 import os
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog
+from popup_system import messagebox, InGamePopup, simpledialog
 from datetime import datetime, date, timedelta
 from typing import Dict, Any, Optional
 import gzip
@@ -1061,7 +1062,7 @@ class GameSaveManager:
             return []
 
 
-class SaveLoadWindow(tk.Toplevel):
+class SaveLoadWindow(InGamePopup):
     """UI window for saving and loading games"""
     
     def __init__(self, parent, mode='save'):
@@ -1703,7 +1704,7 @@ class SaveLoadWindow(tk.Toplevel):
         suggestions = self._generate_name_suggestions()
         
         # Create suggestion window
-        suggestion_window = tk.Toplevel(self)
+        suggestion_window = InGamePopup(self)
         suggestion_window.title("Save Name Suggestions")
         suggestion_window.geometry("400x300")
         suggestion_window.configure(background=self.parent.BG_COLOR)
@@ -1979,7 +1980,7 @@ class SaveLoadWindow(tk.Toplevel):
     def _show_save_properties_dialog(self, save_data, filepath):
         """Show save file properties in a dialog"""
         # Create properties window
-        props_window = tk.Toplevel(self)
+        props_window = InGamePopup(self)
         props_window.title("Save File Properties")
         props_window.geometry("500x400")
         props_window.configure(background=self.parent.BG_COLOR)

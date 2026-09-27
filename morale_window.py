@@ -5,6 +5,7 @@
 # CustomTkinter: CTkToplevel chrome, dark ttk.Treeview, CTkScrollableFrame.
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 
 import customtkinter as ctk
@@ -12,7 +13,7 @@ import customtkinter as ctk
 import reputation_system as rs
 
 
-class MoraleWindow(ctk.CTkToplevel):
+class MoraleWindow(InGamePopup):
     """Team Morale - dressing-room dynamics at a glance."""
 
     RESPONSE_TAGS = {
@@ -484,7 +485,7 @@ class MoraleWindow(ctk.CTkToplevel):
             return 0, 0
 
 
-class AdviseCoachPopup(ctk.CTkToplevel):
+class AdviseCoachPopup(InGamePopup):
     """GM advisory popup: pick guidance, see whether the coach listens."""
 
     def __init__(self, parent_win, coach, team, roster, on_done=None):
@@ -620,7 +621,7 @@ class AdviseCoachPopup(ctk.CTkToplevel):
             pass
 
 
-class LineControlPopup(ctk.CTkToplevel):
+class LineControlPopup(InGamePopup):
     """Discuss (amicable) vs seize (nuclear) the lineup pen."""
 
     def __init__(self, parent_win, coach, team, roster, ctx, on_done=None):
@@ -706,7 +707,7 @@ class LineControlPopup(ctk.CTkToplevel):
             pass
 
 
-class DeclareRivalPopup(ctk.CTkToplevel):
+class DeclareRivalPopup(InGamePopup):
     """Name your enemy: declare a team rival or a personal beef with an
     opposing head coach. Declarations never fade until renounced."""
 

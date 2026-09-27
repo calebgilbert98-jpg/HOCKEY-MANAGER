@@ -10,11 +10,12 @@ import calendar
 from datetime import date, timedelta
 
 import tkinter as tk
+from popup_system import InGamePopup
 
 import customtkinter as ctk
 
 
-class CalendarWindow(ctk.CTkToplevel):
+class CalendarWindow(InGamePopup):
     """Season calendar: month grid + day detail pane."""
 
     # Day-cell styles keyed by event priority. Each entry carries the cell

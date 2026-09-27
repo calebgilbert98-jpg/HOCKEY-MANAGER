@@ -3,13 +3,14 @@
 # Clean, modern, no white text boxes.
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 from modern_ui import (
     AppColors, AppFonts, AppCard, PillBadge, AppButton
 )
 
 
-class PlayerProfile(tk.Toplevel):
+class PlayerProfile(InGamePopup):
     """Modern player profile (modern).
     
     Layout:

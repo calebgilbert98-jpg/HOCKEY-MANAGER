@@ -4,13 +4,14 @@ Simple, reliable player display system that guarantees player visibility
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from typing import List, Optional
 from game_classes import Player, PlayerPosition, to_100_scale
 from game_classes import debug_print
 from scouting_profiles import displayed_overall
 
-class PlayerBrowserWindow(tk.Toplevel):
+class PlayerBrowserWindow(InGamePopup):
     """Standalone player browser with guaranteed player display"""
     
     def __init__(self, parent, players: List[Player], title="Available Players"):
@@ -337,7 +338,7 @@ class PlayerBrowserWindow(tk.Toplevel):
         """Get the selected player (for external use)"""
         return getattr(self, 'result', None)
 
-class SimpleDraftOrderWindow(tk.Toplevel):
+class SimpleDraftOrderWindow(InGamePopup):
     """Simple draft order display window"""
     
     def __init__(self, parent, draft_manager):

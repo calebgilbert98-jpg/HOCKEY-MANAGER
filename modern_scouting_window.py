@@ -5,7 +5,8 @@ Includes: Scout management, player evaluation, assignments, reports, and draft a
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from typing import Dict, List, Optional, Any
 import datetime
 import random
@@ -13,7 +14,7 @@ from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
 from scouting_profiles import displayed_overall, displayed_attribute
 
 
-class ModernScoutingWindow(tk.Toplevel):
+class ModernScoutingWindow(InGamePopup):
     """Professional scouting management interface with dedicated draft support"""
     
     def __init__(self, parent):

@@ -4,7 +4,8 @@
 # message list with unread/urgent/overdue row tags, dark preview pane.
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from datetime import date, timedelta
 from game_classes import EmailMessage, EmailGenerator
 from typing import List, Optional
@@ -12,7 +13,7 @@ from typing import List, Optional
 import customtkinter as ctk
 
 
-class InboxWindow(ctk.CTkToplevel):
+class InboxWindow(InGamePopup):
     """EHM-style Email Inbox window with comprehensive email management."""
 
     _FILTERS = [

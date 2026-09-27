@@ -2,6 +2,7 @@
 # Contains reusable UI elements, like the player profile window.
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 from game_classes import PlayerPosition, to_100_scale
 
@@ -25,7 +26,7 @@ def _to_100_scale(value):
         return 50
 
 
-class PlayerProfileWindow(tk.Toplevel):
+class PlayerProfileWindow(InGamePopup):
     """A comprehensive player profile window similar to Eastside Hockey Manager."""
     def __init__(self, parent, player, is_scouted=False, report=None):
         super().__init__(parent)

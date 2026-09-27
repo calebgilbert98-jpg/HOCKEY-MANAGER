@@ -7,7 +7,8 @@ styled dark treeview with rating-tier and morale tags, CTk dialogs.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from typing import List
 
 import customtkinter as ctk
@@ -22,7 +23,7 @@ from ctk_theme import (
 )
 
 
-class StaffManagementWindow(ctk.CTkToplevel):
+class StaffManagementWindow(InGamePopup):
     """Comprehensive staff management interface with EHM-style functionality."""
 
     # Roles whose attributes are verifiably read by the sim engine (scouting.py)
@@ -1016,7 +1017,7 @@ class StaffManagementWindow(ctk.CTkToplevel):
     def show_staff_details_window(self, staff: Staff, is_current: bool):
         """Show detailed staff information window."""
         ct = self._ct
-        details_window = ctk.CTkToplevel(self)
+        details_window = InGamePopup(self)
         details_window.title(f"Staff Details - {staff.full_name}")
         details_window.configure(fg_color=ct['BG'])
         details_window.geometry("680x940")
@@ -1147,7 +1148,7 @@ class StaffManagementWindow(ctk.CTkToplevel):
         messaging and view refreshes.
         """
         ct = self._ct
-        nego_window = ctk.CTkToplevel(self)
+        nego_window = InGamePopup(self)
         nego_window.title(f"Contract Negotiation - {staff.full_name}")
         nego_window.configure(fg_color=ct['BG'])
         nego_window.geometry("500x470")
@@ -1351,7 +1352,7 @@ class StaffManagementWindow(ctk.CTkToplevel):
         ct = self._ct
         selected_staff_list = [s for s in self.get_current_team_staff() if s.id in self.selected_staff]
 
-        summary_window = ctk.CTkToplevel(self)
+        summary_window = InGamePopup(self)
         summary_window.title(f"Selected Staff Summary ({len(selected_staff_list)} staff)")
         summary_window.configure(fg_color=ct['BG'])
         summary_window.geometry("600x520")
@@ -1414,7 +1415,7 @@ class StaffManagementWindow(ctk.CTkToplevel):
     def reassign_single_staff(self, staff):
         """Reassign role for a single staff member."""
         ct = self._ct
-        reassign_window = ctk.CTkToplevel(self)
+        reassign_window = InGamePopup(self)
         reassign_window.title(f"Reassign {staff.full_name}")
         reassign_window.configure(fg_color=ct['BG'])
         reassign_window.geometry("420x340")
@@ -1477,7 +1478,7 @@ class StaffManagementWindow(ctk.CTkToplevel):
     def reassign_multiple_staff(self, staff_list):
         """Reassign roles for multiple staff members."""
         ct = self._ct
-        reassign_window = ctk.CTkToplevel(self)
+        reassign_window = InGamePopup(self)
         reassign_window.title(f"Bulk Reassign ({len(staff_list)} staff)")
         reassign_window.configure(fg_color=ct['BG'])
         reassign_window.geometry("620x520")
@@ -1564,7 +1565,7 @@ class StaffManagementWindow(ctk.CTkToplevel):
     def _report_window(self, title, content):
         """Shared modern scrollable-text dialog used by the report/chart views."""
         ct = self._ct
-        win = ctk.CTkToplevel(self)
+        win = InGamePopup(self)
         win.title(title)
         win.configure(fg_color=ct['BG'])
         win.geometry("800x620")

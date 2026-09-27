@@ -4,7 +4,8 @@ Gradual skill improvement through focused training sessions
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from typing import Dict, List, Optional, Tuple
 from datetime import date, timedelta
 from dataclasses import dataclass, field
@@ -417,7 +418,7 @@ class PracticeEngine:
                     history.current_schedule = None
 
 
-class DevelopmentOverviewWindow(tk.Toplevel):
+class DevelopmentOverviewWindow(InGamePopup):
     """Development overview window showing all team players"""
     
     def __init__(self, parent):
@@ -705,7 +706,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             analysis_text += "• Veteran-heavy roster - Focus on mentorship and leadership development\n"
         
         # Show analysis in a scrollable dialog
-        analysis_window = tk.Toplevel(self)
+        analysis_window = InGamePopup(self)
         analysis_window.title("Team Development Analysis")
         analysis_window.configure(background=self.parent.BG_COLOR)
         analysis_window.geometry("600x500")
@@ -1598,7 +1599,7 @@ def test_practice_system():
     print("\n✅ Enhanced Practice System test complete!")
 
 
-class PracticeCenterWindow(tk.Toplevel):
+class PracticeCenterWindow(InGamePopup):
     """Practice center window for active roster players only"""
     
     def __init__(self, parent):

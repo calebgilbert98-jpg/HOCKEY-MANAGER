@@ -4,7 +4,8 @@ Complete Stanley Cup playoff bracket generation and management
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from datetime import date, timedelta
 import random
 from typing import List, Dict, Tuple, Optional
@@ -267,7 +268,7 @@ class PlayoffBracket:
         }
 
 
-class PlayoffWindow(tk.Toplevel):
+class PlayoffWindow(InGamePopup):
     """NHL Playoff bracket viewer and management window"""
     
     def __init__(self, parent):

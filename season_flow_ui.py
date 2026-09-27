@@ -3,6 +3,7 @@
 # Provides user interface for controlling season automation
 
 import tkinter as tk
+from popup_system import messagebox, InGamePopup
 from tkinter import ttk
 from datetime import date, timedelta
 from automated_season_flow import AutomatedSeasonFlow, AutoAdvanceMode, SeasonPhase, get_season_phase_color, format_days_until_milestone
@@ -186,7 +187,7 @@ class SeasonFlowControlPanel(ttk.Frame):
             # Find next user team game
             upcoming_games = self.automation._get_upcoming_user_games(30)  # Look 30 days ahead
             if not upcoming_games:
-                tk.messagebox.showinfo("No Games", "No upcoming user team games found in the next 30 days.")
+                messagebox.showinfo("No Games", "No upcoming user team games found in the next 30 days.")
                 return
                 
             next_game = upcoming_games[0]
@@ -199,14 +200,14 @@ class SeasonFlowControlPanel(ttk.Frame):
                 
         except Exception as e:
             print(f"Error advancing to next game: {e}")
-            tk.messagebox.showerror("Error", f"Failed to advance to next game: {e}")
+            messagebox.showerror("Error", f"Failed to advance to next game: {e}")
             
     def _advance_to_milestone(self):
         """Advance to the next milestone"""
         try:
             next_milestone = self.automation.get_next_milestone()
             if not next_milestone:
-                tk.messagebox.showinfo("No Milestones", "No upcoming milestones found.")
+                messagebox.showinfo("No Milestones", "No upcoming milestones found.")
                 return
                 
             current_date = self.game_manager.current_date
@@ -218,7 +219,7 @@ class SeasonFlowControlPanel(ttk.Frame):
                 
         except Exception as e:
             print(f"Error advancing to milestone: {e}")
-            tk.messagebox.showerror("Error", f"Failed to advance to milestone: {e}")
+            messagebox.showerror("Error", f"Failed to advance to milestone: {e}")
             
     def _skip_week(self):
         """Skip ahead one week"""
@@ -243,13 +244,13 @@ class SeasonFlowControlPanel(ttk.Frame):
             if hasattr(self.game_manager, 'update_all_views'):
                 self.game_manager.update_all_views()
                 
-            tk.messagebox.showinfo("Advanced", f"Advanced {days} day{'s' if days != 1 else ''}.")
+            messagebox.showinfo("Advanced", f"Advanced {days} day{'s' if days != 1 else ''}.")
             
         except Exception as e:
             print(f"Error advancing days: {e}")
-            tk.messagebox.showerror("Error", f"Failed to advance days: {e}")
+            messagebox.showerror("Error", f"Failed to advance days: {e}")
 
-class SettingsWindow(tk.Toplevel):
+class SettingsWindow(InGamePopup):
     """Settings window for automation configuration"""
     
     def __init__(self, parent, automation):
@@ -381,14 +382,14 @@ class SettingsWindow(tk.Toplevel):
             settings.pause_at_user_games = self.pause_games_var.get()
             settings.auto_skip_offseason = self.skip_offseason_var.get()
             
-            tk.messagebox.showinfo("Settings Saved", "Automation settings have been updated.")
+            messagebox.showinfo("Settings Saved", "Automation settings have been updated.")
             self.destroy()
             
         except Exception as e:
             print(f"Error saving settings: {e}")
-            tk.messagebox.showerror("Error", f"Failed to save settings: {e}")
+            messagebox.showerror("Error", f"Failed to save settings: {e}")
 
-class MilestoneNotificationWindow(tk.Toplevel):
+class MilestoneNotificationWindow(InGamePopup):
     """Window for displaying milestone notifications"""
     
     def __init__(self, parent, milestone):

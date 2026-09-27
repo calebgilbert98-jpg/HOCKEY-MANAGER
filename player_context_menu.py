@@ -4,7 +4,7 @@ Provides consistent right-click player interactions across all windows
 """
 
 import tkinter as tk
-from tkinter import messagebox
+from popup_system import messagebox, InGamePopup
 
 class PlayerContextMenu:
     """Universal player context menu for consistent player interactions across all windows"""
@@ -164,7 +164,7 @@ class PlayerContextMenu:
     
     def _create_scout_assignment_dialog(self, player):
         """Create a dialog for scout assignment"""
-        dialog = tk.Toplevel(self.parent)
+        dialog = InGamePopup(self.parent)
         dialog.title(f"Scout Assignment - {player.full_name}")
         dialog.geometry("400x300")
         dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -227,7 +227,7 @@ class PlayerContextMenu:
     def _add_to_shortlist(self, player):
         """Add player to shortlist with category selection"""
         # Create shortlist dialog
-        shortlist_dialog = tk.Toplevel(self.parent)
+        shortlist_dialog = InGamePopup(self.parent)
         shortlist_dialog.title("Add to Shortlist")
         shortlist_dialog.geometry("400x300")
         shortlist_dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -322,7 +322,7 @@ class PlayerContextMenu:
     
     def _create_comparison_window(self, player):
         """Create comparison window"""
-        compare_window = tk.Toplevel(self.parent)
+        compare_window = InGamePopup(self.parent)
         compare_window.title(f"Compare Players - {player.full_name}")
         compare_window.geometry("600x500")
         
@@ -486,7 +486,7 @@ class PlayerContextMenu:
     
     def _create_training_assignment_dialog(self, player):
         """Create training assignment dialog"""
-        dialog = tk.Toplevel(self.parent)
+        dialog = InGamePopup(self.parent)
         dialog.title(f"Training Assignment - {player.full_name}")
         dialog.geometry("400x350")
         dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -646,7 +646,7 @@ class PlayerContextMenu:
     
     def _create_trade_proposal_dialog(self, player):
         """Create a trade proposal dialog"""
-        dialog = tk.Toplevel(self.parent)
+        dialog = InGamePopup(self.parent)
         dialog.title(f"Trade Proposal - {player.full_name}")
         dialog.geometry("500x400")
         dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -732,7 +732,7 @@ class PlayerContextMenu:
     
     def _create_enhanced_comparison_window(self, player):
         """Create enhanced comparison window with better styling and functionality"""
-        compare_window = tk.Toplevel(self.parent)
+        compare_window = InGamePopup(self.parent)
         compare_window.title(f"Player Comparison - {player.full_name}")
         compare_window.geometry("900x700")
         compare_window.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))

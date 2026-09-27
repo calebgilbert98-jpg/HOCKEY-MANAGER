@@ -4,6 +4,7 @@ Accessible only on March 8th (NHL Trade Deadline Day)
 """
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 import time
 from datetime import datetime, timedelta
@@ -14,7 +15,7 @@ import random
 from trade_deadline_manager import TradeDeadlineManager, get_deadline_manager
 
 
-class TradeDeadlineCenter(tk.Toplevel):
+class TradeDeadlineCenter(InGamePopup):
     """Immersive Trade Deadline Center - Active only on Trade Deadline Day"""
     
     def __init__(self, parent):
@@ -899,7 +900,7 @@ class TradeDeadlineCenter(tk.Toplevel):
         DeadlineMarketBrowser(self, self.deadline_manager)
 
 
-class QuickTradeInterface(tk.Toplevel):
+class QuickTradeInterface(InGamePopup):
     """Quick trade proposal interface for deadline day"""
     
     def __init__(self, parent, deadline_manager):
@@ -1064,7 +1065,7 @@ class QuickTradeInterface(tk.Toplevel):
         self.destroy()
 
 
-class EmergencyTradeInterface(tk.Toplevel):
+class EmergencyTradeInterface(InGamePopup):
     """Emergency trade interface for last-minute deadline deals"""
     
     def __init__(self, parent, deadline_manager):
@@ -1145,7 +1146,7 @@ class EmergencyTradeInterface(tk.Toplevel):
         self.destroy()
 
 
-class DeadlineMarketBrowser(tk.Toplevel):
+class DeadlineMarketBrowser(InGamePopup):
     """Comprehensive market browser for deadline day trading"""
     
     def __init__(self, parent, deadline_manager):

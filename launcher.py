@@ -8,7 +8,7 @@ import sys
 import os
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox
+from popup_system import messagebox
 
 # Ensure we can import from current directory
 current_dir = Path(__file__).parent

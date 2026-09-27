@@ -4,12 +4,13 @@ Shows real-time performance statistics and optimization reports
 """
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 import threading
 import time
 
 
-class PerformanceMonitorWindow(tk.Toplevel):
+class PerformanceMonitorWindow(InGamePopup):
     """Window for monitoring game performance and optimization statistics"""
     
     def __init__(self, parent):

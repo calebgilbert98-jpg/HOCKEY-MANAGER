@@ -4,7 +4,8 @@
 
 import random
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox
 from datetime import date, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple

@@ -3,7 +3,8 @@
 
 import random
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup, simpledialog
 import customtkinter as ctk
 from ctk_theme import (
     init_ctk_theme, primary_button, secondary_button, heading,
@@ -3038,7 +3039,7 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     Returns True when the user confirms, False otherwise.
     """
     result = {'ok': False}
-    dlg = tk.Toplevel(parent)
+    dlg = InGamePopup(parent)
     dlg.title(title)
     dlg.transient(parent)
     dlg.resizable(False, False)
@@ -3195,6 +3196,14 @@ class HockeyManagerGUI(tk.Tk):
         self.title("Puck Dynasty - Hockey Manager")
         self.geometry("1400x800")
         self.configure(background=self.BG_COLOR)
+
+        # In-game popup system: every dialog/window renders INSIDE this
+        # window as an overlay card -- no floating OS-level popups.
+        try:
+            from popup_system import register as _register_popups
+            _register_popups(self)
+        except Exception:
+            self.popup_manager = None
         
         # Set application icon
         self._set_application_icon()
@@ -3330,7 +3339,7 @@ class HockeyManagerGUI(tk.Tk):
             team_names = [team.team_name for team in self.league.teams]
             
             # Create simple selection window as a Toplevel (child of main window)
-            selection_window = tk.Toplevel(self)
+            selection_window = InGamePopup(self)
             selection_window.title("Select Your Team - Puck Dynasty")
             selection_window.geometry("400x300")
             selection_window.configure(bg='#181818')
@@ -3825,6 +3834,12 @@ class HockeyManagerGUI(tk.Tk):
 
     def _create_main_dashboard(self):
         """Creates the main dashboard with enhanced menu bar and modern dashboard system."""
+        # Navigating screens dismisses any open in-game popups (FM behavior).
+        try:
+            if getattr(self, "popup_manager", None) is not None:
+                self.popup_manager.close_all()
+        except Exception:
+            pass
         # Clear any existing content
         for widget in self.winfo_children():
             widget.destroy()
@@ -4297,6 +4312,10 @@ class HockeyManagerGUI(tk.Tk):
             if isinstance(w, tk.Toplevel):
                 target = w
                 break
+            # in-game popup cards live inside the main window now
+            if type(w).__name__ == "InGamePopup":
+                target = w
+                break
             w = getattr(w, 'master', None)
         if target is None:
             return None
@@ -4370,7 +4389,7 @@ class HockeyManagerGUI(tk.Tk):
         if getattr(self, '_qol_cheat_open', False):
             return
         self._qol_cheat_open = True
-        dlg = tk.Toplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Keyboard Shortcuts")
         dlg.transient(self)
         dlg.resizable(False, False)
@@ -4854,7 +4873,7 @@ class HockeyManagerGUI(tk.Tk):
             return
             
         # Create selection dialog
-        selection_window = tk.Toplevel(self)
+        selection_window = InGamePopup(self)
         selection_window.title("Select Player Focus")
         selection_window.configure(background=self.BG_COLOR)
         selection_window.geometry("400x500")
@@ -5141,7 +5160,7 @@ class HockeyManagerGUI(tk.Tk):
     
     def _show_email_notification(self, message):
         """Show a popup notification for urgent emails."""
-        notification_window = tk.Toplevel(self)
+        notification_window = InGamePopup(self)
         notification_window.title("New Email")
         notification_window.geometry("400x200")
         notification_window.configure(background=self.BG_COLOR)
@@ -5353,7 +5372,7 @@ class HockeyManagerGUI(tk.Tk):
         if 'game_results' in self.open_windows and self.open_windows['game_results'].winfo_exists():
             self.open_windows['game_results'].destroy()
             
-        window = tk.Toplevel(self)
+        window = InGamePopup(self)
         window.title(f"Game Results - {game_result['date'].strftime('%B %d, %Y')}")
         window.geometry("1200x800")
         window.configure(bg=self.BG_COLOR)
@@ -5968,7 +5987,7 @@ class HockeyManagerGUI(tk.Tk):
     def _ask_game_mode_dialog(self, home_team, away_team):
         """Pre-game modal: Quick Sim or Watch Live? Returns 'quick'/'watch'."""
         choice = {'mode': 'quick'}
-        dlg = tk.Toplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Game Day")
         dlg.configure(bg="#0e0e11")
         dlg.resizable(False, False)
@@ -6097,10 +6116,10 @@ class HockeyManagerGUI(tk.Tk):
             
         except ImportError as e:
             print(f"Error importing season flow UI: {e}")
-            tk.messagebox.showerror("Error", f"Could not load season flow controls: {e}")
+            messagebox.showerror("Error", f"Could not load season flow controls: {e}")
         except Exception as e:
             print(f"Error showing season flow panel: {e}")
-            tk.messagebox.showerror("Error", f"Failed to show season flow panel: {e}")
+            messagebox.showerror("Error", f"Failed to show season flow panel: {e}")
             
     def _hide_season_flow_panel(self):
         """Hide the automated season flow control panel"""
@@ -6521,7 +6540,7 @@ class HockeyManagerGUI(tk.Tk):
         try:
             from modern_ui import AppColors, AppFonts, AppButton
         except Exception:
-            from tkinter import messagebox
+            from popup_system import messagebox
             messagebox.showwarning(
                 "Action Required",
                 "\n\n".join(b.get('title', '') + "\n" + b.get('detail', '')
@@ -6537,7 +6556,7 @@ class HockeyManagerGUI(tk.Tk):
             return
 
         # Prevent multiple clicks by disabling button during simulation
-        dlg = tk.Toplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Action Required")
         dlg.configure(bg=AppColors.BG)
         dlg.transient(self)
@@ -6983,7 +7002,7 @@ class HockeyManagerGUI(tk.Tk):
         elif kind == "error":
             self._mp_toast(f"Host: {payload.get('message', '')}")
         elif kind == "disconnected":
-            from tkinter import messagebox
+            from popup_system import messagebox
             try:
                 messagebox.showerror(
                     "Disconnected",
@@ -8880,11 +8899,11 @@ class HockeyManagerGUI(tk.Tk):
         """Show an enhanced record achievement popup"""
         try:
             import tkinter as tk
-            import tkinter.messagebox as msgbox
+            from popup_system import messagebox as msgbox
             from tkinter import ttk
             
             # Create custom achievement window
-            achievement_window = tk.Toplevel(self)
+            achievement_window = InGamePopup(self)
             achievement_window.title("Record Achievement!")
             achievement_window.configure(bg=self.BG_COLOR)
             achievement_window.geometry("500x350")
@@ -8978,7 +8997,7 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             # Fallback to simple messagebox
             try:
-                import tkinter.messagebox as msgbox
+                from popup_system import messagebox as msgbox
                 msgbox.showinfo(title, message + "\n\nCongratulations on this historic achievement!")
             except:
                 pass
@@ -9326,7 +9345,7 @@ class HockeyManagerGUI(tk.Tk):
         season_str = f"{self.league.season_year}-{self.league.season_year + 1}"
         
         # Create a summary window
-        summary_window = tk.Toplevel(self)
+        summary_window = InGamePopup(self)
         summary_window.title(f"{season_str} Season Summary")
         summary_window.geometry("900x700")
         summary_window.configure(background=self.BG_COLOR)
@@ -10246,7 +10265,7 @@ class HockeyManagerGUI(tk.Tk):
 
     def _career_handle_sack(self):
         """Board has lost patience: game-over flow."""
-        from tkinter import messagebox
+        from popup_system import messagebox
         # Fire once: without this the dialog + news spam on every subsequent
         # game day / monthly review for the rest of the save.
         if getattr(self.career, 'sack_announced', False):
@@ -11267,7 +11286,7 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
         messagebox.showinfo("Lines Updated", "Your team's best lines have been set!")
 
-class CleanEditLinesWindow(ctk.CTkToplevel):
+class CleanEditLinesWindow(InGamePopup):
     """Clean, simple, and intuitive line editor with proper contrast and readability"""
     
     def __init__(self, parent):
@@ -12135,7 +12154,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
     def show_modern_notification(self, title, message, notification_type="info"):
         """Show a modern notification popup"""
         # Create notification window
-        notification = tk.Toplevel(self)
+        notification = InGamePopup(self)
         notification.title(title)
         notification.geometry("350x150")
         notification.configure(bg='#16161a')
@@ -12329,7 +12348,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
         # Hard compatibility (goalies only in net, skaters never in net).
         position_type = slot.zone_id.split('_')[0]
         if not self.is_position_compatible(player, position_type):
-            tk.messagebox.showwarning(
+            messagebox.showwarning(
                 "Invalid Position",
                 f"{player.full_name} cannot be assigned to this position type.")
             return
@@ -12608,7 +12627,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
         title = getattr(label, "_chem_title", "Chemistry")
         total, drivers = line_chemistry_report(players)
 
-        popup = tk.Toplevel(self)
+        popup = InGamePopup(self)
         popup.title(title)
         popup.geometry("460x380")
         popup.configure(bg="#16161a")
@@ -12833,7 +12852,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
             pass
 
     def _open_view_menu(self):
-        pop = tk.Toplevel(self)
+        pop = InGamePopup(self)
         pop.title("View")
         pop.configure(bg=self.C_CARD)
         pop.resizable(False, False)
@@ -13085,7 +13104,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
     
     def show_line_analytics(self):
         """Show detailed analytics for current line combinations"""
-        analytics_window = tk.Toplevel(self)
+        analytics_window = InGamePopup(self)
         analytics_window.title("Line Analytics")
         analytics_window.geometry("800x600")
         analytics_window.configure(bg=self.parent.BG_COLOR)
@@ -13182,7 +13201,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
             team_text_widget.config(state='disabled')
 
 
-class TacticsWindow(tk.Toplevel):
+class TacticsWindow(InGamePopup):
     """Team tactics editor with pill selectors.
 
     Even-strength style, power-play approach, penalty-kill approach and line
@@ -13342,7 +13361,7 @@ class TacticsWindow(tk.Toplevel):
         self.impact_label.configure(text="\n".join(lines))
 
 
-class TradeBlockWindow(tk.Toplevel):
+class TradeBlockWindow(InGamePopup):
     """
     Enhanced Trade Block window with filtering, sorting, bulk actions, context menu, and summary.
     """
@@ -13621,7 +13640,7 @@ class TradeBlockWindow(tk.Toplevel):
             messagebox.showinfo("Shop Player", "No players selected.")
             return
             
-        shop_window = tk.Toplevel(self)
+        shop_window = InGamePopup(self)
         shop_window.title("Shop Players")
         shop_window.geometry("700x500")
         shop_window.configure(bg=self.parent.BG_COLOR)
@@ -13864,7 +13883,7 @@ class TradeBlockWindow(tk.Toplevel):
     def update_views(self):
         self._populate_tree()
         
-class ContractExtensionsWindow(tk.Toplevel):
+class ContractExtensionsWindow(InGamePopup):
     """Window for handling contract extensions."""
     
     def __init__(self, parent):
@@ -14261,7 +14280,7 @@ class ContractExtensionsWindow(tk.Toplevel):
         
     def show_contract_features_help(self):
         """Show help information about the enhanced contract features."""
-        help_window = tk.Toplevel(self)
+        help_window = InGamePopup(self)
         help_window.title("NHL-Style Contract Features")
         help_window.geometry("700x500")
         help_window.configure(background=self.parent.BG_COLOR)
@@ -14339,7 +14358,7 @@ estimated likelihood of the player accepting your offer.
             if player:
                 self.negotiate_with_player(player)
 
-class ExtensionNegotiationWindow(tk.Toplevel):
+class ExtensionNegotiationWindow(InGamePopup):
     """Window for negotiating contract extensions with a player."""
     
     def __init__(self, parent, player, market_value=None):
@@ -14928,7 +14947,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter a valid number for salary.")
 
-class GMOptionsWindow(ctk.CTkToplevel):
+class GMOptionsWindow(InGamePopup):
     """GM Options - executive management tools.
 
     CustomTkinter rebuild: charcoal background, rounded section cards,
@@ -15266,7 +15285,7 @@ def main():
         print("Critical error launching Hockey Manager:", e)
         traceback.print_exc()
         try:
-            from tkinter import messagebox
+            from popup_system import messagebox
             messagebox.showerror("Critical Launch Error", f"Failed to start Hockey Manager:\n{str(e)}")
         except:
             pass
@@ -15288,7 +15307,7 @@ def _launch_with_imported_league(config):
     Puck Dynasty League. Runs the same post-generation setup as
     GameManager.apply_startup_settings (draft picks, settings, schedule).
     """
-    from tkinter import messagebox
+    from popup_system import messagebox
     try:
         print("Starting Puck Dynasty with imported rosters...")
         settings = {
@@ -15355,7 +15374,7 @@ def _launch_with_wizard():
     Returns True if a game was launched, False if the user cancelled.
     """
     import tkinter as tk
-    from tkinter import messagebox
+    from popup_system import messagebox
     from new_game_setup import open_setup_wizard, build_database_config
 
     holder = {}

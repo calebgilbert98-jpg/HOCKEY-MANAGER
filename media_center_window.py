@@ -4,14 +4,15 @@
 # journalists/storylines, rounded event cards in a CTkScrollableFrame.
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from media_system import MediaSystem, MediaEngagementLevel, JournalistType
 import random
 
 import customtkinter as ctk
 
 
-class MediaCenterWindow(ctk.CTkToplevel):
+class MediaCenterWindow(InGamePopup):
     """Media Center - Optional immersive media interactions"""
 
     _ENGAGEMENT_DESCRIPTIONS = {
@@ -599,7 +600,7 @@ TIP: {"Higher engagement = more storylines but more interactions" if status['eng
                         event)
 
 
-class InterviewWindow(ctk.CTkToplevel):
+class InterviewWindow(InGamePopup):
     """Interactive interview window for media events"""
 
     def __init__(self, parent, event, raw_event=None):
@@ -866,7 +867,7 @@ class InterviewWindow(ctk.CTkToplevel):
         self.destroy()
 
 
-class PreviewWindow(ctk.CTkToplevel):
+class PreviewWindow(InGamePopup):
     """Read-only preview of sample answers for the chosen response style."""
 
     def __init__(self, parent, response_style, questions):

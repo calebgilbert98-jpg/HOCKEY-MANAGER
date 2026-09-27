@@ -8,6 +8,7 @@ Each hub is a full-screen, broadcast-style page with a live wire feed,
 done-deals tracker, and quick actions into the relevant management windows.
 """
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 from datetime import date
 
@@ -65,7 +66,7 @@ def days_until_event(d=None):
 # ----------------------------------------------------------------------------
 # Base hub
 # ----------------------------------------------------------------------------
-class EventDayHub(tk.Toplevel):
+class EventDayHub(InGamePopup):
     """Shared immersive shell: header, 3-column content, scrolling wire ticker."""
 
     BG = '#0e0e11'
@@ -677,7 +678,7 @@ class FreeAgencyFrenzy(EventDayHub):
 # ----------------------------------------------------------------------------
 def prompt_event_day(parent, game_manager, event):
     """Ask the user whether to open the event hub when the day arrives."""
-    from tkinter import messagebox
+    from popup_system import messagebox
     titles = {
         'draft': ("Draft Day is here!",
                   "The NHL Entry Draft begins today.\n\nOpen Draft Day Central for the live pick-by-pick experience?"),

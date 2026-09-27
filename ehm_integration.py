@@ -4,6 +4,7 @@ Connects enhanced players with live game viewer
 """
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 import threading
 import time
@@ -284,7 +285,7 @@ class EHMReplayViewer:
         self.event_log = event_log
         
         # Create window
-        self.window = tk.Toplevel(parent)
+        self.window = InGamePopup(parent)
         self.window.title(f"🏒 EHM Replay: {self.home_team} vs {self.away_team}")
         self.window.configure(background='#181818')
         self.window.geometry("1400x900")
@@ -400,7 +401,7 @@ class EHMGameViewer:
         self.away_team = away_team
         
         # Create window
-        self.window = tk.Toplevel(parent)
+        self.window = InGamePopup(parent)
         self.window.title(f"🏒 EHM Live Game: {home_team} vs {away_team}")
         self.window.configure(background='#181818')
         self.window.geometry("1400x900")
@@ -1122,7 +1123,7 @@ class EHMGameViewer:
     
     def _show_detailed_stats(self):
         """Show detailed game statistics"""
-        stats_window = tk.Toplevel(self.window)
+        stats_window = InGamePopup(self.window)
         stats_window.title("Game Statistics")
         stats_window.configure(bg='#181818')
         stats_window.geometry("800x600")
