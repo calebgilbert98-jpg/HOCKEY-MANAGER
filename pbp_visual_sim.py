@@ -34,6 +34,10 @@ try:
 except Exception:
     _team_fg = None
 try:
+    from team_identity_system import dot_colors_for_team as _dot_colors_fn
+except Exception:
+    _dot_colors_fn = None
+try:
     import ctk_theme as _ctk_theme
 except Exception:
     _ctk_theme = None
@@ -96,6 +100,24 @@ def _team_colors(team_name):
             c = _nhl_identity.get_team_colors(team_name)
             if c is not None:
                 return c.primary, c.text_on_primary
+    except Exception:
+        pass
+    return None, None
+
+
+def _dot_colors(team_name):
+    """(body, trim) two-color dot scheme for a team: primary body with a
+    secondary-color outline ring, so each team's skaters wear both of
+    the club's primary colors. Never raises.
+
+    Returns (None, None) when the team has no identity entry, so callers
+    can fall back to the legacy single-color dots.
+    """
+    try:
+        if _dot_colors_fn is not None:
+            body, trim = _dot_colors_fn(team_name)
+            if body is not None:
+                return body, trim
     except Exception:
         pass
     return None, None
@@ -528,6 +550,10 @@ class PBPVisualSim(tk.Toplevel):
         self._away_tc = _team_colors(away_team.team_name)
         self._home_primary = self._home_tc[0] or ACCENT
         self._away_primary = self._away_tc[0] or AWAY_COLOR
+        # Two-color on-ice dots: (body, trim) per team so skaters wear both
+        # primary colors; falls back to body-only legacy dots when unknown.
+        self._home_dc = _dot_colors(home_team.team_name)
+        self._away_dc = _dot_colors(away_team.team_name)
         # Team-colored stat text (readable on the dark UI).
         try:
             self._home_fg = _team_fg(home_team.team_name) if _team_fg else ACCENT
@@ -1308,16 +1334,18 @@ class PBPVisualSim(tk.Toplevel):
         c = self.canvas
         idx = 0
         for is_home, line in ((True, self.home_line), (False, self.away_line)):
-            color = self._home_primary if is_home else self._away_primary
+            body = self._home_primary if is_home else self._away_primary
+            dc = self._home_dc if is_home else self._away_dc
+            trim = (dc[1] if dc and dc[1] else "white")
             for role in ("C", "LW", "RW", "D1", "D2"):
                 p = line.get(role)
                 if p is None:
                     continue
-                self._make_dot(f"S{idx}", p, is_home, role, color, r=13)
+                self._make_dot(f"S{idx}", p, is_home, role, body, trim, r=13)
                 idx += 1
             g = line.get("G")
             if g is not None:
-                self._make_dot(f"G{idx}", g, is_home, "G", color, r=15)
+                self._make_dot(f"G{idx}", g, is_home, "G", body, trim, r=15)
                 idx += 1
         # puck (+ soft glow behind it)
         px, py = self.X(self.puck["x"]), self.Y(self.puck["y"])
@@ -1330,7 +1358,7 @@ class PBPVisualSim(tk.Toplevel):
                                           width=2, tags=("fxring",),
                                           state="hidden")
 
-    def _make_dot(self, dot_id, player, is_home, role, color, r=13):
+    def _make_dot(self, dot_id, player, is_home, role, body, trim="white", r=13):
         c = self.canvas
         num = getattr(player, "jersey_number", None) or "–"
         # start off-ice; formations will place them
@@ -1338,9 +1366,11 @@ class PBPVisualSim(tk.Toplevel):
         sx, sy = self.X(x) + 2.5, self.Y(y) + 3.5
         shadow = c.create_oval(sx - r, sy - r, sx + r, sy + r,
                                fill="#8fa3b8", outline="", tags=("dot",))
+        # two-color team dot: body in the team's primary, outline ring in
+        # the secondary so both club colors read at a glance
         oval = c.create_oval(self.X(x) - r, self.Y(y) - r,
                              self.X(x) + r, self.Y(y) + r,
-                             fill=color, outline="white", width=2,
+                             fill=body, outline=trim, width=3,
                              tags=("dot",))
         fg = (self._home_tc[1] if is_home else self._away_tc[1]) or \
              ("white" if is_home else "#0e0e11")
@@ -1353,7 +1383,7 @@ class PBPVisualSim(tk.Toplevel):
             "id": dot_id, "player": player, "is_home": is_home,
             "role": role, "x": x, "y": y, "tx": x, "ty": y,
             "oval": oval, "text": txt, "shadow": shadow, "tick": tick,
-            "r": r, "fx": 1.0, "fy": 0.0, "color": color,
+            "r": r, "fx": 1.0, "fy": 0.0, "color": body, "trim": trim,
             "nudge": None,  # (dx, dy, until) hit animation
             "jx": random.uniform(-2.5, 2.5),  # fixed personal jitter
             "jy": random.uniform(-2.5, 2.5),

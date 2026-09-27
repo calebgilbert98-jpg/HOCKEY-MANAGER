@@ -381,3 +381,29 @@ def text_color_for_team(team_name) -> str:
         return colors.primary
     except Exception:
         return _DEFAULT_ACCENT[0]
+
+
+def dot_colors_for_team(team_name) -> tuple:
+    """Return (body, trim) for on-ice skater dots in the team's two
+    primary colors: body = primary, trim = secondary ring.
+
+    The trim is used for the dot's outline ring only (jersey numbers
+    stay high-contrast via text_color_for_team logic), so even teams
+    whose primary and secondary are close stay readable.
+
+    Unknown or missing names return (None, None) so callers can fall
+    back to the legacy colors. Never raises.
+    """
+    try:
+        colors = nhl_identity.get_team_colors(team_name)
+        if colors is None and team_name:
+            key = str(team_name).strip().lower()
+            for name, c in nhl_identity.team_colors.items():
+                if name.lower() == key:
+                    colors = c
+                    break
+        if colors is None:
+            return None, None
+        return colors.primary, colors.secondary
+    except Exception:
+        return None, None
