@@ -5,7 +5,17 @@ the exact list of what Phase 1 adds and what it touches, so you can
 merge without guesswork. Read this before rebasing.
 
 **Design rationale:** `docs/MULTIPLAYER_DESIGN.md`.
-**Test:** `python3 test_multiplayer_phase1.py` (11/11 passing, headless).
+**Test:** `python3 test_multiplayer_phase1.py` (12/12 passing, headless).
+
+> **2026-09-27 — main merged INTO this branch** (`0e34610`): this branch
+> now contains your CustomTkinter rollout (v0.11.0) *plus* the MP Phase 1
+> and pressure-test work below. Nothing of yours was reverted: the only
+> judgment call was `CleanEditLinesWindow`, where the point-click Sleeper
+> rewrite (Muck's approved UX direction) was kept on your `ctk.CTkToplevel`
+> base. One real bug from the merge was fixed: `update_inbox_notification`
+> called `.config()` on the new CTk inbox pill (CTk has no `.config`) —
+> now `.configure()`. Verified: MP suite 12/12, lines smoke 36/36,
+> pressure battery 8/8, 30-day sim clean on the merged tree.
 
 ---
 
