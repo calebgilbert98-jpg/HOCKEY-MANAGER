@@ -2962,14 +2962,31 @@ def game_tension(home_team: Any, away_team: Any, rivalries: list,
 # Identity is preserved; behavior is earned.
 
 def _deal_base_controversy(entity: Any, hothead_chance: float = 0.08) -> int:
-    """The actual deal. Never calls ensure_reputation_fields (no recursion)."""
+    """The actual deal. Never calls ensure_reputation_fields (no recursion).
+
+    Personality is READ from the other devs' attribute model, not rolled
+    independently: discipline / composure / aggressiveness / teamwork are
+    already generated per prospect type (tier + archetype + age), so an
+    enforcer archetype with 82 aggressiveness deals hotter than a two-way
+    center with 72 discipline -- exactly what their system already says.
+    A small individual nudge plus rare true outliers keep it human.
+    Staff on the EHM 1-20 scale are normalized first.
+    """
+    disc = getattr(entity, "discipline", 60) or 60
+    comp = getattr(entity, "composure", 60) or 60
+    aggr = getattr(entity, "aggressiveness", 50) or 50
+    team = getattr(entity, "teamwork", 60) or 60
+    if max(disc, comp, aggr, team) <= 20:
+        disc, comp, aggr, team = disc * 5, comp * 5, aggr * 5, team * 5
+    base = ((100 - disc) * 0.35 + (100 - comp) * 0.25
+            + max(0, aggr - 50) * 0.6 + (100 - team) * 0.1)
+    base += random.randint(-8, 8)  # individuality within the type
     roll = random.random()
-    if roll < 0.05:
-        base = random.randint(0, 8)     # saint
-    elif roll < 0.05 + hothead_chance:
-        base = random.randint(55, 85)   # hothead
-    else:
-        base = random.randint(8, 35)    # everyone else
+    if roll < hothead_chance * 0.4:
+        base = random.randint(55, 85)   # hothead despite the numbers
+    elif roll < hothead_chance * 0.4 + 0.03:
+        base = random.randint(0, 8)     # saint despite the numbers
+    base = max(0, min(100, int(round(base))))
     entity.base_controversy = base
     entity.controversy = base
     return base
