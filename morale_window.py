@@ -640,26 +640,6 @@ class LineControlPopup(ctk.CTkToplevel):
         self._RED = RED
         self._app = getattr(parent_win, 'parent', None)
 
-    def _mp_send(self, action, params):
-        """Route to the MP host when this machine is a client; True = routed."""
-        try:
-            client = getattr(self._app, "mp_client", None)
-            if client is None:
-                return False
-            params = dict(params or {})
-            params.setdefault("team_id", getattr(self._team, "team_name", ""))
-            client.send_action(action, params)
-            try:
-                from ctk_theme import TEXT_DIM
-                self.result.configure(
-                    text="Sent to the host -- the room will react after the next sync.",
-                    text_color=TEXT_DIM)
-            except Exception:
-                pass
-            return True
-        except Exception:
-            return False
-
         cname = getattr(coach, 'full_name', 'Coach')
         preview = rs.preview_line_control_discussion(coach, ctx)
         heading(self, text=f"The lineup pen: {cname}").pack(anchor='w', padx=16, pady=(12, 2))
@@ -680,6 +660,26 @@ class LineControlPopup(ctk.CTkToplevel):
         self.result = ctk.CTkLabel(self, text="", font=('Segoe UI', 11),
                                    wraplength=500, justify='left')
         self.result.pack(padx=16, pady=12)
+
+    def _mp_send(self, action, params):
+        """Route to the MP host when this machine is a client; True = routed."""
+        try:
+            client = getattr(self._app, "mp_client", None)
+            if client is None:
+                return False
+            params = dict(params or {})
+            params.setdefault("team_id", getattr(self._team, "team_name", ""))
+            client.send_action(action, params)
+            try:
+                from ctk_theme import TEXT_DIM
+                self.result.configure(
+                    text="Sent to the host -- the room will react after the next sync.",
+                    text_color=TEXT_DIM)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
     def _discuss(self):
         if self._mp_send("set_line_control", {"holder": "gm", "approach": "discuss"}):
@@ -717,8 +717,8 @@ class DeclareRivalPopup(ctk.CTkToplevel):
         super().__init__(parent_win)
         self.title("Declare Rival")
         self.configure(fg_color=BG)
-        self.geometry("540x620")
-        self.minsize(480, 540)
+        self.geometry("540x470")
+        self.minsize(480, 440)
         self._team = team
         self._league = league
         self._on_done = on_done
