@@ -552,7 +552,9 @@ class InboxWindow(InGamePopup):
 
         # Interactive inbox actions (game-day bundle, press conferences)
         # render rich widgets in place of the plain text content.
-        if getattr(message, 'action_type', None) in ("game_day", "postmatch_presser"):
+        if getattr(message, 'action_type', None) in (
+                "game_day", "postmatch_presser",
+                "trade_offer", "trade_counter"):
             self._show_interactive_action(message)
         else:
             self._hide_interactive_action()
@@ -703,6 +705,8 @@ class InboxWindow(InGamePopup):
             self._render_game_day_bundle(message)
         elif message.action_type == "postmatch_presser":
             self._render_postmatch_presser(message)
+        elif message.action_type in ("trade_offer", "trade_counter"):
+            self._render_trade_negotiation(message)
 
     def _hide_interactive_action(self):
         """Restore the plain text content view."""
@@ -847,6 +851,122 @@ class InboxWindow(InGamePopup):
         if answered and all(answered):
             self._iwrap("Presser complete -- the story is filed.",
                         size=11, dim=True, padx=10, pady=10)
+
+    # ------------------------------------------------------------------
+    # Trade negotiation (FM24/EHM-style): offers and counters live in the
+    # inbox. Nothing here is a blocking decision -- the user can read it,
+    # close the inbox, and come back days later.
+    # ------------------------------------------------------------------
+
+    def _render_trade_negotiation(self, message):
+        import trade_negotiation as tn
+        app = self.parent
+        neg_id = (message.action_data or {}).get("negotiation_id")
+        neg = tn.get_negotiation(app, neg_id) if neg_id else None
+
+        self._iwrap("TRADE TALKS", size=15, bold=True, padx=10, pady=(10, 2))
+        if neg is None or not neg.is_open:
+            self._iwrap("This negotiation is no longer on the table.",
+                        size=11, dim=True, padx=10)
+            return
+
+        is_counter = message.action_type == "trade_counter"
+        self._iwrap(f"{neg.partner_team_name}  "
+                    f"\u00b7  Round {neg.rounds}", size=11, dim=True, padx=10)
+        if neg.last_message and is_counter:
+            self._iwrap(f"\u201C{neg.last_message}\u201D", size=11,
+                        padx=10, pady=(4, 2))
+        if neg.patience < 0.7 and neg.is_open:
+            self._iwrap("They are losing patience -- the next offer "
+                        "should be your best.", size=10, dim=True, padx=10)
+
+        self._action_section("THE DEAL ON THE TABLE")
+        self._iwrap("YOU SEND:", size=10, dim=True, padx=10, pady=(2, 0))
+        for ad in neg.user_assets or []:
+            self._iwrap("\u2022 " + tn.asset_summary([ad]), size=11, padx=18)
+        self._iwrap("YOU GET:", size=10, dim=True, padx=10, pady=(6, 0))
+        for ad in neg.partner_assets or []:
+            self._iwrap("\u2022 " + tn.asset_summary([ad]), size=11, padx=18)
+
+        self._action_section("YOUR MOVE")
+        btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
+        btn_row.pack(anchor='w', padx=10, pady=6)
+        if is_counter:
+            self._secondary_button(
+                btn_row, text="Review & Adjust",
+                command=lambda m=message: self._on_trade_negotiate(m)
+            ).pack(side='left', padx=(0, 8))
+            self._primary_button(
+                btn_row, text="Accept Counter",
+                command=lambda m=message: self._on_trade_accept(m)
+            ).pack(side='left', padx=(0, 8))
+        else:
+            self._secondary_button(
+                btn_row, text="Negotiate",
+                command=lambda m=message: self._on_trade_negotiate(m)
+            ).pack(side='left', padx=(0, 8))
+            self._primary_button(
+                btn_row, text="Accept",
+                command=lambda m=message: self._on_trade_accept(m)
+            ).pack(side='left', padx=(0, 8))
+        self._secondary_button(
+            btn_row, text="Walk Away",
+            command=lambda m=message: self._on_trade_decline(m)
+        ).pack(side='left')
+        self._iwrap("Close this inbox any time -- the offer waits for you.",
+                    size=10, dim=True, padx=10, pady=(8, 0))
+
+    def _trade_neg_from_message(self, message):
+        import trade_negotiation as tn
+        neg_id = (message.action_data or {}).get("negotiation_id")
+        return tn.get_negotiation(self.parent, neg_id) if neg_id else None
+
+    def _on_trade_negotiate(self, message):
+        import trade_negotiation as tn
+        neg = self._trade_neg_from_message(message)
+        if neg is None or not neg.is_open:
+            return
+        app = self.parent
+        try:
+            user_objs, _ = tn.resolve_assets(app, neg.user_assets)
+            partner_objs, _ = tn.resolve_assets(app, neg.partner_assets)
+            partner = tn.find_team(app, neg.partner_team_name)
+            preset = {"partner": partner,
+                      "user_assets": user_objs,
+                      "partner_assets": partner_objs,
+                      "negotiation_id": neg.id,
+                      "mode": "counter"}
+            self._on_closing()
+            app.open_trade_window(preset=preset)
+        except Exception as e:
+            print(f"trade negotiate failed: {e}")
+
+    def _on_trade_accept(self, message):
+        import trade_negotiation as tn
+        neg = self._trade_neg_from_message(message)
+        if neg is None:
+            return
+        try:
+            tn.accept_negotiation(self.parent, neg.id)
+        except Exception as e:
+            print(f"trade accept failed: {e}")
+        message.action_done = True
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    def _on_trade_decline(self, message):
+        import trade_negotiation as tn
+        neg = self._trade_neg_from_message(message)
+        if neg is None:
+            return
+        try:
+            tn.decline_negotiation(self.parent, neg.id)
+        except Exception as e:
+            print(f"trade decline failed: {e}")
+        message.action_done = True
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
 
     def _on_bundle_presser_answer(self, message, qi, ai):
         try:

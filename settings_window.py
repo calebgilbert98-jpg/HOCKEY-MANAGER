@@ -439,6 +439,8 @@ class SettingsWindow(InGamePopup):
         self.font_size_var = tk.StringVar()
         self._row(theme, "Font size:", self.font_size_var,
                   ['Small', 'Medium (Current)', 'Large'], width=18)
+        ttk.Label(theme, text="Applies to windows opened after saving.",
+                  font=AppFonts.CAPTION).pack(anchor="w", pady=(0, 6))
 
         window = self._section(content, "Window Behavior")
         self.auto_close_var = tk.BooleanVar()
@@ -684,6 +686,14 @@ class SettingsWindow(InGamePopup):
                 json.dump(self.settings, f, indent=2)
 
             self._notify_parent_of_changes()
+
+            # Apply the font-size choice immediately: every window opened
+            # from now on picks up the new scale (no restart needed).
+            try:
+                import ui_scale
+                ui_scale.scale_from_setting(self.font_size_var.get())
+            except Exception:
+                pass
 
             # Show success message
             messagebox.showinfo(

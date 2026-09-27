@@ -99,9 +99,19 @@ class PlayerContextMenu:
             for label, command in additional_options:
                 context_menu.add_command(label=label, command=command)
         
-        # Show menu
+        # Show menu (Shift+F10 keyboard events carry no pointer
+        # position -- fall back to the widget's center)
+        x_root = getattr(event, "x_root", 0) or 0
+        y_root = getattr(event, "y_root", 0) or 0
+        if not x_root and not y_root:
+            try:
+                w = event.widget
+                x_root = w.winfo_rootx() + w.winfo_width() // 2
+                y_root = w.winfo_rooty() + w.winfo_height() // 2
+            except Exception:
+                pass
         try:
-            context_menu.tk_popup(event.x_root, event.y_root)
+            context_menu.tk_popup(x_root, y_root)
         finally:
             context_menu.grab_release()
     
@@ -628,21 +638,49 @@ class PlayerContextMenu:
         )
     
     def _propose_trade(self, player):
-        """Open trade proposal window with player pre-selected"""
+        """Open the Trade Center with this player pre-loaded on the table."""
         try:
-            # Try to open existing trade window
+            app = None
             if hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'open_trade_window'):
-                self.parent.parent.open_trade_window()
-                messagebox.showinfo("Trade Window", f"Trade window opened. Add {player.full_name} to your trade proposal.")
+                app = self.parent.parent
             elif hasattr(self.parent, 'open_trade_window'):
-                self.parent.open_trade_window()
-                messagebox.showinfo("Trade Window", f"Trade window opened. Add {player.full_name} to your trade proposal.")
+                app = self.parent
+            if app is not None and hasattr(app, 'open_trade_window'):
+                user_team = getattr(app, 'user_team', None)
+                rosters = []
+                if user_team is not None:
+                    rosters = (list(getattr(user_team, 'roster', []) or []) +
+                               list(getattr(user_team, 'ahl_roster', []) or []) +
+                               list(getattr(user_team, 'prospects', []) or []))
+                own = player in rosters
+                preset = {"partner": self._trade_partner_for(app, player, own),
+                          "user_assets": [player] if own else [],
+                          "partner_assets": [] if own else [player],
+                          "mode": "new"}
+                app.open_trade_window(preset=preset)
             else:
-                # Create quick trade proposal dialog
                 self._create_trade_proposal_dialog(player)
         except Exception:
             # Fallback to trade proposal dialog
             self._create_trade_proposal_dialog(player)
+
+    @staticmethod
+    def _trade_partner_for(app, player, own):
+        """Best-guess trade partner: the player's team (or first rival)."""
+        try:
+            league = getattr(getattr(app, 'game_manager', app), 'league', None)
+            if league is not None and not own:
+                for t in getattr(league, 'teams', []) or []:
+                    rosters = (list(getattr(t, 'roster', []) or []) +
+                               list(getattr(t, 'ahl_roster', []) or []) +
+                               list(getattr(t, 'prospects', []) or []))
+                    if player in rosters:
+                        return t
+            teams = [t for t in getattr(league, 'teams', []) or []
+                     if t is not getattr(app, 'user_team', None)]
+            return teams[0] if teams else None
+        except Exception:
+            return None
     
     def _create_trade_proposal_dialog(self, player):
         """Create a trade proposal dialog"""
@@ -939,6 +977,39 @@ class PlayerContextMenu:
             analysis += f"Focus training on: {', '.join(weaknesses[:2])}\\n"
         
         return analysis
+
+def bind_player_context(widget, player_or_getter, parent_window):
+    """Right-click (or Shift+F10) on ANY widget showing a player name.
+
+    The EHM/FM24 interaction: every player name in the game opens the
+    standard player menu. player_or_getter is either a player object or
+    a callable(event) -> player (for rows/cells resolved at click time).
+
+    One line per surface:
+        bind_player_context(name_label, player, self)
+    """
+    mgr = PlayerContextMenu(parent_window)
+
+    def _show(event):
+        try:
+            player = (player_or_getter(event) if callable(player_or_getter)
+                      else player_or_getter)
+        except Exception:
+            player = None
+        if player is not None:
+            mgr.show_context_menu(event, player)
+
+    try:
+        widget.bind("<Button-3>", _show)
+    except Exception:
+        pass
+    try:
+        # Keyboard alternative (accessibility): Shift+F10 opens it too.
+        widget.bind("<Shift-F10>", _show)
+    except Exception:
+        pass
+    return mgr
+
 
 def add_player_context_menu(treeview, parent_window):
     """

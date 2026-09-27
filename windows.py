@@ -558,6 +558,13 @@ class RosterWindow(InGamePopup):
                 child.bind('<Button-1>', _open)
                 child.bind('<Enter>', _hover_on)
                 child.bind('<Leave>', _hover_off)
+            # EHM/FM24: right-click any player name for the player menu
+            try:
+                from player_context_menu import bind_player_context
+                for w in (tile, name_lbl, sub_lbl):
+                    bind_player_context(w, player, self)
+            except Exception:
+                pass
         else:
             tile = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=8,
                                 border_width=1, border_color=ct['BORDER'])
@@ -3372,7 +3379,7 @@ class TradeWindow(InGamePopup):
     METER_W = 280
     METER_H = 22
 
-    def __init__(self, parent):
+    def __init__(self, parent, preset=None):
         from ctk_theme import (
             init_ctk_theme, CTkPlayerList, CTkOfferList,
             primary_button, secondary_button, heading, body,
@@ -3384,13 +3391,19 @@ class TradeWindow(InGamePopup):
                         TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
                         RED=RED, BLUE=BLUE)
         init_ctk_theme()
-        super().__init__(parent)
+        # A workbench, not a verdict: non-modal with click-out so the
+        # user can dismiss it freely and keep exploring. Sending an
+        # offer never resolves instantly -- the AI GM answers in a few
+        # days via the inbox.
+        super().__init__(parent, modal=False, dismiss_on_backdrop=True)
         self.parent = parent
         self.title("Trade Center")
         self.geometry("1280x780")
         self.configure(fg_color=BG)
         self.trade_offers = {'user': [], 'partner': []}
         self._history_visible = False
+        self._preset = preset or {}
+        self._negotiation_id = self._preset.get("negotiation_id")
 
         # Slim branded banner strip (decorative; never breaks the window)
         try:
@@ -3486,9 +3499,10 @@ class TradeWindow(InGamePopup):
                          command=lambda: self._remove_from_trade('partner')).pack(
                              anchor='e', padx=12, pady=(4, 8))
 
-        primary_button(center, text="Propose Trade",
-                       command=self.propose_trade).pack(fill='x', padx=12, pady=(6, 0))
-        body(center, "The AI GM evaluates value, needs and cap space.\nLowball and expect a counter.",
+        self.propose_btn = primary_button(center, text="Send Offer",
+                                          command=self.propose_trade)
+        self.propose_btn.pack(fill='x', padx=12, pady=(6, 0))
+        body(center, "The other GM takes a few days to answer.\nYou can close this and keep working -- the reply lands in your inbox.",
              size=10, dim=True).pack(padx=12, pady=(8, 10))
 
         # Partner roster
@@ -3510,6 +3524,49 @@ class TradeWindow(InGamePopup):
         self.history_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
 
         self.update_views()
+        self._apply_preset()
+        self._wire_player_menus()
+
+    # ------------------------------------------------------------------
+    # Preset (opened from an inbox negotiation or a player menu)
+    # ------------------------------------------------------------------
+    def _apply_preset(self):
+        pr = self._preset
+        if not pr:
+            return
+        partner = pr.get("partner")
+        if partner is not None:
+            try:
+                self.partner_combo.set(partner.team_name)
+            except Exception:
+                pass
+            self.update_trade_partner_roster()
+        for side in ("user", "partner"):
+            assets = pr.get("user_assets" if side == "user" else "partner_assets")
+            if assets:
+                self.trade_offers[side] = [a for a in assets
+                                           if a not in self.trade_offers[side]]
+        self._refresh_offer_lists()
+        self._update_meter()
+        if pr.get("mode") == "counter":
+            try:
+                self.propose_btn.configure(text="Send Counter-Offer")
+                self.title(f"Trade Center -- countering {partner.team_name}"
+                           if partner is not None else "Trade Center")
+            except Exception:
+                pass
+
+    def _wire_player_menus(self):
+        """EHM/FM24: right-click any player row for the player menu."""
+        try:
+            from player_context_menu import PlayerContextMenu
+            mgr = PlayerContextMenu(self)
+            self.user_list.on_right_click = (
+                lambda e, p: mgr.show_context_menu(e, p))
+            self.partner_list.on_right_click = (
+                lambda e, p: mgr.show_context_menu(e, p))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Views
@@ -3681,6 +3738,9 @@ class TradeWindow(InGamePopup):
                      if t.team_name == self.partner_combo.get()), None)
 
     def propose_trade(self):
+        """Send the offer. The AI GM answers in a few days via the inbox --
+        this window can be closed freely in the meantime."""
+        import trade_negotiation as tn
         partner = self._partner_team()
         if partner is None:
             messagebox.showwarning("No partner", "Select a trade partner first.")
@@ -3695,71 +3755,24 @@ class TradeWindow(InGamePopup):
             messagebox.showerror("Cap problem",
                                  "This trade puts YOU over the salary cap. Shed salary first.")
             return
-        resp = self.te.ai_consider_trade(partner, user_assets, partner_assets,
-                                         user_team=self.parent.user_team)
-        if resp.decision == 'accept':
-            self._complete_trade(partner, user_assets, partner_assets)
-            messagebox.showinfo("Trade Accepted", resp.message +
-                                "\n\n" + self._last_summary)
-        elif resp.decision == 'reject':
-            messagebox.showerror("Trade Rejected", resp.message)
-        else:
-            self._counter_dialog(partner, user_assets, partner_assets, resp)
-
-    def _counter_dialog(self, partner, user_assets, partner_assets, resp):
-        from ctk_theme import secondary_button, primary_button, heading, body, BG, PANEL
-        dlg = InGamePopup(self)
-        dlg.title("Counter-offer")
-        dlg.geometry("460x280")
-        dlg.configure(fg_color=BG)
-        dlg.transient(self)
-        heading(dlg, f"{partner.team_name} counters", size=15).pack(pady=(16, 6))
-        body(dlg, resp.message, size=11, dim=True).pack(pady=6, padx=24)
-        btns = ctk.CTkFrame(dlg, fg_color="transparent")
-        btns.pack(pady=16)
-
-        def accept_counter():
-            ua = list(user_assets) + list(resp.want_added)
-            pa = list(partner_assets) + list(resp.will_add)
-            if not self.te._cap_ok_after(self.parent.user_team, ua, pa):
-                messagebox.showerror("Cap problem",
-                                     "The counter puts you over the cap.")
+        if self._negotiation_id and self._preset.get("mode") == "counter":
+            neg = tn.get_negotiation(self.parent, self._negotiation_id)
+            if neg is not None and neg.is_open:
+                tn.send_counter(self.parent, neg, user_assets, partner_assets)
+                messagebox.showinfo(
+                    "Counter-offer sent",
+                    f"Your revised proposal is with {partner.team_name}.\n"
+                    "They will answer in a few days -- the reply lands in "
+                    "your inbox. You can close this window.")
+                self.destroy()
                 return
-            dlg.destroy()
-            self._complete_trade(partner, ua, pa)
-            messagebox.showinfo("Trade Accepted",
-                                "Counter accepted!\n\n" + self._last_summary)
-
-        primary_button(btns, text="Accept Counter",
-                       command=accept_counter).pack(side='left', padx=8)
-        secondary_button(btns, text="Walk Away",
-                         command=dlg.destroy).pack(side='left', padx=8)
-
-    def _complete_trade(self, partner, user_assets, partner_assets):
-        gm = getattr(self.parent, 'game_manager', None)
-        date_str = str(getattr(gm, 'current_date', '')) if gm else ''
-        trade = self.te.execute_trade(self.parent.user_team, partner,
-                                      user_assets, partner_assets, date_str)
-        self._last_summary = trade.summary
-        if gm is not None:
-            gm.trade_history.append(trade)
-            # Media + news
-            try:
-                traded = [a for a in user_assets if not self.te._is_pick(a)]
-                received = [a for a in partner_assets if not self.te._is_pick(a)]
-                if hasattr(gm, 'media_system') and gm.media_system:
-                    gm.media_system.process_trade(
-                        user_team=self.parent.user_team, other_team=partner,
-                        traded_players=traded, received_players=received)
-            except Exception:
-                pass
-            try:
-                self.parent.add_news_story(f"TRADE: {trade.summary}")
-            except Exception:
-                pass
-        self.trade_offers = {'user': [], 'partner': []}
-        self.parent.update_all_views()
-        self.update_views()
+        tn.send_offer(self.parent, partner, user_assets, partner_assets)
+        messagebox.showinfo(
+            "Offer sent",
+            f"Your offer is with {partner.team_name}'s front office.\n"
+            "Expect an answer within a few days -- it will arrive in your "
+            "inbox, so feel free to close this and keep working.")
+        self.destroy()
 
     # ------------------------------------------------------------------
     # History

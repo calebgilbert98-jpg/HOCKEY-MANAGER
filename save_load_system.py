@@ -70,6 +70,11 @@ class GameSaveManager:
                 # Trade and contract data
                 'trade_history': getattr(self.game_manager, 'trade_history', []),
                 'contract_negotiations': getattr(self.game_manager, 'contract_negotiations', {}),
+                # Live trade negotiations (delayed AI answers, counters)
+                'trade_negotiations': [
+                    (n.to_dict() if hasattr(n, 'to_dict') else n)
+                    for n in getattr(self.game_manager, 'trade_negotiations', []) or []
+                ],
                 
                 # Email and communication
                 'inbox_messages': getattr(self.game_manager, 'inbox_messages', []),
@@ -545,6 +550,14 @@ class GameSaveManager:
                 self.game_manager.game_results = save_data['game_results']
             
             # Restore other game data
+            # Live trade negotiations come back as dataclasses, not dicts
+            if 'trade_negotiations' in save_data:
+                try:
+                    import trade_negotiation as _tn
+                    _tn.load_state(self, save_data['trade_negotiations'])
+                except Exception as _tne:
+                    print(f"trade negotiations restore failed (non-fatal): {_tne}")
+
             for key in ['player_stats_history', 'team_stats_history', 'draft_classes', 
                        'scouting_reports', 'waiver_claims', 'trade_history', 
                        'contract_negotiations', 'inbox_messages', 'news_stories',

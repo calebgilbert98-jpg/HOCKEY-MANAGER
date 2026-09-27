@@ -183,9 +183,8 @@ class ShortlistWindow(InGamePopup):
         self.create_interface()
         self.populate_shortlist()
         
-        # Make window non-modal
-        self.transient(parent)
-        self.grab_set()
+        # Non-modal: the shortlist is a workbench, not a verdict -- the
+        # user can keep it open (or click out of it) while exploring.
     
     def create_interface(self):
         """Create the shortlist interface"""

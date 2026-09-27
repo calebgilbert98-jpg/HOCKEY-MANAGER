@@ -327,15 +327,15 @@ class TradeDeadlineCenter(InGamePopup):
         style.configure('DeadlineTitle.TLabel', 
                        background=self.DEADLINE_BG, 
                        foreground=self.URGENT_RED, 
-                       font=('Segoe UI', 28, 'bold'))
+                       font=('Segoe UI', 20, 'bold'))
         style.configure('DeadlineSubtitle.TLabel', 
                        background=self.DEADLINE_BG, 
                        foreground=self.TEXT_WHITE, 
-                       font=('Segoe UI', 16))
+                       font=('Segoe UI', 12))
         style.configure('CountdownLabel.TLabel', 
                        background=self.DEADLINE_BG, 
                        foreground=self.DEADLINE_GOLD, 
-                       font=('Consolas', 48, 'bold'))
+                       font=('Consolas', 32, 'bold'))
         style.configure('TickerLabel.TLabel', 
                        background=self.URGENT_RED, 
                        foreground=self.TEXT_WHITE, 

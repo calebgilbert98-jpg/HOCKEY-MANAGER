@@ -112,12 +112,19 @@ def secondary_button(parent, text, command=None, **kw):
 
 
 def heading(parent, text, size=18, **kw):
+    # Route through ui_scale so Settings -> Font size actually works.
+    if "font" not in kw:
+        from ui_scale import scaled
+        size = scaled(size)
     kw.setdefault("font", ("Segoe UI", size, "bold"))
     kw.setdefault("text_color", TEXT)
     return ctk.CTkLabel(parent, text=text, **kw)
 
 
 def body(parent, text, size=12, dim=False, **kw):
+    if "font" not in kw:
+        from ui_scale import scaled
+        size = scaled(size)
     kw.setdefault("font", ("Segoe UI", size))
     kw.setdefault("text_color", TEXT_DIM if dim else TEXT)
     return ctk.CTkLabel(parent, text=text, **kw)
@@ -142,6 +149,8 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
         self._rows = []          # (frame, player)
         self._selected = None
         self._selected_frame = None
+        # Optional: on_right_click(event, player) -- EHM/FM24 player menu.
+        self.on_right_click = None
 
     def set_players(self, players):
         for frame, _ in self._rows:
@@ -185,7 +194,17 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
             w.bind("<Button-1>", lambda e, f=row, pl=player: self._select(f, pl))
             w.bind("<Enter>", lambda e, f=row: self._hover(f, True))
             w.bind("<Leave>", lambda e, f=row: self._hover(f, False))
+            w.bind("<Button-3>", lambda e, pl=player: self._fire_right_click(e, pl))
+            w.bind("<Shift-F10>", lambda e, pl=player: self._fire_right_click(e, pl))
         self._rows.append((row, player))
+
+    def _fire_right_click(self, event, player):
+        cb = getattr(self, "on_right_click", None)
+        if callable(cb):
+            try:
+                cb(event, player)
+            except Exception:
+                pass
 
     @staticmethod
     def _ovr_color(ovr):

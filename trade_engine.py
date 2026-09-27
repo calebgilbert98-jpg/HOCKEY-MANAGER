@@ -182,8 +182,13 @@ class AIResponse:
 
 
 def ai_consider_trade(partner_team, user_assets, partner_assets,
-                      user_team=None) -> AIResponse:
-    """AI GM evaluates your offer. Returns accept / reject / counter."""
+                      user_team=None, patience=1.0) -> AIResponse:
+    """AI GM evaluates your offer. Returns accept / reject / counter.
+
+    patience: 1.0 = fresh talks. Drops each counter round; a tired GM
+    drives a harder bargain (higher effective greed) and is likelier
+    to walk away than counter.
+    """
     from game_classes import DraftPick
     ev = evaluate_trade(user_assets, partner_assets)
 
@@ -209,8 +214,10 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
             pass
     effective = ratio + need_bonus
 
-    # Personality: some GMs drive a harder bargain
-    greed = 0.95 + random.uniform(-0.03, 0.10)
+    # Personality: some GMs drive a harder bargain. Low patience
+    # (after several counter rounds) pushes the demand higher and can
+    # turn a would-be counter into a flat rejection.
+    greed = (0.95 + random.uniform(-0.03, 0.10)) / max(patience, 0.35)
 
     if effective >= greed:
         return AIResponse('accept', "You've got a deal.")
@@ -231,6 +238,9 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                         user_picks.append(pk)
         except Exception:
             pass
+    if patience < 0.55 and random.random() < (0.55 - patience):
+        return AIResponse('reject',
+                          "We've been around on this too long. I'm moving on.")
     candidates = sorted(user_roster + user_picks, key=asset_value)
     shortfall = ev.partner_value * greed - ev.user_value
     for c in candidates:

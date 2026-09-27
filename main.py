@@ -3127,6 +3127,13 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+        # UI scale: honor Settings -> Font size for all modern surfaces.
+        try:
+            import ui_scale
+            ui_scale.apply_from_prefs()
+        except Exception:
+            pass
+
         # Modern theme bridge: restyle every legacy window (ttk defaults
         # and classic tk widgets) to the charcoal/teal Puck Dynasty UI.
         try:
@@ -6825,6 +6832,14 @@ class HockeyManagerGUI(tk.Tk):
             # ALWAYS advance date and update UI (whether games existed or not)
             self.current_date += timedelta(days=1)
 
+            # Trade talks: AI GMs answer due offers/counters via the inbox.
+            # Non-fatal by design -- a negotiation must never break the sim.
+            try:
+                import trade_negotiation as _tn
+                _tn.process_due_negotiations(self)
+            except Exception as _tne:
+                print(f"trade negotiation tick failed (non-fatal): {_tne}")
+
             # Headline hygiene (cheap, once a day): expire inbox news older
             # than 7 game-days unless the user saved it or it's a milestone
             # for their team.
@@ -9895,10 +9910,16 @@ class HockeyManagerGUI(tk.Tk):
         return None
     
     def present_trade_offers(self, offers):
-        """Present trade offers to the user and process their response."""
+        """Route AI trade offers to the inbox as negotiable proposals.
+
+        FM24/EHM-style: no blocking modal. Each offer becomes a live
+        negotiation the user can accept, decline, or counter on their own
+        time -- closing everything in between answers nothing.
+        """
         if not offers:
             return
-            
+        import trade_negotiation as tn
+
         # Group offers by player
         offers_by_player = {}
         for offer in offers:
@@ -9906,31 +9927,21 @@ class HockeyManagerGUI(tk.Tk):
             if player not in offers_by_player:
                 offers_by_player[player] = []
             offers_by_player[player].append(offer)
-        
-        # Prepare a detailed message for each player
-        message = "Trade offers received:\n\n"
-        
-        for player, player_offers in offers_by_player.items():
-            message += f"For {player.full_name} ({player.primary_position.name}, OVR: {player.overall_rating()}):\n"
-            
-            for i, offer in enumerate(player_offers, 1):
-                team = offer['team']
-                package = offer['offer']
-                
-                message += f"  Offer {i} from {team.team_name}:\n"
-                for offered_player in package:
-                    message += f"    - {offered_player.full_name} ({offered_player.primary_position.name}, OVR: {offered_player.overall_rating()})\n"
-                
-                message += "\n"
-        
+
         # Add to news log
         self.news_log.append({
             'date': self.current_date,
             'story': f"Trade offers received for {len(offers_by_player)} player(s) on your trade block."
         })
-        
-        # Show notification to user
-        messagebox.showinfo("Trade Offers Received", message)
+
+        # One live negotiation per offer, delivered to the inbox
+        for player, player_offers in offers_by_player.items():
+            for offer in player_offers:
+                try:
+                    tn.incoming_offer(self, offer['team'],
+                                      offer['offer'], player_wanted=player)
+                except Exception as e:
+                    print(f"incoming trade offer failed (non-fatal): {e}")
     
     def open_roster_window(self):
         if 'roster' not in self.open_windows or not self.open_windows['roster'].winfo_exists():
@@ -9942,9 +9953,19 @@ class HockeyManagerGUI(tk.Tk):
             self.open_windows['free_agency'] = FreeAgencyWindow(self)
         self.open_windows['free_agency'].focus_set()
 
-    def open_trade_window(self):
-        if 'trade' not in self.open_windows or not self.open_windows['trade'].winfo_exists():
-            self.open_windows['trade'] = TradeWindow(self)
+    def open_trade_window(self, preset=None):
+        if ('trade' not in self.open_windows
+                or not self.open_windows['trade'].winfo_exists()
+                or preset):
+            # A preset (negotiation counter, player-menu proposal) always
+            # opens a fresh workbench so the terms are exactly what was asked.
+            try:
+                old = self.open_windows.get('trade')
+                if old is not None and old.winfo_exists():
+                    old.destroy()
+            except Exception:
+                pass
+            self.open_windows['trade'] = TradeWindow(self, preset=preset)
         self.open_windows['trade'].focus_set()
 
     def open_trade_deadline_center(self):

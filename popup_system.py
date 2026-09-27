@@ -134,7 +134,7 @@ class InGamePopup(tk.Frame):
         if mgr is None:
             # No in-game manager (pre-registration): degrade to a plain frame.
             return super().__new__(cls)
-        entry = mgr._make_entry("", 560, 420, False)
+        entry = mgr._make_entry("", 560, 420, False, False)
         inst = super().__new__(cls)
         tk.Frame.__init__(inst, entry["body"])
         inst._init_popup_metadata(entry)
@@ -152,6 +152,7 @@ class InGamePopup(tk.Frame):
         object.__setattr__(self, "_popup_minsize", (0, 0))
         object.__setattr__(self, "_modal_requested", False)
         object.__setattr__(self, "_dismissible", True)
+        object.__setattr__(self, "_dismiss_on_backdrop", False)
         object.__setattr__(self, "_handles_escape", False)
         object.__setattr__(self, "_wm_delete_cb", None)
         object.__setattr__(self, "_closed", False)
@@ -164,7 +165,12 @@ class InGamePopup(tk.Frame):
         except Exception:
             pass
 
-    def __init__(self, master=None, **kw):
+    def __init__(self, master=None, modal=None, dismiss_on_backdrop=None, **kw):
+        # modal=True requests a grabbed (blocking) card; modal=False pins it
+        # non-modal. dismiss_on_backdrop=True adds a click-catcher behind a
+        # non-modal card so clicking out of it dismisses the card.
+        _modal_kw = modal
+        _backdrop_kw = dismiss_on_backdrop
         if getattr(self, "_prebuilt_entry", None) is not None:
             # Widget already created inside the card by __new__; the passed
             # master is the *opener* (kept for the subclass's own use) --
@@ -179,6 +185,12 @@ class InGamePopup(tk.Frame):
                 except tk.TclError:
                     pass
             mgr = self._popup_manager
+            if _modal_kw is True:
+                object.__setattr__(self, "_modal_requested", True)
+            elif _modal_kw is False:
+                object.__setattr__(self, "_modal_requested", False)
+            if _backdrop_kw is not None:
+                object.__setattr__(self, "_dismiss_on_backdrop", bool(_backdrop_kw))
             if mgr is not None:
                 # Adopt after the subclass __init__ finishes so title/size
                 # set there are applied to the card.
@@ -194,6 +206,7 @@ class InGamePopup(tk.Frame):
         object.__setattr__(self, "_popup_minsize", (0, 0))
         object.__setattr__(self, "_modal_requested", False)
         object.__setattr__(self, "_dismissible", True)
+        object.__setattr__(self, "_dismiss_on_backdrop", False)
         object.__setattr__(self, "_handles_escape", False)
         object.__setattr__(self, "_wm_delete_cb", None)
         object.__setattr__(self, "_closed", False)
@@ -424,6 +437,7 @@ class PopupManager:
         self._stack.append(entry)
         popup.pack(fill="both", expand=True)
         self._place_entry(entry)
+        self._arm_dismiss_on_backdrop(popup, entry)
         self._apply_title(popup)
         self._apply_size(popup)
         if getattr(popup, "_modal_requested", False):
@@ -434,14 +448,15 @@ class PopupManager:
             pass
 
     def show_card(self, title="", width=520, height=360, modal=True,
-                  on_close=None):
+                  on_close=None, dismiss_on_backdrop=False):
         """Bare card for inline-built popups. Returns (host, close_fn).
 
         Build widgets into ``host`` (it quacks like a Toplevel); ``close_fn``
         or ``host.destroy()`` dismisses the card. Adopted synchronously so
         the entry is in the stack before this returns.
         """
-        host = InGamePopup(self.root)  # __new__-routed; idle adoption scheduled
+        host = InGamePopup(self.root, modal=modal,
+                             dismiss_on_backdrop=dismiss_on_backdrop)
         host.title(title)
         host.geometry(f"{width}x{height}")
         if on_close is not None:
@@ -485,7 +500,7 @@ class PopupManager:
 
     # -- internals ------------------------------------------------------------
 
-    def _make_entry(self, title, width, height, modal):
+    def _make_entry(self, title, width, height, modal, dismiss_on_backdrop=False):
         root = self.root
         backdrop = None
         if modal:
@@ -496,8 +511,13 @@ class PopupManager:
         tbar = tk.Frame(shell, bg=_TITLE_BG, height=34)
         tbar.pack(fill="x", side="top")
         tbar.pack_propagate(False)
+        try:
+            from ui_scale import scaled as _scaled
+            _tfs = _scaled(11)
+        except Exception:
+            _tfs = 11
         tlabel = tk.Label(tbar, text=title, bg=_TITLE_BG, fg=_TEXT,
-                         font=("Segoe UI", 11, "bold"), anchor="w")
+                         font=("Segoe UI", _tfs, "bold"), anchor="w")
         tlabel.pack(side="left", padx=12)
         xbtn = tk.Label(tbar, text="\u2715", bg=_TITLE_BG, fg=_TEXT_DIM,
                        font=("Segoe UI", 11, "bold"), cursor="hand2", padx=10)
@@ -507,7 +527,9 @@ class PopupManager:
         body.pack(fill="both", expand=True)
         entry = {"shell": shell, "backdrop": backdrop, "body": body,
                  "popup": None, "modal": modal, "tlabel": tlabel,
-                 "width": width, "height": height, "_mgr_ref": self}
+                 "width": width, "height": height, "_mgr_ref": self,
+                 "dismiss_on_backdrop": bool(dismiss_on_backdrop) and not modal,
+                 "clickout_bind": None}
         xbtn.bind("<Button-1>", lambda e: self._on_x(entry))
         xbtn.bind("<Enter>", lambda e: xbtn.configure(fg=_DANGER))
         xbtn.bind("<Leave>", lambda e: xbtn.configure(fg=_TEXT_DIM))
@@ -601,6 +623,58 @@ class PopupManager:
         if popup is not None:
             self._close_popup(popup)
 
+    def _arm_dismiss_on_backdrop(self, popup, entry):
+        """Arm FM24-style click-out: the first click outside a non-modal
+        card dismisses it AND lands where the user aimed, so they can
+        immediately explore (no dimmed locked-screen feel)."""
+        if entry.get("clickout_bind") is not None:
+            return
+        if not getattr(popup, "_dismiss_on_backdrop", False):
+            # also honor the entry flag set via show_card()
+            if not entry.get("dismiss_on_backdrop"):
+                return
+        if entry.get("modal"):
+            return
+        # Sync the entry flag: __new__ builds the entry before __init__
+        # kwargs are known, so the popup-level request lands here.
+        entry["dismiss_on_backdrop"] = True
+        try:
+            shell_path = str(entry["shell"])
+            def _catcher(event, en=entry, sp=shell_path):
+                try:
+                    if not en.get("dismiss_on_backdrop"):
+                        return
+                    if not self._stack or self._stack[-1] is not en:
+                        return  # only the top card answers click-out
+                    popup = en.get("popup")
+                    if popup is None or not getattr(popup, "_dismissible", True):
+                        return
+                    try:
+                        inside = str(event.widget).startswith(sp)
+                    except Exception:
+                        inside = False
+                    if not inside:
+                        self._on_x(en)
+                except Exception:
+                    pass
+            bind_id = self.root.bind("<Button-1>", _catcher, add="+")
+            entry["clickout_bind"] = bind_id
+        except Exception:
+            pass
+
+    def _disarm_dismiss_on_backdrop(self, entry):
+        try:
+            bind_id = entry.get("clickout_bind")
+            if bind_id:
+                self.root.unbind("<Button-1>", bind_id)
+        except Exception:
+            pass
+        entry["clickout_bind"] = None
+
+    def _on_backdrop_click(self, entry):
+        """Kept for API compat; click-out is now handled at root level."""
+        return
+
     def _on_escape(self, popup):
         if getattr(popup, "_handles_escape", False):
             return
@@ -627,6 +701,10 @@ class PopupManager:
         self._teardown_entry(entry)
 
     def _teardown_entry(self, entry):
+        try:
+            self._disarm_dismiss_on_backdrop(entry)
+        except Exception:
+            pass
         try:
             entry["shell"].grab_release()
         except Exception:
