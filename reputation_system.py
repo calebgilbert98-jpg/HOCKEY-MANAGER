@@ -1339,6 +1339,10 @@ def apply_mistreat_player(team: Any, coach: Any, player: Any,
     player.happiness = max(0, (getattr(player, "happiness", 70) or 70) - 15)
     player.controversy = min(100, (player.controversy or 0) + 5)
     pop = team_perception(player, roster=roster)
+    ff = fan_favourite_score(player, team)
+    fav = ff["score"] >= 70
+    friends = [p for p in roster
+               if p is not player and _ensure_relationships(p).get(player.id, 0) >= 50]
     if pop >= 65:
         _shift_happiness(roster, -3, lambda p: p is not player)
         text = (f"{getattr(coach, 'full_name', 'Coach')} buried {name}. "
@@ -1350,6 +1354,18 @@ def apply_mistreat_player(team: Any, coach: Any, player: Any,
     else:
         text = f"{getattr(coach, 'full_name', 'Coach')} buried {name}. Few complaints."
         delta = -1
+    if fav:
+        _shift_happiness(roster, -2)
+        for p in friends:
+            p.happiness = max(0, (getattr(p, "happiness", 70) or 70) - 3)
+        text += (f" {name} is a {ff['tier'].lower()} -- the fans are letting the "
+                 f"organization hear it, and his friends in the room aren't happy.")
+        delta -= 2
+        leaders_backing = any(
+            p in team_hierarchy(roster).get("Team Leaders", []) for p in friends)
+        if leaders_backing:
+            text += " The leadership group is not happy."
+            delta -= 1
     return record_team_event(team, "mistreatment", text, morale_delta=delta, tone="down")
 
 
@@ -1979,3 +1995,606 @@ def get_rivalry_heat(rivalries: list, team_a: Any, team_b: Any,
     return {"heat": heat,
             "label": "Simmering" if heat < 35 else "Heated" if heat < 65 else "Bad blood",
             "details": parts}
+
+
+# ---------------------------------------------------------------------------
+# Fan favourites
+# ---------------------------------------------------------------------------
+# Realistic parameters, in rough order of importance:
+#   1. What they do on the ice (production) -- matters most.
+#   2. Tenure -- the longer the sweater, the deeper the love.
+#   3. Reputation + leadership -- stars and warriors.
+#   4. Captaincy -- the C carries weight with fans.
+#   5. Character -- box-office divas sell tickets while producing; fans turn
+#      on expensive headaches fast.
+#   6. Youth hype -- the 20-year-old phenom gets a bonus.
+
+FAN_TIERS = [
+    (85, "Beloved icon"),
+    (70, "Fan favourite"),
+    (55, "Popular"),
+    (40, "Known quantity"),
+    (0, "Anonymous"),
+]
+
+
+def _tenure_years(player: Any) -> int:
+    t = str(getattr(player, "team_tenure", "") or "")
+    try:
+        if "This season" in t:
+            return 0
+        if "4+" in t:
+            return 5
+        import re as _re
+        m = _re.search(r"(\d+)", t)
+        return int(m.group(1)) if m else 0
+    except Exception:
+        return 0
+
+
+def fan_tier_label(score: float) -> str:
+    for cutoff, label in FAN_TIERS:
+        if score >= cutoff:
+            return label
+    return "Anonymous"
+
+
+def fan_favourite_score(player: Any, team: Any = None) -> Dict[str, Any]:
+    """0-100 how much the fans adore this player, and why."""
+    ensure_reputation_fields(player)
+    score = 15.0
+    reasons: List[str] = []
+    try:
+        gp = max(1, getattr(player, "games_played", 1) or 1)
+        pts = getattr(player, "points", 0) or 0
+        ppg = pts / gp
+        prod = min(30.0, ppg * 25)
+        score += prod
+        if ppg >= 1.0:
+            reasons.append(f"Point-per-game star ({ppg:.2f} PPG)")
+        elif ppg >= 0.6:
+            reasons.append(f"Steady producer ({ppg:.2f} PPG)")
+
+        yrs = _tenure_years(player)
+        ten = min(15.0, yrs * 3)
+        score += ten
+        if yrs >= 4:
+            reasons.append(f"{yrs}+ years in the sweater")
+
+        rep = getattr(player, "reputation", 0) or 0
+        score += rep * 0.15
+        lead = getattr(player, "leadership", 50) or 50
+        score += lead * 0.10
+        if lead >= 80:
+            reasons.append("Warrior -- leaves it all out there")
+
+        role = str(getattr(player, "captaincy", "") or "").upper()
+        if role == "C":
+            score += 8
+            reasons.append("Wears the C")
+        elif role == "A":
+            score += 4
+
+        vol = getattr(player, "controversy", 0) or 0
+        if vol >= 70:
+            if ppg >= 0.8:
+                score += 8
+                reasons.append("Box-office -- fans love the theatre")
+            else:
+                score -= 12
+                reasons.append("Expensive headache -- fans have turned")
+        elif vol <= 20 and lead >= 60:
+            score += 4
+            reasons.append("Model pro")
+
+        age = getattr(player, "age", 27) or 27
+        if age <= 22 and ppg >= 0.7:
+            score += 5
+            reasons.append("Phenom hype")
+    except Exception:
+        pass
+    score = max(0, min(100, round(score)))
+    return {"score": score, "tier": fan_tier_label(score), "reasons": reasons}
+
+
+def is_fan_favourite(player: Any, team: Any = None) -> bool:
+    try:
+        return fan_favourite_score(player, team)["score"] >= 70
+    except Exception:
+        return False
+
+
+def coach_fan_appeal(coach: Any,
+                     team_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """0-100: how much the fans like the coach. Winning cures everything;
+    player's coaches are loved, drill sergeants are respected (not loved)."""
+    ensure_reputation_fields(coach)
+    ctx = team_context or {}
+    score = 40.0
+    reasons: List[str] = []
+    try:
+        wp = ctx.get("win_pct", 0.5)
+        score += max(0.0, min(1.0, wp)) * 35
+        if wp >= 0.6:
+            reasons.append("Winning -- fans love a winner")
+        yrs = getattr(coach, "years_with_team", 0) or 0
+        score += min(10.0, yrs * 2)
+        style = coach_style(coach)["label"]
+        if style == "Player's Coach":
+            score += 10
+            reasons.append("Player's coach -- easy to love")
+        elif style == "Drill Sergeant":
+            score -= 5
+            reasons.append("Demanding -- respected more than loved")
+        vol = getattr(coach, "controversy", 0) or 0
+        score -= vol * 0.1
+        if (getattr(coach, "favorite_team", "") or "") == ctx.get("team_name", ""):
+            score += 8
+            reasons.append("One of our own")
+    except Exception:
+        pass
+    score = max(0, min(100, round(score)))
+    return {"score": score, "tier": fan_tier_label(score), "reasons": reasons}
+
+
+# ---------------------------------------------------------------------------
+# Friend / rival formation
+# ---------------------------------------------------------------------------
+# Whether two players become friends or rivals depends on character
+# (controversy/leadership similarity), attributes (age, position group,
+# nationality), and where each sits in the room hierarchy (same tier bonds;
+# distant tiers grate). Stored on player.relationships: {other_id: -100..100}.
+
+def _pos_group(p: Any) -> str:
+    try:
+        pos = str(getattr(p, "primary_position", "") or "").upper()
+        if "GOAL" in pos or pos == "G":
+            return "G"
+        if "DEFEN" in pos or pos in ("LD", "RD", "D"):
+            return "D"
+        return "F"
+    except Exception:
+        return "F"
+
+
+def bond_likelihood(a: Any, b: Any,
+                    tier_of: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
+    """0-100 friendship likelihood and 0-100 rivalry likelihood for a pair."""
+    ensure_reputation_fields(a)
+    ensure_reputation_fields(b)
+    friendship = 30.0
+    rivalry = 8.0
+    reasons: List[str] = []
+    try:
+        if tier_of:
+            ta, tb = tier_of.get(id(a)), tier_of.get(id(b))
+            if ta and tb:
+                if ta == tb:
+                    friendship += 20
+                    reasons.append(f"Same standing ({ta})")
+                else:
+                    order = ["Team Leaders", "Core Group", "Squad Players", "Fringe"]
+                    gap = abs(order.index(ta) - order.index(tb))
+                    if gap >= 2:
+                        rivalry += 12
+                        reasons.append("Different worlds in the room")
+        ca, cb = (a.controversy or 0), (b.controversy or 0)
+        if abs(ca - cb) <= 15:
+            friendship += 12
+            reasons.append("Similar temperaments")
+        elif max(ca, cb) >= 65 and abs(ca - cb) >= 40:
+            rivalry += 25
+            reasons.append("Oil and water")
+        la, lb = (getattr(a, "leadership", 50) or 50), (getattr(b, "leadership", 50) or 50)
+        if la >= 70 and lb >= 70:
+            friendship += 10
+            reasons.append("Mutual respect of leaders")
+        age_gap = abs((getattr(a, "age", 27) or 27) - (getattr(b, "age", 27) or 27))
+        if age_gap <= 3:
+            friendship += 8
+        elif age_gap >= 9:
+            rivalry += 6
+            reasons.append("Generation gap")
+        if _pos_group(a) == _pos_group(b):
+            friendship += 6
+        na, nb = str(getattr(a, "nationality", "") or ""), str(getattr(b, "nationality", "") or "")
+        if na and na == nb:
+            friendship += 4
+    except Exception:
+        pass
+    return {"friendship": max(0, min(100, round(friendship))),
+            "rivalry": max(0, min(100, round(rivalry))),
+            "reasons": reasons}
+
+
+def _ensure_relationships(p: Any) -> dict:
+    ensure_reputation_fields(p)
+    if not hasattr(p, "relationships") or not isinstance(getattr(p, "relationships", None), dict):
+        p.relationships = {}
+    return p.relationships
+
+
+def nudge_relationship(a: Any, b: Any, delta: int,
+                       reason: str = "") -> None:
+    """Directly move one pair (events: brawl together, betrayal, ...)."""
+    try:
+        ra, rb = _ensure_relationships(a), _ensure_relationships(b)
+        v = max(-100, min(100, ra.get(b.id, 0) + delta))
+        ra[b.id] = v
+        rb[a.id] = v
+    except Exception:
+        pass
+
+
+def evolve_relationships(roster: List[Any], league: Any = None,
+                         months: int = 1, seed: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Monthly roll: friendships and rivalries form and deepen on their own.
+    Returns notable new developments for the dynamics feed."""
+    import random as _r
+    rng = _r.Random(seed)
+    for p in roster:
+        _ensure_relationships(p)
+    tiers = team_hierarchy(roster)
+    tier_of = {id(p): t for t, ps in tiers.items() for p in ps}
+    league_rivs = list(getattr(league, "rivalries", []) or []) if league else []
+    notable: List[Dict[str, Any]] = []
+    for i, a in enumerate(roster):
+        for b in roster[i + 1:]:
+            try:
+                bl = bond_likelihood(a, b, tier_of)
+                cur = a.relationships.get(b.id, 0)
+                target = bl["friendship"] - bl["rivalry"]
+                lr = rivalry_between(league_rivs, a, b) if league_rivs else None
+                if lr:
+                    target = min(target, -lr["intensity"])
+                rate = 0.12 * months * (1.6 if lr else 1.0)  # bad blood festers fast
+                step = (target - cur) * rate + rng.uniform(-3, 3)
+                new = max(-100, min(100, round(cur + step)))
+                a.relationships[b.id] = new
+                b.relationships[a.id] = new
+                if cur < 40 <= new:
+                    notable.append({"kind": "friendship", "a": a, "b": b, "value": new})
+                elif cur > -40 >= new:
+                    notable.append({"kind": "rift", "a": a, "b": b, "value": new})
+            except Exception:
+                pass
+    return notable
+
+
+def get_friends(player: Any, roster: List[Any], n: int = 3) -> List[Dict[str, Any]]:
+    rels = _ensure_relationships(player)
+    scored = [(rels.get(p.id, 0), p) for p in roster if p is not player]
+    scored.sort(key=lambda t: -t[0])
+    return [{"player": p, "score": s} for s, p in scored[:n] if s >= 30]
+
+
+def get_rivals(player: Any, roster: List[Any], league: Any = None,
+               n: int = 3) -> List[Dict[str, Any]]:
+    by_name: Dict[str, Dict[str, Any]] = {}
+    rels = _ensure_relationships(player)
+    scored = [(rels.get(p.id, 0), p) for p in roster if p is not player]
+    scored.sort(key=lambda t: t[0])
+    for s, p in scored:
+        if s <= -30:
+            by_name[getattr(p, "full_name", "?")] = {
+                "name": getattr(p, "full_name", "?"), "score": s,
+                "origin": "locker room"}
+    if league is not None:
+        for r in get_rivalries_for(getattr(league, "rivalries", []) or [], player):
+            other = r["b_name"] if r["a"] == _ekey(player) else r["a_name"]
+            origin = r["origin"].replace("_", " ") + (" (entrenched)" if r.get("solidified") else "")
+            entry = {"name": other, "score": -r["intensity"], "origin": origin}
+            if other in by_name:
+                by_name[other]["score"] = min(by_name[other]["score"], entry["score"])
+                by_name[other]["origin"] = entry["origin"]
+            else:
+                by_name[other] = entry
+    out = sorted(by_name.values(), key=lambda d: d["score"])
+    return out[:n]
+
+
+# ---------------------------------------------------------------------------
+# Reactions to developments: fan favourites change how news lands
+# ---------------------------------------------------------------------------
+# The room and the fanbase react to what happens to a player or coach.
+# Fan favourites amplify everything: burying one is a scandal, extending one
+# is a parade.
+
+def _apply_room_shift(roster: List[Any], delta: int,
+                      only: Optional[Any] = None) -> None:
+    for p in roster:
+        try:
+            if only is None or only(p):
+                p.happiness = max(0, min(100, (getattr(p, "happiness", 70) or 70) + delta))
+        except Exception:
+            pass
+
+
+def player_news_reaction(team: Any, player: Any, kind: str,
+                         roster: List[Any],
+                         league: Any = None) -> Dict[str, Any]:
+    """kind: trade_rumor | benched | injured | milestone | award |
+    retirement | extension_signed. Returns what happened."""
+    ensure_reputation_fields(player)
+    ff = fan_favourite_score(player, team)
+    fav = ff["score"] >= 70
+    name = getattr(player, "full_name", "Player").split()
+    name = name[0] if name else "Player"
+    friends = [p for p in roster
+               if p is not player and _ensure_relationships(p).get(player.id, 0) >= 50]
+    room = 0
+    fan = 0
+    texts: List[str] = []
+    if kind == "trade_rumor":
+        room -= 2
+        fan -= 15 if fav else 4
+        texts.append(f"Trade winds around {name} are a distraction.")
+        if fav:
+            texts.append(f"The fans are furious -- {name} is a {ff['tier'].lower()}.")
+        _apply_room_shift(friends, -2)
+    elif kind == "benched":
+        room -= 3 if fav else 1
+        fan -= 12 if fav else 3
+        texts.append(f"{name} benched." + (" The building boos." if fav else ""))
+        _apply_room_shift(friends, -3)
+    elif kind == "injured":
+        tiers = team_hierarchy(roster)
+        leader = player in tiers.get("Team Leaders", [])
+        room -= 3 if leader else 1
+        fan -= 8 if fav else 2
+        texts.append(f"{name} hurt." + (" The room feels it." if leader else ""))
+        _apply_room_shift(friends, -2)
+    elif kind in ("milestone", "award"):
+        room += 2
+        fan += 10 if fav else 4
+        texts.append(f"{name} honoured -- the room loves it."
+                     + (" The city is buzzing." if fav else ""))
+        _apply_room_shift(friends, 2)
+        _apply_room_shift(roster, 1)
+    elif kind == "retirement":
+        room -= 2 if fav else 1
+        fan -= 10 if fav else 3
+        texts.append(f"{name} hangs them up."
+                     + (" End of an era." if fav else ""))
+    elif kind == "extension_signed":
+        room += 2 if fav else 1
+        fan += 12 if fav else 3
+        texts.append(f"{name} extended."
+                     + (" The fans are delighted." if fav else ""))
+    else:
+        texts.append(f"{name}: {kind}.")
+    if room:
+        _apply_room_shift(roster, room)
+    tone = "up" if room > 0 else "down" if room < 0 else "neutral"
+    record_team_event(team, "player_news",
+                      " ".join(texts) + (f" (Fan impact: {fan:+d}.)" if fan else ""),
+                      morale_delta=room, tone=tone)
+    return {"room_delta": room, "fan_delta": fan, "fan_favourite": fav,
+            "fan_score": ff["score"], "friends_affected": len(friends),
+            "text": " ".join(texts)}
+
+
+def coach_news_reaction(team: Any, coach: Any, kind: str,
+                        roster: List[Any],
+                        team_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """kind: fired | hired | line_seize | extension | milestone_win."""
+    ensure_reputation_fields(coach)
+    ctx = team_context or {}
+    appeal = coach_fan_appeal(coach, ctx)
+    loved = appeal["score"] >= 70
+    cname = getattr(coach, "full_name", "Coach").split()[0]
+    room = 0
+    fan = 0
+    texts: List[str] = []
+    if kind == "fired":
+        wp = ctx.get("win_pct", 0.5)
+        if wp < 0.45 and (getattr(coach, "controversy", 0) or 0) >= 60:
+            fan += 5
+            texts.append(f"{cname} fired. Sections of the fanbase say good riddance.")
+        else:
+            room -= 4
+            fan -= 20 if loved else 8
+            texts.append(f"{cname} fired."
+                         + (" The fans are livid -- he was beloved." if loved else ""))
+        try:
+            for p in roster:
+                if player_coach_response(p, coach, ctx)["label"] == "Bought in":
+                    p.happiness = max(0, (getattr(p, "happiness", 70) or 70) - 3)
+        except Exception:
+            pass
+    elif kind == "hired":
+        fav_team = (getattr(coach, "favorite_team", "") or "") == getattr(team, "team_name", "")
+        room += 2
+        fan += 10 if fav_team else 4
+        texts.append(f"{cname} hired as head coach."
+                     + (" A hometown hero -- the city is thrilled." if fav_team else ""))
+    elif kind == "line_seize":
+        room -= 2
+        fan -= 6 if loved else 2
+        texts.append(f"GM took {cname}'s lines."
+                     + (" Talk radio is ablaze." if loved else ""))
+    elif kind == "extension":
+        room += 2
+        fan += 8 if loved else 3
+        texts.append(f"{cname} extended." + (" The fans approve." if loved else ""))
+    elif kind == "milestone_win":
+        room += 2
+        fan += 8 if loved else 4
+        texts.append(f"Milestone win for {cname}.")
+    if room:
+        _apply_room_shift(roster, room)
+    tone = "up" if room > 0 else "down" if room < 0 else "neutral"
+    record_team_event(team, "coach_news", " ".join(texts),
+                      morale_delta=room, tone=tone)
+    return {"room_delta": room, "fan_delta": fan, "fan_appeal": appeal["score"],
+            "text": " ".join(texts)}
+
+
+# Fan favourites take discounts to stay: loyalty nudge inside contract_loyalty.
+_orig_contract_loyalty = contract_loyalty
+
+
+def contract_loyalty(player: Any) -> float:  # noqa: F811
+    base = _orig_contract_loyalty(player)
+    try:
+        if is_fan_favourite(player):
+            base = min(0.98, base + 0.08)
+    except Exception:
+        pass
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Rivalry reviews: solidification every few years
+# ---------------------------------------------------------------------------
+# Every few years each rivalry gets a verdict: does it fade, simmer on, or
+# SOLIDIFY into permanent bad blood? Stronger implications dominate the
+# verdict -- a season-ending injury calcifies; just chirping along with a
+# regional rivalry fades when the context changes.
+
+RIVALRY_ORIGIN_WEIGHT = {
+    "major_injury": 90,      # personal, career-affecting -- never really dies
+    "brawl_game": 75,        # personal escalation
+    "mistreatment": 70,
+    "firing": 70,
+    "playoff_series": 60,    # 7-game wars can calcify
+    "heavy_hits": 55,
+    "gm_power_struggle": 50,
+    "contract_dispute": 45,
+    "award_race": 35,
+    "regional": 25,          # just encouraged the rivalry -- ambient
+}
+
+# Origins personal enough that the bad blood belongs to the MAN, not the sweater.
+PERSONAL_ORIGINS = {"major_injury", "brawl_game", "mistreatment", "heavy_hits"}
+
+
+def review_rivalries(rivalries: list, years: int = 3) -> List[Dict[str, Any]]:
+    """Every few years: solidify, simmer, fade, or bury each rivalry.
+    Returns the verdicts (useful for an offseason news feed)."""
+    verdicts: List[Dict[str, Any]] = []
+    for r in list(rivalries):
+        try:
+            if r.get("solidified"):
+                # Entrenched: barely cools, never dies on its own.
+                r["intensity"] = max(60, r["intensity"] - 1 * years)
+                verdicts.append({"rivalry": r, "outcome": "entrenched",
+                                 "text": f"{r['a_name']} vs {r['b_name']}: entrenched. "
+                                         f"This one isn't going away."})
+                continue
+            strength = RIVALRY_ORIGIN_WEIGHT.get(r["origin"], 40)
+            # Stronger implications play the biggest factor.
+            score = (strength * 0.45 + r["grudge"] * 0.25
+                     + r["career_cost"] * 0.15 + r["intensity"] * 0.15)
+            if score >= 68:
+                r["solidified"] = True
+                r["intensity"] = max(r["intensity"], 65)
+                verdicts.append({"rivalry": r, "outcome": "solidified",
+                                 "text": f"{r['a_name']} vs {r['b_name']}: SOLIDIFIED. "
+                                         f"{r['story'][:80]}"})
+            elif score >= 42:
+                r["intensity"] = max(20, r["intensity"] - 4 * years)
+                verdicts.append({"rivalry": r, "outcome": "simmering",
+                                 "text": f"{r['a_name']} vs {r['b_name']}: still simmering "
+                                         f"({r['intensity']:.0f})."})
+            else:
+                # Regional hate has a floor: it never fully dies.
+                floor = 30 if r["origin"] == "regional" else 0
+                r["intensity"] = max(floor, r["intensity"] - 10 * years)
+                if r["intensity"] <= 5 and floor == 0:
+                    rivalries.remove(r)
+                    verdicts.append({"rivalry": r, "outcome": "buried",
+                                     "text": f"{r['a_name']} vs {r['b_name']}: buried. "
+                                             f"Time healed it."})
+                elif floor and r["intensity"] <= floor:
+                    verdicts.append({"rivalry": r, "outcome": "enduring",
+                                     "text": f"{r['a_name']} vs {r['b_name']}: enduring "
+                                             f"({r['intensity']:.0f}) -- some hate never dies."})
+                else:
+                    verdicts.append({"rivalry": r, "outcome": "fading",
+                                     "text": f"{r['a_name']} vs {r['b_name']}: fading "
+                                             f"({r['intensity']:.0f})."})
+        except Exception:
+            pass
+    return verdicts
+
+
+def on_player_transfer(rivalries: list, player: Any,
+                       from_team: Any = None,
+                       to_team: Any = None) -> Dict[str, Any]:
+    """A player changes sweaters. Personal bad blood (injuries, personal
+    escalation) follows the MAN -- it's his, not the team's. Ambient stuff he
+    merely 'encouraged' (regional chirping, mild award races) is left behind
+    or cools to almost nothing."""
+    carried: List[Dict[str, Any]] = []
+    left: List[Dict[str, Any]] = []
+    try:
+        for r in list(get_rivalries_for(rivalries, player)):
+            if r["kind"] not in ("player_player", "coach_player", "gm_coach"):
+                continue
+            if r["origin"] in PERSONAL_ORIGINS or r.get("solidified") or r["intensity"] >= 50:
+                carried.append(r)
+            elif r["intensity"] < 35:
+                rivalries.remove(r)
+                left.append(r)
+            else:
+                r["intensity"] = max(10, r["intensity"] - 25)
+                left.append(r)
+    except Exception:
+        pass
+    return {"carried": carried, "left_behind": left,
+            "text": (f"{_ename(player)} moved. "
+                     f"{len(carried)} personal beef(s) follow him; "
+                     f"{len(left)} ambient one(s) left behind.")}
+
+
+# ---------------------------------------------------------------------------
+# National teammates
+# ---------------------------------------------------------------------------
+# International tournaments cut across NHL bad blood. Winning together --
+# especially for leaders -- forges bonds; even real NHL enemies can bury it
+# after a gold-medal run. A disaster can scar instead.
+
+def apply_international_tournament(rivalries: list, players: List[Any],
+                                   nation: str, result: str) -> Dict[str, Any]:
+    """result: gold | silver | bronze | early_exit. players: same-nation
+    participants. Returns what changed."""
+    result = (result or "").lower()
+    bond = {"gold": 12, "silver": 8, "bronze": 6}.get(result, 4)
+    soften = {"gold": 25, "silver": 15, "bronze": 8}.get(result, 0)
+    buried: List[Dict[str, Any]] = []
+    bonded = 0
+    try:
+        for i, a in enumerate(players):
+            ensure_reputation_fields(a)
+            for b in players[i + 1:]:
+                ensure_reputation_fields(b)
+                # Shared triumph bonds; leaders bond hardest.
+                la = getattr(a, "leadership", 50) or 50
+                lb = getattr(b, "leadership", 50) or 50
+                extra = 6 if (la >= 70 and lb >= 70) else 0
+                nudge_relationship(a, b, bond + extra,
+                                   f"{nation} {result} together")
+                bonded += 1
+                # NHL bad blood can be overcome by winning together.
+                r = rivalry_between(rivalries, a, b)
+                if r and soften:
+                    r["intensity"] -= soften
+                    if r["intensity"] <= 10 and not r.get("solidified"):
+                        rivalries.remove(r)
+                        buried.append(r)
+                    elif r.get("solidified") and r["intensity"] < 60:
+                        # Even entrenched hate thaws a little.
+                        r["intensity"] = 60
+        if result == "gold":
+            for p in players:
+                try:
+                    p.reputation = min(100, (getattr(p, "reputation", 0) or 0) + 2)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    medal = {"gold": "GOLD", "silver": "silver", "bronze": "bronze"}.get(result, "early exit")
+    return {"bonded_pairs": bonded, "buried": buried,
+            "text": (f"{nation} {medal}: {bonded} pair(s) bonded. "
+                     + (f"{len(buried)} NHL beef(s) buried." if buried else ""))}

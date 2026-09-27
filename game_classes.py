@@ -225,6 +225,7 @@ class Player:
     # Reputation system (ratchet 0-100; visible attitude/volatility 0-100)
     reputation: int = 0
     controversy: int = 0
+    relationships: Dict[int, int] = field(default_factory=dict)  # other player id -> -100..100 (friend..rival)
     reputation_history: list = field(default_factory=list)
     controversy_history: list = field(default_factory=list)
     squad_status: str = "Rotation"  # Star Player / Key Player / Regular Starter / Rotation / Prospect / Surplus

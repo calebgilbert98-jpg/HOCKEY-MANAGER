@@ -409,7 +409,8 @@ class MoraleWindow(ctk.CTkToplevel):
         if coach is not None and rivalries:
             for r in rs.get_rivalries_for(rivalries, coach)[:3]:
                 other = r['b_name'] if r['a_name'] == getattr(coach, 'full_name', '') else r['a_name']
-                lines.append(f"\U0001f525 {other} ({r['intensity']:.0f} -- {r['origin'].replace('_', ' ')})")
+                lock = "\U0001f512 " if r.get('solidified') else ""
+                lines.append(f"\U0001f525 {lock}{other} ({r['intensity']:.0f} -- {r['origin'].replace('_', ' ')})")
         if rivalries:
             team_rs = [r for r in rivalries
                        if r['kind'] == 'team_team'
@@ -417,7 +418,8 @@ class MoraleWindow(ctk.CTkToplevel):
             team_rs.sort(key=lambda r: -r['intensity'])
             for r in team_rs[:3]:
                 other = r['b_name'] if r['a'][1] == team.team_name else r['a_name']
-                lines.append(f"\U0001f3d2 {other}: {r['intensity']:.0f} ({r['origin'].replace('_', ' ')})")
+                lock = "\U0001f512 " if r.get('solidified') else ""
+                lines.append(f"\U0001f3d2 {lock}{other}: {r['intensity']:.0f} ({r['origin'].replace('_', ' ')})")
             # loudest player beef on the roster
             beefs = []
             for p in roster:

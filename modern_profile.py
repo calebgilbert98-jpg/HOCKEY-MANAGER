@@ -57,6 +57,7 @@ class PlayerProfile(tk.Toplevel):
         self._create_header(content)
         self._create_stats(content)
         self._create_attributes(content)
+        self._create_dynamics(content)
     
     def _create_header(self, parent):
         """Player header with avatar and basic info."""
@@ -224,6 +225,67 @@ class PlayerProfile(tk.Toplevel):
         for name, value in attrs:
             self._create_attribute_bar(content, name, value, card.card_bg)
     
+    def _create_dynamics(self, parent):
+        """Dressing-room standing: reputation, attitude, fan favourite status,
+        friends, rivals, and league bad blood."""
+        import reputation_system as rs
+        p = self.player
+        try:
+            rs.ensure_reputation_fields(p)
+        except Exception:
+            pass
+        league = getattr(getattr(self, "parent_app", None), "league", None)
+        roster = []
+        try:
+            for t in (getattr(league, "teams", []) or []):
+                if p in (getattr(t, "roster", []) or []):
+                    roster = list(t.roster)
+                    break
+        except Exception:
+            pass
+
+        card = tk.Frame(parent, bg=AppColors.BG_ELEVATED)
+        card.pack(fill="x", pady=(0, 16))
+        tk.Label(card, text="Dressing Room & Standing",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=AppColors.BG_ELEVATED).pack(anchor="w", padx=16, pady=(12, 4))
+        body = tk.Frame(card, bg=AppColors.BG_ELEVATED)
+        body.pack(fill="x", padx=16, pady=(0, 12))
+
+        try:
+            ff = rs.fan_favourite_score(p)
+            att = rs.describe_attitude(p)
+            tier = "-"
+            if roster:
+                tiers = rs.team_hierarchy(roster)
+                for tname, ps in tiers.items():
+                    if p in ps:
+                        tier = tname
+                        break
+            lines = [
+                f"Reputation  {getattr(p, 'reputation', 0)}/100  (career ratchet -- never drops)",
+                f"Attitude  {att}  ({getattr(p, 'controversy', 0)}/100 volatility)",
+                f"Room tier  {tier}",
+                f"Fans  {ff['tier']}  ({ff['score']}/100)" +
+                (f" -- {'; '.join(ff['reasons'][:2])}" if ff["reasons"] else ""),
+            ]
+            friends = rs.get_friends(p, roster) if roster else []
+            if friends:
+                lines.append("Close with  " + ", ".join(
+                    f"{f['player'].first_name} {f['player'].last_name}" for f in friends))
+            rivals = rs.get_rivals(p, roster, league) if roster else []
+            if rivals:
+                lines.append("Bad blood  " + ", ".join(
+                    f"{d['name']} ({d['origin']})" for d in rivals))
+            for ln in lines:
+                tk.Label(body, text=ln, font=AppFonts.SMALL,
+                         fg=AppColors.TEXT_SECONDARY, bg=AppColors.BG_ELEVATED,
+                         wraplength=800, justify="left").pack(anchor="w", pady=2)
+        except Exception as e:
+            tk.Label(body, text=f"Dynamics unavailable ({e})",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=AppColors.BG_ELEVATED).pack(anchor="w")
+
     def _create_attribute_bar(self, parent, name, value, bg):
         """Create a visual attribute bar."""
         row = tk.Frame(parent, bg=bg)
