@@ -155,10 +155,6 @@ class ModernScoutingWindow(InGamePopup):
         title_frame = tk.Frame(header_frame, bg=self.parent.TITLE_BAR_COLOR)
         title_frame.pack(expand=True)
         
-        title_label = tk.Label(title_frame, text="PROFESSIONAL SCOUTING CENTER",
-                              font=(self.parent.FONT_FAMILY, 18, "bold"),
-                              bg=self.parent.TITLE_BAR_COLOR, fg=self.parent.HEADER_COLOR)
-        title_label.pack(pady=(15, 2))
         
         # Current date and status
         current_date = datetime.datetime.now().strftime("%B %d, %Y")

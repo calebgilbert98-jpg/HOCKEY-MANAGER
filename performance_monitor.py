@@ -34,15 +34,6 @@ class PerformanceMonitorWindow(InGamePopup):
         main_frame = tk.Frame(self, bg=self.parent.BG_COLOR)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Title
-        title_label = tk.Label(
-            main_frame,
-            text="Performance Monitor",
-            font=(self.parent.FONT_FAMILY, 16, 'bold'),
-            bg=self.parent.BG_COLOR,
-            fg=self.parent.HEADER_COLOR
-        )
-        title_label.pack(pady=(0, 10))
         
         # Control frame
         control_frame = tk.Frame(main_frame, bg=self.parent.BG_COLOR)

@@ -303,8 +303,6 @@ class NewGameSetupWizard(InGamePopup):
     def _build(self):
         header = tk.Frame(self, bg=BG)
         header.pack(fill="x", padx=24, pady=(18, 6))
-        tk.Label(header, text="New Career", font=(FONT, 22, "bold"),
-                 bg=BG, fg=TEXT).pack(side="left")
         tk.Label(header, text="Set up your hockey universe",
                  font=(FONT, 11), bg=BG, fg=MUTED).pack(side="left", padx=(12, 0), pady=(8, 0))
 

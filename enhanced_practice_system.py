@@ -1638,10 +1638,6 @@ class PracticeCenterWindow(InGamePopup):
     
     def _create_interface(self):
         """Create the practice center interface"""
-        # Title
-        title_label = ttk.Label(self, text="Practice Center - Active Roster Only", 
-                              style='Title.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
-        title_label.pack(pady=(10, 0))
         
         subtitle_label = ttk.Label(self, text="Schedule individual practice sessions for players on the active roster", 
                                  style='Content.TLabel')

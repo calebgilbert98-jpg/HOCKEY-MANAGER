@@ -247,8 +247,6 @@ class SettingsWindow(InGamePopup):
     def _create_header(self, parent):
         header = tk.Frame(parent, bg=AppColors.BG)
         header.pack(fill="x", pady=(0, 12))
-        tk.Label(header, text="Settings", bg=AppColors.BG,
-                 fg=AppColors.TEXT_PRIMARY, font=AppFonts.H1).pack(anchor="w")
         tk.Label(header, text="Customize your Puck Dynasty experience",
                  bg=AppColors.BG, fg=AppColors.TEXT_SECONDARY,
                  font=AppFonts.SMALL).pack(anchor="w", pady=(2, 0))

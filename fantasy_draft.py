@@ -642,10 +642,6 @@ class FantasyDraftWindow(InGamePopup):
         init_frame = ttk.Frame(parent, style='Panel.TFrame')
         init_frame.pack(fill=tk.BOTH, expand=True, pady=20)
         
-        # Title
-        title_label = ttk.Label(init_frame, text="Fantasy Draft Setup", 
-                              style='MainTitle.TLabel')
-        title_label.pack(pady=20)
         
         # Draft info
         info_frame = ttk.Frame(init_frame, style='Panel.TFrame')

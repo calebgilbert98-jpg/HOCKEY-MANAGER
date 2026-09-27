@@ -67,3 +67,11 @@ toasts, and file pickers — see below).
   and `shot_ingame_dialog.png`.
 - MP suite 12/12, lines smoke 36/36, pressure battery 8/8, headless Watch Live
   game completes inside a card.
+
+## Rule: no duplicate internal title headers
+
+The card's title bar already shows `self.title(...)`. Do NOT add an internal
+header label repeating it — it renders twice (once in the card chrome, once in
+the content). Keep subtitles, descriptions, and context labels (e.g. the player
+name in an "Edit Notes - {name}" dialog); remove only the repeated title text.
+Player-profile name headers are content, not chrome — those stay.

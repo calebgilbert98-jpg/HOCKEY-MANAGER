@@ -190,13 +190,6 @@ class ShortlistWindow(InGamePopup):
     def create_interface(self):
         """Create the shortlist interface"""
         
-        # Title bar
-        title_bar = ttk.Frame(self, padding=(20, 10))
-        title_bar.pack(fill="x")
-        ttk.Label(title_bar, text="Player Shortlist", 
-                 font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                 background=self.parent.BG_COLOR, 
-                 foreground=self.parent.HEADER_COLOR).pack()
         
         # Main content frame
         content_frame = ttk.Frame(self, padding=10)
@@ -477,12 +470,6 @@ class AddPlayerDialog(InGamePopup):
     def create_interface(self):
         """Create the add player interface"""
         
-        # Title
-        title_label = ttk.Label(self, text="Add Player to Shortlist", 
-                               font=(self.parent.FONT_FAMILY, 14, 'bold'),
-                               background=self.parent.BG_COLOR,
-                               foreground=self.parent.HEADER_COLOR)
-        title_label.pack(pady=10)
         
         # Player selection
         player_frame = ttk.LabelFrame(self, text="Select Player", padding=10)
@@ -628,7 +615,7 @@ class EditNotesDialog(InGamePopup):
         """Create the notes editing interface"""
         
         # Title
-        title_label = ttk.Label(self, text=f"Edit Notes - {self.entry.player_name}", 
+        title_label = ttk.Label(self, text=self.entry.player_name, 
                                font=(self.parent_window.parent.FONT_FAMILY, 14, 'bold'),
                                background=self.parent_window.parent.BG_COLOR,
                                foreground=self.parent_window.parent.HEADER_COLOR)
@@ -687,7 +674,7 @@ class ChangePriorityDialog(InGamePopup):
         """Create the priority change interface"""
         
         # Title
-        title_label = ttk.Label(self, text=f"Change Priority - {self.entry.player_name}", 
+        title_label = ttk.Label(self, text=self.entry.player_name, 
                                font=(self.parent_window.parent.FONT_FAMILY, 14, 'bold'),
                                background=self.parent_window.parent.BG_COLOR,
                                foreground=self.parent_window.parent.HEADER_COLOR)

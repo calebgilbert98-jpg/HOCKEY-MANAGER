@@ -142,11 +142,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         header_frame = ttk.Frame(parent)
         header_frame.pack(fill='x', pady=(0, 20))
         
-        # Title and description with dark theme
-        title_label = ttk.Label(header_frame, 
-                               text="Player Development Center",
-                               style='DarkTitle.TLabel')
-        title_label.pack(anchor='w')
+        # Description with dark theme
         
         desc_label = ttk.Label(header_frame,
                               text="Monitor player progress, assign training focus, and track development potential",

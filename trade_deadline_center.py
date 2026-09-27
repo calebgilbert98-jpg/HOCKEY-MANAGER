@@ -379,11 +379,6 @@ class TradeDeadlineCenter(InGamePopup):
         header_frame = ttk.Frame(parent, style='Deadline.TFrame')
         header_frame.pack(fill='x', pady=(0, 20))
         
-        # Title
-        title_label = ttk.Label(header_frame, 
-                               text="NHL TRADE DEADLINE CENTER", 
-                               style='DeadlineTitle.TLabel')
-        title_label.pack(pady=(0, 10))
         
         # Countdown timer
         countdown_frame = ttk.Frame(header_frame, style='Deadline.TFrame')
@@ -1198,9 +1193,6 @@ class DeadlineMarketBrowser(InGamePopup):
         title_frame = tk.Frame(header_frame, bg=self.DEADLINE_RED)
         title_frame.pack(expand=True, fill='both')
         
-        tk.Label(title_frame, text="DEADLINE MARKET INTELLIGENCE",
-                bg=self.DEADLINE_RED, fg=self.TEXT_WHITE,
-                font=('Segoe UI', 18, 'bold')).pack(pady=5)
         
         tk.Label(title_frame, text=f"Market Analysis • {time_info['formatted']} to Deadline",
                 bg=self.DEADLINE_RED, fg=self.DEADLINE_GOLD,

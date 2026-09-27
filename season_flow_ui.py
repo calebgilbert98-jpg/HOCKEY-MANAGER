@@ -274,9 +274,6 @@ class SettingsWindow(InGamePopup):
         main_frame = ttk.Frame(self, style='Panel.TFrame', padding=20)
         main_frame.pack(fill='both', expand=True)
         
-        # Title
-        ttk.Label(main_frame, text="Automation Settings", 
-                 style='Title.TLabel', font=('Segoe UI', 14, 'bold')).pack(pady=(0, 20))
         
         # Game simulation settings
         game_frame = ttk.LabelFrame(main_frame, text="Game Simulation", padding=10)

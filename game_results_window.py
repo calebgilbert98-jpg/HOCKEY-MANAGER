@@ -45,16 +45,6 @@ class GameResultsWindow(InGamePopup):
         main_frame = tk.Frame(self, bg=self.parent.BG_COLOR)
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
-        # Header
-        header_frame = tk.Frame(main_frame, bg=self.parent.BG_COLOR)
-        header_frame.pack(fill='x', pady=(0, 20))
-        
-        title_label = tk.Label(header_frame, 
-                              text=f"Daily Results - {self.date_str}",
-                              font=('Segoe UI', 18, 'bold'),
-                              fg='#FFFFFF',
-                              bg=self.parent.BG_COLOR)
-        title_label.pack()
         
         # Content notebook for tabs
         self.notebook = ttk.Notebook(main_frame)

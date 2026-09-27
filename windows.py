@@ -3809,9 +3809,6 @@ class ScoutingWindow(InGamePopup):
         # ---- Header ----
         header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
         header.pack(fill='x', padx=10, pady=(10, 0))
-        ttk.Label(header, text="Scouting Department",
-                  font=(parent.FONT_FAMILY, 18, 'bold'),
-                  style='Heading.TLabel').pack(side='left')
         n_prospects = len(getattr(parent.league, 'draft_prospects', []) or [])
         ttk.Label(header, text=f"{n_prospects} draft-eligible prospects on the radar",
                   style='Secondary.TLabel').pack(side='left', padx=(12, 0))
@@ -7568,9 +7565,6 @@ class TradeBlockWindow(InGamePopup):
         main_frame = ttk.Frame(self)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="Trade Block", style='Title.TLabel')
-        title_label.pack(pady=(0, 20))
         
         # Create notebook for different sections
         notebook = ttk.Notebook(main_frame)
@@ -8215,8 +8209,6 @@ class ContractExtensionsWindow(InGamePopup):
         instruction_frame = ttk.Frame(main_frame, style='Panel.TFrame')
         instruction_frame.pack(fill='x', padx=5, pady=5)
         
-        ttk.Label(instruction_frame, text="Contract Extensions", font=(parent.FONT_FAMILY, 16, 'bold'), 
-                 style='Header.TLabel').pack(anchor='w', padx=10, pady=5)
         
         ttk.Label(instruction_frame, text="Negotiate extensions with players entering the final year of their contract. "
                                          "Per NHL rules, you can extend contracts at any time in the final year.", 
@@ -9027,9 +9019,6 @@ class SeasonGoalsWindow(InGamePopup):
         team = self.parent.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
-        ttk.Label(header, text="Season Goals",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='TLabel').pack(side=tk.LEFT)
         PillButton(header, text="Refresh", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh_progress).pack(side=tk.RIGHT)
@@ -9178,9 +9167,6 @@ class TeamAnalyticsWindow(InGamePopup):
         team = self.parent.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
-        ttk.Label(header, text="Team Analytics",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='TLabel').pack(side=tk.LEFT)
         PillButton(header, text="Refresh", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
@@ -9303,9 +9289,6 @@ class SalaryAnalyticsWindow(InGamePopup):
         team = self.parent.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
-        ttk.Label(header, text="Salary Analytics",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='TLabel').pack(side=tk.LEFT)
         PillButton(header, text="Refresh", bg='#0e0e11',
                    font=(self.parent.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
@@ -9405,9 +9388,6 @@ class BuyoutCalculatorWindow(InGamePopup):
     def _build(self):
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
-        ttk.Label(header, text="Buyout Calculator",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='TLabel').pack(side=tk.LEFT)
         ttk.Label(header, text="NHL rules: 2/3 of remaining salary (1/3 if under 26), "
                                "spread over 2× remaining term",
                   style='Secondary.TLabel', wraplength=340,

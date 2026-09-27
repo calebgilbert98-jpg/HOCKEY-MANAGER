@@ -13293,8 +13293,6 @@ class TacticsWindow(InGamePopup):
 
         header = tk.Frame(self, bg=bg)
         header.pack(fill='x', padx=20, pady=(16, 4))
-        tk.Label(header, text="Team Tactics", bg=bg, fg=fg,
-                 font=(font, 16, 'bold')).pack(side='left')
         tk.Label(header, text="Your game plan shapes sim results in every situation.",
                  bg=bg, fg=muted, font=(font, 10)).pack(side='left', padx=(12, 0))
 
@@ -13426,7 +13424,6 @@ class TradeBlockWindow(InGamePopup):
         # --- Title bar ---
         title_bar = ttk.Frame(self, style='TitleBar.TFrame')
         title_bar.pack(fill="x")
-        ttk.Label(title_bar, text="Manage Trade Block", style='Title.TLabel', padding=(10, 8)).pack(side="left")
         # Team logo (placeholder)
         logo_canvas = tk.Canvas(title_bar, width=40, height=40, bg=parent.TITLE_BAR_COLOR, highlightthickness=0)
         logo_canvas.pack(side="right", padx=8)
@@ -13948,17 +13945,10 @@ class ContractExtensionsWindow(InGamePopup):
         main_frame = ttk.Frame(self, style='Dark.TFrame', padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Title and description
+        # Description
         header_frame = ttk.Frame(main_frame, style='TitleBar.TFrame', padding=(10, 5))
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        title_label = ttk.Label(
-            header_frame, 
-            text="CONTRACT EXTENSIONS", 
-            style='Title.TLabel',
-            font=(self.parent.FONT_FAMILY, 16, 'bold')
-        )
-        title_label.pack(side=tk.LEFT)
         
         desc_label = ttk.Label(
             header_frame, 

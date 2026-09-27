@@ -90,9 +90,6 @@ class RosterImportWizard(InGamePopup):
     def _build_chrome(self):
         header = tk.Frame(self, bg=AppColors.BG)
         header.pack(fill="x", padx=20, pady=(16, 4))
-        tk.Label(header, text="Import Rosters",
-                 font=AppFonts.H1, bg=AppColors.BG,
-                 fg=AppColors.TEXT_PRIMARY).pack(side="left")
         tk.Label(header, text="Start a career with pre-built EHM rosters",
                  font=AppFonts.SMALL, bg=AppColors.BG,
                  fg=AppColors.TEXT_SECONDARY).pack(side="left", padx=(12, 0))
