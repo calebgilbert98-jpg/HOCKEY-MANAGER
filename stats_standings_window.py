@@ -68,7 +68,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         self._secondary_button = secondary_button
         self._heading = heading
         self._body = body
-        self._teamcolor_tags = set()  # Treeview tags already configured
+        self._teamcolor_tags = set()  # reserved (grid table needs no tags)
         self._ff = "Segoe UI"
         init_ctk_theme()
         super().__init__(parent)
@@ -2065,42 +2065,111 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         self.create_enhanced_standings_table(self.standings_scrollable, view_type)
     
     def create_enhanced_standings_table(self, parent, view_type):
-        """Create enhanced standings table with advanced metrics"""
-        # Column definitions based on advanced metrics setting.
-        # Every column is backed by real tracked data (no estimates).
-        if self.show_advanced.get():
-            columns = {
-                'rank': ('Rank', 50),
-                'team': ('Team', 170),
-                'gp': ('GP', 40),
-                'w': ('W', 35),
-                'l': ('L', 35),
-                'otl': ('OTL', 40),
-                'pts': ('PTS', 45),
-                'pt_pct': ('PT%', 55),
-                'gf': ('GF', 45),
-                'ga': ('GA', 45),
-                'diff': ('+/-', 50),
-                'playoff': ('Playoff', 70)
-            }
+        """Grid-based standings table.
+
+        Team colors live ONLY in the Team column (ttk.Treeview styles
+        whole rows, so per-column color needs a real grid); playoff
+        locks get the classic green band in the Playoff column.
+        """
+        show_advanced = self.show_advanced.get()
+        # Ordered (key, title) pairs; every column backed by real data.
+        if show_advanced:
+            columns = [('rank', 'Rank'), ('team', 'Team'), ('gp', 'GP'),
+                       ('w', 'W'), ('l', 'L'), ('otl', 'OTL'),
+                       ('pts', 'PTS'), ('pt_pct', 'PT%'), ('gf', 'GF'),
+                       ('ga', 'GA'), ('diff', '+/-'), ('playoff', 'Playoff')]
         else:
-            columns = {
-                'rank': ('Rank', 50),
-                'team': ('Team', 170),
-                'gp': ('GP', 40),
-                'w': ('W', 35),
-                'l': ('L', 35),
-                'otl': ('OTL', 40),
-                'pts': ('PTS', 45),
-                'pt_pct': ('PT%', 55),
-                'diff': ('+/-', 50),
-            }
+            columns = [('rank', 'Rank'), ('team', 'Team'), ('gp', 'GP'),
+                       ('w', 'W'), ('l', 'L'), ('otl', 'OTL'),
+                       ('pts', 'PTS'), ('pt_pct', 'PT%'), ('diff', '+/-')]
 
-        # Dark styled table
-        tree = self._make_tree(parent, columns, height=25)
+        # Build the grid straight into the scroll area's inner frame; the
+        # outer CTkScrollableFrame owns the scrollbar (nesting a second
+        # canvas+scrollbar inside it collapses the viewport).
+        body = parent
 
-        # Use real data with fallback
-        self.add_enhanced_standings_data(tree, view_type, self.show_advanced.get())
+        # Header row
+        for col, (_key, title) in enumerate(columns):
+            tk.Label(body, text=title, bg=self.parent.BG_COLOR,
+                     fg='#9aa3b2',
+                     font=('TkDefaultFont', 9, 'bold')).grid(
+                row=0, column=col, sticky='w', padx=6, pady=(4, 8))
+        body.grid_columnconfigure(1, weight=1)  # team column stretches
+
+        teams = self._standings_teams()
+        # League-wide playoff cut (top 16 by points) for the Playoff column
+        league_rank = sorted(teams,
+                             key=lambda t: (self._team_points(t), t.wins),
+                             reverse=True)
+        playoff_names = {t.team_name for t in league_rank[:16]}
+
+        view = (self.standings_view.get()
+                if hasattr(self, 'standings_view') else view_type)
+        sort = (self.standings_sort.get()
+                if hasattr(self, 'standings_sort') else "Points")
+        teams = self._apply_standings_view(teams, view)
+        teams = self._apply_standings_sort(teams, sort)
+
+        _fg_default = '#e8e8e8'
+        for r, team in enumerate(teams, 1):  # Show all teams in view
+            try:
+                otl = getattr(team, 'ot_losses', 0)
+                gp = team.wins + team.losses + otl
+                points = self._team_points(team)
+                pt_pct = (points / (gp * 2) * 100) if gp > 0 else 0.0
+                goals_for = getattr(team, 'goals_for', 0)
+                goals_against = getattr(team, 'goals_against', 0)
+                goal_diff = goals_for - goals_against
+                playoff = "In" if team.team_name in playoff_names else "Out"
+
+                vals = {
+                    'rank': str(r),
+                    'gp': str(gp),
+                    'w': str(team.wins),
+                    'l': str(team.losses),
+                    'otl': str(otl),
+                    'pts': str(points),
+                    'pt_pct': f"{pt_pct:.1f}%",
+                    'gf': str(goals_for),
+                    'ga': str(goals_against),
+                    'diff': f"{goal_diff:+d}",
+                    'playoff': playoff,
+                }
+
+                # Team-true color lives ONLY in the Team column.
+                _bg, _fg = self.parent.BG_COLOR, _fg_default
+                if _accent_for_team is not None:
+                    try:
+                        _bg, _, _fg = _accent_for_team(team.team_name)
+                    except Exception:
+                        pass
+                for col, (key, _title) in enumerate(columns):
+                    if key == 'team':
+                        cell = tk.Frame(body, bg=_bg)
+                        cell.grid(row=r, column=col, sticky='ew',
+                                  padx=2, pady=1)
+                        if _jersey_chip is not None:
+                            try:
+                                _jersey_chip(cell, team.team_name,
+                                             w=40, h=22).pack(
+                                    side='left', padx=(6, 4), pady=2)
+                            except Exception:
+                                pass
+                        tk.Label(cell, text=team.team_name, bg=_bg, fg=_fg,
+                                 font=('TkDefaultFont', 9, 'bold')).pack(
+                            side='left', padx=(0, 8), pady=2)
+                    elif key == 'playoff' and playoff == "In":
+                        # Playoff lock: the classic green band.
+                        tk.Label(body, text="In", bg='#166534', fg='#FFFFFF',
+                                 font=('TkDefaultFont', 9, 'bold')).grid(
+                            row=r, column=col, sticky='ew', padx=2, pady=1)
+                    else:
+                        tk.Label(body, text=vals[key], bg=self.parent.BG_COLOR,
+                                 fg=_fg_default).grid(
+                            row=r, column=col, sticky='w', padx=6, pady=2)
+            except Exception as e:
+                print(f"Error processing team {team.team_name}: {e}")
+                continue
     
     def _standings_teams(self):
         """NHL teams for standings, with real-team fallback."""
@@ -2172,79 +2241,6 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         return sorted(teams, key=lambda t: (self._team_points(t), t.wins),
                       reverse=True)  # Points
 
-    def add_enhanced_standings_data(self, tree, view_type, show_advanced):
-        """Add enhanced standings data with real team information"""
-        teams = self._standings_teams()
-
-        # League-wide playoff cut (top 16 by points) for the Playoff column
-        league_rank = sorted(teams, key=lambda t: (self._team_points(t), t.wins),
-                             reverse=True)
-        playoff_names = {t.team_name for t in league_rank[:16]}
-
-        view = self.standings_view.get() if hasattr(self, 'standings_view') else view_type
-        sort = self.standings_sort.get() if hasattr(self, 'standings_sort') else "Points"
-        teams = self._apply_standings_view(teams, view)
-        teams = self._apply_standings_sort(teams, sort)
-
-        for rank, team in enumerate(teams, 1):  # Show all teams in view
-            try:
-                otl = getattr(team, 'ot_losses', 0)
-                gp = team.wins + team.losses + otl
-                points = self._team_points(team)
-                pt_pct = (points / (gp * 2) * 100) if gp > 0 else 0.0
-                goals_for = getattr(team, 'goals_for', 0)
-                goals_against = getattr(team, 'goals_against', 0)
-                goal_diff = goals_for - goals_against
-                playoff = "In" if team.team_name in playoff_names else "Out"
-
-                if show_advanced:
-                    values = (
-                        rank,
-                        team.team_name,
-                        gp,  # GP
-                        team.wins,
-                        team.losses,
-                        otl,
-                        points,  # Points
-                        f"{pt_pct:.1f}%",  # PT%
-                        goals_for,  # GF (real data)
-                        goals_against,  # GA (real data)
-                        f"{goal_diff:+d}",  # +/- (calculated)
-                        playoff,
-                    )
-                else:
-                    values = (
-                        rank,
-                        team.team_name,
-                        gp,  # GP
-                        team.wins,
-                        team.losses,
-                        otl,
-                        points,  # Points
-                        f"{pt_pct:.1f}%",  # PT%
-                        f"{goal_diff:+d}",  # +/- (calculated from real data)
-                    )
-
-                # Team-true row colors: every row wears its club's identity.
-                # (Replaces the flat playoff-green band; playoff status
-                # still reads in the Playoff column.)
-                _tag = "tm_" + "".join(
-                    ch if ch.isalnum() else "_" for ch in team.team_name)
-                if _tag not in self._teamcolor_tags:
-                    self._teamcolor_tags.add(_tag)
-                    if _accent_for_team is not None:
-                        try:
-                            _bg, _, _fg = _accent_for_team(team.team_name)
-                            tree.tag_configure(_tag, background=_bg,
-                                               foreground=_fg)
-                        except Exception:
-                            pass
-                tree.insert('', 'end', values=values, tags=(_tag,))
-
-            except Exception as e:
-                print(f"Error processing team {team.team_name}: {e}")
-                continue
-    
     def get_fallback_teams(self):
         """Get teams from alternative data sources if main source fails"""
         try:

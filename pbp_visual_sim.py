@@ -123,6 +123,17 @@ def _dot_colors(team_name):
     return None, None
 
 
+def _luminance(hex_color):
+    """Relative luminance of a hex color, 0 (black) to 1 (white).
+    Never raises."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = (int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    except Exception:
+        return 0.5
+
+
 def _user_accent():
     """Current UI accent: the controlled team's color once the app theme
     has been applied, otherwise the legacy teal. Never raises."""
@@ -1539,9 +1550,18 @@ class PBPVisualSim(tk.Toplevel):
         c = self.canvas
         idx = 0
         for is_home, line in ((True, self.home_line), (False, self.away_line)):
-            body = self._home_primary if is_home else self._away_primary
-            dc = self._home_dc if is_home else self._away_dc
-            trim = (dc[1] if dc and dc[1] else "white")
+            if is_home:
+                # Home side wears its colors: primary body, secondary ring.
+                body = self._home_primary
+                dc = self._home_dc
+                trim = (dc[1] if dc and dc[1] else "white")
+            else:
+                # Away side always wears white (real road whites), with the
+                # club's primary as the trim stripe so each skater still
+                # reads as their team at a glance.
+                body = "#FFFFFF"
+                dc = self._away_dc
+                trim = (dc[0] if dc and dc[0] else self._away_primary)
             for role in ("C", "LW", "RW", "D1", "D2"):
                 p = line.get(role)
                 if p is None:
@@ -1571,19 +1591,33 @@ class PBPVisualSim(tk.Toplevel):
         sx, sy = self.X(x) + 2.5, self.Y(y) + 3.5
         shadow = c.create_oval(sx - r, sy - r, sx + r, sy + r,
                                fill="#8fa3b8", outline="", tags=("dot",))
-        # two-color team dot: body in the team's primary, outline ring in
-        # the secondary so both club colors read at a glance
+        # two-color team dot: body in the team's colors (home primary /
+        # away white), outline ring in the club's secondary (home) or
+        # primary (away) so both sides read at a glance
         oval = c.create_oval(self.X(x) - r, self.Y(y) - r,
                              self.X(x) + r, self.Y(y) + r,
                              fill=body, outline=trim, width=3,
                              tags=("dot",))
-        fg = (self._home_tc[1] if is_home else self._away_tc[1]) or \
-             ("white" if is_home else "#0e0e11")
+        if is_home:
+            fg = (self._home_tc[1] if self._home_tc else None) or "white"
+        else:
+            # White away jersey: dark numbers. Prefer the club's primary
+            # when it's dark (authentic road look), else near-black.
+            fg = None
+            try:
+                _prim = (self._away_dc[0]
+                         if self._away_dc and self._away_dc[0]
+                         else self._away_primary)
+                if _prim and _luminance(_prim) < 0.35:
+                    fg = _prim
+            except Exception:
+                fg = None
+            fg = fg or "#101014"
         txt = c.create_text(self.X(x), self.Y(y), text=str(num),
                             fill=fg, font=(FONT, 9, "bold"), tags=("dot",))
         # facing tick: short line showing skate direction (updated per tick)
         tick = c.create_line(self.X(x), self.Y(y), self.X(x), self.Y(y),
-                             fill="white", width=2, tags=("dot",))
+                             fill=fg, width=2, tags=("dot",))
         self.dots[dot_id] = {
             "id": dot_id, "player": player, "is_home": is_home,
             "role": role, "x": x, "y": y, "tx": x, "ty": y,
