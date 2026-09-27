@@ -2239,6 +2239,13 @@ class GameSim:
                         "GOAL",
                     )
                     break
+            # -- Controversy engine (additive): uncalled incidents and
+            #    pot-stirring. Internally gated to ~1 roll each per period.
+            try:
+                from controversy_system import period_controversy_tick
+                period_controversy_tick(self)
+            except Exception:
+                pass
             
             # Update fatigue and check for line changes
             self._update_fatigue(time_elapsed)
@@ -4565,46 +4572,62 @@ class GameSim:
         # Resolve the shot
         if random.random() > adjusted_save_prob:
             # Goal scored
-            goal_type = self._determine_goal_type(shot_type, location, save_type)
+            # -- Controversy review (additive): a borderline crease play can
+            #    be challenged by the defending coach BEFORE the goal hits
+            #    the scoresheet, so a disallowed goal never needs stat surgery.
+            _cz_verdict = "goal"
+            try:
+                from controversy_system import review_goal_scoring_play
+                _cz_verdict = review_goal_scoring_play(
+                    self, attacking_team, defending_team, shooter,
+                    location, shot_type)
+            except Exception:
+                _cz_verdict = "goal"
+            if _cz_verdict == "disallowed":
+                # Waved off after review: no stats, restart with a faceoff.
+                self._resolve_faceoff(reason="disallowed goal",
+                                       offending_team=attacking_team)
+            else:
+                goal_type = self._determine_goal_type(shot_type, location, save_type)
             
-            # Record the goal
-            self._record_goaltender_stats(goalie, 'goal', save_type, expected_goal, quality)
+                # Record the goal
+                self._record_goaltender_stats(goalie, 'goal', save_type, expected_goal, quality)
             
-            # Handle assists
-            assists = []
-            if passer:
-                assists.append(passer)
-            # Trait: Playmakers earn more secondary assists
-            secondary_chance = 0.4
-            # Boost if any on-ice teammate is a playmaker (they're more likely to get the secondary)
-            for p in self._get_on_ice(attacking_team):
-                if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE:
-                    secondary_chance *= _trait_bonus(p, "assist_chance_mult")
-                    break  # Only apply once (highest bonus)
-            if random.random() < min(0.8, secondary_chance):  # Secondary assist chance
-                second_assist_candidates = [p for p in self._get_on_ice(attacking_team) 
-                                          if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE]
-                if second_assist_candidates:
-                    # Weight by playmaker trait for secondary assist selection
-                    weights = [_trait_bonus(p, "assist_chance_mult") for p in second_assist_candidates]
-                    assists.append(random.choices(second_assist_candidates, weights=weights, k=1)[0])
+                # Handle assists
+                assists = []
+                if passer:
+                    assists.append(passer)
+                # Trait: Playmakers earn more secondary assists
+                secondary_chance = 0.4
+                # Boost if any on-ice teammate is a playmaker (they're more likely to get the secondary)
+                for p in self._get_on_ice(attacking_team):
+                    if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE:
+                        secondary_chance *= _trait_bonus(p, "assist_chance_mult")
+                        break  # Only apply once (highest bonus)
+                if random.random() < min(0.8, secondary_chance):  # Secondary assist chance
+                    second_assist_candidates = [p for p in self._get_on_ice(attacking_team) 
+                                              if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE]
+                    if second_assist_candidates:
+                        # Weight by playmaker trait for secondary assist selection
+                        weights = [_trait_bonus(p, "assist_chance_mult") for p in second_assist_candidates]
+                        assists.append(random.choices(second_assist_candidates, weights=weights, k=1)[0])
             
-            self._handle_goal(attacking_team, shooter, assists, shot_type, location)
+                self._handle_goal(attacking_team, shooter, assists, shot_type, location)
             
-            # Log advanced goal details
-            self.event_log.append({
-                'timestamp': self._period_length - self.clock,
-                'duration': 1.0,
-                'type': 'GOAL_ADVANCED',
-                'details': {
-                    'scorer_id': shooter.id,
-                    'goaltender_id': goalie.id,
-                    'goal_type': goal_type.value,
-                    'expected_goal': round(expected_goal, 3),
-                    'save_probability': round(adjusted_save_prob, 3),
-                    'shot_quality': quality
-                }
-            })
+                # Log advanced goal details
+                self.event_log.append({
+                    'timestamp': self._period_length - self.clock,
+                    'duration': 1.0,
+                    'type': 'GOAL_ADVANCED',
+                    'details': {
+                        'scorer_id': shooter.id,
+                        'goaltender_id': goalie.id,
+                        'goal_type': goal_type.value,
+                        'expected_goal': round(expected_goal, 3),
+                        'save_probability': round(adjusted_save_prob, 3),
+                        'shot_quality': quality
+                    }
+                })
         else:
             # Save made
             shot_power = random.randint(1, 10)  # Shot power factor

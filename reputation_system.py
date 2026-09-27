@@ -3243,6 +3243,7 @@ INCIDENT_WEIGHTS = {
     "star_injured": 25,      # you hurt our best player -- we remember
     "player_injured": 12,
     "controversial_hit": 10,
+    "bad_call": 8,            # a missed call / uncalled infraction -- we remember
     "coach_comments": 8,     # he ran his mouth in the media
     "brawl": 15,
 }

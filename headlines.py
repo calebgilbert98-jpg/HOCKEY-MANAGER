@@ -49,6 +49,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "blockbuster_trade": _blockbuster_headline,
         "coaching_change": _coaching_change_headline,
         "rivalry_declared": _rivalry_declared_headline,
+        "controversial_call": _controversial_call_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -190,6 +191,46 @@ def _rivalry_declared_headline(game_date, declarer_name, target_name,
             f"something, and from now on, these do.\"\n\n"
             f"Ticket offices on both sides are already reporting a spike for "
             f"the next meeting."
+        )
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=subject,
+        content=content,
+        category="League",
+        priority=2,
+    )
+
+
+def _controversial_call_headline(game_date, event="disallowed_goal",
+                                 scoring_team="", defending_team="",
+                                 shooter="", call_kind="goaltender interference",
+                                 period=3, home_score=0, away_score=0, **kw):
+    from game_classes import EmailMessage
+    if event == "disallowed_goal":
+        subject = (f"🚨 {defending_team} survive review -- {shooter}'s goal "
+                   f"wiped off the board")
+        content = (
+            f"A {shooter} goal for the {scoring_team} was disallowed after a "
+            f"coach's challenge for {call_kind} in period {period}, and the "
+            f"{defending_team} bench erupted.\n\n"
+            f"\"That's as clear as it gets,\" one assistant coach said. \"You "
+            f"can't do that to a goaltender and expect it to count.\"\n\n"
+            f"The {scoring_team} room, meanwhile, looked stunned -- a goal "
+            f"taken off the board this late changes everything."
+        )
+    else:  # failed_challenge
+        subject = (f"🚨 Failed challenge burns {defending_team} -- "
+                   f"delay-of-game minor after {shooter}'s goal stands")
+        content = (
+            f"The {defending_team} challenged {shooter}'s goal for {call_kind} in "
+            f"period {period}, lost, and paid the real price: a delay-of-game "
+            f"minor with the goal still counting.\n\n"
+            f"\"You only throw that flag if you're sure,\" a rival coach said. "
+            f"\"They weren't sure. Now they're killing a penalty instead of "
+            f"playing hockey.\"\n\n"
+            f"Whether the {defending_team} room rallies or folds from here "
+            f"will say everything about their leadership."
         )
     return EmailMessage(
         sender="League News Desk",

@@ -1693,6 +1693,12 @@ class PBPVisualSim(tk.Toplevel):
             if not self._instant:
                 self._banner_show("fight", "LINE BRAWL!", desc, color="#ff5a5a")
                 self._shake(mag=6.0, dur=0.8)
+        elif et == "controversy":
+            self._feed(ev.get("text", "Controversy on the ice -- the call is disputed."),
+                       tag="info", ev=ev)
+            if ev.get("outcome") == "rally" and not self._instant:
+                self._banner_show("info", "LOCKED IN",
+                                  ev.get("text", "")[:80], color="#7fd4ff")
         elif et == "milestone":
             self._on_milestone(ev)
         elif et == "icing":
