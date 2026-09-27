@@ -766,23 +766,62 @@ class PBPVisualSim(tk.Toplevel):
         b.pack(side="left", padx=padx)
         return b
 
+    def _jersey_icon(self, parent, team_name, tc):
+        """2x team icon styled like the club's jersey: primary body, a
+        secondary hem stripe with trim pinstripes, and a crest carrying
+        the team abbreviation. Never raises."""
+        W, H = 132, 64
+        cv = tk.Canvas(parent, width=W, height=H, bg="#16161a",
+                       highlightthickness=0, bd=0)
+        try:
+            primary = (tc[0] if tc and tc[0] else ACCENT)
+            fg = (tc[1] if tc and tc[1] else "#0e0e11")
+            dc = _dot_colors(team_name)
+            secondary = dc[1] if dc and dc[1] else "white"
+            trim = None
+            try:
+                if _nhl_identity is not None:
+                    c = _nhl_identity.get_team_colors(team_name)
+                    if c is not None:
+                        trim = c.text_on_secondary
+            except Exception:
+                trim = None
+            if not trim or trim.lower() == secondary.lower():
+                trim = (primary if primary.lower() != secondary.lower()
+                        else "#ffffff")
+            # jersey body
+            cv.create_rectangle(0, 0, W, H, fill=primary, outline="")
+            # hem stripes: trim / secondary / trim
+            y0 = H - 20
+            cv.create_rectangle(0, y0, W, y0 + 3, fill=trim, outline="")
+            cv.create_rectangle(0, y0 + 3, W, y0 + 11,
+                                fill=secondary, outline="")
+            cv.create_rectangle(0, y0 + 11, W, y0 + 14, fill=trim, outline="")
+            # crest with the abbreviation
+            cw, ch = 68, 30
+            cx0, cy0 = (W - cw) // 2, 7
+            cv.create_rectangle(cx0, cy0, cx0 + cw, cy0 + ch,
+                                fill=primary, outline=trim, width=2)
+            cv.create_text(W // 2, cy0 + ch // 2 + 1,
+                           text=_abbr(team_name),
+                           fill=fg, font=(FONT, 15, "bold"))
+        except Exception:
+            pass
+        return cv
+
     def _build_widgets(self):
         # Broadcast score bug: [BOS][1 – 2][BUF][P3 04:32]  WIN PROB  LIVE
         top = tk.Frame(self, bg=BG)
         top.pack(fill="x", padx=10, pady=(10, 6))
         bug = tk.Frame(top, bg="#16161a")
         bug.pack(side="left")
-        tk.Label(bug, text=_abbr(self.home_team.team_name),
-                 bg=self._home_tc[0] or ACCENT,
-                 fg=self._home_tc[1] or "#0e0e11", font=(FONT, 14, "bold"),
-                 padx=10, pady=6).pack(side="left")
+        self._jersey_icon(bug, self.home_team.team_name,
+                          self._home_tc).pack(side="left")
         self.score_var = tk.StringVar(value="0 – 0")
         tk.Label(bug, textvariable=self.score_var, bg="#16161a", fg="white",
                  font=(FONT, 18, "bold"), padx=10).pack(side="left")
-        tk.Label(bug, text=_abbr(self.away_team.team_name),
-                 bg=self._away_tc[0] or AWAY_COLOR,
-                 fg=self._away_tc[1] or "#0e0e11", font=(FONT, 14, "bold"),
-                 padx=10, pady=6).pack(side="left")
+        self._jersey_icon(bug, self.away_team.team_name,
+                          self._away_tc).pack(side="left")
         self.clock_var = tk.StringVar(value="P1 20:00")
         tk.Label(bug, textvariable=self.clock_var, bg="#23262e", fg=_user_accent(),
                  font=(FONT, 14, "bold"), padx=10, pady=6).pack(side="left")
