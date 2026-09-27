@@ -8398,9 +8398,13 @@ class HockeyManagerGUI(tk.Tk):
         home_goal_expectation += home_own + away_opp
         away_goal_expectation += away_own + home_opp
 
-        # FM-style squad morale modifier (subtle: +/-3%)
-        home_goal_expectation *= self._career_morale_modifier(home_team)
-        away_goal_expectation *= self._career_morale_modifier(away_team)
+        # Situations channel: room + bench + hunger move goal expectation a
+        # few percent either way -- the same factor the detailed engines
+        # (GameSim, AdvancedGameSim) apply per shot. Computed once per team
+        # per game here; applies to every team in the league, user or AI.
+        # (Replaces the old squad-morale modifier, which situations subsumes.)
+        home_goal_expectation *= self._situation_goal_mult(home_team)
+        away_goal_expectation *= self._situation_goal_mult(away_team)
         
         # Generate goals with realistic NHL distribution
         # Use round() not int() to avoid truncation bias (~0.5 goals lost per team)
@@ -10066,6 +10070,17 @@ class HockeyManagerGUI(tk.Tk):
     def _career_team_games(self) -> int:
         b = self.career.board
         return b.season_wins + b.season_losses + b.season_otl
+
+    def _situation_goal_mult(self, team) -> float:
+        """Quick-sim goal-expectation multiplier from the situations factor
+        (room state, coaching buy-in, youth hunger). Same 0.92-1.08 range the
+        detailed engines use; computed once per team per game. Never raises.
+        """
+        try:
+            from reputation_system import situations_factor as _sf
+            return float(_sf(team, {}).get("xg_mult", 1.0))
+        except Exception:
+            return 1.0
 
     def _career_morale_modifier(self, team) -> float:
         """Subtle goal-expectation modifier from squad morale (0.97-1.03)."""
