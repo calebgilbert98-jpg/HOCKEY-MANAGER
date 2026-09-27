@@ -1681,6 +1681,18 @@ class PBPVisualSim(tk.Toplevel):
                        tag="info", ev=ev)
         elif et == "fight":
             self._on_fight(ev)
+        elif et == "coach_order":
+            self._feed(f"{ev.get('coach', 'The coach')} has sent his guys out -- "
+                       f"the {ev.get('team', '')} are looking to punish.",
+                       tag="info", ev=ev)
+        elif et == "brawl":
+            pairs = ev.get("pairs", []) or []
+            desc = ", ".join(f"{h.split()[-1]} vs {a.split()[-1]}" for h, a in pairs)
+            self._feed(f"LINE BRAWL! {desc} -- every skater on the ice gets "
+                       f"a 10-minute misconduct.", tag="fight", ev=ev)
+            if not self._instant:
+                self._banner_show("fight", "LINE BRAWL!", desc, color="#ff5a5a")
+                self._shake(mag=6.0, dur=0.8)
         elif et == "milestone":
             self._on_milestone(ev)
         elif et == "icing":
@@ -4064,7 +4076,8 @@ def open_pbp_window(parent, home_team, away_team, on_complete=None,
         intensity meter can account for bad blood between the clubs.
     Returns the PBPVisualSim window. Does not block.
     """
-    sim = GameSim(home_team, away_team)
+    sim = GameSim(home_team, away_team, is_playoff=is_playoff,
+                  rivalries=rivalries, series_game=series_game)
     win = PBPVisualSim(parent, sim, home_team, away_team,
                        home_line=_best_line(home_team),
                        away_line=_best_line(away_team),

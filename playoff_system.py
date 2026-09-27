@@ -221,8 +221,13 @@ class PlayoffBracket:
         # Use the existing game simulation but with playoff modifiers
         from simulation import GameSim
         
-        # Create game simulation with playoff intensity
-        game_sim = GameSim(series.team1, series.team2, is_playoff=True)
+        # Create game simulation with playoff intensity. Pass the upcoming series
+        # game number so playoff officiating (whistle ramp, desperation bump,
+        # tension stakes) and rivalries engage correctly.
+        game_sim = GameSim(series.team1, series.team2, is_playoff=True,
+                           series_game=series.games_played + 1,
+                           rivalries=getattr(getattr(self, "league", None),
+                                             "rivalries", None))
         result = game_sim.simulate_game()
         
         home_score = result.get('home_score', 0)

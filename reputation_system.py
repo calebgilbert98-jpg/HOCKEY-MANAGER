@@ -2842,7 +2842,11 @@ def order_punishment(coach: Any, team: Any, game_state: Dict[str, Any],
         period = game_state.get("period", 1)
         is_playoff = game_state.get("is_playoff", False)
         tension = game_state.get("tension", 0)
-        score = tendency
+        # Personality alone can never order it: even the hottest coach maxes at
+        # 0.55 on a calm night. It takes a situation -- a blowout, bad blood,
+        # running it up -- to push anyone over the line. (Torts doesn't send
+        # the boys out on a quiet Tuesday either.)
+        score = tendency * 0.55
         reasons: List[str] = []
         if sd <= -3 and is_playoff:
             score += 0.35
@@ -2938,6 +2942,125 @@ def respond_to_punishment(coach: Any, game_state: Optional[Dict[str, Any]] = Non
 
 
 # ---------------------------------------------------------------------------
+# NHL-grounded violence rates: fights, tussles, and line brawls
+# ---------------------------------------------------------------------------
+# Grounded in the modern game (2021-22 through 2024-25):
+# - Fights: ~0.26 per game (hockeyfights.com). ~80% of games are fight-free,
+#   ~17-18% see exactly one fight; only ~2-3% see more than one.
+# - Line brawls (3+ combatants fighting at once): ~2 per 1312-game season.
+#   Recent ones, all following the same script -- blowout + 3rd period +
+#   a flashpoint, punished with 10-minute misconducts, never suspensions:
+#     2022-23: TBL-VGK Mar 9 '23, FLA-OTT Apr 6 '23 (166 PIM)
+#     2023-24: FLA-OTT Nov 27 '23 (167 PIM, all 10 skaters misconducted),
+#              NYR-NJD Apr 3 '24 (brawl 2 seconds in, 8 ejected),
+#              TOR-BUF Mar 31 '24 (all 10 misconducted after a post-whistle scrum)
+#     2024-25: WSH-SEA Mar 9 '25 (all 10 in the box, mostly roughing minors),
+#              FLA-EDM Jun 10 '25 (SCF Game 3, all 10 on the ice in a 6-1 blowout)
+# - Tussles (post-whistle scrums): common -- most heated games have a few --
+#   but they almost never escalate. Refs and players keep them at shoving.
+# - True bench-clearing brawls are extinct; the model doesn't produce them.
+NHL_FIGHTS_PER_GAME = 0.26
+# True line brawls (3+ simultaneous fighting pairs) are far rarer than the
+# word "brawl" in headlines suggests. Five-season census, 2021-22 through
+# 2025-26, regular season + playoffs (~6,990 games):
+#   21-22: none found
+#   22-23: TBL-VGK Mar'23, FLA-OTT Apr'23 (166 PIM)
+#   23-24: FLA-OTT Nov'23 (167 PIM, all 10 misconducted),
+#           NYR-NJD Apr'24 (five simultaneous fights off the opening draw)
+#   24-25: FLA-EDM Jun'25 SCF G3 (6-1 blowout, all 10 involved)
+#   25-26: FLA-TBL (3 simultaneous fights, 3rd period of a 4-0 game)
+# 6 confirmed in ~6,990 games ~= 0.00086. Near-misses (TOR-BUF Mar'24,
+# BUF-TBL Mar'26 multi-fight games; WSH-SEA Mar'25 scrum) don't clear the
+# 3-pair bar. Round to 0.0009: ~1.2 line brawls per 1312-game NHL season.
+NHL_BRAWLS_PER_GAME = 0.0009
+
+
+def fight_probability(tension: float, is_playoff: bool = False,
+                      ordered: bool = False,
+                      retaliation_mod: float = 1.0) -> float:
+    """Per-game probability of at least one fight.
+
+    Scales with the tension meter: a calm night (~10) sits well below the
+    league average, a boiling rivalry (~80+) fights at multiples of it.
+    Playoff teams are more disciplined about sitting five; an ordered team
+    (coach sent them out) is much more likely to go."""
+    try:
+        # League average (~0.26) lands around tension 20; a calm night sits
+        # below it, a boiling rivalry fights at multiples of it.
+        p = NHL_FIGHTS_PER_GAME * (0.45 + 2.6 * (max(0.0, tension) / 100.0))
+        if is_playoff:
+            p *= 0.75
+        if ordered:
+            p *= 2.2
+        return round(min(0.85, p * max(0.0, retaliation_mod)), 4)
+    except Exception:
+        return NHL_FIGHTS_PER_GAME
+
+
+def brawl_probability(tension: float, is_playoff: bool = False,
+                      ordered: bool = False, blowout: bool = False,
+                      period: int = 1) -> float:
+    """Per-game probability of a LINE BRAWL: 3+ combatants fighting at once.
+
+    Exceedingly rare by design (~0.2% of games league-wide). Needs real heat
+    AND the classic script: a blowout, the third period, a flashpoint. An
+    ordered team in a boiling blowout is the only scenario that moves the
+    needle much -- and even then it's a long shot, like the real thing."""
+    try:
+        heat = max(0.0, tension - 35.0) / 65.0
+        p = NHL_BRAWLS_PER_GAME * (heat ** 2) * 6.0
+        if blowout:
+            p *= 4.0
+        if period >= 3:
+            p *= 2.0
+        if ordered:
+            p *= 5.0
+        if is_playoff:
+            p *= 0.8
+        return round(min(0.06, p), 5)
+    except Exception:
+        return 0.0
+
+
+def after_whistle_penalty_mult(is_playoff: bool, series_game: int = 1) -> float:
+    """How the whistle treats post-whistle stuff (roughing, unsportsmanlike).
+
+    The myth is that refs swallow the whistle in the playoffs; the data is
+    subtler -- overall power plays tick UP early (desperation penalties in
+    mismatched round-1 series). But RETALIATORY penalties fall off a cliff:
+    coaches bench anyone who takes a dumb one, and officials let scrums go,
+    especially late in a series. So: after-the-whistle minors get rarer in
+    the playoffs, more so the deeper the series goes. Fights still draw
+    fighting majors -- nobody ignores a fight."""
+    try:
+        if not is_playoff:
+            return 1.0
+        g = max(1, min(7, int(series_game)))
+        return round(max(0.25, 0.62 - 0.05 * g), 3)
+    except Exception:
+        return 1.0
+
+
+def playoff_penalty_mult(is_playoff: bool, series_game: int = 1) -> float:
+    """Desperation-penalty rate in the playoffs (hooking, holding, tripping,
+    slashing -- the ordinary stuff, not retaliation and not fights).
+
+    theScore (Mar 2025): overall power plays tick UP in the postseason,
+    especially in early rounds -- desperation penalties rise in mismatched
+    round-1 series, then the rate eases as the series deepens and the whistle
+    tightens. So Games 1-2 run a touch hotter than a regular-season game and
+    Game 7 runs a touch cooler. Modest by design: ~+15% / -5%."""
+    try:
+        if not is_playoff:
+            return 1.0
+        g = max(1, min(7, int(series_game)))
+        return {1: 1.15, 2: 1.12, 3: 1.08, 4: 1.04,
+                5: 1.00, 6: 0.97, 7: 0.95}[g]
+    except Exception:
+        return 1.0
+
+
+# ---------------------------------------------------------------------------
 # Performance as a beef rectifier: the Torts/Werenski arc
 # ---------------------------------------------------------------------------
 # A hard coach who drags a career year out of a player forges a bond out of
@@ -3002,6 +3125,36 @@ INCIDENT_WEIGHTS = {
     "coach_comments": 8,     # he ran his mouth in the media
     "brawl": 15,
 }
+
+
+def fresh_violent_incident(rivalries: list, team_a: Any, team_b: Any,
+                           within_games: int = 10) -> bool:
+    """True if these two teams have a brawl / injury / controversial-hit
+    incident in their rivalry log within the last `within_games` games.
+
+    Drives the rarest script in hockey: the premeditated opening-faceoff
+    line brawl. NYR-NJD, Apr 3 2024: five simultaneous fights two seconds
+    in, answering Rempe's suspendable elbow on Siegenthaler the last time
+    they met. Observed rate: ~1 in 5 NHL seasons -- keep any roll built on
+    this tiny."""
+    try:
+        violent = {"brawl", "star_injured", "player_injured",
+                   "controversial_hit"}
+        names = {getattr(team_a, "team_name", ""),
+                 getattr(team_b, "team_name", "")}
+        for r in rivalries or []:
+            if r.get("kind") != "team_team":
+                continue
+            rnames = {r.get("a_name"), r.get("b_name")}
+            if names != rnames:
+                continue
+            for inc in r.get("incidents") or []:
+                if inc.get("kind") in violent and \
+                        _incident_games_ago(inc) <= within_games:
+                    return True
+        return False
+    except Exception:
+        return False
 
 
 def record_game_incident(rivalries: list, team_a: Any, team_b: Any,

@@ -401,10 +401,21 @@ DEFENSEMEN_POSITIONS = (PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENS
                         PlayerPosition.DEFENSE)
 
 
-def _draw_infraction():
-    """Draw a (name, minutes, detail) infraction with NHL-realistic lengths."""
+def _draw_infraction(fight_mult: float = 1.0, scrum_mult: float = 1.0,
+                     play_mult: float = 1.0):
+    """Draw a (name, minutes, detail) infraction with NHL-realistic lengths.
+
+    fight_mult scales the Fighting weight (tension meter, coach orders);
+    scrum_mult scales post-whistle minors (Roughing, Unsportsmanlike) -- the
+    playoffs swallow the whistle on retaliation; play_mult scales every other
+    infraction (early-series desperation bump, fading late). All default to
+    1.0, which reproduces the original draw exactly."""
     names = [n for n, _, _, _ in INFRACTIONS]
-    name = random.choices(names, weights=_INFRACTION_WEIGHTS, k=1)[0]
+    weights = [w * (fight_mult if n == "Fighting"
+                    else scrum_mult if n in ("Roughing", "Unsportsmanlike conduct")
+                    else play_mult)
+               for n, w, _, _ in INFRACTIONS]
+    name = random.choices(names, weights=weights, k=1)[0]
     base = next(b for n, _, b, _ in INFRACTIONS if n == name)
     upgrade = next(u for n, _, _, u in INFRACTIONS if n == name)
     minutes = base
@@ -480,18 +491,52 @@ class GameSim:
     Stage 4: Physical play mechanics, defensive systems, and turnover tracking.
     Stage 5: Advanced goaltending mechanics, save types, and positioning systems.
     """
-    def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False):
+    def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False,
+                 rivalries=None, series_game: int = 1):
         self.home_team = home_team
         self.away_team = away_team
         self.is_playoff = is_playoff
+        self.rivalries = rivalries if rivalries is not None else []
+        self.series_game = series_game
+        # --- Tension / punishment / brawl state (additive; inert when unused) ---
+        # Base tension comes from the same breakdown the visualizer's meter
+        # uses, so the engine and the meter agree on how heated this game is.
+        self._tension_base = 10.0
+        self._live_heat = 0.0          # in-game: fights +6, majors +4, brawls +10
+        self._brawl_happened = False   # at most one line brawl per game
+        self._in_brawl = False         # recursion guard while booking brawl fights
+        self._opening_brawl = None     # team_name if a premeditated opening-draw
+                                       # brawl is scripted (see _evaluate_punishment_orders)
+        self._retaliation_mod = 1.0
+        self._punishment_orders = {}   # team_name -> order_punishment() dict
+        self._home_coach = None
+        self._away_coach = None
+        try:
+            from reputation_system import game_tension_breakdown
+            bd = game_tension_breakdown(home_team, away_team,
+                                        rivalries=self.rivalries,
+                                        is_playoff=is_playoff)
+            self._tension_base = float(bd.get("tension", 10.0))
+        except Exception:
+            pass
+        try:
+            self._home_coach = self._find_head_coach(home_team)
+            self._away_coach = self._find_head_coach(away_team)
+        except Exception:
+            pass
         self.home_score = 0
         self.away_score = 0
         self.period = 1
         self.clock = 1200  # 20 minutes in seconds
         self._period_length = 1200  # for event_log elapsed timestamps
+        # Log/listener fields must exist before pre-game punishment orders,
+        # which announce themselves via _log_event/_emit_pbp.
         self.game_log = []
         self.notable_events = []
         self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
+        self.pbp_listeners = []
+        # Pre-game punishment orders need score/period fields set first.
+        self._evaluate_punishment_orders()
 
         # Recent shooters: keeps one sniper from monopolizing every shot.
         # After you shoot, the puck moves on -- someone else shoots next.
@@ -499,7 +544,7 @@ class GameSim:
 
         # Play-by-play visualizer hooks (additive; zero overhead when unused).
         # Listeners are callables receiving one event dict each.
-        self.pbp_listeners = []
+        # (pbp_listeners is initialized earlier, before pre-game orders.)
         # Sudden-death OT bookkeeping (set by _handle_overtime)
         self._ot_sudden_death = False
         self._ot_start_score = None
@@ -1966,6 +2011,13 @@ class GameSim:
         self._emit_pbp("game_start",
                        home_team=self.home_team.team_name,
                        away_team=self.away_team.team_name)
+        # Premeditated line brawl: both teams knew this was coming before
+        # the puck dropped. Two seconds in, gloves everywhere.
+        if getattr(self, "_opening_brawl", None):
+            try:
+                self._run_brawl("the opening faceoff")
+            except Exception:
+                pass
 
         for p in range(1, 4):
             self.period = p
@@ -1973,6 +2025,9 @@ class GameSim:
             self._period_length = 1200
             self._emit_pbp("period_start", period=p)
             if p == 3:
+                # The Maurice spot develops mid-game: a coach getting run out
+                # of the building may send his guys out now.
+                self._reevaluate_punishment_orders()
                 # a perfect goalie through 40:00 is a broadcast storyline
                 try:
                     if self.away_score == 0:
@@ -5159,7 +5214,10 @@ class GameSim:
         call (handled in _resolve_faceoff).
         """
         if infraction is None:
-            name, penalty_length, detail = _draw_infraction()
+            name, penalty_length, detail = _draw_infraction(
+                fight_mult=self._fight_weight_mult(),
+                scrum_mult=self._scrum_weight_mult(),
+                play_mult=self._play_weight_mult())
         else:
             name, penalty_length, detail = infraction
 
@@ -5196,6 +5254,274 @@ class GameSim:
         self.possession_player = None
         self.current_situation = self._get_current_situation()
 
+    # ------------------------------------------------------------------
+    # Tension / punishment / brawl hooks (reputation_system logic, engine
+    # mechanics). All guarded: if reputation_system is unavailable the sim
+    # behaves exactly as before.
+    # ------------------------------------------------------------------
+    def _find_head_coach(self, team):
+        try:
+            from game_classes import StaffRole
+            found = team.get_staff_by_role(StaffRole.HEAD_COACH)
+            return found[0] if found else None
+        except Exception:
+            return None
+
+    def _live_tension(self):
+        return min(100.0, self._tension_base + self._live_heat)
+
+    def _game_state_for(self, team):
+        sd = self.home_score - self.away_score
+        if team is not self.home_team:
+            sd = -sd
+        return {"score_diff": sd, "period": getattr(self, "period", 1),
+                "is_playoff": self.is_playoff, "tension": self._live_tension()}
+
+    def _evaluate_punishment_orders(self):
+        """Pre-game: does either coach send his guys out? Score is 0-0, so
+        only real bad blood can trigger it this early."""
+        try:
+            from reputation_system import order_punishment, respond_to_punishment
+        except Exception:
+            return
+        self._punishment_orders = {}
+        self._retaliation_mod = 1.0
+        for team, coach, opp_coach in (
+                (self.home_team, self._home_coach, self._away_coach),
+                (self.away_team, self._away_coach, self._home_coach)):
+            if coach is None:
+                continue
+            try:
+                res = order_punishment(coach, team, self._game_state_for(team),
+                                       rivalries=self.rivalries)
+            except Exception:
+                continue
+            self._punishment_orders[team.team_name] = res
+            if res.get("ordered"):
+                self._log_event(res.get("story", ""), "COACH")
+                self._emit_pbp("coach_order", team=team.team_name,
+                               coach=getattr(coach, "full_name", "Coach"),
+                               story=res.get("story", ""))
+                self._note_retaliation(opp_coach)
+                # The rarest script in hockey: a premeditated line brawl off
+                # the opening draw, answering a fresh violent incident
+                # (NYR-NJD, Apr 3 2024: five simultaneous fights two seconds
+                # in, after Rempe's suspendable elbow the last meeting).
+                # ~1 in 5 NHL seasons: keep the roll tiny.
+                try:
+                    from reputation_system import fresh_violent_incident
+                    opp_team = (self.away_team if team is self.home_team
+                                else self.home_team)
+                    if (self._opening_brawl is None
+                            and fresh_violent_incident(self.rivalries, team,
+                                                       opp_team)
+                            and random.random() < 0.04):
+                        self._opening_brawl = team.team_name
+                except Exception:
+                    pass
+
+    def _reevaluate_punishment_orders(self):
+        """Start of the 3rd: the Maurice spot develops mid-game. Only newly
+        ordered coaches get announced."""
+        try:
+            from reputation_system import order_punishment
+        except Exception:
+            return
+        for team, coach, opp_coach in (
+                (self.home_team, self._home_coach, self._away_coach),
+                (self.away_team, self._away_coach, self._home_coach)):
+            if coach is None or self._punishment_orders.get(team.team_name, {}).get("ordered"):
+                continue
+            try:
+                res = order_punishment(coach, team, self._game_state_for(team),
+                                       rivalries=self.rivalries)
+            except Exception:
+                continue
+            self._punishment_orders[team.team_name] = res
+            if res.get("ordered"):
+                self._log_event(f"3rd period -- {res.get('story', '')}", "COACH")
+                self._emit_pbp("coach_order", team=team.team_name,
+                               coach=getattr(coach, "full_name", "Coach"),
+                               story=res.get("story", ""))
+                self._note_retaliation(opp_coach)
+
+    def _note_retaliation(self, opp_coach):
+        """The other bench answers a punishment order -- or pointedly doesn't."""
+        try:
+            from reputation_system import respond_to_punishment
+            resp = respond_to_punishment(opp_coach, {"tension": self._live_tension()})
+        except Exception:
+            return
+        if resp and resp.get("responds"):
+            self._retaliation_mod = max(self._retaliation_mod,
+                                        resp.get("retaliation_mod", 1.0))
+            self._live_heat = min(40.0, self._live_heat + resp.get("tension_delta", 0) / 2.0)
+            self._log_event(resp.get("story", ""), "COACH")
+
+    def _fight_weight_mult(self):
+        """Scale the Fighting draw weight so the sim's fight rate tracks the
+        tension meter. Base sim: ~0.175 fights/game; target comes from the
+        NHL-grounded fight_probability()."""
+        try:
+            from reputation_system import fight_probability
+            ordered = any(o.get("ordered") for o in
+                          getattr(self, "_punishment_orders", {}).values())
+            target = fight_probability(self._live_tension(),
+                                       is_playoff=self.is_playoff,
+                                       ordered=ordered,
+                                       retaliation_mod=getattr(self, "_retaliation_mod", 1.0))
+            return max(0.25, min(4.0, target / 0.175))
+        except Exception:
+            return 1.0
+
+    def _scrum_weight_mult(self):
+        """Post-whistle minors (roughing, unsportsmanlike): the playoffs
+        swallow the whistle on retaliation, more so late in a series.
+        Overtime officials are cautious too -- scrums in OT (period 4+) get
+        the same let-them-play treatment, while fights and majors are still
+        called."""
+        try:
+            from reputation_system import after_whistle_penalty_mult
+            m = after_whistle_penalty_mult(self.is_playoff,
+                                           getattr(self, "series_game", 1))
+            if getattr(self, "period", 1) >= 4:
+                m *= 0.6
+            return m
+        except Exception:
+            return 1.0
+
+    def _play_weight_mult(self):
+        """Ordinary infractions in the playoffs: a touch of early-series
+        desperation (more hooking/holding/tripping in Games 1-2), easing off
+        by Game 7. Regular season: 1.0."""
+        try:
+            from reputation_system import playoff_penalty_mult
+            return playoff_penalty_mult(self.is_playoff,
+                                        getattr(self, "series_game", 1))
+        except Exception:
+            return 1.0
+
+    def _maybe_brawl(self, trigger):
+        """A flashpoint (fight, major) in a heated game can erupt into a line
+        brawl: 3+ combatants at once. Grounded at ~1.2 per NHL season (6 in
+        5 seasons, 2021-22..2025-26) -- rare."""
+        if self._brawl_happened or self._in_brawl:
+            return
+        try:
+            from reputation_system import brawl_probability
+        except Exception:
+            return
+        sd = abs(self.home_score - self.away_score)
+        ordered = any(o.get("ordered") for o in self._punishment_orders.values())
+        p = brawl_probability(self._live_tension(), is_playoff=self.is_playoff,
+                              ordered=ordered, blowout=sd >= 3,
+                              period=getattr(self, "period", 1))
+        if random.random() >= p:
+            return
+        self._run_brawl(trigger)
+
+    def _run_brawl(self, trigger):
+        """The full script: 2-4 pairs drop the gloves, every skater on the
+        ice gets a 10-minute misconduct -- the NHL's actual answer to a line
+        brawl (Nov 27 '23: all 10 skaters). Misconducts, not suspensions: no
+        bloodbath, the game goes on. Logged as an incident so the next
+        meeting's meter remembers."""
+        self._brawl_happened = True
+        self._in_brawl = True
+        try:
+            home_skaters = [p for p in self._get_on_ice(self.home_team)
+                            if p.primary_position != PlayerPosition.GOALIE]
+            away_skaters = [p for p in self._get_on_ice(self.away_team)
+                            if p.primary_position != PlayerPosition.GOALIE]
+            n_pairs = min(len(home_skaters), len(away_skaters),
+                          random.randint(2, 4))
+            if n_pairs < 2:
+                self._brawl_happened = False  # not enough skaters; may try again later
+                return
+            pairs = []
+            for i in range(n_pairs):
+                hp, ap = home_skaters[i], away_skaters[i]
+                pairs.append((hp, ap))
+                self._book_fight_pair(hp, self.home_team, ap, self.away_team)
+                self.penalties_called += 2  # second half of each coincidental pair
+            for p in home_skaters:
+                self._book_misconduct(p, self.home_team)
+            for p in away_skaters:
+                self._book_misconduct(p, self.away_team)
+            names = ", ".join(f"{h.full_name.split()[-1]} vs {a.full_name.split()[-1]}"
+                              for h, a in pairs)
+            self._log_event(
+                f"LINE BRAWL! It started with {trigger} and now {names} -- "
+                f"every skater on the ice gets a 10-minute misconduct.", "BRAWL")
+            self._emit_pbp("brawl", pairs=[(h.full_name, a.full_name) for h, a in pairs],
+                           home_team=self.home_team.team_name,
+                           away_team=self.away_team.team_name)
+            self._live_heat = min(40.0, self._live_heat + 10.0)
+            try:
+                from reputation_system import record_game_incident
+                record_game_incident(self.rivalries, self.home_team,
+                                     self.away_team, "brawl")
+            except Exception:
+                pass
+        finally:
+            self._in_brawl = False
+
+    def _book_fight_pair(self, player, team, opponent=None, opposing_team=None):
+        """Book one coincidental fighting-major pair (5 each, teams stay 5v5).
+        Shared by the normal fight path and brawls."""
+        if opposing_team is None:
+            opposing_team = self.away_team if team == self.home_team else self.home_team
+        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
+        opp_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+        player.stats.penalties_in_minutes += 5
+        team_penalties.append({'player': player, 'time': 5 * 60, 'minutes': 5,
+                               'infraction': "Fighting", 'manpower_loss': False,
+                               'terminates_on_goal': False})
+        if opponent is None:
+            opp_skaters = [p for p in self._get_on_ice(opposing_team)
+                           if p.primary_position != PlayerPosition.GOALIE]
+            opponent = random.choice(opp_skaters) if opp_skaters else None
+        if opponent is not None:
+            opponent.stats.penalties_in_minutes += 5
+            opp_penalties.append({'player': opponent, 'time': 5 * 60, 'minutes': 5,
+                                  'infraction': "Fighting", 'manpower_loss': False,
+                                  'terminates_on_goal': False})
+            self._log_event(
+                f"{player.full_name} ({team.team_name}) and "
+                f"{opponent.full_name} ({opposing_team.team_name}) drop the gloves! "
+                f"Coincidental 5-minute fighting majors -- teams stay at full strength.",
+                "FIGHT")
+        else:
+            self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
+        self._emit_pbp("fight", player=player, team=team.team_name)
+        self.fights_called += 1
+        if team == self.home_team:
+            self.home_penalties_called += 1
+            self.home_pim_called += 5
+            self.away_penalties_called += 1
+            self.away_pim_called += 5
+        else:
+            self.away_penalties_called += 1
+            self.away_pim_called += 5
+            self.home_penalties_called += 1
+            self.home_pim_called += 5
+        if not self._in_brawl:
+            self._live_heat = min(40.0, self._live_heat + 6.0)
+            self._maybe_brawl("fight")
+
+    def _book_misconduct(self, player, team):
+        """10-minute misconduct: the player sits, no manpower change."""
+        player.stats.penalties_in_minutes += 10
+        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
+        team_penalties.append({'player': player, 'time': 10 * 60, 'minutes': 10,
+                               'infraction': "Misconduct", 'manpower_loss': False,
+                               'terminates_on_goal': False})
+        self.misconducts_called += 1
+        if team == self.home_team:
+            self.home_pim_called += 10
+        else:
+            self.away_pim_called += 10
+
     def _book_penalty(self, player, team, name, penalty_length, detail):
         """Record a penalty (box time, PIM, PP/PK bookkeeping, PBP) without
         stopping play. The whistle/faceoff is the caller's job."""
@@ -5214,42 +5540,8 @@ class GameSim:
 
         if name == "Fighting":
             # Coincidental fighting majors: both combatants get 5, teams stay 5v5.
-            manpower_loss = False
-            terminates_on_goal = False
-            player.stats.penalties_in_minutes += 5
-            team_penalties.append({'player': player, 'time': 5 * 60, 'minutes': 5,
-                                   'infraction': name, 'manpower_loss': False,
-                                   'terminates_on_goal': False})
-            # Find a willing combatant on the other team
-            opp_skaters = [p for p in self._get_on_ice(opposing_team)
-                           if p.primary_position != PlayerPosition.GOALIE]
-            opponent = random.choice(opp_skaters) if opp_skaters else None
-            if opponent is not None:
-                opponent.stats.penalties_in_minutes += 5
-                opp_penalties.append({'player': opponent, 'time': 5 * 60, 'minutes': 5,
-                                      'infraction': name, 'manpower_loss': False,
-                                      'terminates_on_goal': False})
-                self._log_event(
-                    f"{player.full_name} ({team.team_name}) and "
-                    f"{opponent.full_name} ({opposing_team.team_name}) drop the gloves! "
-                    f"Coincidental 5-minute fighting majors -- teams stay at full strength.",
-                    "FIGHT")
-            else:
-                self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
-            self._emit_pbp("fight", player=player, team=team.team_name)
-            self.fights_called += 1
-            # A fight is two penalties: both combatants (and teams) get 5 PIM
+            self._book_fight_pair(player, team)
             self.penalties_called += 1  # second penalty of the pair
-            if team == self.home_team:
-                self.home_penalties_called += 1
-                self.home_pim_called += 5
-                self.away_penalties_called += 1
-                self.away_pim_called += 5
-            else:
-                self.away_penalties_called += 1
-                self.away_pim_called += 5
-                self.home_penalties_called += 1
-                self.home_pim_called += 5
         else:
             player.stats.penalties_in_minutes += penalty_length
             team_penalties.append({'player': player, 'time': penalty_length * 60,
@@ -5261,6 +5553,12 @@ class GameSim:
             opposing_team_name = opposing_team.team_name
             self.team_stats[opposing_team_name]['power_play_opportunities'] += 1
             self.team_stats[team.team_name]['penalty_kill_opportunities'] += 1
+
+        # A non-fighting major is a flashpoint: heat rises, and in a heated
+        # game it can be the spark a line brawl needs.
+        if name != "Fighting" and penalty_length == 5 and not self._in_brawl:
+            self._live_heat = min(40.0, self._live_heat + 4.0)
+            self._maybe_brawl("major")
 
         # Occasional 10-minute misconduct tacked onto a minor (no extra manpower loss)
         misconduct = ""
