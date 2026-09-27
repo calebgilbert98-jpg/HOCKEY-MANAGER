@@ -471,13 +471,68 @@ class AdviseCoachPopup(ctk.CTkToplevel):
         btn_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
         btn_frame.pack(fill='both', expand=True, padx=16, pady=(0, 10))
         for key, label in rs.ADVICE_TYPES.items():
+            if key == "feature_player":
+                continue  # handled below with a player picker
             secondary_button(btn_frame, text=label,
                              command=lambda k=key: self._give_advice(k)).pack(
                                  fill='x', padx=10, pady=5)
 
+        # Per-player ask: give one guy more ice time and a bigger role.
+        feat_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
+        feat_frame.pack(fill='x', padx=16, pady=(0, 10))
+        ctk.CTkLabel(feat_frame, text="Feature a player -- more ice time, bigger role:",
+                     font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(8, 2))
+        names = [getattr(p, 'full_name', '?') for p in (roster or [])]
+        self._feat_pick = ctk.CTkOptionMenu(feat_frame,
+                                            values=names or ["(no players)"])
+        self._feat_pick.pack(fill='x', padx=10, pady=4)
+        row = ctk.CTkFrame(feat_frame, fg_color='transparent')
+        row.pack(fill='x', padx=10, pady=(0, 8))
+        secondary_button(row, text="Request",
+                         command=self._request_feature).pack(side='left', padx=(0, 6))
+        secondary_button(row, text="Rescind",
+                         command=self._rescind_feature).pack(side='left')
+
         self.result = ctk.CTkLabel(self, text="", font=('Segoe UI', 11),
                                    wraplength=480, justify='left')
         self.result.pack(padx=16, pady=(0, 12))
+
+    def _picked_player(self):
+        name = self._feat_pick.get()
+        for p in (self._roster or []):
+            if getattr(p, 'full_name', None) == name:
+                return p
+        return None
+
+    def _request_feature(self):
+        from ctk_theme import GREEN, RED
+        p = self._picked_player()
+        if p is None:
+            return
+        try:
+            out = rs.advise_coach(self._coach, "feature_player", self._team,
+                                  self._roster, target_player=p)
+            heard = "LISTENED" if out["listened"] else "IGNORED"
+            self.result.configure(
+                text=f"{heard} (p={out['probability']:.0%}): {out['text']}",
+                text_color=GREEN if out["listened"] else RED)
+            if self._on_done:
+                self._on_done()
+        except Exception:
+            pass
+
+    def _rescind_feature(self):
+        from ctk_theme import GREEN
+        p = self._picked_player()
+        if p is None:
+            return
+        try:
+            out = rs.unfeature_player(self._coach, p, self._team)
+            self.result.configure(text=out["text"], text_color=GREEN)
+            if self._on_done:
+                self._on_done()
+        except Exception:
+            pass
 
     def _give_advice(self, key):
         from ctk_theme import GREEN, RED

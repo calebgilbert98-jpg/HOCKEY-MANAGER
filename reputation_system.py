@@ -1296,6 +1296,10 @@ def coach_archetype_valuation(coach: Any, player: Any) -> float:
         rep = getattr(coach, "reputation", 50) or 50
         if rep < 45 and style in ("players_coach", "motivator") and family == "grind":
             val -= 0.05
+        # The GM asked for this player to be featured: the coach is playing
+        # him now, so the system values him.
+        if getattr(player, "usage_featured", False):
+            val = min(1.15, val + 0.15)
         return round(max(0.5, min(1.15, val)), 3)
     except Exception:
         return 1.0
@@ -1524,11 +1528,11 @@ def detect_dynamics_issues(team: Any, team_context: Optional[Dict[str, Any]],
                     if base < 30:
                         issues.append({
                             "key": "underutilized", "severity": "low",
-                            "text": f"{name} ({arch}) isn't credited by this system -- but he's laid back, so it doesn't matter to him. The fans and the league still see the draw; he could be utilized better."})
+                            "text": f"{name} ({arch}) isn't credited by this system -- but he's laid back, so it doesn't matter to him. The fans and the league still see the draw; ask the coach to feature him (Advise Coach)."})
                     else:
                         issues.append({
                             "key": "underutilized", "severity": "medium",
-                            "text": f"{name} ({arch}) is being undervalued in this system -- and he knows it. The fans and the league still see the draw; he could be utilized better."})
+                            "text": f"{name} ({arch}) is being undervalued in this system -- and he knows it. The fans and the league still see the draw; ask the coach to feature him (Advise Coach)."})
             except Exception:
                 continue
         return issues
@@ -1547,6 +1551,7 @@ ADVICE_TYPES = {
     "more_structure": "Install more structure",
     "play_the_kids": "Play the young players more",
     "shorten_bench": "Lean on the veterans",
+    "feature_player": "Feature a player (more ice time)",
 }
 
 _ADVICE_FALLOUT = {
@@ -1560,14 +1565,19 @@ _ADVICE_FALLOUT = {
 
 
 def advise_coach(coach: Any, advice_key: str, team: Any = None,
-                 roster: Optional[List[Any]] = None) -> Dict[str, Any]:
+                 roster: Optional[List[Any]] = None,
+                 target_player: Any = None) -> Dict[str, Any]:
     """The GM advises the coach. Whether he listens depends on personality:
     adaptable communicators listen; brash, stubborn coaches take it as an
-    insult. Trust (gm_trust) evolves with every exchange."""
+    insult. Trust (gm_trust) evolves with every exchange.
+    advice_key 'feature_player' needs target_player: the GM asks the coach
+    to give one specific player more ice time and a bigger role."""
     ensure_reputation_fields(coach)
     if not hasattr(coach, "gm_trust") or coach.gm_trust is None:
         coach.gm_trust = 70
     label = ADVICE_TYPES.get(advice_key, advice_key)
+    if advice_key == "feature_player" and target_player is not None:
+        label = f"Feature {getattr(target_player, 'full_name', 'player')} (more ice time)"
     brash = (coach.controversy or 0) >= 60
     try:
         adapt = getattr(coach, "adaptability", 10) or 10
@@ -1578,11 +1588,32 @@ def advise_coach(coach: Any, advice_key: str, team: Any = None,
              + (coach.gm_trust - 70) / 100 * 0.50)
         if brash:
             p *= 0.6  # takes advice as an insult
+        if advice_key == "feature_player":
+            # Telling a coach WHO to play is personal. Stings more.
+            p *= 0.85
+        # If the GM holds the lineup pen, there's nothing to ask for.
+        if advice_key == "feature_player" and team is not None and \
+                getattr(team, "line_control", "coach") == "gm":
+            return {"listened": True, "probability": 1.0,
+                    "text": "You hold the lineup pen -- no need to ask. He's already playing.",
+                    "gm_trust": coach.gm_trust}
         p = max(0.05, min(0.95, p))
         listened = random.random() < p
         cname = getattr(coach, "full_name", "Coach")
         if listened:
             coach.gm_trust = min(100, coach.gm_trust + 5)
+            if advice_key == "feature_player" and target_player is not None:
+                pname = getattr(target_player, "full_name", "The player")
+                target_player.usage_featured = True
+                target_player.happiness = min(100, (getattr(target_player, "happiness", 70) or 70) + 6)
+                text = (f"{pname} is getting top-six minutes and a bigger role at the GM's request. "
+                        f"He noticed.")
+                if team is not None:
+                    record_team_event(team, "gm_advice", f"GM advised: {label}. {text}",
+                                      morale_delta=3, tone="up")
+                return {"listened": True, "probability": round(p, 3),
+                        "text": f"{cname} listened. {text}", "gm_trust": coach.gm_trust,
+                        "featured": pname}
             text, delta, pred = _ADVICE_FALLOUT.get(advice_key, (f"Coach took the advice: {label}.", 2, None))
             n = _shift_happiness(roster or [], delta, pred)
             if team is not None:
@@ -1603,6 +1634,20 @@ def advise_coach(coach: Any, advice_key: str, team: Any = None,
     except Exception:
         return {"listened": False, "probability": 0.0, "text": "Advice lost in the noise.",
                 "gm_trust": getattr(coach, "gm_trust", 70)}
+
+
+def unfeature_player(coach: Any, target_player: Any, team: Any = None) -> Dict[str, Any]:
+    """The GM rescinds the feature request: back to whatever the coach decides."""
+    try:
+        target_player.usage_featured = False
+        pname = getattr(target_player, "full_name", "The player")
+        if team is not None:
+            record_team_event(team, "gm_advice",
+                              f"GM rescinded the feature request for {pname} -- usage is the coach's call again.",
+                              morale_delta=0, tone="neutral")
+        return {"ok": True, "text": f"{pname} is no longer a requested feature -- the coach decides his usage again."}
+    except Exception:
+        return {"ok": False, "text": "Nothing changed."}
 
 
 # ---------------------------------------------------------------------------
@@ -2661,6 +2706,10 @@ def on_player_transfer(rivalries: list, player: Any,
     escalation) follows the MAN -- it's his, not the team's. Ambient stuff he
     merely 'encouraged' (regional chirping, mild award races) is left behind
     or cools to almost nothing."""
+    try:
+        player.usage_featured = False  # new room, new coach, no standing request
+    except Exception:
+        pass
     carried: List[Dict[str, Any]] = []
     left: List[Dict[str, Any]] = []
     try:
