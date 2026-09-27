@@ -9138,7 +9138,8 @@ class HockeyManagerGUI(tk.Tk):
     def update_inbox_notification(self):
         """Update the inbox button notification."""
         if hasattr(self, 'inbox_btn'):
-            self.inbox_btn.config(text=self._get_inbox_button_text())
+            # CTk widgets use configure(), not config()
+            self.inbox_btn.configure(text=self._get_inbox_button_text())
             
     def send_email_to_user(self, message):
         """Send an email message to the user's inbox."""
