@@ -497,6 +497,13 @@ class GameSim:
         self.away_team = away_team
         self.is_playoff = is_playoff
         self.rivalries = rivalries if rivalries is not None else []
+        # Installed NHL systems: every team skates an identity.
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(home_team)
+            _tx.ensure_team_tactics(away_team)
+        except Exception:
+            pass
         self.series_game = series_game
         # --- Tension / punishment / brawl state (additive; inert when unused) ---
         # Base tension comes from the same breakdown the visualizer's meter
@@ -5204,7 +5211,24 @@ class GameSim:
     def _select_formation(self, team, situation):
         """
         Stage 3: Select appropriate formation based on situation.
+
+        The team's installed PP/PK system (tactics.py) -- a coaching
+        decision, not a dice roll. Falls back to the old random pick
+        when no system is installed.
         """
+        try:
+            import tactics as _tx
+            tk = _tx.team_tactics(team)
+            if situation == SpecialSituation.POWER_PLAY:
+                key = tk.get("pp", "umbrella")
+                if key in _tx.POWERPLAY_SYSTEMS:
+                    return ("pp", key)
+            elif situation == SpecialSituation.PENALTY_KILL:
+                key = tk.get("pk", "diamond")
+                if key in _tx.PENALTY_KILL_SYSTEMS:
+                    return ("pk", key)
+        except Exception:
+            pass
         if situation == SpecialSituation.POWER_PLAY:
             formations = list(PowerPlayFormation)
             return random.choice(formations)
@@ -5222,13 +5246,30 @@ class GameSim:
         
         if situation == SpecialSituation.POWER_PLAY:
             modifier = 2.0  # ~2x: real power plays generate far more shot volume
-            if formation == PowerPlayFormation.UMBRELLA:
+            if isinstance(formation, tuple) and formation[0] == "pp":
+                try:
+                    import tactics as _tx
+                    modifier *= _tx.POWERPLAY_SYSTEMS[formation[1]].get(
+                        "pp_shots", 1.0)
+                except Exception:
+                    pass
+            elif formation == PowerPlayFormation.UMBRELLA:
                 modifier += 0.1  # Extra 10% for umbrella formation
             elif formation == PowerPlayFormation.OVERLOAD:
                 modifier += 0.05  # Extra 5% for overload
         elif situation == SpecialSituation.PENALTY_KILL:
             modifier = 0.6  # 40% reduction for penalty kill
-            if formation == PenaltyKillFormation.DIAMOND:
+            if isinstance(formation, tuple) and formation[0] == "pk":
+                # The shorthanded team's own system: an aggressive kill
+                # hunts shorthanded rushes, a passive box just survives.
+                try:
+                    import tactics as _tx
+                    _sh = _tx.PENALTY_KILL_SYSTEMS[formation[1]].get(
+                        "sh_threat", 1.0)
+                    modifier *= 0.7 + 0.3 * _sh
+                except Exception:
+                    pass
+            elif formation == PenaltyKillFormation.DIAMOND:
                 modifier += 0.1  # Better defense with diamond
             elif formation == PenaltyKillFormation.BOX:
                 modifier += 0.05  # Slight improvement with box
@@ -6138,7 +6179,22 @@ class GameSim:
         
         # Apply special situation modifiers (Stage 3)
         shot_chance = self._apply_situation_modifiers(shot_chance, current_situation, formation)
-        
+
+        # Installed NHL systems (tactics.py): pace + PK suppression.
+        # Pace is the geometric mean of both teams' tempo -- a trap team
+        # drags even a rush team into a slower game, and vice versa.
+        try:
+            import tactics as _tx
+            _att = _tx.resolve_team_tactics(attacking_team)
+            _dfn = _tx.resolve_team_tactics(defending_team)
+            shot_chance *= (_att["pace"] * _dfn["pace"]) ** 0.5
+            if (current_situation == SpecialSituation.POWER_PLAY
+                    and self._is_team_on_power_play(attacking_team)):
+                # A good kill smothers PP shot volume, not just finishing.
+                shot_chance *= (2.0 - _dfn["pk"])
+        except Exception:
+            pass
+
         # Track formation usage
         if formation:
             if not hasattr(self, 'formation_usage'):
@@ -7135,6 +7191,15 @@ class GameSim:
         """
         hit_chance = base_chance * self.physical_intensity
         try:
+            # Installed systems (tactics.py): heavy teams finish checks,
+            # skill teams angle off. Normalized, so the league average is
+            # untouched -- only the identity moves.
+            import tactics as _tx
+            _phys = _tx.resolve_team_tactics(hitting_team)["physical"]
+            hit_chance *= max(0.8, min(1.3, _phys))
+        except Exception:
+            pass
+        try:
             # Enforcer deterrence: carriers skate freer with a tough guy
             # on the ice alongside them.
             mates = [p for p in self._get_on_ice(carrier_team)
@@ -8054,7 +8119,20 @@ class GameSim:
             factor *= {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
                        'Aggressive': 1.02}.get(pk, 0.97)
 
-        return max(0.8, min(1.25, factor))
+        # Installed NHL systems (tactics.py): layered under the old
+        # aggression sliders. Your attack against their structure; your
+        # power play against their kill.
+        try:
+            import tactics as _tx
+            _att = _tx.resolve_team_tactics(attacking_team)
+            _dfn = _tx.resolve_team_tactics(defending_team)
+            factor *= _att["attack"] * _dfn["defense"]
+            if sit_att == SpecialSituation.POWER_PLAY:
+                factor *= _att["pp"] * (2.0 - _dfn["pk"])
+        except Exception:
+            pass
+
+        return max(0.75, min(1.35, factor))
 
     def _get_tactical_system_bonus(self, team, situation):
         """

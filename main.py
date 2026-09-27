@@ -1960,6 +1960,10 @@ class AdvancedGameSim:
         # computed once here (the per-shot loop only reads the multiplier).
         self._init_situations()
 
+        # Installed NHL systems (tactics.py): per-game matchup edge per
+        # side, computed once here -- the per-shot loop only reads.
+        self._init_systems_edge()
+
         # Initialize performance cache
         from performance_optimizations import get_global_cache
         self.cache = get_global_cache()
@@ -2050,6 +2054,43 @@ class AdvancedGameSim:
         factor. Read per shot; computed per game."""
         try:
             return self._situation_edge.get(team_name, 1.0)
+        except Exception:
+            return 1.0
+
+    def _init_systems_edge(self):
+        """Installed NHL systems (tactics.py): your attack vs their
+        structure, your power play vs their kill. Computed ONCE per game
+        here in __init__ -- the per-shot hot loop below only reads the
+        stored multiplier. Never raises; inert (1.0) when unused."""
+        self._systems_matchup = {"home_goals": 1.0, "away_goals": 1.0,
+                                 "pace": 1.0, "home_pp": 1.0, "away_pp": 1.0,
+                                 "home_sh_threat": 1.0,
+                                 "away_sh_threat": 1.0}
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(self.home_team)
+            _tx.ensure_team_tactics(self.away_team)
+            self._systems_matchup = _tx.matchup_modifiers(self.home_team,
+                                                          self.away_team)
+        except Exception:
+            pass
+
+    def _systems_edge_for(self, team_name: str) -> float:
+        """Systems multiplier for the shooting side. Read per shot;
+        computed per game. On the power play this is your PP system vs
+        their kill (the defending kill used to be ignored entirely);
+        shorthanded it folds in counterattack threat."""
+        try:
+            m = self._systems_matchup or {}
+            home = team_name == self.home_team.team_name
+            if getattr(self, "pp_team", None) == team_name:
+                return m.get("home_pp" if home else "away_pp", 1.0)
+            base = m.get("home_goals" if home else "away_goals", 1.0)
+            if getattr(self, "pk_team", None) == team_name:
+                sh = m.get("home_sh_threat" if home else "away_sh_threat",
+                           1.0)
+                return base * (1.0 + (sh - 1.0) * 0.4)
+            return base
         except Exception:
             return 1.0
 
@@ -2686,6 +2727,9 @@ class AdvancedGameSim:
         # finishing a few percent either way. Own channel, like the
         # controversy momentum channel -- not part of any capped budget.
         shot_chance *= self._situation_edge_for(puck_team_name)
+        # Installed NHL systems: your attack vs their structure, your
+        # power play vs their kill. Own channel, precomputed per game.
+        shot_chance *= self._systems_edge_for(puck_team_name)
         shot_chance = max(0.04, min(0.16, shot_chance))
 
         # Shot blocking check
@@ -8420,6 +8464,14 @@ class HockeyManagerGUI(tk.Tk):
                     media_engine.route_events(self, _mev, game_date)
                 except Exception:
                     pass
+
+                # Tactics: rooms learn their systems one game at a time.
+                try:
+                    import tactics as _tx
+                    _tx.tick_tactics_familiarity(home_team)
+                    _tx.tick_tactics_familiarity(away_team)
+                except Exception:
+                    pass
                 
             except Exception as e:
                 print(f"Error in batch simulation: {e}")
@@ -8584,6 +8636,22 @@ class HockeyManagerGUI(tk.Tk):
         away_own, away_opp = _tactic_shifts(getattr(away_team, 'tactic_even_strength', 'Balanced'))
         home_goal_expectation += home_own + away_opp
         away_goal_expectation += away_own + home_opp
+
+        # Installed NHL systems (tactics.py): layered under the old
+        # sliders. Your attack vs their structure; pace moves total goals;
+        # PP/PK systems nudge season-level expectations (there is no
+        # per-man-advantage state in the lightweight path).
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(home_team)
+            _tx.ensure_team_tactics(away_team)
+            _mm = _tx.matchup_modifiers(home_team, away_team)
+            home_goal_expectation *= _mm["home_goals"] * _mm["pace"]
+            away_goal_expectation *= _mm["away_goals"] * _mm["pace"]
+            home_goal_expectation *= 1.0 + (_mm["home_pp"] - 1.0) * 0.15
+            away_goal_expectation *= 1.0 + (_mm["away_pp"] - 1.0) * 0.15
+        except Exception:
+            pass
 
         # Situations channel: room + bench + hunger move goal expectation a
         # few percent either way -- the same factor the detailed engines
@@ -9724,6 +9792,25 @@ class HockeyManagerGUI(tk.Tk):
         # Controversy cooldown + staff rep + Cup bonus. Reads standings before
         # league.end_of_season() wipes them.
         self._update_offseason_reputations()
+        # Copycat league: AI teams steal the Cup champion's systems.
+        # (Familiarity cost included -- copying isn't free.)
+        try:
+            import tactics as _tx
+            _CAT_LABEL = {"pp": "power play", "pk": "penalty kill",
+                          "offense": "offensive system",
+                          "defense": "defensive system"}
+            for _tn, _cat, _sys in _tx.offseason_copycat(
+                    getattr(self, 'league', None)):
+                _sysname = {"pp": _tx.POWERPLAY_SYSTEMS,
+                            "pk": _tx.PENALTY_KILL_SYSTEMS,
+                            "offense": _tx.OFFENSIVE_SYSTEMS,
+                            "defense": _tx.DEFENSIVE_SYSTEMS}[_cat][_sys]["name"]
+                self.add_news(
+                    f"Copycat league: {_tn} install the {_sysname} "
+                    f"{_CAT_LABEL[_cat]} after watching the champions "
+                    f"win with it.")
+        except Exception:
+            pass
         # Age players and reset stats
         self.league.end_of_season()
 
