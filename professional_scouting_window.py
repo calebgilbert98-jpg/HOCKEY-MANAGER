@@ -1608,11 +1608,11 @@ Months Until Draft: 6
                 
                 # Generate weaknesses based on lower attributes
                 weaknesses = []
-                if hasattr(target_player, 'strength') and target_player.strength < 12:
+                if hasattr(target_player, 'strength') and target_player.strength < 60:
                     weaknesses.append("Needs to add physical strength")
-                if hasattr(target_player, 'discipline') and target_player.discipline < 12:
+                if hasattr(target_player, 'discipline') and target_player.discipline < 60:
                     weaknesses.append("Occasional discipline issues")
-                if hasattr(target_player, 'consistency') and getattr(target_player, 'consistency', 10) < 12:
+                if hasattr(target_player, 'consistency') and getattr(target_player, 'consistency', 50) < 60:
                     weaknesses.append("Consistency can be improved")
                 
                 # Default weaknesses if none found

@@ -26,8 +26,16 @@ try:
     from manager_career import morale_label
 except Exception:
     def morale_label(m):  # fallback if career module is unavailable
-        return {9: "Superb", 8: "Superb", 7: "Good", 6: "Good",
-                5: "Okay", 4: "Okay", 3: "Poor", 2: "Poor"}.get(int(m), "Abysmal")
+        m = int(m)
+        if m >= 85:
+            return "Superb"
+        if m >= 65:
+            return "Good"
+        if m >= 45:
+            return "Okay"
+        if m >= 25:
+            return "Poor"
+        return "Abysmal"
 
 
 class AppDropdown(ctk.CTkComboBox):

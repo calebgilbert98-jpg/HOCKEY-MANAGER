@@ -1178,7 +1178,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             ("Strength", getattr(player, 'strength', 10)),
             ("Speed", getattr(player, 'speed', 10)),
             ("Stamina", getattr(player, 'stamina', 10)),
-            ("Injury Prone", getattr(player, 'injury_proneness', 10)),
+            ("Injury Prone", getattr(player, 'injury_proneness', 50)),
             ("Aggression", getattr(player, 'aggression', 10)),
             ("Bravery", getattr(player, 'bravery', 10))
         ]

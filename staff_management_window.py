@@ -1401,7 +1401,7 @@ class StaffManagementWindow(ctk.CTkToplevel):
         for staff in sorted(selected_staff_list, key=lambda s: s.role.value):
             morale = getattr(staff, 'morale', 10)
             summary_content += f"• {staff.full_name} ({staff.role.value})\n"
-            summary_content += f"  Rating: {staff.overall_rating} | Salary: ${staff.salary:,} | Morale: {morale}/20\n\n"
+            summary_content += f"  Rating: {staff.overall_rating} | Salary: ${staff.salary:,} | Morale: {morale}/100\n\n"
 
         text_widget.insert('1.0', summary_content)
         text_widget.configure(state='disabled')
@@ -1637,7 +1637,7 @@ class StaffManagementWindow(ctk.CTkToplevel):
                     morale = getattr(staff, 'morale', 10)
                     status = self.get_staff_status(staff)
                     report += f"• {staff.full_name} ({staff.role.value})\n"
-                    report += f"  Overall: {staff.overall_rating} | Experience: {staff.experience}y | Morale: {morale}/20\n"
+                    report += f"  Overall: {staff.overall_rating} | Experience: {staff.experience}y | Morale: {morale}/100\n"
                     report += f"  Salary: ${staff.salary:,} | Contract: {staff.contract_years}y | Status: {status}\n\n"
 
                 dept_avg = sum(s.overall_rating for s in staff_list) / len(staff_list)

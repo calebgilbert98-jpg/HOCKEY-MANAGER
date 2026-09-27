@@ -10053,8 +10053,8 @@ class HockeyManagerGUI(tk.Tk):
         fx = self.career.training.weekly_effects()
         if fx["morale_delta"]:
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
-                p.morale = max(1, min(10, m + (1 if fx["morale_delta"] > 0 else -1)))
+                m = getattr(p, "morale", 70) or 70
+                p.morale = max(1, min(100, m + (5 if fx["morale_delta"] > 0 else -5)))
         import random as _r
         if _r.random() < 0.02 * fx["injury_risk_mult"]:
             candidates = [p for p in (getattr(team, "roster", []) or [])
@@ -10431,8 +10431,8 @@ class HockeyManagerGUI(tk.Tk):
         total_board = sum(a.get("board_effect", 0) for a in answers)
         if total_morale:
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
-                p.morale = max(1, min(10, m + (1 if total_morale > 0 else -1)))
+                m = getattr(p, "morale", 70) or 70
+                p.morale = max(1, min(100, m + (5 if total_morale > 0 else -5)))
         if total_board:
             self.career.board.confidence = max(0, min(100, self.career.board.confidence + total_board))
         summary = f"{kind}: " + "; ".join(a.get("label", "") for a in answers)
@@ -10475,13 +10475,13 @@ class HockeyManagerGUI(tk.Tk):
 
             # Dressing room mood swing
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
+                m = getattr(p, "morale", 70) or 70
                 h = getattr(p, "happiness", 70) or 70
                 if user_won:
-                    p.morale = min(10, m + 1)
+                    p.morale = min(100, m + 5)
                     p.happiness = min(100, h + 3)
                 else:
-                    p.morale = max(1, m - 1)
+                    p.morale = max(1, m - 5)
                     p.happiness = max(0, h - 3)
 
             if self.career.board.sacked:
@@ -11089,6 +11089,7 @@ class HockeyManagerGUI(tk.Tk):
             person.contract.salary = person.salary
             person.contract.years_remaining = person.contract_years
             # Track market-setting contracts (star + top-5 AAV)
+            _set_market = False
             try:
                 if _cap_sys is not None:
                     _season = getattr(getattr(self, 'league', None),
@@ -11102,6 +11103,20 @@ class HockeyManagerGUI(tk.Tk):
                             'story': (f"{person.full_name}'s "
                                       f"${person.salary:,} deal sets the market "
                                       f"-- comparable stars will demand more.")})
+            except Exception:
+                pass
+            # Contract-decision fallout: overpay verdict, fan beef, GM rep,
+            # and GM-GM heat when the deal resets the market. The salary
+            # engine itself (SalaryCapSystem) is untouched.
+            try:
+                from reputation_system import evaluate_contract_decision
+                _cd = evaluate_contract_decision(
+                    person, person.salary, asking_price,
+                    team=self.user_team, league=self.league,
+                    market_setter=bool(_set_market))
+                if _cd.get("story"):
+                    self.news_log.append({'date': self.current_date,
+                                          'story': _cd["story"]})
             except Exception:
                 pass
             if not extension:
@@ -13995,7 +14010,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             
             # Determine morale status for display
             morale_str = ""
-            if player.morale >= 15:
+            if player.morale >= 75:
                 morale_str = "Very Happy"
                 morale_tag = "high_morale"
             elif player.morale >= 10:

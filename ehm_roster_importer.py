@@ -950,16 +950,16 @@ def import_league_from_db(path: str,
                 for f_, v in blended.items():
                     try:
                         if f_ == "injury_proneness":
-                            # intentional 1-20 scale, not 100
-                            setattr(p, f_, int(round(max(1, min(20, v / 2.5)))))
+                            # 1-100 scale (higher = more prone); blended ~50 -> *2
+                            setattr(p, f_, int(round(max(5, min(100, v * 2)))))
                         else:
                             setattr(p, f_, int(round(max(2, min(100, v * 2)))))
                     except (AttributeError, TypeError):
                         pass
-                # morale is 1-10 on PD (blended ~50 scale -> /5)
+                # morale is 1-100 on PD (blended ~50 scale -> *2)
                 if "morale" in blended:
-                    p.morale = max(1, min(10, int(
-                        round(blended["morale"] / 5))))
+                    p.morale = max(1, min(100, int(
+                        round(blended["morale"] * 2))))
                 if col_ca and row[col_ca]:
                     try:
                         p.peak_rating = max(
@@ -1051,7 +1051,7 @@ def import_league_from_db(path: str,
                     if col and row[col] is not None:
                         try:
                             setattr(s, pd_f, max(
-                                1, min(20, int(round(float(row[col]))))))
+                                5, min(100, int(round(float(row[col])) * 5))))
                         except (TypeError, ValueError, AttributeError):
                             pass
                 if col_nat and row[col_nat] is not None:

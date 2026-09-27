@@ -870,8 +870,8 @@ class DatabaseGenerator:
         
         for attr in advanced_attrs:
             if attr == 'injury_proneness':
-                # Lower is better for injury proneness
-                value = random.randint(1, 10)
+                # Lower is better for injury proneness (1-100 scale)
+                value = random.randint(5, 50)
             else:
                 base_value = random.randint(base_min, base_max)
                 value = int(base_value * current_factor)

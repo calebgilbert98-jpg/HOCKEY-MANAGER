@@ -146,11 +146,17 @@ def seed_player_reputation(player: Any) -> int:
 
 
 def seed_staff_reputation(staff: Any) -> int:
-    """Seed a 0-100 career reputation from the legacy 5-15 staff reputation."""
+    """Seed a 0-100 career reputation from staff reputation.
+
+    Handles both legacy 5-15 saves (mapped 5-15 -> 20-70) and post-rescale
+    native 1-100 values (clamped)."""
     ensure_reputation_fields(staff)
-    legacy = getattr(staff, "reputation", 10)  # legacy 5-15 scale
-    # Map 5-15 -> 20-70 so existing staff land mid-range, room to grow
-    mapped = int(20 + (max(5, min(15, legacy)) - 5) * 5)
+    legacy = getattr(staff, "reputation", 50) or 50  # legacy 5-15 scale
+    if legacy <= 20:
+        # Map 5-15 -> 20-70 so existing staff land mid-range, room to grow
+        mapped = int(20 + (max(5, min(15, legacy)) - 5) * 5)
+    else:
+        mapped = max(1, min(100, int(legacy)))
     staff.career_reputation = mapped
     return mapped
 
@@ -785,14 +791,15 @@ def team_chemistry(roster: List[Any],
 # teammates can't stand, or the beloved 4th-liner nobody outside the room
 # has heard of. Both are pure functions of stored state (no new fields).
 
-def _staff_100(entity: Any, attr: str, default: int = 10) -> float:
-    """Staff 1-20 attribute -> 0-100 scale."""
+def _staff_100(entity: Any, attr: str, default: int = 50) -> float:
+    """Staff 1-100 attribute -> 0-100 scale (native since the full rescale;
+    clamp-only for safety)."""
     try:
         v = getattr(entity, attr, default)
         v = default if v is None else v
-        return max(1, min(20, int(v))) * 5
+        return max(1, min(100, int(v)))
     except Exception:
-        return default * 5
+        return default
 
 
 def _is_staff(entity: Any) -> bool:
@@ -942,18 +949,18 @@ def room_status(entity: Any, team_context: Optional[Dict[str, Any]] = None,
             for attr, label, w in (("man_management", "Poor communicator", 0.45),
                                    ("motivating", "Can't motivate", 0.35),
                                    ("leadership", "Not a leader", 0.30)):
-                v = getattr(entity, attr, 12) or 12
-                f = max(0.0, (12 - v)) / 20 * w
+                v = getattr(entity, attr, 60) or 60
+                f = max(0.0, (60 - v)) / 100 * w
                 factors.append((label, round(f, 3)))
             # 6. Discipline mismatch (two-sided, very NHL) ---------------------
-            disc = getattr(entity, "discipline", 10) or 10
+            disc = getattr(entity, "discipline", 50) or 50
             if roster:
                 avg_age = sum(getattr(p, "age", 27) or 27 for p in roster) / len(roster)
                 avg_lead = sum(getattr(p, "leadership", 50) or 50 for p in roster) / len(roster)
                 avg_vol = sum((getattr(p, "controversy", 0) or 0) for p in roster) / len(roster)
-                if disc >= 15 and avg_age >= 28.5 and avg_lead >= 60:
+                if disc >= 75 and avg_age >= 28.5 and avg_lead >= 60:
                     factors.append(("Drill sergeant vs veteran room", 0.14))
-                if disc <= 8 and (avg_vol >= 38 or avg_age <= 25):
+                if disc <= 40 and (avg_vol >= 38 or avg_age <= 25):
                     factors.append(("Lost control (soft coach, wild room)", 0.18))
             # 7. The leaders have quit on him ---------------------------------
             if roster:
@@ -1151,9 +1158,9 @@ def coach_style(coach: Any) -> Dict[str, Any]:
     plus the winning key."""
     ensure_reputation_fields(coach)
     try:
-        # Deviation from the NHL-average 10: only DISTINCTIVE traits define
-        # a style. An all-average coach is balanced, not a weak motivator.
-        d = lambda a: (getattr(coach, a, 10) or 10) - 10  # 1-20 scale
+        # Deviation from the NHL-average coach (~65): only DISTINCTIVE traits
+        # define a style. An all-average coach is balanced, not a weak motivator.
+        d = lambda a: (getattr(coach, a, 65) or 65) - 65  # 1-100 scale
         scores = {
             "drill_sergeant": d("discipline") * 2 + d("motivating") * 0.5 - d("man_management") * 0.5,
             "players_coach": d("man_management") * 2 + d("motivating") * 0.5 - d("discipline") * 0.5,
@@ -1163,7 +1170,7 @@ def coach_style(coach: Any) -> Dict[str, Any]:
         }
         best = max(scores, key=scores.get)
         # Nothing distinctive -> balanced.
-        if scores[best] < 6:
+        if scores[best] < 30:
             best = "balanced"
         style = dict(COACHING_STYLES[best])
         style["key"] = best
@@ -1194,7 +1201,7 @@ def engagement_style(player: Any) -> Dict[str, Any]:
         disc = getattr(player, "discipline", 50) or 50
         lead = getattr(player, "leadership", 50) or 50
         happy = getattr(player, "happiness", 70) or 70
-        conf = getattr(player, "morale", 10) or 10  # form/confidence, ~1-20
+        conf = getattr(player, "morale", 50) or 50  # form/confidence, 1-100
         if age <= 23 and vol >= 45:
             key = "needs_guidance"
         elif flair >= 68 and disc < 50:
@@ -1203,7 +1210,7 @@ def engagement_style(player: Any) -> Dict[str, Any]:
             key = "thrives_on_structure"
         elif age >= 32 and lead >= 68:
             key = "veteran_autonomy"
-        elif happy < 50 or conf <= 6:
+        elif happy < 50 or conf <= 30:
             # Happiness is about the room; morale is about his own game.
             # A happy-but-cold player still needs an arm around him.
             key = "fragile_confidence"
@@ -1246,16 +1253,16 @@ def coach_player_fit(coach: Any, player: Any) -> float:
         eng = engagement_style(player)["key"]
         fit = _COACH_FIT.get(style, {}).get(eng, 0.0)
         # Good communicators smooth every edge; bad ones sharpen them.
-        mm = getattr(coach, "man_management", 10) or 10
-        fit += (mm - 10) / 10 * 0.25
+        mm = getattr(coach, "man_management", 50) or 50
+        fit += (mm - 50) / 50 * 0.25
         # A developer's touch lives in the attribute, not just the style
-        # label: even a motivator with an 18 youth rating reaches kids.
-        wwy = getattr(coach, "working_with_youngsters", 10) or 10
+        # label: even a motivator with a 90 youth rating reaches kids.
+        wwy = getattr(coach, "working_with_youngsters", 50) or 50
         if eng in ("needs_guidance", "fragile_confidence") \
                 and (getattr(player, "age", 26) or 26) <= 23:
-            fit += (wwy - 10) / 10 * 0.3
+            fit += (wwy - 50) / 50 * 0.3
         # Brash player + weak communicator = oil and water.
-        if (player.controversy or 0) >= 60 and mm < 10:
+        if (player.controversy or 0) >= 60 and mm < 50:
             fit -= 0.2
         return round(max(-1.0, min(1.0, fit)), 3)
     except Exception:
@@ -1410,9 +1417,9 @@ def apply_bag_skate(team: Any, coach: Any, roster: List[Any]) -> Dict[str, Any]:
 
 def apply_inspiring_speech(team: Any, coach: Any, roster: List[Any]) -> Dict[str, Any]:
     """Locker-room speech. Lands only if the coach can actually move a room."""
-    mot = getattr(coach, "motivating", 10) or 10
-    lead = getattr(coach, "leadership", 10) or 10
-    if mot >= 14 or lead >= 14:
+    mot = getattr(coach, "motivating", 50) or 50
+    lead = getattr(coach, "leadership", 50) or 50
+    if mot >= 70 or lead >= 70:
         _shift_happiness(roster, 5)
         text = (f"{getattr(coach, 'full_name', 'Coach')} gave an inspiring locker-room speech. "
                 f"The room is buzzing.")
@@ -1477,7 +1484,7 @@ def detect_dynamics_issues(team: Any, team_context: Optional[Dict[str, Any]],
     try:
         ctx = team_context or {}
         win_pct = max(0.0, min(1.0, ctx.get("win_pct", 0.5)))
-        disc = getattr(coach, "discipline", 10) or 10
+        disc = getattr(coach, "discipline", 50) or 50
         style = coach_style(coach)
         n = max(1, len(roster))
         avg_age = sum(getattr(p, "age", 27) or 27 for p in roster) / n
@@ -1486,13 +1493,13 @@ def detect_dynamics_issues(team: Any, team_context: Optional[Dict[str, Any]],
         tactic = getattr(team, "tactic_even_strength", "Balanced")
 
         streak = ctx.get("losing_streak", 0)
-        if streak >= 3 and disc >= 13:
+        if streak >= 3 and disc >= 65:
             issues.append({"key": "too_tense", "severity": "high",
                            "text": f"Players look tense -- {streak}-game skid under a demanding coach. The room is gripping the sticks."})
-        if avg_age <= 25.5 and disc <= 8:
+        if avg_age <= 25.5 and disc <= 40:
             issues.append({"key": "not_hard_enough", "severity": "high",
                            "text": "Young group, soft practices: the coach isn't demanding enough and it shows."})
-        if avg_vol >= 40 and disc <= 9:
+        if avg_vol >= 40 and disc <= 45:
             issues.append({"key": "lack_discipline", "severity": "medium",
                            "text": "The room lacks discipline -- too many passengers, not enough accountability."})
         if avg_flair >= 62 and tactic == "Defensive" and style["restrictiveness"] >= 0.7:
@@ -1580,11 +1587,11 @@ def advise_coach(coach: Any, advice_key: str, team: Any = None,
         label = f"Feature {getattr(target_player, 'full_name', 'player')} (more ice time)"
     brash = (coach.controversy or 0) >= 60
     try:
-        adapt = getattr(coach, "adaptability", 10) or 10
-        mm = getattr(coach, "man_management", 10) or 10
-        p = (0.35 + (adapt * 5) / 100 * 0.30
+        adapt = getattr(coach, "adaptability", 50) or 50
+        mm = getattr(coach, "man_management", 50) or 50
+        p = (0.35 + adapt / 100 * 0.30
              + (100 - (coach.controversy or 0)) / 100 * 0.20
-             + (mm * 5) / 100 * 0.15
+             + mm / 100 * 0.15
              + (coach.gm_trust - 70) / 100 * 0.50)
         if brash:
             p *= 0.6  # takes advice as an insult
@@ -1741,7 +1748,7 @@ def preview_line_control_discussion(coach: Any,
     ctx = team_context or {}
     cn = getattr(coach, "control_need", 50) or 50
     trust = getattr(coach, "gm_trust", 70) or 70
-    adapt = getattr(coach, "adaptability", 10) or 10
+    adapt = getattr(coach, "adaptability", 50) or 50
     dry = _dry_spell(ctx)
     rookie = bool(getattr(coach, "first_nhl_chair", False)) and \
         (getattr(coach, "years_with_team", 0) or 0) <= 2
@@ -1882,7 +1889,7 @@ def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]
     leadership, his boyhood team, and the logic that a Suzuki wants the Habs."""
     ensure_reputation_fields(player)
     attrs: Dict[str, Any] = {}
-    attrs["leadership"] = max(8, min(18, int((getattr(player, "leadership", 50) or 50) / 100 * 18)))
+    attrs["leadership"] = max(35, min(95, int(getattr(player, "leadership", 50) or 50)))
     # Favorite team: 40% the sweater he retires in, else a random boyhood team.
     import random as _r
     tnames = [getattr(t, "team_name", "") for t in (teams or []) if getattr(t, "team_name", "")]
@@ -1919,11 +1926,12 @@ def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]
 # really let go; career-cost (a lost Cup, a firing) keeps it hot.
 
 RIVALRY_KINDS = ("coach_coach", "coach_player", "gm_coach", "gm_agent",
-                 "player_player", "team_team")
+                 "gm_gm", "player_player", "team_team")
 
 RIVALRY_ORIGINS = ("brawl_game", "playoff_series", "major_injury", "firing",
                    "heavy_hits", "award_race", "regional", "mistreatment",
-                   "gm_power_struggle", "contract_dispute", "declared")
+                   "gm_power_struggle", "contract_dispute", "offer_sheet",
+                   "declared")
 
 # The classics. Regional hate never fully dies.
 REGIONAL_RIVALRIES = frozenset([
@@ -2944,7 +2952,7 @@ def coach_reprisal_tendency(coach: Any) -> float:
         elif style == "Player's Coach":
             t -= 0.25
         t += (getattr(coach, "controversy", 20) or 20) / 100 * 0.30
-        t += (getattr(coach, "discipline", 10) or 10) / 20 * 0.10
+        t += (getattr(coach, "discipline", 50) or 50) / 100 * 0.10
         return round(max(0.0, min(1.0, t)), 3)
     except Exception:
         return 0.3
@@ -3198,7 +3206,7 @@ def rectify_coach_player_beef(rivalries: list, player: Any, coach: Any,
         if not r or r["kind"] != "coach_player":
             return {"rectified": False, "reason": "no coach-player beef to rectify"}
         style = coach_style(coach)["label"]
-        hard = style == "Drill Sergeant" or (getattr(coach, "discipline", 10) or 10) >= 14
+        hard = style == "Drill Sergeant" or (getattr(coach, "discipline", 50) or 50) >= 70
         score = 0.0
         if career_best:
             score += 60
@@ -3592,11 +3600,11 @@ def _player_volatility_offset(p: Any, team: Any = None, coach: Any = None,
     # Working with youngsters: a developer calms young volatility; a coach
     # who can't reach kids makes a young hothead worse.
     if age <= 23 and coach is not None and base >= 45:
-        wwy = getattr(coach, "working_with_youngsters", 10) or 10
-        if wwy >= 15:
+        wwy = getattr(coach, "working_with_youngsters", 50) or 50
+        if wwy >= 75:
             off -= 3
             reasons.append("a developer who reaches young players (-3)")
-        elif wwy <= 8:
+        elif wwy <= 40:
             off += 2
             reasons.append("coach can't reach young players (+2)")
 
@@ -3611,10 +3619,10 @@ def _player_volatility_offset(p: Any, team: Any = None, coach: Any = None,
                 off -= 4
                 reasons.append("golden prospect met real adversity and prevailed (-4)")
             else:
-                wwy = 10
+                wwy = 50
                 if coach is not None:
-                    wwy = getattr(coach, "working_with_youngsters", 10) or 10
-                if wwy >= 15:
+                    wwy = getattr(coach, "working_with_youngsters", 50) or 50
+                if wwy >= 75:
                     off += 4
                     reasons.append("entitlement meets reality, but the coach reaches him (+4)")
                 else:
@@ -3801,8 +3809,8 @@ def coach_development_factor(player: Any, coach: Any) -> float:
         factor *= 0.70 + (influence / 100.0) * 0.60
         # 2. The youth touch, for young players.
         if age <= 23:
-            wwy = getattr(coach, "working_with_youngsters", 10) or 10
-            factor *= 1.0 + (wwy - 10) / 10 * 0.25
+            wwy = getattr(coach, "working_with_youngsters", 50) or 50
+            factor *= 1.0 + (wwy - 50) / 50 * 0.25
         # 3. Personality: raw coachability, then the current relationship.
         cont = getattr(player, "controversy", 0) or 0
         factor *= 1.0 - (cont / 100.0) * 0.25
@@ -3957,3 +3965,206 @@ def situations_factor(team: Any, ctx: Optional[Dict[str, Any]] = None) -> Dict[s
         "drivers": [{"label": l, "value": v} for l, v in drivers],
         "story": story,
     }
+
+
+# ---------------------------------------------------------------------------
+# Contract decisions: overpays, market-setting deals, offer sheets
+# ---------------------------------------------------------------------------
+# Sits ON TOP of SalaryCapSystem (salary_cap_system.py): that engine owns the
+# math (demand, market comps, market setters). This layer owns the human
+# fallout -- fan beefs with overpaid players, GM reputation swings, and
+# GM-GM bad blood when someone resets the market or fires off an offer sheet.
+
+def contract_verdict(aav: float, expected_aav: float) -> Dict[str, Any]:
+    """Classify a contract against its expected (market/demand) value.
+
+    Returns verdict + overpay ratio. Thresholds mirror real front-office
+    language: within 15% is just business; 15-40% over is an overpay the
+    fanbase will grumble about; beyond that is albatross territory.
+    """
+    try:
+        ratio = float(aav) / max(float(expected_aav), 1.0)
+    except (TypeError, ValueError):
+        ratio = 1.0
+    if ratio < 0.85:
+        verdict = "steal"
+    elif ratio < 1.15:
+        verdict = "fair"
+    elif ratio < 1.40:
+        verdict = "overpay"
+    else:
+        verdict = "megadeal"
+    return {"verdict": verdict, "overpay_ratio": round(ratio, 3)}
+
+
+def _team_gm_staff(team: Any) -> Optional[Any]:
+    """The Staff entity holding the GM chair, if the team has one."""
+    try:
+        for s in getattr(team, "staff", None) or []:
+            if getattr(getattr(s, "role", None), "name", "") == "GENERAL_MANAGER":
+                return s
+    except Exception:
+        pass
+    return None
+
+
+def _nudge_gm_rep(team: Any, delta: int, reason: str) -> None:
+    gm = _team_gm_staff(team)
+    if gm is None:
+        return
+    try:
+        ensure_reputation_fields(gm)
+        cur = int(getattr(gm, "career_reputation", 0) or 0)
+        gm.career_reputation = max(0, min(100, cur + delta))
+        gm.reputation_history.append({"date": date.today().isoformat(),
+                                     "reputation": gm.career_reputation,
+                                     "reason": reason})
+    except Exception:
+        pass
+
+
+def record_offer_sheet(rivalries: list, offering_team: Any, target_team: Any,
+                       player: Any, aav: float,
+                       matched: bool = False) -> Dict[str, Any]:
+    """A shameless offer sheet poaches an RFA: instant bad blood.
+
+    GM-GM heat (this is personal -- you went into his kitchen), team-team
+    heat, the jilted fanbase turns on the player, and the league's GMs take
+    notice. Call this from the offer-sheet transaction path when it lands.
+    """
+    pname = _ename(player)
+    oname = getattr(offering_team, "team_name", "?")
+    tname = getattr(target_team, "team_name", "?")
+    story = (f"{oname} offer-sheeted {pname} (${aav:,.0f} AAV) away from "
+             f"{tname}" + (" -- matched! The GM stood his ground."
+                           if matched else " -- and got their man."))
+    out: Dict[str, Any] = {"story": story, "rivalries": []}
+    ogm, tgm = gm_persona(offering_team), gm_persona(target_team)
+    r = add_rivalry(rivalries, ogm, tgm, "gm_gm", 80, "offer_sheet",
+                    f"{_ename(ogm)} poached {pname} from {_ename(tgm)} "
+                    f"with a ${aav:,.0f} AAV offer sheet.",
+                    grudge=70, career_cost=25)
+    if r:
+        out["rivalries"].append(r)
+    r = add_rivalry(rivalries, offering_team, target_team, "team_team", 40,
+                    "offer_sheet",
+                    f"{oname} raided {tname}'s RFA {pname}.",
+                    grudge=55)
+    if r:
+        out["rivalries"].append(r)
+    # The jilted fanbase never forgets -- even if the player stays.
+    try:
+        player.fan_backlash = max(int(getattr(player, "fan_backlash", 0) or 0),
+                                  55 if matched else 70)
+    except Exception:
+        pass
+    try:
+        record_team_event(target_team, "offer_sheet",
+                          f"{pname} signed an offer sheet with {oname}. "
+                          f"The building is furious.",
+                          morale_delta=-3, tone="down")
+    except Exception:
+        pass
+    return out
+
+
+def evaluate_contract_decision(player: Any, aav: float, expected_aav: float,
+                               team: Any = None, league: Any = None,
+                               market_setter: bool = False,
+                               is_offer_sheet: bool = False,
+                               from_team: Any = None) -> Dict[str, Any]:
+    """Score the human fallout of a contract: overpay verdict, fan beef with
+    the player, GM reputation swing, and GM-GM heat when the deal resets the
+    market (market_setter=True comes straight from
+    SalaryCapSystem.register_signing -- Caleb's market engine is untouched).
+
+    Pure-ish: never raises; applies effects to player/team/league in place.
+    """
+    cv = contract_verdict(aav, expected_aav)
+    verdict, ratio = cv["verdict"], cv["overpay_ratio"]
+    pname = _ename(player)
+    tname = getattr(team, "team_name", "the club") if team is not None else "the club"
+    effects: List[str] = []
+    texts: List[str] = []
+
+    # Contract pressure: the bigger the overpay, the hotter the seat. The
+    # fans will turn a grumble into a full beef if production doesn't match.
+    try:
+        pressure = max(0, min(100, int(round((ratio - 1.0) * 120)))) if ratio > 1 else 0
+        player.contract_pressure = pressure
+    except Exception:
+        pressure = 0
+
+    fav = False
+    try:
+        fav = fan_favourite_score(player, team)["score"] >= 70
+    except Exception:
+        pass
+
+    if verdict == "steal":
+        texts.append(f"{pname} signed well below market (${aav:,.0f} AAV) -- "
+                     f"a steal for {tname}.")
+        effects.append("gm_rep+4 (shrewd deal)")
+        _nudge_gm_rep(team, 4, "team_friendly_signing")
+        try:
+            record_team_event(team, "contract",
+                              f"{pname} took a team-friendly deal. The room "
+                              f"notices who buys in.", morale_delta=2, tone="up")
+        except Exception:
+            pass
+    elif verdict == "fair":
+        texts.append(f"{pname} signed at market value (${aav:,.0f} AAV).")
+    else:
+        # Overpay / megadeal: fans do the math instantly.
+        slack = 0.6 if fav else 1.0  # beloved players get the benefit of the doubt
+        backlash = max(0, min(100, int(round((ratio - 1.15) * 220 * slack)) + (10 if verdict == "megadeal" else 0)))
+        try:
+            player.fan_backlash = max(int(getattr(player, "fan_backlash", 0) or 0), backlash)
+        except Exception:
+            pass
+        if verdict == "overpay":
+            texts.append(f"{pname} got ${aav:,.0f} AAV -- about "
+                         f"{int(round((ratio - 1) * 100))}% over market. "
+                         f"The fanbase is grumbling.")
+            effects.append(f"fan_backlash={backlash} on player")
+            _nudge_gm_rep(team, -2, "overpay_signing")
+            effects.append("gm_rep-2 (overpay)")
+        else:
+            texts.append(f"{pname}'s ${aav:,.0f} AAV deal is an albatross -- "
+                         f"{int(round((ratio - 1) * 100))}% over market. "
+                         f"Talk radio is on fire.")
+            effects.append(f"fan_backlash={backlash} on player")
+            _nudge_gm_rep(team, -5, "albatross_contract")
+            effects.append("gm_rep-5 (albatross)")
+        try:
+            record_team_event(team, "contract", " ".join(texts),
+                              morale_delta=-1 if verdict == "overpay" else -2,
+                              tone="down")
+        except Exception:
+            pass
+
+    rivalries = _rivalry_store(league) if league is not None else []
+    if market_setter and league is not None and team is not None:
+        # Caleb's engine just moved the market: comparable stars league-wide
+        # will demand 10-15% more. Their GMs know exactly who to blame.
+        story = (f"{_ename(gm_persona(team))} reset the market with {pname}'s "
+                 f"${aav:,.0f} AAV deal -- every agent with a comparable "
+                 f"client just raised their ask.")
+        r = add_rivalry(rivalries, gm_persona(team), "rival GMs", "gm_gm",
+                        45, "contract_dispute", story, grudge=60)
+        if r:
+            effects.append("gm_gm heat 45 (market reset)")
+        texts.append("Around the league, rival GMs are furious -- this deal "
+                     "just made all of their extensions more expensive.")
+        _nudge_gm_rep(team, -1, "reset_market_against_peers")
+        effects.append("gm_rep-1 (peer resentment)")
+
+    if is_offer_sheet and league is not None and team is not None and from_team is not None:
+        os_out = record_offer_sheet(rivalries, team, from_team, player, aav)
+        texts.append(os_out["story"])
+        effects.append("offer_sheet: gm_gm 80, team_team 40")
+
+    return {"verdict": verdict, "overpay_ratio": ratio,
+            "contract_pressure": pressure,
+            "market_setter": bool(market_setter),
+            "story": " ".join(texts), "effects": effects}

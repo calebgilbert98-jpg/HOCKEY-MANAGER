@@ -225,13 +225,13 @@ def get_player_personality(player) -> str:
 
 
 def morale_label(morale: int) -> str:
-    if morale >= 9:
+    if morale >= 85:
         return "Superb"
-    if morale >= 7:
+    if morale >= 65:
         return "Good"
-    if morale >= 5:
+    if morale >= 45:
         return "Okay"
-    if morale >= 3:
+    if morale >= 25:
         return "Poor"
     return "Abysmal"
 
@@ -294,12 +294,12 @@ def update_player_happiness(player, team_games_played: int) -> List[str]:
         player.transfer_requested = True
         events.append(f"TRANSFER REQUEST: {player.first_name} {player.last_name} has asked to leave the club.")
 
-    # Morale follows happiness loosely
-    morale = getattr(player, "morale", 7) or 7
-    if happiness >= 70 and morale < 10:
-        player.morale = min(10, morale + 1)
+    # Morale follows happiness loosely (both 1-100)
+    morale = getattr(player, "morale", 70) or 70
+    if happiness >= 70 and morale < 100:
+        player.morale = min(100, morale + 5)
     elif happiness < 30 and morale > 1:
-        player.morale = max(1, morale - 1)
+        player.morale = max(1, morale - 5)
 
     player.happiness = happiness
     player.playing_time_concern = concern
@@ -354,37 +354,37 @@ def chat_with_player(player, action: str) -> Tuple[str, Dict[str, int]]:
     """Apply a private chat action. Returns (result_text, effects_dict)."""
     personality = get_player_personality(player)
     happiness = getattr(player, "happiness", 70) or 70
-    morale = getattr(player, "morale", 7) or 7
+    morale = getattr(player, "morale", 70) or 70
     name = f"{player.first_name} {player.last_name}"
     effects = {"happiness": 0, "morale": 0, "concern": 0}
 
     if action == "praise":
-        dh, dm = 8, 1
+        dh, dm = 8, 5
         if personality == "Driven":
-            dh, dm = 12, 2
+            dh, dm = 12, 10
         text = f"{name} appreciated the praise and looks motivated."
     elif action == "criticize":
         if personality in ("Driven", "Professional"):
-            dh, dm = -4, 1
+            dh, dm = -4, 5
             text = f"{name} took the criticism on the chin and vows to respond on the ice."
         else:
-            dh, dm = -12, -2
+            dh, dm = -12, -10
             text = f"{name} reacted badly to the criticism. His agent called to complain."
     elif action == "promise_icetime":
         player.promise_made = "more_icetime"
-        dh, dm, dc = 10, 1, -25
+        dh, dm, dc = 10, 5, -25
         effects["concern"] = dc
         text = f"You promised {name} more ice time. He'll be watching your line selections."
         player.happiness = max(0, min(100, happiness + dh))
-        player.morale = max(1, min(10, morale + dm))
+        player.morale = max(1, min(100, morale + dm))
         player.playing_time_concern = max(0, (getattr(player, "playing_time_concern", 0) or 0) + dc)
         return text, {"happiness": dh, "morale": dm, "concern": dc}
     elif action == "reassure_future":
-        dh, dm = 5, 1
+        dh, dm = 5, 5
         text = f"{name} seemed reassured by your words."
     elif action == "discipline":
         if personality == "Volatile":
-            dh, dm = -15, -2
+            dh, dm = -15, -10
             text = f"{name} exploded at the discipline. This could get ugly."
         else:
             dh, dm, dc = -5, 0, -15
@@ -404,7 +404,7 @@ def chat_with_player(player, action: str) -> Tuple[str, Dict[str, int]]:
     effects["happiness"] = dh
     effects["morale"] = dm
     player.happiness = max(0, min(100, happiness + dh))
-    player.morale = max(1, min(10, morale + dm))
+    player.morale = max(1, min(100, morale + dm))
     if effects["concern"]:
         player.playing_time_concern = max(0, (getattr(player, "playing_time_concern", 0) or 0) + effects["concern"])
     return text, effects
@@ -707,11 +707,11 @@ def apply_team_talk(team, option: dict, context: dict) -> Tuple[str, float]:
         reaction = "The players nodded along."
 
     for p in getattr(team, "roster", []) or []:
-        m = getattr(p, "morale", 7) or 7
+        m = getattr(p, "morale", 70) or 70
         # Leaders and big-game players respond more
-        leadership = getattr(p, "leadership", 10) or 10
-        adj = morale_delta + (1 if leadership >= 15 and morale_delta > 0 else 0)
-        p.morale = max(1, min(10, m + adj))
+        leadership = getattr(p, "leadership", 50) or 50
+        adj = morale_delta + (1 if leadership >= 75 and morale_delta > 0 else 0)
+        p.morale = max(1, min(100, m + adj * 5))
 
     return reaction, boost
 

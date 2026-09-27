@@ -3930,7 +3930,7 @@ class GameSim:
             self._resolve_scoring_chance(attacker, attacking_team, defending_team)
             return "Scoring Chance", attacking_team 
         else:
-            if random.random() < (defender.hitting_tendency / 1000.0) and (20 - defender.discipline) > random.randint(1, 20):
+            if random.random() < (defender.hitting_tendency / 1000.0) and (100 - defender.discipline) / 5 > random.randint(1, 20):
                 self._resolve_penalty(defender, defending_team)
                 return "Penalty", attacking_team 
             

@@ -217,7 +217,7 @@ class Player:
     
     consistency: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     important_matches: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
-    morale: int = 10
+    morale: int = 70  # 1-100 scale (form/confidence)
 
     # Football Manager-style career fields (happiness, squad status, chats)
     happiness: int = 70  # 0-100, how happy the player is at the club
@@ -316,7 +316,7 @@ class Player:
 
     skating: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     strength: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
-    injury_proneness: int = field(default_factory=lambda: random.randint(1, 20))
+    injury_proneness: int = field(default_factory=lambda: max(5, min(98, int(random.gauss(45, 20)))))  # 1-100; higher = more prone
 
     shooting: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     passing: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
@@ -979,6 +979,13 @@ class Player:
         }
         return stat_mapping.get(stat_type, 0)
 
+def _staff_attr_100() -> int:
+    """Lifelike 1-100 staff attribute: bell curve around 65 (NHL-calibre
+    competence), clamped 30-99. True 90+ elites and sub-40 liabilities are
+    rare -- the granularity the sim engine deserves."""
+    return max(30, min(99, int(random.gauss(65, 12))))
+
+
 @dataclass
 class Staff:
     """Represents a non-player staff member with detailed EHM-style attributes."""
@@ -990,50 +997,50 @@ class Staff:
     nationality: str = field(default_factory=lambda: random.choice(['USA', 'Canada', 'Russia', 'Sweden', 'Finland', 'Czech Republic']))
     
     # Core Coaching Attributes (1-20 scale)
-    coaching_forwards: int = field(default_factory=lambda: random.randint(8, 18))
-    coaching_defensemen: int = field(default_factory=lambda: random.randint(8, 18))
-    coaching_goalies: int = field(default_factory=lambda: random.randint(8, 18))
+    coaching_forwards: int = field(default_factory=lambda: _staff_attr_100())
+    coaching_defensemen: int = field(default_factory=lambda: _staff_attr_100())
+    coaching_goalies: int = field(default_factory=lambda: _staff_attr_100())
     
     # Tactical Knowledge
-    tactical_knowledge: int = field(default_factory=lambda: random.randint(8, 18))
-    game_preparation: int = field(default_factory=lambda: random.randint(8, 18))
-    match_preparation: int = field(default_factory=lambda: random.randint(8, 18))
+    tactical_knowledge: int = field(default_factory=lambda: _staff_attr_100())
+    game_preparation: int = field(default_factory=lambda: _staff_attr_100())
+    match_preparation: int = field(default_factory=lambda: _staff_attr_100())
     
     # Player Development
-    working_with_youngsters: int = field(default_factory=lambda: random.randint(8, 18))
-    player_development: int = field(default_factory=lambda: random.randint(8, 18))
+    working_with_youngsters: int = field(default_factory=lambda: _staff_attr_100())
+    player_development: int = field(default_factory=lambda: _staff_attr_100())
     
     # Management Skills
-    man_management: int = field(default_factory=lambda: random.randint(8, 18))
-    motivating: int = field(default_factory=lambda: random.randint(8, 18))
-    discipline: int = field(default_factory=lambda: random.randint(8, 18))
-    leadership: int = field(default_factory=lambda: random.randint(8, 18))
+    man_management: int = field(default_factory=lambda: _staff_attr_100())
+    motivating: int = field(default_factory=lambda: _staff_attr_100())
+    discipline: int = field(default_factory=lambda: _staff_attr_100())
+    leadership: int = field(default_factory=lambda: _staff_attr_100())
     
     # Scouting Abilities
-    judging_player_ability: int = field(default_factory=lambda: random.randint(8, 18))
-    judging_player_potential: int = field(default_factory=lambda: random.randint(8, 18))
+    judging_player_ability: int = field(default_factory=lambda: _staff_attr_100())
+    judging_player_potential: int = field(default_factory=lambda: _staff_attr_100())
     
     # Communication & Relationships
-    media_handling: int = field(default_factory=lambda: random.randint(8, 18))
-    determination: int = field(default_factory=lambda: random.randint(8, 18))
-    adaptability: int = field(default_factory=lambda: random.randint(8, 18))
+    media_handling: int = field(default_factory=lambda: _staff_attr_100())
+    determination: int = field(default_factory=lambda: _staff_attr_100())
+    adaptability: int = field(default_factory=lambda: _staff_attr_100())
     
     # Specialized Skills (position-dependent)
-    level_of_discipline: int = field(default_factory=lambda: random.randint(8, 18))
-    attacking_coaching: int = field(default_factory=lambda: random.randint(8, 18))
-    defensive_coaching: int = field(default_factory=lambda: random.randint(8, 18))
-    mental_coaching: int = field(default_factory=lambda: random.randint(8, 18))
-    technical_coaching: int = field(default_factory=lambda: random.randint(8, 18))
+    level_of_discipline: int = field(default_factory=lambda: _staff_attr_100())
+    attacking_coaching: int = field(default_factory=lambda: _staff_attr_100())
+    defensive_coaching: int = field(default_factory=lambda: _staff_attr_100())
+    mental_coaching: int = field(default_factory=lambda: _staff_attr_100())
+    technical_coaching: int = field(default_factory=lambda: _staff_attr_100())
 
-    # Morale (1-20 scale, display-only; the sim engine does not read staff morale)
-    morale: int = field(default_factory=lambda: random.randint(5, 17))
+    # Morale (1-100 scale, display-only; the sim engine does not read staff morale)
+    morale: int = field(default_factory=lambda: max(10, min(99, int(random.gauss(60, 15)))))
     
     # Contract Information
     salary: int = field(default_factory=lambda: random.randint(75000, 500000))
     contract_years: int = field(default_factory=lambda: random.randint(1, 5))
     
-    # Performance Tracking
-    reputation: int = field(default_factory=lambda: random.randint(5, 15))
+    # Performance Tracking (reputation on the 1-100 scale)
+    reputation: int = field(default_factory=lambda: max(10, min(95, int(random.gauss(50, 15)))))
     experience: int = field(default_factory=lambda: random.randint(1, 30))  # Years of experience
     years_with_team: int = field(default_factory=lambda: random.randint(0, 4))  # Tenure with current team (room-status shelf life)
     gm_trust: int = 70  # 0-100 GM-coach trust; evolves as advice is taken/ignored
@@ -1976,8 +1983,8 @@ class Team:
         """Calculates team chemistry based on player morale and leadership."""
         if not self.roster:
             return 50
-        # morale is 1-10 -> 10-100; leadership is internal ~50 scale -> 1-100
-        avg_morale = sum(p.morale for p in self.roster) / len(self.roster) * 10
+        # morale and leadership are both native 1-100
+        avg_morale = sum(p.morale for p in self.roster) / len(self.roster)
         avg_leadership = sum(to_100_scale(p.leadership) for p in self.roster) / len(self.roster)
         return max(1, min(100, int(avg_morale * 0.6 + avg_leadership * 0.4)))
     

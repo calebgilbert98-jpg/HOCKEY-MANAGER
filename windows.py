@@ -8930,7 +8930,7 @@ class GMDashboardWindow(tk.Toplevel):
         if team.roster:
             avg_morale = sum(p.morale for p in team.roster) / len(team.roster)
             avg_age = sum(p.age for p in team.roster) / len(team.roster)
-            self._line(card, f"Avg morale: {avg_morale:.1f}/10")
+            self._line(card, f"Avg morale: {avg_morale:.1f}/100")
             self._line(card, f"Avg age: {avg_age:.1f} years")
             self._line(card, f"Roster size: {len(team.roster)} players")
 

@@ -882,8 +882,8 @@ class GameSaveManager:
         except Exception as e:
             print(f"Error restoring free agents: {e}")
 
-    # Fields that live on the native 1-100 scale (intentional 1-20 / 1-10
-    # fields like injury_proneness, morale, staff attributes are excluded).
+    # Fields that live on the native 1-100 scale (post-rescale this is every
+    # attribute: players, morale, injury proneness, and all staff fields).
     _SCALE_100_PLAYER_FIELDS = (
         'acceleration', 'adaptability', 'aggressiveness', 'agility',
         'anticipation', 'backhand', 'balance', 'bodycheck', 'breakaway_skill',
@@ -945,6 +945,42 @@ class GameSaveManager:
                 v = getattr(p, f, None)
                 if isinstance(v, (int, float)) and v < 62:
                     setattr(p, f, min(100, int(round(v * 2))))
+                    migrated += 1
+            # Morale was 1-10, injury proneness 1-20 on legacy saves.
+            v = getattr(p, 'morale', None)
+            if isinstance(v, (int, float)) and v <= 10:
+                setattr(p, 'morale', min(100, int(round(v * 10))))
+                migrated += 1
+            v = getattr(p, 'injury_proneness', None)
+            if isinstance(v, (int, float)) and v <= 20:
+                setattr(p, 'injury_proneness', min(100, int(round(v * 5))))
+                migrated += 1
+        # Staff: all 22 coaching attributes were 1-20, morale 5-17,
+        # reputation 5-15. Post-rescale everything is 1-100.
+        staff_fields = (
+            'coaching_forwards', 'coaching_defensemen', 'coaching_goalies',
+            'tactical_knowledge', 'game_preparation', 'match_preparation',
+            'working_with_youngsters', 'player_development', 'man_management',
+            'motivating', 'discipline', 'leadership',
+            'judging_player_ability', 'judging_player_potential',
+            'media_handling', 'determination', 'adaptability',
+            'level_of_discipline', 'attacking_coaching', 'defensive_coaching',
+            'mental_coaching', 'technical_coaching',
+        )
+        for team in league.teams:
+            for s in getattr(team, 'staff', None) or []:
+                for f in staff_fields:
+                    v = getattr(s, f, None)
+                    if isinstance(v, (int, float)) and v <= 20:
+                        setattr(s, f, min(100, int(round(v * 5))))
+                        migrated += 1
+                v = getattr(s, 'morale', None)
+                if isinstance(v, (int, float)) and v <= 20:
+                    setattr(s, 'morale', min(100, int(round(v * 5))))
+                    migrated += 1
+                v = getattr(s, 'reputation', None)
+                if isinstance(v, (int, float)) and v <= 20:
+                    setattr(s, 'reputation', min(100, int(round(v * 5))))
                     migrated += 1
         print(f"Migrated {len(players)} players from legacy attribute scale "
               f"({migrated} fields doubled, mean was {mean:.1f})")
