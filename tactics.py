@@ -540,8 +540,17 @@ def set_team_system(team: Any, category: str, system_key: str) -> bool:
 
 
 def tick_tactics_familiarity(team: Any, amount: float = 4.0) -> None:
-    """Call once per game: the room learns the system."""
+    """Call once per game: the room learns the system.
+
+    Assistant buy-in: a franchise icon teaching the system gets the room
+    there faster (the Coffey effect) -- see assistant_coaches.
+    """
     try:
+        try:
+            import assistant_coaches as _ac
+            amount += _ac.assistant_familiarity_bonus(team)
+        except Exception:
+            pass
         fam = _get(team, "tactics_familiarity", 85)
         team.tactics_familiarity = max(0.0, min(95.0, fam + amount))
         _bust_tactics_cache(team)

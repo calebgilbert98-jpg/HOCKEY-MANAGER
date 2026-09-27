@@ -1240,6 +1240,13 @@ class StaffManagementWindow(InGamePopup):
                         staff.salary = offered_salary
                         staff.contract_years = offered_years
                         user_team.staff.append(staff)
+                        try:
+                            import assistant_coaches as _ac
+                            _app = getattr(self, "app", None) or getattr(
+                                self, "master", None)
+                            _ac.on_assistant_hired(user_team, staff, app=_app)
+                        except Exception:
+                            pass
                         if staff in self.available_staff:
                             self.available_staff.remove(staff)
                 else:

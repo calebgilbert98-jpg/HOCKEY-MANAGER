@@ -1947,6 +1947,16 @@ def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]
         name_value=getattr(player, "career_reputation", 0) or 0)
     last = getattr(player, "last_team_name", "") or getattr(player, "team_name", "")
     attrs["connections"] = [last] if last else []
+    # Franchise icon: a star retiring in your sweater is YOUR legend.
+    # (Coffey in Edmonton.) Only real stars qualify -- icons are earned.
+    try:
+        _rep = float(getattr(player, "career_reputation", 0) or 0)
+        _gp = float(getattr(player, "career_games", 0) or 0)
+        if last and _rep >= 65 and _gp >= 400:
+            attrs["icon_team"] = last
+            attrs["icon_level"] = "icon" if (_rep >= 80 and _gp >= 600) else "star"
+    except Exception:
+        pass
     return attrs
 
 
