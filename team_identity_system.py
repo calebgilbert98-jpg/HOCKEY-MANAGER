@@ -302,3 +302,82 @@ class NHLTeamIdentity:
 
 # Global team identity instance
 nhl_identity = NHLTeamIdentity()
+
+
+# ---------------------------------------------------------------------------
+# UI accent resolution: one team's colors -> app-wide accent color.
+# The accent must stay readable on the dark UI, so near-black primaries
+# (Pittsburgh, Los Angeles) fall back to the secondary color.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ACCENT = ("#00ceb8", "#00a896", "#0e0e11")  # legacy teal
+
+
+def _luminance(hex_color: str) -> float:
+    """Relative luminance of a hex color, 0 (black) to 1 (white)."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = (int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    except Exception:
+        return 0.5
+
+
+def _darken(hex_color: str, factor: float = 0.85) -> str:
+    """Scale a hex color toward black by factor (0..1)."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (int(r * factor), int(g * factor), int(b * factor))
+    except Exception:
+        return hex_color
+
+
+def accent_for_team(team_name) -> tuple:
+    """Return (accent, hover, text_on_accent) for a team name.
+
+    Uses the team's primary color unless it is too dark to read on the
+    dark UI, in which case the secondary color is used. Unknown or
+    missing names fall back to the legacy teal. Never raises.
+    """
+    colors = None
+    try:
+        colors = nhl_identity.get_team_colors(team_name)
+        if colors is None and team_name:
+            key = str(team_name).strip().lower()
+            for name, c in nhl_identity.team_colors.items():
+                if name.lower() == key:
+                    colors = c
+                    break
+    except Exception:
+        colors = None
+    if colors is None:
+        return _DEFAULT_ACCENT
+    if _luminance(colors.primary) < 0.09:
+        base, text = colors.secondary, colors.text_on_secondary
+    else:
+        base, text = colors.primary, colors.text_on_primary
+    return base, _darken(base, 0.85), text
+
+
+def text_color_for_team(team_name) -> str:
+    """Team-colored text that stays readable on the dark UI: the primary
+    color, unless it is too dark to read on near-black, in which case the
+    secondary is used. Unknown names fall back to the legacy teal.
+    Never raises.
+    """
+    try:
+        colors = nhl_identity.get_team_colors(team_name)
+        if colors is None and team_name:
+            key = str(team_name).strip().lower()
+            for name, c in nhl_identity.team_colors.items():
+                if name.lower() == key:
+                    colors = c
+                    break
+        if colors is None:
+            return _DEFAULT_ACCENT[0]
+        if _luminance(colors.primary) < 0.15:
+            return colors.secondary
+        return colors.primary
+    except Exception:
+        return _DEFAULT_ACCENT[0]

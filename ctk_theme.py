@@ -25,7 +25,41 @@ GREEN = "#3fb950"
 RED = "#e74c3c"
 BLUE = "#58a6ff"
 
+# Readable text color for the current accent (dark on gold/teal, white on
+# navy/red). set_team_accent() keeps it in sync with TEAL.
+ACCENT_TEXT = BG
+
 _THEME_APPLIED = False
+
+
+def _darken_hex(hex_color, factor=0.85):
+    """Scale a hex color toward black by factor (0..1). Never raises."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (int(r * factor), int(g * factor), int(b * factor))
+    except Exception:
+        return hex_color
+
+
+def set_team_accent(accent, hover=None, text=None):
+    """Re-theme UI accents to a team's colors.
+
+    Mutates TEAL/TEAL_HOVER/TEAL_DARK/ACCENT_TEXT. Widget helpers in this
+    module read those globals at call time, so everything built after this
+    call -- nav pills, primary buttons, selected states -- wears the team
+    color. Safe to call repeatedly; pass no args to restore legacy teal.
+    """
+    global TEAL, TEAL_HOVER, TEAL_DARK, ACCENT_TEXT
+    TEAL = accent or "#00ceb8"
+    TEAL_HOVER = hover or _darken_hex(TEAL, 0.85)
+    TEAL_DARK = _darken_hex(TEAL, 0.7)
+    ACCENT_TEXT = text or BG
+
+
+def current_accent():
+    """Return the active (accent, hover, text) triple."""
+    return TEAL, TEAL_HOVER, ACCENT_TEXT
 
 
 def _theme_path():
@@ -58,10 +92,10 @@ def init_ctk_theme():
 
 
 def primary_button(parent, text, command=None, **kw):
-    """Teal primary CTkButton."""
+    """Teal primary CTkButton (follows the team accent once themed)."""
     kw.setdefault("fg_color", TEAL)
     kw.setdefault("hover_color", TEAL_HOVER)
-    kw.setdefault("text_color", BG)
+    kw.setdefault("text_color", ACCENT_TEXT)
     kw.setdefault("corner_radius", 8)
     kw.setdefault("font", ("Segoe UI", 12, "bold"))
     return ctk.CTkButton(parent, text=text, command=command, **kw)

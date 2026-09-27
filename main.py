@@ -3052,6 +3052,18 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     return result['ok']
 
 
+def _mix_hex(a, b, t=0.5):
+    """Blend two hex colors; t=0 -> a, t=1 -> b. Never raises."""
+    try:
+        ha, hb = a.lstrip("#"), b.lstrip("#")
+        ra, ga, ba = (int(ha[i:i + 2], 16) for i in (0, 2, 4))
+        rb, gb, bb = (int(hb[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (
+            int(ra + (rb - ra) * t), int(ga + (gb - ga) * t), int(ba + (bb - ba) * t))
+    except Exception:
+        return a
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
@@ -3222,6 +3234,7 @@ class HockeyManagerGUI(tk.Tk):
             # Team already selected from startup window
             self.user_team = user_team_found
             self.user_team.is_user_team = True
+            self._update_team_colors()
             
             # Set GM profile from startup settings
             if hasattr(self.game_manager, 'startup_settings') and self.game_manager.startup_settings:
@@ -3354,6 +3367,7 @@ class HockeyManagerGUI(tk.Tk):
                 self.user_team = user_team
                 user_team.is_user_team = True
                 self.title(f"{user_team.team_name} - Puck Dynasty")
+                self._update_team_colors()
                 
                 # Generate initial emails and continue setup
                 self._finalize_phase2_initialization()
@@ -3567,6 +3581,24 @@ class HockeyManagerGUI(tk.Tk):
         """Update button colors to match the user's team colors"""
         if hasattr(self, 'user_team') and self.user_team and hasattr(self, 'modern_theme'):
             self.modern_theme.update_team_colors(self.style, self.user_team.team_name)
+        # App-wide accent follows the user's team: every CustomTkinter
+        # widget built after this call (nav pills, primary buttons,
+        # selected states) and the game visualizer wear the team color.
+        try:
+            if getattr(self, 'user_team', None):
+                import ctk_theme
+                from team_identity_system import accent_for_team
+                accent, hover, _text = accent_for_team(self.user_team.team_name)
+                ctk_theme.set_team_accent(accent, hover, _text)
+                # Plain-tkinter dashboard reads modern_ui.AppColors at
+                # build time -- keep it in step (ACCENT_BG is a whisper
+                # of the accent over the window background).
+                from modern_ui import AppColors
+                AppColors.ACCENT = accent
+                AppColors.ACCENT_DIM = hover
+                AppColors.ACCENT_BG = _mix_hex(accent, "#0e0e11", 0.85)
+        except Exception:
+            pass
 
     def _set_application_icon(self):
         """Set the Puck Dynasty logo as the application icon"""
@@ -7114,6 +7146,7 @@ class HockeyManagerGUI(tk.Tk):
                     self.user_team = claimed
             elif hasattr(self.game_manager, 'user_team'):
                 self.user_team = self.game_manager.user_team
+            self._update_team_colors()
             self.update_all_views()
             if label:
                 self._rebuild_news_log_from_stories()

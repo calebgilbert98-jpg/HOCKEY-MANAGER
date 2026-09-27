@@ -25,6 +25,18 @@ try:
     import reputation_system as _reputation
 except Exception:
     _reputation = None
+try:
+    from team_identity_system import nhl_identity as _nhl_identity
+except Exception:
+    _nhl_identity = None
+try:
+    from team_identity_system import text_color_for_team as _team_fg
+except Exception:
+    _team_fg = None
+try:
+    import ctk_theme as _ctk_theme
+except Exception:
+    _ctk_theme = None
 
 # ----------------------------------------------------------------------------
 # Theme (matches app dark theme; square corners everywhere, pills on buttons)
@@ -71,6 +83,33 @@ def _abbr(team_name):
     if not words:
         return "???"
     return words[0][:3].ljust(3)[:3]
+
+
+def _team_colors(team_name):
+    """(bg, fg) pill colors in the team's true NHL colors. Never raises.
+
+    Returns (None, None) when the team has no identity entry, so callers
+    can fall back to the legacy colors.
+    """
+    try:
+        if _nhl_identity is not None:
+            c = _nhl_identity.get_team_colors(team_name)
+            if c is not None:
+                return c.primary, c.text_on_primary
+    except Exception:
+        pass
+    return None, None
+
+
+def _user_accent():
+    """Current UI accent: the controlled team's color once the app theme
+    has been applied, otherwise the legacy teal. Never raises."""
+    try:
+        if _ctk_theme is not None:
+            return _ctk_theme.TEAL
+    except Exception:
+        pass
+    return ACCENT
 
 
 # ----------------------------------------------------------------------------
@@ -482,6 +521,22 @@ class PBPVisualSim(tk.Toplevel):
         self.sim = sim
         self.home_team = home_team
         self.away_team = away_team
+        # True NHL colors for both clubs (score bug, banners); the UI
+        # accent follows the team the user controls (ctk_theme, themed by
+        # the app when a team is picked).
+        self._home_tc = _team_colors(home_team.team_name)
+        self._away_tc = _team_colors(away_team.team_name)
+        self._home_primary = self._home_tc[0] or ACCENT
+        self._away_primary = self._away_tc[0] or AWAY_COLOR
+        # Team-colored stat text (readable on the dark UI).
+        try:
+            self._home_fg = _team_fg(home_team.team_name) if _team_fg else ACCENT
+            self._away_fg = _team_fg(away_team.team_name) if _team_fg else AWAY_COLOR
+        except Exception:
+            self._home_fg, self._away_fg = ACCENT, AWAY_COLOR
+        # UI chrome accent: the team the user controls (falls back to teal
+        # when no team has been themed yet).
+        self._ui_accent = _user_accent()
         self.home_line = home_line or _best_line(home_team)
         self.away_line = away_line or _best_line(away_team)
         self.on_complete = on_complete  # called once (on UI thread) when game_end plays
@@ -691,17 +746,19 @@ class PBPVisualSim(tk.Toplevel):
         top.pack(fill="x", padx=10, pady=(10, 6))
         bug = tk.Frame(top, bg="#16161a")
         bug.pack(side="left")
-        tk.Label(bug, text=_abbr(self.home_team.team_name), bg=ACCENT,
-                 fg="#0e0e11", font=(FONT, 14, "bold"),
+        tk.Label(bug, text=_abbr(self.home_team.team_name),
+                 bg=self._home_tc[0] or ACCENT,
+                 fg=self._home_tc[1] or "#0e0e11", font=(FONT, 14, "bold"),
                  padx=10, pady=6).pack(side="left")
         self.score_var = tk.StringVar(value="0 – 0")
         tk.Label(bug, textvariable=self.score_var, bg="#16161a", fg="white",
                  font=(FONT, 18, "bold"), padx=10).pack(side="left")
-        tk.Label(bug, text=_abbr(self.away_team.team_name), bg=AWAY_COLOR,
-                 fg="#0e0e11", font=(FONT, 14, "bold"),
+        tk.Label(bug, text=_abbr(self.away_team.team_name),
+                 bg=self._away_tc[0] or AWAY_COLOR,
+                 fg=self._away_tc[1] or "#0e0e11", font=(FONT, 14, "bold"),
                  padx=10, pady=6).pack(side="left")
         self.clock_var = tk.StringVar(value="P1 20:00")
-        tk.Label(bug, textvariable=self.clock_var, bg="#23262e", fg=ACCENT,
+        tk.Label(bug, textvariable=self.clock_var, bg="#23262e", fg=_user_accent(),
                  font=(FONT, 14, "bold"), padx=10, pady=6).pack(side="left")
 
         # Win probability (home perspective), next to the bug
@@ -737,7 +794,7 @@ class PBPVisualSim(tk.Toplevel):
         for _w in (tensf, trow, self.tension_canvas, self.tension_num):
             _w.bind("<Button-1>", lambda e: self._toggle_tension_panel())
 
-        tk.Label(top, text="LIVE SIM", bg=ACCENT, fg="white",
+        tk.Label(top, text="LIVE SIM", bg=self._ui_accent, fg="white",
                  font=(FONT, 11, "bold"), padx=8, pady=2).pack(side="right", padx=12)
 
         # Slim bar under the scoreboard: on-ice units, momentum, next moment
@@ -753,9 +810,9 @@ class PBPVisualSim(tk.Toplevel):
         self.units_home_var = tk.StringVar(value="–")
         self.units_away_var = tk.StringVar(value="–")
         tk.Label(urow, textvariable=self.units_home_var, bg=CONTENT_BG,
-                 fg=ACCENT, font=(FONT, 12, "bold")).pack(side="left", padx=(0, 14))
+                 fg=self._home_fg, font=(FONT, 12, "bold")).pack(side="left", padx=(0, 14))
         tk.Label(urow, textvariable=self.units_away_var, bg=CONTENT_BG,
-                 fg=AWAY_COLOR, font=(FONT, 12, "bold")).pack(side="left")
+                 fg=self._away_fg, font=(FONT, 12, "bold")).pack(side="left")
 
         btnf = tk.Frame(sub, bg=CONTENT_BG)
         btnf.pack(side="right", padx=4)
@@ -814,11 +871,11 @@ class PBPVisualSim(tk.Toplevel):
             av = tk.StringVar(value="0")
             self._stat_vars[key] = (hv, av)
             tk.Label(cell, textvariable=hv, font=(FONT, 13, "bold"),
-                     bg=CONTENT_BG, fg=ACCENT).pack(side="left", padx=(10, 0))
+                     bg=CONTENT_BG, fg=self._home_fg).pack(side="left", padx=(10, 0))
             tk.Label(cell, text=label, font=(FONT, 9),
                      bg=CONTENT_BG, fg=MUTED).pack(side="left", padx=6)
             tk.Label(cell, textvariable=av, font=(FONT, 13, "bold"),
-                     bg=CONTENT_BG, fg=AWAY_COLOR).pack(side="right", padx=(0, 10))
+                     bg=CONTENT_BG, fg=self._away_fg).pack(side="right", padx=(0, 10))
 
         # Live goalie stats cell: "<last> saves/shots" per side
         gcell = tk.Frame(strip, bg=CONTENT_BG)
@@ -827,11 +884,11 @@ class PBPVisualSim(tk.Toplevel):
         self._goalie_home_var = tk.StringVar(value="–")
         self._goalie_away_var = tk.StringVar(value="–")
         tk.Label(gcell, textvariable=self._goalie_home_var, font=(FONT, 10, "bold"),
-                 bg=CONTENT_BG, fg=ACCENT).pack(side="left", padx=(10, 0))
+                 bg=CONTENT_BG, fg=self._home_fg).pack(side="left", padx=(10, 0))
         tk.Label(gcell, text="Goalies", font=(FONT, 9),
                  bg=CONTENT_BG, fg=MUTED).pack(side="left", padx=6)
         tk.Label(gcell, textvariable=self._goalie_away_var, font=(FONT, 10, "bold"),
-                 bg=CONTENT_BG, fg=AWAY_COLOR).pack(side="right", padx=(0, 10))
+                 bg=CONTENT_BG, fg=self._away_fg).pack(side="right", padx=(0, 10))
 
         # Right panel: feed + controls (width adapts to the window; see
         # _on_window_configure). Crucial details stay legible at any size.
@@ -842,7 +899,7 @@ class PBPVisualSim(tk.Toplevel):
         self._right_w = 320
         self.bind("<Configure>", self._on_window_configure)
 
-        tk.Label(right, text="PLAY BY PLAY", bg=CONTENT_BG, fg=ACCENT,
+        tk.Label(right, text="PLAY BY PLAY", bg=CONTENT_BG, fg=self._ui_accent,
                  font=(FONT, 13, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
 
         # Controls (packed before the feed so they always keep their space)
@@ -887,11 +944,11 @@ class PBPVisualSim(tk.Toplevel):
                             padx=10, pady=8, height=22, spacing1=2, spacing3=3)
         self.feed.pack(fill="both", expand=True, padx=8, pady=4)
         self.feed.tag_config("goal", foreground="#7CFC98", font=(FONT, 13, "bold"))
-        self.feed.tag_config("period", foreground=ACCENT, font=(FONT, 12, "bold"))
+        self.feed.tag_config("period", foreground=self._ui_accent, font=(FONT, 12, "bold"))
         self.feed.tag_config("penalty", foreground="#FFD166", font=(FONT, 12, "bold"))
         self.feed.tag_config("shot", foreground="#9FD8FF")
         self.feed.tag_config("fight", foreground="#FF8A5C", font=(FONT, 12, "bold"))
-        self.feed.tag_config("summary", foreground=ACCENT, font=(FONT, 13, "bold"))
+        self.feed.tag_config("summary", foreground=self._ui_accent, font=(FONT, 13, "bold"))
         self.feed.tag_config("big", foreground="#FFFFFF", font=(FONT, 12, "bold"))
         self.feed.tag_config("info", foreground="#AEB6C8")
         self.feed.config(state="disabled")
@@ -1251,7 +1308,7 @@ class PBPVisualSim(tk.Toplevel):
         c = self.canvas
         idx = 0
         for is_home, line in ((True, self.home_line), (False, self.away_line)):
-            color = ACCENT if is_home else AWAY_COLOR
+            color = self._home_primary if is_home else self._away_primary
             for role in ("C", "LW", "RW", "D1", "D2"):
                 p = line.get(role)
                 if p is None:
@@ -1285,7 +1342,8 @@ class PBPVisualSim(tk.Toplevel):
                              self.X(x) + r, self.Y(y) + r,
                              fill=color, outline="white", width=2,
                              tags=("dot",))
-        fg = "white" if is_home else "#0e0e11"
+        fg = (self._home_tc[1] if is_home else self._away_tc[1]) or \
+             ("white" if is_home else "#0e0e11")
         txt = c.create_text(self.X(x), self.Y(y), text=str(num),
                             fill=fg, font=(FONT, 9, "bold"), tags=("dot",))
         # facing tick: short line showing skate direction (updated per tick)
@@ -2508,7 +2566,7 @@ class PBPVisualSim(tk.Toplevel):
         self._period_stats["shots"][side] += 1
         self._push_momentum(side, 1)
         self._pstat(ev.get("shooter"), "SOG")
-        self._trail_color = ACCENT if att_home else AWAY_COLOR
+        self._trail_color = self._home_primary if att_home else self._away_primary
         shooter_dot = self._dot_by_player(ev.get("shooter"))
         sp = ev.get("shooter_pos")
         rush = False
@@ -2666,11 +2724,14 @@ class PBPVisualSim(tk.Toplevel):
             # quiet so the big ones mean something.
             if ev.get("impact") == "big" and ev.get("story") and not self._instant:
                 try:
+                    # Banner wears the defending (goalie's) team color.
+                    _att_home = ev.get("attacking_team") == self.home_team.team_name
+                    _save_color = self._away_primary if _att_home else self._home_primary
                     self._banner_show(
                         "big_save", "WHAT A SAVE!",
                         f"{self._pname(ev.get('goalie'))} robs "
                         f"{self._pname(ev.get('shooter'))}",
-                        color="#4fc3f7")
+                        color=_save_color)
                     self._shake(mag=3.0, dur=0.35)
                 except Exception:
                     pass
@@ -2710,7 +2771,7 @@ class PBPVisualSim(tk.Toplevel):
         if self._instant:
             return
         now = self._now()
-        color = ACCENT if att_home else AWAY_COLOR
+        color = self._home_primary if att_home else self._away_primary
         S = self._pname(ev.get("shooter"))
         ast = ev.get("assists") or []
         sub = S
@@ -2916,7 +2977,7 @@ class PBPVisualSim(tk.Toplevel):
                 c.create_line(px - r * 0.7, py + r * 0.7, px + r * 0.7,
                               py - r * 0.7, fill=col, width=2, tags=("shotmap", "fx"))
             elif result == "save":
-                col = ACCENT if side == "home" else AWAY_COLOR
+                col = self._home_primary if side == "home" else self._away_primary
                 c.create_oval(px - 4, py - 4, px + 4, py + 4, fill=col,
                               outline="white", width=1, tags=("shotmap", "fx"))
             elif result == "block":
@@ -3055,7 +3116,7 @@ class PBPVisualSim(tk.Toplevel):
         ]
         if sub:
             items.append(c.create_text(W / 2, H / 2 + 32, text=sub,
-                                       fill=ACCENT, font=(FONT, 18, "bold")))
+                                       fill=self._ui_accent, font=(FONT, 18, "bold")))
         for it in items:
             c.tag_raise(it)
         self._card_items = items
@@ -3153,7 +3214,7 @@ class PBPVisualSim(tk.Toplevel):
         else:
             for w in win.winfo_children():
                 w.destroy()
-        col = ACCENT if d["is_home"] else AWAY_COLOR
+        col = self._home_primary if d["is_home"] else self._away_primary
         team = (self.home_team.team_name if d["is_home"]
                 else self.away_team.team_name)
         tk.Label(win, text=self._fullname(p), bg="#16161a", fg="white",
@@ -3231,7 +3292,7 @@ class PBPVisualSim(tk.Toplevel):
         win.configure(bg="#16161a")
         win.geometry("340x430")
         self._stars_win = win
-        tk.Label(win, text="THREE STARS", bg="#16161a", fg=ACCENT,
+        tk.Label(win, text="THREE STARS", bg="#16161a", fg=self._ui_accent,
                  font=(FONT, 13, "bold")).pack(pady=(12, 4))
         medals = ("1st", "2nd", "3rd")
         for i, s in enumerate(stars):
@@ -3398,7 +3459,7 @@ class PBPVisualSim(tk.Toplevel):
                 "penalty", "PENALTY",
                 f"{self._pname(ev.get('player'))} — {mins} min for "
                 f"{ev.get('infraction', 'a foul')}",
-                color=ACCENT if home else AWAY_COLOR)
+                color=self._home_primary if home else self._away_primary)
         # Majors heat the game up.
         if mins >= 5:
             try:
@@ -3423,7 +3484,7 @@ class PBPVisualSim(tk.Toplevel):
         kind = ev.get("kind", "")
         name = self._pname(ev.get("player"))
         home = self._side_of(ev.get("team")) == "home"
-        color = ACCENT if home else AWAY_COLOR
+        color = self._home_primary if home else self._away_primary
         if kind == "hat_trick_watch":
             title, sub = "HAT-TRICK WATCH", f"{name} has two -- one more for the hats"
             tag = "goal"
@@ -3572,13 +3633,15 @@ class PBPVisualSim(tk.Toplevel):
             return
         c.delete("all")
         p = self._winprob
-        c.create_rectangle(0, 0, W * p, H, fill=ACCENT, outline="")
-        c.create_rectangle(W * p, 0, W, H, fill=AWAY_COLOR, outline="")
+        c.create_rectangle(0, 0, W * p, H, fill=self._home_primary, outline="")
+        c.create_rectangle(W * p, 0, W, H, fill=self._away_primary, outline="")
         hab = _abbr(self.home_team.team_name)
         aab = _abbr(self.away_team.team_name)
-        c.create_text(4, H / 2, text=hab, anchor="w", fill="#0e0e11",
+        c.create_text(4, H / 2, text=hab, anchor="w",
+                      fill=self._home_tc[1] or "#0e0e11",
                       font=(FONT, 8, "bold"))
-        c.create_text(W - 4, H / 2, text=aab, anchor="e", fill="#0e0e11",
+        c.create_text(W - 4, H / 2, text=aab, anchor="e",
+                      fill=self._away_tc[1] or "#0e0e11",
                       font=(FONT, 8, "bold"))
 
     def _flash_light(self, side):
@@ -3618,17 +3681,17 @@ class PBPVisualSim(tk.Toplevel):
         c.create_rectangle(2, top, W - 2, bot, fill="#23262e", outline="")
         if frac > 0.01:
             c.create_rectangle(mid, top, mid + frac * (W / 2 - 2), bot,
-                               fill=ACCENT, outline="")
+                               fill=self._home_primary, outline="")
         elif frac < -0.01:
             c.create_rectangle(mid + frac * (W / 2 - 2), top, mid, bot,
-                               fill=AWAY_COLOR, outline="")
+                               fill=self._away_primary, outline="")
         c.create_line(mid, 2, mid, H - 2, fill="#555A66", width=1)
         hab = _abbr(self.home_team.team_name)
         aab = _abbr(self.away_team.team_name)
         c.create_text(4, H / 2, text=hab, anchor="w",
-                      fill=ACCENT, font=(FONT, 8, "bold"))
+                      fill=self._home_fg, font=(FONT, 8, "bold"))
         c.create_text(W - 4, H / 2, text=aab, anchor="e",
-                      fill=AWAY_COLOR, font=(FONT, 8, "bold"))
+                      fill=self._away_fg, font=(FONT, 8, "bold"))
 
     # ------------------------------------------------------------------
     # Game intensity (tension) meter
