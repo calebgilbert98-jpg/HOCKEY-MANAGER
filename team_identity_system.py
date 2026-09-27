@@ -212,10 +212,10 @@ class NHLTeamIdentity:
                 text_on_secondary="#000000"
             ),
             "Edmonton Oilers": TeamColors(
-                primary="#041E42",      # Navy Blue
-                secondary="#FF4C00",    # Orange
+                primary="#FF4C00",      # Orange
+                secondary="#041E42",    # Royal Navy Blue
                 accent="#FFFFFF",       # White
-                text_on_primary="#FFFFFF",
+                text_on_primary="#000000",
                 text_on_secondary="#FFFFFF"
             ),
             "Los Angeles Kings": TeamColors(
