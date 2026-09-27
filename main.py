@@ -2517,6 +2517,28 @@ class AdvancedGameSim:
         # (Elite 18 vs weak 8 = +8% → ~17% is the realistic ceiling for great chances)
         skill_diff = shooter_skill - goalie_skill
         shot_chance = 0.09 + (skill_diff * 0.008)
+
+        # -- Impact tier (additive): tired / normal / big shot. Scales the
+        # existing shot_chance on top of the agreed math above -- big shots
+        # finish cleaner, tired ones are easier stops. Never overrides it.
+        try:
+            import impact_system as _imp
+            _sd = self.score.get(puck_team_name, 0) - self.score.get(opp_team_name, 0)
+            _ictx = _imp.ImpactContext(
+                fatigue=max(0.0, min(100.0, fatigue_factor * 100.0)),
+                on_pk=(self.pk_team == puck_team_name),
+                on_pp=bool(self.pp_team),
+                score_diff=int(_sd),
+                period=int(getattr(self, "period", 1) or 1),
+                clock_seconds=max(0.0, 3600.0 - float(getattr(self, "time", 0) or 0)),
+                is_playoff=bool(getattr(self, "is_playoff", False)),
+            )
+            _seff = _imp.shot_effects(_imp.classify_shot_impact(shooter, _ictx))
+            _sm = _seff["save_prob_mult"]
+            if _sm != 1.0:
+                shot_chance = min(0.45, max(0.005, shot_chance / _sm))
+        except Exception:
+            pass
         
         # Team tactics affect shot quality
         # Get the shooting team's tactics

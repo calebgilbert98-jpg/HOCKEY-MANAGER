@@ -508,6 +508,11 @@ class GameSim:
         self._opening_brawl = None     # team_name if a premeditated opening-draw
                                        # brawl is scripted (see _evaluate_punishment_orders)
         self._retaliation_mod = 1.0
+        # --- Impact-tier engine (additive; inert when unused) ---
+        # Coach instructions keyed by team name (e.g. "play_harder").
+        # Derived automatically from coach makeup + game state when unset;
+        # the game-day bundle / team talk can set one explicitly.
+        self._coach_instructions = {}
         self._punishment_orders = {}   # team_name -> order_punishment() dict
         self._home_coach = None
         self._away_coach = None
@@ -4481,6 +4486,17 @@ class GameSim:
         self.expected_goals[attacking_team.team_name] = \
             self.expected_goals.get(attacking_team.team_name, 0.0) + expected_goal
 
+        # -- Impact tier (additive): tired / normal / big shot, classified
+        # from personnel, fatigue, game state and coaching. Used for the
+        # pbp payload here and the goal-probability scaling below.
+        shot_impact = 1  # NORMAL
+        try:
+            import impact_system as _imp
+            _ictx = _imp.build_context(self, shooter, attacking_team)
+            shot_impact = _imp.classify_shot_impact(shooter, _ictx)
+        except Exception:
+            shot_impact = 1
+
         # Positional honesty: the shooter was already placed at his shot
         # location when the chance developed; report the authoritative spot.
         sx, sy = self._ppos_get(shooter)
@@ -4493,6 +4509,7 @@ class GameSim:
                        location=location.value if hasattr(location, "value") else str(location),
                        quality=self._pbp_num(quality),
                        distance=self._pbp_num(distance),
+                       impact={0: "tired", 1: "normal", 2: "big"}[shot_impact],
                        shooter_pos=(round(sx, 1), round(sy, 1)))
         # Positional: the shot heads for the net
         self._ppos_ensure()
@@ -4528,6 +4545,18 @@ class GameSim:
         if mult != 1.0:
             goal_prob = (1.0 - adjusted_save_prob) * mult
             adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+
+        # -- Impact scaling (additive): apply the classified tier on top
+        # of the existing math, exactly like the scoring-level preference
+        # above. Big shots beat goalies cleaner; tired ones are easier.
+        try:
+            _seff = _imp.shot_effects(shot_impact)
+            _sm = _seff["save_prob_mult"]
+            if _sm != 1.0:
+                _gp = (1.0 - adjusted_save_prob) / _sm
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, _gp))
+        except Exception:
+            pass
         
         # Resolve the shot
         if random.random() > adjusted_save_prob:
@@ -4587,7 +4616,8 @@ class GameSim:
             else:
                 # Regular save
                 self._handle_save(goalie, shooter, shot_type, quality,
-                                  defending_team=defending_team)
+                                  defending_team=defending_team,
+                                  shot_impact=shot_impact, distance=distance)
             
             # Update goaltender fatigue
             self._update_goaltender_fatigue(goalie, quality)
@@ -4734,14 +4764,36 @@ class GameSim:
         
         return False
 
-    def _handle_save(self, goalie, shooter, shot_type, quality, defending_team=None):
+    def _handle_save(self, goalie, shooter, shot_type, quality, defending_team=None,
+                     shot_impact=1, distance=None):
         """Handle a save event."""
+        # -- Impact tier (additive): classify the save. A robbery on a
+        # grade-A look can steal momentum; a tired wobbler just gets
+        # stopped. Never changes whether the puck was stopped.
+        save_impact = 1  # NORMAL
+        try:
+            import impact_system as _imp
+            _sctx = _imp.build_context(self, goalie, defending_team)
+            save_impact = _imp.classify_save_impact(
+                goalie, shooter, quality, distance if distance is not None else 25.0, _sctx)
+            _seff = _imp.save_effects(save_impact)
+            if _seff["heat"]:
+                self._live_heat = min(40.0, self._live_heat + _seff["heat"])
+            if save_impact == 2 and defending_team is not None and _seff["momentum"]:
+                _imp.nudge_momentum(self, defending_team, _seff["momentum"])
+            _story = _imp.story_worthy(save_impact, goalie, _sctx)
+            _freeze_mult = _seff["freeze_mult"]
+        except Exception:
+            _story = False
+            _freeze_mult = 1.0
         self._log_event(f"Shot by {shooter.full_name}, saved by {goalie.full_name}!", "SAVE")
         self._emit_pbp("save",
                        goalie=goalie,
                        shooter=shooter,
                        defending_team=getattr(goalie, "team_name", None),
-                       shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type))
+                       shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
+                       impact={0: "tired", 1: "normal", 2: "big"}[save_impact],
+                       story=_story)
         # NHL: on a controlled save the goalie often covers the puck for a
         # whistle -- faceoff at the nearest end-zone dot in his own end.
         # More likely on dangerous looks / under sustained pressure.
@@ -4751,7 +4803,7 @@ class GameSim:
             q = float(quality)
         except (TypeError, ValueError):
             q = 0.4
-        if defending_team is not None and random.random() < 0.06 + 0.08 * q:
+        if defending_team is not None and random.random() < (0.06 + 0.08 * q) * _freeze_mult:
             self._log_event(f"{goalie.full_name} covers the puck for a faceoff.",
                             "STOPPAGE")
             self._emit_pbp("goalie_freeze", goalie=goalie,
@@ -5268,6 +5320,29 @@ class GameSim:
             from game_classes import StaffRole
             found = team.get_staff_by_role(StaffRole.HEAD_COACH)
             return found[0] if found else None
+        except Exception:
+            return None
+
+    # -- Coach instructions (impact-tier engine; additive) --
+    def set_coach_instruction(self, team_name, instruction):
+        """Set a coach instruction for a team (e.g. "play_harder").
+
+        Consumed by the impact-tier classifiers. Pass None to clear.
+        """
+        try:
+            if not hasattr(self, "_coach_instructions"):
+                self._coach_instructions = {}
+            if instruction:
+                self._coach_instructions[team_name] = instruction
+            else:
+                self._coach_instructions.pop(team_name, None)
+        except Exception:
+            pass
+
+    def get_coach_instruction(self, team):
+        try:
+            return self._coach_instructions.get(
+                getattr(team, "team_name", None))
         except Exception:
             return None
 
@@ -6920,17 +6995,36 @@ class GameSim:
         
         hit_successful = random.random() < success_chance
         
+        # -- Impact tier (additive): tired / normal / big hit, from
+        # personnel, fatigue and coaching. A coach's "play harder"
+        # instruction shifts the distribution up (capped).
+        hit_impact = 1  # NORMAL
+        try:
+            import impact_system as _imp
+            _hteam = self._get_player_team(hitting_player)
+            _hctx = _imp.build_context(self, hitting_player, _hteam)
+            hit_impact = _imp.classify_hit_impact(hitting_player, target_player, _hctx)
+        except Exception:
+            hit_impact = 1
+
         if hit_successful:
-            result = self._resolve_hit_result(hitting_player, target_player, hit_type)
-            self._record_hit_stats(hitting_player, target_player, hit_type, result)
+            result = self._resolve_hit_result(hitting_player, target_player, hit_type,
+                                              impact=hit_impact)
+            self._record_hit_stats(hitting_player, target_player, hit_type, result,
+                                   impact=hit_impact)
             return result
         else:
-            self._record_hit_stats(hitting_player, target_player, hit_type, HitResult.MISSED)
+            self._record_hit_stats(hitting_player, target_player, hit_type, HitResult.MISSED,
+                                   impact=hit_impact)
             return HitResult.MISSED
 
-    def _resolve_hit_result(self, hitting_player, target_player, hit_type):
+    def _resolve_hit_result(self, hitting_player, target_player, hit_type, impact=1):
         """
         Stage 4: Determine the outcome of a successful hit.
+
+        `impact` (0 tired / 1 normal / 2 big) scales the existing result
+        weights on top of the hit-type logic below -- big hits force more
+        turnovers and carry more injury risk, tired ones less.
         """
         # Base result probabilities
         results = [
@@ -6981,6 +7075,20 @@ class GameSim:
             ]
 
         # Select result based on probabilities
+        # -- Impact scaling (additive): applied AFTER the hit-type and
+        # trait logic above, so all existing tuning is preserved.
+        try:
+            import impact_system as _imp
+            _heff = _imp.hit_effects(impact)
+            results = [
+                (r, p * _heff["turnover_mult"] if r == HitResult.TURNOVER_CAUSED
+                 else p * _heff["injury_mult"] if r == HitResult.INJURY_CAUSED
+                 else p * _heff["penalty_mult"] if r == HitResult.PENALTY_DRAWN
+                 else p)
+                for r, p in results
+            ]
+        except Exception:
+            pass
         rand = random.random()
         cumulative = 0
         for result, prob in results:
@@ -6990,12 +7098,28 @@ class GameSim:
         
         return HitResult.SUCCESSFUL
 
-    def _record_hit_stats(self, hitting_player, target_player, hit_type, result):
+    def _record_hit_stats(self, hitting_player, target_player, hit_type, result, impact=1):
         """
         Stage 4: Record hitting statistics and update tracking.
         """
         hitting_team = self._get_player_team(hitting_player)
         target_team = self._get_player_team(target_player)
+        impact_name = {0: "tired", 1: "normal", 2: "big"}[impact] \
+            if impact in (0, 1, 2) else "normal"
+
+        # -- Impact consequences (additive): big hits raise the
+        # temperature and can swing momentum at the right moment.
+        try:
+            import impact_system as _imp
+            _heff = _imp.hit_effects(impact)
+            if _heff["heat"]:
+                self._live_heat = min(40.0, self._live_heat + _heff["heat"])
+            if impact == 2 and _heff["momentum"] and hitting_team is not None:
+                _hctx = _imp.build_context(self, hitting_player, hitting_team)
+                if _imp.story_worthy(impact, hitting_player, _hctx):
+                    _imp.nudge_momentum(self, hitting_team, _heff["momentum"])
+        except Exception:
+            pass
         
         # Update individual stats
         if hitting_player.id in self.game_stats:
@@ -7033,7 +7157,8 @@ class GameSim:
                            hitting_player=hitting_player,
                            target_player=target_player,
                            hit_type=hit_type.value,
-                           result=result.value)
+                           result=result.value,
+                           impact=impact_name)
         elif result == HitResult.SUCCESSFUL:
             # Routine contact is still hockey: rub-outs along the wall and
             # finishes on the forecheck happen all game. Emit it so the
@@ -7042,7 +7167,8 @@ class GameSim:
                            hitting_player=hitting_player,
                            target_player=target_player,
                            hit_type=hit_type.value,
-                           result=result.value)
+                           result=result.value,
+                           impact=impact_name)
 
     def _resolve_turnover(self, player_losing_puck, player_gaining_puck, turnover_type):
         """

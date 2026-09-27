@@ -2388,6 +2388,19 @@ class PBPVisualSim(tk.Toplevel):
             self._update_scoreboard(ev)
         elif et == "save":
             msg = self._save_text(ev)
+            # Big story-worthy saves get the broadcast treatment: a lower
+            # third and a camera jolt, like a goal. Everything else stays
+            # quiet so the big ones mean something.
+            if ev.get("impact") == "big" and ev.get("story") and not self._instant:
+                try:
+                    self._banner_show(
+                        "big_save", "WHAT A SAVE!",
+                        f"{self._pname(ev.get('goalie'))} robs "
+                        f"{self._pname(ev.get('shooter'))}",
+                        color="#4fc3f7")
+                    self._shake(mag=3.0, dur=0.35)
+                except Exception:
+                    pass
             self._feed(msg, ev=ev)
             side = self._player_side(ev.get("goalie"), ev, "defending_team")
             self._goalie_shot(side, goalie=ev.get("goalie"), scored=False)
@@ -3019,11 +3032,14 @@ class PBPVisualSim(tk.Toplevel):
         self._feed(random.choice(_HIT_T).format(
             H=self._pname(ev.get("hitting_player")),
             T=self._pname(ev.get("target_player")), ht=ht), ev=ev)
-        # impact burst at the target; bigger hits shake the camera
+        # impact burst at the target; bigger hits shake the camera.
+        # Prefer the engine's explicit impact tier; fall back to the old
+        # heuristics for events from older engines.
         if t and not self._instant:
             self._spawn_burst(t["x"], t["y"])
-            big = (ev.get("hit_type", "hit") != "hit" or
-                   ev.get("result") == "turnover_caused")
+            big = (ev.get("impact", "normal") == "big"
+                   or ev.get("hit_type", "hit") != "hit"
+                   or ev.get("result") == "turnover_caused")
             if big:
                 self._shake(mag=2.5, dur=0.3)
                 # knockdown: target crumples and stays down briefly.
