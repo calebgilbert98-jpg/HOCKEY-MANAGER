@@ -332,7 +332,8 @@ class MoraleWindow(ctk.CTkToplevel):
                      f"Man-mgmt {getattr(coach, 'man_management', '?')}\n"
                      f"Ambition: {amb}" + (f"  •  Boyhood team: {fav}" if fav else "") + "\n"
                      f"Room status: {st['level']} ({st['risk']:.0%} risk)  •  "
-                     f"GM trust: {getattr(coach, 'gm_trust', 70)}/100\n"
+                     f"GM trust: {getattr(coach, 'gm_trust', 70)}/100  •  "
+                     f"Influence: {getattr(coach, 'influence', 70)}/100\n"
                      f"If you discuss the lines: {preview['text']}")
             self.line_btn.configure(text=f"Lines: {'YOU (GM)' if lc == 'gm' else 'Coach'}")
         else:

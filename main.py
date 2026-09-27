@@ -8916,6 +8916,9 @@ class HockeyManagerGUI(tk.Tk):
                     pass
                 # Coach volatility: losing humbles, a new sweater reforms.
                 rs.decay_controversy(s, team=team, win_pct=win_pct)
+                # Coach influence: recent success builds it, losing burns it.
+                rs.develop_coach_influence(s, win_pct=win_pct, is_champ=is_champ,
+                                           roster=team.roster)
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""

@@ -82,6 +82,13 @@ def ensure_reputation_fields(entity: Any) -> None:
             _deal_base_controversy(entity)
         except Exception:
             entity.base_controversy = 15
+    # Coach influence: set at hire (floor 65, icons higher), then earned/burned.
+    if _is_staff_entity(entity) and getattr(entity, "influence", None) is None:
+        try:
+            entity.influence = coach_influence_at_hire(
+                accolades=getattr(entity, "career_reputation", 0) or 0)
+        except Exception:
+            entity.influence = 65
     if not hasattr(entity, "controversy_history"):
         entity.controversy_history = []
     if not hasattr(entity, "reputation_history"):
@@ -792,6 +799,11 @@ def _is_staff(entity: Any) -> bool:
     return hasattr(entity, "role") and not hasattr(entity, "primary_position")
 
 
+def _is_staff_entity(entity: Any) -> bool:
+    """Duck-typed staff check for contexts without a real Staff object."""
+    return not hasattr(entity, "primary_position")
+
+
 def _role_name(entity: Any) -> str:
     role = getattr(entity, "role", None)
     return str(getattr(role, "value", role) or "")
@@ -1258,6 +1270,8 @@ def player_coach_response(player: Any, coach: Any,
         fit = coach_player_fit(coach, player)
         happy = getattr(player, "happiness", 70) or 70
         score = fit * 0.6 + (happy - 65) / 100 * 0.4
+        # Influence: an icon's voice carries (+0.10); a lame duck's doesn't.
+        score += ((getattr(coach, "influence", 70) or 70) - 70) * 0.004
         if score >= 0.30:
             label = "Bought in"
         elif score >= -0.05:
@@ -1765,6 +1779,8 @@ def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]
     # sweater he wore is where his guys are.
     generate_personality(player)
     attrs["base_controversy"] = getattr(player, "base_controversy", 20)
+    attrs["influence"] = coach_influence_at_hire(
+        name_value=getattr(player, "career_reputation", 0) or 0)
     last = getattr(player, "last_team_name", "") or getattr(player, "team_name", "")
     attrs["connections"] = [last] if last else []
     return attrs
@@ -3003,9 +3019,6 @@ def generate_personality(entity: Any, hothead_chance: float = 0.08) -> int:
         return 20
 
 
-def _is_staff_entity(entity: Any) -> bool:
-    return not hasattr(entity, "primary_position")
-
 
 def _draft_overall(p: Any) -> Optional[int]:
     try:
@@ -3185,7 +3198,8 @@ def coach_market_appeal(coach: Any, hiring_org: tuple = ()) -> Dict[str, Any]:
                       for v in (hiring_org or ()))
         if vouched:
             tax *= 0.5
-        score = max(0, min(100, rep * 0.7 - tax + 15))
+        influence = getattr(coach, "influence", 70) or 70
+        score = max(0, min(100, rep * 0.65 - tax + 15 + influence * 0.1))
         return {"appeal": round(score, 1), "reputation": rep,
                 "controversy_tax": round(tax, 1), "vouched": vouched,
                 "story": (f"{_ename(coach)}: appeal {score:.0f} "
@@ -3207,3 +3221,54 @@ def volatility_trade_discount(player: Any) -> float:
         return round(max(0.70, 1 - discount), 3)
     except Exception:
         return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Coach influence: accolades, recent success, name value, respect
+# ---------------------------------------------------------------------------
+# influence (0-100) is how much weight a coach's voice carries. It's set at
+# hire -- floor 65, icons higher -- then earned or burned every season.
+
+def coach_influence_at_hire(accolades: float = 0, name_value: float = 0) -> int:
+    """Influence a coach walks in the door with.
+
+    accolades: career_reputation (Cups and winning are already baked in).
+    name_value: for the NHL legend turned coach -- his playing career
+                opens doors his coaching resume hasn't earned yet.
+    No new hire starts below 65. Icons start near 95.
+    """
+    score = 65 + min(20, (accolades or 0) * 0.25) + min(20, (name_value or 0) * 0.22)
+    return max(65, min(95, int(round(score))))
+
+
+def develop_coach_influence(coach: Any, win_pct: Optional[float] = None,
+                            is_champ: bool = False,
+                            roster: Optional[List[Any]] = None) -> int:
+    """Yearly influence drift: recent success builds it, losing burns it,
+    and respect in the room is the final judge."""
+    ensure_reputation_fields(coach)
+    inf = getattr(coach, "influence", None)
+    if inf is None:
+        inf = coach_influence_at_hire(
+            accolades=getattr(coach, "career_reputation", 0) or 0)
+    if win_pct is not None:
+        if is_champ:
+            inf += 6
+        elif win_pct >= 0.600:
+            inf += 3
+        elif win_pct >= 0.500:
+            inf += 1
+        elif win_pct < 0.400:
+            inf -= 9
+        elif win_pct < 0.450:
+            inf -= 6
+    if roster is not None:
+        try:
+            level = room_status(coach, {"win_pct": win_pct or 0.5},
+                                roster=roster)["level"]
+            inf += {"Lost": -8, "Fracturing": -5, "Strain": -2,
+                    "Secure": 1}.get(level, 0)
+        except Exception:
+            pass
+    coach.influence = max(0, min(100, int(round(inf))))
+    return coach.influence
