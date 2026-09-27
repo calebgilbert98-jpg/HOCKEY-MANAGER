@@ -996,6 +996,8 @@ class DevelopmentOverviewWindow(InGamePopup):
             if 'development_tree_map' not in self.parent.tree_maps:
                 self.parent.tree_maps['development_tree_map'] = {}
             self.parent.tree_maps['development_tree_map'][item_id] = player
+            # Widget-keyed entry so the app-wide right-click menu resolves it.
+            self.parent.tree_maps.setdefault(self.player_tree, {})[item_id] = player
         
         # Update status bar
         if hasattr(self, 'status_bar'):
@@ -1725,6 +1727,8 @@ class PracticeCenterWindow(InGamePopup):
             if 'practice_center_tree_map' not in self.parent.tree_maps:
                 self.parent.tree_maps['practice_center_tree_map'] = {}
             self.parent.tree_maps['practice_center_tree_map'][item_id] = player
+            # Widget-keyed entry so the app-wide right-click menu resolves it.
+            self.parent.tree_maps.setdefault(self.player_tree, {})[item_id] = player
     
     def _on_player_select(self, event):
         """Handle player selection"""

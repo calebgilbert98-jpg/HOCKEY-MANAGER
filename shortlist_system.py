@@ -12,6 +12,7 @@ A comprehensive player shortlist system for tracking:
 import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
+from player_context_menu import PlayerContextMenu
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from datetime import datetime
@@ -342,29 +343,37 @@ class ShortlistWindow(InGamePopup):
             self.parent.tree_maps[self.shortlist_tree][item] = entry
     
     def add_shortlist_context_menu(self):
-        """Add context menu to shortlist treeview"""
+        """Add context menu to shortlist treeview (universal player menu + shortlist actions)."""
         def show_context_menu(event):
             item = self.shortlist_tree.identify_row(event.y)
-            if item:
-                self.shortlist_tree.selection_set(item)
+            if not item:
+                return
+            self.shortlist_tree.selection_set(item)
+            entry = self.parent.tree_maps.get(self.shortlist_tree, {}).get(item)
+            player = self.find_player_by_id(entry.player_id) if entry else None
+            if player:
+                PlayerContextMenu(self.parent).show_context_menu(
+                    event, player,
+                    additional_options=[
+                        ("Edit Notes", self.edit_notes),
+                        ("Change Priority", self.change_priority),
+                        ("Remove from Shortlist", self.remove_selected),
+                    ])
+            else:
+                # Entry's player not on any roster: shortlist-only actions.
                 context_menu = tk.Menu(self, tearoff=0)
-                
-                context_menu.add_command(label="View Player Profile", 
-                                       command=lambda: self.view_player_profile(item))
-                context_menu.add_separator()
-                context_menu.add_command(label="Edit Notes", 
+                context_menu.add_command(label="Edit Notes",
                                        command=self.edit_notes)
-                context_menu.add_command(label="Change Priority", 
+                context_menu.add_command(label="Change Priority",
                                        command=self.change_priority)
                 context_menu.add_separator()
-                context_menu.add_command(label="Remove from Shortlist", 
+                context_menu.add_command(label="Remove from Shortlist",
                                        command=self.remove_selected)
-                
                 try:
                     context_menu.tk_popup(event.x_root, event.y_root)
                 finally:
                     context_menu.grab_release()
-        
+
         self.shortlist_tree.bind("<Button-3>", show_context_menu)
     
     def view_player_profile(self, item):

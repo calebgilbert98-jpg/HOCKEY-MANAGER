@@ -13,6 +13,7 @@ import random
 from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
 from game_classes import debug_print
 from ui_widgets import PillButton
+from player_context_menu import PlayerContextMenu
 
 
 class ProfessionalScoutingWindow(InGamePopup):
@@ -1036,24 +1037,22 @@ class ProfessionalScoutingWindow(InGamePopup):
             self._update_status(f"Selected: {len(selection)} player(s)")
     
     def _show_player_context_menu(self, event):
-        """Show context menu for selected player"""
+        """Show full player context menu (universal + scouting actions)."""
         item = self.players_tree.identify_row(event.y)
-        if item:
-            self.players_tree.selection_set(item)
-            
-            context_menu = tk.Menu(self, tearoff=0)
-            context_menu.add_command(label="Assign Scout", command=self._assign_scout_to_player)
-            context_menu.add_command(label="View Profile", command=self._view_player_profile)
-            context_menu.add_separator()
-            context_menu.add_command(label="Add to Watchlist", command=self._add_to_watchlist)
-            context_menu.add_command(label="Compare", command=self._compare_players)
-            context_menu.add_separator()
-            context_menu.add_command(label="Advanced Analysis", command=self._advanced_analysis)
-            
-            try:
-                context_menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                context_menu.grab_release()
+        if not item:
+            return
+        self.players_tree.selection_set(item)
+        player = self.parent.tree_maps.get('players_tree', {}).get(item)
+        if not player:
+            return
+        PlayerContextMenu(self.parent).show_context_menu(
+            event, player,
+            additional_options=[
+                ("Assign Scout", self._assign_scout_to_player),
+                ("Add to Watchlist", self._add_to_watchlist),
+                ("Compare", self._compare_players),
+                ("Advanced Analysis", self._advanced_analysis),
+            ])
     
     def _assign_scout_to_player(self):
         """Assign a scout to evaluate selected player"""

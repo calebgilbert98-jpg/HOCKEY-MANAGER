@@ -557,6 +557,14 @@ class GameSim:
         # Play-by-play visualizer hooks (additive; zero overhead when unused).
         # Listeners are callables receiving one event dict each.
         # (pbp_listeners is initialized earlier, before pre-game orders.)
+        # Live-PBP tick buffer: while a tick runs, _emit_pbp stashes events
+        # here instead of dispatching immediately. At tick end
+        # _spread_tick_timestamps stamps each buffered event with its own
+        # slice of the tick's game time (like game_log/event_log) and
+        # flushes them in order, so the visualizer never sees a burst of
+        # plays sharing one timestamp.
+        self._pbp_tick_buffer = []
+        self._pbp_buffering = False
         # Sudden-death OT bookkeeping (set by _handle_overtime)
         self._ot_sudden_death = False
         self._ot_start_score = None
@@ -2229,9 +2237,22 @@ class GameSim:
 
         while self.clock > 0:
             time_elapsed = random.randint(8, 20)  # Slightly faster pace
+            tick_start_clock = self.clock
             self.clock -= time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
+            # Tick-local log indices: used below to spread this tick's
+            # elapsed game time across the events logged during the tick,
+            # so sequential plays get distinct chronological timestamps.
+            tick_log_start = len(self.game_log)
+            tick_elog_start = len(self.event_log)
+            # Live-PBP buffer scope: events emitted during this tick are
+            # held until _spread_tick_timestamps stamps + flushes them.
+            # Flush stragglers first (a previous tick that died mid-spread).
+            if getattr(self, "_pbp_tick_buffer", None):
+                self._flush_pbp_buffer()
+            tick_pbp_start = len(self._pbp_tick_buffer)
+            self._pbp_buffering = True
 
             # Sudden-death OT: stop the period as soon as someone scores
             if getattr(self, '_ot_sudden_death', False) and self._ot_start_score is not None:
@@ -2300,6 +2321,13 @@ class GameSim:
                 self._emit_skate()
             except Exception:
                 pass
+
+            # EHM-style clock realism: spread this tick's elapsed time over
+            # its events so the PBP feed never shows a burst of plays all
+            # stamped with the exact same second.
+            self._spread_tick_timestamps(tick_start_clock, time_elapsed,
+                                         tick_log_start, tick_elog_start,
+                                         tick_pbp_start)
 
         # Rule 26: a delayed call can't survive the horn -- force the
         # whistle at the period boundary.
@@ -4624,17 +4652,32 @@ class GameSim:
                 self._handle_goal(attacking_team, shooter, assists, shot_type, location)
             
                 # Log advanced goal details
+                defending_team = (self.away_team if attacking_team == self.home_team
+                                  else self.home_team)
+                if defending_team.team_name in getattr(self, "goalie_pulled", set()):
+                    _goal_strength = 'EN'
+                elif self._is_team_on_power_play(attacking_team):
+                    _goal_strength = 'PP'
+                elif self._is_team_on_penalty_kill(attacking_team):
+                    _goal_strength = 'SH'
+                else:
+                    _goal_strength = 'EV'
+                _elapsed = max(0.0, self._period_length - self.clock)
                 self.event_log.append({
-                    'timestamp': self._period_length - self.clock,
+                    'timestamp': _elapsed,
                     'duration': 1.0,
                     'type': 'GOAL_ADVANCED',
                     'details': {
                         'scorer_id': shooter.id,
+                        'assist_ids': [p.id for p in assists],
                         'goaltender_id': goalie.id,
                         'goal_type': goal_type.value,
                         'expected_goal': round(expected_goal, 3),
                         'save_probability': round(adjusted_save_prob, 3),
-                        'shot_quality': quality
+                        'shot_quality': quality,
+                        'period': self.period,
+                        'strength': _goal_strength,
+                        'time_str': f"{int(_elapsed // 60)}:{int(_elapsed % 60):02d}",
                     }
                 })
         else:
@@ -6707,6 +6750,24 @@ class GameSim:
         self._handle_goal(team_with_puck, scorer, [],
                           shot_type=ShotType.WRIST_SHOT,
                           location=ShotLocation.CREASE, empty_net=True)
+        _en_elapsed = max(0.0, self._period_length - self.clock)
+        self.event_log.append({
+            'timestamp': _en_elapsed,
+            'duration': 1.0,
+            'type': 'GOAL_ADVANCED',
+            'details': {
+                'scorer_id': scorer.id,
+                'assist_ids': [],
+                'goaltender_id': None,
+                'goal_type': 'empty_net',
+                'expected_goal': 1.0,
+                'save_probability': 0.0,
+                'shot_quality': 'high',
+                'period': self.period,
+                'strength': 'EN',
+                'time_str': f"{int(_en_elapsed // 60)}:{int(_en_elapsed % 60):02d}",
+            }
+        })
 
     def _emit_pbp(self, event_type, **payload):
         """Emit a play-by-play event to registered listeners (no-op if none)."""
@@ -6727,11 +6788,31 @@ class GameSim:
             "away_score": getattr(self, "away_score", 0),
         }
         ev.update(payload)
+        if getattr(self, "_pbp_buffering", False):
+            # Inside a tick: hold for end-of-tick timestamp spreading.
+            self._pbp_tick_buffer.append(ev)
+            return
+        # Defensive: never strand a previous tick's events if a tick died
+        # before its spread/flush ran.
+        if getattr(self, "_pbp_tick_buffer", None):
+            self._flush_pbp_buffer()
         for cb in list(self.pbp_listeners):
             try:
                 cb(ev)
             except Exception:
                 pass
+
+    def _flush_pbp_buffer(self):
+        """Deliver buffered tick events to listeners, in emission order."""
+        buf = self._pbp_tick_buffer
+        self._pbp_tick_buffer = []
+        self._pbp_buffering = False
+        for e in buf:
+            for cb in list(self.pbp_listeners):
+                try:
+                    cb(e)
+                except Exception:
+                    pass
 
     @staticmethod
     def _pbp_num(value):
@@ -6740,6 +6821,67 @@ class GameSim:
             return round(float(value), 3)
         except (TypeError, ValueError):
             return str(value) if value is not None else None
+
+    def _spread_tick_timestamps(self, tick_start_clock, time_elapsed,
+                                  log_start, elog_start, pbp_start=0):
+        """Distribute a tick's elapsed game time across its logged events.
+
+        The tick loop advances the clock once per tick but a tick can log
+        several plays (pass -> shot -> save). Without this, every play in
+        the tick shares one timestamp and the PBP feed shows bursts like
+        five events at "P1 14:13". EHM-style realism: each action consumes
+        a slice of the tick's game time, so sequential plays get distinct,
+        chronologically ordered stamps. The live visualizer stream
+        (buffered during the tick) gets the same treatment, then flushes
+        to listeners in emission order.
+        """
+        import re
+        n = len(self.game_log) - log_start
+        if n > 0 and time_elapsed > 0:
+            for j in range(n):
+                ev_clock = max(0.0,
+                               tick_start_clock - (j + 1) * time_elapsed / n)
+                stamp = (f"[P{self.period} - {int(ev_clock // 60):02d}:"
+                         f"{int(ev_clock % 60):02d}]")
+                idx = log_start + j
+                self.game_log[idx] = re.sub(r'^\[P\d+ - \d{2}:\d{2}\]',
+                                            stamp, self.game_log[idx], count=1)
+        m = len(self.event_log) - elog_start
+        if m > 0 and time_elapsed > 0:
+            for j in range(m):
+                ev_clock = max(0.0,
+                               tick_start_clock - (j + 1) * time_elapsed / m)
+                elapsed = max(0.0, self._period_length - ev_clock)
+                e = self.event_log[elog_start + j]
+                try:
+                    e['timestamp'] = elapsed
+                    det = e.get('details')
+                    if isinstance(det, dict) and 'time_str' in det:
+                        det['time_str'] = (f"{int(elapsed // 60)}:"
+                                           f"{int(elapsed % 60):02d}")
+                except Exception:
+                    pass
+        # Live visualizer stream: stamp each buffered event with its own
+        # slice of the tick (emission order == chronological order), then
+        # flush to listeners. Ends the tick's buffering scope even when
+        # nothing was buffered.
+        try:
+            pb = self._pbp_tick_buffer
+            k = len(pb) - pbp_start
+            if k > 0 and time_elapsed > 0:
+                for j in range(k):
+                    ev_clock = max(0.0, tick_start_clock
+                                   - (j + 1) * time_elapsed / k)
+                    el = max(0.0, self._period_length - ev_clock)
+                    e = pb[pbp_start + j]
+                    try:
+                        e["clock"] = ev_clock
+                        e["elapsed"] = el
+                        e["t"] = ((max(1, self.period) - 1) * 1200 + el)
+                    except Exception:
+                        pass
+        finally:
+            self._flush_pbp_buffer()
 
     def _log_event(self, message, event_type="INFO"):
         """Adds an event to the game log with a timestamp."""

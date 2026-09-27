@@ -79,10 +79,18 @@ class GameResultsWindow(InGamePopup):
         """Create games results tab"""
         games_frame = tk.Frame(self.notebook, bg='#1F1F1F')
         self.notebook.add(games_frame, text="Games")
-        
+
+        hint = tk.Label(games_frame,
+                        text="Double-click a game (or select it and press View Box Score) "
+                             "to see goals, assists and full stats.",
+                        font=('Segoe UI', 9, 'italic'),
+                        fg='#9E9E9E', bg='#1F1F1F')
+        hint.pack(fill='x', padx=20, pady=(12, 0), anchor='w')
+
         # Games list
         columns = ('Home Team', 'Score', 'Away Team', 'Status')
-        self.games_tree = ttk.Treeview(games_frame, columns=columns, show='headings', height=15)
+        self.games_tree = ttk.Treeview(games_frame, columns=columns, show='headings', height=13)
+        self._games = []  # result dicts, parallel to tree rows
         
         # Configure columns
         self.games_tree.heading('Home Team', text='Home Team')
@@ -102,6 +110,36 @@ class GameResultsWindow(InGamePopup):
         # Pack games components
         self.games_tree.pack(side='left', fill='both', expand=True, padx=20, pady=20)
         games_scrollbar.pack(side='right', fill='y', pady=20)
+
+        # Box score actions
+        action_frame = tk.Frame(games_frame, bg='#1F1F1F')
+        action_frame.pack(fill='x', padx=20, pady=(0, 14))
+        box_btn = tk.Button(action_frame,
+                            text="View Box Score",
+                            command=self._open_box_score,
+                            font=('Segoe UI', 10, 'bold'),
+                            bg='#00ceb8', fg='white',
+                            padx=24, pady=6, border=0,
+                            activebackground='#00a894')
+        box_btn.pack(side='right')
+        self.games_tree.bind('<Double-1>', lambda _e: self._open_box_score())
+
+    def _open_box_score(self):
+        """Open the box score for the selected game."""
+        sel = self.games_tree.selection()
+        if not sel:
+            tk.messagebox.showinfo("No Game Selected",
+                                   "Select a game first to view its box score.")
+            return
+        idx = self.games_tree.index(sel[0])
+        if idx < 0 or idx >= len(self._games):
+            return
+        try:
+            from game_box_score import GameBoxScoreWindow
+            GameBoxScoreWindow(self, self._games[idx])
+        except Exception as e:
+            tk.messagebox.showerror("Box Score Unavailable",
+                                    f"Could not open the box score:\n{e}")
     
     def _create_standings_tab(self):
         """Create standings tab"""
@@ -173,6 +211,7 @@ class GameResultsWindow(InGamePopup):
                 
                 score_text = f"{home_score} - {away_score}"
                 self.games_tree.insert('', 'end', values=(home_team, score_text, away_team, status))
+                self._games.append(game)
         
         # Load standings from 'league_results'
         league_results = self.results_data.get('league_results', {})
