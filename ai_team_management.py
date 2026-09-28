@@ -397,8 +397,8 @@ class AITeamManager:
                 team_decisions.extend(sign_decisions)
 
             # Execute the decisions this manager owns end-to-end (FA
-            # signings, prospect signings, gated promotions).
-            # Trade/extension offers remain proposals.
+            # signings, extensions, prospect signings, gated promotions).
+            # Trade offers remain proposals (they go through negotiation).
             self._execute_decisions(team, team_decisions)
 
             decisions.extend(team_decisions)
@@ -471,6 +471,13 @@ class AITeamManager:
         _pos = getattr(player, "primary_position", "")
         _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
         _age = int(getattr(player, "age", 27) or 27)
+        # A player can only sign one ELC: a player currently on an ELC
+        # asks second-contract money, not the ELC band.
+        try:
+            _on_elc = bool(getattr(getattr(player, "contract", None),
+                                  "entry_level", False))
+        except Exception:
+            _on_elc = False
         _lg = league if league is not None else getattr(self, "_league_ref",
                                                        None)
         _season = int(getattr(_lg, "season_year", 0) or 0)
@@ -480,7 +487,12 @@ class AITeamManager:
                 else DEFAULT_CAP
         except Exception:
             _cap = DEFAULT_CAP
-        _base_pct = (_ovr100 * 100_000) / 104_000_000
+        # Base demand follows the 2026 market-reset bands (superstar
+        # 95+ $14-19M, premium 90+ $9-13.5M) -- the same logic the
+        # league's contracts were generated on -- expressed as % of cap
+        # so it scales, with any market-setter premium on top.
+        from salary_cap_system import base_ask_dollars as _bad
+        _base_pct = _bad(_ovr100, _age, _on_elc, _pos_name) / _cap
         try:
             if _cap_sys is not None:
                 _ask = _cap_sys.demand_for(_base_pct, _ovr100, _pos_name,

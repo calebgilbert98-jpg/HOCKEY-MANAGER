@@ -34,7 +34,10 @@ def check(name, cond, detail=""):
 
 
 def make_player(name, age, ovr, salary, years_left, **kw):
-    random.seed(abs(hash(name)) % 10_000)
+    # Stable seed: md5, not hash() -- the builtin string hash is salted
+    # per process, which made this file's results flip between runs.
+    import hashlib as _hl
+    random.seed(int(_hl.md5(name.encode()).hexdigest(), 16) % 10_000)
     p = Player(first_name=name, last_name="Ext", age=age,
                primary_position=PlayerPosition.CENTER)
     _ovr = ovr
@@ -138,15 +141,18 @@ victim = make_player("Victim", 28, 82, 4_000_000, 1, loyalty=90, happiness=90)
 team4 = make_team("Exts", fatties + [victim])
 mgr4, league4 = make_mgr(team4)
 ask4 = mgr4._player_ask(victim, league=league4)
+from salary_cap_system import total_cap_charge as _tcc4
+_charge4 = int(_tcc4(team4))
+_offer4 = int(ask4 * 1.25)
 d4 = AIDecision(team_name="Exts", decision_type="contract_extension",
                 target_player=victim,
-                offer_details={"salary": int(ask4 * 1.25), "term": 5},
+                offer_details={"salary": _offer4, "term": 5},
                 priority_score=0.9, reasoning="test",
                 timestamp=date(2026, 11, 1))
-# 99M committed; 1.25x ask on top of the 4M hit must break 104M
+# The new money replaces the 4M hit; the offer must break 104M.
 check("test setup: would break cap",
-      99_000_000 - 4_000_000 + int(ask4 * 1.25) > 104_000_000,
-      f"ask={ask4}")
+      _charge4 - 4_000_000 + _offer4 > 104_000_000,
+      f"ask={ask4} charge={_charge4}")
 ok4 = mgr4._execute_contract_extension(team4, d4, league4)
 check("over-cap extension refused", ok4 is False)
 check("contract untouched", victim.contract.salary == 4_000_000

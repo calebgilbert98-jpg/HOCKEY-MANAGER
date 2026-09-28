@@ -611,7 +611,11 @@ _p5.contract = _SN(salary=0, years_remaining=0, no_trade_clause=False,
                    ntc_waiver_for="")
 _c4_league.free_agents.append(_p5)
 _ovr5 = _p5.overall_rating()
-_ask5 = int((_ovr5 * 100_000) / 104_000_000 * _SALARY_CAP)
+from salary_cap_system import base_ask_dollars as _bad5
+from game_classes import to_100_scale as _t100_5
+# Production ask, so the counter-band calibration below tracks the
+# real negotiation (SALARY_CAP == 104M here, no rescale needed).
+_ask5 = _bad5(int(_t100_5(_ovr5)), 30, False, "C")
 
 # Calibrate into the 70-90% counter band (clause value nudges effective up).
 _counter_msg = None

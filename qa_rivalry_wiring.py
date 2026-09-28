@@ -397,8 +397,9 @@ def _mkfa(pid, name, pos, ovr=80, salary=0, euro=False):
 
 def _ask(ovr):
     """The player's true ask: the same machinery the user faces
-    (ovr x $100k at the $104M cap, floored at $750k)."""
-    return max(int((ovr * 100_000 / 104_000_000) * 104_000_000), 750_000)
+    (2026 market-reset bands via base_ask_dollars, floored at $750k)."""
+    from salary_cap_system import base_ask_dollars as _badw
+    return max(_badw(ovr, 27, False, "C"), 750_000)
 
 
 def _mkstrategy(needs, budget=95_000_000, risk=0.0,
@@ -582,8 +583,9 @@ _t8 = _FakeTeam("Broke Club", [])
 _lg8 = SimpleNamespace(
     free_agents=[_mkfa(112, "Pricy", PlayerPosition.CENTER, ovr=80)],
     rivalries=[], season_year=2026)
+# Budget sits below the 80-ovr ask (~$4.76M), so meeting it is impossible.
 _m8 = _mkmgr(_lg8, _t8, _mkstrategy([PlayerPosition.CENTER],
-                                   budget=7_000_000))
+                                   budget=4_000_000))
 check("ai fa: counter-zone offer walks when the ask breaks the budget",
       not _m8._execute_free_agent_signing(
           _t8, _mkdecision(_lg8.free_agents[0],

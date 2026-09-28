@@ -15186,7 +15186,14 @@ class HockeyManagerGUI(tk.Tk):
             _ovr100 = int(_ovr * 2)
         _pos = getattr(person, "primary_position", "")
         _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
-        _base_pct = (_ovr * 100_000) / 104_000_000  # ~0.096% per OVR point at the modern cap
+        try:
+            _on_elc = bool(getattr(getattr(person, "contract", None),
+                                  "entry_level", False))
+        except Exception:
+            _on_elc = False
+        from salary_cap_system import base_ask_dollars as _bad2
+        _base_pct = _bad2(_ovr100, getattr(person, "age", 27),
+                          _on_elc, _pos_name) / _live_cap
         if _cap_sys is not None:
             _season = getattr(getattr(self, 'league', None), 'season_year', 0)
             asking_price = _cap_sys.demand_for(

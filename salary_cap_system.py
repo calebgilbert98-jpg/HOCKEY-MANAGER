@@ -367,6 +367,68 @@ def elc_max_total(contract_years=3, season_year=None) -> int:
     return elc_max_salary(yrs, season_year) * yrs
 
 
+# 2026-27 cap the market bands were calibrated against.
+_ASK_BAND_CAP = 104_000_000
+
+
+def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
+                     position: str = "") -> int:
+    """Base annual salary a player asks for, BEFORE market-setter premium.
+
+    The 2026 summer market reset, shared by every negotiation path (user
+    contract talks, AI free agency, AI extensions): superstar 95+ asks
+    $14-19M, premium 90+ asks $9-13.5M -- the same bands the league's
+    contracts were generated on and the AI's own estimate mirrors. Below
+    the star tiers the regular youth / veteran / middle-class curves
+    apply. A player can only sign one ELC, so a player currently on an
+    ELC asks second-contract money, not the ELC band.
+
+    Bands are fractions of the 2026 $104M cap, so callers dividing by
+    the live cap get demands that scale as the cap climbs. Callers feed
+    the result through SalaryCapSystem.demand_for for the market premium.
+    """
+    try:
+        ovr100 = int(ovr100)
+    except Exception:
+        ovr100 = 75
+    try:
+        age = int(age)
+    except Exception:
+        age = 27
+    if ovr100 >= 95:
+        lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
+    elif ovr100 >= 90:
+        lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
+    elif age <= 22 and not on_elc:
+        # ELC-aged player asking for his (first) NHL deal.
+        try:
+            lo, hi = int(league_minimum_salary()), int(
+                elc_max_salary(3 if age <= 21 else 2))
+        except Exception:
+            lo, hi = 775_000, 975_000
+        f = (ovr100 - 62) / 28
+    elif age <= 25 and ovr100 < 80:
+        lo, hi, f = 1_200_000, 5_000_000, (ovr100 - 62) / 28
+    elif age >= 33 and ovr100 < 84:
+        try:
+            _vlo = int(league_minimum_salary())
+        except Exception:
+            _vlo = 775_000
+        lo, hi, f = _vlo, 3_750_000, (ovr100 - 62) / 28
+    else:
+        lo, hi, f = 1_000_000, 6_500_000, (ovr100 - 62) / 28
+    f = max(0.0, min(1.0, f))
+    base = lo + (hi - lo) * f
+    # Generation is position-blind; the established estimate carries a
+    # small positional nudge and the ask matches it.
+    _pos = str(position or "").upper()
+    if _pos.startswith("G"):
+        base *= 1.1
+    elif _pos.startswith("C"):
+        base *= 1.05
+    return int(base)
+
+
 def elc_max_salary(contract_years=3, season_year=None) -> int:
     """Max flat salary for an ELC signed in the given season.
 
