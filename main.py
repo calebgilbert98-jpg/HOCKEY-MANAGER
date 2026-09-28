@@ -12058,6 +12058,24 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+        # Restricted free agency (rfa_system.py): qualifying offers at the
+        # real CBA minimums, rare AI offer sheets with real pick
+        # compensation, and salary arbitration at real-life-calibrated filing
+        # rates. AI clubs are processed end-to-end; the user's qualifying
+        # decisions arrive as an interactive inbox message. Runs after
+        # end_of_season() expired the contracts above.
+        try:
+            import rfa_system as _rfa
+            _rfa_summary = _rfa.process_rfa_offseason(
+                self.league, app=self, rng=getattr(self, "_rng", None))
+            if _rfa_summary.get("arbitration_awards"):
+                self.add_news(
+                    f"Arbitration tracker: "
+                    f"{_rfa_summary['arbitration_filings']} filed, "
+                    f"{len(_rfa_summary['arbitration_awards'])} resolved.")
+        except Exception:
+            pass
+
         # A new schedule was generated: drop cached season dates/games so the
         # season-end safety net in simulate_day recomputes from the new slate
         # instead of the previous season's.
@@ -14660,6 +14678,65 @@ class HockeyManagerGUI(tk.Tk):
         self._clear_offered_clause(person)
         message.action_done = True
         return True
+
+    # ----- RFA inbox actions (rfa_system) -----
+    def apply_rfa_qualifying_decision(self, message, player_id, qualify):
+        """Inbox action: extend or decline a qualifying offer for one RFA."""
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_qualifying_decision(
+            self, self.league, self.user_team, player_id, bool(qualify))
+        decided = data.get("decided", {}) or {}
+        decided[str(player_id)] = bool(qualify)
+        data["decided"] = decided
+        message.action_data = data
+        cards = data.get("cards", []) or []
+        if len(decided) >= len(cards):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def apply_offer_sheet_match_decision(self, message, match):
+        """Inbox action: match an offer sheet or take the pick compensation."""
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_offer_sheet_match(
+            self, self.league, data.get("player_id"), bool(match))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def apply_arbitration_walkaway_decision(self, message, walk_away):
+        """Inbox action: walk away from an arbitration award (48h window)."""
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        aav = int(data.get("award_aav", 0) or 0)
+        term = int(data.get("term_years", 1) or 1)
+        player_id = data.get("player_id")
+        if not walk_away:
+            # Accept: sign at the awarded terms.
+            person = self._find_inbox_player(data)
+            if person is not None:
+                c = getattr(person, "contract", None)
+                if c is not None:
+                    c.salary = aav
+                    c.years_remaining = term
+        res = _rfa.apply_walk_away(
+            self, self.league, self.user_team, player_id, bool(walk_away))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
 
     def reopen_contract_negotiation(self, message):
         """Inbox action: open a fresh negotiation window for the player."""

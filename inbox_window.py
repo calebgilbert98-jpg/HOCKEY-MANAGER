@@ -663,7 +663,9 @@ class InboxView(ctk.CTkFrame):
         # render rich widgets in place of the plain text content.
         if getattr(message, 'action_type', None) in (
                 "game_day", "postmatch_presser",
-                "trade_offer", "trade_counter"):
+                "trade_offer", "trade_counter", "contract_counter",
+                "rfa_qualifying", "offer_sheet_match",
+                "arbitration_walkaway"):
             self._show_interactive_action(message)
         else:
             self._hide_interactive_action()
@@ -859,6 +861,12 @@ class InboxView(ctk.CTkFrame):
             self._render_trade_negotiation(message)
         elif message.action_type == "contract_counter":
             self._render_contract_counter(message)
+        elif message.action_type == "rfa_qualifying":
+            self._render_rfa_qualifying(message)
+        elif message.action_type == "offer_sheet_match":
+            self._render_offer_sheet_match(message)
+        elif message.action_type == "arbitration_walkaway":
+            self._render_arbitration_walkaway(message)
 
     def _hide_interactive_action(self):
         """Restore the plain text content view."""
@@ -1173,6 +1181,125 @@ class InboxView(ctk.CTkFrame):
 
     def _on_contract_counter_walkaway(self, message):
         message.action_done = True
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    # ---------- RFA: qualifying offers ----------
+    def _render_rfa_qualifying(self, message):
+        """Per-RFA Qualify / Don't qualify buttons (rfa_system)."""
+        data = message.action_data or {}
+        cards = data.get("cards", []) or []
+        decided = data.get("decided", {}) or {}
+        self._iwrap("QUALIFYING OFFERS", size=15, bold=True,
+                    padx=10, pady=(10, 2))
+        if message.action_done:
+            self._iwrap("All qualifying decisions are in.", size=11, dim=True,
+                        padx=10)
+            return
+        remaining = [c for c in cards if str(c.get("player_id")) not in decided]
+        if not remaining:
+            message.action_done = True
+            self._iwrap("All qualifying decisions are in.", size=11, dim=True,
+                        padx=10)
+            return
+        for c in remaining:
+            pid = str(c.get("player_id"))
+            name = c.get("name", "Unknown")
+            qo = c.get("qo_amount", 0)
+            prior = c.get("prior_salary", 0)
+            self._action_section(name.upper())
+            self._iwrap(f"Qualifying offer: ${qo:,}  (was ${prior:,})",
+                        size=11, padx=10, pady=(2, 4))
+            btn_row = ctk.CTkFrame(self.interactive_frame,
+                                   fg_color="transparent")
+            btn_row.pack(fill="x", padx=10, pady=(0, 4))
+            self._primary_button(
+                btn_row, text=f"Extend QO ${qo:,}",
+                command=lambda m=message, p=pid:
+                    self._on_rfa_qualify(m, p, True),
+            ).pack(fill="x", pady=(0, 6))
+            self._secondary_button(
+                btn_row, text="Don't qualify (walks as UFA)",
+                command=lambda m=message, p=pid:
+                    self._on_rfa_qualify(m, p, False),
+            ).pack(fill="x")
+        self._iwrap("Qualifying keeps his rights; declining makes him a UFA.",
+                    size=10, dim=True, padx=10, pady=(6, 0))
+
+    def _on_rfa_qualify(self, message, player_id, qualify):
+        try:
+            self.app.apply_rfa_qualifying_decision(message, player_id, qualify)
+        except Exception as e:
+            print(f"rfa qualify failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    # ---------- RFA: offer-sheet match ----------
+    def _render_offer_sheet_match(self, message):
+        data = message.action_data or {}
+        self._iwrap("OFFER SHEET", size=15, bold=True, padx=10, pady=(10, 2))
+        if message.action_done:
+            self._iwrap("Decision made.", size=11, dim=True, padx=10)
+            return
+        aav = data.get("aav", 0)
+        years = data.get("years", 1)
+        comp = data.get("compensation", "")
+        self._iwrap(f"${aav:,}/yr x {years}y.", size=12, bold=True,
+                    padx=10, pady=(2, 2))
+        self._iwrap(f"Decline and take: {comp}", size=11, padx=10, pady=(0, 2))
+        self._iwrap("Matching keeps him at these terms -- he can't be "
+                    "traded for a year without his consent.",
+                    size=10, dim=True, padx=10, pady=(0, 4))
+        btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=6)
+        self._primary_button(
+            btn_row, text="Match the offer sheet",
+            command=lambda m=message: self._on_offer_sheet_match(m, True),
+        ).pack(fill="x", pady=(0, 8))
+        self._secondary_button(
+            btn_row, text="Decline, take the picks",
+            command=lambda m=message: self._on_offer_sheet_match(m, False),
+        ).pack(fill="x")
+
+    def _on_offer_sheet_match(self, message, match):
+        try:
+            self.app.apply_offer_sheet_match_decision(message, match)
+        except Exception as e:
+            print(f"offer sheet match failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    # ---------- RFA: arbitration walk-away ----------
+    def _render_arbitration_walkaway(self, message):
+        data = message.action_data or {}
+        self._iwrap("ARBITRATION WALK-AWAY WINDOW", size=15, bold=True,
+                    padx=10, pady=(10, 2))
+        if message.action_done:
+            self._iwrap("Decision made.", size=11, dim=True, padx=10)
+            return
+        aav = data.get("award_aav", 0)
+        term = data.get("term_years", 1)
+        self._iwrap(f"Award: ${aav:,}/yr x {term}y.", size=12, bold=True,
+                    padx=10, pady=(2, 2))
+        self._iwrap("Walk away within 48 hours and he becomes a UFA. "
+                    "Otherwise the award is binding.",
+                    size=10, dim=True, padx=10, pady=(0, 4))
+        btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=6)
+        self._primary_button(
+            btn_row, text="Accept the award",
+            command=lambda m=message: self._on_arbitration_walkaway(m, False),
+        ).pack(fill="x", pady=(0, 8))
+        self._secondary_button(
+            btn_row, text="Walk away (becomes UFA)",
+            command=lambda m=message: self._on_arbitration_walkaway(m, True),
+        ).pack(fill="x")
+
+    def _on_arbitration_walkaway(self, message, walk_away):
+        try:
+            self.app.apply_arbitration_walkaway_decision(message, walk_away)
+        except Exception as e:
+            print(f"arbitration walkaway failed: {e}")
         self._refresh_inbox()
         self._display_message_preview(message)
 
