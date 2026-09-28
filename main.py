@@ -8016,11 +8016,28 @@ class HockeyManagerGUI(tk.Tk):
                     talk_boost = _bundle_talk_boost
                 else:
                     talk_boost = self._career_team_talk(opponent)
+                # Adaptive Rivals: AI scouts the user (quick sim)
+                _qs_adapted = None
+                try:
+                    from adaptive_rivals import adapt_for_opponent, revert_to_base
+                    if opponent != self.user_team:
+                        adapt_for_opponent(opponent, self.user_team,
+                                           getattr(self, 'game_results', []))
+                        _qs_adapted = opponent
+                except Exception:
+                    pass
                 # Standard full simulation for user games
                 sim_engine = AdvancedGameSim(home_team, away_team)
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
                 winner, loser, scores, events, notable_events = sim_engine.run()
+                # Revert AI tactics
+                if _qs_adapted is not None:
+                    try:
+                        from adaptive_rivals import revert_to_base
+                        revert_to_base(_qs_adapted)
+                    except Exception:
+                        pass
                 # AdvancedGameSim does not touch player season stats.
                 stats_from_events = True
 
@@ -9564,6 +9581,24 @@ class HockeyManagerGUI(tk.Tk):
         """
         from pbp_visual_sim import open_pbp_window
 
+        # Adaptive Rivals: AI scouts the user and adjusts tactics for this game.
+        # Reverts to base identity afterwards.
+        _adapted_team = None
+        try:
+            from adaptive_rivals import adapt_for_opponent, revert_to_base
+            user = getattr(self, 'user_team', None)
+            user_name = user.team_name if user else None
+            ai_team = None
+            if home_team.team_name == user_name and away_team.team_name != user_name:
+                ai_team = away_team
+            elif away_team.team_name == user_name and home_team.team_name != user_name:
+                ai_team = home_team
+            if ai_team is not None and user is not None:
+                adapt_for_opponent(ai_team, user, getattr(self, 'game_results', []))
+                _adapted_team = ai_team
+        except Exception:
+            pass
+
         holder = {}
         win_ref = {}
 
@@ -9668,6 +9703,15 @@ class HockeyManagerGUI(tk.Tk):
         if went_to_ot:
             notable_events.append({'period': 5 if had_shootout else 4,
                                    'event': 'overtime'})
+
+        # Adaptive Rivals: revert AI tactics to base identity
+        if _adapted_team is not None:
+            try:
+                from adaptive_rivals import revert_to_base
+                revert_to_base(_adapted_team)
+            except Exception:
+                pass
+
         return winner, loser, scores, events, notable_events, sim
 
     def _update_player_reputations(self):
