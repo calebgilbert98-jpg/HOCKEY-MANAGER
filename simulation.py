@@ -4516,6 +4516,20 @@ class GameSim:
             location_weights[ShotLocation.CREASE] *= 2.5
             location_weights[ShotLocation.LOW_SLOT] *= 1.3
 
+        # E1: on the power play, the PP formation overrides the ES shape.
+        if self._special_unit_active(attacking_team, 'PP'):
+            pp = getattr(attacking_team, "tactic_pp", "umbrella")
+            if pp == "umbrella":
+                location_weights[ShotLocation.POINT] *= 1.6
+                location_weights[ShotLocation.HIGH_SLOT] *= 1.3
+            elif pp == "funnel":
+                location_weights[ShotLocation.LOW_SLOT] *= 1.6
+                location_weights[ShotLocation.CREASE] *= 1.5
+            elif pp == "diamond":
+                location_weights[ShotLocation.HIGH_SLOT] *= 1.4
+                location_weights[ShotLocation.LEFT_CIRCLE] *= 1.3
+                location_weights[ShotLocation.RIGHT_CIRCLE] *= 1.3
+
         return self._weighted_random_choice(location_weights)
 
     def _calculate_shot_distance(self, location):
@@ -4559,6 +4573,11 @@ class GameSim:
             base_block_chance *= 1.2
         elif self.current_defensive_system == DefensiveSystem.AGGRESSIVE_FORECHECK:
             base_block_chance *= 0.9
+        # E1 DZ coverage tactic: collapse packs the slot (more blocks),
+        # open is aggressive (fewer bodies in shooting lanes).
+        dz = getattr(defending_team, "tactic_dz_coverage", "positional")
+        base_block_chance *= {"collapse": 1.25, "positional": 1.0,
+                              "open": 0.85}.get(dz, 1.0)
         
         # Apply defensive pressure modifier (Stage 4)
         base_block_chance *= self.defensive_pressure

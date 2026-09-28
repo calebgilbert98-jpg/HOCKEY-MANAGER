@@ -1807,6 +1807,19 @@ class Team:
     tactic_forecheck: str = "2-1-2"
     # Offensive-zone formation: 'Overload', 'Umbrella', 'Spread', 'Crash the Net'
     tactic_offense: str = "Spread"
+    # E1 named tactical systems (roadmap): each phase has a selectable system.
+    # Neutral zone: '1-2-2', '1-1-3', '2-1-2'
+    tactic_neutral_zone: str = "1-2-2"
+    # Breakout: 'positional', 'board_play', 'crisscross', 'wings_cross'
+    tactic_breakout: str = "positional"
+    # DZ coverage: 'positional', 'collapse', 'open'
+    tactic_dz_coverage: str = "positional"
+    # Power play: 'umbrella', '1-2-2', '2-1-2', 'diamond', 'funnel'
+    tactic_pp: str = "umbrella"
+    # Penalty kill: 'tight_box', 'wide_box', 'diamond'
+    tactic_pk: str = "tight_box"
+    # Faceoff: 'basic', 'overload', 'drop_pass', 'point_shot'
+    tactic_faceoff: str = "basic"
     
     # Draft picks owned by this team
     draft_picks: Dict[int, List[DraftPick]] = field(default_factory=dict)  # Year -> List of picks
