@@ -4843,8 +4843,9 @@ class GameSim:
             ShotType.WRAPAROUND: 0.7
         }.get(shot_type, 1.0)
         
-        # Goalie rebound control
-        rebound_control_factor = (20 - goalie.rebound_control) / 20
+        # Goalie rebound control (1-100 scale: avg ~69 -> factor 0.31;
+        # the old (20 - rc)/20 assumed a 1-20 scale and went negative here)
+        rebound_control_factor = max(0.05, (100 - goalie.rebound_control) / 100)
         
         rebound_chance = base_rebound_chance * type_modifier * rebound_control_factor
         
@@ -7780,11 +7781,16 @@ class GameSim:
         goalie_skill = (positioning_skill + reaction_skill + technique_skill) / 3
         
         # Skill edge: good goalies reduce xG, bad goalies increase it.
-        # League average skill ~35 on the 50-scale. Each point above/below
-        # adjusts xG by 2%. Elite (40): 0.90x xG. Weak (30): 1.10x xG.
-        LEAGUE_AVG_GOALIE_SKILL = 35.0
+        # Recalibrated for the live 1-100 scale: generated goalies average
+        # ~67.5 (n=400, stdev 2.8, range 60-75). The old 35.0 assumed a
+        # 50-scale, which parked every starter at the 0.70 clamp and killed
+        # all differentiation between goalies. Anchor-preserving: the average
+        # goalie keeps the historically calibrated 0.70x; each point of skill
+        # moves xG by 2% around that anchor, so the game's scoring balance is
+        # unchanged. Best generated (75): 0.595x. Worst (60): 0.805x.
+        LEAGUE_AVG_GOALIE_SKILL = 67.5
         skill_diff = goalie_skill - LEAGUE_AVG_GOALIE_SKILL
-        xg_multiplier = max(0.7, min(1.3, 1.0 - (skill_diff * 0.02)))
+        xg_multiplier = max(0.49, min(0.91, 0.70 * (1.0 - skill_diff * 0.02)))
         effective_xg = expected_goal * xg_multiplier
         
         # Base save probability (inverse of effective xG)
@@ -7838,10 +7844,14 @@ class GameSim:
         """
         Stage 5: Determine how well the goaltender controls the rebound.
         """
-        # Base rebound control based on goaltender's rebound control attribute
-        # Calibrated so an average goalie (~12) controls ~80% of saves cleanly;
-        # elite goalies ~95%, weak ones ~70% (before save/shot modifiers)
-        base_control = 0.5 + (goaltender.rebound_control / 20.0) * 0.5
+        # Base rebound control, calibrated for the live 1-100 scale.
+        # (The old formula assumed a 1-20 scale with avg ~12; on 1-100 it
+        # evaluated above 2.2 for every goalie and pegged at the 0.97 cap, so
+        # rebound_control did nothing and rebounds barely existed.)
+        # Average goalie (~69) controls ~80% of saves cleanly;
+        # elite (~85) ~93%, weak (~55) ~69%.
+        base_control = min(0.97, max(0.50,
+                                     0.80 + (goaltender.rebound_control - 69.0) * 0.008))
         
         # Save type modifiers
         save_type_modifier = {
