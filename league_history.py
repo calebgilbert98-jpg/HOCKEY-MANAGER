@@ -25,6 +25,7 @@ class LeagueHistory:
         self.seasons: List[Dict[str, Any]] = []  # one per completed season
         self.hall_of_fame: List[Dict[str, Any]] = []  # inducted players
         self.first_season_year: Optional[int] = None
+        self.franchise_records = FranchiseRecords()
 
     # -- Season archive --
 
@@ -179,6 +180,7 @@ class LeagueHistory:
             "seasons": self.seasons,
             "hall_of_fame": self.hall_of_fame,
             "first_season_year": self.first_season_year,
+            "franchise_records": self.franchise_records.to_dict(),
         }
 
     @classmethod
@@ -187,4 +189,245 @@ class LeagueHistory:
         h.seasons = data.get("seasons", [])
         h.hall_of_fame = data.get("hall_of_fame", [])
         h.first_season_year = data.get("first_season_year")
+        h.franchise_records = FranchiseRecords.from_dict(
+            data.get("franchise_records", {}))
         return h
+
+
+# ---------------------------------------------------------------------------
+# Franchise Records
+# ---------------------------------------------------------------------------
+
+# Record categories, mirroring how NHL clubs publish record books.
+SKATER_CAREER_RECORDS = ["games", "goals", "assists", "points", "pim", "shots"]
+SKATER_SEASON_RECORDS = ["goals", "assists", "points", "shots", "pim"]
+GOALIE_CAREER_RECORDS = ["games", "wins", "shutouts", "saves"]
+GOALIE_SEASON_RECORDS = ["wins", "shutouts", "save_pct"]
+TEAM_SEASON_RECORDS = ["points", "wins", "goals_for", "goals_against",
+                       "goal_differential"]
+
+
+class FranchiseRecords:
+    """All-time records per franchise, in the style of NHL team record books.
+
+    Tracks, for each franchise (keyed by team name):
+    - Skater career records: most games/goals/assists/points/PIM/shots
+    - Skater single-season records: most goals/assists/points/shots/PIM
+    - Goalie career records: most games/wins/shutouts/saves
+    - Goalie single-season records: most wins/shutouts, best SV%
+    - Team season records: most points/wins, most/fewest goals for/against,
+      best differential
+    - Streaks: longest win streak, longest unbeaten streak
+
+    Career accumulations are per-franchise: a player's stats count toward a
+    franchise only for seasons played with that club. update_from_season()
+    should be called at each season end.
+    """
+
+    def __init__(self):
+        # {team_name: {player_id: {stat: total}}}
+        self.franchise_career: Dict[str, Dict[str, Dict[str, float]]] = {}
+        # {team_name: {category: {value, player, season}}}
+        self.career_records: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self.season_records: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self.goalie_career_records: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self.goalie_season_records: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self.team_season_records: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self.streaks: Dict[str, Dict[str, Any]] = {}
+        # {player_id: name} for display
+        self._names: Dict[str, str] = {}
+
+    # -- internal helpers --
+
+    @staticmethod
+    def _pid(player: Any) -> str:
+        return str(getattr(player, "id", getattr(player, "full_name", "?")))
+
+    @staticmethod
+    def _is_goalie(player: Any) -> bool:
+        pos = getattr(player, "primary_position", None)
+        return "GOALIE" in getattr(pos, "name", str(pos)).upper()
+
+    def _accum(self, team_name: str, player: Any) -> Dict[str, float]:
+        tc = self.franchise_career.setdefault(team_name, {})
+        pid = self._pid(player)
+        acc = tc.setdefault(pid, {c: 0 for c in
+                                  SKATER_CAREER_RECORDS + GOALIE_CAREER_RECORDS})
+        self._names[pid] = getattr(player, "full_name",
+                                    getattr(player, "name", "?"))
+        return acc
+
+    def _maybe_record(self, store: Dict[str, Dict[str, Dict[str, Any]]],
+                      team_name: str, category: str, value: float,
+                      player: Any, season: str,
+                      higher_is_better: bool = True,
+                      label: Optional[str] = None) -> bool:
+        """Set a record if value beats the stored one. Returns True if new record."""
+        recs = store.setdefault(team_name, {})
+        cur = recs.get(category)
+        beats = (cur is None or
+                 (higher_is_better and value > cur["value"]) or
+                 (not higher_is_better and value < cur["value"]))
+        if beats and value > 0:
+            recs[category] = {
+                "value": value,
+                "player": label or getattr(player, "full_name",
+                                           getattr(player, "name", "?")),
+                "player_id": self._pid(player),
+                "season": season,
+            }
+            return True
+        return False
+
+    # -- season-end update --
+
+    def update_from_season(self, team: Any, season_label: str) -> List[Dict[str, Any]]:
+        """Fold a completed season into franchise records.
+
+        Returns a list of newly-set records (for news/inbox).
+        """
+        new_records = []
+        team_name = getattr(team, "team_name", "?")
+        rosters = (list(getattr(team, "roster", []) or []) +
+                   list(getattr(team, "ahl_roster", []) or []))
+
+        for p in rosters:
+            st = getattr(p, "stats", None) or getattr(p, "season_stats", None)
+            if st is None:
+                continue
+            acc = self._accum(team_name, p)
+            gp = getattr(st, "games_played", 0) or 0
+            if gp == 0:
+                continue
+            if self._is_goalie(p):
+                for cat, attr in (("games", "games_played"), ("wins", "wins"),
+                                  ("shutouts", "shutouts"), ("saves", "saves")):
+                    v = getattr(st, attr, 0) or 0
+                    acc[cat] += v
+                    if self._maybe_record(self.goalie_career_records, team_name,
+                                          cat, acc[cat], p, season_label):
+                        new_records.append({"team": team_name, "type": "goalie_career",
+                                            "category": cat, "player": self._names[self._pid(p)],
+                                            "value": acc[cat]})
+                # Single-season goalie records
+                w = getattr(st, "wins", 0) or 0
+                so = getattr(st, "shutouts", 0) or 0
+                sa = getattr(st, "shots_against", 0) or 0
+                sv = getattr(st, "saves", 0) or 0
+                sv_pct = (sv / sa) if sa >= 500 else 0  # min. workload
+                for cat, v in (("wins", w), ("shutouts", so), ("save_pct", sv_pct)):
+                    if self._maybe_record(self.goalie_season_records, team_name,
+                                          cat, v, p, season_label):
+                        new_records.append({"team": team_name, "type": "goalie_season",
+                                            "category": cat, "player": self._names[self._pid(p)],
+                                            "value": v, "season": season_label})
+            else:
+                for cat, attr in (("games", "games_played"), ("goals", "goals"),
+                                  ("assists", "assists"),
+                                  ("pim", "penalties_in_minutes"),
+                                  ("shots", "shots")):
+                    v = getattr(st, attr, 0) or 0
+                    acc[cat] += v
+                acc["points"] += (getattr(st, "goals", 0) or 0) + (getattr(st, "assists", 0) or 0)
+                for cat in SKATER_CAREER_RECORDS:
+                    if self._maybe_record(self.career_records, team_name,
+                                          cat, acc[cat], p, season_label):
+                        new_records.append({"team": team_name, "type": "career",
+                                            "category": cat, "player": self._names[self._pid(p)],
+                                            "value": acc[cat]})
+                # Single-season skater records
+                season_vals = {
+                    "goals": getattr(st, "goals", 0) or 0,
+                    "assists": getattr(st, "assists", 0) or 0,
+                    "points": (getattr(st, "goals", 0) or 0) + (getattr(st, "assists", 0) or 0),
+                    "shots": getattr(st, "shots", 0) or 0,
+                    "pim": getattr(st, "penalties_in_minutes", 0) or 0,
+                }
+                for cat, v in season_vals.items():
+                    if self._maybe_record(self.season_records, team_name,
+                                          cat, v, p, season_label):
+                        new_records.append({"team": team_name, "type": "season",
+                                            "category": cat, "player": self._names[self._pid(p)],
+                                            "value": v, "season": season_label})
+
+        # Team season records
+        pts = getattr(team, "points", 0) or 0
+        wins = getattr(team, "wins", 0) or 0
+        gf = getattr(team, "goals_for", 0) or 0
+        ga = getattr(team, "goals_against", 0) or 0
+        team_vals = {"points": pts, "wins": wins, "goals_for": gf,
+                     "goal_differential": gf - ga}
+        for cat, v in team_vals.items():
+            if self._maybe_record(self.team_season_records, team_name,
+                                  cat, v, team, season_label, label=team_name):
+                new_records.append({"team": team_name, "type": "team_season",
+                                    "category": cat, "value": v, "season": season_label})
+        # Fewest goals against (lower is better)
+        if self._maybe_record(self.team_season_records, team_name,
+                              "goals_against", ga, team, season_label,
+                              higher_is_better=False, label=team_name):
+            new_records.append({"team": team_name, "type": "team_season",
+                                "category": "goals_against", "value": ga,
+                                "season": season_label})
+        return new_records
+
+    def record_streak(self, team_name: str, streak_type: str, length: int,
+                      season_label: str) -> bool:
+        """Record a win/unbeaten streak if it's a franchise best."""
+        st = self.streaks.setdefault(team_name, {})
+        cur = st.get(streak_type, {}).get("length", 0)
+        if length > cur:
+            st[streak_type] = {"length": length, "season": season_label}
+            return True
+        return False
+
+    # -- queries for UI --
+
+    def get_career_records(self, team_name: str) -> Dict[str, Dict[str, Any]]:
+        return self.career_records.get(team_name, {})
+
+    def get_season_records(self, team_name: str) -> Dict[str, Dict[str, Any]]:
+        return self.season_records.get(team_name, {})
+
+    def get_goalie_records(self, team_name: str) -> Dict[str, Dict[str, Any]]:
+        return {"career": self.goalie_career_records.get(team_name, {}),
+                "season": self.goalie_season_records.get(team_name, {})}
+
+    def get_team_records(self, team_name: str) -> Dict[str, Dict[str, Any]]:
+        recs = dict(self.team_season_records.get(team_name, {}))
+        recs.update({f"streak_{k}": v for k, v in
+                     self.streaks.get(team_name, {}).items()})
+        return recs
+
+    def all_teams(self) -> List[str]:
+        teams = (set(self.career_records) | set(self.season_records) |
+                 set(self.goalie_career_records) | set(self.team_season_records) |
+                 set(self.franchise_career))
+        return sorted(teams)
+
+    # -- persistence --
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "franchise_career": self.franchise_career,
+            "career_records": self.career_records,
+            "season_records": self.season_records,
+            "goalie_career_records": self.goalie_career_records,
+            "goalie_season_records": self.goalie_season_records,
+            "team_season_records": self.team_season_records,
+            "streaks": self.streaks,
+            "names": self._names,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FranchiseRecords":
+        fr = cls()
+        fr.franchise_career = data.get("franchise_career", {})
+        fr.career_records = data.get("career_records", {})
+        fr.season_records = data.get("season_records", {})
+        fr.goalie_career_records = data.get("goalie_career_records", {})
+        fr.goalie_season_records = data.get("goalie_season_records", {})
+        fr.team_season_records = data.get("team_season_records", {})
+        fr.streaks = data.get("streaks", {})
+        fr._names = data.get("names", {})
+        return fr

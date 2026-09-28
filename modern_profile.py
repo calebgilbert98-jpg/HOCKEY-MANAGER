@@ -140,6 +140,7 @@ class PlayerProfile(InGamePopup):
         # FM24-style tab strip
         tab_defs = [
             ("Overview", self._page_overview),
+            ("Analytics", self._page_analytics),
             ("Personality", self._page_personality),
             ("Scout Report", self._page_scout),
             ("Dynamics", self._page_dynamics),
@@ -212,6 +213,9 @@ class PlayerProfile(InGamePopup):
     def _page_scout(self, parent):
         self._create_readiness(parent)
         self._create_scout_notes(parent)
+
+    def _page_analytics(self, parent):
+        self._create_deep_dive(parent)
 
     def _page_dynamics(self, parent):
         self._create_dynamics(parent)
@@ -559,6 +563,98 @@ class PlayerProfile(InGamePopup):
             tk.Label(content, text=f"Dynamics unavailable ({e})",
                      font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                      bg=card.card_bg).pack(anchor="w")
+
+
+    def _create_deep_dive(self, parent):
+        """Analytics: deep-dive advanced metrics -- offense, possession,
+        defense, and goaltending -- in the style of NHL analytics sites."""
+        import advanced_metrics as am
+        p = self.player
+        try:
+            is_goalie = 'GOALIE' in str(p.primary_position).upper()
+        except Exception:
+            is_goalie = False
+
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        content = card.get_content_frame()
+        tk.Label(content, text="Deep Dive — Advanced Analytics",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=card.card_bg).pack(anchor="w", pady=(0, 4))
+        tk.Label(content,
+                 text="Possession and shot-quality metrics are modeled from attributes "
+                      "and usage, like public xG models.",
+                 font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                 bg=card.card_bg, wraplength=640, justify="left").pack(anchor="w", pady=(0, 12))
+
+        def _section(title, rows):
+            tk.Label(content, text=title, font=AppFonts.H3,
+                     fg=AppColors.TEXT_PRIMARY, bg=card.card_bg).pack(anchor="w", pady=(10, 4))
+            for label, value, tip in rows:
+                row = tk.Frame(content, bg=card.card_bg)
+                row.pack(fill="x", pady=1)
+                tk.Label(row, text=label, font=AppFonts.BODY,
+                         fg=AppColors.TEXT_SECONDARY, bg=card.card_bg,
+                         width=28, anchor="w").pack(side="left")
+                tk.Label(row, text=value, font=AppFonts.BODY_BOLD,
+                         fg=AppColors.TEXT_PRIMARY, bg=card.card_bg).pack(side="left")
+                if tip:
+                    dot = tk.Label(row, text="ⓘ", font=AppFonts.SMALL,
+                                   fg=AppColors.ACCENT, bg=card.card_bg, cursor="hand2")
+                    dot.pack(side="left", padx=6)
+                    dot.bind("<Enter>", lambda e, t=tip: self._show_glossary_tip(e, t))
+
+        try:
+            if is_goalie:
+                m = am.goalie_advanced(p)
+                _section("Goaltending — Above Expected", [
+                    ("GSAx", f"{m.gsax:+.1f}", am.GLOSSARY["GSAx"]),
+                    ("GSAA", f"{m.gsaa:+.1f}", am.GLOSSARY["GSAA"]),
+                    ("High-danger SV%", f"{m.hdsv_pct:.3f}", am.GLOSSARY["HDSV%"]),
+                    ("Quality-start %", f"{m.qs_pct:.1%}", am.GLOSSARY["QS%"]),
+                ])
+                _section("Workload", [
+                    ("Save %", f"{m.sv_pct:.3f}", None),
+                    ("GAA", f"{m.gaa:.2f}", None),
+                    ("Shots against / 60", f"{m.sa_per60:.1f}", None),
+                ])
+            else:
+                m = am.skater_advanced(p)
+                _section("Offense — Finishing & Creation", [
+                    ("Shooting %", f"{m.sh_pct:.1f}%", am.GLOSSARY["SH%"]),
+                    ("Individual xG", f"{m.ixg:.1f}", am.GLOSSARY["ixG"]),
+                    ("Goals / 60", f"{m.g_per60:.2f}", None),
+                    ("Points / 60", f"{m.p_per60:.2f}", am.GLOSSARY["P/60"]),
+                    ("Game Score", f"{m.game_score:.1f}", am.GLOSSARY["Game Score"]),
+                ])
+                _section("Possession — Driving Play", [
+                    ("Corsi %", f"{m.cf_pct:.1f}%", am.GLOSSARY["CF%"]),
+                    ("Fenwick %", f"{m.ff_pct:.1f}%", am.GLOSSARY["FF%"]),
+                    ("Expected-goal share", f"{m.xgf_pct:.1f}%", am.GLOSSARY["xGF%"]),
+                    ("Offensive-zone starts", f"{m.oz_pct:.1f}%", am.GLOSSARY["OZ%"]),
+                ])
+                _section("Defense & Luck", [
+                    ("PDO", f"{m.pdo:.3f}", am.GLOSSARY["PDO"]),
+                    ("Hits", str(m.hits), None),
+                    ("Blocked shots", str(m.blocks), None),
+                ])
+        except Exception as e:
+            tk.Label(content, text=f"Analytics unavailable ({e})",
+                     font=AppFonts.BODY, fg=AppColors.TEXT_SECONDARY,
+                     bg=card.card_bg).pack(anchor="w")
+
+    def _show_glossary_tip(self, event, text):
+        try:
+            tip = tk.Toplevel()
+            tip.wm_overrideredirect(True)
+            tip.geometry(f"+{event.x_root+10}+{event.y_root+10}")
+            tk.Label(tip, text=text, wraplength=280, justify="left",
+                     background="#ffffe0", relief="solid", borderwidth=1,
+                     font=AppFonts.SMALL).pack()
+            event.widget.bind("<Leave>", lambda _e: tip.destroy(), add="+")
+            tip.after(4000, tip.destroy)
+        except Exception:
+            pass
 
     def _create_scout_notes(self, parent):
         """Scout Report: strengths/weaknesses read off the attribute groups,

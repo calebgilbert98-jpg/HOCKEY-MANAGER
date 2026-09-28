@@ -10573,6 +10573,15 @@ class HockeyManagerGUI(tk.Tk):
             standings_snapshot=standings_snapshot,
         )
 
+        # Franchise records: fold each team's season into the record book.
+        # Runs before end_of_season() wipes per-season stats.
+        try:
+            season_label = f"{year}-{str(year + 1)[-2:]}"
+            for team in self.league.teams:
+                hist.franchise_records.update_from_season(team, season_label)
+        except Exception:
+            pass
+
     def process_trade_block_offers(self):
         """Process trade offers for players on the trade block."""
         if not self.trade_block:
@@ -16319,6 +16328,8 @@ class LeagueHistoryView(ctk.CTkFrame):
         self.app = app if app is not None else parent
         self.game_manager = game_manager
         self._close_screen = None  # set by show_screen() or wrapper
+        self.content = ctk.CTkFrame(self)
+        self.content.pack(fill="both", expand=True)
         self._build()
 
     def close_view(self):
@@ -16371,6 +16382,169 @@ class LeagueHistoryView(ctk.CTkFrame):
         notebook.add(hof_frame, text="Hall of Fame")
         self._build_hof(hof_frame, h)
 
+        # Advanced Stats tab
+        adv_frame = ttk.Frame(notebook)
+        notebook.add(adv_frame, text="Advanced Stats")
+        self._build_advanced(adv_frame, h)
+
+        # Franchise Records tab
+        fr_frame = ttk.Frame(notebook)
+        notebook.add(fr_frame, text="Franchise Records")
+        self._build_franchise_records(fr_frame, h)
+
+    def _build_advanced(self, parent, h):
+        """Team advanced metrics + league leaders in advanced categories."""
+        import tkinter as tk
+        from tkinter import ttk
+        from advanced_metrics import team_advanced, league_leaders_advanced, GLOSSARY
+
+        gm = self.game_manager
+        teams = list(getattr(gm, "teams", []) or getattr(gm, "league_teams", []))
+
+        # Team advanced table
+        ttk.Label(parent, text="Team Advanced Metrics (5v5 process)",
+                  font=('Arial', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
+        cols = ["Team", "CF%", "FF%", "xGF%", "GF%", "PDO", "PP%", "PK%", "SRS"]
+        tree = ttk.Treeview(parent, columns=cols, show='headings', height=12)
+        for c in cols:
+            tree.heading(c, text=c)
+            tree.column(c, width=80 if c != "Team" else 170, anchor='center' if c != "Team" else 'w')
+        for t in teams:
+            try:
+                m = team_advanced(t)
+                tree.insert('', 'end', values=(
+                    getattr(t, "team_name", "?"), m.cf_pct, m.ff_pct, m.xgf_pct,
+                    m.gf_pct, f"{m.pdo:.3f}", m.pp_pct, m.pk_pct, m.srs))
+            except Exception:
+                continue
+        tree.pack(fill='x', padx=10, pady=5)
+
+        # League leaders in advanced categories
+        ttk.Label(parent, text="League Leaders — Advanced",
+                  font=('Arial', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
+        players = []
+        for t in teams:
+            players += list(getattr(t, "roster", []) or [])
+        cats = [("ixG", "ixg"), ("xGF%", "xgf_pct"), ("Corsi%", "cf_pct"),
+                ("PDO", "pdo"), ("P/60", "p_per60"), ("Game Score", "game_score"),
+                ("GSAx", "gsax")]
+        cat_frame = ttk.Frame(parent)
+        cat_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        for i, (label, cat) in enumerate(cats):
+            col = ttk.Frame(cat_frame)
+            col.pack(side='left', fill='both', expand=True, padx=4)
+            hdr = ttk.Label(col, text=label, font=('Arial', 9, 'bold'))
+            hdr.pack(anchor='w')
+            tip = GLOSSARY.get(label, "")
+            if tip:
+                hdr.bind("<Enter>", lambda e, t=tip: self._show_tip(e, t))
+            try:
+                leaders = league_leaders_advanced(players, cat, limit=5)
+            except Exception:
+                leaders = []
+            for j, r in enumerate(leaders):
+                v = r["value"]
+                vs = f"{v:.1f}" if isinstance(v, float) and cat != "pdo" else (
+                    f"{v:.3f}" if cat == "pdo" else str(v))
+                ttk.Label(col, text=f"{j+1}. {r['name']} ({vs})",
+                          font=('Arial', 8)).pack(anchor='w')
+
+    def _show_tip(self, event, text):
+        try:
+            from tkinter import Toplevel, Label
+            tip = Toplevel()
+            tip.wm_overrideredirect(True)
+            tip.geometry(f"+{event.x_root+10}+{event.y_root+10}")
+            Label(tip, text=text, wraplength=280, justify='left',
+                  background="#ffffe0", relief='solid', borderwidth=1,
+                  font=('Arial', 8)).pack()
+            def _close(_e=None):
+                try: tip.destroy()
+                except Exception: pass
+            event.widget.bind("<Leave>", _close, add='+')
+            tip.after(4000, _close)
+        except Exception:
+            pass
+
+    def _build_franchise_records(self, parent, h):
+        """Franchise record book: pick a team, see its all-time records."""
+        import tkinter as tk
+        from tkinter import ttk
+        fr = getattr(h, "franchise_records", None)
+        if fr is None:
+            ttk.Label(parent, text="Franchise records not yet tracked.").pack(pady=20)
+            return
+        teams = fr.all_teams()
+        gm = self.game_manager
+        if not teams:
+            # Offer all league teams so the view isn't empty
+            teams = sorted({getattr(t, "team_name", "?")
+                            for t in (list(getattr(gm, "teams", []) or []) +
+                                      list(getattr(gm, "league_teams", []) or []))})
+
+        top = ttk.Frame(parent)
+        top.pack(fill='x', padx=10, pady=10)
+        ttk.Label(top, text="Franchise:", font=('Arial', 10, 'bold')).pack(side='left')
+        team_var = tk.StringVar(value=teams[0] if teams else "")
+        combo = ttk.Combobox(top, textvariable=team_var, values=teams,
+                             state='readonly', width=30)
+        combo.pack(side='left', padx=8)
+
+        body = ttk.Frame(parent)
+        body.pack(fill='both', expand=True, padx=10, pady=5)
+
+        def _fmt_value(cat, v):
+            if cat in ("save_pct",):
+                return f"{v:.3f}"
+            if isinstance(v, float):
+                return f"{v:.1f}" if v % 1 else str(int(v))
+            return str(v)
+
+        def _refresh(*_a):
+            for w in body.winfo_children():
+                w.destroy()
+            tn = team_var.get()
+            sections = [
+                ("Skater — Career Franchise Records", fr.get_career_records(tn),
+                 {"games": "Most games", "goals": "Most goals", "assists": "Most assists",
+                  "points": "Most points", "pim": "Most PIM", "shots": "Most shots"}),
+                ("Skater — Single-Season Records", fr.get_season_records(tn),
+                 {"goals": "Most goals", "assists": "Most assists", "points": "Most points",
+                  "shots": "Most shots", "pim": "Most PIM"}),
+            ]
+            gr = fr.get_goalie_records(tn)
+            sections.append(("Goalie — Career Records", gr["career"],
+                             {"games": "Most appearances", "wins": "Most wins",
+                              "shutouts": "Most shutouts", "saves": "Most saves"}))
+            sections.append(("Goalie — Single-Season Records", gr["season"],
+                             {"wins": "Most wins", "shutouts": "Most shutouts",
+                              "save_pct": "Best SV%"}))
+            sections.append(("Team — Season & Streak Records", fr.get_team_records(tn),
+                             {"points": "Most points", "wins": "Most wins",
+                              "goals_for": "Most goals for",
+                              "goals_against": "Fewest goals against",
+                              "goal_differential": "Best differential",
+                              "streak_win": "Longest win streak",
+                              "streak_unbeaten": "Longest unbeaten streak"}))
+            for title, recs, labels in sections:
+                ttk.Label(body, text=title, font=('Arial', 10, 'bold')).pack(anchor='w', pady=(8, 2))
+                if not recs:
+                    ttk.Label(body, text="No records yet — they begin with the current season.",
+                              font=('Arial', 9, 'italic')).pack(anchor='w', padx=10)
+                    continue
+                for cat, label in labels.items():
+                    r = recs.get(cat)
+                    if not r:
+                        continue
+                    who = r.get("player", r.get("team_name", ""))
+                    season = r.get("season", "")
+                    val = _fmt_value(cat, r.get("value", 0))
+                    line = f"{label}: {who} — {val}" + (f" ({season})" if season and who else "")
+                    ttk.Label(body, text=line, font=('Arial', 9)).pack(anchor='w', padx=10)
+
+        combo.bind("<<ComboboxSelected>>", _refresh)
+        _refresh()
+
     def _build_champions(self, parent, h):
         import tkinter as tk
         from tkinter import ttk
@@ -16421,7 +16595,7 @@ class LeagueHistoryView(ctk.CTkFrame):
         ctrl.pack(fill='x', padx=10, pady=10)
         ttk.Label(ctrl, text="Season:").pack(side='left', padx=5)
         years = sorted([s['year'] for s in h.seasons], reverse=True)
-        year_var = ttk.StringVar(value=str(years[0]))
+        year_var = tk.StringVar(value=str(years[0]))
         combo = ttk.Combobox(ctrl, textvariable=year_var,
                              values=[str(y) for y in years],
                              state='readonly', width=10)
@@ -16463,7 +16637,7 @@ class LeagueHistoryView(ctk.CTkFrame):
         ctrl.pack(fill='x', padx=10, pady=10)
         ttk.Label(ctrl, text="Category:").pack(side='left', padx=5)
         cats = ["points", "goals", "assists", "wins", "shutouts", "save_pct"]
-        cat_var = ttk.StringVar(value="points")
+        cat_var = tk.StringVar(value="points")
         combo = ttk.Combobox(ctrl, textvariable=cat_var, values=cats,
                              state='readonly', width=12)
         combo.pack(side='left', padx=5)
