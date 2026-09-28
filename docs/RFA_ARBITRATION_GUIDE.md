@@ -97,6 +97,27 @@ hearings ~5%, offer sheets ~0.6/yr.
    `offer_sheet_match` inbox; arbitration filing → award news; walk-away
    window → `arbitration_walkaway` inbox when the threshold binds).
 
+## Cap compliance — nobody signs what they can't fit
+
+`_cap_room(team)` reads `salary_cap_system.cap_breakdown` — the exact
+accounting (roster + buyouts + retained + dead cap) the user's
+day-advancement blocker enforces. `Team.cap_space` is a live property
+(`salary_cap − payroll`, recomputed on every read), used only as fallback.
+
+- **AI teams never go over the cap.** Every AI spend path is hard-gated:
+  no QO above room (non-tender instead), no RFA/UFA signing above room
+  (offer capped at room; holdout/release below the $775k minimum), no
+  offer sheet the aggressor can't fit, no match the victim can't fit.
+- **Compliance sweep** (`_ai_cap_compliance_sweep`): after the July pass,
+  any AI team still over (dead-cap subtleties) papers players down —
+  two-ways first (fully exempt), then biggest hits — until compliant.
+- **The user can offer whatever they want** — including qualifying into
+  over-cap (the inbox shows live cap space and warns when the total QO
+  bill exceeds it). Accountability is the existing FM-style day blocker:
+  an over-cap roster cannot advance the day until salary is shed via
+  trade, waivers, or demotion. No unsolvable states: demotion is always
+  available as the release valve.
+
 ## Inbox actions (all in `inbox_window.py`, handlers in `main.py`)
 
 - `rfa_qualifying` → `apply_rfa_qualifying_decision` →

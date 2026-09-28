@@ -442,17 +442,12 @@ def _ai_qualify_decision(team, player, qo_amount: int) -> bool:
     except Exception:
         ovr = 70.0
     age = _age(player)
-    if age <= 24 and ovr >= 74:
-        return True
-    if ovr >= 77:
-        return True
-    if ovr < 72:
+    merit = (age <= 24 and ovr >= 74) or ovr >= 77 or (
+        ovr >= 72 and _cap_room(team) > qo_amount * 3)
+    if not merit:
         return False
-    try:
-        room = float(getattr(team, "cap_space", 10_000_000) or 0)
-    except Exception:
-        room = 10_000_000
-    return room > qo_amount * 3
+    # Hard gate: never qualify into over-cap, however good the player.
+    return qo_amount <= _cap_room(team)
 
 
 def _ai_rfa_deal(player, qo_amount: int, rng) -> Tuple[int, int]:
@@ -533,8 +528,14 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
         if r.random() < 0.60:
             still_unsigned.append((team, player, qo))
             continue
+        room = _cap_room(team)
+        if room < 775_000:
+            # No room: he holds out (stays unsigned) rather than the club
+            # signing a deal it cannot fit.
+            still_unsigned.append((team, player, qo))
+            continue
         aav, years = _ai_rfa_deal(player, qo, r)
-        _sign_player(team, player, aav, years)
+        _sign_player(team, player, min(aav, int(room)), years)
 
     # --- 4. AI clubs: UFAs — re-sign the core, release the rest -------------
     for team in ai_teams:
@@ -548,8 +549,14 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             tenure = _service_years(player)
             if ovr >= 82 or (ovr >= 78 and tenure >= 5):
                 market = _market_value(player)
-                _sign_player(team, player, market,
-                             r.choice([2, 3, 4] if ovr >= 84 else [1, 2]))
+                room = _cap_room(team)
+                if market <= room:
+                    _sign_player(team, player, market,
+                                 r.choice([2, 3, 4] if ovr >= 84 else [1, 2]))
+                elif room >= 775_000:
+                    # Cap-strapped: 1-year prove-it deal at what fits.
+                    _sign_player(team, player, int(room), 1)
+                # else: no room at all -- falls through to the pool below
             else:
                 _move_to_free_agents(league, player)
 
@@ -638,9 +645,21 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             continue
         if bool(getattr(player, "arbitration_filed", False)):
             continue
+        room = _cap_room(original_team)
+        if room < 775_000:
+            continue  # still no room: the holdout continues
         aav, years = _ai_rfa_deal(player, qo, r)
-        _sign_player(original_team, player, aav, years)
+        _sign_player(original_team, player, min(aav, int(room)), years)
         summary["qualified"] += 0  # counted at qualify time
+
+    # --- 6c. Cap-compliance sweep: the guarantee -------------------------
+    # Every AI spend path above is hard-capped, but dead-cap subtleties
+    # (buyouts landing post-generation, retained salary) can still tip a
+    # borderline roster over. Real clubs paper players down on these days;
+    # demote (two-ways first: fully exempt) until compliant. AI teams never
+    # enter the season over the cap, so no unsolvable states exist.
+    for team in ai_teams:
+        _ai_cap_compliance_sweep(team)
 
     # --- 7. User team: queue qualifying decisions ----------------------------
     if user_team is not None and app is not None:
@@ -755,9 +774,18 @@ def _queue_rfa_decisions(app, team, cards: List[dict]) -> None:
         from game_classes import EmailMessage
     except Exception:
         return
+    room = _cap_room(team)
+    total_qo = sum(int(c.get("qo_amount", 0) or 0) for c in cards)
     lines = ["Your restricted free agents need qualifying offers by the "
              "deadline. Extend the QO to keep their rights, or decline and "
-             "let them walk as UFAs:"]
+             "let them walk as UFAs:",
+             f"Cap space: {_format_money(room)} — qualifying everyone costs "
+             f"{_format_money(total_qo)}."]
+    if total_qo > room:
+        lines.append("WARNING: qualifying everyone puts you over the cap. "
+                     "You can still do it, but you won't be able to advance "
+                     "the day until you shed salary (trade, waivers, "
+                     "demotion).")
     for c in cards:
         lines.append(f"• {c['name']} (age {c['age']}): "
                      f"QO {_format_money(c['qo_amount'])} "
@@ -772,7 +800,8 @@ def _queue_rfa_decisions(app, team, cards: List[dict]) -> None:
         requires_response=True,
         action_type="rfa_qualifying",
         action_data={"cards": cards,
-                     "team_id": getattr(team, "id", None)},
+                     "team_id": getattr(team, "id", None),
+                     "cap_space": int(room)},
     )
     try:
         app.send_email_to_user(msg)
@@ -908,6 +937,9 @@ def ai_offer_sheet_target_score(offering_team, player, aav: int) -> float:
     premium = aav / max(1, market)
     if premium > 1.35:
         return 0.0
+    # The aggressor must actually be able to fit the AAV.
+    if aav > _cap_room(offering_team):
+        return 0.0
     score = (ovr - 78) / 12.0  # 0..1 across 78..90
     if age <= 24:
         score += 0.25
@@ -920,10 +952,7 @@ def ai_match_decision(original_team, player, aav: int,
                       compensation_label: str) -> bool:
     """Would the AI club match? Real clubs match unless the AAV is far
     above the player's worth to them or the cap makes it impossible."""
-    try:
-        room = float(getattr(original_team, "cap_space", 0) or 0)
-    except Exception:
-        room = 0
+    room = _cap_room(original_team)
     if room < aav:
         return False
     market = _market_value(player)
@@ -1262,6 +1291,25 @@ def apply_offer_sheet_match(app, league, player_id, match: bool,
     return {"ok": True, "matched": match, "story": story}
 
 
+def _cap_room(team) -> float:
+    """Spendable cap room under the REAL accounting.
+
+    Uses salary_cap_system.cap_breakdown -- the same numbers the user's
+    day-advancement compliance blocker enforces (roster + buyouts +
+    retained + dead cap). Falls back to the roster-only Team.cap_space
+    property if the cap module is unavailable.
+    """
+    try:
+        from salary_cap_system import cap_breakdown
+        bd = cap_breakdown(team)
+        return float(bd.get("space", 0) or 0)
+    except Exception:
+        try:
+            return float(getattr(team, "cap_space", 0) or 0)
+        except Exception:
+            return 0.0
+
+
 def _find_player(league, team, player_id):
     if player_id is None:
         return None
@@ -1332,11 +1380,11 @@ def _ai_backfill_roster(team, league, r, target: int = 21) -> None:
     guard = 0
     while len(roster) < target and pool and guard < 40:
         guard += 1
-        room = float(getattr(team, "cap_space", 0) or 0)
+        room = _cap_room(team)
         best = None
         for p in sorted(pool, key=_market_value):
             ask = min(_market_value(p), 1_500_000)
-            if ask <= max(room, 775_000):
+            if ask <= room and room >= 775_000:
                 best = (p, ask)
                 break
         if best is None:
@@ -1349,3 +1397,45 @@ def _ai_backfill_roster(team, league, r, target: int = 21) -> None:
             pass
         if p not in roster:
             roster.append(p)
+
+
+def _is_two_way(player) -> bool:
+    c = getattr(player, "contract", None)
+    try:
+        return bool(getattr(c, "two_way", False))
+    except Exception:
+        return False
+
+
+def _ai_cap_compliance_sweep(team) -> int:
+    """Demote until cap-compliant. Returns number of paper moves made."""
+    try:
+        from salary_cap_system import cap_breakdown
+    except Exception:
+        return 0
+    moves = 0
+    for _ in range(30):  # hard guard
+        try:
+            bd = cap_breakdown(team)
+        except Exception:
+            break
+        if not bd.get("over_cap"):
+            break
+        roster = list(getattr(team, "roster", []) or [])
+        if not roster:
+            break
+        # Two-ways first (fully exempt in the minors), then the biggest
+        # remaining hits -- the standard paper-move order.
+        roster.sort(key=lambda p: (0 if _is_two_way(p) else 1,
+                                   -float(getattr(getattr(p, "contract", None),
+                                                  "salary", 0) or 0)))
+        p = roster[0]
+        try:
+            getattr(team, "roster").remove(p)
+            ahl = getattr(team, "ahl_roster", None)
+            if ahl is not None and p not in ahl:
+                ahl.append(p)
+            moves += 1
+        except Exception:
+            break
+    return moves

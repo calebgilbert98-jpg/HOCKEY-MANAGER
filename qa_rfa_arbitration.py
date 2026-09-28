@@ -316,5 +316,32 @@ check("backfill promotes prospects", len(t.roster) >= 3, str(len(t.roster)))
 check("backfill signs from pool or prospects", len(t.roster) == 4,
       str(len(t.roster)))
 
+# cap guarantees: AI never spends into over-cap; sweep demotes to compliant
+rich = FakeTeam(name="Rich")
+check("_cap_room returns a number", isinstance(R._cap_room(rich), float))
+poor = FakeTeam(name="Poor")
+poor.salary_cap = 5_000_000  # tiny cap -> no room
+star = FakePlayer(name="Star", age=24, seasons_played=5, ovr=88,
+                  salary=9_000_000)
+check("AI won't qualify what it can't fit",
+      R._ai_qualify_decision(poor, star, 9_900_000) is False)
+# sweep: over-cap team gets papered down
+sweep_team = FakeTeam(name="Sweep")
+sweep_team.salary_cap = 10_000_000
+tw = FakePlayer(name="TwoWay", age=22, seasons_played=2, ovr=74,
+                salary=5_000_000)
+tw.contract.two_way = True
+vet = FakePlayer(name="Vet", age=30, seasons_played=8, ovr=80,
+                 salary=8_000_000)
+sweep_team.roster = [tw, vet]
+sweep_team.ahl_roster = []
+moves = R._ai_cap_compliance_sweep(sweep_team)
+from salary_cap_system import cap_breakdown
+bd = cap_breakdown(sweep_team)
+check("sweep demotes until compliant", not bd["over_cap"] and moves >= 1,
+      f"moves={moves} over={bd['over_cap']}")
+check("sweep demotes two-way first",
+      any(getattr(p, 'full_name', '') == "TwoWay" for p in sweep_team.ahl_roster))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
