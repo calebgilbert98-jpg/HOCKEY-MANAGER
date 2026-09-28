@@ -6292,10 +6292,10 @@ class GameSim:
         # starve the shot count; raised again after the zone-state honesty
         # fix (turnovers now recompute the zone) removed phantom
         # defensive-zone "shots" that had been inflating scoring.
-        # Tuned for the hockey-IQ update: the playmaking (draw-and-dish,
-        # seam passes) creates better chances, so we need fewer of them
-        # to hit the scoring target.
-        shot_chance = 0.60
+        # Re-tuned 2026-09-28: validation harness showed 20 SOG/team
+        # (NHL ~30) after the hockey-IQ and zone-state changes; the old
+        # 0.60 was calibrated for a different sim.
+        shot_chance = 0.70
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
