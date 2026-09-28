@@ -12981,6 +12981,22 @@ class HockeyManagerGUI(tk.Tk):
                 noteworthy.extend(manager_career.update_player_happiness(p, team_games))
             except Exception:
                 continue
+        # Farm confidence: AHL production -> morale / attitude / call-up
+        # buzz, once a week (ahl_system.weekly_farm_confidence). The morale
+        # moves feed the existing call-up readiness "Confidence right now"
+        # term and the happiness chain downstream; notes go to the inbox.
+        try:
+            import ahl_system
+            _league = getattr(self.game_manager, "league", None)
+            if _league is not None:
+                for _note in ahl_system.weekly_farm_confidence(
+                        _league, user_team=team):
+                    try:
+                        self.send_email_to_user(_note)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
         # Training effects: morale + injury risk
         fx = self.career.training.weekly_effects()
         if fx["morale_delta"]:

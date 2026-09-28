@@ -5065,6 +5065,14 @@ class League:
                 player.ahl_stats = PlayerStats()
             except Exception:
                 pass
+            # Farm-confidence flags reset with the ledger: one buzz note
+            # per prospect per season; the live buzz flag is recomputed
+            # weekly anyway, but a new season starts everyone quiet.
+            try:
+                player.ahl_buzz_note_sent = False
+                player.ahl_callup_buzz = False
+            except Exception:
+                pass
         
         self.season_year += 1
 
