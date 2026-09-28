@@ -270,15 +270,17 @@ def _room_vet_core(team: Any, arriving: Any):
 
 
 def _vet_character(team: Any, arriving: Any):
-    """Mean (leadership, base_controversy) of the vet core, ignoring the
-    arrival himself. Decides whether a rookie gets tested or sheltered."""
+    """Mean (leadership, drama, temper) of the vet core, ignoring the
+    arrival himself. Drama is the public circus; temper is the hot head
+    that tests rookies -- a room of saints can still be a hard room."""
     leads: List[float] = []
-    edges: List[float] = []
+    dramas: List[float] = []
+    tempers: List[float] = []
     try:
         me = _pid(arriving)
         rows = hierarchy(team)
     except Exception:
-        return 50.0, 20.0
+        return 50.0, 20.0, 45.0
     for r in rows:
         if r["id"] == me:
             continue
@@ -291,12 +293,136 @@ def _vet_character(team: Any, arriving: Any):
             pass
         try:
             # LOCKED baseline, not the incident ratchet -- who they are.
-            edges.append(float(getattr(p, "base_controversy", 20) or 20))
+            _e = getattr(p, "base_controversy", 20)
+            dramas.append(20.0 if _e is None else float(_e))
+        except Exception:
+            pass
+        try:
+            tempers.append(_temper_of(p))
         except Exception:
             pass
     lead = sum(leads) / len(leads) if leads else 50.0
-    edge = sum(edges) / len(edges) if edges else 20.0
-    return lead, edge
+    drama = sum(dramas) / len(dramas) if dramas else 20.0
+    temper = sum(tempers) / len(tempers) if tempers else 45.0
+    return lead, drama, temper
+
+
+def _norm_pair(player: Any, name1: str, default1: float,
+               name2: str, default2: float):
+    """Read two traits on a shared 0-100 scale. Same convention as the
+    reputation system's locked baseline: if both read <= 20 the player
+    is on the EHM 1-20 scale and both are scaled up."""
+    try:
+        v1 = float(getattr(player, name1, default1))
+    except Exception:
+        v1 = float(default1)
+    try:
+        v2 = float(getattr(player, name2, default2))
+    except Exception:
+        v2 = float(default2)
+    if max(v1, v2) <= 20:
+        v1, v2 = v1 * 5, v2 * 5
+    return max(0.0, min(100.0, v1)), max(0.0, min(100.0, v2))
+
+
+def _temper_of(player: Any) -> float:
+    """Hot-headedness: temper that snaps. Distinct from public drama --
+    a saint can have a hot head."""
+    aggr, comp = _norm_pair(player, "aggressiveness", 50, "composure", 60)
+    return aggr * 0.6 + (100 - comp) * 0.4
+
+
+def _difficult_of(player: Any) -> float:
+    """Me-first difficulty: the tough sell. Low drama by definition --
+    he doesn't do circuses -- but hard to work with when the
+    circumstances displease him."""
+    self_, team = _norm_pair(player, "selfishness", 50, "teamwork", 60)
+    return self_ * 0.5 + (100 - team) * 0.5
+
+
+def _personality_of(arriving: Any):
+    """The arrival's personality blend: (cocky, hothead, tough_sell,
+    quiet, spotlight). Drama, temper, and difficulty are separate axes --
+    saints can have hot heads, and quiet men can be difficult."""
+    _cont = getattr(arriving, "base_controversy", 20)
+    try:
+        drama = 20.0 if _cont is None else float(_cont)
+    except Exception:
+        drama = 20.0
+    temper = _temper_of(arriving)
+    difficult = _difficult_of(arriving)
+    pick = _draft_overall(arriving)
+    cocky = drama >= 40
+    hothead = temper >= 65
+    tough_sell = difficult >= 65 and drama < 40
+    quiet = drama <= 15 and temper < 65
+    return (cocky, hothead, tough_sell, quiet,
+            pick is not None and pick <= 3)
+
+
+def _room_situation(team: Any, arriving: Any):
+    """The team's side: room mood (mean morale, results proxy) and roster
+    strength (mean overall, contender proxy), ignoring the arrival.
+    Returns (mood, strength)."""
+    me = _pid(arriving)
+    moods: List[float] = []
+    ovrs: List[float] = []
+    for p in _roster(team):
+        try:
+            if _pid(p) == me:
+                continue
+        except Exception:
+            pass
+        try:
+            moods.append(float(getattr(p, "morale", 70) or 70))
+        except Exception:
+            pass
+        try:
+            ovrs.append(float(p.overall_rating()))
+        except Exception:
+            ovrs.append(70.0)
+    mood = sum(moods) / len(moods) if moods else 70.0
+    strength = sum(ovrs) / len(ovrs) if ovrs else 70.0
+    return mood, strength
+
+
+def _cohort_character(team: Any, arriving: Any):
+    """The young-talent cluster (23 and under, ignoring the arrival):
+    drama, temper, and results. Returns (members, drama, temper, mood).
+    A driven cluster thrives together; a hot, showy, or losing one is a
+    bad influence -- each for its own reason."""
+    me = _pid(arriving)
+    members: List[Any] = []
+    for p in _roster(team):
+        try:
+            if _pid(p) == me:
+                continue
+            age = int(getattr(p, "age", 99) or 99)
+        except Exception:
+            continue
+        if age <= 23:
+            members.append(p)
+    dramas: List[float] = []
+    tempers: List[float] = []
+    moods: List[float] = []
+    for p in members:
+        try:
+            _e = getattr(p, "base_controversy", 20)
+            dramas.append(20.0 if _e is None else float(_e))
+        except Exception:
+            pass
+        try:
+            tempers.append(_temper_of(p))
+        except Exception:
+            pass
+        try:
+            moods.append(float(getattr(p, "morale", 70) or 70))
+        except Exception:
+            pass
+    drama = sum(dramas) / len(dramas) if dramas else 20.0
+    temper = sum(tempers) / len(tempers) if tempers else 45.0
+    mood = sum(moods) / len(moods) if moods else 70.0
+    return members, drama, temper, mood
 
 
 def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
@@ -341,44 +467,166 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
     if arch == "blue_chip":
         pick = _draft_overall(arriving)
         pick_txt = f"the #{pick} overall pick" if pick else "the blue-chip kid"
+        cocky, hothead, tough_sell, quiet, spotlight = \
+            _personality_of(arriving)
+        mood, strength = _room_situation(team, arriving)
+        crisis = mood < 55
+        content = mood >= 72
+        win_now = strength >= 81
         if n_vets >= 3:
             # A veteran room's PERSONALITIES decide the welcome, not the
             # headcount: a great leadership group is the best possible
-            # landing for a rookie; only a demanding room tests him.
-            _lead, _edge = _vet_character(team, arriving)
-            if _edge >= 40:
-                # Demanding room: hotheads run it, the kid gets tested.
-                _bump(arriving, -4)
-                for p in _roster(team):
-                    if p is arriving:
-                        continue
-                    try:
-                        pa = int(getattr(p, "age", 99) or 99)
-                    except Exception:
-                        pa = 99
-                    if pa <= 23:
-                        _bump(p, +2)
-                lines.append(f"{aname}, {pick_txt}, walks into a room that "
-                             f"eats rookies. The vets will test him; the "
-                             f"kids are buzzing.")
-            elif _lead >= 70:
-                # Great vet group: sheltered, mentored -- best fit there is.
-                _bump(arriving, +3)
-                lines.append(f"{aname}, {pick_txt}, couldn't ask for a "
+            # landing for a rookie; only a demanding room tests him. The
+            # kid's own swagger and the team's situation shape it further.
+            _lead, _drama, _temper = _vet_character(team, arriving)
+            fiery = _temper >= 65
+            circus = _drama >= 40
+            demanding = fiery or circus
+            sheltering = _lead >= 70 and not demanding
+            if demanding:
+                flavor = "fiery" if _temper >= _drama else "circus"
+                if flavor == "fiery":
+                    if cocky and hothead:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks in talking "
+                                 f"and looking for a fight. This will be "
+                                 f"fun for everyone but him.")
+                    elif cocky:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks in talking. "
+                                 f"This room eats rookies with mouths.")
+                    elif hothead:
+                        kid_delta = -3
+                        story = (f"{aname}, {pick_txt}, doesn't say a word "
+                                 f"and doesn't take a step back. They'll "
+                                 f"respect that -- after the test.")
+                    elif tough_sell:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks into a room "
+                                 f"that eats rookies. The vets will find "
+                                 f"out what he's made of -- and who it's for.")
+                    elif quiet:
+                        kid_delta = -3
+                        story = (f"{aname}, {pick_txt}, keeps his head "
+                                 f"down. The vets will test him anyway.")
+                    else:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks into a room "
+                                 f"that eats rookies. The vets will test "
+                                 f"him; the kids are buzzing.")
+                else:
+                    if cocky and not hothead:
+                        kid_delta = -1
+                        story = (f"{aname}, {pick_txt}, walks into a "
+                                 f"circus -- and he'll fit right into it.")
+                    elif hothead:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks into a "
+                                 f"circus. They'll try to get a rise out of him.")
+                    elif quiet:
+                        kid_delta = -3
+                        story = (f"{aname}, {pick_txt}, walks into a "
+                                 f"circus. Every word he says will be a "
+                                 f"headline -- he doesn't say many.")
+                    else:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks into a "
+                                 f"circus. The cameras love a new act.")
+                if kid_delta <= -3:
+                    for p in _roster(team):
+                        if p is arriving:
+                            continue
+                        try:
+                            pa = int(getattr(p, "age", 99) or 99)
+                        except Exception:
+                            pa = 99
+                        if pa <= 23:
+                            _bump(p, +2)
+            elif sheltering:
+                if cocky:
+                    kid_delta = +2
+                    story = (f"{aname}, {pick_txt}, couldn't ask for a "
+                             f"better room. The vets will keep the kid's "
+                             f"feet on the ground.")
+                elif hothead:
+                    kid_delta = +3
+                    story = (f"{aname}, {pick_txt}, couldn't ask for a "
+                             f"better room. The vets will point that "
+                             f"temper at the other team.")
+                elif tough_sell:
+                    kid_delta = +2
+                    story = (f"{aname}, {pick_txt}, lands in a well-led "
+                             f"room. The vets know how to handle his type.")
+                else:
+                    kid_delta = +3
+                    story = (f"{aname}, {pick_txt}, couldn't ask for a "
                              f"better room. The vets will look after the kid.")
             else:
-                # Neutral veteran room: all eyes on the kid, nothing more.
-                _bump(arriving, -1)
-                lines.append(f"{aname}, {pick_txt}, joins a veteran room. "
-                             f"All eyes on the kid.")
+                kid_delta = -1
+                story = (f"{aname}, {pick_txt}, joins a veteran room. "
+                         f"All eyes on the kid.")
+            # One situational beat: the room's situation gets a say, but
+            # never more than one -- legible, never making or breaking.
+            if crisis:
+                kid_delta -= 1
+                if tough_sell:
+                    story += " He already doesn't like the circumstances."
+                else:
+                    story += (" The room is losing, and nobody's in the "
+                              "mood to babysit.")
+            elif win_now and not sheltering:
+                kid_delta -= 1
+                story += " They need him to produce right now."
+            elif spotlight and not sheltering:
+                kid_delta -= 1
+                story += " The spotlight follows him everywhere he goes."
+            elif content and not demanding and not sheltering:
+                kid_delta += 1
+                story += " A happy room makes for a soft landing."
+            kid_delta = max(-4, min(3, kid_delta))
+            _bump(arriving, kid_delta)
+            lines.append(story)
         else:
-            # Young room: the future just walked in.
-            _bump(arriving, +2)
-            for p in _roster(team):
-                if p is not arriving:
+            # Young room: the kid cohort's character decides whether he
+            # thrives or drifts -- drama, temper, results, situation, each
+            # with its own flavor.
+            cohort, c_drama, c_temper, c_mood = _cohort_character(
+                team, arriving)
+            wild = c_temper >= 65 or c_drama >= 40 or c_mood < 55
+            driven = c_drama < 30 and c_temper < 55 and c_mood >= 60
+            if driven and cohort:
+                _bump(arriving, +3)
+                for p in cohort:
                     _bump(p, +1)
-            lines.append(f"{aname}, {pick_txt}, joins a young room. "
+                story = (f"{aname}, {pick_txt}, lands with a young core "
+                         f"that pushes each other. Iron sharpens iron.")
+            elif wild and cohort:
+                _bump(arriving, +1)
+                if c_temper >= 65 and c_temper >= c_drama:
+                    story = (f"{aname}, {pick_txt}, joins a young room "
+                             f"that runs hot. He'll have to keep his head "
+                             f"straight.")
+                elif c_drama >= 40 and c_drama > c_temper:
+                    story = (f"{aname}, {pick_txt}, joins a young room "
+                             f"that loves the spotlight. He'll have to "
+                             f"keep his head straight.")
+                else:
+                    story = (f"{aname}, {pick_txt}, joins a young room "
+                             f"that's losing and pointing fingers. He'll "
+                             f"have to keep his head straight.")
+                if cocky or hothead:
+                    story += (" He looks like he'll fit right in -- "
+                              "that's the worry.")
+            else:
+                _bump(arriving, +2)
+                for p in _roster(team):
+                    if p is not arriving:
+                        _bump(p, +1)
+                story = (f"{aname}, {pick_txt}, joins a young room. "
                          f"The future just walked in.")
+            if spotlight:
+                story += " Everyone already knows his name."
+            lines.append(story)
     elif arch == "veteran":
         # Respect travels: a softer landing than a nobody gets.
         if best is not None:
@@ -387,6 +635,16 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
         else:
             _bump(arriving, -2)
             lines.append(f"{aname} arrives. Even outsiders respect the resume.")
+        _vcocky, _vhot, _vtough, _vquiet, _vspot = _personality_of(arriving)
+        try:
+            _vmood, _vstr = _room_situation(team, arriving)
+        except Exception:
+            _vmood = 70.0
+        if _vtough and _vmood < 55:
+            # Tough sell, bad circumstances: difficult until they change.
+            _bump(arriving, -2)
+            lines.append(f"{aname} doesn't like the circumstances. "
+                         f"He'll be difficult until they change.")
         vet_inf = influence_of(arriving)
         cap_letter = (str(getattr(cap, "captaincy", "") or "").upper()
                       if cap is not None else "")
@@ -638,7 +896,11 @@ def cascade_on_trade(team: Any, traded: Any = None, arriving: Any = None,
             pass
 
     for ln in lines:
-        _log(team, (f"[{date_str}] " if date_str else "") + ln)
+        # _arrival_reaction already date-prefixes its lines; the trade's own
+        # departure lines still need it. Never double-prefix.
+        if date_str and not ln.startswith("["):
+            ln = f"[{date_str}] " + ln
+        _log(team, ln)
     return lines
 
 
