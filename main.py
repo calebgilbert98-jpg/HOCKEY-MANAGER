@@ -9588,13 +9588,17 @@ class HockeyManagerGUI(tk.Tk):
         """Hold the annual entry draft"""
         print(f"🏒 ENTRY DRAFT {year} BEGINS! 🏒")
         
-        # Generate draft prospects if they don't exist
-        if not self.league.draft_prospects:
+        # Generate draft prospects if they don't exist. The class is stamped
+        # with its draft year: if last year's draft never ran (board never
+        # opened), the stale class must NOT be reused for this year's draft.
+        _prospect_year = getattr(self.league, 'draft_prospects_year', None)
+        if not self.league.draft_prospects or _prospect_year != year:
             print("Generating draft prospects...")
             from draft_generator import generate_draft_class
             draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
             self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)
             print(f"Generated {len(self.league.draft_prospects)} draft prospects")
+            self.league.draft_prospects_year = year
             # Draft Story Engine: assign storylines to top prospects
             try:
                 from draft_stories import assign_prospect_storylines, deliver_prospect_stories
@@ -9616,6 +9620,21 @@ class HockeyManagerGUI(tk.Tk):
         
         # Simulate draft lottery for first round
         self.league.simulate_draft_lottery(year)
+
+        # Draft-day market: the lottery set the order, so every GM knows
+        # where they're picking -- the phones light up like the trade
+        # deadline. AI clubs trade up for need fits, and rebuilding clubs
+        # shop veterans to contenders holding late firsts. (Never runs for
+        # fantasy drafts: no trading there, by design.)
+        try:
+            from draft_day_trades import run_draft_day_trading
+            _ddt_deals = run_draft_day_trading(self.league, year, app=self)
+            if _ddt_deals:
+                self.add_news(
+                    f"DRAFT BUZZ: {len(_ddt_deals)} draft-day deal(s) go down "
+                    f"as GMs jockey for position.")
+        except Exception as _dde:
+            print(f"Draft-day trading failed (non-fatal): {_dde}")
         
         # Add news story about the draft
         draft_story = f"The {year} NHL Entry Draft begins today! Teams will select from a pool of {len(self.league.draft_prospects)} eligible prospects over 7 rounds."

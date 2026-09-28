@@ -4943,6 +4943,7 @@ class DraftView(ctk.CTkFrame):
         self.draft_order = []          # [round, team, draft_pick]
         self.picks_made = []           # (team_name, overall, player)
         self.selected_prospect = None
+        self._armed_prospect = None  # M4: two-step inline pick confirmation
         self.strategy_var = tk.StringVar(master=self, value="BPA")
         self.pos_filter_var = tk.StringVar(master=self, value="All Positions")
         self._ai_after_id = None
@@ -4970,6 +4971,23 @@ class DraftView(ctk.CTkFrame):
         self.clock_label.pack(padx=16)
         self.pick_info_label = self._body(self.clock_frame, text="", dim=True)
         self.pick_info_label.pack(padx=16, pady=(0, 8))
+        # Draft pace control (M5): 1x / 4x / sim-to-my-pick.
+        pace_row = ctk.CTkFrame(self.clock_frame, fg_color="transparent")
+        pace_row.pack(pady=(0, 8))
+        ctk.CTkLabel(pace_row, text="PACE",
+                     font=("Segoe UI", 9, 'bold'),
+                     text_color=ct['TEXT_DIM']).pack(side='left', padx=(0, 6))
+        self._pace_btns = {}
+        for _mode, _lbl in (("1x", "1×"), ("4x", "4×"),
+                            ("sim", "▶▶ My pick")):
+            _pb = ctk.CTkButton(pace_row, text=_lbl, width=70, height=24,
+                               font=("Segoe UI", 10, 'bold'),
+                               command=lambda m=_mode: self._set_pace(m))
+            _pb.pack(side='left', padx=2)
+            self._pace_btns[_mode] = _pb
+        self._pace_mode = '1x'
+        self._sim_active = False
+        self._paint_pace_btns()
 
         # ---- 3 columns (grid; CTk has no PanedWindow) ----
         main_pane = ctk.CTkFrame(self, fg_color="transparent")
@@ -4979,17 +4997,39 @@ class DraftView(ctk.CTkFrame):
         main_pane.grid_columnconfigure(2, weight=1)
         main_pane.grid_rowconfigure(0, weight=1)
 
-        # LEFT: draft board
+        # LEFT: draft board -- tabbed: the available-prospect board is the
+        # primary surface (war-room convention); results and the user's own
+        # picks live one tap away.
         left = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
         left.grid(row=0, column=0, sticky='nsew', padx=(0, 4))
         ctk.CTkLabel(left, text="DRAFT BOARD",
                      font=("Segoe UI", 10, 'bold'),
                      text_color=ct['TEXT_DIM']).pack(anchor='w',
                                                      padx=12, pady=(10, 4))
+        tab_row = ctk.CTkFrame(left, fg_color="transparent")
+        tab_row.pack(fill='x', padx=12, pady=(0, 4))
+        self._board_tab_var = tk.StringVar(master=self, value="Available")
+        self._board_tab_btns = {}
+        for _tab in ("Available", "Results", "My Picks"):
+            _b = ctk.CTkButton(tab_row, text=_tab, width=90, height=26,
+                               font=("Segoe UI", 10, 'bold'),
+                               command=lambda t=_tab: self._draft_board_tab(t))
+            _b.pack(side='left', padx=(0, 6))
+            self._board_tab_btns[_tab] = _b
         self._setup_tree_style()
         board_card = ctk.CTkFrame(left, fg_color=ct['CARD'], corner_radius=8)
         board_card.pack(fill='both', expand=True, padx=10, pady=(0, 10))
-        self.draft_results_tree = self._create_draft_board(board_card)
+        self._board_tab_frames = {}
+        for _tab in ("Available", "Results", "My Picks"):
+            _f = tk.Frame(board_card, bg=ct['CARD'])
+            self._board_tab_frames[_tab] = _f
+        self.available_tree = self._create_available_board(
+            self._board_tab_frames["Available"])
+        self.draft_results_tree = self._create_draft_board(
+            self._board_tab_frames["Results"])
+        self.mypicks_tree = self._create_mypicks_board(
+            self._board_tab_frames["My Picks"])
+        self._draft_board_tab("Available")
 
         # CENTER: war room
         center = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
@@ -5041,7 +5081,10 @@ class DraftView(ctk.CTkFrame):
                      font=("Segoe UI", 10, 'bold'),
                      text_color=ct['TEXT_DIM']).pack(anchor='w',
                                                      padx=12, pady=(4, 2))
-        self.shortlist = tk.Listbox(center, height=14, activestyle='none',
+        # Shortlist capped at 8 rows: the war room must fit in 900px
+        # height with the prospect card + action buttons visible (no
+        # clipping; single-level scrolling rule).
+        self.shortlist = tk.Listbox(center, height=8, activestyle='none',
                                     bg=ct['CARD'], fg=ct['TEXT'],
                                     selectbackground=ct['ROW_SELECTED'],
                                     relief='flat',
@@ -5049,11 +5092,17 @@ class DraftView(ctk.CTkFrame):
                                     highlightbackground=ct['BORDER'])
         self.shortlist.pack(fill='x', padx=12, pady=(0, 4))
         self.shortlist.bind('<<ListboxSelect>>', self._on_shortlist_select)
+        self.shortlist.bind('<Double-1>', self._on_shortlist_double)
 
         self.selected_label = self._body(center, text="No prospect selected",
                                    dim=True)
         self.selected_label.configure(wraplength=300)
         self.selected_label.pack(anchor='w', padx=12, pady=(0, 6))
+
+        # M2: inline prospect card -- evaluation at the moment of decision.
+        self.prospect_card = ctk.CTkFrame(center, fg_color=ct['CARD'],
+                                          corner_radius=8)
+        self.prospect_card.pack(fill='x', padx=12, pady=(0, 6))
 
         btn_col = ctk.CTkFrame(center, fg_color="transparent")
         btn_col.pack(fill='x', padx=12, pady=(0, 10))
@@ -5068,6 +5117,8 @@ class DraftView(ctk.CTkFrame):
                                                   text="Trade This Pick",
                                                   command=self.trade_current_pick)
         self.trade_pick_button.pack(fill='x', pady=2)
+        # Esc disarms a two-step pick confirmation.
+        self.bind('<Escape>', lambda _e: self._disarm_draft_button())
 
         # RIGHT: ticker
         right = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
@@ -5177,6 +5228,246 @@ class DraftView(ctk.CTkFrame):
         g = (str(grade) if grade is not None else 'C').strip()
         return self.dn.grade_color(self._GRADE_BASE.get(g, 'C'))
 
+    # -- M1: tabbed draft board -------------------------------------------
+    def _draft_board_tab(self, name):
+        """Switch the left column between Available / Results / My Picks."""
+        self._board_tab_var.set(name)
+        ct = self._ct
+        for tab, btn in self._board_tab_btns.items():
+            active = tab == name
+            btn.configure(fg_color=ct['TEAL'] if active else ct['CARD'],
+                          text_color=ct['BG'] if active else ct['TEXT_DIM'])
+        for tab, frame in self._board_tab_frames.items():
+            if tab == name:
+                frame.pack(fill='both', expand=True)
+            else:
+                frame.pack_forget()
+
+    def _create_available_board(self, parent):
+        """Ranked available-prospect board (the war room's primary surface)."""
+        ct = self._ct
+        columns = {'rank': ('#', 36), 'player': ('Player', 150),
+                   'pos': ('Pos', 42), 'pot': ('Pot', 64), 'age': ('Age', 36)}
+        tree = ttk.Treeview(parent, columns=list(columns.keys()),
+                            show='headings', style='Draft.Treeview',
+                            height=30)
+        for col, (text, width) in columns.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col, t=tree:
+                         self.app._sort_treeview_generic(t, c))
+            tree.column(col, width=width, anchor='center')
+        for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
+            tree.tag_configure(f"pot_{g}",
+                               foreground=self.dn.grade_color(g))
+        try:
+            self.app._bind_player_context_menu(tree, 'default', False)
+        except Exception:
+            pass
+        v_scroll = ttk.Scrollbar(parent, orient="vertical",
+                                 command=tree.yview,
+                                 style='Draft.Vertical.TScrollbar')
+        tree.configure(yscrollcommand=v_scroll.set)
+        tree.pack(side="left", fill="both", expand=True,
+                  padx=(10, 0), pady=10)
+        v_scroll.pack(side="right", fill="y", padx=(0, 6), pady=10)
+        tree.bind('<<TreeviewSelect>>', self._on_available_select)
+        tree.bind('<Double-1>', self._on_available_double)
+        return tree
+
+    def _create_mypicks_board(self, parent):
+        """The user's own selections, one tab away."""
+        ct = self._ct
+        columns = {'pick': ('#', 40), 'player': ('Player', 160),
+                   'pos': ('Pos', 42), 'pot': ('Pot', 60)}
+        tree = ttk.Treeview(parent, columns=list(columns.keys()),
+                            show='headings', style='Draft.Treeview',
+                            height=30)
+        for col, (text, width) in columns.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col, t=tree:
+                         self.app._sort_treeview_generic(t, c))
+            tree.column(col, width=width, anchor='center')
+        for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
+            tree.tag_configure(f"pot_{g}",
+                               foreground=self.dn.grade_color(g))
+        try:
+            self.app._bind_player_context_menu(tree, 'default', False)
+        except Exception:
+            pass
+        v_scroll = ttk.Scrollbar(parent, orient="vertical",
+                                 command=tree.yview,
+                                 style='Draft.Vertical.TScrollbar')
+        tree.configure(yscrollcommand=v_scroll.set)
+        tree.pack(side="left", fill="both", expand=True,
+                  padx=(10, 0), pady=10)
+        v_scroll.pack(side="right", fill="y", padx=(0, 6), pady=10)
+        return tree
+
+    def _prospect_by_id(self, pid):
+        for p in getattr(self.app.league, 'draft_prospects', None) or []:
+            if str(getattr(p, 'id', '')) == str(pid):
+                return p
+        return None
+
+    def _refresh_available_board(self):
+        tree = getattr(self, 'available_tree', None)
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        reports = getattr(self.app.user_team, 'scouting_reports', {}) or {}
+        for i, p in enumerate(self._board_sorted_available(), 1):
+            report = reports.get(getattr(p, 'id', None))
+            pot = (self.scmod.report_potential_display(report, p) if report
+                   else self.scmod.consensus_range(p))
+            try:
+                pos = p.primary_position.value
+            except Exception:
+                pos = "?"
+            grade = self._GRADE_BASE.get(
+                str(getattr(p, 'potential_grade', 'C')).strip(), 'C')
+            tree.insert('', 'end',
+                        iid=str(getattr(p, 'id', '')),
+                        values=(i, getattr(p, 'full_name', '?'), pos, pot,
+                                getattr(p, 'age', '?')),
+                        tags=(f"pot_{grade}",))
+
+    def _refresh_mypicks_board(self):
+        tree = getattr(self, 'mypicks_tree', None)
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        try:
+            uname = self.app.user_team.team_name
+        except Exception:
+            return
+        for team_name, overall, player in self.picks_made:
+            if team_name != uname:
+                continue
+            try:
+                pos = player.primary_position.value
+            except Exception:
+                pos = "?"
+            grade = self._GRADE_BASE.get(
+                str(getattr(player, 'potential_grade', 'C')).strip(), 'C')
+            tree.insert('', 'end', values=(
+                overall, getattr(player, 'full_name', '?'), pos,
+                getattr(player, 'potential_grade', '?')),
+                tags=(f"pot_{grade}",))
+
+    def _on_available_select(self, event=None):
+        sel = self.available_tree.selection()
+        if not sel:
+            return
+        p = self._prospect_by_id(sel[0])
+        if p is None:
+            return
+        self.selected_prospect = p
+        if self._armed_prospect is not None and self._armed_prospect is not p:
+            self._disarm_draft_button()
+        self._render_prospect_card(p)
+
+    def _on_available_double(self, event=None):
+        self._on_available_select()
+        if self.selected_prospect is not None:
+            self._arm_draft_button(self.selected_prospect)
+
+    # -- M2: inline prospect card ------------------------------------------
+    def _render_prospect_card(self, p):
+        """Evaluation at the moment of decision: identity, scout view,
+        storyline, and team-need fit -- without leaving the war room."""
+        ct = self._ct
+        card = self.prospect_card
+        for w in card.winfo_children():
+            w.destroy()
+        try:
+            pos = p.primary_position.value
+        except Exception:
+            pos = "?"
+        name = getattr(p, 'full_name', '?')
+        age = getattr(p, 'age', '?')
+        ht = getattr(p, 'height', '') or ''
+        wt = getattr(p, 'weight', '') or ''
+        nat = (getattr(p, 'nationality', None)
+               or getattr(p, 'nation', '') or '')
+        # Consensus rank among the available pool
+        try:
+            avail = self._available_prospects()
+            crank = avail.index(p) + 1 if p in avail else None
+        except Exception:
+            crank = None
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill='x', padx=10, pady=(8, 0))
+        ctk.CTkLabel(head, text=name,
+                     font=("Segoe UI", 13, 'bold'),
+                     text_color=ct['TEXT']).pack(side='left')
+        if crank:
+            ctk.CTkLabel(head, text=f"Consensus #{crank}",
+                         font=("Segoe UI", 10, 'bold'),
+                         text_color=ct['GOLD']).pack(side='right')
+        meta_bits = [b for b in
+                     (pos, f"Age {age}",
+                      f"{ht}" if ht else "", f"{wt}" if wt else "",
+                      str(nat) if nat else "") if b]
+        self._body(head, text="  ·  ".join(meta_bits),
+                   dim=True).pack(anchor='w', padx=10)
+        # Scout view (fog-of-war) + storyline + need fit
+        reports = getattr(self.app.user_team, 'scouting_reports', {}) or {}
+        report = reports.get(getattr(p, 'id', None))
+        if report is not None:
+            try:
+                viewings = int(getattr(report, 'viewings', 0) or 0)
+            except Exception:
+                viewings = 0
+            acc = getattr(report, 'accuracy', '') or ''
+            scout_line = (f"Your scout: {self.scmod.report_potential_display(report, p)}"
+                          f"  ·  {viewings} viewing{'s' if viewings != 1 else ''}"
+                          + (f"  ·  {acc} accuracy" if acc else ""))
+        else:
+            scout_line = (f"Unscouted — consensus "
+                          f"{self.scmod.consensus_range(p)}")
+        self._body(card, text=scout_line, dim=False).pack(
+            anchor='w', padx=10, pady=(2, 0))
+        details = []
+        if report is not None:
+            strengths = list(getattr(report, 'strengths', None) or [])[:2]
+            weaknesses = list(getattr(report, 'weaknesses', None) or [])[:2]
+            if strengths:
+                details.append("Strengths: " + ", ".join(str(s) for s in strengths))
+            if weaknesses:
+                details.append("Weaknesses: " + ", ".join(str(s) for s in weaknesses))
+        try:
+            storylines = getattr(self.app.league, 'prospect_storylines', {}) or {}
+            story = storylines.get(p)
+            if story:
+                details.append(f"📖 {story.get('title', story.get('type', ''))}")
+        except Exception:
+            pass
+        for line in details:
+            lbl = self._body(card, text=line, dim=True)
+            lbl.configure(wraplength=320)
+            lbl.pack(anchor='w', padx=10)
+        # Team-need fit chip
+        try:
+            needs = self.te.team_needs(self.app.user_team) or []
+            if pos in needs[:2]:
+                chip = ctk.CTkLabel(card, text="✓ FITS TEAM NEED",
+                                    font=("Segoe UI", 9, 'bold'),
+                                    text_color=ct['GREEN'])
+                chip.pack(anchor='w', padx=10, pady=(2, 8))
+            else:
+                ctk.CTkLabel(card, text="", font=("Segoe UI", 2)).pack(pady=(0, 8))
+        except Exception:
+            pass
+        # Right-click opens the full player profile.
+        try:
+            card.bind('<Button-3>',
+                      lambda _e, _p=p: self.app.open_player_profile(_p))
+            for w in card.winfo_children():
+                w.bind('<Button-3>',
+                       lambda _e, _p=p: self.app.open_player_profile(_p))
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     def start_draft(self):
         # Make sure every team owns its picks (idempotent if already done)
@@ -5277,6 +5568,20 @@ class DraftView(ctk.CTkFrame):
             count += 1
             if count >= 30:
                 break
+        # Keep the tabbed board in step with the shortlist.
+        try:
+            self._refresh_available_board()
+        except Exception:
+            pass
+        try:
+            self._refresh_mypicks_board()
+        except Exception:
+            pass
+
+    def _on_shortlist_double(self, event=None):
+        self._on_shortlist_select()
+        if self.selected_prospect is not None:
+            self._arm_draft_button(self.selected_prospect)
 
     def _on_shortlist_select(self, event=None):
         sel = self.shortlist.curselection()
@@ -5284,6 +5589,8 @@ class DraftView(ctk.CTkFrame):
             return
         p = self._shortlist_players[sel[0]]
         self.selected_prospect = p
+        if self._armed_prospect is not None and self._armed_prospect is not p:
+            self._disarm_draft_button()
         reports = self.app.user_team.scouting_reports
         report = reports.get(p.id)
         pot = (self.scmod.report_potential_display(report, p) if report
@@ -5294,32 +5601,65 @@ class DraftView(ctk.CTkFrame):
             pos = "?"
         self.selected_label.configure(
             text=f"Selected: {p.full_name} ({pos}, {p.age}) — Potential {pot}")
+        self._render_prospect_card(p)
 
-    # ------------------------------------------------------------------
-    def process_draft_pick(self):
-        if self.current_pick >= len(self.draft_order):
-            self.end_draft()
-            return
-        round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
+    # -- M5: draft pace ----------------------------------------------------
+    def _set_pace(self, mode):
+        """1x / 4x / sim-to-my-pick. Sim takes effect immediately."""
+        self._pace_mode = mode
+        self._paint_pace_btns()
+        if mode == 'sim' and not self._sim_active:
+            try:
+                if self._ai_after_id:
+                    self.after_cancel(self._ai_after_id)
+            except Exception:
+                pass
+            self._ai_after_id = None
+            if self.current_pick < len(self.draft_order):
+                self.process_draft_pick()
+
+    def _paint_pace_btns(self):
+        ct = self._ct
+        for mode, btn in getattr(self, '_pace_btns', {}).items():
+            active = mode == getattr(self, '_pace_mode', '1x')
+            try:
+                btn.configure(fg_color=ct['TEAL'] if active else ct['CARD'],
+                              text_color=ct['BG'] if active else ct['TEXT_DIM'])
+            except Exception:
+                pass
+
+    def _mp_clock_for(self, team):
+        """True when a remote human owns this pick (MP draft-clock wait)."""
+        try:
+            return bool(
+                getattr(self.app, 'mp_host', None) is not None
+                and not bool(getattr(team, 'is_user_team', False))
+                and __import__('game_classes').is_human_managed(team))
+        except Exception:
+            return False
+
+    def _refresh_clock_ui(self, round_num, team_on_clock, overall):
+        """Header/clock/next-pick labels + button states. No scheduling and
+        no market hooks -- safe to call from the sim loop."""
         if round_num != self.current_round:
             self.current_round = round_num
-        overall = self.current_pick + 1
-        pick_in_round = (self.current_pick %
-                         max(1, len(self.app.league.teams))) + 1
-
+        try:
+            _nhl_count = sum(1 for _t in self.app.league.teams
+                             if getattr(_t, 'league_name', '') ==
+                             'National Hockey League') or 32
+        except Exception:
+            _nhl_count = 32
+        pick_in_round = (self.current_pick % max(1, _nhl_count)) + 1
         self.draft_status_label.configure(
             text=f"Round {round_num} of {self.total_rounds}")
         self.clock_label.configure(text=team_on_clock.team_name)
         self.pick_info_label.configure(
             text=f"Pick #{overall}  (Round {round_num}, #{pick_in_round} in round)")
-
         is_user = team_on_clock == self.app.user_team
         state = 'normal' if is_user else 'disabled'
         self.draft_button.configure(state=state)
         self.auto_button.configure(state=state)
         self.trade_pick_button.configure(state=state)
-
-        # Your next pick info
         nxt = next((i for i in range(self.current_pick, len(self.draft_order))
                     if self.draft_order[i][1] == self.app.user_team), None)
         if nxt is not None:
@@ -5329,20 +5669,103 @@ class DraftView(ctk.CTkFrame):
         else:
             self.next_pick_label.configure(text="No picks remaining")
 
+    def _ai_step(self):
+        """One synchronous AI step for sim mode. Returns True to continue."""
+        if self.current_pick >= len(self.draft_order):
+            return False
+        round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
+        if team_on_clock == self.app.user_team:
+            return False
+        if self._mp_clock_for(team_on_clock):
+            return False
+        if round_num == 1:
+            try:
+                from draft_day_trades import on_clock_check
+                if on_clock_check(self):
+                    return True  # order changed; step again
+            except Exception:
+                pass
+            _r2, team_on_clock, _dp = self.draft_order[self.current_pick]
+            if (team_on_clock == self.app.user_team
+                    or self._mp_clock_for(team_on_clock)):
+                return False
+            round_num = _r2
+        overall = self.current_pick + 1
+        self._refresh_clock_ui(round_num, team_on_clock, overall)
+        reach, steal = self._do_ai_pick()
+        if overall <= 3 or reach or steal:
+            # Pause on round-1 drama: drop to 1x so the user actually sees it.
+            self._set_pace('1x')
+            return False
+        return True
+
+    def _run_sim(self):
+        """Sim-to-my-pick: run AI picks synchronously until the user's
+        clock, an MP clock, draft end, or round-1 drama."""
+        if self._sim_active:
+            return
+        self._sim_active = True
+        try:
+            guard = 0
+            while guard < 500 and self._ai_step():
+                guard += 1
+        finally:
+            self._sim_active = False
+        self._refresh_shortlist()
+        self.process_draft_pick()
+
+    # ------------------------------------------------------------------
+    def process_draft_pick(self):
+        if self.current_pick >= len(self.draft_order):
+            self.end_draft()
+            return
+        round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
+        # DRAFT-DAY MARKET: round 1 runs like the trade deadline. Before the
+        # clock starts, the phones ring -- an AI club below may trade up for
+        # the slot (AI on the clock), or an AI club may call the user with an
+        # offer (user on the clock). Human-managed clubs are never moved
+        # without consent; multiplayer draft-clock waits are untouched.
+        if round_num == 1:
+            try:
+                from draft_day_trades import on_clock_check
+                if on_clock_check(self):
+                    round_num, team_on_clock, _dp = \
+                        self.draft_order[self.current_pick]
+            except Exception:
+                pass
+        if round_num != self.current_round:
+            self.current_round = round_num
+        overall = self.current_pick + 1
+        self._refresh_clock_ui(round_num, team_on_clock, overall)
+
+        is_user = team_on_clock == self.app.user_team
+
+        # The phone rings for the user too: an AI club that loves someone
+        # near the top of the board may call about your round-1 pick.
+        if is_user and round_num == 1:
+            try:
+                from draft_day_trades import incoming_offer_for_user
+                incoming_offer_for_user(self)
+                # The call may have moved the pick; re-read the clock.
+                if self.current_pick < len(self.draft_order):
+                    _r2, team_on_clock, _dp = \
+                        self.draft_order[self.current_pick]
+                    is_user = team_on_clock == self.app.user_team
+                    if not is_user:
+                        state = 'disabled'
+                        self.draft_button.configure(state=state)
+                        self.auto_button.configure(state=state)
+                        self.trade_pick_button.configure(state=state)
+            except Exception:
+                pass
+
+        # Your next pick info is handled inside _refresh_clock_ui.
+
         # MULTIPLAYER: a team claimed by a remote human doesn't get an AI
         # auto-pick -- its manager picks live on the draft clock (60s,
         # then the AI makes the pick for them).
         if not is_user:
-            try:
-                _mp_wait = bool(
-                    getattr(self.app, 'mp_host', None) is not None
-                    and not bool(getattr(team_on_clock, 'is_user_team',
-                                         False))
-                    and __import__('game_classes').is_human_managed(
-                        team_on_clock))
-            except Exception:
-                _mp_wait = False
-            if _mp_wait:
+            if self._mp_clock_for(team_on_clock):
                 self.draft_button.configure(state='disabled')
                 self.auto_button.configure(state='disabled')
                 self.trade_pick_button.configure(state='disabled')
@@ -5368,7 +5791,11 @@ class DraftView(ctk.CTkFrame):
                     self.after_cancel(self._ai_after_id)
                 except Exception:
                     pass
-            self._ai_after_id = self.after(650, self.ai_make_pick)
+            if self._pace_mode == 'sim' and not self._sim_active:
+                self._run_sim()
+                return
+            delay = 150 if self._pace_mode == '4x' else 650
+            self._ai_after_id = self.after(delay, self.ai_make_pick)
 
     def _mp_check_client_pick(self):
         """Draft-clock wait loop: execute the client's pick, auto-pick on
@@ -5423,15 +5850,15 @@ class DraftView(ctk.CTkFrame):
             return
         self._mp_wait_id = self.after(1000, self._mp_check_client_pick)
 
-    def ai_make_pick(self):
-        self._ai_after_id = None
+    def _do_ai_pick(self):
+        """Execute one AI pick synchronously. Returns (reach, steal)."""
         if self.current_pick >= len(self.draft_order):
-            return
+            return (False, False)
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
         available = self._available_prospects()
         if not available:
             self.end_draft()
-            return
+            return (False, False)
         needs = self.te.team_needs(team_on_clock)
         # Consider top 12, weigh positional need + randomness
         candidates = available[:12]
@@ -5447,14 +5874,36 @@ class DraftView(ctk.CTkFrame):
                 base *= 1.08
             if pos == 'G' and round_num <= 1:
                 base *= 0.80  # goalies rarely go top-10
+            # Franchise situation: contenders draft for readiness (higher
+            # current overall), rebuilders draft for ceiling (potential
+            # grade). Modest tilt -- BPA still rules the board.
+            try:
+                from draft_day_trades import franchise_pick_multiplier
+                _strat = self.app.ai_manager.get_team_strategy(
+                    team_on_clock.team_name)
+                base *= franchise_pick_multiplier(
+                    p, getattr(_strat, 'priority', None))
+            except Exception:
+                pass
             base *= random.uniform(0.94, 1.06)
             scored.append((base, p))
         scored.sort(key=lambda s: s[0], reverse=True)
         selected = scored[0][1]
         # Reach / steal detection for the ticker
         idx = available.index(selected)
+        reach = idx >= 8
+        steal = idx == 0 and self.current_pick >= 4
         self.execute_pick(team_on_clock, selected,
-                          reach=idx >= 8, steal=idx == 0 and self.current_pick >= 4)
+                          reach=reach, steal=steal)
+        return (reach, steal)
+
+    def ai_make_pick(self):
+        """Scheduled (1x/4x) AI pick: one synchronous pick, then the draft
+        flow continues via execute_pick -> process_draft_pick."""
+        self._ai_after_id = None
+        if self.current_pick >= len(self.draft_order):
+            return
+        self._do_ai_pick()
 
     def make_user_pick(self):
         if not self.selected_prospect:
@@ -5468,10 +5917,31 @@ class DraftView(ctk.CTkFrame):
             messagebox.showwarning("Unavailable", "That prospect was already drafted.")
             self._refresh_shortlist()
             return
-        if not messagebox.askyesno("Confirm Pick",
-                                   f"Draft {p.full_name}?\nThis cannot be undone."):
+        # M4: two-step inline confirm -- first click arms, second commits.
+        # No per-pick modal; mis-clicks die on the armed button instead.
+        if self._armed_prospect is not p:
+            self._arm_draft_button(p)
             return
+        self._disarm_draft_button()
         self.execute_pick(team_on_clock, p)
+
+    def _arm_draft_button(self, p):
+        """Arm the draft button for one prospect; a second click commits."""
+        self._armed_prospect = p
+        name = getattr(p, 'full_name', '?')
+        if len(name) > 20:
+            name = name[:19] + "…"
+        try:
+            self.draft_button.configure(text=f"CONFIRM — DRAFT {name}")
+        except Exception:
+            pass
+
+    def _disarm_draft_button(self):
+        self._armed_prospect = None
+        try:
+            self.draft_button.configure(text="Draft Selected")
+        except Exception:
+            pass
 
     def auto_pick(self):
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
@@ -5549,13 +6019,19 @@ class DraftView(ctk.CTkFrame):
             pass
         self.current_pick += 1
         self.selected_prospect = None
+        self._disarm_draft_button()
         self.selected_label.configure(text="No prospect selected")
         self._refresh_shortlist()
-        # Keep the board scrolled to the newest pick
-        kids = self.draft_results_tree.get_children()
-        if kids:
-            self.draft_results_tree.see(kids[0])
-        self.process_draft_pick()
+        # Keep the board scrolled to the newest pick (skip during sim --
+        # the sim loop drives the draft and scroll churn is pure noise).
+        if not self._sim_active:
+            kids = self.draft_results_tree.get_children()
+            if kids:
+                self.draft_results_tree.see(kids[0])
+        # In sim mode the driver loop advances the draft; otherwise the
+        # next pick is scheduled/driven from here.
+        if not self._sim_active:
+            self.process_draft_pick()
 
     # ------------------------------------------------------------------
     def trade_current_pick(self):
@@ -5566,6 +6042,13 @@ class DraftView(ctk.CTkFrame):
         _r, team_on_clock, user_pick = self.draft_order[self.current_pick]
         if team_on_clock != self.app.user_team:
             messagebox.showinfo("Not Your Pick", "You can only trade your own pick.")
+            return
+        if user_pick is None:
+            # Fallback draft order (no pick objects): nothing to trade.
+            messagebox.showinfo(
+                "No Pick Data",
+                "Pick ownership data isn't available for this draft, "
+                "so the pick can't be traded.")
             return
         dlg = InGamePopup(self)
         dlg.title("Trade this pick")
@@ -5579,7 +6062,9 @@ class DraftView(ctk.CTkFrame):
              dim=True).pack(pady=(0, 8))
 
         teams = sorted(t.team_name for t in self.app.league.teams
-                       if t != self.app.user_team)
+                       if t != self.app.user_team
+                       and getattr(t, 'league_name', '') ==
+                       'National Hockey League')
 
         def _partner_picks(name):
             team = next((t for t in self.app.league.teams

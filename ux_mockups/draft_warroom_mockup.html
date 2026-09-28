@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Draft War Room — On-the-Clock Redesign (mockup)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0e0e11; color: #F2F5FA; font-family: "Segoe UI", system-ui, sans-serif;
+         padding: 14px; font-size: 14px; }
+  .frame { max-width: 1560px; margin: 0 auto; }
+  .note { color: #9aa0aa; font-size: 12px; margin-bottom: 10px; }
+  /* spotlight bar */
+  .spotlight { background: #1e1e24; border: 1px solid #2a2a30; border-radius: 10px;
+               display: flex; align-items: center; gap: 18px; padding: 12px 20px; }
+  .badge { width: 54px; height: 54px; border-radius: 50%; background: #00ceb8;
+           color: #0e0e11; font-weight: 800; display: flex; align-items: center;
+           justify-content: center; font-size: 18px; }
+  .clock-team { font-size: 22px; font-weight: 800; }
+  .clock-pick { color: #9aa0aa; font-size: 13px; }
+  .countdown { margin-left: auto; text-align: center; }
+  .countdown .t { font-size: 26px; font-weight: 800; color: #00ceb8; font-variant-numeric: tabular-nums; }
+  .countdown .l { font-size: 10px; color: #9aa0aa; letter-spacing: 2px; }
+  .timerbar { height: 6px; background: #2a2a30; border-radius: 3px; margin-top: 6px; width: 180px; }
+  .timerbar > div { height: 100%; width: 62%; background: #00ceb8; border-radius: 3px; }
+  .speed { display: flex; gap: 6px; align-items: center; }
+  .speed button { background: #16161a; border: 1px solid #2a2a30; color: #F2F5FA;
+                  border-radius: 6px; padding: 8px 12px; font-size: 13px; cursor: pointer; }
+  .speed button.on { border-color: #00ceb8; color: #00ceb8; }
+  /* columns */
+  .cols { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 10px; margin-top: 10px; }
+  .panel { background: #16161a; border-radius: 10px; padding: 12px 14px; }
+  .panel h3 { color: #00ceb8; font-size: 11px; letter-spacing: 2px; margin-bottom: 8px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .tabs span { font-size: 12px; padding: 5px 12px; border-radius: 14px; cursor: pointer;
+               background: #1e1e24; color: #9aa0aa; }
+  .tabs span.on { background: #00ceb8; color: #0e0e11; font-weight: 700; }
+  .prow { display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+          background: #1e1e24; border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
+  .prow.sel { outline: 2px solid #00ceb8; }
+  .prank { color: #9aa0aa; width: 28px; font-weight: 700; }
+  .pname { font-weight: 700; }
+  .pmeta { color: #9aa0aa; font-size: 12px; }
+  .ppot { margin-left: auto; font-weight: 800; }
+  .gA { color: #46c93a; } .gB { color: #a3d84b; } .gC { color: #e8b93c; }
+  .dots { font-size: 11px; letter-spacing: 2px; }
+  /* prospect card */
+  .card { background: #1e1e24; border: 1px solid #2a2a30; border-radius: 10px; padding: 16px; }
+  .card .nm { font-size: 20px; font-weight: 800; }
+  .card .sub { color: #9aa0aa; font-size: 13px; margin: 2px 0 10px; }
+  .tags { display: flex; gap: 8px; margin-bottom: 12px; }
+  .tag { font-size: 12px; padding: 4px 10px; border-radius: 12px; background: #16161a;
+         border: 1px solid #2a2a30; }
+  .tag.riser { border-color: #46c93a; color: #46c93a; }
+  .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 13px; margin-bottom: 12px; }
+  .kv b { color: #9aa0aa; font-weight: 600; }
+  .report { font-size: 13px; line-height: 1.5; background: #16161a; border-radius: 8px;
+            padding: 10px 12px; margin-bottom: 12px; }
+  .report .sc { color: #00ceb8; font-weight: 700; font-size: 12px; }
+  .actions { display: flex; flex-direction: column; gap: 8px; }
+  .btn { border: none; border-radius: 8px; padding: 13px; font-size: 15px; font-weight: 800;
+         cursor: pointer; }
+  .btn.primary { background: #00ceb8; color: #0e0e11; }
+  .btn.second { background: #2a2a30; color: #F2F5FA; }
+  .btn .sub2 { display: block; font-size: 11px; font-weight: 600; opacity: .75; }
+  .hint { font-size: 12px; color: #9aa0aa; text-align: center; }
+  /* wire */
+  .wire { font-size: 13px; }
+  .wrow { padding: 7px 10px; background: #1e1e24; border-radius: 8px; margin-bottom: 6px; }
+  .wrow .pn { color: #9aa0aa; font-weight: 700; margin-right: 8px; }
+  .pill { font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
+  .steal { background: #123f1d; color: #46c93a; } .reach { background: #40230f; color: #d97f3c; }
+  .mine { outline: 1px solid #00ceb8; }
+  .callbanner { margin-top: 10px; background: #23140a; border: 1px solid #d97f3c;
+                border-radius: 10px; padding: 12px 14px; font-size: 13px; }
+  .callbanner b { color: #d97f3c; }
+  .callbanner button { float: right; background: #d97f3c; border: none; color: #0e0e11;
+                       font-weight: 800; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="note">MOCKUP 1 — Redesigned on-the-clock war room (static; shows the "your pick" state). Addresses: misnamed board, invisible prospect card, 3-click pick flow, no pacing control, no draft clock in single-player.</div>
+
+  <!-- SPOTLIGHT -->
+  <div class="spotlight">
+    <div class="badge">DET</div>
+    <div>
+      <div style="font-size:10px;letter-spacing:3px;color:#9aa0aa;font-weight:700">ON THE CLOCK</div>
+      <div class="clock-team">Detroit Red Wings</div>
+      <div class="clock-pick">Pick #7 overall &middot; Round 1, #7 in round</div>
+    </div>
+    <div class="countdown">
+      <div class="l">TIME ON CLOCK</div>
+      <div class="t">1:52</div>
+      <div class="timerbar"><div></div></div>
+    </div>
+    <div class="speed">
+      <span style="font-size:12px;color:#9aa0aa">Draft pace</span>
+      <button class="on">1&times;</button><button>4&times;</button><button>Sim to my pick &#9654;&#9654;</button>
+    </div>
+  </div>
+
+  <div class="cols">
+    <!-- LEFT: real board -->
+    <div class="panel">
+      <h3>AVAILABLE BOARD</h3>
+      <div class="tabs"><span class="on">Available</span><span>Results</span><span>My picks</span></div>
+      <div class="prow"><span class="prank">1</span><div><div class="pname">Liam Sorensen</div><div class="pmeta">C &middot; Age 18 &middot; scouted <span class="dots" style="color:#46c93a">&#9679;&#9679;&#9679;&#9679;</span></div></div><span class="ppot gA">A</span></div>
+      <div class="prow sel"><span class="prank">2</span><div><div class="pname">Marcus Bell</div><div class="pmeta">RD &middot; Age 18 &middot; scouted <span class="dots" style="color:#46c93a">&#9679;&#9679;&#9679;&#9679;</span></div></div><span class="ppot gA">A&minus;</span></div>
+      <div class="prow"><span class="prank">3</span><div><div class="pname">Ivan Petrov</div><div class="pmeta">LW &middot; Age 17 &middot; scouted <span class="dots" style="color:#e8b93c">&#9679;&#9679;&#9675;&#9675;</span></div></div><span class="ppot gB">B+</span></div>
+      <div class="prow"><span class="prank">4</span><div><div class="pname">Cole Hansen</div><div class="pmeta">G &middot; Age 18 &middot; unscouted <span class="dots" style="color:#9aa0aa">&#9675;&#9675;&#9675;&#9675;</span></div></div><span class="ppot gC">B&ndash;C</span></div>
+      <div class="prow"><span class="prank">5</span><div><div class="pname">Tomas Novak</div><div class="pmeta">LD &middot; Age 18 &middot; scouted <span class="dots" style="color:#e8b93c">&#9679;&#9679;&#9679;&#9675;</span></div></div><span class="ppot gB">B</span></div>
+      <div class="prow"><span class="prank">6</span><div><div class="pname">Jayden Cole</div><div class="pmeta">RW &middot; Age 19 &middot; scouted <span class="dots" style="color:#46c93a">&#9679;&#9679;&#9679;&#9679;</span></div></div><span class="ppot gB">B</span></div>
+      <p class="note" style="margin-top:8px">Rows show YOUR scout's fog-of-war grade (not the true grade). Dots = report depth. Strategy pills + position filter live above this list.</p>
+    </div>
+
+    <!-- CENTER: prospect card + actions -->
+    <div>
+      <div class="card">
+        <div class="nm">Marcus Bell <span style="color:#9aa0aa;font-size:14px;font-weight:600">#2 on your board</span></div>
+        <div class="sub">RD &middot; 18 &middot; 6'2" &middot; 194 lbs &middot; Canada &middot; consensus #3</div>
+        <div class="tags"><span class="tag riser">&#9650; Riser</span><span class="tag">Fits need: RD</span><span class="tag">Rebuild target: ceiling</span></div>
+        <div class="kv">
+          <div><b>Your scout's potential</b><br><span class="gA" style="font-weight:800">A&minus;</span> (4 viewings, high accuracy)</div>
+          <div><b>Consensus range</b><br>B+ &ndash; A</div>
+          <div><b>Strengths</b><br>First pass, gap control</div>
+          <div><b>Weaknesses</b><br>Shot selection</div>
+        </div>
+        <div class="report"><span class="sc">SCOUT NOTE &middot; J. Pelletier</span><br>
+        "Bell has shot up boards after a dominant second half. Franchise defenseman tools if the offense keeps trending. I'd take him anywhere in the top 5."</div>
+        <div class="actions">
+          <button class="btn primary">DRAFT MARCUS BELL<span class="sub2">Pick #7 &middot; click once to arm, again to confirm &mdash; no popup</span></button>
+          <div style="display:flex;gap:8px">
+            <button class="btn second" style="flex:1">Auto Pick (My Board)</button>
+            <button class="btn second" style="flex:1">Trade This Pick</button>
+          </div>
+          <div class="hint">Double-click a row to arm &mdash; or press Enter. Esc disarms.</div>
+        </div>
+      </div>
+      <div class="callbanner"><b>&#9742; INCOMING CALL &middot; Chicago</b><br>
+        "We want to move up to #7 &mdash; word is they love Bell." 
+        <button>Take the call</button>
+        <div style="clear:both"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: wire -->
+    <div class="panel">
+      <h3>DRAFT WIRE</h3>
+      <div class="wire">
+        <div class="wrow"><span class="pn">#6</span>Chicago selects Ivan Petrov (LW)<span class="pill reach">REACH</span></div>
+        <div class="wrow"><span class="pn">#5</span>San Jose selects Tomas Novak (LD)</div>
+        <div class="wrow"><span class="pn">#4</span>Columbus selects Cole Hansen (G)<span class="pill steal">STEAL?</span></div>
+        <div class="wrow mine"><span class="pn">#3</span><b>Detroit</b> selects Jayden Cole (RW)</div>
+        <div class="wrow"><span class="pn">#2</span>Anaheim selects Liam Sorensen (C)</div>
+        <div class="wrow"><span class="pn">#1</span>Buffalo selects ... </div>
+      </div>
+      <p class="note" style="margin-top:8px">Your picks highlighted. Drama lines (reaches, slides, storylines) land here &mdash; not buried in the inbox.</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -257,12 +257,13 @@ COUNTRY_DISTRIBUTION = {
 }
 
 POSITION_DISTRIBUTION = {
-    PlayerPosition.CENTER: 0.20,
-    PlayerPosition.LEFT_WING: 0.18,
-    PlayerPosition.RIGHT_WING: 0.18,
-    PlayerPosition.LEFT_DEFENSE: 0.14,
-    PlayerPosition.RIGHT_DEFENSE: 0.14,
-    PlayerPosition.GOALIE: 0.16
+    PlayerPosition.CENTER: 0.22,
+    PlayerPosition.LEFT_WING: 0.19,
+    PlayerPosition.RIGHT_WING: 0.19,
+    PlayerPosition.LEFT_DEFENSE: 0.16,
+    PlayerPosition.RIGHT_DEFENSE: 0.16,
+    # Real drafts take ~18-22 goalies of 224 (~8-10%), not 16%.
+    PlayerPosition.GOALIE: 0.08
 }
 
 # --- Potential Distribution ---
@@ -589,9 +590,11 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal") -> l
     distribution = DRAFT_QUALITY_DISTRIBUTIONS.get(quality, POTENTIAL_DISTRIBUTION)
     prospects = []
     
-    # Ensure we have a minimum number of players at each position
+    # Ensure we have a minimum number of players at each position.
+    # Goalies get a lower floor: real drafts take ~18-22 of 224.
     position_counts = {pos: 0 for pos in PlayerPosition}
-    min_per_position = 20  # Ensure at least 20 players per position
+    min_per_position = {pos: 20 for pos in PlayerPosition}
+    min_per_position[PlayerPosition.GOALIE] = 10
     
     # Ensure we have a minimum number of players at each potential tier
     potential_counts = {pot: 0 for pot in distribution.keys()}
@@ -601,7 +604,7 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal") -> l
         # Determine if we need to force a specific position
         forced_position = None
         for pos, count in position_counts.items():
-            if count < min_per_position:
+            if count < min_per_position[pos]:
                 forced_position = pos
                 break
         

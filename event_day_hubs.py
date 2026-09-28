@@ -164,9 +164,10 @@ class EventDayHubView(ctk.CTkFrame):
         return btn
 
     def _close_button(self):
+        # Route through close_view so subclasses can cancel timers.
         tk.Button(self.actions_bar, text="Close", bg=self.PANEL, fg=self.MUTED,
                   font=('Segoe UI', 11), relief='flat', padx=18, pady=8,
-                  cursor='hand2', command=self.destroy).pack(side='right')
+                  cursor='hand2', command=self.close_view).pack(side='right')
 
     # -- ticker ------------------------------------------------------------
     def _build_ticker(self):
@@ -245,8 +246,9 @@ class DraftDayCentral(EventDayHubView):
     EVENT_TAGLINE = "Seven rounds. 224 picks. One future. Follow every selection live."
 
     def _build_actions(self, bar):
-        self._action_button("Open Draft Board", self._open_draft, accent=True)
-        self._action_button("War Room / Auto-Draft", self._open_draft)
+        # M7: one board action; "Trade This Pick" routes to the live
+        # draft-day pick swap when a board is open, else the Trade Center.
+        self._action_button("Draft Board / War Room", self._open_draft, accent=True)
         self._action_button("Trade This Pick", self._open_trade)
         self._action_button("Scouting Department", self._open_scouting)
         self._close_button()
@@ -263,28 +265,98 @@ class DraftDayCentral(EventDayHubView):
                          highlightthickness=1)
         clock.pack(fill='x', padx=14, pady=(0, 10))
         team, pickinfo = self._on_the_clock()
-        tk.Label(clock, text=team, bg=self.CARD, fg=self.WHITE,
-                 font=('Segoe UI', 16, 'bold')).pack(pady=(10, 2))
-        tk.Label(clock, text=pickinfo, bg=self.CARD, fg=self.MUTED,
-                 font=('Segoe UI', 11)).pack(pady=(0, 10))
+        self._clock_team_lbl = tk.Label(clock, text=team, bg=self.CARD, fg=self.WHITE,
+                                       font=('Segoe UI', 16, 'bold'))
+        self._clock_team_lbl.pack(pady=(10, 2))
+        self._clock_info_lbl = tk.Label(clock, text=pickinfo, bg=self.CARD, fg=self.MUTED,
+                                        font=('Segoe UI', 11))
+        self._clock_info_lbl.pack(pady=(0, 10))
 
-        self._build_prospect_cards(self.center_col)
+        self._column_title(self.center_col, "TOP AVAILABLE PROSPECTS")
+        self._prospect_wrap = tk.Frame(self.center_col, bg=self.PANEL)
+        self._prospect_wrap.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+        self._fill_prospect_cards()
 
         # RIGHT: draft-day deals + class snapshot
         self._column_title(self.right_col, "DRAFT-DAY DEALS")
         self.deals_box = self._feed_box(self.right_col, height=12)
         self._feed_write(self.deals_box, self._deals_lines())
         self._column_title(self.right_col, "CLASS SNAPSHOT")
-        snap = tk.Frame(self.right_col, bg=self.CARD, highlightbackground=self.BORDER,
-                        highlightthickness=1)
-        snap.pack(fill='x', padx=14, pady=(0, 12))
-        for label, value in self._class_snapshot():
-            r = tk.Frame(snap, bg=self.CARD)
-            r.pack(fill='x', padx=12, pady=3)
-            tk.Label(r, text=label, bg=self.CARD, fg=self.MUTED,
-                     font=('Segoe UI', 10)).pack(side='left')
-            tk.Label(r, text=value, bg=self.CARD, fg=self.GOLD,
-                     font=('Segoe UI', 10, 'bold')).pack(side='right')
+        self._snap_frame = tk.Frame(self.right_col, bg=self.CARD, highlightbackground=self.BORDER,
+                                    highlightthickness=1)
+        self._snap_frame.pack(fill='x', padx=14, pady=(0, 12))
+        self._fill_snapshot()
+
+        # M6: keep the hub live while the draft moves.
+        self._live_after_id = None
+        self._live_tick()
+
+    # -- live refresh (M6) ---------------------------------------------------
+    def _clear(self, frame):
+        try:
+            for _c in frame.winfo_children():
+                _c.destroy()
+        except Exception:
+            pass
+
+    def _refresh_live_sections(self):
+        """Rewrite every live section from current state. Safe to call on
+        a timer: every read is guarded, and it no-ops if widgets are gone."""
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            self._feed_write(self.wire_box, self._wire_lines())
+        except Exception:
+            pass
+        try:
+            self._feed_write(self.deals_box, self._deals_lines())
+        except Exception:
+            pass
+        try:
+            team, pickinfo = self._on_the_clock()
+            self._clock_team_lbl.configure(text=team)
+            self._clock_info_lbl.configure(text=pickinfo)
+        except Exception:
+            pass
+        try:
+            self._fill_prospect_cards()
+        except Exception:
+            pass
+        try:
+            self._fill_snapshot()
+        except Exception:
+            pass
+
+    def _live_tick(self):
+        self._cancel_live_tick()
+        try:
+            self._refresh_live_sections()
+        except Exception:
+            pass
+        try:
+            self._live_after_id = self.after(4000, self._live_tick)
+        except Exception:
+            self._live_after_id = None
+
+    def _cancel_live_tick(self):
+        _aid = getattr(self, '_live_after_id', None)
+        if _aid:
+            try:
+                self.after_cancel(_aid)
+            except Exception:
+                pass
+        self._live_after_id = None
+
+    def close_view(self):
+        # M6: never leave a refresh timer running after the hub closes.
+        try:
+            self._cancel_live_tick()
+        except Exception:
+            pass
+        super().close_view()
 
     # -- data ----------------------------------------------------------------
     def _prospects(self):
@@ -345,11 +417,15 @@ class DraftDayCentral(EventDayHubView):
             bits.append(f"Proj. pick #{proj}")
         return " \u00b7 ".join(bits)
 
-    def _build_prospect_cards(self, parent):
-        """Multi-field prospect cards built only from real prospect attributes."""
-        self._column_title(parent, "TOP AVAILABLE PROSPECTS")
-        wrap = tk.Frame(parent, bg=self.PANEL)
-        wrap.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+    def _fill_prospect_cards(self):
+        """Rebuild the top-available prospect cards from current state.
+
+        M6: called once at build and again on every live refresh, so the
+        cards stay honest as the board empties. Only public attributes
+        (letter grade, scout notes) -- never true potential numbers.
+        """
+        wrap = self._prospect_wrap
+        self._clear(wrap)
         ordered = self._sorted_prospects()
         cards = ordered[:6]
         if not cards:
@@ -388,6 +464,18 @@ class DraftDayCentral(EventDayHubView):
             tk.Label(card, text=self._scout_note(p), bg=self.CARD, fg=self.MUTED,
                      font=('Segoe UI', 9, 'italic'), anchor='w', justify='left',
                      wraplength=430).pack(fill='x', padx=10, pady=(2, 8))
+
+    def _fill_snapshot(self):
+        """Rebuild the class-snapshot rows (M6: live on refresh)."""
+        snap = self._snap_frame
+        self._clear(snap)
+        for label, value in self._class_snapshot():
+            r = tk.Frame(snap, bg=self.CARD)
+            r.pack(fill='x', padx=12, pady=3)
+            tk.Label(r, text=label, bg=self.CARD, fg=self.MUTED,
+                     font=('Segoe UI', 10)).pack(side='left')
+            tk.Label(r, text=value, bg=self.CARD, fg=self.GOLD,
+                     font=('Segoe UI', 10, 'bold')).pack(side='right')
 
     def _top_available(self, n=8):
         prosp = self._sorted_prospects()[:n]
@@ -442,7 +530,17 @@ class DraftDayCentral(EventDayHubView):
         return lines
 
     def _deals_lines(self):
-        # Draft-day trades involving picks show up here when the draft runs
+        # Draft-day trades involving picks show up here when the draft runs.
+        # The draft-day deal engine records real deals on the league; fall
+        # back to the empty state when none have happened yet.
+        deals = []
+        try:
+            league = getattr(getattr(self, 'gm', None), 'league', None)
+            deals = list(getattr(league, 'draft_day_deals', None) or [])
+        except Exception:
+            deals = []
+        if deals:
+            return deals[-8:]
         return ["No draft-day trades yet.",
                 "Pick swaps will be tracked here as they happen."]
 
@@ -455,7 +553,7 @@ class DraftDayCentral(EventDayHubView):
         top3 = ", ".join(f"{k}: {v}" for k, v in pos.most_common(3))
         nat = Counter(str(getattr(p, 'nationality', getattr(p, 'nation', '?'))) for p in prosp)
         top_nat = nat.most_common(1)[0][0] if nat else "—"
-        return [("Eligible prospects", str(len(prosp))),
+        return [("Remaining prospects", str(len(prosp))),
                 ("Top positions", top3),
                 ("Top nation", top_nat),
                 ("Rounds", "7")]
@@ -472,7 +570,38 @@ class DraftDayCentral(EventDayHubView):
         except Exception:
             pass
 
+    def _find_draft_view(self):
+        """Locate an open DraftView (dashboard screen or popup card)."""
+        try:
+            from collections import deque
+            seen = set()
+            queue = deque([self.app])
+            while queue:
+                w = queue.popleft()
+                if id(w) in seen:
+                    continue
+                seen.add(id(w))
+                if callable(getattr(w, 'trade_current_pick', None)) \
+                        and getattr(w, 'draft_order', None):
+                    return w
+                try:
+                    queue.extend(w.winfo_children())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
     def _open_trade(self):
+        # M7: "Trade This Pick" routes to the live draft-day pick-swap
+        # dialog when a draft board is open; otherwise the Trade Center.
+        try:
+            dv = self._find_draft_view()
+            if dv is not None:
+                dv.trade_current_pick()
+                return
+        except Exception:
+            pass
         try:
             self.app.open_trade_window()
         except Exception:
