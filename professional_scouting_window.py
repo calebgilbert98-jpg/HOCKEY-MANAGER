@@ -261,25 +261,19 @@ class ProfessionalScoutingView(ctk.CTkFrame):
         
         # If no scouts found, create a basic scout for functionality
         if not scouts:
-            from game_classes import Staff, Contract
-            import datetime
-            
-            # Create a basic scout
-            contract = Contract(
-                annual_salary=50000,
-                contract_years=1,
-                contract_end=datetime.date.today().year + 1
-            )
-            
+            from game_classes import Staff, StaffRole
+
+            # Create a basic scout (neutral 1-100 scouting attributes)
             scout = Staff(
                 first_name="John",
                 last_name="Scout",
+                role=StaffRole.PROFESSIONAL_SCOUT,
                 age=40,
                 nationality="USA",
-                position="Scout",
-                ability=12,
-                potential=12,
-                contract=contract
+                judging_player_ability=50,
+                judging_player_potential=50,
+                salary=50000,
+                contract_years=1,
             )
             scouts.append(scout)
         

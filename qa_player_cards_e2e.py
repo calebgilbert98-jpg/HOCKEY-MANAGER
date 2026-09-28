@@ -273,6 +273,8 @@ for t in league.teams:
         by_id[pl.id] = pl
 for pl in league.free_agents:
     by_id[pl.id] = pl
+for pl in getattr(league, "draft_prospects", []) or []:
+    by_id[pl.id] = pl
 fam_ok = True
 for t in league.teams:
     for pl in t.roster:
@@ -339,6 +341,32 @@ check("goalie advanced metrics are real, not placeholders",
       and "Quality-start %" in g_texts
       and "Medium Danger SV%" not in g_texts
       and "Even Strength SV%" not in g_texts)
+
+# -- 10. family links resolve for free agents and draft prospects -------
+import game_classes as _gc
+from game_classes import PlayerPosition as _PP
+fa1 = _gc.Player("Free", "AgentBro", 25, _PP.CENTER, 70)
+fa1.team_name = "Free Agent"
+fa1.id = 990001
+p2fam = list(getattr(p2, "family_ids", []) or [])
+p2.family_ids = p2fam + [fa1.id]
+fa1.family_ids = [p2.id]
+league.free_agents.append(fa1)
+pr1 = _gc.Player("Young", "ProspectBro", 18, _PP.LEFT_WING, 62)
+pr1.team_name = "Draft Prospect"
+pr1.id = 990002
+p2.family_ids = list(getattr(p2, "family_ids", []) or []) + [pr1.id]
+pr1.family_ids = [p2.id]
+league.draft_prospects.append(pr1)
+view2 = app.open_player_profile(p2)
+for _ in range(6):
+    app.update_idletasks(); app.update()
+d2 = view2._allies_data()
+fam_names = [f.full_name for f in d2["family"]]
+check("family member on free agents resolves on the card",
+      "Free AgentBro" in fam_names)
+check("family member in draft prospects resolves on the card",
+      "Young ProspectBro" in fam_names)
 
 print(f"\n{len(passed)} passed, {len(failed)} failed")
 app.destroy()

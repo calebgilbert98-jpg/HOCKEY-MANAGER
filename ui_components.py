@@ -970,6 +970,11 @@ class PlayerProfileView(ctk.CTkFrame):
         if league is not None:
             for t in getattr(league, 'teams', []) or []:
                 all_players.extend(getattr(t, 'roster', []) or [])
+            # Family links can point at free agents or draft prospects
+            # (generation links across rosters + free agents + prospects);
+            # resolve them too.
+            all_players.extend(getattr(league, 'free_agents', []) or [])
+            all_players.extend(getattr(league, 'draft_prospects', []) or [])
         by_id = {p.id: p for p in all_players}
 
         family_ids = set(getattr(self.player, 'family_ids', []) or [])

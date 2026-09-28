@@ -421,6 +421,9 @@ class DatabaseGenerator:
             for team in getattr(league, 'teams', []) or []:
                 pool.extend(getattr(team, 'roster', []) or [])
             pool.extend(getattr(league, 'free_agents', []) or [])
+            # Draft prospects too -- brothers in the same draft class
+            # (the Hughes/Staal treatment) are exactly this flavor.
+            pool.extend(getattr(league, 'draft_prospects', []) or [])
 
             by_surname = {}
             for p in pool:
