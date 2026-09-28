@@ -156,5 +156,22 @@ check("lottery day is May 8",
 check("not draft day",
       not (date(2027, 5, 8).month == 6 and 23 <= date(2027, 5, 8).day <= 25))
 
+# -- 13: points ties broken by wins (not roster order) ------------------------
+lg_t, nhl_t = make_league()
+# Tie the two worst teams on points; fewer wins = worse = better odds.
+for _t in nhl_t[2:]:
+    lg_t.standings[_t.team_name] = {"Points": 90, "W": 40}
+lg_t.standings[nhl_t[0].team_name] = {"Points": 40, "W": 15}
+lg_t.standings[nhl_t[1].team_name] = {"Points": 40, "W": 18}
+_elig_t = dl.eligible_teams(lg_t)
+check("tiebreak: fewer wins seeds worse (better odds)",
+      _elig_t[0].team_name == nhl_t[0].team_name,
+      f"first eligible: {_elig_t[0].team_name}")
+_rows_t = dl.run_lottery(lg_t, 2028, random.Random(3))
+_worst_odds = next(r["odds_pct"] for r in _rows_t
+                   if r["original_team"] == nhl_t[0].team_name)
+check("tiebreak: worse-on-wins gets 25.5% odds",
+      _worst_odds == 25.5, str(_worst_odds))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

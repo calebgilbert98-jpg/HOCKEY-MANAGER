@@ -53,10 +53,27 @@ def _points(league: Any, team: Any) -> float:
         return 0.0
 
 
+def _wins(league: Any, team: Any) -> int:
+    try:
+        return int((getattr(league, "standings", {}) or {})
+                   .get(_team_name(team), {}).get("W", 0))
+    except Exception:
+        return 0
+
+
+def _seed_key(league: Any, team: Any):
+    """Lottery seeding: fewest points, then fewest wins.
+
+    Real NHL breaks lottery ties by regulation wins; the game tracks
+    only total W, so fewer total wins is the closest faithful proxy.
+    Without this, ties fell back to roster order -- arbitrary odds."""
+    return (_points(league, team), _wins(league, team))
+
+
 def eligible_teams(league: Any) -> List[Any]:
     """Bottom 11 NHL teams by regular-season points (worst first)."""
     teams = _nhl_teams(league)
-    teams.sort(key=lambda t: _points(league, t))
+    teams.sort(key=lambda t: _seed_key(league, t))
     return teams[:11]
 
 
@@ -109,7 +126,9 @@ def run_lottery(league: Any, year: int,
     second = _weighted_draw(rest, rest_odds, rng)
 
     # Reverse-standings rank among ALL NHL teams (pre-lottery pick).
-    all_sorted = sorted(_nhl_teams(league), key=lambda t: _points(league, t))
+    # Same tiebreak as eligibility so pre_rank and odds agree on ties.
+    all_sorted = sorted(_nhl_teams(league),
+                        key=lambda t: _seed_key(league, t))
     pre_rank = {_team_name(t): i + 1 for i, t in enumerate(all_sorted)}
 
     winners = [_team_name(first), _team_name(second)]
