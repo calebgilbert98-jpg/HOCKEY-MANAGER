@@ -396,7 +396,12 @@ class DatabaseGenerator:
         # Generate league schedule if needed
         if hasattr(main_league, 'generate_schedule'):
             main_league.generate_schedule()
-        
+
+        # Day-1 guarantee: no NHL club opens over the salary cap (the
+        # cap-compliance Continue blocker would otherwise fire before the
+        # user can play a single day).
+        self._enforce_nhl_cap_compliance(main_league.teams)
+
         update_progress(100, "Database generation complete!", f"Total: {players_created:,} players")
         
         print(f"Database generation complete!")
@@ -959,16 +964,23 @@ class DatabaseGenerator:
         # Salary based on overall rating and age
         overall = player.overall_rating()
         
-        if overall >= 47:
-            salary = random.randint(7000000, 12000000)  # Elite players
-        elif overall >= 44:
-            salary = random.randint(4000000, 8000000)   # Top players
-        elif overall >= 40:
-            salary = random.randint(2000000, 5000000)   # Good players
-        elif overall >= 37:
-            salary = random.randint(900000, 2500000)    # Role players
+        # Salary based on overall rating and age.
+        # NOTE: overall_rating() is a weighted 1-100 attribute average; measured
+        # NHL distributions on fictional DBs run p5=69 / p50=79 / p95=86, so the
+        # tiers below are calibrated to that scale (an older 47/44/40/37 scale
+        # put 100% of players in the elite tier and broke cap compliance).
+        if overall >= 86:
+            salary = random.randint(9500000, 12500000)  # Elite players (top ~5%)
+        elif overall >= 83:
+            salary = random.randint(6000000, 9000000)   # Star players
+        elif overall >= 80:
+            salary = random.randint(4000000, 6000000)   # Top-6 F / top-4 D
+        elif overall >= 77:
+            salary = random.randint(2500000, 4000000)   # Everyday regulars
+        elif overall >= 74:
+            salary = random.randint(1200000, 2500000)   # Role players
         else:
-            salary = random.randint(750000, 1200000)    # Depth players
+            salary = random.randint(775000, 1200000)    # Depth players
         
         # Age adjustments
         if age < 23:
@@ -997,7 +1009,74 @@ class DatabaseGenerator:
             pass
 
         return contract
-    
+
+    @staticmethod
+    def _fair_salary_for_overall(overall: int) -> int:
+        """Tier-median salary for an overall rating (mirrors _generate_contract)."""
+        if overall >= 86:
+            return 11_000_000
+        if overall >= 83:
+            return 7_500_000
+        if overall >= 80:
+            return 5_000_000
+        if overall >= 77:
+            return 3_250_000
+        if overall >= 74:
+            return 1_850_000
+        return 1_000_000
+
+    @staticmethod
+    def _enforce_nhl_cap_compliance(teams) -> None:
+        """Day-1 guarantee: no NHL club opens over the salary cap.
+
+        Retiered draws land ~$81M on average, but a lucky team can still draw
+        over the cap and hit the cap-compliance Continue blocker before the
+        user plays a single day. Trim the most overpaid deals (highest salary
+        per overall point) down toward their tier's fair value until the
+        roster fits under the cap with ~1.5% breathing room. Farm clubs have
+        no cap and are skipped. Static so career setup can re-run it after
+        real-life dead-cap penalties are seeded (they land after generation).
+        """
+        try:
+            from salary_cap_system import DEFAULT_CAP, cap_breakdown
+            cap = int(DEFAULT_CAP)
+        except Exception:
+            cap, cap_breakdown = 104_000_000, None
+        target = int(cap * 0.985)
+        for team in teams:
+            if getattr(team, "league_level", 1) != 1:
+                continue
+            roster = [p for p in (getattr(team, "roster", None) or [])
+                      if getattr(p, "contract", None) is not None]
+            if not roster:
+                continue
+            if cap_breakdown is not None:
+                total = cap_breakdown(team)["total"]
+            else:
+                total = sum(int(p.contract.salary or 0) for p in roster)
+            if total <= target:
+                continue
+            # Most overpaid first: salary per overall point.
+            roster.sort(key=lambda p: (int(p.contract.salary or 0)
+                                       / max(1, p.overall_rating())),
+                        reverse=True)
+            for p in roster:
+                if total <= target:
+                    break
+                fair = DatabaseGenerator._fair_salary_for_overall(p.overall_rating())
+                salary = int(p.contract.salary or 0)
+                if salary > fair:
+                    cut = min(salary - fair, total - target)
+                    p.contract.salary = salary - cut
+                    total -= cut
+            if total > target:
+                # Pathological draw (e.g. an all-elite roster): proportional
+                # scale-down guarantees compliance no matter the draws.
+                scale = target / total
+                for p in roster:
+                    p.contract.salary = max(775_000,
+                                            int((p.contract.salary or 0) * scale))
+
     def _get_weighted_nationality(self) -> str:
         """Get nationality with international factor applied"""
         
