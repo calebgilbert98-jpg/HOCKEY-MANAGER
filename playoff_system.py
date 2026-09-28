@@ -5,12 +5,27 @@ Complete Stanley Cup playoff bracket generation and management
 
 import tkinter as tk
 from tkinter import ttk
+import customtkinter as ctk
 from popup_system import messagebox, InGamePopup
 from datetime import date, timedelta
 import random
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 from game_classes import Team, PlayerPosition
+
+
+def _sfont(family, size, weight=""):
+    """Scale-aware font tuple replacement (honors Settings -> Font size).
+
+    Returns a live tkinter Font registered with ui_scale; changing the
+    tier resizes open-window text in place. Falls back to a plain tuple
+    when ui_scale is unavailable (headless stubs).
+    """
+    try:
+        from ui_scale import font as _mkfont
+        return _mkfont(family, size, weight)
+    except Exception:
+        return (family, size, weight) if weight else (family, size)
 
 
 @dataclass
@@ -268,23 +283,30 @@ class PlayoffBracket:
         }
 
 
-class PlayoffWindow(InGamePopup):
+class PlayoffView(ctk.CTkFrame):
     """NHL Playoff bracket viewer and management window"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the PlayoffWindow wrapper
         self.playoff_bracket = None
         
-        self.title("NHL Playoffs - Stanley Cup Tournament")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("1400x900")
+        self.configure(fg_color=self.app.BG_COLOR)
         
         # Create the playoff interface
         self._create_playoff_interface()
         
         # Initialize playoff bracket if season is complete
         self._check_playoff_eligibility()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
     
     def _create_playoff_interface(self):
         """Create the main playoff interface"""
@@ -294,7 +316,7 @@ class PlayoffWindow(InGamePopup):
         
         # Title
         title_label = ttk.Label(main_frame, text="🏆 NHL Stanley Cup Playoffs", 
-                               style='Title.TLabel', font=(self.parent.FONT_FAMILY, 24, 'bold'))
+                               style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 24, 'bold'))
         title_label.pack(pady=(0, 20))
         
         # Control buttons
@@ -323,7 +345,7 @@ class PlayoffWindow(InGamePopup):
         bracket_container.pack(fill='both', expand=True)
         
         # Create scrollable bracket view
-        canvas = tk.Canvas(bracket_container, bg=self.parent.CONTENT_BG)
+        canvas = tk.Canvas(bracket_container, bg=self.app.CONTENT_BG)
         scrollbar = ttk.Scrollbar(bracket_container, orient="vertical", command=canvas.yview)
         self.bracket_frame = ttk.Frame(canvas, style='Content.TFrame')
         
@@ -342,11 +364,11 @@ class PlayoffWindow(InGamePopup):
     
     def _check_playoff_eligibility(self):
         """Check if playoffs can be generated"""
-        if hasattr(self.parent, 'league') and self.parent.league:
+        if hasattr(self.app, 'league') and self.app.league:
             # Check if regular season is complete
-            current_date = getattr(self.parent, 'current_date', None)
+            current_date = getattr(self.app, 'current_date', None)
             if current_date:
-                playoff_start = date(self.parent.league.season_year + 1, 4, 16)
+                playoff_start = date(self.app.league.season_year + 1, 4, 16)
                 if current_date >= playoff_start:
                     self.status_label.config(text="Regular season complete - Ready to generate playoffs!")
                 else:
@@ -356,11 +378,11 @@ class PlayoffWindow(InGamePopup):
     def _generate_bracket(self):
         """Generate the playoff bracket"""
         try:
-            if not hasattr(self.parent, 'league') or not self.parent.league:
+            if not hasattr(self.app, 'league') or not self.app.league:
                 messagebox.showerror("Error", "No league data available")
                 return
             
-            self.playoff_bracket = PlayoffBracket(self.parent.league)
+            self.playoff_bracket = PlayoffBracket(self.app.league)
             self.playoff_bracket.generate_playoff_bracket()
             
             self._update_status_display()
@@ -393,7 +415,7 @@ class PlayoffWindow(InGamePopup):
                 f"This will simulate every remaining game of the "
                 f"{self.playoff_bracket.current_round} round."):
             return
-        sim_progress.create_fallback_save(self.parent, "playoffs_round")
+        sim_progress.create_fallback_save(self.app, "playoffs_round")
         dlg = sim_progress.SimProgressDialog(
             self, title="Simulating Playoff Round")
         try:
@@ -412,7 +434,7 @@ class PlayoffWindow(InGamePopup):
         # Lore: deliver any headlines stashed during the round (brawls, ...).
         try:
             import headlines
-            headlines.drain_bracket_headlines(self.parent, self.playoff_bracket)
+            headlines.drain_bracket_headlines(self.app, self.playoff_bracket)
         except Exception:
             pass
 
@@ -439,7 +461,7 @@ class PlayoffWindow(InGamePopup):
         # gracefully if no display is available.)
         import sim_progress
         try:
-            _headless = bool(getattr(self.parent, '_bulk_simming', False))
+            _headless = bool(getattr(self.app, '_bulk_simming', False))
         except Exception:
             _headless = False
         if not _headless and not sim_progress.confirm_heavy_sim(
@@ -447,7 +469,7 @@ class PlayoffWindow(InGamePopup):
                 "This will simulate every remaining playoff game through "
                 "the Stanley Cup Final."):
             return
-        sim_progress.create_fallback_save(self.parent, "playoffs_all")
+        sim_progress.create_fallback_save(self.app, "playoffs_all")
         dlg = None
         if not _headless:
             try:
@@ -483,7 +505,7 @@ class PlayoffWindow(InGamePopup):
         # Lore: deliver any headlines stashed during the tournament.
         try:
             import headlines
-            headlines.drain_bracket_headlines(self.parent, self.playoff_bracket)
+            headlines.drain_bracket_headlines(self.app, self.playoff_bracket)
         except Exception:
             pass
 
@@ -532,7 +554,7 @@ class PlayoffWindow(InGamePopup):
             # Round header
             round_title = round_name.replace('_', ' ').title()
             round_label = ttk.Label(self.bracket_frame, text=f"🏒 {round_title}", 
-                                   style='Heading.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
+                                   style='Heading.TLabel', font=_sfont(self.app.FONT_FAMILY, 16, 'bold'))
             round_label.grid(row=row, column=0, columnspan=4, pady=(20, 10), sticky='w')
             row += 1
             
@@ -566,7 +588,7 @@ class PlayoffWindow(InGamePopup):
         
         # VS separator
         ttk.Label(series_frame, text="vs", style='Content.TLabel', 
-                 font=(self.parent.FONT_FAMILY, 10, 'italic')).pack()
+                 font=_sfont(self.app.FONT_FAMILY, 10, 'italic')).pack()
         
         # Team 2
         team2_frame = ttk.Frame(series_frame, style='Content.TFrame')
@@ -588,7 +610,7 @@ class PlayoffWindow(InGamePopup):
             status_text = f"In Progress (First to {wins_needed})"
         
         ttk.Label(series_frame, text=status_text, style='Content.TLabel', 
-                 font=(self.parent.FONT_FAMILY, 8)).pack(pady=(5, 0))
+                 font=_sfont(self.app.FONT_FAMILY, 8)).pack(pady=(5, 0))
 
 
 def test_playoff_system():
@@ -657,3 +679,21 @@ if __name__ == "__main__":
     # Test the playoff system
     test_bracket = test_playoff_system()
     print("\nPlayoff system test completed successfully!")
+
+
+class PlayoffWindow(InGamePopup):
+    """Popup wrapper around PlayoffView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("NHL Playoffs - Stanley Cup Tournament")
+        self._view = PlayoffView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

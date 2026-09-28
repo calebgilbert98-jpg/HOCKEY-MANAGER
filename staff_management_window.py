@@ -23,7 +23,7 @@ from ctk_theme import (
 )
 
 
-class StaffManagementWindow(InGamePopup):
+class StaffManagementView(ctk.CTkFrame):
     """Comprehensive staff management interface with EHM-style functionality."""
 
     # Roles whose attributes are verifiably read by the sim engine (scouting.py)
@@ -31,7 +31,7 @@ class StaffManagementWindow(InGamePopup):
                     StaffRole.AMATEUR_SCOUT, StaffRole.EUROPEAN_SCOUT,
                     StaffRole.ADVANCE_SCOUT}
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         init_ctk_theme()
         self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, TEAL_DARK=TEAL_DARK,
                         BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER,
@@ -43,12 +43,11 @@ class StaffManagementWindow(InGamePopup):
         self._heading = heading
         self._body = body
         self._ff = getattr(parent, 'FONT_FAMILY', 'Segoe UI')
+        ctk.CTkFrame.__init__(self, parent)
 
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Staff Management - Hockey Manager")
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the StaffManagementWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1280x860")
 
         # Staff candidates hired through the Free Agency window land here briefly
         # during negotiation; the authoritative lists live on the team/league.
@@ -67,16 +66,35 @@ class StaffManagementWindow(InGamePopup):
         self.update_current_staff_view()
 
         # Track window under the same key the main app uses
-        self.parent.open_windows['staff_management'] = self
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.app.open_windows['staff_management'] = self
+
+    def _sfont(self, size, weight=""):
+        """Scale-aware font tuple (honors Settings -> Font size).
+
+        CustomTkinter widgets don't safely accept tkinter Font objects,
+        so sizes are scaled at build time via ui_scale.scaled().
+        """
+        try:
+            from ui_scale import scaled as _scaled
+            size = _scaled(size)
+        except Exception:
+            pass
+        return (self._ff, size, weight) if weight else (self._ff, size)
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _on_close(self):
         """Unregister from the main app's window tracker and close."""
         try:
-            self.parent.open_windows.pop('staff_management', None)
+            self.app.open_windows.pop('staff_management', None)
         except Exception:
             pass
-        self.destroy()
+        self.close_view()
 
     def _get_user_team(self):
         """Return the user's team from live game state (never fabricated).
@@ -84,7 +102,7 @@ class StaffManagementWindow(InGamePopup):
         Prefers the game manager's canonical user_team reference, falling back
         to the is_user_team scan used elsewhere in the codebase.
         """
-        gm = getattr(self.parent, 'game_manager', None)
+        gm = getattr(self.app, 'game_manager', None)
         team = getattr(gm, 'user_team', None) if gm is not None else None
         if team is not None:
             return team
@@ -109,11 +127,11 @@ class StaffManagementWindow(InGamePopup):
                         borderwidth=0,
                         relief='flat',
                         rowheight=28,
-                        font=(self._ff, 10))
+                        font=self._sfont(10))
         style.configure('Staff.Treeview.Heading',
                         background=ct['PANEL'],
                         foreground=ct['TEXT'],
-                        font=(self._ff, 10, 'bold'),
+                        font=self._sfont(10, 'bold'),
                         relief='flat',
                         borderwidth=0)
         style.map('Staff.Treeview',
@@ -201,7 +219,7 @@ class StaffManagementWindow(InGamePopup):
         summary_card = self._card(frame)
         summary_card.pack(fill="x", padx=12, pady=(10, 0))
         self.staff_summary_label = ctk.CTkLabel(
-            summary_card, text="", font=(self._ff, 11, "bold"),
+            summary_card, text="", font=self._sfont(11, 'bold'),
             text_color=ct['TEXT'], anchor="w")
         self.staff_summary_label.pack(fill="x", padx=14, pady=10)
 
@@ -212,7 +230,7 @@ class StaffManagementWindow(InGamePopup):
         finner.pack(fill="x", padx=14, pady=10)
 
         def _flabel(text):
-            return ctk.CTkLabel(finner, text=text, font=(self._ff, 10),
+            return ctk.CTkLabel(finner, text=text, font=self._sfont(10),
                                 text_color=ct['TEXT_DIM'])
 
         _flabel("Department:").pack(side="left")
@@ -339,7 +357,7 @@ class StaffManagementWindow(InGamePopup):
         frame = self.tabview.tab("Hire Staff")
         frame.configure(fg_color=self._ct['PANEL'])
         ctk.CTkLabel(
-            frame, text="Opening Free Agency...", font=(self._ff, 12),
+            frame, text="Opening Free Agency...", font=self._sfont(12),
             text_color=self._ct['TEXT_DIM']).pack(expand=True, pady=40)
 
     def _on_tabview_change(self, tab_name):
@@ -351,18 +369,18 @@ class StaffManagementWindow(InGamePopup):
         """Redirect to Free Agency staff page and close this window."""
         # Unregister this window before opening Free Agency
         try:
-            self.parent.open_windows.pop('staff_management', None)
+            self.app.open_windows.pop('staff_management', None)
         except Exception:
             pass
 
         # Open the enhanced free agency window
-        self.parent.open_free_agency_window()
+        self.app.open_free_agency_window()
 
         # Select the staff tab ("Free Agent Staff") once it is ready.
         # (The CTk rebuild dropped FA's old ttk `notebook` attribute, so the
         # legacy `notebook.select(1)` call is replaced with the tabview API.)
         def select_staff_tab():
-            fa_window = self.parent.open_windows.get('free_agency')
+            fa_window = self.app.open_windows.get('free_agency')
             if fa_window is not None and hasattr(fa_window, 'tabview'):
                 try:
                     if fa_window.winfo_exists():
@@ -372,10 +390,10 @@ class StaffManagementWindow(InGamePopup):
                     pass
 
         # Schedule the tab selection for after the window is fully created
-        self.parent.after_idle(select_staff_tab)
+        self.app.after_idle(select_staff_tab)
 
         # Close this window
-        self.destroy()
+        self.close_view()
 
     def create_staff_overview_tab(self):
         """Staff overview and organizational chart."""
@@ -387,14 +405,14 @@ class StaffManagementWindow(InGamePopup):
         org_card = self._card(frame)
         org_card.pack(fill="both", expand=True, padx=12, pady=(10, 6))
         ctk.CTkLabel(org_card, text="Organizational Chart",
-                     font=(self._ff, 13, "bold"),
+                     font=self._sfont(13, 'bold'),
                      text_color=ct['TEXT'], anchor="w").pack(
                          anchor="w", padx=14, pady=(10, 6))
 
         chart_holder = ctk.CTkFrame(org_card, fg_color="transparent")
         chart_holder.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.org_text = ctk.CTkTextbox(
-            chart_holder, font=(self._ff, 10), wrap="word",
+            chart_holder, font=self._sfont(10), wrap="word",
             fg_color=ct['BG'], text_color=ct['TEXT'],
             border_color=ct['BORDER'], border_width=1, corner_radius=8)
         self.org_text.pack(side="left", fill="both", expand=True)
@@ -403,11 +421,11 @@ class StaffManagementWindow(InGamePopup):
         stats_card = self._card(frame)
         stats_card.pack(fill="x", padx=12, pady=(6, 10))
         ctk.CTkLabel(stats_card, text="Staff Statistics",
-                     font=(self._ff, 13, "bold"),
+                     font=self._sfont(13, 'bold'),
                      text_color=ct['TEXT'], anchor="w").pack(
                          anchor="w", padx=14, pady=(10, 4))
         self.stats_label = ctk.CTkLabel(
-            stats_card, text="", font=(self._ff, 10),
+            stats_card, text="", font=self._sfont(10),
             text_color=ct['TEXT_DIM'], anchor="w", justify="left")
         self.stats_label.pack(anchor="w", padx=14, pady=(0, 10))
 
@@ -940,8 +958,18 @@ class StaffManagementWindow(InGamePopup):
                 results.append(f"{staff.full_name}: no agreement")
 
         if results:
-            msg = "Contract Negotiation Results:\n" + "\n".join(results)
-            messagebox.showinfo("Negotiation Results", msg)
+            # One inbox digest instead of a popup (FM24/EHM style).
+            try:
+                from game_classes import EmailMessage
+                from datetime import date
+                self.app.send_email_to_user(EmailMessage(
+                    sender="System", sender_type="System",
+                    date_sent=date.today(), category="Contracts", priority=2,
+                    subject="Staff Negotiation Results",
+                    content="Contract negotiations complete:\n" + "\n".join(
+                        f"• {r}" for r in results)))
+            except Exception:
+                pass
 
         self.update_current_staff_view()
 
@@ -1002,7 +1030,7 @@ class StaffManagementWindow(InGamePopup):
         ct = self._ct
         card = self._card(parent)
         card.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(card, text=title, font=(self._ff, 11, "bold"),
+        ctk.CTkLabel(card, text=title, font=self._sfont(11, 'bold'),
                      text_color=ct['TEXT'], anchor="w").pack(
                          anchor="w", padx=12, pady=(10, 4))
         inner = ctk.CTkFrame(card, fg_color="transparent")
@@ -1010,73 +1038,114 @@ class StaffManagementWindow(InGamePopup):
         return inner
 
     def _info_label(self, parent, text):
-        ctk.CTkLabel(parent, text=text, font=(self._ff, 10),
+        ctk.CTkLabel(parent, text=text, font=self._sfont(10),
                      text_color=self._ct['TEXT_DIM'], anchor="w",
                      justify="left").pack(anchor="w", padx=4, pady=2)
 
     def show_staff_details_window(self, staff: Staff, is_current: bool):
-        """Show detailed staff information window."""
+        """Show detailed staff information window -- FM24-style tabs."""
         ct = self._ct
         details_window = InGamePopup(self)
         details_window.title(f"Staff Details - {staff.full_name}")
         details_window.configure(fg_color=ct['BG'])
-        details_window.geometry("680x940")
+        details_window.geometry("680x820")
         details_window.transient(self)
 
-        # Main frame (scrollable so the tall dialog always fits)
-        main_frame = ctk.CTkScrollableFrame(details_window, fg_color="transparent")
-        main_frame.pack(fill="both", expand=True, padx=14, pady=14)
-
-        # Header
-        self._heading(main_frame, text=staff.full_name, size=18).pack(
+        # Fixed header
+        header = ctk.CTkFrame(details_window, fg_color="transparent")
+        header.pack(fill="x", padx=14, pady=(14, 4))
+        self._heading(header, text=staff.full_name, size=18).pack(
             anchor="w", pady=(0, 2))
-        ctk.CTkLabel(main_frame, text=f"{staff.role.value}  •  Rating {staff.overall_rating}",
-                     font=(self._ff, 11), text_color=ct['TEAL']).pack(
-                         anchor="w", pady=(0, 12))
+        ctk.CTkLabel(header,
+                     text=f"{staff.role.value}  •  Rating {staff.overall_rating}",
+                     font=self._sfont(11), text_color=ct['TEAL']).pack(
+                         anchor="w", pady=(0, 4))
+        # FM24-style identity line: coaching style, ambition, boyhood team
+        self._staff_identity_line(header, staff, ct)
 
-        # Basic info
-        info_inner = self._dialog_card(main_frame, "Basic Information")
+        # FM24-style tab strip
+        tabbar = ctk.CTkFrame(details_window, fg_color="transparent")
+        tabbar.pack(fill="x", padx=14, pady=(6, 0))
+        tab_pages = {}
+        tab_buttons = {}
+
+        def switch_tab(name):
+            for tname, page in tab_pages.items():
+                if tname == name:
+                    page.pack(fill="both", expand=True)
+                else:
+                    page.pack_forget()
+            for tname, btn in tab_buttons.items():
+                active = tname == name
+                btn.configure(
+                    text_color=ct['TEXT'] if active else ct['TEXT_DIM'],
+                    fg_color=ct['CARD'] if active else "transparent")
+
+        # Scrollable page host (a single scroll region; pages swap inside)
+        pages_frame = ctk.CTkScrollableFrame(details_window,
+                                             fg_color="transparent")
+        pages_frame.pack(fill="both", expand=True, padx=14, pady=(6, 6))
+
+        # -- Overview page ------------------------------------------------
+        overview = ctk.CTkFrame(pages_frame, fg_color="transparent")
+        info_inner = self._dialog_card(overview, "Basic Information")
         self._info_label(info_inner, f"Age: {staff.age}")
         self._info_label(info_inner, f"Nationality: {staff.nationality}")
         self._info_label(info_inner, f"Experience: {staff.experience} years")
         self._info_label(info_inner, f"Overall Rating: {staff.overall_rating}")
         self._info_label(info_inner, f"Reputation: {staff.reputation}")
 
-        # Contract info
-        contract_inner = self._dialog_card(main_frame, "Contract Information")
+        contract_inner = self._dialog_card(overview, "Contract Information")
         self._info_label(contract_inner, f"Salary: ${staff.salary:,}")
-        self._info_label(contract_inner, f"Contract Length: {staff.contract_years} years")
+        self._info_label(contract_inner,
+                         f"Contract Length: {staff.contract_years} years")
 
-        # Attributes
-        attr_inner = self._dialog_card(main_frame, "Attributes")
-        attr_text = ctk.CTkTextbox(
-            attr_inner, font=(self._ff, 9), wrap="word", height=220,
-            fg_color=ct['BG'], text_color=ct['TEXT'],
-            border_color=ct['BORDER'], border_width=1, corner_radius=8)
-        attr_text.pack(fill="both", expand=True, padx=4, pady=4)
-        attr_text.insert("1.0", self.format_staff_attributes(staff))
-        attr_text.configure(state="disabled")
+        desc_inner = self._dialog_card(overview, "Role Description")
+        ctk.CTkLabel(desc_inner, text=staff.get_role_description(),
+                     font=self._sfont(10), text_color=ct['TEXT_DIM'],
+                     wraplength=580, justify="left",
+                     anchor="w").pack(anchor="w", padx=4, pady=4)
+        tab_pages["Overview"] = overview
 
-        # On-Ice Impact - what this staffer's attributes verifiably affect
-        impact_inner = self._dialog_card(main_frame, "On-Ice Impact")
+        # -- Attributes page ----------------------------------------------
+        attrs_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
+        attr_inner = self._dialog_card(attrs_page, "Attributes")
+        self._staff_attribute_groups(attr_inner, staff, ct)
+        tab_pages["Attributes"] = attrs_page
+
+        # -- Standing page -------------------------------------------------
+        standing_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
+        standing_inner = self._dialog_card(standing_page, "Standing")
+        self._staff_standing_lines(standing_inner, staff, ct)
+
+        impact_inner = self._dialog_card(standing_page, "On-Ice Impact")
         for line, kind in self._staff_impact_lines(staff):
             fg = {'ok': ct['GREEN'], 'warn': ct['GOLD'],
                   'info': ct['TEXT_FAINT']}.get(kind, ct['TEXT_FAINT'])
             ctk.CTkLabel(impact_inner, text=f"•  {line}",
-                         font=(self._ff, 9), text_color=fg,
+                         font=self._sfont(9), text_color=fg,
                          wraplength=560, justify="left",
                          anchor="w").pack(anchor="w", padx=8, pady=2)
+        tab_pages["Standing"] = standing_page
 
-        # Role description
-        desc_inner = self._dialog_card(main_frame, "Role Description")
-        ctk.CTkLabel(desc_inner, text=staff.get_role_description(),
-                     font=(self._ff, 10), text_color=ct['TEXT_DIM'],
-                     wraplength=580, justify="left",
-                     anchor="w").pack(anchor="w", padx=4, pady=4)
+        # -- Personality page ----------------------------------------------
+        personality_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
+        self._staff_personality_tab(personality_page, staff, ct)
+        tab_pages["Personality"] = personality_page
 
-        # Buttons
-        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        button_frame.pack(fill="x", pady=(4, 0))
+        for tname in ("Overview", "Attributes", "Standing", "Personality"):
+            btn = ctk.CTkButton(
+                tabbar, text=tname, fg_color="transparent",
+                text_color=ct['TEXT_DIM'], hover_color=ct['CARD'],
+                font=self._sfont(12, 'bold'), corner_radius=8,
+                command=lambda n=tname: switch_tab(n))
+            btn.pack(side="left", padx=(0, 4))
+            tab_buttons[tname] = btn
+        switch_tab("Overview")
+
+        # Fixed button bar
+        button_frame = ctk.CTkFrame(details_window, fg_color="transparent")
+        button_frame.pack(fill="x", padx=14, pady=(0, 14))
 
         if is_current:
             self._secondary_button(button_frame, text="Negotiate Contract",
@@ -1094,10 +1163,211 @@ class StaffManagementWindow(InGamePopup):
                                command=details_window.destroy,
                                width=110, height=36).pack(side="right", padx=5)
 
+    def _staff_personality_tab(self, parent, staff, ct):
+        """Personality page: coaching style writeup, ambition, control style,
+        management manner -- who he is behind the bench."""
+        import reputation_system as rs
+        inner = self._dialog_card(parent, "Personality")
+        try:
+            style = rs.coach_style(staff)
+            ctk.CTkLabel(inner, text=style.get("label", "Balanced"),
+                         font=self._sfont(13, 'bold'),
+                         text_color=ct['TEAL'], anchor="w").pack(
+                             anchor="w", padx=8, pady=(4, 2))
+            if style.get("description"):
+                ctk.CTkLabel(inner, text=style["description"],
+                             font=self._sfont(10), text_color=ct['TEXT_DIM'],
+                             wraplength=560, justify="left",
+                             anchor="w").pack(anchor="w", padx=8, pady=2)
+        except Exception:
+            pass
+        ambition_text = {
+            "stanley_cup": "Burning to win the Stanley Cup.",
+            "climb": "Climbing -- wants a bigger chair.",
+            "developer": "Lives to develop young players.",
+            "hometown": "Dreams of coaching his hometown team.",
+            "lifer": "A lifer -- happy wherever the game takes him.",
+        }.get(str(getattr(staff, "ambition", "") or ""), "")
+        lines = []
+        if ambition_text:
+            lines.append(f"Ambition: {ambition_text}")
+        fav = getattr(staff, "favorite_team", None)
+        if fav:
+            lines.append(f"Boyhood team: {fav}")
+        try:
+            cn = float(getattr(staff, "control_need", 50))
+            if cn >= 75:
+                lines.append("Runs the room his way -- needs full control.")
+            elif cn >= 45:
+                lines.append("Comfortable sharing the room with his staff.")
+            else:
+                lines.append("Collaborative -- delegates freely to assistants.")
+        except Exception:
+            pass
+        try:
+            mot = float(getattr(staff, "motivating", 50))
+            disc = float(getattr(staff, "discipline", 50))
+            if mot >= 75 and disc >= 75:
+                lines.append("Demanding and inspiring in equal measure.")
+            elif mot >= 75 and disc < 60:
+                lines.append("An arm-around-the-shoulder motivator.")
+            elif disc >= 75 and mot < 60:
+                lines.append("A demanding disciplinarian.")
+            elif mot < 45 and disc < 45:
+                lines.append("Hands-off -- lets the leaders run the room.")
+        except Exception:
+            pass
+        for line in lines:
+            ctk.CTkLabel(inner, text=f"\u2022  {line}", font=self._sfont(10),
+                         text_color=ct['TEXT_FAINT'], wraplength=560,
+                         justify="left", anchor="w").pack(
+                             anchor="w", padx=8, pady=2)
+
+    # ------------------------------------------------------------------
+    # FM24-style staff card sections
+    # ------------------------------------------------------------------
+    _STAFF_ATTR_GROUPS = [
+        ("Coaching", ["coaching_forwards", "coaching_defensemen",
+                      "coaching_goalies", "attacking_coaching",
+                      "defensive_coaching", "technical_coaching",
+                      "mental_coaching"]),
+        ("Tactical", ["tactical_knowledge", "game_preparation",
+                      "match_preparation"]),
+        ("Development", ["working_with_youngsters", "player_development",
+                         "judging_player_ability", "judging_player_potential"]),
+        ("Management", ["man_management", "motivating", "discipline",
+                        "level_of_discipline", "media_handling"]),
+        ("Personality", ["leadership", "determination", "adaptability"]),
+    ]
+
+    def _staff_identity_line(self, parent, staff, ct):
+        """FM24-style identity line: coaching style, ambition, boyhood team."""
+        import reputation_system as rs
+        bits = []
+        try:
+            if "COACH" in str(getattr(getattr(staff, "role", None), "name", "")):
+                style = rs.coach_style(staff)
+                label = style.get("label") if isinstance(style, dict) else None
+                if label:
+                    bits.append(label)
+        except Exception:
+            pass
+        amb = getattr(staff, "ambition", None)
+        if amb:
+            bits.append(str(amb).replace("_", " ").title())
+        fav = getattr(staff, "favorite_team", None)
+        if fav:
+            bits.append(f"Boyhood: {fav}")
+        cn = getattr(staff, "control_need", None)
+        if cn is not None:
+            try:
+                cn = float(cn)
+                bits.append("Authoritarian" if cn >= 70 else
+                            "Collaborative" if cn <= 35 else "Balanced control")
+            except Exception:
+                pass
+        ctk.CTkLabel(parent,
+                     text="   •   ".join(bits) if bits else "",
+                     font=self._sfont(10), text_color=ct['TEXT_DIM'],
+                     anchor="w").pack(anchor="w", pady=(0, 12))
+
+    def _attr_bar_ctk(self, parent, label, value, max_val=100):
+        """Single attribute bar on the native 1-100 scale."""
+        ct = self._ct
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        ctk.CTkLabel(row, text=label, font=self._sfont(10),
+                     text_color=ct['TEXT_DIM'], width=130,
+                     anchor="w").pack(side="left")
+        bar = ctk.CTkProgressBar(row, width=110, height=8,
+                                 progress_color=ct['TEAL'])
+        bar.pack(side="left", padx=(4, 8))
+        try:
+            bar.set(max(0.0, min(1.0, float(value) / max_val)))
+            vtext = str(int(value))
+        except Exception:
+            bar.set(0.0)
+            vtext = "?"
+        ctk.CTkLabel(row, text=vtext, font=self._sfont(10, 'bold'),
+                     text_color=ct['TEXT'], width=28,
+                     anchor="e").pack(side="left")
+
+    def _staff_attribute_groups(self, parent, staff, ct):
+        """FM24-style grouped attribute bars (native 1-100 scale)."""
+        grid = ctk.CTkFrame(parent, fg_color="transparent")
+        grid.pack(fill="x")
+        for gi, (gname, fields) in enumerate(self._STAFF_ATTR_GROUPS):
+            col = ctk.CTkFrame(grid, fg_color="transparent")
+            col.grid(row=gi // 2, column=gi % 2, sticky="nsew", padx=(0, 18),
+                     pady=(0, 10))
+            ctk.CTkLabel(col, text=gname, font=self._sfont(10, 'bold'),
+                         text_color=ct['TEAL'], anchor="w").pack(anchor="w",
+                                                                 pady=(0, 4))
+            for f in fields:
+                if not hasattr(staff, f):
+                    continue
+                self._attr_bar_ctk(col, f.replace("_", " ").title(),
+                                   getattr(staff, f), 100)
+        grid.grid_columnconfigure(0, weight=1)
+        grid.grid_columnconfigure(1, weight=1)
+
+    def _staff_standing_lines(self, parent, staff, ct):
+        """Room standing, GM trust, control, assistant effectiveness."""
+        import reputation_system as rs
+        lines = []
+        try:
+            st = rs.room_status(staff)
+            if isinstance(st, dict):
+                level = st.get("level", "Secure")
+                risk = float(st.get("risk", 0.0) or 0.0)
+                kind = "warn" if risk >= 0.45 else "info"
+                lines.append((f"Room standing: {level} "
+                              f"({risk:.0%} losing-the-room risk)", kind))
+        except Exception:
+            pass
+        try:
+            if str(getattr(getattr(staff, "role", None), "name", "")) == "HEAD_COACH":
+                lines.append((f"GM trust: {getattr(staff, 'gm_trust', 70)}/100",
+                              "info"))
+        except Exception:
+            pass
+        try:
+            eff = getattr(staff, "assistant_effect", None)
+            if eff:
+                lines.append((f"Assistant effectiveness: {float(eff):.0f}",
+                              "ok"))
+        except Exception:
+            pass
+        try:
+            cn = getattr(staff, "control_need", None)
+            if cn is not None:
+                lines.append((f"Control need: {float(cn):.0f}/100", "info"))
+        except Exception:
+            pass
+        if not lines:
+            lines.append(("No standing data recorded.", "info"))
+        for text, kind in lines:
+            fg = {"ok": ct["GREEN"], "warn": ct["GOLD"],
+                  "info": ct["TEXT_FAINT"]}.get(kind, ct["TEXT_FAINT"])
+            ctk.CTkLabel(parent, text=f"•  {text}", font=self._sfont(10),
+                         text_color=fg, wraplength=560, justify="left",
+                         anchor="w").pack(anchor="w", padx=8, pady=2)
+
     def _negotiate_current_staff(self, staff: Staff, details_window):
         """Negotiate with a current staffer from the details window (modal, honest result)."""
         if self.open_contract_negotiation(staff, is_hiring=False):
-            messagebox.showinfo("Success", f"Contract renegotiated with {staff.full_name}!")
+            # Result lands in the inbox (FM24/EHM style), not a popup.
+            try:
+                from game_classes import EmailMessage
+                from datetime import date
+                self.app.send_email_to_user(EmailMessage(
+                    sender="System", sender_type="System",
+                    date_sent=date.today(), category="Contracts", priority=2,
+                    subject=f"Staff re-signed: {staff.full_name}",
+                    content=(f"Contract renegotiated with {staff.full_name} "
+                             f"({staff.role.value}).")))
+            except Exception:
+                pass
             details_window.destroy()
             self.update_views()
 
@@ -1166,7 +1436,7 @@ class StaffManagementWindow(InGamePopup):
                       text=f"Negotiating with {staff.full_name}",
                       size=14).pack(anchor="w", pady=(0, 2))
         ctk.CTkLabel(main_frame, text=staff.role.value,
-                     font=(self._ff, 11), text_color=ct['TEAL']).pack(
+                     font=self._sfont(11), text_color=ct['TEAL']).pack(
                          anchor="w", pady=(0, 14))
 
         # Current demands
@@ -1180,7 +1450,7 @@ class StaffManagementWindow(InGamePopup):
         offer_grid.pack(anchor="w")
 
         ctk.CTkLabel(offer_grid, text="Salary:",
-                     font=(self._ff, 10), text_color=ct['TEXT_DIM']).grid(
+                     font=self._sfont(10), text_color=ct['TEXT_DIM']).grid(
                          row=0, column=0, padx=5, pady=5, sticky='w')
         salary_entry = ctk.CTkEntry(
             offer_grid, width=150, fg_color=ct['BG'],
@@ -1189,7 +1459,7 @@ class StaffManagementWindow(InGamePopup):
         salary_entry.grid(row=0, column=1, padx=5, pady=5)
 
         ctk.CTkLabel(offer_grid, text="Years:",
-                     font=(self._ff, 10), text_color=ct['TEXT_DIM']).grid(
+                     font=self._sfont(10), text_color=ct['TEXT_DIM']).grid(
                          row=1, column=0, padx=5, pady=5, sticky='w')
         years_entry = ctk.CTkEntry(
             offer_grid, width=150, fg_color=ct['BG'],
@@ -1199,7 +1469,7 @@ class StaffManagementWindow(InGamePopup):
 
         # Result label
         result_label = ctk.CTkLabel(main_frame, text="",
-                                    font=(self._ff, 10),
+                                    font=self._sfont(10),
                                     text_color=ct['TEXT_DIM'],
                                     wraplength=440, justify="left")
         result_label.pack(fill="x", pady=(0, 12))
@@ -1400,7 +1670,7 @@ class StaffManagementWindow(InGamePopup):
                       size=14).pack(anchor="w", pady=(0, 12))
 
         text_widget = ctk.CTkTextbox(
-            main_frame, wrap="word", font=(self._ff, 11),
+            main_frame, wrap="word", font=self._sfont(11),
             fg_color=ct['PANEL'], text_color=ct['TEXT'],
             border_color=ct['BORDER'], border_width=1, corner_radius=8)
         text_widget.pack(fill="both", expand=True)
@@ -1461,11 +1731,11 @@ class StaffManagementWindow(InGamePopup):
         self._heading(main_frame, text=f"Reassign {staff.full_name}",
                       size=14).pack(anchor="w", pady=(0, 6))
         ctk.CTkLabel(main_frame, text=f"Current Role: {staff.role.value}",
-                     font=(self._ff, 10), text_color=ct['TEXT_DIM']).pack(
+                     font=self._sfont(10), text_color=ct['TEXT_DIM']).pack(
                          anchor="w", pady=(0, 12))
 
         ctk.CTkLabel(main_frame, text="New Role:",
-                     font=(self._ff, 10), text_color=ct['TEXT_DIM']).pack(anchor='w')
+                     font=self._sfont(10), text_color=ct['TEXT_DIM']).pack(anchor='w')
         role_combo = ctk.CTkComboBox(
             main_frame, values=[role.value for role in StaffRole],
             state='readonly',
@@ -1537,7 +1807,7 @@ class StaffManagementWindow(InGamePopup):
             staff_frame.pack(fill='x', pady=5, padx=10)
 
             ctk.CTkLabel(staff_frame, text=f"{staff.full_name}:",
-                         font=(self._ff, 10),
+                         font=self._sfont(10),
                          text_color=ct['TEXT']).pack(side='left')
 
             role_combo = ctk.CTkComboBox(
@@ -1612,7 +1882,7 @@ class StaffManagementWindow(InGamePopup):
                                                            pady=(0, 12))
 
         text_widget = ctk.CTkTextbox(
-            main_frame, wrap="word", font=(self._ff, 11),
+            main_frame, wrap="word", font=self._sfont(11),
             fg_color=ct['PANEL'], text_color=ct['TEXT'],
             border_color=ct['BORDER'], border_width=1, corner_radius=8)
         text_widget.pack(fill="both", expand=True)
@@ -1748,3 +2018,20 @@ class StaffManagementWindow(InGamePopup):
                 chart += "\n"
 
         return chart
+
+class StaffManagementWindow(InGamePopup):
+    """Popup wrapper around StaffManagementView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Staff Management - Hockey Manager")
+        self._view = StaffManagementView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

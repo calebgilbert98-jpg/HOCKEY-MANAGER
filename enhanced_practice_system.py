@@ -6,12 +6,27 @@ Gradual skill improvement through focused training sessions
 import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
+import customtkinter as ctk
 from typing import Dict, List, Optional, Tuple
 from datetime import date, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
 import random
 import json
+
+
+def _sfont(family, size, weight=""):
+    """Scale-aware font tuple replacement (honors Settings -> Font size).
+
+    Returns a live tkinter Font registered with ui_scale; changing the
+    tier resizes open-window text in place. Falls back to a plain tuple
+    when ui_scale is unavailable (headless stubs).
+    """
+    try:
+        from ui_scale import font as _mkfont
+        return _mkfont(family, size, weight)
+    except Exception:
+        return (family, size, weight) if weight else (family, size)
 
 
 class PracticeType(Enum):
@@ -418,29 +433,36 @@ class PracticeEngine:
                     history.current_schedule = None
 
 
-class DevelopmentOverviewWindow(InGamePopup):
+class DevelopmentOverviewView(ctk.CTkFrame):
     """Development overview window showing all team players"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Development Overview & Progress")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("1200x800")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the DevelopmentOverviewWindow wrapper
+        self.configure(fg_color=self.app.BG_COLOR)
         
         # Initialize practice engine
         if not hasattr(parent, 'practice_engine'):
-            parent.practice_engine = PracticeEngine()
+            self.app.practice_engine = PracticeEngine()
         
-        self.practice_engine = parent.practice_engine
+        self.practice_engine = self.app.practice_engine
         self.selected_player = None
         
         self._create_interface()
         self._populate_players()
         
         # Track window for lifecycle management
-        self.parent.open_windows['development_overview'] = self
-    
+        self.app.open_windows['development_overview'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _create_interface(self):
         """Create the enhanced development overview interface"""
         # Main container with zero padding to maximize usable area
@@ -453,7 +475,7 @@ class DevelopmentOverviewWindow(InGamePopup):
         
         # Title
         title_label = ttk.Label(top_frame, text="🏒 Player Development Center", 
-                               style='Title.TLabel', font=(self.parent.FONT_FAMILY, 24, 'bold'))  # Increased from 18 to 24
+                               style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 24, 'bold'))  # Increased from 18 to 24
         title_label.pack(side='left')
         
         # Quick action buttons
@@ -501,12 +523,12 @@ class DevelopmentOverviewWindow(InGamePopup):
         status_frame.pack(fill='x', pady=(3, 0))
         
         self.status_bar = ttk.Label(status_frame, text="Select a player to view development details", 
-                                   style='Content.TLabel', font=(self.parent.FONT_FAMILY, 14))  # Increased from 10 to 14
+                                   style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 14))  # Increased from 10 to 14
         self.status_bar.pack(side='left')
         
         # Bottom right - Close button
         ttk.Button(status_frame, text="❌ Close", 
-                  command=self.destroy, style='TButton').pack(side='right')
+                  command=self.close_view, style='TButton').pack(side='right')
     
     def _create_player_list(self, parent):
         """Create enhanced player selection list"""
@@ -587,7 +609,7 @@ class DevelopmentOverviewWindow(InGamePopup):
         parent.grid_columnconfigure(1, weight=0)
         
         # Scrollable frame for player details
-        canvas = tk.Canvas(parent, bg=self.parent.CONTENT_BG)
+        canvas = tk.Canvas(parent, bg=self.app.CONTENT_BG)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         self.details_frame = ttk.Frame(canvas, style='Content.TFrame')
         
@@ -606,23 +628,22 @@ class DevelopmentOverviewWindow(InGamePopup):
         # Default message
         self.default_label = ttk.Label(self.details_frame, 
                                      text="Select a player to view detailed development information",
-                                     style='Content.TLabel', font=(self.parent.FONT_FAMILY, 16))  # Increased from 12 to 16
+                                     style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 16))  # Increased from 12 to 16
         self.default_label.pack(pady=50)
     
     def _open_practice_window(self):
         """Open the practice center for active roster players"""
-        if 'practice_center' not in self.parent.open_windows or not self.parent.open_windows['practice_center'].winfo_exists():
-            self.parent.open_windows['practice_center'] = PracticeCenterWindow(self.parent)
-        self.parent.open_windows['practice_center'].focus_set()
+        self.app.show_screen('practice_center', 'Practice Center',
+                             PracticeCenterView)
     
     def _show_team_analysis(self):
         """Show comprehensive team development analysis"""
         # Check if we have access to user team data
         user_team = None
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            user_team = self.parent.user_team
-        elif hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'user_team'):
-            user_team = self.parent.game_manager.user_team
+        if hasattr(self.app, 'user_team') and self.app.user_team:
+            user_team = self.app.user_team
+        elif hasattr(self.app, 'game_manager') and hasattr(self.app.game_manager, 'user_team'):
+            user_team = self.app.game_manager.user_team
         else:
             messagebox.showwarning("No Team", "No team data available")
             return
@@ -708,15 +729,15 @@ class DevelopmentOverviewWindow(InGamePopup):
         # Show analysis in a scrollable dialog
         analysis_window = InGamePopup(self)
         analysis_window.title("Team Development Analysis")
-        analysis_window.configure(background=self.parent.BG_COLOR)
+        analysis_window.configure(background=self.app.BG_COLOR)
         analysis_window.geometry("600x500")
         
         # Text widget with scrollbar
         text_frame = ttk.Frame(analysis_window, style='Content.TFrame')
         text_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
-        text_widget = tk.Text(text_frame, wrap='word', font=(self.parent.FONT_FAMILY, 14),  # Increased from 10 to 14
-                             bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        text_widget = tk.Text(text_frame, wrap='word', font=_sfont(self.app.FONT_FAMILY, 14),  # Increased from 10 to 14
+                             bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR)
         scrollbar = ttk.Scrollbar(text_frame, orient='vertical', command=text_widget.yview)
         text_widget.configure(yscrollcommand=scrollbar.set)
         
@@ -759,7 +780,7 @@ class DevelopmentOverviewWindow(InGamePopup):
         self.player_info_frame.pack(fill='x', padx=10, pady=10)
         
         self.player_name_label = ttk.Label(self.player_info_frame, text="Select a player to begin practice", 
-                                         style='Title.TLabel', font=(self.parent.FONT_FAMILY, 14, 'bold'))
+                                         style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 14, 'bold'))
         self.player_name_label.pack()
         
         # Practice type selection
@@ -879,10 +900,10 @@ class DevelopmentOverviewWindow(InGamePopup):
         
         # Check if we have access to user team data
         user_team = None
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            user_team = self.parent.user_team
-        elif hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'user_team'):
-            user_team = self.parent.game_manager.user_team
+        if hasattr(self.app, 'user_team') and self.app.user_team:
+            user_team = self.app.user_team
+        elif hasattr(self.app, 'game_manager') and hasattr(self.app.game_manager, 'user_team'):
+            user_team = self.app.game_manager.user_team
         else:
             # Show error message in the tree
             error_item = self.player_tree.insert('', 'end', values=(
@@ -991,13 +1012,13 @@ class DevelopmentOverviewWindow(InGamePopup):
             item_id = self.player_tree.insert('', 'end', values=values, tags=(player.id, tag))
             
             # Store player reference in tree map for easy access
-            if not hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps = {}
-            if 'development_tree_map' not in self.parent.tree_maps:
-                self.parent.tree_maps['development_tree_map'] = {}
-            self.parent.tree_maps['development_tree_map'][item_id] = player
+            if not hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps = {}
+            if 'development_tree_map' not in self.app.tree_maps:
+                self.app.tree_maps['development_tree_map'] = {}
+            self.app.tree_maps['development_tree_map'][item_id] = player
             # Widget-keyed entry so the app-wide right-click menu resolves it.
-            self.parent.tree_maps.setdefault(self.player_tree, {})[item_id] = player
+            self.app.tree_maps.setdefault(self.player_tree, {})[item_id] = player
         
         # Update status bar
         if hasattr(self, 'status_bar'):
@@ -1030,11 +1051,11 @@ class DevelopmentOverviewWindow(InGamePopup):
         item_id = selection[0]
         
         # Get player from tree map
-        if (hasattr(self.parent, 'tree_maps') and 
-            'development_tree_map' in self.parent.tree_maps and
-            item_id in self.parent.tree_maps['development_tree_map']):
+        if (hasattr(self.app, 'tree_maps') and 
+            'development_tree_map' in self.app.tree_maps and
+            item_id in self.app.tree_maps['development_tree_map']):
             
-            self.selected_player = self.parent.tree_maps['development_tree_map'][item_id]
+            self.selected_player = self.app.tree_maps['development_tree_map'][item_id]
             self._display_comprehensive_player_details()
         else:
             # Fallback: try to find player by name from tree values
@@ -1044,10 +1065,10 @@ class DevelopmentOverviewWindow(InGamePopup):
                 
                 # Search for player by name
                 user_team = None
-                if hasattr(self.parent, 'user_team') and self.parent.user_team:
-                    user_team = self.parent.user_team
-                elif hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'user_team'):
-                    user_team = self.parent.game_manager.user_team
+                if hasattr(self.app, 'user_team') and self.app.user_team:
+                    user_team = self.app.user_team
+                elif hasattr(self.app, 'game_manager') and hasattr(self.app.game_manager, 'user_team'):
+                    user_team = self.app.game_manager.user_team
                 
                 if user_team:
                     all_players = (user_team.roster + 
@@ -1063,7 +1084,7 @@ class DevelopmentOverviewWindow(InGamePopup):
             # If we get here, show error message
             error_label = ttk.Label(self.details_frame, 
                                    text="Error: Could not load player details. Please try selecting another player.",
-                                   style='Content.TLabel', font=(self.parent.FONT_FAMILY, 12))
+                                   style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 12))
             error_label.pack(pady=50)
     
     def _display_comprehensive_player_details(self):
@@ -1080,12 +1101,12 @@ class DevelopmentOverviewWindow(InGamePopup):
         
         # Player name and basic info
         name_label = ttk.Label(header_frame, text=player.full_name, 
-                              style='Title.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
+                              style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 16, 'bold'))
         name_label.pack()
         
         basic_info = f"{player.primary_position.value} • Age {player.age} • Overall: {player.overall_rating()}"
         basic_label = ttk.Label(header_frame, text=basic_info, 
-                               style='Content.TLabel', font=(self.parent.FONT_FAMILY, 12))
+                               style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 12))
         basic_label.pack()
         
         # Development Status Section
@@ -1131,7 +1152,7 @@ class DevelopmentOverviewWindow(InGamePopup):
         tech_frame.grid(row=0, column=0, sticky='nw', padx=(0, 20))
         
         ttk.Label(tech_frame, text="Technical Skills:", 
-                 style='Subtitle.TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                 style='Subtitle.TLabel', font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         
         tech_skills = [
             ("Skating", getattr(player, 'skating', 10)),
@@ -1153,7 +1174,7 @@ class DevelopmentOverviewWindow(InGamePopup):
         mental_frame.grid(row=0, column=1, sticky='nw', padx=(0, 20))
         
         ttk.Label(mental_frame, text="Mental Attributes:", 
-                 style='Subtitle.TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                 style='Subtitle.TLabel', font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         
         mental_skills = [
             ("Work Rate", getattr(player, 'work_rate', 10)),
@@ -1175,7 +1196,7 @@ class DevelopmentOverviewWindow(InGamePopup):
         physical_frame.grid(row=0, column=2, sticky='nw')
         
         ttk.Label(physical_frame, text="Physical Attributes:", 
-                 style='Subtitle.TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                 style='Subtitle.TLabel', font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         
         physical_skills = [
             ("Strength", getattr(player, 'strength', 10)),
@@ -1286,7 +1307,7 @@ class DevelopmentOverviewWindow(InGamePopup):
             outlook_color = 'red'
         
         ttk.Label(traj_content, text=outlook, style='Content.TLabel',
-                 foreground=outlook_color, font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                 foreground=outlook_color, font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         
         # Age-specific development advice
         if player.age <= 21:
@@ -1485,14 +1506,14 @@ class DevelopmentOverviewWindow(InGamePopup):
         for item in self.history_tree.get_children():
             self.history_tree.delete(item)
         
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return
         
         # Get all recent sessions from all players
         all_sessions = []
-        all_players = (self.parent.user_team.roster + 
-                      self.parent.user_team.ahl_roster + 
-                      self.parent.user_team.prospects)
+        all_players = (self.app.user_team.roster + 
+                      self.app.user_team.ahl_roster + 
+                      self.app.user_team.prospects)
         
         for player in all_players:
             history = self.practice_engine.get_player_history(player.id)
@@ -1518,6 +1539,24 @@ class DevelopmentOverviewWindow(InGamePopup):
 
 
 # Function to test the practice system
+
+
+class DevelopmentOverviewWindow(InGamePopup):
+    """Popup wrapper around DevelopmentOverviewView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Development Overview & Progress")
+        self._view = DevelopmentOverviewView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 def test_practice_system():
     """Test the enhanced practice system"""
     print("🏒 Testing Enhanced Practice System...")
@@ -1601,43 +1640,43 @@ def test_practice_system():
     print("\n✅ Enhanced Practice System test complete!")
 
 
-class PracticeCenterWindow(InGamePopup):
+class PracticeCenterView(ctk.CTkFrame):
     """Practice center window for active roster players only"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the PracticeCenterWindow wrapper
         
         # Handle practice engine - parent might be the game manager directly or have a game_manager attribute
         if hasattr(parent, 'game_manager'):
             # Parent has a game_manager attribute
-            self.practice_engine = getattr(parent.game_manager, 'practice_engine', None)
+            self.practice_engine = getattr(self.app.game_manager, 'practice_engine', None)
             if not self.practice_engine:
                 self.practice_engine = PracticeEngine()
-                parent.game_manager.practice_engine = self.practice_engine
+                self.app.game_manager.practice_engine = self.practice_engine
         else:
             # Parent IS the game manager (HockeyManagerGUI)
             self.practice_engine = getattr(parent, 'practice_engine', None)
             if not self.practice_engine:
                 self.practice_engine = PracticeEngine()
-                parent.practice_engine = self.practice_engine
+                self.app.practice_engine = self.practice_engine
         
         self.selected_player = None
         
-        self.title("Practice Center")
-        self.geometry("1000x700")
-        self.configure(background=parent.BG_COLOR)
-        
-        # Make window modal
-        self.transient(parent)
-        self.grab_set()
-        
+        self.configure(fg_color=self.app.BG_COLOR)
+
         self._create_interface()
         self.update_views()
-        
-        # Center the window
-        self.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
-    
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _create_interface(self):
         """Create the practice center interface"""
         
@@ -1655,13 +1694,13 @@ class PracticeCenterWindow(InGamePopup):
         content_frame.grid_rowconfigure(0, weight=1)
         
         # Left panel - Player list
-        left_panel = self.parent._create_panel(content_frame, "Active Roster Players", 0, 0)
+        left_panel = self.app._create_panel(content_frame, "Active Roster Players", 0, 0)
         
         # Player list
         self._create_player_list(left_panel)
         
         # Right panel - Practice controls
-        right_panel = self.parent._create_panel(content_frame, "Practice Session", 0, 1)
+        right_panel = self.app._create_panel(content_frame, "Practice Session", 0, 1)
         
         # Practice controls
         self._create_practice_controls(right_panel)
@@ -1670,7 +1709,7 @@ class PracticeCenterWindow(InGamePopup):
         button_frame = ttk.Frame(self, style='Content.TFrame')
         button_frame.pack(fill='x', padx=20, pady=10)
         
-        ttk.Button(button_frame, text="Close", command=self.destroy).pack(side='right')
+        ttk.Button(button_frame, text="Close", command=self.close_view).pack(side='right')
     
     def _create_player_list(self, parent):
         """Create the active roster player list"""
@@ -1683,7 +1722,7 @@ class PracticeCenterWindow(InGamePopup):
             'practice': ('Current Practice', 120)
         }
         
-        self.player_tree = self.parent._create_treeview(parent, columns)  # Remove fixed height
+        self.player_tree = self.app._create_treeview(parent, columns)  # Remove fixed height
         self.player_tree.bind('<<TreeviewSelect>>', self._on_player_select)
         
         # Grid the treeview to match panel layout
@@ -1701,7 +1740,7 @@ class PracticeCenterWindow(InGamePopup):
         for item in self.player_tree.get_children():
             self.player_tree.delete(item)
         
-        user_team = self.parent.game_manager.user_team
+        user_team = self.app.game_manager.user_team
         active_roster = user_team.roster  # Only active roster players
         
         for player in active_roster:
@@ -1724,18 +1763,18 @@ class PracticeCenterWindow(InGamePopup):
             ), tags=(player.id,))
             
             # Store player object reference
-            if 'practice_center_tree_map' not in self.parent.tree_maps:
-                self.parent.tree_maps['practice_center_tree_map'] = {}
-            self.parent.tree_maps['practice_center_tree_map'][item_id] = player
+            if 'practice_center_tree_map' not in self.app.tree_maps:
+                self.app.tree_maps['practice_center_tree_map'] = {}
+            self.app.tree_maps['practice_center_tree_map'][item_id] = player
             # Widget-keyed entry so the app-wide right-click menu resolves it.
-            self.parent.tree_maps.setdefault(self.player_tree, {})[item_id] = player
+            self.app.tree_maps.setdefault(self.player_tree, {})[item_id] = player
     
     def _on_player_select(self, event):
         """Handle player selection"""
         selection = self.player_tree.selection()
         if selection:
             item_id = selection[0]
-            self.selected_player = self.parent.tree_maps.get('practice_center_tree_map', {}).get(item_id)
+            self.selected_player = self.app.tree_maps.get('practice_center_tree_map', {}).get(item_id)
             self._update_practice_controls()
     
     def _create_practice_controls(self, parent):
@@ -1976,5 +2015,23 @@ class PracticeCenterWindow(InGamePopup):
         self._update_practice_controls()
 
 
+
+
+class PracticeCenterWindow(InGamePopup):
+    """Popup wrapper around PracticeCenterView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Practice Center")
+        self._view = PracticeCenterView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 if __name__ == "__main__":
     test_practice_system()

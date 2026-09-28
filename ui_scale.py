@@ -97,6 +97,25 @@ def _notify_scale_listeners() -> None:
             pass
 
 
+def _make_font(family, size, weight):
+    """Build the Font object (or a tuple fallback pre-root/headless)."""
+    try:
+        import tkinter.font as tkfont
+        import tkinter as tk
+        # Ensure a default root exists for the Font constructor.
+        try:
+            tk._default_root.update_idletasks()  # noqa: SLF001
+        except Exception:
+            pass
+        return tkfont.Font(family=family,
+                           size=max(6, int(round(float(size) * _effective()))),
+                           weight=weight or "normal")
+    except Exception:
+        # Headless / pre-root: fall back to a plain tuple; the caller
+        # still gets a valid font spec.
+        return (family, size, weight) if weight else (family, size)
+
+
 def font(family, size, weight=""):
     """Create a scale-aware Font, registered for live rescaling.
 
@@ -106,22 +125,13 @@ def font(family, size, weight=""):
     Safe to call before a Tk root exists only if one is created later --
     in practice every caller runs after the app root exists.
     """
+    f = _make_font(family, size, weight)
     try:
         import tkinter.font as tkfont
-        import tkinter as tk
-        # Ensure a default root exists for the Font constructor.
-        try:
-            tk._default_root.update_idletasks()  # noqa: SLF001
-        except Exception:
-            pass
-        f = tkfont.Font(family=family,
-                        size=max(6, int(round(float(size) * _effective()))),
-                        weight=weight or "normal")
+        if isinstance(f, tkfont.Font):
+            _registry.append((f, float(size)))
     except Exception:
-        # Headless / pre-root: fall back to a plain tuple; the caller
-        # still gets a valid font spec.
-        return (family, size, weight) if weight else (family, size)
-    _registry.append((f, float(size)))
+        pass
     return f
 
 
@@ -132,7 +142,38 @@ def _apply_to_registry() -> None:
             f.configure(size=max(6, int(round(base * eff))))
         except Exception:
             pass
+    for key, f in list(_cache.items()):
+        try:
+            f.configure(size=max(6, int(round(_cache_base[key] * eff))))
+        except Exception:
+            pass
     _notify_scale_listeners()
+
+
+_cache = {}       # (family, size, weight) -> tkinter.font.Font
+_cache_base = {}  # (family, size, weight) -> base size
+
+
+def get(family, size, weight=""):
+    """Cached scale-aware Font: same spec returns the same live object.
+
+    Use for shared constants (e.g. AppFonts) where every attribute
+    access must not mint a new Font. Changing the tier resizes the
+    cached fonts in place, just like :func:`font`.
+    """
+    key = (str(family), float(size), str(weight or "normal"))
+    f = _cache.get(key)
+    if f is not None:
+        return f
+    f = _make_font(family, size, weight)
+    try:
+        import tkinter.font as tkfont
+        if isinstance(f, tkfont.Font):
+            _cache[key] = f
+            _cache_base[key] = float(size)
+    except Exception:
+        pass
+    return f
 
 
 def scaled(px) -> int:

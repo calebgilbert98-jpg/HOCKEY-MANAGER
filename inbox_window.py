@@ -12,9 +12,34 @@ from typing import List, Optional
 
 import customtkinter as ctk
 
+def _ifont(size, weight=""):
+    """Scale-aware Segoe UI font (honors Settings -> Font size).
 
-class InboxWindow(InGamePopup):
-    """EHM-style Email Inbox window with comprehensive email management."""
+    For plain-tk widgets; CTk call sites use ui_scale.scaled() inline
+    because CustomTkinter doesn't safely accept tkinter Font objects.
+    """
+    try:
+        from ui_scale import font as _mkfont
+        return _mkfont("Segoe UI", size, weight)
+    except Exception:
+        return ("Segoe UI", size, weight) if weight else ("Segoe UI", size)
+
+
+def _scaled(px):
+    try:
+        from ui_scale import scaled as _s
+        return _s(px)
+    except Exception:
+        return px
+
+
+class InboxView(ctk.CTkFrame):
+    """EHM-style Email Inbox view.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.open_inbox_window) or
+    inside the legacy InboxWindow popup card.
+    """
 
     _FILTERS = [
         ("All", "all"),
@@ -29,7 +54,7 @@ class InboxWindow(InGamePopup):
         ("League", "League"),
     ]
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -46,15 +71,13 @@ class InboxWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Inbox")
-        self.configure(fg_color=BG)
-        self.geometry("1050x720")
-        self.minsize(900, 600)
+        ctk.CTkFrame.__init__(self, parent, fg_color=BG)
+        self.app = app if app is not None else parent
+        # Set by show_screen() (dashboard) or the InboxWindow wrapper (card).
+        self._close_screen = None
 
         # Initialize inbox reference
-        self.inbox = parent.user_team.inbox
+        self.inbox = self.app.user_team.inbox
         self.selected_message = None
         self._current_filter = "all"
 
@@ -62,8 +85,7 @@ class InboxWindow(InGamePopup):
         self._create_interface()
         self._populate_inbox()
 
-        # Update parent's inbox notification
-        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
 
     # ------------------------------------------------------------------
     # CTk styling helpers
@@ -81,11 +103,11 @@ class InboxWindow(InGamePopup):
                         borderwidth=0,
                         relief='flat',
                         rowheight=30,
-                        font=('Segoe UI', 10))
+                        font=_ifont(10))
         style.configure('Inbox.Treeview.Heading',
                         background=ct['PANEL'],
                         foreground=ct['TEXT'],
-                        font=('Segoe UI', 10, 'bold'),
+                        font=_ifont(10, 'bold'),
                         relief='flat',
                         borderwidth=0)
         style.map('Inbox.Treeview',
@@ -133,22 +155,27 @@ class InboxWindow(InGamePopup):
         # before the content frame so it always keeps its space)
         self._create_toolbar(main_container)
 
-        # Main content area - split between email list and preview
+        # Main content area - emails above, message content below. The
+        # preview pane carries the email itself and gets the larger share
+        # of the space; the list is just the index.
         content_frame = ctk.CTkFrame(main_container, fg_color="transparent")
         content_frame.pack(fill='both', expand=True, pady=(12, 0))
-        content_frame.grid_columnconfigure(0, weight=3)
-        content_frame.grid_columnconfigure(1, weight=2)
-        content_frame.grid_rowconfigure(0, weight=1)
+        content_frame.grid_columnconfigure(0, weight=1)
+        # uniform group: the cavity is split strictly 1:2 by weight -- the
+        # open email is the biggest part of the window, EHM-style, while the
+        # message list (with its tall treeview) scrolls in its strip.
+        content_frame.grid_rowconfigure(0, weight=1, uniform="inbox_rows")
+        content_frame.grid_rowconfigure(1, weight=2, uniform="inbox_rows")
 
-        left_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
+        list_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
                                   corner_radius=12)
-        left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
-        right_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
-                                   corner_radius=12)
-        right_frame.grid(row=0, column=1, sticky='nsew', padx=(6, 0))
+        list_frame.grid(row=0, column=0, sticky='nsew', pady=(0, 6))
+        preview_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
+                                     corner_radius=12)
+        preview_frame.grid(row=1, column=0, sticky='nsew', pady=(6, 0))
 
-        self._create_email_list(left_frame)
-        self._create_email_preview(right_frame)
+        self._create_email_list(list_frame)
+        self._create_email_preview(preview_frame)
 
     def _create_filter_pills(self, parent):
         """Two rows of rounded CTk filter pills (selected pill is teal).
@@ -175,7 +202,7 @@ class InboxWindow(InGamePopup):
                 text_color=ct['TEXT'],
                 border_width=1, border_color=ct['BORDER'],
                 corner_radius=16, height=30, width=110,
-                font=('Segoe UI', 11),
+                font=('Segoe UI', _scaled(11)),
                 command=lambda f=filter_type: self._apply_filter(f))
             btn.pack(side='left', padx=4)
             self._filter_buttons[filter_type] = btn
@@ -200,18 +227,18 @@ class InboxWindow(InGamePopup):
 
         columns = {
             'priority': ('!', 30),
-            'sender': ('From', 150),
-            'subject': ('Subject', 260),
-            'category': ('Category', 90),
-            'date': ('Date', 90),
-            'status': ('Status', 80)
+            'sender': ('From', 170),
+            'subject': ('Subject', 460),
+            'category': ('Category', 110),
+            'date': ('Date', 100),
+            'status': ('Status', 90)
         }
 
         table_frame = ctk.CTkFrame(parent, fg_color="transparent")
         table_frame.pack(fill='both', expand=True, padx=8, pady=(0, 8))
 
         self.email_tree = ttk.Treeview(table_frame, columns=list(columns.keys()),
-                                       show='headings', height=20,
+                                       show='headings', height=8,
                                        style='Inbox.Treeview')
 
         for col, (text, width) in columns.items():
@@ -221,11 +248,11 @@ class InboxWindow(InGamePopup):
 
         # Message-row color tags: first tag in the tuple wins on conflicts
         self.email_tree.tag_configure(
-            'overdue', foreground=ct['GOLD'], font=('Segoe UI', 10, 'bold'))
+            'overdue', foreground=ct['GOLD'], font=_ifont(10, 'bold'))
         self.email_tree.tag_configure(
-            'urgent', foreground=ct['RED'], font=('Segoe UI', 10, 'bold'))
+            'urgent', foreground=ct['RED'], font=_ifont(10, 'bold'))
         self.email_tree.tag_configure(
-            'unread', foreground=ct['TEXT'], font=('Segoe UI', 10, 'bold'))
+            'unread', foreground=ct['TEXT'], font=_ifont(10, 'bold'))
         self.email_tree.tag_configure('read', foreground=ct['TEXT_DIM'])
         self.email_tree.tag_configure('new_status', foreground=ct['TEAL'])
 
@@ -253,31 +280,39 @@ class InboxWindow(InGamePopup):
     def _create_email_preview(self, parent):
         """Create the email preview pane."""
         ct = self._ct
-        self._heading(parent, "Message Preview", size=14).pack(
+        self._heading(parent, "Message", size=14).pack(
             anchor='w', padx=14, pady=(12, 6))
 
-        # Email header card
+        # Email header card (compact two-column grid -- the pane is now
+        # full width, so From/Date and Subject/Category share rows and the
+        # message body gets the vertical room).
         header_frame = ctk.CTkFrame(parent, fg_color=ct['PANEL'],
                                     corner_radius=10)
         header_frame.pack(fill='x', padx=12, pady=(0, 8))
+        header_frame.grid_columnconfigure(0, weight=1)
+        header_frame.grid_columnconfigure(1, weight=1)
 
         self.preview_from_label = self._body(header_frame, "From: ", size=11)
-        self.preview_from_label.pack(anchor='w', padx=12, pady=(8, 2))
+        self.preview_from_label.grid(row=0, column=0, sticky='w',
+                                     padx=12, pady=(8, 2))
+        self.preview_date_label = self._body(header_frame, "Date: ", size=11)
+        self.preview_date_label.grid(row=0, column=1, sticky='w',
+                                     padx=12, pady=(8, 2))
         self.preview_subject_label = self._body(header_frame, "Subject: ",
                                                 size=11)
-        self.preview_subject_label.pack(anchor='w', padx=12, pady=2)
-        self.preview_date_label = self._body(header_frame, "Date: ", size=11)
-        self.preview_date_label.pack(anchor='w', padx=12, pady=2)
+        self.preview_subject_label.grid(row=1, column=0, sticky='w',
+                                        padx=12, pady=(2, 8))
         self.preview_category_label = self._body(header_frame, "Category: ",
                                                  size=11)
-        self.preview_category_label.pack(anchor='w', padx=12, pady=(2, 8))
+        self.preview_category_label.grid(row=1, column=1, sticky='w',
+                                         padx=12, pady=(2, 8))
 
         # Email content (dark CTkTextbox with styled scrollbar)
         self.content_text = ctk.CTkTextbox(
             parent, wrap='word',
             fg_color=ct['PANEL'], text_color=ct['TEXT'],
             border_width=1, border_color=ct['BORDER'],
-            corner_radius=10, font=('Segoe UI', 11))
+            corner_radius=10, font=('Segoe UI', _scaled(11)))
         self.content_text.pack(fill='both', expand=True, padx=12, pady=(0, 8))
         self.content_text.configure(state='disabled')
 
@@ -383,8 +418,8 @@ class InboxWindow(InGamePopup):
             self.email_tree.delete(item)
 
         # Clear tree maps
-        if hasattr(self.parent, 'tree_maps') and 'inbox_messages' in self.parent.tree_maps:
-            self.parent.tree_maps['inbox_messages'].clear()
+        if hasattr(self.app, 'tree_maps') and 'inbox_messages' in self.app.tree_maps:
+            self.app.tree_maps['inbox_messages'].clear()
 
         # Add messages
         for message in self.inbox.messages:
@@ -447,11 +482,11 @@ class InboxWindow(InGamePopup):
         ))
 
         # Store message reference in tree_maps
-        if not hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps = {}
-        if 'inbox_messages' not in self.parent.tree_maps:
-            self.parent.tree_maps['inbox_messages'] = {}
-        self.parent.tree_maps['inbox_messages'][item_id] = message
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = {}
+        if 'inbox_messages' not in self.app.tree_maps:
+            self.app.tree_maps['inbox_messages'] = {}
+        self.app.tree_maps['inbox_messages'][item_id] = message
 
         # Apply styling based on read/urgent/overdue status
         self.email_tree.item(item_id, tags=self._row_tags(message))
@@ -465,8 +500,8 @@ class InboxWindow(InGamePopup):
             self.email_tree.delete(item)
 
         # Clear tree maps (messages are re-registered below)
-        if hasattr(self.parent, 'tree_maps') and 'inbox_messages' in self.parent.tree_maps:
-            self.parent.tree_maps['inbox_messages'].clear()
+        if hasattr(self.app, 'tree_maps') and 'inbox_messages' in self.app.tree_maps:
+            self.app.tree_maps['inbox_messages'].clear()
 
         # Filter messages
         filtered_messages = []
@@ -523,10 +558,10 @@ class InboxWindow(InGamePopup):
         if selection:
             item = selection[0]
             # Get message object from tree_maps
-            if (hasattr(self.parent, 'tree_maps') and
-                'inbox_messages' in self.parent.tree_maps and
-                item in self.parent.tree_maps['inbox_messages']):
-                message = self.parent.tree_maps['inbox_messages'][item]
+            if (hasattr(self.app, 'tree_maps') and
+                'inbox_messages' in self.app.tree_maps and
+                item in self.app.tree_maps['inbox_messages']):
+                message = self.app.tree_maps['inbox_messages'][item]
                 self.selected_message = message
                 self._display_message_preview(message)
 
@@ -641,8 +676,8 @@ class InboxWindow(InGamePopup):
         # Check if this is a fantasy draft message
         if ("FANTASY DRAFT" in message.subject.upper() and
             message.sender_type == "League" and
-            hasattr(self.parent.game_manager, 'pending_fantasy_draft') and
-            self.parent.game_manager.pending_fantasy_draft):
+            hasattr(self.app.game_manager, 'pending_fantasy_draft') and
+            self.app.game_manager.pending_fantasy_draft):
 
             # Show fantasy draft button
             self.special_action_btn.configure(
@@ -666,7 +701,7 @@ class InboxWindow(InGamePopup):
             self._on_closing()
 
             # Launch the fantasy draft window
-            self.parent.open_fantasy_draft_window()
+            self.app.open_fantasy_draft_window()
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not start fantasy draft: {e}")
@@ -681,8 +716,8 @@ class InboxWindow(InGamePopup):
         """Select and display the message with the given id."""
         try:
             mapping = {}
-            if hasattr(self.parent, 'tree_maps'):
-                mapping = self.parent.tree_maps.get('inbox_messages', {})
+            if hasattr(self.app, 'tree_maps'):
+                mapping = self.app.tree_maps.get('inbox_messages', {})
             for item_id, message in mapping.items():
                 if getattr(message, 'id', None) == message_id:
                     self.email_tree.selection_set(item_id)
@@ -707,6 +742,8 @@ class InboxWindow(InGamePopup):
             self._render_postmatch_presser(message)
         elif message.action_type in ("trade_offer", "trade_counter"):
             self._render_trade_negotiation(message)
+        elif message.action_type == "contract_counter":
+            self._render_contract_counter(message)
 
     def _hide_interactive_action(self):
         """Restore the plain text content view."""
@@ -743,7 +780,7 @@ class InboxWindow(InGamePopup):
     def _render_game_day_bundle(self, message):
         """Pre-match presser + team talk + Watch/Quick, all in the inbox."""
         data = message.action_data or {}
-        app = self.parent
+        app = self.app
         try:
             today = app.current_date.isoformat()
         except Exception:
@@ -860,7 +897,7 @@ class InboxWindow(InGamePopup):
 
     def _render_trade_negotiation(self, message):
         import trade_negotiation as tn
-        app = self.parent
+        app = self.app
         neg_id = (message.action_data or {}).get("negotiation_id")
         neg = tn.get_negotiation(app, neg_id) if neg_id else None
 
@@ -919,14 +956,14 @@ class InboxWindow(InGamePopup):
     def _trade_neg_from_message(self, message):
         import trade_negotiation as tn
         neg_id = (message.action_data or {}).get("negotiation_id")
-        return tn.get_negotiation(self.parent, neg_id) if neg_id else None
+        return tn.get_negotiation(self.app, neg_id) if neg_id else None
 
     def _on_trade_negotiate(self, message):
         import trade_negotiation as tn
         neg = self._trade_neg_from_message(message)
         if neg is None or not neg.is_open:
             return
-        app = self.parent
+        app = self.app
         try:
             user_objs, _ = tn.resolve_assets(app, neg.user_assets)
             partner_objs, _ = tn.resolve_assets(app, neg.partner_assets)
@@ -947,7 +984,7 @@ class InboxWindow(InGamePopup):
         if neg is None:
             return
         try:
-            tn.accept_negotiation(self.parent, neg.id)
+            tn.accept_negotiation(self.app, neg.id)
         except Exception as e:
             print(f"trade accept failed: {e}")
         message.action_done = True
@@ -960,9 +997,66 @@ class InboxWindow(InGamePopup):
         if neg is None:
             return
         try:
-            tn.decline_negotiation(self.parent, neg.id)
+            tn.decline_negotiation(self.app, neg.id)
         except Exception as e:
             print(f"trade decline failed: {e}")
+        message.action_done = True
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    # -- contract counter-offers (FM24/EHM style agent replies) -------------
+    def _render_contract_counter(self, message):
+        data = message.action_data or {}
+        name = data.get("player_name", "The player")
+        asking = data.get("asking_price", 0)
+        years = data.get("years", 1)
+
+        self._iwrap("CONTRACT COUNTER-OFFER", size=15, bold=True,
+                    padx=10, pady=(10, 2))
+        if message.action_done:
+            self._iwrap("This negotiation is closed.", size=11, dim=True,
+                        padx=10)
+            return
+        self._iwrap(f"{name} rejected your offer but will sign for "
+                    f"${asking:,} per year over {years} year(s).",
+                    size=11, padx=10, pady=(4, 2))
+        self._action_section("YOUR MOVE")
+        btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=6)
+        # Vertical full-width buttons: the preview pane is narrow (~330px) and
+        # a single row clips the third action.
+        self._primary_button(
+            btn_row, text=f"Accept ${asking:,}/yr",
+            command=lambda m=message: self._on_contract_counter_accept(m)
+        ).pack(fill="x", pady=(0, 8))
+        self._secondary_button(
+            btn_row, text="New Offer",
+            command=lambda m=message: self._on_contract_counter_new_offer(m)
+        ).pack(fill="x", pady=(0, 8))
+        self._secondary_button(
+            btn_row, text="Walk Away",
+            command=lambda m=message: self._on_contract_counter_walkaway(m)
+        ).pack(fill="x")
+        self._iwrap("Close this inbox any time -- the offer waits for you.",
+                    size=10, dim=True, padx=10, pady=(6, 0))
+
+    def _on_contract_counter_accept(self, message):
+        try:
+            self.app.accept_contract_counter(message)
+        except Exception as e:
+            print(f"contract counter accept failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    def _on_contract_counter_new_offer(self, message):
+        try:
+            self.app.reopen_contract_negotiation(message)
+        except Exception as e:
+            print(f"contract counter new offer failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    def _on_contract_counter_walkaway(self, message):
         message.action_done = True
         self._refresh_inbox()
         self._display_message_preview(message)
@@ -970,21 +1064,21 @@ class InboxWindow(InGamePopup):
 
     def _on_bundle_presser_answer(self, message, qi, ai):
         try:
-            self.parent._answer_bundle_presser(message, qi, ai)
+            self.app._answer_bundle_presser(message, qi, ai)
         except Exception:
             pass
         self._show_interactive_action(message)
 
     def _on_bundle_team_talk(self, message, oi):
         try:
-            self.parent._answer_bundle_team_talk(message, oi)
+            self.app._answer_bundle_team_talk(message, oi)
         except Exception:
             pass
         self._show_interactive_action(message)
 
     def _on_postmatch_answer(self, message, qi, ai):
         try:
-            self.parent._answer_postmatch_presser(message, qi, ai)
+            self.app._answer_postmatch_presser(message, qi, ai)
         except Exception:
             pass
         self._show_interactive_action(message)
@@ -1038,8 +1132,8 @@ class InboxWindow(InGamePopup):
     def _refresh_inbox(self):
         """Refresh the inbox display, preserving the active filter."""
         self._apply_filter(getattr(self, '_current_filter', 'all'))
-        if hasattr(self.parent, 'update_inbox_notification'):
-            self.parent.update_inbox_notification()
+        if hasattr(self.app, 'update_inbox_notification'):
+            self.app.update_inbox_notification()
 
     def _clear_preview(self):
         """Clear the message preview pane."""
@@ -1073,12 +1167,53 @@ class InboxWindow(InGamePopup):
         # Refresh per-filter unread badges
         self._update_filter_badges()
 
-    def _on_closing(self):
-        """Handle window closing."""
-        # Update parent inbox notification
-        if hasattr(self.parent, 'update_inbox_notification'):
-            self.parent.update_inbox_notification()
-        self.destroy()
+    def request_close(self):
+        """Close the view: refresh the nav badge, then hand off."""
+        if hasattr(self.app, 'update_inbox_notification'):
+            self.app.update_inbox_notification()
+        self.close_view()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    # Popup-mode alias kept for the InboxWindow wrapper.
+    _on_closing = request_close
 
 
 # Sample email generation removed - emails are now generated dynamically from actual game events
+class InboxWindow(InGamePopup):
+    """Popup wrapper around InboxView (backward compatibility).
+
+    New code should embed InboxView as a full-screen view via
+    HockeyManagerGUI.open_inbox_window() instead of opening this card.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Inbox")
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = InboxView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._view.request_close)
+        except Exception:
+            pass
+
+    def focus_message(self, message_id):
+        return self._view.focus_message(message_id)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

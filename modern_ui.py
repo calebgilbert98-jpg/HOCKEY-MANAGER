@@ -49,29 +49,48 @@ class AppColors:
     TEAM_DEFAULT = "#00ceb8"
 
 
-class AppFonts:
-    """Typography scale."""
-    
-    # Headings
-    HERO = ("Segoe UI", 28, "bold")        # Large hero numbers
-    H1 = ("Segoe UI", 20, "bold")          # Section titles
-    H2 = ("Segoe UI", 16, "bold")          # Card titles
-    H3 = ("Segoe UI", 14, "bold")          # Subsection
-    
-    # Body
-    BODY = ("Segoe UI", 12, "normal")      # Regular text
-    BODY_BOLD = ("Segoe UI", 12, "bold")   # Bold body
-    SMALL = ("Segoe UI", 11, "normal")     # Small text
-    SMALL_BOLD = ("Segoe UI", 11, "bold")
-    
-    # Labels (uppercase, muted)
-    LABEL = ("Segoe UI", 10, "bold")       # Small caps labels
-    CAPTION = ("Segoe UI", 9, "normal")    # Tiny captions
-    
-    # Numbers
-    STAT_LARGE = ("Segoe UI", 32, "bold")  # Big stat numbers
-    STAT_MEDIUM = ("Segoe UI", 24, "bold") # Medium stats
-    STAT_SMALL = ("Segoe UI", 18, "bold")  # Small stats
+class _AppFontsMeta(type):
+    """Metaclass: AppFonts.<NAME> returns a live ui_scale Font.
+
+    Sizes match the original fixed tuples at the Default tier; every
+    other tier (and auto-fit) rescales them in place. Attribute access
+    is cached, so repeated ``font=AppFonts.SMALL`` evaluations share
+    one Font object instead of minting new ones.
+    """
+    _SIZES = {
+        # Headings
+        "HERO":        (28, "bold"),    # Large hero numbers
+        "H1":          (20, "bold"),    # Section titles
+        "H2":          (16, "bold"),    # Card titles
+        "H3":          (14, "bold"),    # Subsection
+        # Body
+        "BODY":        (12, "normal"),  # Regular text
+        "BODY_BOLD":   (12, "bold"),    # Bold body
+        "SMALL":       (11, "normal"),  # Small text
+        "SMALL_BOLD":  (11, "bold"),
+        # Labels (uppercase, muted)
+        "LABEL":       (10, "bold"),    # Small caps labels
+        "CAPTION":     (9, "normal"),   # Tiny captions
+        # Numbers
+        "STAT_LARGE":  (32, "bold"),    # Big stat numbers
+        "STAT_MEDIUM": (24, "bold"),    # Medium stats
+        "STAT_SMALL":  (18, "bold"),    # Small stats
+    }
+
+    def __getattr__(cls, name):
+        spec = cls._SIZES.get(name)
+        if spec is None:
+            raise AttributeError("AppFonts has no attribute %r" % (name,))
+        size, weight = spec
+        try:
+            from ui_scale import get as _getfont
+            return _getfont("Segoe UI", size, weight)
+        except Exception:
+            return ("Segoe UI", size, weight)
+
+
+class AppFonts(metaclass=_AppFontsMeta):
+    """Typography scale (live fonts honoring Settings -> Font size)."""
 
 
 class AppCard(tk.Frame):

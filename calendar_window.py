@@ -15,7 +15,7 @@ from popup_system import InGamePopup
 import customtkinter as ctk
 
 
-class CalendarWindow(InGamePopup):
+class CalendarView(ctk.CTkFrame):
     """Season calendar: month grid + day detail pane."""
 
     # Day-cell styles keyed by event priority. Each entry carries the cell
@@ -51,7 +51,7 @@ class CalendarWindow(InGamePopup):
     # Styles whose cells get bold text (mirrors the old ttk emphasis).
     _BOLD_STYLES = ('home', 'away', 'allstar', 'deadline', 'today')
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -66,19 +66,13 @@ class CalendarWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title(f"Season Calendar - {self.parent.user_team.team_name}")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the CalendarWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1280x860")
-        self.minsize(1024, 680)
-
-        # Window setup
-        self.resizable(True, True)
-        self.transient(parent)
 
         # Current date tracking
-        self.current_view_date = self.parent.current_date
+        self.current_view_date = self.app.current_date
         self.selected_date = None
         self._selected_btn = None
 
@@ -91,23 +85,15 @@ class CalendarWindow(InGamePopup):
         self._populate_calendar()
 
         # Add to parent's open windows
-        self.parent.open_windows['calendar'] = self
+        self.app.open_windows['calendar'] = self
 
-        # Center window
-        self.center_window()
-
-    def center_window(self):
-        """Center the window on screen."""
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        if width <= 1 or height <= 1:
-            # Not mapped yet (e.g. parent hidden); leave the wm geometry
-            # request ("1280x860") untouched instead of shrinking to 1x1.
-            return
-        x = (self.winfo_screenwidth() - width) // 2
-        y = (self.winfo_screenheight() - height) // 2
-        self.geometry(f'{width}x{height}+{x}+{y}')
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # Layout
@@ -147,7 +133,7 @@ class CalendarWindow(InGamePopup):
         title_box = ctk.CTkFrame(header, fg_color="transparent")
         title_box.pack(side='left', padx=16, pady=12)
         self._heading(title_box, "Season Calendar", size=20).pack(anchor='w')
-        self._body(title_box, self.parent.user_team.team_name,
+        self._body(title_box, self.app.user_team.team_name,
                    size=12, dim=True).pack(anchor='w')
 
         nav = ctk.CTkFrame(header, fg_color="transparent")
@@ -266,7 +252,7 @@ class CalendarWindow(InGamePopup):
                              command=self._launch_trade_deadline_center).pack(
                                  fill='x', pady=3)
         self._secondary_button(self.actions_frame, text="Trade Center",
-                               command=self.parent.open_trade_window).pack(
+                               command=self.app.open_trade_window).pack(
                                    fill='x', pady=3)
         self._secondary_button(self.actions_frame, text="Market Analysis",
                                command=self._view_market_analysis).pack(
@@ -276,12 +262,12 @@ class CalendarWindow(InGamePopup):
 
     def _launch_trade_deadline_center(self):
         """Launch the Trade Deadline Center from calendar."""
-        self.parent.open_trade_deadline_center()
+        self.app.open_trade_deadline_center()
 
     def _view_market_analysis(self):
         """Placeholder for market analysis - could open trade statistics."""
         # For now, redirect to trade window
-        self.parent.open_trade_window()
+        self.app.open_trade_window()
 
     # ------------------------------------------------------------------
     # Event data (unchanged logic)
@@ -294,7 +280,7 @@ class CalendarWindow(InGamePopup):
         self.nhl_calendar_info = self._get_nhl_calendar_info()
 
         # Load team games and NHL events
-        for game_entry in self.parent.league.schedule:
+        for game_entry in self.app.league.schedule:
             # Handle different schedule formats
             if isinstance(game_entry, dict):
                 # New format: dictionary with date, home_team, away_team, etc.
@@ -340,10 +326,10 @@ class CalendarWindow(InGamePopup):
             # Handle regular team games - show ALL games (EHM/FM style)
             # User's games get high importance, others get normal
             else:
-                is_user_game = self.parent.user_team in (home_team, away_team)
+                is_user_game = self.app.user_team in (home_team, away_team)
 
                 if is_user_game:
-                    is_home = self.parent.user_team == home_team
+                    is_home = self.app.user_team == home_team
                     opponent = away_team if is_home else home_team
 
                     event = {
@@ -396,13 +382,13 @@ class CalendarWindow(InGamePopup):
         The season_year is the year the season starts (e.g., 2024 for 2024-25).
         """
         try:
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'season_year'):
-                return self.parent.league.season_year
+            if hasattr(self.app, 'league') and hasattr(self.app.league, 'season_year'):
+                return self.app.league.season_year
         except (AttributeError, TypeError):
             pass
         # Fallback: derive from current date
         # If we're in Jan-Sep, the season started last year
-        current = self.parent.current_date
+        current = self.app.current_date
         if current.month >= 10:
             return current.year
         else:
@@ -562,7 +548,7 @@ class CalendarWindow(InGamePopup):
         'entry_draft'/'free_agency' types the old check looked for.
         """
         events = self.events_by_date.get(day, [])
-        is_today = (day == self.parent.current_date)
+        is_today = (day == self.app.current_date)
 
         style_key, marker = 'default', ''
         if events:
@@ -730,9 +716,9 @@ class CalendarWindow(InGamePopup):
 
     def _user_results(self):
         """Game results involving the user team, oldest first."""
-        user = self.parent.user_team
+        user = self.app.user_team
         results = []
-        for result in getattr(self.parent, 'game_results', None) or []:
+        for result in getattr(self.app, 'game_results', None) or []:
             try:
                 if user in (result['home_team'], result['away_team']):
                     results.append(result)
@@ -747,7 +733,7 @@ class CalendarWindow(InGamePopup):
         Outcome is 'W', 'L' or 'T'. Returns None when the result is malformed.
         """
         try:
-            user = self.parent.user_team
+            user = self.app.user_team
             home, away = result['home_team'], result['away_team']
             is_home = (user == home)
             opponent = away if is_home else home
@@ -795,7 +781,7 @@ class CalendarWindow(InGamePopup):
     def _iter_schedule_games(self):
         """Yield (date, home_team, away_team) for real games in the schedule,
         skipping NHL special-event entries."""
-        league = getattr(self.parent, 'league', None)
+        league = getattr(self.app, 'league', None)
         schedule = getattr(league, 'schedule', None) or []
         for entry in schedule:
             try:
@@ -833,8 +819,8 @@ class CalendarWindow(InGamePopup):
         for game_date, home, away in self._iter_schedule_games():
             if game_date is None or game_date <= self.selected_date:
                 continue
-            if opponent in (home, away) and self.parent.user_team in (home, away):
-                venue = 'vs' if self.parent.user_team == home else '@'
+            if opponent in (home, away) and self.app.user_team in (home, away):
+                venue = 'vs' if self.app.user_team == home else '@'
                 upcoming.append(f"{game_date.strftime('%b %d')}: {venue} {self._team_label(opponent)}")
         if upcoming:
             lines.append("Upcoming: " + "; ".join(upcoming[:4]))
@@ -880,18 +866,18 @@ class CalendarWindow(InGamePopup):
 
     def _get_game_result(self, game_date, opponent):
         """Get the result of a game if it has been played."""
-        for result in self.parent.game_results:
+        for result in self.app.game_results:
             if (result['date'] == game_date and
                 opponent in (result['home_team'], result['away_team'])):
 
-                if self.parent.user_team == result['home_team']:
+                if self.app.user_team == result['home_team']:
                     user_score = result['home_score']
                     opp_score = result['away_score']
                 else:
                     user_score = result['away_score']
                     opp_score = result['home_score']
 
-                result_text = "Won" if result['winner'] == self.parent.user_team else "Lost"
+                result_text = "Won" if result['winner'] == self.app.user_team else "Lost"
                 return f"{result_text} {user_score}-{opp_score}"
         return None
 
@@ -916,9 +902,9 @@ class CalendarWindow(InGamePopup):
 
     def _go_to_today(self):
         """Navigate to current date."""
-        self.current_view_date = self.parent.current_date
+        self.current_view_date = self.app.current_date
         self._populate_calendar()
-        self._select_date(self.parent.current_date)
+        self._select_date(self.app.current_date)
 
     def _view_game_details(self):
         """View detailed game information."""
@@ -930,15 +916,15 @@ class CalendarWindow(InGamePopup):
 
         if game_events:
             # Open game details or schedule window
-            self.parent.open_schedule_window()
+            self.app.open_schedule_window()
 
     def _view_team_stats(self):
         """View team statistics."""
-        self.parent.open_roster_window()
+        self.app.open_roster_window()
 
     def _view_news(self):
         """View news and updates."""
-        self.parent.open_news_window()
+        self.app.open_news_window()
 
     def update_calendar(self):
         """Refresh the calendar with current data."""
@@ -960,3 +946,23 @@ class CalendarWindow(InGamePopup):
         except tk.TclError:
             # Window was destroyed, ignore
             pass
+
+class CalendarWindow(InGamePopup):
+    """Popup wrapper around CalendarView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        try:
+            self.title(f"Season Calendar - {parent.user_team.team_name}")
+        except Exception:
+            self.title("Season Calendar")
+        self._view = CalendarView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

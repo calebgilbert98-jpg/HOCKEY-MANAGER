@@ -10,21 +10,22 @@ from popup_system import messagebox, InGamePopup
 from datetime import date
 from typing import List, Optional
 
+import customtkinter as ctk
+
 import manager_career as mc
 from player_context_menu import PlayerContextMenu
 
 
-class ManagerHubWindow(InGamePopup):
+class ManagerHubView(ctk.CTkFrame):
     """FM-style manager hub with tabbed career screens."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.career = parent.career
-        self.title("Manager Hub")
-        self.geometry("950x680")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ManagerHubWindow wrapper
+        self.career = self.app.career
         try:
-            self.configure(background=parent.BG_COLOR)
+            self.configure(fg_color=self.app.BG_COLOR)
         except Exception:
             pass
 
@@ -40,6 +41,14 @@ class ManagerHubWindow(InGamePopup):
         self._build_profile_tab(notebook)
 
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
     def _build_board_tab(self, notebook):
         frame = ttk.Frame(notebook, padding=15)
         notebook.add(frame, text="  Board  ")
@@ -161,7 +170,7 @@ class ManagerHubWindow(InGamePopup):
     def _playoff_cutoff_pace(self):
         """Approximate 82-game pace of the 16th-place team, or None."""
         try:
-            gm = getattr(self.parent, "game_manager", None)
+            gm = getattr(self.app, "game_manager", None)
             if gm is None:
                 return None
             league = getattr(gm, "league", None)
@@ -229,13 +238,13 @@ class ManagerHubWindow(InGamePopup):
             messagebox.showinfo("Squad", "Select a player first.")
             return None
         pid = int(self.squad_tree.item(sel[0], "values")[0].split("|")[0])
-        for p in self.parent.user_team.roster:
+        for p in self.app.user_team.roster:
             if p.id == pid:
                 return p
         return None
 
     def _player_by_id(self, pid):
-        for p in self.parent.user_team.roster:
+        for p in self.app.user_team.roster:
             if p.id == pid:
                 return p
         return None
@@ -253,12 +262,12 @@ class ManagerHubWindow(InGamePopup):
         player = self._player_by_id(pid)
         if not player:
             return
-        PlayerContextMenu(self.parent).show_context_menu(event, player)
+        PlayerContextMenu(self.app).show_context_menu(event, player)
 
     def _refresh_squad(self):
         for i in self.squad_tree.get_children():
             self.squad_tree.delete(i)
-        for p in sorted(self.parent.user_team.roster,
+        for p in sorted(self.app.user_team.roster,
                         key=lambda x: (x.last_name, x.first_name)):
             try:
                 pos = p.primary_position.name if hasattr(p.primary_position, "name") else str(p.primary_position)
@@ -293,7 +302,7 @@ class ManagerHubWindow(InGamePopup):
         p = self._selected_player()
         if not p:
             return
-        team = self.parent.user_team
+        team = self.app.user_team
         if letter == "C":
             for mate in team.roster:
                 if getattr(mate, "captaincy", None) == "C":
@@ -394,7 +403,7 @@ class ManagerHubWindow(InGamePopup):
         box = self.prospect_list
         box.config(state="normal")
         box.delete("1.0", "end")
-        prospects = list(getattr(self.parent.user_team, "prospects", []) or [])
+        prospects = list(getattr(self.app.user_team, "prospects", []) or [])
         if not prospects:
             box.insert("end", "No unsigned prospects yet. Build your pipeline "
                               "at the NHL Entry Draft each June.")
@@ -463,9 +472,26 @@ class ManagerHubWindow(InGamePopup):
 
 
 # ---------------------------------------------------------------------------
+
+class ManagerHubWindow(InGamePopup):
+    """Popup wrapper around ManagerHubView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Manager Hub")
+        self._view = ManagerHubView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
 # Dialogs
 # ---------------------------------------------------------------------------
-
 class TeamTalkDialog(InGamePopup):
     """Modal team talk picker. Result: (option_dict_or_None, reaction_text, boost)."""
 

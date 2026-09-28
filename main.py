@@ -18,17 +18,21 @@ from game_classes import debug_print
 from windows import (RosterWindow, FreeAgencyWindow, TradeWindow, ScoutingWindow, 
                      DraftWindow, ScheduleWindow, FinancesWindow, NewsWindow, 
                      GMOptionsWindow, ContractNegotiationWindow, 
-                     TradeBlockWindow, WaiversWindow, SetCaptainsWindow)
+                     TradeBlockWindow, WaiversWindow, SetCaptainsWindow,
+                     RosterView, FreeAgencyView, ScoutingView,
+                     DraftView, ScheduleView, FinancesView, NewsView,
+                     GMOptionsView, WaiversView, GMDashboardView,
+                     TeamAnalyticsView, SalaryAnalyticsView)
 from ui_components import PlayerProfileWindow
 from ui_widgets import PillButton
 from inbox_window import InboxWindow
 # Professional Calendar System (Phase 4) - replaces old calendar_window
-from calendar_window import CalendarWindow
+from calendar_window import CalendarWindow, CalendarView
 from schedule_engine import ScheduleEngine, ScheduleConfiguration, ScheduleGenerationMode
-from staff_management_window import StaffManagementWindow
-from professional_scouting_window import ProfessionalScoutingWindow
-from modern_scouting_window import ModernScoutingWindow
-from stats_standings_window import StatsStandingsWindow
+from staff_management_window import StaffManagementWindow, StaffManagementView
+from professional_scouting_window import ProfessionalScoutingWindow, ProfessionalScoutingView
+from modern_scouting_window import ModernScoutingWindow, ModernScoutingView
+from stats_standings_window import StatsStandingsWindow, StatsStandingsView
 from GAME_VIEWER import launch_game_viewer
 from draft_generator import generate_draft_class
 from database_manager import initialize_game_database
@@ -50,7 +54,7 @@ from event_day_hubs import (DraftDayCentral, FreeAgencyFrenzy, is_draft_day,
 
 # Import Phase 1 systems
 from save_load_system import SaveLoadWindow, GameSaveManager
-from playoff_system import PlayoffWindow
+from playoff_system import PlayoffWindow, PlayoffView
 from atmospheric_dashboard import AtmosphericDashboard
 from visual_identity_system import HockeyAtmosphereSystem
 from smart_data_widgets import PlayerStatsCard, TeamStandingsWidget
@@ -60,9 +64,10 @@ from player_development_system import PlayerDevelopmentEngine, initialize_player
 
 # Import optional Media System
 from media_system import MediaSystem
-from media_center_window import MediaCenterWindow
-from morale_window import MoraleWindow
+from media_center_window import MediaCenterWindow, MediaCenterView
+from morale_window import MoraleWindow, MoraleView
 from tactics_window import TacticsWindow
+from manager_hub_window import ManagerHubView
 
 # Import Football Manager-style career systems
 import manager_career
@@ -84,6 +89,7 @@ except ImportError:
 try:
     from tooltip import create_tooltip
 except Exception:
+
     def create_tooltip(widget, text, delay=500):
         return None
 
@@ -134,6 +140,7 @@ START_DATE = date(datetime.now().year, 10, 1)
 # --- Game Engine Class ---
 class GameManager:
     """Manages the overall game state, including setup and season progression."""
+
     def __init__(self, league_name="EHM Clone Hockey League"):
         self.league = League(league_name)
         self.league.set_game_manager(self)  # Set reference for database access
@@ -165,6 +172,7 @@ class GameManager:
         # Don't setup game immediately - wait for startup settings
         
     @property
+
     def ai_manager(self):
         """Lazy initialization of AI team manager"""
         if self._ai_manager is None:
@@ -197,6 +205,7 @@ class GameManager:
         return SALARY_CAP
         
     @property
+
     def record_manager(self):
         """Lazy initialization of record manager to avoid blocking startup"""
         if self._record_manager is None:
@@ -1050,6 +1059,7 @@ NHL League Office""",
         print(f"Free agent staff available: {len(self.league.free_agent_staff)}")
     
     @property
+
     def free_agents(self):
         """Get free agents from the database manager."""
         if hasattr(self, 'database_manager'):
@@ -1328,6 +1338,7 @@ def roll_game_injury(team):
 def best_lines(team):
     """Builds the best possible lineup for the given team based on player ratings and positions."""
     # Injured players can't dress: filter them out (fall back to full group if empty)
+
     def _healthy(players):
         healthy = [p for p in players if not getattr(p, 'is_injured', False)]
         return healthy if healthy else players
@@ -1967,6 +1978,7 @@ class LiveHockeySimulation:
 
 class AdvancedGameSim:
     """Simulates a hockey game and produces a structured event log for visualization."""
+
     def __init__(self, home_team, away_team):
         self.home_team = home_team
         self.away_team = away_team
@@ -3989,6 +4001,7 @@ class HockeyManagerGUI(tk.Tk):
         # Create main container with proper layout
         main_container = ttk.Frame(self, style='Panel.TFrame')
         main_container.pack(fill="both", expand=True)
+        self.main_container = main_container
         
         # Configure grid weights for proper expansion
         main_container.grid_rowconfigure(0, weight=0)  # Menu bar - fixed height
@@ -4022,6 +4035,9 @@ class HockeyManagerGUI(tk.Tk):
                 dashboard_frame = tk.Frame(main_container, bg=AppColors.BG)
                 dashboard_frame.grid(row=1, column=0, sticky="nsew")
                 self.dashboard.create_dashboard(dashboard_frame)
+                # Full-screen views (e.g. inbox) hide/restore this frame.
+                self._dashboard_frame = dashboard_frame
+                self._dashboard_grid = dict(row=1, column=0, sticky="nsew")
                 
             except Exception as e:
                 print(f"Modern dashboard failed, falling back: {e}")
@@ -4041,6 +4057,10 @@ class HockeyManagerGUI(tk.Tk):
             dashboard_frame = ttk.Frame(main_container, style='Panel.TFrame')
             dashboard_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
             self.dashboard.create_immersive_dashboard(dashboard_frame)
+            # Full-screen views (e.g. inbox) hide/restore this frame.
+            self._dashboard_frame = dashboard_frame
+            self._dashboard_grid = dict(row=1, column=0, sticky="nsew",
+                                        padx=10, pady=10)
         
         # Update dashboard with current data
         self.update_dashboard_data()
@@ -4667,6 +4687,7 @@ class HockeyManagerGUI(tk.Tk):
         self.standings_tree.grid(row=1, column=0, sticky='nsew', padx=10, pady=10)  # Use grid instead of pack
         
     # Enhanced EHM-style panel methods
+
     def _create_enhanced_player_focus_panel(self, parent):
         """Enhanced player focus panel with more detailed information and better space usage."""
         panel = self._create_panel(parent, "⭐ Player Spotlight", 0, 0)
@@ -4771,7 +4792,7 @@ class HockeyManagerGUI(tk.Tk):
         
         self.recent_preview_text = tk.Text(messages_frame, height=6, width=20,
                                          bg=self.CONTENT_BG, fg=self.TEXT_COLOR,
-                                         font=(self.FONT_FAMILY, 8), wrap='word',
+                                         font=(self.FONT_FAMILY, 9), wrap='word',
                                          state='disabled', relief='flat', 
                                          borderwidth=0, cursor='arrow')
         self.recent_preview_text.pack(fill='both', expand=True)
@@ -6305,6 +6326,7 @@ class HockeyManagerGUI(tk.Tk):
         self.open_windows['performance_monitor'].focus_set()
         
     # Enhanced panel update methods
+
     def update_enhanced_schedule_panel(self):
         """Update the enhanced schedule panel."""
         if hasattr(self, 'schedule_tree'):
@@ -6816,6 +6838,7 @@ class HockeyManagerGUI(tk.Tk):
     # ------------------------------------------------------------------
     # Trade deadline day: 30-minute game clock (9 AM -> 3 PM ET)
     # ------------------------------------------------------------------
+
     def is_trade_deadline_day(self):
         """Game-date check: is today trade deadline day (March 8)?"""
         try:
@@ -7467,6 +7490,7 @@ class HockeyManagerGUI(tk.Tk):
         return False, f"unsupported action: {action}"
 
     # -- morale / coaching-room actions (host side) ----------------------
+
     def _mp_team_context(self, team):
         """Host-side equivalent of the Morale window's team context."""
         ctx = {"win_pct": 0.5, "room_leadership": 50, "losing_streak": 0}
@@ -7561,6 +7585,7 @@ class HockeyManagerGUI(tk.Tk):
         return True, (text[:300] if text else "done")
 
     # -- rivalry declarations (host side) --------------------------------
+
     def _apply_rivalry_action(self, action, params, team):
         """Apply a client's rivalry declaration/renounce to canonical state.
 
@@ -8264,6 +8289,7 @@ class HockeyManagerGUI(tk.Tk):
     NEWS_TRIM_BATCH = 200
 
     @staticmethod
+
     def _result_date_key(value):
         """Normalize a result's mixed-format date to a datetime.date."""
         try:
@@ -8387,25 +8413,24 @@ class HockeyManagerGUI(tk.Tk):
                         highlight = f"{event.get('event')}: {player_name} - Period {event.get('period', 1)}"
                         game_highlights.append(highlight)
             
-            # Show the results window
-            from game_results_window import GameResultsWindow
-            
-            # Package all data into the format GameResultsWindow expects
+            # Show the results as a full-screen view (FM/EHM-style teleport)
+            from game_results_window import GameResultsView
+
+            # Package all data into the format the view expects
             results_data = {
                 'date': self.current_date.strftime("%B %d, %Y"),
                 'user_game_result': user_game_result,
-                'all_games': today_results,  # GameResultsWindow expects 'all_games' not 'today_results'
+                'all_games': today_results,  # the view expects 'all_games' not 'today_results'
                 'league_results': league_results,
-                'news_events': recent_news,  # GameResultsWindow expects 'news_events' not 'recent_news'
+                'news_events': recent_news,  # the view expects 'news_events' not 'recent_news'
                 'game_highlights': game_highlights,
                 'games_played': len(today_results) if today_results else 0,
                 'new_messages_count': 0  # TODO: Calculate actual new message count
             }
             
-            results_window = GameResultsWindow(
-                self,
-                results_data
-            )
+            results_window = self.show_screen(
+                'game_results', 'Game Results', GameResultsView,
+                results_data, fresh=True)
             
         except Exception as e:
             print(f"Error showing daily results: {e}")
@@ -10601,14 +10626,10 @@ class HockeyManagerGUI(tk.Tk):
                     print(f"incoming trade offer failed (non-fatal): {e}")
     
     def open_roster_window(self):
-        if 'roster' not in self.open_windows or not self.open_windows['roster'].winfo_exists():
-            self.open_windows['roster'] = RosterWindow(self)
-        self.open_windows['roster'].focus_set()
+        return self.show_screen('roster', 'Roster', RosterView)
 
     def open_free_agency_window(self):
-        if 'free_agency' not in self.open_windows or not self.open_windows['free_agency'].winfo_exists():
-            self.open_windows['free_agency'] = FreeAgencyWindow(self)
-        self.open_windows['free_agency'].focus_set()
+        return self.show_screen('free_agency', 'Free Agency', FreeAgencyView)
 
     def open_trade_window(self, preset=None):
         if ('trade' not in self.open_windows
@@ -10670,74 +10691,49 @@ class HockeyManagerGUI(tk.Tk):
             messagebox.showerror("Error", f"Could not open fantasy draft window: {e}")
 
     def open_scouting_window(self):
-        if 'scouting' not in self.open_windows or not self.open_windows['scouting'].winfo_exists():
-            self.open_windows['scouting'] = ScoutingWindow(self)
-        self.open_windows['scouting'].focus_set()
-    
+        return self.show_screen('scouting', 'Scouting', ScoutingView)
+
     def open_scouting_management_window(self):
-        if 'scouting' not in self.open_windows or not self.open_windows['scouting'].winfo_exists():
-            try:
-                from modern_scouting_window import ModernScoutingWindow
-                self.open_windows['scouting'] = ModernScoutingWindow(self)
-            except Exception:
-                self.open_windows['scouting'] = ProfessionalScoutingWindow(self)
-        self.open_windows['scouting'].focus_set()
-    
+        try:
+            from modern_scouting_window import ModernScoutingView
+            return self.show_screen('scouting', 'Scouting', ModernScoutingView)
+        except Exception:
+            from professional_scouting_window import ProfessionalScoutingView
+            return self.show_screen('scouting', 'Scouting', ProfessionalScoutingView)
+
     def open_staff_management_window(self):
-        if 'staff_management' not in self.open_windows or not self.open_windows['staff_management'].winfo_exists():
-            self.open_windows['staff_management'] = StaffManagementWindow(self)
-        self.open_windows['staff_management'].focus_set()
-        
+        return self.show_screen('staff_management', 'Staff', StaffManagementView)
+
     def open_draft_window(self):
-        if 'draft' not in self.open_windows or not self.open_windows['draft'].winfo_exists():
-            self.open_windows['draft'] = DraftWindow(self)
-        self.open_windows['draft'].focus_set()
+        return self.show_screen('draft', 'NHL Draft', DraftView)
 
     def open_schedule_window(self):
-        if 'schedule' not in self.open_windows or not self.open_windows['schedule'].winfo_exists():
-            self.open_windows['schedule'] = ScheduleWindow(self)
-        self.open_windows['schedule'].focus_set()
+        return self.show_screen('schedule', 'Schedule', ScheduleView)
 
     def open_finances_window(self):
-        if 'finances' not in self.open_windows or not self.open_windows['finances'].winfo_exists():
-            self.open_windows['finances'] = FinancesWindow(self)
-        self.open_windows['finances'].focus_set()
-    
+        return self.show_screen('finances', 'Finances', FinancesView)
+
     def open_news_window(self):
-        if 'news' not in self.open_windows or not self.open_windows['news'].winfo_exists():
-            self.open_windows['news'] = NewsWindow(self)
-        self.open_windows['news'].focus_set()
-    
+        return self.show_screen('news', 'News', NewsView)
+
     def open_media_center(self):
         """Open the optional Media & Press Conference Center"""
-        if 'media_center' not in self.open_windows or not self.open_windows['media_center'].winfo_exists():
-            self.open_windows['media_center'] = MediaCenterWindow(self)
-        self.open_windows['media_center'].focus_set()
+        return self.show_screen('media_center', 'Media Center', MediaCenterView)
 
     def open_morale_window(self):
         """Open the Team Morale tab (chemistry, hierarchy, social groups)."""
-        if 'morale' not in self.open_windows or not self.open_windows['morale'].winfo_exists():
-            self.open_windows['morale'] = MoraleWindow(self)
-        self.open_windows['morale'].focus_set()
+        return self.show_screen('morale', 'Team Morale', MoraleView)
 
     def open_tactics_window(self):
         """Open the Team Tactics screen (systems, familiarity, fit)."""
-        if 'tactics' not in self.open_windows or not self.open_windows['tactics'].winfo_exists():
-            self.open_windows['tactics'] = TacticsWindow(self)
-        self.open_windows['tactics'].focus_set()
-        
+        return self.show_screen('tactics', 'Tactics', TacticsView)
+
     def open_stats_standings_window(self, focus_tab=None):
         """Open the comprehensive Stats and Standings window with optional tab focus."""
-        if 'stats_standings' not in self.open_windows or not self.open_windows['stats_standings'].winfo_exists():
-            self.open_windows['stats_standings'] = StatsStandingsWindow(self)
-            
-        window = self.open_windows['stats_standings']
-        window.focus_set()
-        window.lift()
-        
-        # Set focus to specific tab if requested
+        window = self.show_screen('stats_standings', 'Stats & Standings', StatsStandingsView)
         if focus_tab:
             window.set_focus_tab(focus_tab)
+        return window
 
     def open_league_history_window(self):
         """Open the League History window (champions, awards, leaders, HOF)."""
@@ -10790,23 +10786,106 @@ class HockeyManagerGUI(tk.Tk):
             win.lift()
         except Exception:
             pass
-    
+
     def open_records_window(self):
         """Open the NHL Records in the Stats window."""
         # Open stats window focused on records tab instead of separate window
         self.open_stats_standings_window(focus_tab='records')
         
-    def open_inbox_window(self, focus_message_id=None):
-        """Open the Email Inbox window, optionally focused on one message."""
-        if 'inbox' not in self.open_windows or not self.open_windows['inbox'].winfo_exists():
-            self.open_windows['inbox'] = InboxWindow(self)
-        window = self.open_windows['inbox']
-        window.focus_set()
-        if focus_message_id:
+    # ---------------- full-screen view system (FM/EHM-style teleport) ----------------
+
+    def show_screen(self, screen_id, title, view_cls, *args, **kwargs):
+        """Teleport to a full-screen view instead of opening a popup card.
+
+        Replaces the dashboard (or the current screen) with a slim nav bar
+        (‹ Dashboard + screen title) above the embedded view. The menu bar
+        stays visible so navigation never strands the user. The view is
+        registered in open_windows under screen_id so existing refresh code
+        (update_all_views etc.) keeps working unchanged.
+
+        Pass fresh=True to rebuild the view even when it is already showing
+        (for screens constructed with new data each time, like game results).
+        """
+        import customtkinter as ctk
+        fresh = kwargs.pop('fresh', False)
+        cur = getattr(self, '_current_screen', None)
+        if (not fresh and cur is not None and cur['id'] == screen_id
+                and cur['holder'].winfo_exists()):
             try:
-                window.focus_message(focus_message_id)
+                cur['view'].focus_set()
             except Exception:
                 pass
+            return cur['view']
+        self._teardown_screen()
+        if (hasattr(self, '_dashboard_frame')
+                and self._dashboard_frame.winfo_exists()):
+            self._dashboard_frame.grid_forget()
+        holder = ctk.CTkFrame(self.main_container, fg_color=BG)
+        holder.grid(row=1, column=0, sticky='nsew')
+        holder.grid_rowconfigure(1, weight=1)
+        holder.grid_columnconfigure(0, weight=1)
+        navbar = ctk.CTkFrame(holder, fg_color=CARD, corner_radius=0, height=44)
+        navbar.grid(row=0, column=0, sticky='ew')
+        secondary_button(navbar, text="\u2039 Dashboard",
+                         command=self.show_dashboard,
+                         width=130, height=30).pack(side='left', padx=12, pady=7)
+        heading(navbar, title, size=16).pack(side='left', padx=8)
+        view = view_cls(holder, app=self, *args, **kwargs)
+        view._close_screen = self.show_dashboard
+        view.grid(row=1, column=0, sticky='nsew')
+        self._current_screen = {'id': screen_id, 'holder': holder, 'view': view}
+        self.open_windows[screen_id] = view
+        try:
+            view.focus_set()
+        except Exception:
+            pass
+        return view
+
+    def _teardown_screen(self):
+        """Destroy the current full-screen view, if any."""
+        cur = getattr(self, '_current_screen', None)
+        self._current_screen = None
+        if cur is None:
+            return
+        try:
+            if (cur['id'] in self.open_windows
+                    and self.open_windows[cur['id']] is cur['view']):
+                del self.open_windows[cur['id']]
+        except Exception:
+            pass
+        try:
+            if cur['holder'].winfo_exists():
+                cur['holder'].destroy()
+        except Exception:
+            pass
+
+    def show_dashboard(self):
+        """Leave the current full-screen view and restore the dashboard."""
+        self._teardown_screen()
+        if hasattr(self, '_dashboard_frame'):
+            try:
+                self._dashboard_frame.grid(**self._dashboard_grid)
+            except Exception:
+                pass
+            try:
+                self.update_dashboard_data()
+            except Exception:
+                pass
+
+    def open_inbox_window(self, focus_message_id=None):
+        """Show the inbox as a full-screen view (EHM-style), not a popup."""
+        from inbox_window import InboxView
+        view = self.show_screen('inbox', 'Inbox', InboxView)
+        if focus_message_id:
+            try:
+                view.focus_message(focus_message_id)
+            except Exception:
+                pass
+        return view
+
+    def close_inbox_screen(self):
+        """Leave the full-screen inbox and restore the dashboard."""
+        self.show_dashboard()
         
     def _get_inbox_button_text(self):
         """Get the text for the inbox button with unread count."""
@@ -10830,6 +10909,7 @@ class HockeyManagerGUI(tk.Tk):
     # Football Manager-style career systems
     # ------------------------------------------------------------------
     @property
+
     def career(self):
         """Lazy FM-style career state, stored on the GameManager so it survives."""
         gm = self.game_manager
@@ -10847,10 +10927,7 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_manager_hub(self):
         """Open the FM-style Manager Hub window."""
-        from manager_hub_window import ManagerHubWindow
-        if "manager_hub" not in self.open_windows or not self.open_windows["manager_hub"].winfo_exists():
-            self.open_windows["manager_hub"] = ManagerHubWindow(self)
-        self.open_windows["manager_hub"].focus_set()
+        return self.show_screen('manager_hub', 'Manager Hub', ManagerHubView)
 
     def _career_prompts_allowed(self) -> bool:
         """Interactive prompts only for manual day-by-day play."""
@@ -11407,10 +11484,8 @@ class HockeyManagerGUI(tk.Tk):
         
     def open_playoffs_window(self):
         """Open the NHL Playoffs window."""
-        if 'playoffs' not in self.open_windows or not self.open_windows['playoffs'].winfo_exists():
-            self.open_windows['playoffs'] = PlayoffWindow(self)
-        self.open_windows['playoffs'].focus_set()
-        
+        return self.show_screen('playoffs', 'Playoffs', PlayoffView)
+
     def on_game_loaded(self):
         """Called when a game is loaded from save file."""
         self.is_new_game = False
@@ -11557,15 +11632,11 @@ class HockeyManagerGUI(tk.Tk):
             
     def open_calendar_window(self):
         """Open the Season Calendar window."""
-        if 'calendar' not in self.open_windows or not self.open_windows['calendar'].winfo_exists():
-            self.open_windows['calendar'] = CalendarWindow(self)
-        self.open_windows['calendar'].focus_set()
+        return self.show_screen('calendar', 'Calendar', CalendarView)
 
     def open_gm_options_window(self):
-        if 'gm_options' not in self.open_windows or not self.open_windows['gm_options'].winfo_exists():
-            self.open_windows['gm_options'] = GMOptionsWindow(self)
-        self.open_windows['gm_options'].focus_set()
-        
+        return self.show_screen('gm_options', 'GM Options', GMOptionsView)
+
     def open_settings_window(self):
         """Open the comprehensive settings window."""
         if 'settings' not in self.open_windows or not self.open_windows['settings'].winfo_exists():
@@ -11607,30 +11678,20 @@ class HockeyManagerGUI(tk.Tk):
             self.open_windows['edit_lines'] = CleanEditLinesWindow(self)
         self.open_windows['edit_lines'].focus_set()
 
-    def open_tactics_window(self):
-        """Open the team tactics editor (even strength / PP / PK / matching)."""
-        if 'tactics' not in self.open_windows or not self.open_windows['tactics'].winfo_exists():
-            self.open_windows['tactics'] = TacticsWindow(self)
-        self.open_windows['tactics'].focus_set()
-        
     def open_development_window(self):
         """Open the Player Development window."""
-        if 'development' not in self.open_windows or not self.open_windows['development'].winfo_exists():
-            from player_development_window_professional import PlayerDevelopmentWindowProfessional
-            self.open_windows['development'] = PlayerDevelopmentWindowProfessional(self)
-        self.open_windows['development'].focus_set()
-    
+        from player_development_window_professional import PlayerDevelopmentViewProfessional
+        return self.show_screen('development', 'Player Development', PlayerDevelopmentViewProfessional)
+
     def open_development_overview(self):
         """Open the Development Overview window."""
         self.open_development_window()
     
     def open_practice_center(self):
         """Open the Practice Center window for active roster players."""
-        if 'practice_center' not in self.open_windows or not self.open_windows['practice_center'].winfo_exists():
-            from enhanced_practice_system import PracticeCenterWindow
-            self.open_windows['practice_center'] = PracticeCenterWindow(self)
-        self.open_windows['practice_center'].focus_set()
-        
+        from enhanced_practice_system import PracticeCenterView
+        return self.show_screen('practice_center', 'Practice Center', PracticeCenterView)
+
     def open_trade_block_window(self):
         """Open the Trade Block management window."""
         if 'trade_block' not in self.open_windows or not self.open_windows['trade_block'].winfo_exists():
@@ -11645,9 +11706,7 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_waivers_window(self):
         """Open the Waivers management window."""
-        if 'waivers' not in self.open_windows or not self.open_windows['waivers'].winfo_exists():
-            self.open_windows['waivers'] = WaiversWindow(self)
-        self.open_windows['waivers'].focus_set()
+        return self.show_screen('waivers', 'Waivers', WaiversView)
 
     def open_set_captains_window(self):
         """Open the Set Captains window."""
@@ -11883,8 +11942,11 @@ class HockeyManagerGUI(tk.Tk):
             self.open_windows['contract'] = ContractNegotiationWindow(self, player, is_extension)
         self.open_windows['contract'].focus_set()
 
-    def handle_contract_offer(self, person, extension=False):
+    def handle_contract_offer(self, person, extension=False, notify="popup"):
         # NHL contract rules (cap-relative: uses the live league cap):
+        # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style
+        # inbox message; counter-offers become interactive), "quiet" (no
+        # notification -- bulk callers send one digest themselves).
         min_salary = 750_000
         _cap_sys = getattr(getattr(self, 'league', None),
                            'salary_cap_system', None)
@@ -11929,6 +11991,9 @@ class HockeyManagerGUI(tk.Tk):
                 if hasattr(person, "contract"):
                     person.contract.salary = salary
                     person.contract.years_remaining = 2
+            self._notify_contract_result("accepted" if accepted else "rejected",
+                                         person, salary, 2, salary, extension,
+                                         notify)
             return accepted
 
         # Cap-relative asking price: base demand as % of cap, scaled by
@@ -11952,55 +12017,210 @@ class HockeyManagerGUI(tk.Tk):
         asking_price = max(asking_price, 750_000)
         
         if person.salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
-            messagebox.showinfo("Contract Accepted", f"{person.full_name} has accepted your contract offer!")
-            person.contract.salary = person.salary
-            person.contract.years_remaining = person.contract_years
-            # Track market-setting contracts (star + top-5 AAV)
-            _set_market = False
-            try:
-                if _cap_sys is not None:
-                    _season = getattr(getattr(self, 'league', None),
-                                      'season_year', 0)
-                    _set_market = _cap_sys.register_signing(
-                        person.full_name, person.salary, _ovr100,
-                        _pos_name, getattr(person, "age", 27), _season)
-                    if _set_market:
-                        self.news_log.append({
-                            'date': self.current_date,
-                            'story': (f"{person.full_name}'s "
-                                      f"${person.salary:,} deal sets the market "
-                                      f"-- comparable stars will demand more.")})
-            except Exception:
-                pass
-            # Contract-decision fallout: overpay verdict, fan beef, GM rep,
-            # and GM-GM heat when the deal resets the market. The salary
-            # engine itself (SalaryCapSystem) is untouched.
-            try:
-                from reputation_system import evaluate_contract_decision
-                _cd = evaluate_contract_decision(
-                    person, person.salary, asking_price,
-                    team=self.user_team, league=self.league,
-                    market_setter=bool(_set_market))
-                if _cd.get("story"):
-                    self.news_log.append({'date': self.current_date,
-                                          'story': _cd["story"]})
-            except Exception:
-                pass
-            if not extension:
-                self.league.free_agents.remove(person)
-                self.user_team.add_player(person, "roster")
-            self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {person.contract_years}-year contract."})
-            
-            # Generate media event for signing (if media system enabled)
-            if hasattr(self, 'media_system') and self.media_system:
-                contract_type = 'extension' if extension else 'signing'
-                self.media_system.process_signing(person, self.user_team, contract_type, person.salary, person.contract_years)
-            
-            self.update_all_views()
+            self._finalize_contract_signing(person, person.salary,
+                                            person.contract_years,
+                                            asking_price, extension)
+            self._notify_contract_result("accepted", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify)
+            return True
         elif person.salary >= asking_price * 0.7: # Counter-offers if between 70-90%
-            messagebox.showinfo("Counter Offer", f"{person.full_name} has rejected your offer, but is willing to sign for ${asking_price:,} per year.")
+            self._notify_contract_result("counter", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify)
+            return False
         else: # Rejects if below 70%
-            messagebox.showerror("Contract Rejected", f"{person.full_name} has rejected your contract offer.")
+            self._notify_contract_result("rejected", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify)
+            return False
+
+    def _finalize_contract_signing(self, person, salary, years, asking_price,
+                                   extension):
+        """Apply an agreed contract: cap records, market tracking, news,
+        media, roster moves. Shared by the negotiation window and the
+        inbox counter-offer accept button."""
+        person.salary = salary
+        person.contract_years = years
+        _contract = getattr(person, "contract", None)
+        if _contract is not None:
+            _contract.salary = salary
+            _contract.years_remaining = years
+        _cap_sys = getattr(getattr(self, 'league', None),
+                           'salary_cap_system', None)
+        # Track market-setting contracts (star + top-5 AAV)
+        _set_market = False
+        try:
+            _ovr = person.overall_rating()
+            try:
+                from game_classes import to_100_scale
+                _ovr100 = int(to_100_scale(_ovr))
+            except Exception:
+                _ovr100 = int(_ovr * 2)
+            _pos = getattr(person, "primary_position", "")
+            _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
+            if _cap_sys is not None:
+                _season = getattr(getattr(self, 'league', None), 'season_year', 0)
+                _set_market = _cap_sys.register_signing(
+                    person.full_name, salary, _ovr100,
+                    _pos_name, getattr(person, "age", 27), _season)
+                if _set_market:
+                    self.news_log.append({
+                        'date': self.current_date,
+                        'story': (f"{person.full_name}'s "
+                                  f"${salary:,} deal sets the market "
+                                  f"-- comparable stars will demand more.")})
+        except Exception:
+            pass
+        # Contract-decision fallout: overpay verdict, fan beef, GM rep,
+        # and GM-GM heat when the deal resets the market. The salary
+        # engine itself (SalaryCapSystem) is untouched.
+        try:
+            from reputation_system import evaluate_contract_decision
+            _cd = evaluate_contract_decision(
+                person, salary, asking_price,
+                team=self.user_team, league=self.league,
+                market_setter=bool(_set_market))
+            if _cd.get("story"):
+                self.news_log.append({'date': self.current_date,
+                                      'story': _cd["story"]})
+        except Exception:
+            pass
+        if not extension:
+            try:
+                self.league.free_agents.remove(person)
+            except Exception:
+                pass
+            self.user_team.add_player(person, "roster")
+        self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})
+
+        # Generate media event for signing (if media system enabled)
+        if hasattr(self, 'media_system') and self.media_system:
+            contract_type = 'extension' if extension else 'signing'
+            self.media_system.process_signing(person, self.user_team, contract_type, salary, years)
+
+        self.update_all_views()
+
+    def _notify_contract_result(self, kind, person, salary, years,
+                                asking_price, extension, notify="popup"):
+        """Route a contract result to a legacy popup, the inbox, or nowhere.
+
+        kind: "accepted" | "counter" | "rejected".
+        """
+        name = getattr(person, "full_name",
+                       getattr(person, "name", "The player"))
+        if notify == "quiet":
+            return
+        if notify == "inbox":
+            self._inbox_contract_result(kind, person, name, salary, years,
+                                        asking_price, extension)
+            return
+        # legacy popup behaviour
+        if kind == "accepted":
+            messagebox.showinfo("Contract Accepted",
+                                f"{name} has accepted your contract offer!")
+        elif kind == "counter":
+            messagebox.showinfo("Counter Offer",
+                                f"{name} has rejected your offer, but is willing "
+                                f"to sign for ${asking_price:,} per year.")
+        else:
+            messagebox.showerror("Contract Rejected",
+                                 f"{name} has rejected your contract offer.")
+
+    def _inbox_contract_result(self, kind, person, name, salary, years,
+                               asking_price, extension):
+        """FM24/EHM-style: contract news lands in the inbox. Counter-offers
+        arrive as interactive messages (accept / new offer / walk away)."""
+        from game_classes import EmailMessage
+        pid = getattr(person, "id", None)
+        base = dict(sender="Agent", sender_type="Agent",
+                    date_sent=date.today(), category="Contracts",
+                    related_player_id=pid, priority=3, is_important=True)
+        if kind == "accepted":
+            term = "extension" if extension else "contract"
+            msg = EmailMessage(
+                subject=f"Signed: {name}",
+                content=(f"{name} has agreed to terms: "
+                         f"${salary:,} per year over {years} year(s).\n\n"
+                         f"The {term} is finalized and the paperwork is filed "
+                         f"with the league office."),
+                **base)
+        elif kind == "rejected":
+            msg = EmailMessage(
+                subject=f"Talks break down: {name}",
+                content=(f"{name} has rejected your offer of "
+                         f"${salary:,} per year outright and is not "
+                         f"countering at this time.\n\n"
+                         f"His camp feels the number needs to be "
+                         f"significantly higher before talks resume."),
+                **base)
+        else:  # counter -- interactive
+            msg = EmailMessage(
+                subject=f"Counter-offer: {name}",
+                content=(f"{name}'s camp has rejected your offer of "
+                         f"${salary:,} per year, but they are willing to "
+                         f"sign for ${asking_price:,} per year over "
+                         f"{years} year(s).\n\n"
+                         f"Respond below -- the offer waits for you."),
+                requires_response=True,
+                action_type="contract_counter",
+                action_data={"player_id": pid, "player_name": name,
+                             "asking_price": int(asking_price),
+                             "years": int(years),
+                             "is_extension": bool(extension)},
+                **base)
+        self.send_email_to_user(msg)
+
+    def _find_inbox_player(self, data):
+        """Locate a player referenced by an inbox action (id, then name)."""
+        pid = (data or {}).get("player_id")
+        name = (data or {}).get("player_name")
+        league = getattr(self, "league", None)
+        pools = []
+        try:
+            for t in (getattr(league, "teams", []) or []):
+                pools.append(list(getattr(t, "roster", []) or []))
+            pools.append(list(getattr(league, "free_agents", []) or []))
+        except Exception:
+            pass
+        for pool in pools:
+            for p in pool:
+                if pid and getattr(p, "id", None) == pid:
+                    return p
+        if name:
+            for pool in pools:
+                for p in pool:
+                    if getattr(p, "full_name", "") == name:
+                        return p
+        return None
+
+    def accept_contract_counter(self, message):
+        """Inbox action: accept the agent's counter-offer as-is."""
+        data = message.action_data or {}
+        person = self._find_inbox_player(data)
+        if person is None:
+            message.action_done = True
+            return False
+        asking = data.get("asking_price", 0)
+        years = data.get("years", 1)
+        extension = data.get("is_extension", False)
+        self._finalize_contract_signing(person, asking, years, asking,
+                                        extension)
+        self._inbox_contract_result("accepted", person,
+                                    getattr(person, "full_name", "The player"),
+                                    asking, years, asking, extension)
+        message.action_done = True
+        return True
+
+    def reopen_contract_negotiation(self, message):
+        """Inbox action: open a fresh negotiation window for the player."""
+        data = message.action_data or {}
+        person = self._find_inbox_player(data)
+        message.action_done = True
+        if person is None:
+            return
+        self.open_contract_negotiation_window(
+            person, is_extension=bool(data.get("is_extension", False)))
 
     def assign_jersey_number(self, player):
         new_number = simpledialog.askinteger("Assign Jersey Number", f"Enter a new jersey number for {player.full_name}:", initialvalue=player.jersey_number)
@@ -12192,6 +12412,7 @@ class CleanEditLinesWindow(InGamePopup):
     # ------------------------------------------------------------------
     # Sleeper-style team strip + roster panel (point-click, no tabs)
     # ------------------------------------------------------------------
+
     def create_team_overview(self, parent_frame):
         """Slim Sleeper-style stat strip: team avg / top line / roster size."""
         strip = tk.Frame(parent_frame, bg=self.C_CARD)
@@ -12603,6 +12824,7 @@ class CleanEditLinesWindow(InGamePopup):
     # ------------------------------------------------------------------
     # Unit views (all zones are built up-front; switchers show one group)
     # ------------------------------------------------------------------
+
     def _build_unit_views(self, parent):
         self._unit_frames = {}
         self._rating_bigs = []     # big-numeral rating labels (view pref)
@@ -13180,6 +13402,7 @@ class CleanEditLinesWindow(InGamePopup):
     # ------------------------------------------------------------------
     # Slots + point-click selection (replaces drag and drop)
     # ------------------------------------------------------------------
+
     def create_slot(self, parent, zone_id, pos_label):
         """A line slot. Click a selected player, then the slot, to assign."""
         outer = tk.Frame(parent, bg=self.C_BORDER)
@@ -13710,6 +13933,7 @@ class CleanEditLinesWindow(InGamePopup):
     # ------------------------------------------------------------------
     # View preferences (persisted), footer warnings, zone helpers
     # ------------------------------------------------------------------
+
     def _prefs_path(self):
         import os
         return os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -14100,8 +14324,8 @@ class CleanEditLinesWindow(InGamePopup):
             team_text_widget.config(state='disabled')
 
 
-class TacticsWindow(InGamePopup):
-    """Team tactics editor with pill selectors.
+class TacticsView(tk.Frame):
+    """Team tactics editor as an embeddable view (FM/EHM-style screen).
 
     Even-strength style, power-play approach, penalty-kill approach and line
     matching all write straight to the team object and feed the sim engine
@@ -14135,12 +14359,11 @@ class TacticsWindow(InGamePopup):
     _ES_DEFENSE = {'Very Defensive': 0.92, 'Defensive': 0.96, 'Balanced': 1.0,
                    'Offensive': 1.03, 'Very Offensive': 1.06}
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.team = parent.user_team
-        self.title(f"Team Tactics — {self.team.team_name}")
-        self.geometry("660x780")
+    def __init__(self, parent, app=None):
+        tk.Frame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the TacticsWindow wrapper
+        self.team = self.app.user_team
         bg = getattr(parent, 'CONTENT_BG', '#0e0e11')
         self.configure(bg=bg)
 
@@ -14191,9 +14414,17 @@ class TacticsWindow(InGamePopup):
         done_btn = PillButton(footer, text="Done", bg=bg, font=(font, 11, 'bold'),
                               fg='white', selected_bg='#00ceb8',
                               selected_fg='white', hover_bg='#00a894',
-                              padx=28, pady=8, command=self.destroy)
+                              padx=28, pady=8, command=self.close_view)
         done_btn.pack(side='right')
         done_btn.set_selected(True)  # Done is always in its active visual state
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _select(self, attr, value):
         setattr(self.team, attr, value)
@@ -14258,10 +14489,31 @@ class TacticsWindow(InGamePopup):
         self.impact_label.configure(text="\n".join(lines))
 
 
+class TacticsWindow(InGamePopup):
+    """Popup wrapper around TacticsView (backward compatibility)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Team Tactics")
+        self._view = TacticsView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
 class TradeBlockWindow(InGamePopup):
     """
     Enhanced Trade Block window with filtering, sorting, bulk actions, context menu, and summary.
     """
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -15131,12 +15383,17 @@ class ContractExtensionsWindow(InGamePopup):
                 player.contract_years = 2  # Default offer for extension
                 
                 # Negotiate
-                accepted = self.parent.handle_contract_offer(player, extension=True)
+                accepted = self.parent.handle_contract_offer(player, extension=True, notify="quiet")
                 results.append(f"{player.full_name}: {'Accepted' if accepted else 'Rejected'}")
         
-        # Show results
-        msg = "Extension Results:\n" + "\n".join(results)
-        messagebox.showinfo("Negotiation Results", msg)
+        # One inbox digest instead of a popup per player (FM24 style)
+        from game_classes import EmailMessage
+        self.parent.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Extension Results",
+            content="Extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
         
         # Refresh the view after negotiations
         self.eligible_players = self.get_eligible_players()
@@ -15156,12 +15413,17 @@ class ContractExtensionsWindow(InGamePopup):
             player.contract_years = 2  # Default offer for extension
             
             # Negotiate
-            accepted = self.parent.handle_contract_offer(player, extension=True)
+            accepted = self.parent.handle_contract_offer(player, extension=True, notify="quiet")
             results.append(f"{player.full_name}: {'Accepted' if accepted else 'Rejected'}")
         
-        # Show results
-        msg = "Extension Results:\n" + "\n".join(results)
-        messagebox.showinfo("Negotiation Results", msg)
+        # One inbox digest instead of a popup per player (FM24 style)
+        from game_classes import EmailMessage
+        self.parent.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Extension Results",
+            content="Extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
         
         # Refresh the view after negotiations
         self.eligible_players = self.get_eligible_players()
@@ -15836,8 +16098,8 @@ class ExtensionNegotiationWindow(InGamePopup):
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter a valid number for salary.")
 
-class GMOptionsWindow(InGamePopup):
-    """GM Options - executive management tools.
+class GMOptionsView(ctk.CTkFrame):
+    """GM Options - executive management tools, as an embeddable view.
 
     CustomTkinter rebuild: charcoal background, rounded section cards,
     teal-accented buttons, CTkSegmentedButton for the game-presentation
@@ -15847,14 +16109,12 @@ class GMOptionsWindow(InGamePopup):
     open_windows registration pattern used by the caller.
     """
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("GM Options")
-        self.geometry("520x760")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the GMOptionsWindow wrapper
         self.configure(fg_color=BG)
-        self.resizable(True, True)
 
         # Header - plain chrome, not a card
         header = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
@@ -15870,7 +16130,7 @@ class GMOptionsWindow(InGamePopup):
 
         self._build_section(content, "Player Management", [
             ("Player Shortlist", self.open_shortlist_window),
-            ("Set Captains", parent.open_set_captains_window),
+            ("Set Captains", self.app.open_set_captains_window),
         ])
         self._build_section(content, "Executive Actions", [
             ("GM Dashboard", self.open_gm_dashboard),
@@ -15879,18 +16139,27 @@ class GMOptionsWindow(InGamePopup):
         ])
         self._build_section(content, "Quick Actions", [
             ("Auto-Negotiate Extensions", self.auto_negotiate_extensions),
-            ("Check Inbox", parent.open_inbox_window),
+            ("Check Inbox", self.app.open_inbox_window),
         ])
         self._build_presentation_section(content)
 
         # Close - primary pill pinned at the bottom
         footer = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
         footer.pack(fill="x", padx=24, pady=(0, 18))
-        primary_button(footer, "Close", command=self.destroy).pack(fill="x")
+        primary_button(footer, "Close", command=self.close_view).pack(fill="x")
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # Layout helpers
     # ------------------------------------------------------------------
+
     def _build_section(self, parent, title, buttons):
         """Rounded card with a heading and full-width action buttons."""
         card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
@@ -15912,10 +16181,10 @@ class GMOptionsWindow(InGamePopup):
         heading(card, "Your games:", size=11, text_color=TEXT_DIM).pack(
             anchor="w", padx=16)
 
-        labels = [lbl for lbl, _ in self.parent.GAME_MODE_LABELS]
-        current = self.parent._get_user_game_mode()
+        labels = [lbl for lbl, _ in self.app.GAME_MODE_LABELS]
+        current = self.app._get_user_game_mode()
         initial_label = next(
-            (lbl for lbl, key in self.parent.GAME_MODE_LABELS if key == current),
+            (lbl for lbl, key in self.app.GAME_MODE_LABELS if key == current),
             labels[0])
         self._mode_seg = ctk.CTkSegmentedButton(
             card, values=labels, command=self._on_mode_pick,
@@ -15935,27 +16204,28 @@ class GMOptionsWindow(InGamePopup):
     # ------------------------------------------------------------------
     # Actions (logic unchanged from the ttk version)
     # ------------------------------------------------------------------
+
     def _on_mode_pick(self, label):
-        key = next((k for lbl, k in self.parent.GAME_MODE_LABELS if lbl == label),
+        key = next((k for lbl, k in self.app.GAME_MODE_LABELS if lbl == label),
                    'ask')
-        self.parent._set_user_game_mode(key)
+        self.app._set_user_game_mode(key)
 
     def open_shortlist_window(self):
         """Open the player shortlist management window"""
         from shortlist_system import ShortlistWindow
-        if 'shortlist' not in self.parent.open_windows or not self.parent.open_windows['shortlist'].winfo_exists():
-            self.parent.open_windows['shortlist'] = ShortlistWindow(self.parent)
-        self.parent.open_windows['shortlist'].focus_set()
+        if 'shortlist' not in self.app.open_windows or not self.app.open_windows['shortlist'].winfo_exists():
+            self.app.open_windows['shortlist'] = ShortlistWindow(self.parent)
+        self.app.open_windows['shortlist'].focus_set()
 
     def open_gm_dashboard(self):
         """Open GM dashboard with key team metrics"""
-        from windows import GMDashboardWindow
-        GMDashboardWindow(self.parent)
+        from windows import GMDashboardView
+        self.app.show_screen("gm_dashboard", "GM Dashboard", GMDashboardView)
 
     def open_team_analytics(self):
         """Open advanced team analytics"""
-        from windows import TeamAnalyticsWindow
-        TeamAnalyticsWindow(self.parent)
+        from windows import TeamAnalyticsView
+        self.app.show_screen("team_analytics", "Team Analytics", TeamAnalyticsView)
 
     def open_season_goals(self):
         """Open season goals and objectives"""
@@ -15965,7 +16235,7 @@ class GMOptionsWindow(InGamePopup):
     def auto_negotiate_extensions(self):
         """Auto-negotiate contract extensions with expiring players"""
         expiring = []
-        team = self.parent.user_team
+        team = self.app.user_team
 
         # Find players with 1 year left on contract
         for player in team.roster + team.ahl_roster:
@@ -16003,11 +16273,37 @@ class GMOptionsWindow(InGamePopup):
                 years = getattr(person, "contract_years", 1)
             person.salary = salary
             person.contract_years = years
-            accepted = self.parent.handle_contract_offer(person, extension=True)
+            accepted = self.app.handle_contract_offer(person, extension=True, notify="quiet")
             results.append(f"{getattr(person, 'full_name', getattr(person, 'name', 'Unknown'))}: {'Accepted' if accepted else 'Rejected'}")
 
-        msg = "Auto-Negotiation Results:\n" + "\n".join(results)
-        messagebox.showinfo("Extension Results", msg)
+        # One inbox digest instead of a popup (FM24 style)
+        from game_classes import EmailMessage
+        self.app.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Auto-Negotiation Results",
+            content="Automatic extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
+
+class GMOptionsWindow(InGamePopup):
+    """Popup wrapper around GMOptionsView (backward compatibility)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("GM Options")
+        self._view = GMOptionsView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
 
 def test_enhanced_simulation():
     """Test the enhanced simulation and game viewer integration"""

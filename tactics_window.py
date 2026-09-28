@@ -15,7 +15,7 @@ import reputation_system as rs
 import tactics as tx
 
 
-class TacticsWindow(InGamePopup):
+class TacticsView(ctk.CTkFrame):
     """Team Tactics - the whiteboard: systems, fit, and who owns it."""
 
     CATS = [
@@ -26,7 +26,7 @@ class TacticsWindow(InGamePopup):
         ("philosophy", "Philosophy", "PHILOSOPHIES"),
     ]
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -43,37 +43,44 @@ class TacticsWindow(InGamePopup):
         self._body = body
         init_ctk_theme()
 
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Team Tactics")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the TacticsWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1080x880")
-        self.minsize(940, 720)
 
         self._pending = {}          # category -> new system key
         self._key_of_name = {}      # per-category display name -> key
         self._response_text = ""
-        self._mp_locked = getattr(parent, "mp_client", None) is not None
+        self._mp_locked = getattr(self.app, "mp_client", None) is not None
 
         self._create_interface()
         self.refresh()
 
-        parent.open_windows['tactics'] = self
-        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+        _wins = getattr(self.app, "open_windows", None)
+        if isinstance(_wins, dict):
+            _wins['tactics'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _on_closing(self):
         try:
-            if 'tactics' in self.parent.open_windows:
-                del self.parent.open_windows['tactics']
+            if 'tactics' in self.app.open_windows:
+                del self.app.open_windows['tactics']
         except Exception:
             pass
-        self.destroy()
+        self.close_view()
 
     # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------
     def _team(self):
-        return getattr(self.parent, "user_team", None)
+        return getattr(self.app, "user_team", None)
 
     def _head_coach(self, team):
         try:
@@ -88,7 +95,7 @@ class TacticsWindow(InGamePopup):
         ctx = {"win_pct": 0.5, "losing_streak": 0}
         try:
             team = self._team()
-            st = self.parent.league.standings.get(team.team_name, {})
+            st = self.app.league.standings.get(team.team_name, {})
             w = st.get('W', st.get('Wins', 0))
             l = st.get('L', st.get('Losses', 0))
             otl = st.get('OTL', 0)
@@ -348,7 +355,7 @@ class TacticsWindow(InGamePopup):
             self._pending.clear()
         self._response_text = res.get("text", "")
         try:
-            news = getattr(self.parent, "add_news", None)
+            news = getattr(self.app, "add_news", None)
             if news and res.get("applied"):
                 news(f"Tactics: {res['text']}")
         except Exception:
@@ -373,7 +380,7 @@ class TacticsWindow(InGamePopup):
             self._pending.clear()
         self._response_text = res.get("text", "")
         try:
-            news = getattr(self.parent, "add_news", None)
+            news = getattr(self.app, "add_news", None)
             if news and res.get("applied"):
                 news(f"Tactics: {res['text']}")
         except Exception:
@@ -403,7 +410,7 @@ class TacticsWindow(InGamePopup):
                 pass
         self._response_text = res.get("text", "")
         try:
-            news = getattr(self.parent, "add_news", None)
+            news = getattr(self.app, "add_news", None)
             if news and res.get("changed"):
                 news(f"Tactics: {res['text']}")
         except Exception:
@@ -460,3 +467,21 @@ class TacticsWindow(InGamePopup):
             self._response_text = ("Preferred tactics staged -- suggest them to "
                                    "your coach, enforce them, or take over.")
         self.refresh()
+
+
+class TacticsWindow(InGamePopup):
+    """Popup wrapper around TacticsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Team Tactics")
+        self._view = TacticsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
