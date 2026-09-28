@@ -4752,6 +4752,22 @@ class GameSim:
         expected_goal = min(0.95, expected_goal * self._situation_xg_factor(
             attacking_team))
 
+        # Tie-game late tightening (additive): protecting the point is real
+        # hockey -- tied in the 3rd under 10:00 left, both teams trade
+        # chances for structure. Same shared decision both engines call
+        # (scoring_balance.tie_late_factor); this engine applies it on the
+        # xG gate. Manufactures regulation ties toward the NHL's ~23% OT
+        # rate. Own channel, never overrides the math above.
+        try:
+            import scoring_balance as _sbal
+            _tlf = _sbal.tie_late_factor(
+                getattr(self, 'period', 1), getattr(self, 'clock', 1200),
+                getattr(self, 'home_score', 0), getattr(self, 'away_score', 0))
+            if _tlf != 1.0:
+                expected_goal = min(0.95, expected_goal * _tlf)
+        except Exception:
+            pass
+
         # -- Perfect mesh (additive): situational alignment -- chemistry,
         # system fit, morale, form -- pays a super-additive kicker with an
         # underdog tilt, plus playoff elevators in April. Own channel next to
@@ -8432,7 +8448,15 @@ class GameSim:
         # unchanged. Best generated (75): 0.595x. Worst (60): 0.805x.
         LEAGUE_AVG_GOALIE_SKILL = 67.5
         skill_diff = goalie_skill - LEAGUE_AVG_GOALIE_SKILL
-        xg_multiplier = max(0.49, min(0.91, 0.70 * (1.0 - skill_diff * 0.02)))
+        # scoring_balance.BASE_SAVE_TUNE: the shared "slight" SV% nudge
+        # toward .900 both engines apply. The average goalie keeps the
+        # calibrated anchor shape, scaled by the tune; GPG stays in band.
+        try:
+            import scoring_balance as _sbal2
+            _tune = float(_sbal2.BASE_SAVE_TUNE)
+        except Exception:
+            _tune = 1.0
+        xg_multiplier = max(0.49, min(0.91, 0.70 * _tune * (1.0 - skill_diff * 0.02)))
         effective_xg = expected_goal * xg_multiplier
         
         # Base save probability (inverse of effective xG)

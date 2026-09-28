@@ -9357,6 +9357,140 @@ class HockeyManagerGUI(tk.Tk):
                 ttk.Label(parent, text=f"  {player.full_name}: {g}G {a}A = {pts} pts", 
                          style='TLabel').pack(anchor='w', padx=20)
     
+    def _guarantee_offseason_tentpoles(self):
+        """Run the draft lottery + entry draft when the calendar skipped them.
+
+        The lottery (May 8) and entry draft (June 23-25) are date-triggered in
+        _check_for_event_day, but _start_offseason jumps straight from the Cup
+        to July 1 -- so in every path that completes the playoffs those dates
+        are never simulated and the lottery + draft would be silently skipped
+        (no prospects would ever enter the league). Run them here when the
+        date-based path didn't; the per-year guards (lottery_held_years /
+        draft_held_years) make this a no-op otherwise. Dates are set first so
+        headlines, inbox cards and news land on the right day.
+        """
+        try:
+            league = self.league
+            draft_year = self.current_date.year  # e.g. 2027 for the 2026-27 season
+            # 1. Lottery -- fully automatic, no user input needed.
+            lotto_done = set(getattr(league, 'lottery_held_years', None) or [])
+            if draft_year not in lotto_done:
+                self.current_date = date(draft_year, 5, 8)
+                try:
+                    self._hold_draft_lottery(draft_year)
+                except Exception:
+                    debug_print("Tentpole lottery failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    held = set(getattr(league, 'lottery_held_years', None) or [])
+                    held.add(draft_year)
+                    league.lottery_held_years = sorted(held)
+            # 2. Entry draft -- setup (class, lottery order, news, storylines).
+            draft_done = set(getattr(league, 'draft_held_years', None) or [])
+            if draft_year not in draft_done:
+                self.current_date = date(draft_year, 6, 24)
+                try:
+                    self._hold_entry_draft(draft_year)
+                except Exception:
+                    debug_print("Tentpole draft setup failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    held = set(getattr(league, 'draft_held_years', None) or [])
+                    held.add(draft_year)
+                    league.draft_held_years = sorted(held)
+                # 3. Conduct the picks. Headless auto-draft mirrors the draft
+                # board's AI logic (ai_make_pick) for every club.
+                # Design follow-up: interactive per-pick drafting via Draft Day
+                # Central instead of auto-conducting the user's picks.
+                try:
+                    self._auto_conduct_entry_draft(draft_year)
+                except Exception:
+                    debug_print("Tentpole auto-draft failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+        except Exception:
+            debug_print("Offseason tentpole guarantee failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+
+    def _auto_conduct_entry_draft(self, draft_year):
+        """Headless full entry draft: every pick made with the draft board's
+        AI selection logic (no UI). Prospects go to team prospect pools."""
+        import random
+        import trade_engine as te
+        league = self.league
+        try:
+            league.initialize_all_draft_picks()
+        except Exception:
+            pass
+        try:
+            order = league.get_draft_order(draft_year)
+        except Exception:
+            order = []
+        if not order:
+            return
+        picks_made = []
+        for overall_pick, team, _dp in order:
+            available = sorted(getattr(league, 'draft_prospects', []) or [],
+                               key=lambda p: getattr(p, 'draft_ranking', 0),
+                               reverse=True)
+            if not available:
+                break
+            try:
+                needs = te.team_needs(team)
+            except Exception:
+                needs = []
+            try:
+                round_num = getattr(_dp, 'round', 1) if _dp is not None else 1
+            except Exception:
+                round_num = 1
+            # Mirror DraftView.ai_make_pick: top-12 candidates, need-weighted.
+            candidates = available[:12]
+            scored = []
+            for p in candidates:
+                try:
+                    pos = p.primary_position.value
+                except Exception:
+                    pos = "?"
+                base = getattr(p, 'draft_ranking', 0)
+                if pos in (needs or [])[:2]:
+                    base *= 1.08
+                if pos == 'G' and round_num <= 1:
+                    base *= 0.80  # goalies rarely go top-10
+                base *= random.uniform(0.94, 1.06)
+                scored.append((base, p))
+            scored.sort(key=lambda s: s[0], reverse=True)
+            selected = scored[0][1]
+            try:
+                team.add_player(selected, "prospects")
+            except Exception:
+                continue
+            try:
+                league.draft_prospects.remove(selected)
+            except Exception:
+                pass
+            picks_made.append((getattr(team, 'team_name', '?'), overall_pick,
+                               getattr(selected, 'full_name',
+                                       getattr(selected, 'name', '?'))))
+        if not picks_made:
+            return
+        # News wire: top 10 + the user's haul.
+        try:
+            lines = [f"#{ov} {pn} ({tn})" for tn, ov, pn in picks_made[:10]]
+            user_name = getattr(getattr(self, 'user_team', None), 'team_name', '')
+            user_picks = [f"#{ov} {pn}" for tn, ov, pn in picks_made
+                          if tn == user_name][:7]
+            story = (f"The {draft_year} NHL Entry Draft is complete. "
+                     f"Top 10: " + "; ".join(lines) + ".")
+            if user_picks:
+                story += f" Your picks: " + "; ".join(user_picks) + "."
+            self.add_news(story)
+            print(f"Auto-draft complete: {len(picks_made)} picks made.", flush=True)
+        except Exception:
+            pass
+
     def _start_offseason(self):
         """Start the offseason phase."""
         # Controversy cooldown + staff rep + Cup bonus. Reads standings before
@@ -9394,6 +9528,13 @@ class HockeyManagerGUI(tk.Tk):
                     f"champions win with it{_lorebit}.")
         except Exception:
             pass
+        # Tentpole guarantee: the draft lottery (May 8) and entry draft
+        # (June 23-25) are date-triggered, but the July-1 jump below would
+        # otherwise skip them every season. Run them now when missed; the
+        # per-year guards make it a no-op when the date path already ran.
+        # Must precede league.end_of_season(), which wipes the standings the
+        # draft order is built from.
+        self._guarantee_offseason_tentpoles()
         # Age players and reset stats
         self.league.end_of_season()
 

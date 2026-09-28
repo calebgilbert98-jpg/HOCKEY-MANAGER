@@ -1641,17 +1641,27 @@ class StatsStandingsView(ctk.CTkFrame):
             if division_name not in divisions:
                 divisions[division_name] = []
             
-            # Calculate points
-            points = team.wins * 2 + getattr(team, 'ties', 0) + getattr(team, 'ot_losses', 0)
-            
+            # Calculate points — prefer league.standings (the canonical record the
+            # sim writes via _update_standings_fast); fall back to team attrs.
+            ls = (getattr(self.app.league, 'standings', None) or {}).get(team.team_name)
+            if ls:
+                w, l, otl = ls.get('W', 0), ls.get('L', 0), ls.get('OTL', 0)
+                points = ls.get('Points', w * 2 + otl)
+                ties = 0
+            else:
+                w, l = team.wins, team.losses
+                ties = getattr(team, 'ties', 0)
+                otl = getattr(team, 'ot_losses', 0)
+                points = w * 2 + ties + otl
+
             divisions[division_name].append({
                 'name': team.team_name,
-                'record': f"{team.wins}-{team.losses}-{getattr(team, 'ties', 0)}",
+                'record': f"{w}-{l}-{ties}" if not ls else f"{w}-{l}-{otl}",
                 'points': points,
-                'wins': team.wins,
-                'losses': team.losses,
-                'ties': getattr(team, 'ties', 0),
-                'games_played': team.wins + team.losses + getattr(team, 'ties', 0)
+                'wins': w,
+                'losses': l,
+                'ties': ties,
+                'games_played': w + l + (otl if ls else ties)
             })
         
         # Sort by points

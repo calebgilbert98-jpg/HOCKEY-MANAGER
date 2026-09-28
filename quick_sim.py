@@ -1371,6 +1371,27 @@ class AdvancedGameSim:
         skill_diff = shooter_skill - goalie_skill
         shot_chance = recalibrated_shot_chance(skill_diff)
 
+        # -- Scoring-balance tune (additive): the shared BASE_SAVE_TUNE both
+        # engines apply ("slight" SV% nudge toward .900), plus tie-game late
+        # tightening ("protect the point": tied in the 3rd under 10:00 left,
+        # both teams trade chances for structure). Same shared decisions as
+        # GameSim (scoring_balance); this engine applies them on shot_chance.
+        # Own channel, never overrides the agreed math above.
+        try:
+            import scoring_balance as _sbal
+            _tune = float(_sbal.BASE_SAVE_TUNE)
+            if _tune != 1.0:
+                shot_chance *= _tune
+            _secs_left = 3600.0 - float(getattr(self, "time", 0) or 0)
+            _tlf = _sbal.tie_late_factor(
+                int(getattr(self, "period", 1) or 1), _secs_left,
+                self.score.get(self.home_team.team_name, 0),
+                self.score.get(self.away_team.team_name, 0))
+            if _tlf != 1.0:
+                shot_chance = min(0.45, max(0.005, shot_chance * _tlf))
+        except Exception:
+            pass
+
         # -- Impact tier (additive): tired / normal / big shot. Scales the
         # existing shot_chance on top of the agreed math above -- big shots
         # finish cleaner, tired ones are easier stops. Never overrides it.
