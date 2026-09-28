@@ -154,13 +154,17 @@ class DatabaseManager:
                     tier = "NHL_STARTER"
                 else:
                     tier = "NHL_DEPTH"
-                salary, years = contract_gen.determine_contract_info(player, tier)
+                salary, years, two_way, ahl_salary = contract_gen.determine_contract_info(player, tier)
                 player.contract.salary = salary
                 player.contract.years_remaining = years
+                player.contract.two_way = two_way
+                player.contract.ahl_salary = ahl_salary
             for player in list(team.ahl_roster):
-                salary, years = contract_gen.determine_contract_info(player, "AHL_VETERAN")
+                salary, years, two_way, ahl_salary = contract_gen.determine_contract_info(player, "AHL_VETERAN")
                 player.contract.salary = salary
                 player.contract.years_remaining = years
+                player.contract.two_way = two_way
+                player.contract.ahl_salary = ahl_salary
 
         # Cap compliance: no team starts over the salary cap. Scale deals
         # proportionally so payroll + that club's seeded 2026-27 dead cap

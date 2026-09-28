@@ -201,6 +201,13 @@ class Contract:
     # One-transaction waiver: destination team name the player already
     # approved. Cleared when the trade completes or the deal dies.
     ntc_waiver_for: str = ""
+    # Two-way contract: the deal carries a separate minor-league salary.
+    # When the player is assigned to the minors he is paid ahl_salary, and
+    # per the NHL burial rule the two-way minor-league salary does not
+    # count against the NHL salary cap (a one-way deal in the minors
+    # counts salary minus the burial exemption instead).
+    two_way: bool = False
+    ahl_salary: int = 0
     # When modified_ntc_teams is an approved-teams list (not a no-trade
     # list), set alongside it.
     modified_ntc_approved: bool = False

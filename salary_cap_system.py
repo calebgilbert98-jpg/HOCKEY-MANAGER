@@ -313,8 +313,53 @@ class SalaryCapSystem:
 #                  + seeded real-life bonus overages (2026-27)
 
 
+# Burial exemption (NHL rule): a one-way contract assigned to the minors
+# still counts against the cap, minus $1.15M + the league minimum.
+# Two-way deals are fully buried -- the minor-league salary never touches
+# the NHL cap. Prospects never count.
+LEAGUE_MINIMUM_SALARY = 775000
+BURY_EXEMPTION = 1150000 + LEAGUE_MINIMUM_SALARY  # $1,925,000
+
+
+def _active_roster_hit(p) -> int:
+    """Cap hit of a player on the NHL active roster: full salary."""
+    try:
+        contract = getattr(p, "contract", None)
+        if contract is not None:
+            hit = int(getattr(contract, "salary", 0) or 0)
+            hit -= int(getattr(p, "retained_amount", 0) or 0)
+            return max(0, hit)
+    except Exception:
+        pass
+    return 0
+
+
+def minor_league_cap_charge(p) -> int:
+    """Cap hit of a player under NHL contract assigned to the minors.
+
+    True NHL rule: two-way deals count $0 (minor-league salary is cap
+    exempt); one-way deals count salary minus the burial exemption.
+    """
+    try:
+        contract = getattr(p, "contract", None)
+        if contract is None:
+            return 0
+        if bool(getattr(contract, "two_way", False)):
+            return 0
+        hit = int(getattr(contract, "salary", 0) or 0)
+        hit -= int(getattr(p, "retained_amount", 0) or 0)
+        return max(0, hit - BURY_EXEMPTION)
+    except Exception:
+        return 0
+
+
 def roster_cap_charge(team) -> int:
-    """Sum of active NHL roster contract salaries (mirrors Team.payroll).
+    """Active-roster cap charge under the true NHL rule (Eastside logic).
+
+    Only the NHL active roster counts at full salary. Prospects never
+    count. Players under NHL contract in the minors follow the burial
+    rule: two-way deals are fully exempt, one-way deals count salary
+    minus the $1.925M burial exemption.
 
     Retained salary lowers the charge: a player carrying retained_amount
     (kept by his former club) counts salary - retained here, while the
@@ -323,10 +368,9 @@ def roster_cap_charge(team) -> int:
     try:
         total = 0
         for p in (getattr(team, "roster", None) or []):
-            contract = getattr(p, "contract", None)
-            if contract is not None:
-                total += int(getattr(contract, "salary", 0) or 0)
-                total -= int(getattr(p, "retained_amount", 0) or 0)
+            total += _active_roster_hit(p)
+        for p in (getattr(team, "ahl_roster", None) or []):
+            total += minor_league_cap_charge(p)
         return max(0, total)
     except Exception:
         return 0
@@ -424,6 +468,13 @@ def is_over_cap(team, season_year=None) -> bool:
 def cap_breakdown(team, season_year=None) -> Dict:
     """Full component breakdown for cap UI screens."""
     roster = roster_cap_charge(team)
+    # Buried one-way money in the minors, shown separately for transparency
+    # (it is already included in the roster charge above).
+    try:
+        buried = sum(minor_league_cap_charge(p)
+                     for p in (getattr(team, "ahl_roster", None) or []))
+    except Exception:
+        buried = 0
     buyouts = in_game_buyout_charge(team, season_year)
     s_buyout = seeded_buyout_charge(team)
     s_retained = seeded_retained_charge(team)
@@ -437,6 +488,7 @@ def cap_breakdown(team, season_year=None) -> Dict:
     return {
         "cap": cap,
         "roster": roster,
+        "buried": buried,
         "buyouts": buyouts,
         "seeded_buyout": s_buyout,
         "seeded_retained": s_retained,

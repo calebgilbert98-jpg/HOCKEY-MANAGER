@@ -38,19 +38,27 @@ AGE_DISTRIBUTIONS = {
     "OLDTIMER": {"min_age": 33, "max_age": 42, "peak_age": 36}
 }
 
-# Contract value ranges based on skill tier and age
+# Contract value ranges based on skill tier and age.
+# Caleb's original tier structure, rescaled to the 2026-27 economy:
+# league minimum $775k, ELC max $975k, and a top end inflated by
+# above-market mega-deals (Draisaitl $14M, MacKinnon $12.6M, McDavid
+# $12.5M set the ceiling everyone else negotiates against).
 CONTRACT_VALUES = {
-    # 2026-27 scale: league minimum $775k; a 23-man NHL roster must fit
-    # under the $104M cap, so depth deals cluster near the minimum and
-    # only true stars break $9M. (Overall is the native 1-100 scale.)
-    "ENTRY_LEVEL": {"min": 775000, "max": 925000, "years": [3]},
-    "BRIDGE": {"min": 1000000, "max": 3500000, "years": [2, 3]},
-    "STANDARD": {"min": 900000, "max": 5000000, "years": [3, 4, 5, 6]},
-    "PREMIUM": {"min": 6000000, "max": 10500000, "years": [5, 6, 7, 8]},
-    "SUPERSTAR": {"min": 9500000, "max": 14000000, "years": [6, 7, 8]},
-    "VETERAN": {"min": 775000, "max": 2500000, "years": [1, 2]},
-    "AHL": {"min": 70000, "max": 150000, "years": [1, 2]}
+    "ENTRY_LEVEL": {"min": 775000, "max": 975000, "years": [3]},
+    "BRIDGE": {"min": 1000000, "max": 4500000, "years": [2, 3]},
+    "STANDARD": {"min": 900000, "max": 5500000, "years": [3, 4, 5, 6]},
+    "PREMIUM": {"min": 5500000, "max": 10000000, "years": [5, 6, 7, 8]},
+    "SUPERSTAR": {"min": 10000000, "max": 14500000, "years": [6, 7, 8]},
+    "VETERAN": {"min": 775000, "max": 3250000, "years": [1, 2]},
+    "AHL": {"min": 80000, "max": 175000, "years": [1, 2]}
 }
+
+# Above-market inflation: the share of premium/superstar deals that get
+# pushed past the gate by a bidding war, and how far past it they go.
+# This is the league-wide inflation from guys taking above market value.
+ABOVE_MARKET_SHARE = 0.20
+ABOVE_MARKET_BUMP = (1.05, 1.12)
+ABOVE_MARKET_CEILING = 15000000
 
 # Teams for different leagues
 NHL_TEAMS = [
@@ -249,23 +257,31 @@ class PlayerGenerator:
                     new_value = min(GameBalance.MAX_ATTRIBUTE, current_value + boost_amount)
                     setattr(player, attr, new_value)
     
-    def determine_contract_info(self, player: Player, skill_tier: str) -> Tuple[int, int]:
-        """Determine appropriate contract salary and length for a player."""
+    def determine_contract_info(self, player: Player, skill_tier: str) -> Tuple[int, int, bool, int]:
+        """Determine appropriate contract salary and length for a player.
+
+        Returns (nhl_salary, years, two_way, ahl_salary). Category logic is
+        Caleb's original: ELC / bridge for the kids, superstar/premium by
+        overall, veteran deals for the 33+ crowd, AHL money for minor
+        leaguers, standard for everyone else.
+        """
         overall = player.overall_rating()
         age = player.age
-        
+
         # Determine contract category (overall on the native 100-point scale).
-        # Young players sign entry-level deals regardless of rating --
-        # a 21-year-old 78-ovr stud is still on his ELC in real life.
-        if age <= 23:
+        # Caleb's tier structure, with star thresholds calibrated to the
+        # generated curve (median 78): 92+ is a franchise player, 87+ a
+        # first-liner. Kids sign entry-level deals regardless of rating --
+        # a 21-year-old stud is still on his ELC in real life.
+        if age <= 22:
             contract_type = "ENTRY_LEVEL"
-        elif age <= 25 and overall < 74:
-            contract_type = "BRIDGE"
-        elif overall >= 88:
+        elif overall >= 92:
             contract_type = "SUPERSTAR"
-        elif overall >= 83:
+        elif overall >= 87:
             contract_type = "PREMIUM"
-        elif age >= 34 and overall < 80:
+        elif age <= 25 and overall < 80:
+            contract_type = "BRIDGE"
+        elif age >= 33 and overall < 84:
             contract_type = "VETERAN"
         elif "AHL" in skill_tier:
             contract_type = "AHL"
@@ -278,23 +294,46 @@ class PlayerGenerator:
         salary_range = contract_info["max"] - contract_info["min"]
         salary_factor = (overall - 62) / 28  # Normalize to 0-1 range
         salary_factor = max(0, min(1, salary_factor))
-        
+
         base_salary = contract_info["min"] + (salary_range * salary_factor)
-        
+
         # Add some randomness
         variation = random.uniform(0.85, 1.15)
         final_salary = int(base_salary * variation)
-        
+
+        # Above-market inflation: bidding wars push a share of star deals
+        # past the gate, the way real mega-deals inflate the whole market.
+        if contract_type in ("PREMIUM", "SUPERSTAR") and random.random() < ABOVE_MARKET_SHARE:
+            bump = random.uniform(*ABOVE_MARKET_BUMP)
+            final_salary = int(final_salary * bump)
+
         # Ensure within bounds
-        final_salary = max(contract_info["min"], min(contract_info["max"], final_salary))
-        
+        ceiling = ABOVE_MARKET_CEILING if contract_type in ("PREMIUM", "SUPERSTAR") else contract_info["max"]
+        final_salary = max(contract_info["min"], min(ceiling, final_salary))
+
         # Round to nearest 25k
         final_salary = round(final_salary / 25000) * 25000
-        
+
         # Contract length
         contract_length = random.choice(contract_info["years"])
-        
-        return final_salary, contract_length
+
+        # Two-way structure: kids and minor-leaguers sign two-way deals.
+        # Everyone else is one-way.
+        two_way = contract_type in ("ENTRY_LEVEL", "BRIDGE", "AHL")
+        ahl_salary = 0
+        if two_way:
+            ahl_info = CONTRACT_VALUES["AHL"]
+            ahl_range = ahl_info["max"] - ahl_info["min"]
+            ahl_factor = max(0, min(1, (overall - 55) / 30))
+            ahl_salary = round((ahl_info["min"] + ahl_range * ahl_factor) / 5000) * 5000
+            if contract_type == "AHL":
+                # Career minor-leaguer: the tier money IS the minor-league
+                # pay; the NHL salary is league minimum for call-up
+                # accounting.
+                ahl_salary = final_salary
+                final_salary = 775000
+
+        return final_salary, contract_length, two_way, ahl_salary
     
     def create_player(self, 
                      skill_tier: str = "NHL_DEPTH",
@@ -404,9 +443,11 @@ class PlayerGenerator:
         
         # Set contract info if not free agent
         if team_name != "Free Agent":
-            salary, contract_length = self.determine_contract_info(player, skill_tier)
+            salary, contract_length, two_way, ahl_salary = self.determine_contract_info(player, skill_tier)
             player.contract.salary = salary
             player.contract.years_remaining = contract_length
+            player.contract.two_way = two_way
+            player.contract.ahl_salary = ahl_salary
         
         # Set some additional properties
         player.shooting_tendency = random.randint(30, 70)
