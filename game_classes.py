@@ -1322,6 +1322,341 @@ def can_approach_staff(staff, employer_team=None, user_team=None,
         return True, ""
 
 
+# ---------------------------------------------------------------------------
+# Staff aging and development (Sept 2026)
+#
+# Coaches develop like players do: young staff grow with experience, prime
+# staff hold steady, and coaches 60+ regress -- unless they have icon status
+# in the league (icon_level "icon" or reputation 85+), in which case their
+# craft holds. Staff were previously ageless and immortal; every season
+# rollover now ages them one year, moves their coaching attributes by age
+# band, and gently retires the oldest so the coaching carousel keeps
+# turning.
+# ---------------------------------------------------------------------------
+
+# Every coaching attribute that moves with age/experience (1-100 scale).
+_STAFF_DEVELOP_ATTRS = (
+    "coaching_forwards", "coaching_defensemen", "coaching_goalies",
+    "tactical_knowledge", "game_preparation", "match_preparation",
+    "working_with_youngsters", "player_development",
+    "man_management", "motivating", "discipline", "leadership",
+    "judging_player_ability", "judging_player_potential",
+    "media_handling", "determination", "adaptability",
+    "level_of_discipline", "attacking_coaching", "defensive_coaching",
+    "mental_coaching", "technical_coaching",
+)
+
+# Reputation at/above this counts as icon status in the league: the game
+# already prices and covets these coaches as legends.
+_STAFF_ICON_REPUTATION = 85
+
+
+def staff_is_icon(staff) -> bool:
+    """Icon status in the league: stamped icons and 85+ reputation coaches."""
+    try:
+        if getattr(staff, "icon_level", "") == "icon":
+            return True
+        return int(getattr(staff, "reputation", 0) or 0) >= _STAFF_ICON_REPUTATION
+    except Exception:
+        return False
+
+
+def _staff_growth_rate(age: int, icon: bool) -> float:
+    """Base attribute points per year by age band (before employment factor)."""
+    if age <= 34:
+        return 2.0
+    if age <= 44:
+        return 1.0
+    if age <= 54:
+        return 0.0
+    if age <= 59:
+        return -0.5
+    # 60+: past their prime unless they're an icon of the league.
+    return 0.0 if icon else -2.0
+
+
+def develop_staff_member(staff, employed: bool = True,
+                         assignment: str = "nhl") -> dict:
+    """Move one staffer's coaching attributes for a season of experience.
+
+    Returns {attr: delta} for the attributes that changed (transparency for
+    QA/UI). Employed coaches develop faster than the unemployed; NHL chairs
+    develop fastest. Attributes clamp to the 25-99 band.
+    """
+    deltas = {}
+    try:
+        age = int(getattr(staff, "age", 40) or 40)
+    except Exception:
+        age = 40
+    icon = staff_is_icon(staff)
+    base = _staff_growth_rate(age, icon)
+    # Employment factor: working coaches sharpen faster; an employed
+    # veteran also holds off decline a little better.
+    if employed:
+        emp = 1.25 if (assignment or "nhl") == "nhl" else 1.0
+    else:
+        emp = 0.5
+    if base < 0 and employed:
+        emp = min(emp, 0.75)
+    for attr in _STAFF_DEVELOP_ATTRS:
+        try:
+            cur = int(getattr(staff, attr, 65) or 65)
+        except Exception:
+            continue
+        noise = random.uniform(-0.75, 0.75)
+        delta = int(round(base * emp + noise))
+        if delta == 0:
+            continue
+        new = max(25, min(99, cur + delta))
+        if new == cur:
+            continue
+        setattr(staff, attr, new)
+        deltas[attr] = new - cur
+    # Reputation drifts with the craft for non-icons: a fading 64-year-old
+    # slowly loses league standing; a rising young coach gains it. Icons
+    # keep theirs -- that's what icon status means.
+    try:
+        if not icon and deltas:
+            avg = sum(deltas.values()) / len(deltas)
+            rep = int(getattr(staff, "reputation", 50) or 50)
+            if avg > 0.25 and rep < 99:
+                bump = 2 if random.random() < 0.5 else 1
+                staff.reputation = min(99, rep + bump)
+            elif avg < -0.25 and rep > 10:
+                drop = 2 if random.random() < 0.5 else 1
+                staff.reputation = max(10, rep - drop)
+    except Exception:
+        pass
+    return deltas
+
+
+def age_staff_one_year(staff, employed: bool = True,
+                       assignment: str = "nhl") -> bool:
+    """Age one staffer a year: +1 age, +1 experience if employed, attribute
+    development. Returns True if the staffer retires this rollover."""
+    try:
+        staff.age = int(getattr(staff, "age", 40) or 40) + 1
+        if employed:
+            staff.experience = int(getattr(staff, "experience", 0) or 0) + 1
+    except Exception:
+        pass
+    develop_staff_member(staff, employed=employed, assignment=assignment)
+    # Retirement: the carousel keeps turning. Non-icons start considering
+    # it at 66 with rising odds; icons coach deep into their 70s.
+    try:
+        age = int(getattr(staff, "age", 66) or 66)
+        icon = staff_is_icon(staff)
+        if icon:
+            if age >= 72:
+                return random.random() < min(0.75, (age - 71) * 0.10)
+        else:
+            if age >= 66:
+                return random.random() < min(0.75, (age - 65) * 0.10)
+    except Exception:
+        pass
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Staff breakthroughs: results-driven development (Sept 2026)
+#
+# Age/experience moves every coach along a predictable curve (see the aging
+# section above), but careers are also made by RESULTS: winning hockey
+# games and turning players into success stories. Each season rollover,
+# every employed coach gets a season score from (a) team results -- win%,
+# playoff rounds, Cups, Jack Adams nods -- and (b) player-development
+# success stories on his roster, in varying degrees: a +2 improvement
+# counts, a +7 breakout counts more, and pushing a goalie over the
+# NHL-ready line counts extra for the goalie coach. The score becomes a
+# CHANCE (never a guarantee) at a breakthrough leap, weighted by the
+# coach's career stock -- momentum that rises with great seasons and
+# decays with failure, unemployment, new situations, and the age curve.
+# An AHL goalie coach who twice makes his goalies NHL-ready can genuinely
+# become an elite NHL-tier goalie coach; a Cup-winning 66-year-old can
+# hold off the age curve for one more run.
+# ---------------------------------------------------------------------------
+
+def _staff_spotlight_attrs(role):
+    """The attributes a breakthrough moves for each coaching role."""
+    if role == StaffRole.GOALIE_COACH:
+        return ("coaching_goalies", "technical_coaching",
+                "player_development", "working_with_youngsters",
+                "mental_coaching")
+    if role == StaffRole.HEAD_COACH:
+        return ("tactical_knowledge", "leadership", "man_management",
+                "motivating", "game_preparation", "match_preparation")
+    if role in (StaffRole.ASSOCIATE_COACH, StaffRole.ASSISTANT_COACH,
+                StaffRole.POWER_PLAY_COACH, StaffRole.PENALTY_KILL_COACH,
+                StaffRole.SKILLS_COACH, StaffRole.SKATING_COACH):
+        return ("coaching_forwards", "coaching_defensemen",
+                "tactical_knowledge", "working_with_youngsters",
+                "player_development")
+    return ("man_management", "motivating", "leadership",
+            "tactical_knowledge", "determination", "adaptability")
+
+
+def _staff_season_score(staff, team_name, stories, results):
+    """Season score: development stories (varying degrees) + team results."""
+    score = 0.0
+    try:
+        role = getattr(staff, "role", None)
+        st = (stories or {}).get(team_name) or {}
+        _seg = "ahl" if (getattr(staff, "assignment", "nhl")
+                         or "nhl") == "ahl" else "nhl"
+        seg = st.get(_seg) or {}
+        tw = float(seg.get("weight", 0.0) or 0.0)
+        gw = float(seg.get("goalie_weight", 0.0) or 0.0)
+        if role == StaffRole.GOALIE_COACH:
+            score += gw * 1.5 + max(0.0, tw - gw) * 0.25
+        elif role == StaffRole.HEAD_COACH:
+            score += tw * 0.5
+        elif role in (StaffRole.ASSOCIATE_COACH, StaffRole.ASSISTANT_COACH):
+            score += tw * 0.75
+        else:
+            score += tw * 0.25
+        r = (results or {}).get(team_name) or {}
+        if r:
+            if role == StaffRole.HEAD_COACH:
+                wpct = float(r.get("win_pct", 0.5) or 0.5)
+                if wpct >= 0.600:
+                    score += 2.0
+                elif wpct >= 0.550:
+                    score += 1.0
+                elif wpct < 0.400:
+                    score -= 2.0
+                playoff = str(r.get("playoff", "") or "")
+                if "Won Stanley Cup" in playoff:
+                    score += 3.0
+                elif "Lost Stanley Cup Final" in playoff:
+                    score += 2.0
+                elif playoff.startswith("Lost"):
+                    score += 1.0
+            if (r.get("adams_id") is not None
+                    and r.get("adams_id") == getattr(staff, "id", None)):
+                score += 3.0
+    except Exception:
+        pass
+    return score
+
+
+def roll_staff_breakthrough(staff, team_name, stories=None, results=None):
+    """One coach's end-of-season fortune roll.
+
+    Returns (broke_through: bool, score: float, chance: float). A
+    breakthrough lifts the role's spotlight attributes and reputation and
+    banks stock; a quiet year still moves stock with the season's shape.
+    """
+    try:
+        import coach_records as _cr
+        if not _cr.is_coaching_role(staff):
+            return False, 0.0, 0.0
+    except Exception:
+        pass
+    score = _staff_season_score(staff, team_name, stories, results)
+    stock = int(getattr(staff, "stock", 0) or 0)
+    chance = 0.02 + 0.10 * max(score, 0.0) + stock / 600.0
+    chance = max(0.02, min(0.80, chance))
+    if random.random() < chance:
+        spot = _staff_spotlight_attrs(getattr(staff, "role", None))
+        bump = random.randint(2, 4)
+        for attr in spot:
+            try:
+                cur = int(getattr(staff, attr, 65) or 65)
+                setattr(staff, attr,
+                        max(25, min(99, cur + bump + random.randint(0, 1))))
+            except Exception:
+                pass
+        try:
+            rep = int(getattr(staff, "reputation", 50) or 50)
+            staff.reputation = min(99, rep + random.randint(2, 5))
+        except Exception:
+            pass
+        staff.stock = max(-100, min(100, stock + 14))
+        staff.career_breakthroughs = \
+            int(getattr(staff, "career_breakthroughs", 0) or 0) + 1
+        return True, score, chance
+    # No leap: the season's shape still moves the stock.
+    if score >= 3.0:
+        stock += 5
+    elif score <= -2.0:
+        stock -= 10
+    staff.stock = max(-100, min(100, stock))
+    return False, score, chance
+
+
+def roll_staff_breakthroughs(league):
+    """Season-rollover breakthrough pass over every club's coaching staff.
+
+    Reads the development stories computed earlier in this rollover
+    (league._staff_stories) and the team results stashed pre-rollover by
+    the UI flow (league._staff_results_cache, when present). Situation
+    dynamics: a new room means proving it again (stock fades), the age
+    curve closes the window for old non-icons, and unemployment fades the
+    glow. Notable leaps are collected on league.staff_breakthrough_news.
+    """
+    stories = getattr(league, "_staff_stories", None) or {}
+    results = getattr(league, "_staff_results_cache", None) or {}
+    news = []
+    try:
+        for team in getattr(league, "teams", []) or []:
+            tname = getattr(team, "team_name", "")
+            for s in list(getattr(team, "staff", []) or []):
+                try:
+                    broke, score, _chance = roll_staff_breakthrough(
+                        s, tname, stories, results)
+                except Exception:
+                    continue
+                # Situation dynamics: a new room means proving it again;
+                # the age curve closes the window for old non-icons.
+                try:
+                    st = int(getattr(s, "stock", 0) or 0)
+                    if (getattr(s, "years_with_team", 99) or 99) <= 1:
+                        st = int(st * 0.8)
+                    if (int(getattr(s, "age", 40) or 40) >= 60
+                            and not staff_is_icon(s)):
+                        st = int(st * 0.9)
+                    s.stock = max(-100, min(100, st))
+                except Exception:
+                    pass
+                if broke and (score >= 5.0
+                              or int(getattr(s, "reputation", 0) or 0) >= 75):
+                    try:
+                        nm = (f"{getattr(s, 'first_name', '')} "
+                              f"{getattr(s, 'last_name', '')}").strip()
+                        if not nm:
+                            nm = "A coach"
+                        role = getattr(getattr(s, "role", None),
+                                       "value", "coach")
+                        news.append(
+                            f"{nm} ({role}, {tname}) is on the rise after "
+                            f"a breakthrough season (rep "
+                            f"{getattr(s, 'reputation', '?')}, stock "
+                            f"{int(getattr(s, 'stock', 0) or 0):+d}).")
+                    except Exception:
+                        pass
+        # Unemployment fades the glow: out of the game, out of mind.
+        for s in list(getattr(league, "free_agent_staff", None) or []):
+            try:
+                s.stock = int(int(getattr(s, "stock", 0) or 0) * 0.7)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if news:
+        box = getattr(league, "staff_breakthrough_news", None)
+        if not isinstance(box, list):
+            box = []
+            league.staff_breakthrough_news = box
+        box.extend(news)
+    # One-shot: the results cache was stashed pre-rollover by the UI flow.
+    try:
+        if hasattr(league, "_staff_results_cache"):
+            delattr(league, "_staff_results_cache")
+    except Exception:
+        pass
+    return news
+
+
 @dataclass
 class Staff:
     """Represents a non-player staff member with detailed EHM-style attributes."""
@@ -1417,6 +1752,15 @@ class Staff:
     # and the steal/sell watches -- never set by hand.
     tip_record: dict = field(default_factory=lambda: {"calls": 0, "hits": 0})
     tip_history: list = field(default_factory=list)
+
+    # Coaching momentum (-100..100): rises with breakthrough seasons and
+    # great results, decays with failure, unemployment, new situations,
+    # and the age curve. Feeds the breakthrough chance each rollover --
+    # careers have trajectories, not just attributes.
+    stock: int = 0
+    # Career leap count: how many breakthrough seasons this coach has had.
+    # The story of a riser, shown on the staff card.
+    career_breakthroughs: int = 0
 
     @property
     def full_name(self) -> str:
@@ -5324,6 +5668,22 @@ class League:
                     ahl_ids.add(_p.id)
         except Exception:
             pass
+        # Snapshot player overalls BEFORE development: the staff
+        # breakthrough pass compares against these to find this season's
+        # player-development success stories (varying degrees, not just
+        # elite leaps).
+        _overall_before = {}
+        try:
+            for _t in self.teams:
+                for _p in (list(getattr(_t, "roster", []) or [])
+                           + list(getattr(_t, "ahl_roster", []) or [])):
+                    try:
+                        _overall_before[getattr(_p, "id", None)] = \
+                            _p.overall_rating()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         all_players = self.get_all_players()
         for player in all_players:
             try:
@@ -5440,6 +5800,124 @@ class League:
                 player.ahl_callup_buzz = False
             except Exception:
                 pass
+
+        # Coaching success stories: player overall deltas this rollover,
+        # split by NHL/AHL roster so AHL coaches get credit for AHL
+        # development. Varying degrees: +2 counts, +7 breakouts count
+        # more, and crossing the NHL-ready line counts extra.
+        try:
+            _stories = {}
+            for _t in self.teams:
+                _tn = getattr(_t, "team_name", "")
+                _segs = {}
+                for _seg, _plist in (
+                        ("nhl", list(getattr(_t, "roster", []) or [])),
+                        ("ahl", list(getattr(_t, "ahl_roster", []) or []))):
+                    _tw = 0.0
+                    _gw = 0.0
+                    for _p in _plist:
+                        try:
+                            _before = _overall_before.get(
+                                getattr(_p, "id", None))
+                            if _before is None:
+                                continue
+                            _after = _p.overall_rating()
+                            _delta = int(_after) - int(_before)
+                            _age = int(getattr(_p, "age", 99) or 99)
+                            if _age > 29 or _delta < 2:
+                                continue
+                            _w = (1.0 + (1.0 if _delta >= 4 else 0.0)
+                                  + (1.0 if _delta >= 7 else 0.0))
+                            _pos = getattr(
+                                getattr(_p, "primary_position", None),
+                                "name", "")
+                            _is_g = "GOALIE" in str(_pos)
+                            _thresh = 76 if _is_g else 78
+                            if _before < _thresh <= _after:
+                                _w += 1.0
+                            _tw += _w
+                            if _is_g:
+                                _gw += _w
+                        except Exception:
+                            pass
+                    _segs[_seg] = {"weight": _tw, "goalie_weight": _gw}
+                _stories[_tn] = _segs
+            self._staff_stories = _stories
+        except Exception:
+            pass
+        # Breakthrough roll: results + stories become a CHANCE at a career
+        # leap (never a guarantee), weighted by each coach's stock. Runs
+        # before the aging pass so a great season can hold off the age
+        # curve for one more run.
+        try:
+            roll_staff_breakthroughs(self)
+        except Exception:
+            pass
+
+        # Staff aging and development: young coaches grow with experience,
+        # 60+ non-icons regress, icons hold their craft. Staff were
+        # previously ageless; every rollover now ages them one year, moves
+        # their coaching attributes by age band, and retires the oldest so
+        # the coaching carousel keeps turning. Guarded so it can never
+        # break the season rollover.
+        try:
+            _retirees = []
+
+            def _age_staff_list(staff_list, employed, assignment_fn=None):
+                for _s in list(staff_list or []):
+                    try:
+                        _asg = (assignment_fn(_s) if assignment_fn
+                                else "nhl") or "nhl"
+                    except Exception:
+                        _asg = "nhl"
+                    try:
+                        if age_staff_one_year(_s, employed=employed,
+                                             assignment=_asg):
+                            _retirees.append(_s)
+                    except Exception:
+                        pass
+
+            for _t in self.teams:
+                _age_staff_list(
+                    getattr(_t, "staff", []), True,
+                    lambda s: getattr(s, "assignment", "nhl"))
+            _age_staff_list(getattr(self, "free_agent_staff", []), False)
+            _age_staff_list(getattr(self, "overseas_staff", []), True,
+                            lambda s: "overseas")
+            for _s in _retirees:
+                try:
+                    for _t in self.teams:
+                        _lst = getattr(_t, "staff", None)
+                        if _lst is not None and _s in _lst:
+                            _lst.remove(_s)
+                    _lst = getattr(self, "free_agent_staff", None)
+                    if _lst is not None and _s in _lst:
+                        _lst.remove(_s)
+                    _lst = getattr(self, "overseas_staff", None)
+                    if _lst is not None and _s in _lst:
+                        _lst.remove(_s)
+                except Exception:
+                    pass
+            if _retirees:
+                _box = getattr(self, "staff_retirement_news", None)
+                if not isinstance(_box, list):
+                    _box = []
+                    self.staff_retirement_news = _box
+                for _s in _retirees:
+                    try:
+                        _nm = (f"{getattr(_s, 'first_name', '')} "
+                               f"{getattr(_s, 'last_name', '')}").strip()
+                        if not _nm:
+                            _nm = "A coach"
+                        _role = getattr(getattr(_s, "role", None),
+                                        "value", "staffer")
+                        _box.append(
+                            f"{_nm} ({_role}, age "
+                            f"{getattr(_s, 'age', '?')}) has retired.")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         # Junior/college awards for prospects: one lightweight pass over
         # the farm_season data the prospect offseason sim just produced

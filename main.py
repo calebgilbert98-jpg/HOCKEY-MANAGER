@@ -11991,6 +11991,22 @@ class HockeyManagerGUI(tk.Tk):
                 # Coach influence: recent success builds it, losing burns it.
                 rs.develop_coach_influence(s, win_pct=win_pct, is_champ=is_champ,
                                            roster=team.roster)
+            # Stash team results for the staff breakthrough roll: it runs
+            # inside league.end_of_season(), after the standings are wiped,
+            # so the season's shape has to be captured here. One-shot cache
+            # -- the rollover consumes and clears it.
+            try:
+                _src = getattr(self.league, "_staff_results_cache", None)
+                if not isinstance(_src, dict):
+                    _src = {}
+                    self.league._staff_results_cache = _src
+                _src[team.team_name] = {
+                    "w": w, "l": l, "otl": otl, "win_pct": win_pct,
+                    "playoff": playoff_result, "champ": bool(is_champ),
+                    "adams_id": getattr(adams_staff, "id", None),
+                }
+            except Exception:
+                pass
             # Roster churn snapshot for next season's situations factor
             # (gelling vs battle-tested core). Once per team per offseason.
             try:
