@@ -51,3 +51,33 @@ def build_morning_digest(date_str, events):
         'category': 'digest',
         'priority': 'normal',
     }
+
+
+def deliver_morning_digest(team, date_str, events):
+    """Build the digest and deliver it to the team's inbox.
+
+    team: Team object with an `inbox` attribute.
+    Returns the EmailMessage, or None if delivery failed.
+    """
+    try:
+        from game_classes import EmailMessage
+        digest = build_morning_digest(date_str, events)
+        msg = EmailMessage(
+            sender=digest['sender'],
+            sender_type="Staff",
+            subject=digest['subject'],
+            content=digest['body'],
+            category="General",
+            is_important=True,
+            priority=3,
+        )
+        inbox = getattr(team, 'inbox', None)
+        if inbox is not None and hasattr(inbox, 'messages'):
+            inbox.messages.append(msg)
+            return msg
+        elif inbox is not None and hasattr(inbox, 'add_message'):
+            inbox.add_message(msg)
+            return msg
+    except Exception:
+        pass
+    return None
