@@ -65,7 +65,7 @@ def _ahl_hero():
 
 _ahl_hero.stories = (stories_for(6.0, 6.0, "ahl"), None)
 rate = trial_rate(_ahl_hero, 40, 5000)
-check("AHL goalie hero breaks through often (chance ~0.8)",
+check("AHL goalie hero breaks through often (chance ~0.65)",
       0.5 <= rate <= 1.0, f"rate={rate:.2f}")
 
 # Score check: 6.0 goalie weight * 1.5 = 9.0
@@ -78,7 +78,7 @@ def _mid():
     return mkcoach(StaffRole.GOALIE_COACH, age=45, rep=60, assignment="ahl")
 
 
-_mid.stories = (stories_for(3.2, 3.2, "ahl"), None)  # score 4.8 -> chance 0.5
+_mid.stories = (stories_for(3.2, 3.2, "ahl"), None)  # score 4.8 -> chance 0.36
 rate = trial_rate(_mid, 30, 6000)
 check("mid season is a coin flip, not destiny", 0.15 < rate < 0.85,
       f"rate={rate:.2f}")
@@ -109,7 +109,7 @@ sc = _staff_season_score(_champ(), "Testers", stories_for(4.0, 0.0, "nhl"),
 check("Cup HC score: stories + win% + Cup", abs(sc - (2.0 + 2.0 + 3.0)) < 1e-9,
       f"score={sc}")
 rate = trial_rate(_champ, 30, 8000)
-check("Cup-winning HC usually breaks through", rate >= 0.5, f"rate={rate:.2f}")
+check("Cup-winning HC usually breaks through", rate >= 0.35, f"rate={rate:.2f}")
 
 # Jack Adams bump
 hc = _champ()
@@ -133,10 +133,12 @@ try:
 finally:
     gc.random.random = orig
 check("breakthrough fires", broke is True)
-check("spotlight attrs jump (+2..5)",
-      all(getattr(hero, a) - spot_before[a] >= 2 for a in spot_before),
-      f"{ {a: getattr(hero, a) - spot_before[a] for a in spot_before} }")
-check("reputation jumps (+2..5)", 62 <= hero.reputation <= 65,
+# 3 sampled attrs were tracked; at least those move (+1..2 each)
+tracked_jump = sum(getattr(hero, a) - spot_before[a] for a in spot_before)
+check("breakthrough is a focused leap (+1..2 on sampled attrs)",
+      tracked_jump >= 3,
+      f"tracked_jump={tracked_jump}")
+check("reputation jumps (+1..4)", 61 <= hero.reputation <= 64,
       f"rep={hero.reputation}")
 check("stock banks +14", hero.stock == 14, f"stock={hero.stock}")
 check("career leap counted", hero.career_breakthroughs == 1)

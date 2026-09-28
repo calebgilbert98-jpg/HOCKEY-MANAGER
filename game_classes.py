@@ -1362,17 +1362,35 @@ def staff_is_icon(staff) -> bool:
 
 
 def _staff_growth_rate(age: int, icon: bool) -> float:
-    """Base attribute points per year by age band (before employment factor)."""
+    """Base attribute points per year by age band (before employment factor
+    and diminishing returns). Deliberately modest: a 28-year-old riser
+    gains ~1.5/yr at the low end, and the headroom curve below grinds that
+    toward zero as he approaches elite levels. Nobody maxes out."""
     if age <= 34:
-        return 2.0
+        return 1.2
     if age <= 44:
-        return 1.0
+        return 0.6
     if age <= 54:
         return 0.0
     if age <= 59:
         return -0.5
     # 60+: past their prime unless they're an icon of the league.
     return 0.0 if icon else -2.0
+
+
+def _staff_headroom(attr_value: int) -> float:
+    """Diminishing returns on growth: 60->70 is easy, 90->95 is a grind.
+
+    Scales development by headroom to 95, so the age curve asymptotes at
+    elite and can never push past it -- only breakthrough seasons (below)
+    can carry a coach into the 96-99 band, one hard-earned point at a
+    time. Applies to growth only; the age curve hits fading veterans at
+    full force.
+    """
+    try:
+        return max(0.0, min(1.0, (95 - int(attr_value or 60)) / 35.0))
+    except Exception:
+        return 1.0
 
 
 def develop_staff_member(staff, employed: bool = True,
@@ -1404,24 +1422,46 @@ def develop_staff_member(staff, employed: bool = True,
         except Exception:
             continue
         noise = random.uniform(-0.75, 0.75)
-        delta = int(round(base * emp + noise))
+        # Diminishing returns on the way up: the closer to elite, the
+        # slower the climb, and the age curve tops out at 95 -- anything
+        # above that is breakthrough-built and only breakthroughs or
+        # decline move it. Decline hits at full force.
+        if base > 0:
+            if cur >= 96:
+                continue
+            delta = int(round(base * emp * _staff_headroom(cur) + noise))
+            cap = 95
+        elif base < 0:
+            delta = int(round(base * emp + noise))
+            cap = 99
+        else:
+            # Prime plateau (45-54): hold serve. A whisper of +/-1 keeps
+            # cards alive, but it never pushes past 95.
+            if cur >= 96:
+                continue
+            r = random.random()
+            if r < 0.90:
+                continue
+            delta = 1 if r < 0.95 else -1
+            cap = 95
         if delta == 0:
             continue
-        new = max(25, min(99, cur + delta))
+        new = max(25, min(cap, cur + delta))
         if new == cur:
             continue
         setattr(staff, attr, new)
         deltas[attr] = new - cur
-    # Reputation drifts with the craft for non-icons: a fading 64-year-old
+    # Reputation drifts with the craft for non-icons: a fading veteran
     # slowly loses league standing; a rising young coach gains it. Icons
-    # keep theirs -- that's what icon status means.
+    # keep theirs -- that's what icon status means. Steady development
+    # alone can build a name to ~80; beyond that takes results
+    # (breakthroughs), so aging never mints legends by itself.
     try:
         if not icon and deltas:
             avg = sum(deltas.values()) / len(deltas)
             rep = int(getattr(staff, "reputation", 50) or 50)
-            if avg > 0.25 and rep < 99:
-                bump = 2 if random.random() < 0.5 else 1
-                staff.reputation = min(99, rep + bump)
+            if avg > 0.5 and rep < 80:
+                staff.reputation = min(80, rep + 1)
             elif avg < -0.25 and rep > 10:
                 drop = 2 if random.random() < 0.5 else 1
                 staff.reputation = max(10, rep - drop)
@@ -1554,21 +1594,27 @@ def roll_staff_breakthrough(staff, team_name, stories=None, results=None):
         pass
     score = _staff_season_score(staff, team_name, stories, results)
     stock = int(getattr(staff, "stock", 0) or 0)
-    chance = 0.02 + 0.10 * max(score, 0.0) + stock / 600.0
-    chance = max(0.02, min(0.80, chance))
+    chance = 0.02 + 0.07 * max(score, 0.0) + stock / 600.0
+    chance = max(0.02, min(0.70, chance))
     if random.random() < chance:
+        # A breakthrough is a focused leap: 2-3 areas step up, not the
+        # whole card. Past 95 every leap is worth exactly one point, and
+        # 97 is the developed ceiling -- 98+ is born, not made.
         spot = _staff_spotlight_attrs(getattr(staff, "role", None))
-        bump = random.randint(2, 4)
-        for attr in spot:
+        leap_attrs = random.sample(spot, min(3, len(spot)))
+        for attr in leap_attrs:
             try:
                 cur = int(getattr(staff, attr, 65) or 65)
-                setattr(staff, attr,
-                        max(25, min(99, cur + bump + random.randint(0, 1))))
+                if cur >= 97:
+                    continue
+                bhr = max(0.05, min(1.0, (97 - cur) / 40.0))
+                inc = max(1, int(round(random.randint(1, 2) * bhr)))
+                setattr(staff, attr, min(97, cur + inc))
             except Exception:
                 pass
         try:
             rep = int(getattr(staff, "reputation", 50) or 50)
-            staff.reputation = min(99, rep + random.randint(2, 5))
+            staff.reputation = min(99, rep + random.randint(1, 4))
         except Exception:
             pass
         staff.stock = max(-100, min(100, stock + 14))

@@ -52,7 +52,7 @@ young = mkstaff(age=28, rep=60)
 before = avg_attrs(young)
 run_years(young, 5, employed=True, assignment="nhl")
 gain = avg_attrs(young) - before
-check("young NHL coach develops (+~12 over 5y)", gain >= 8, f"gain={gain:.1f}")
+check("young NHL coach develops (+~7 over 5y)", gain >= 5, f"gain={gain:.1f}")
 
 # --- 2. AHL develops slower than NHL ------------------------------------------
 random.seed(21)
