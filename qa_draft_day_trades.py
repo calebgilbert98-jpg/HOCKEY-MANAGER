@@ -57,8 +57,8 @@ for _seed in (7, 21, 99):
     _n = sum(1 for p in _pros
              if getattr(p.primary_position, "value", "") == "G")
     _goalie_counts.append(_n)
-check("goalie supply realistic (12-24 of 224)",
-      all(12 <= n <= 24 for n in _goalie_counts), str(_goalie_counts))
+check("goalie supply realistic (18-25 of 224)",
+      all(18 <= n <= 25 for n in _goalie_counts), str(_goalie_counts))
 random.seed(20260928)
 
 # -- 3: trade-up targeting ----------------------------------------------------

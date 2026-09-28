@@ -441,7 +441,20 @@ class Player:
     # Draft pedigree: round picked + the soft bust floor (Lafreniere cushion).
     draft_round: int = 0
     pedigree_floor: str = ""
-    
+
+    # Drafted-prospect rights lifecycle (Part 5). The club that drafted the
+    # prospect holds his NHL rights until rights_expiry_year. Old-save safe:
+    # always read these via getattr(player, <name>, <default>) -- saves
+    # pickled before this change have no such attributes (pickle does not
+    # call __init__).
+    rights_team: str = ""
+    rights_expiry_year: int = 0
+    rights_type: str = ""  # "CHL" | "NCAA" | "EUROPE"
+    drafted_year: int = 0
+    playing_where: str = ""
+    camp_invite: bool = False
+    draft_reentry: bool = False
+
     contract: Contract = field(default_factory=Contract)
     stats: PlayerStats = field(default_factory=PlayerStats)
     # Playoff-only ledger: folded from GameSim.game_stats after each playoff
@@ -2588,6 +2601,15 @@ class League:
     free_agents: List[Player] = field(default_factory=list)  # Kept for compatibility, but may be overridden
     free_agent_staff: List[Staff] = field(default_factory=list)
     draft_prospects: List[Player] = field(default_factory=list)
+    # CHL prospects who re-enter the draft after their rights expire
+    # (Part 5 rights lifecycle). The UI/draft layer reads this after the
+    # rollover. Old-save safe: read via getattr(self, 'draft_reentries', [])
+    # -- pickled leagues predating this change have no such attribute.
+    draft_reentries: List[Player] = field(default_factory=list)
+    # Rights-lifecycle news strings collected during the offseason rollover
+    # (re-entries, UFAs, retirements, holdout warnings, league changes).
+    # The UI layer posts these; old-save safe, same getattr caveat as above.
+    rights_news: List[str] = field(default_factory=list)
     schedule: List[Tuple[date, Team, Team]] = field(default_factory=list)
     standings: Dict[str, Dict] = field(default_factory=dict)
     current_game_index: int = 0
@@ -5132,6 +5154,375 @@ class League:
         
         self.initialize_standings()
         self.generate_schedule(season_year=self.season_year)
+
+        # Part 5: drafted-prospect rights lifecycle (unsigned rights expiry,
+        # CHL draft re-entries, holdout warnings, leaving junior). Guarded so
+        # a data bug here can never crash the season rollover.
+        try:
+            self._rollover_draft_rights()
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Part 5: unsigned drafted-prospect rights lifecycle
+    #
+    # Simplified real-world model:
+    #   CHL (OHL/QMJHL/WHL)   -> rights 2 years; unsigned + still
+    #                             draft-eligible (age <= 20) re-enters the
+    #                             next draft, otherwise UFA.
+    #   NCAA                   -> rights 4 years, then UFA.
+    #   Europe (everyone else) -> rights 4 years, then UFA.
+    #   Any                    -> 5 full unsigned years post-draft -> retired.
+    # Rights stamping normally happens at draft time in the draft UI
+    # (windows.py DraftView.execute_pick, owned by another worker). As a
+    # backstop, _rollover_draft_rights also stamps any prospect found in a
+    # team's prospects list that has no rights yet (drafted_year == 0) and
+    # is young enough to be a recent pick (age <= 21), inferring the draft
+    # year as the current season year. "Unsigned" == rights_team != "";
+    # signed prospects have their rights fields cleared and are skipped.
+    # ------------------------------------------------------------------
+    _RIGHTS_CHL_LEAGUES = ("OHL", "QMJHL", "WHL")
+    _RIGHTS_JUNIOR_LEAGUES = ("OHL", "WHL", "QMJHL", "USHL", "BCHL", "AJHL",
+                              "SJHL", "MJHL", "NOJHL", "OJHL", "CCHL")
+    # Where unsigned prospects can land when they age out of junior (a
+    # sensible minors/European club by nationality; no full contract sim).
+    _RIGHTS_LEAVE_JUNIOR = {
+        "russia": ("KHL", "MHL"),
+        "sweden": ("SHL", "HockeyAllsvenskan"),
+        "finland": ("Liiga", "Liiga"),
+        "czech": ("Czech Extraliga", "Czech Extraliga"),
+        "slovakia": ("Slovak Extraliga", "Slovak Extraliga"),
+        "germany": ("DEL", "DEL"),
+        "switzerland": ("NL", "NL"),
+        "united states": ("AHL", "ECHL"),
+        "usa": ("AHL", "ECHL"),
+    }
+
+    def stamp_draft_rights(self, player, team_name, draft_year):
+        """Stamp draft rights on a freshly drafted prospect.
+
+        Intended to be called at draft time by the draft UI layer; the
+        season rollover backstop also calls this for unstamped prospects
+        it finds in team.prospects. rights_type comes from the player's
+        junior league: OHL/QMJHL/WHL -> CHL (2-year rights), NCAA -> NCAA
+        (4-year rights), anything else -> EUROPE (4-year rights).
+        """
+        try:
+            jl = (getattr(player, "junior_league", "") or "").strip().upper()
+            if jl in self._RIGHTS_CHL_LEAGUES:
+                rtype, duration = "CHL", 2
+            elif jl == "NCAA":
+                rtype, duration = "NCAA", 4
+            else:
+                rtype, duration = "EUROPE", 4
+            player.rights_team = team_name
+            player.drafted_year = int(draft_year)
+            player.rights_type = rtype
+            player.rights_expiry_year = int(draft_year) + duration
+            if not getattr(player, "playing_where", ""):
+                player.playing_where = getattr(player, "junior_league", "") or "Junior"
+            player.draft_reentry = False
+        except Exception:
+            pass
+
+    def sign_drafted_prospect(self, team, player):
+        """Sign an unsigned drafted prospect to an ELC-like deal.
+
+        Reuses the existing contract-creation path
+        (player_generator.PlayerGenerator.determine_contract_info, which
+        routes age <= 22 prospects through the ENTRY_LEVEL gate:
+        $775k-$975k x 3 years, two-way). No new cap logic: the deal is a
+        plain Contract assignment, and cap reads it through the existing
+        systems. On success the rights fields are cleared (the prospect is
+        no longer "unsigned") and playing_where moves to the pro side;
+        returns True. Returns False when the prospect isn't this team's
+        unsigned rights-holder asset.
+        """
+        try:
+            team_name = team if isinstance(team, str) else getattr(team, "team_name", "")
+            team_obj = None
+            if isinstance(team, str):
+                for t in (getattr(self, "teams", []) or []):
+                    if getattr(t, "team_name", "") == team:
+                        team_obj = t
+                        break
+            else:
+                team_obj = team
+            if team_obj is None:
+                return False
+            prospects = getattr(team_obj, "prospects", []) or []
+            if player not in prospects:
+                return False
+            # Only the rights holder can sign; already-signed prospects
+            # (rights cleared) are skipped.
+            rights_team = getattr(player, "rights_team", "") or ""
+            if not rights_team or rights_team != getattr(team_obj, "team_name", ""):
+                return False
+            try:
+                from player_generator import PlayerGenerator
+                salary, years, two_way, ahl_salary = \
+                    PlayerGenerator().determine_contract_info(player, "NHL_ROOKIE")
+            except Exception:
+                salary, years, two_way, ahl_salary = 925000, 3, True, 85000
+            player.contract = Contract(salary=int(salary),
+                                       years_remaining=int(years),
+                                       two_way=bool(two_way),
+                                       ahl_salary=int(ahl_salary))
+            # Rights consumed: the prospect is now signed. drafted_year is
+            # cleared too -- it now means "drafted but never signed", which
+            # the five-year unsigned-retirement scan relies on.
+            player.rights_team = ""
+            player.rights_expiry_year = 0
+            player.rights_type = ""
+            player.drafted_year = 0
+            player.camp_invite = False
+            player.playing_where = "AHL" if int(getattr(player, "age", 20) or 20) >= 20 \
+                else (getattr(player, "playing_where", "") or "Junior")
+            return True
+        except Exception:
+            return False
+
+    def invite_prospect_to_camp(self, team_name, player):
+        """Invite an unsigned drafted prospect to development camp.
+
+        Sets camp_invite=True. Deliberately gives NO attribute boost:
+        prospect_development.process_prospect_offseason simulates a whole
+        season (stats, grade evaluation) -- far too heavy for a camp
+        invite. Returns a news string for the UI layer.
+        """
+        try:
+            player.camp_invite = True
+            name = getattr(player, "full_name", "Prospect")
+        except Exception:
+            name = "Prospect"
+        return (f"{name} has been invited to {team_name}'s development camp.")
+
+    def _rollover_draft_rights(self, reference_year=None):
+        """Advance the unsigned drafted-prospect rights lifecycle one season.
+
+        Two call paths, same math:
+          * Draft day (main.py): called BEFORE the draft is held, with
+            reference_year = the draft year about to be held. Expiring CHL
+            prospects who are still eligible re-enter THAT draft (the class
+            generator folds league.draft_reentries in).
+          * League.end_of_season (backstop): reference_year is None and the
+            already-incremented season_year is used; the next draft is then
+            season_year + 1.
+        A per-draft-year guard keeps the two paths from running twice for
+        the same offseason.
+        News strings are collected on league.rights_news for the UI layer
+        to post.
+        """
+        season_year = int(getattr(self, "season_year", 0) or 0)
+        if not season_year:
+            return
+        # The upcoming draft, relative to which expiry/re-entry is computed.
+        next_draft = int(reference_year) if reference_year else season_year + 1
+        # Expiry math keys off the season the upcoming draft belongs to:
+        # on draft day season_year is the season just ending (draft year -
+        # 1), so reference_year restores the draft-relative count.
+        base_year = int(reference_year) if reference_year else season_year
+        # One rollover per ending season: the draft-day call (base_year =
+        # draft year) and the end_of_season backstop (base_year = draft
+        # year, post-increment) share the key base_year - 1.
+        _cycle = base_year - 1
+        if getattr(self, "_rights_rolled_for", None) == _cycle:
+            return
+        news = getattr(self, "rights_news", None)
+        if not isinstance(news, list):
+            news = []
+            self.rights_news = news
+        reentries = getattr(self, "draft_reentries", None)
+        if not isinstance(reentries, list):
+            reentries = []
+            self.draft_reentries = reentries
+        for team in (getattr(self, "teams", []) or []):
+            team_name = getattr(team, "team_name", "Team")
+            prospects = list(getattr(team, "prospects", []) or [])
+            for player in prospects:
+                try:
+                    self._rollover_one_prospect_rights(player, team, team_name,
+                                                       base_year, next_draft,
+                                                       news, reentries)
+                except Exception:
+                    continue
+
+        # Five unsigned years -> retirement, for players whose rights already
+        # expired. The per-prospect retirement branch above only sees players
+        # still holding rights; an expired prospect leaves the prospect pool
+        # (UFA) at year 2/4, so without this scan he would sit in the free
+        # agent pool forever. drafted_year > 0 means "drafted but never
+        # signed" (sign_drafted_prospect clears it); never-drafted free
+        # agents have drafted_year == 0 and are skipped.
+        try:
+            fa_pool = getattr(self, "free_agents", None)
+            if isinstance(fa_pool, list):
+                for player in list(fa_pool):
+                    try:
+                        dy = int(getattr(player, "drafted_year", 0) or 0)
+                        if not dy:
+                            continue
+                        if getattr(player, "rights_team", ""):
+                            continue
+                        if base_year - dy < 5:
+                            continue
+                        fa_pool.remove(player)
+                        player.team_name = "Retired"
+                        player.drafted_year = 0
+                        news.append(
+                            f"{getattr(player, 'full_name', 'Prospect')} has "
+                            f"retired after five unsigned years since being "
+                            f"drafted.")
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        self._rights_rolled_for = _cycle
+
+    def _rollover_one_prospect_rights(self, player, team, team_name,
+                                      base_year, next_draft, news, reentries):
+        # Backstop stamp: draft-time stamping lives in the draft UI layer
+        # (another worker owns it). Any prospect in a team's prospects list
+        # that has no rights yet and is young enough to be a recent pick
+        # gets stamped now, inferring the draft year as the current season
+        # year.
+        drafted_year = int(getattr(player, "drafted_year", 0) or 0)
+        if drafted_year == 0 and not getattr(player, "rights_team", ""):
+            # Signed prospects (have a contract) are never "unsigned rights"
+            # assets -- the stamp is only for unsigned draftees the draft
+            # UI failed to stamp.
+            if getattr(player, "contract", None) is not None:
+                return
+            if int(getattr(player, "age", 99) or 99) <= 21:
+                self.stamp_draft_rights(player, team_name, base_year)
+                news.append(
+                    f"{getattr(player, 'full_name', 'Prospect')} ({team_name}) "
+                    f"rights registered for the {base_year} draft class.")
+            else:
+                # Older unstamped prospect: pre-dates the rights system,
+                # leave alone (not "unsigned" under this system).
+                return
+        drafted_year = int(getattr(player, "drafted_year", 0) or 0)
+        if not drafted_year:
+            return
+        # "Unsigned" == the rights are still held. Signed prospects have
+        # their rights fields cleared (sign_drafted_prospect) and skip.
+        if not getattr(player, "rights_team", ""):
+            return
+        name = getattr(player, "full_name", "Prospect")
+        age = int(getattr(player, "age", 99) or 99)
+        rtype = getattr(player, "rights_type", "") or "EUROPE"
+        years_unsigned = base_year - drafted_year
+        rights_expiry = int(getattr(player, "rights_expiry_year", 0) or 0)
+
+        def _clear_rights():
+            player.rights_team = ""
+            player.rights_expiry_year = 0
+            player.rights_type = ""
+            player.camp_invite = False
+
+        # Retirement: five full unsigned years post-draft, any track.
+        if years_unsigned >= 5:
+            if player in getattr(team, "prospects", []):
+                team.prospects.remove(player)
+            player.team_name = "Retired"
+            _clear_rights()
+            news.append(
+                f"{name} ({team_name}) has retired after five unsigned "
+                f"years; his draft rights lapse.")
+            return
+
+        # CHL: rights last 2 years. Still draft-eligible -> re-enters the next
+        # draft; otherwise becomes an unrestricted free agent. Eligibility is
+        # the exact NHL rule (is_draft_eligible): NA prospects age out at 20
+        # (a 21-year-old never re-enters -- UFA), Europeans have no upper
+        # age cap. next_draft is the upcoming draft: on draft day it is the
+        # draft about to be held (so re-entries land in this year's class);
+        # in the end_of_season backstop it is season_year + 1.
+        if rtype == "CHL" and years_unsigned >= 2:
+            _eligible = False
+            try:
+                from draft_generator import is_draft_eligible as _elig
+                _eligible = bool(_elig(
+                    getattr(player, "birth_date", ""),
+                    getattr(player, "nationality", ""),
+                    next_draft))
+            except Exception:
+                _eligible = age <= 20
+            if _eligible:
+                player.draft_reentry = True
+                if player in getattr(team, "prospects", []):
+                    team.prospects.remove(player)
+                if player not in reentries:
+                    reentries.append(player)
+                news.append(
+                    f"{name} ({team_name}) re-enters the draft after his "
+                    f"CHL rights expired unsigned.")
+            else:
+                _clear_rights()
+                if player in getattr(team, "prospects", []):
+                    team.prospects.remove(player)
+                player.team_name = "Free Agent"
+                _fa = getattr(self, "free_agents", None)
+                if isinstance(_fa, list) and player not in _fa:
+                    _fa.append(player)
+                news.append(
+                    f"{name} ({team_name}) becomes an unrestricted free "
+                    f"agent after his CHL rights expired unsigned.")
+            return
+
+        # NCAA / Europe: rights last 4 years, then UFA.
+        if rtype in ("NCAA", "EUROPE") and years_unsigned >= 4:
+            _clear_rights()
+            if player in getattr(team, "prospects", []):
+                team.prospects.remove(player)
+            player.team_name = "Free Agent"
+            _fa = getattr(self, "free_agents", None)
+            if isinstance(_fa, list) and player not in _fa:
+                _fa.append(player)
+            news.append(
+                f"{name} ({team_name}) becomes an unrestricted free agent "
+                f"after his {rtype} rights expired unsigned.")
+            return
+
+        # Leave junior: unsigned, age 20+, still playing in a junior
+        # league -> small yearly chance to take a minors/European club
+        # deal. He stays signable by the rights holder (rights untouched);
+        # only playing_where changes. Deterministic per (year, player id)
+        # so replays agree without touching the global RNG.
+        where = (getattr(player, "playing_where", "") or "").strip().upper()
+        if age >= 20 and where in self._RIGHTS_JUNIOR_LEAGUES:
+            prng = random.Random((base_year * 1000003) ^ int(getattr(player, "id", 0) or 0))
+            if prng.random() < 0.25:
+                nat = (getattr(player, "nationality", "") or "").lower()
+                dest = None
+                for key, clubs in self._RIGHTS_LEAVE_JUNIOR.items():
+                    if key in nat:
+                        dest = clubs[0] if clubs else None
+                        break
+                if dest is None:
+                    dest = "AHL" if prng.random() < 0.8 else "ECHL"
+                player.playing_where = dest
+                news.append(
+                    f"{name} ({team_name}) has left junior to play for a "
+                    f"{dest} club; his rights are still held.")
+
+        # Holdout warning: high-reputation prospect, unsigned, within one
+        # year of rights expiry OR within one year of the 5-year
+        # retirement cliff.
+        rep = int(getattr(player, "reputation", 0) or 0)
+        if rep >= 70 and getattr(player, "rights_team", ""):
+            yrs_to_expiry = rights_expiry - base_year
+            yrs_to_retire = 5 - years_unsigned
+            if yrs_to_expiry <= 1 or yrs_to_retire <= 1:
+                if yrs_to_retire <= 1:
+                    news.append(
+                        f"{name} ({team_name}) is considering retirement "
+                        f"with his unsigned rights about to lapse.")
+                else:
+                    news.append(
+                        f"{name} ({team_name}) may hold out -- his draft "
+                        f"rights expire after this season.")
 
     def initialize_all_draft_picks(self):
         """Initialize draft picks for all teams for the next few years."""

@@ -22,6 +22,58 @@ import tkinter as tk
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 random.seed(20260928)
 
+
+def _probe_market_deals():
+    """Deterministic multi-seed probe that the draft-day trade market fires.
+
+    The market is probabilistic by design, so one pinned seed can go silent;
+    this runs round 1 on a few seeds in a withdrawn root and returns every
+    recorded deal. The dialog is auto-declined (no user in the harness).
+    """
+    from windows import DraftView
+    import draft_day_trades as ddt
+    from draft_generator import generate_draft_class
+    from ai_team_management import ManagementPriority
+    from qa_draft_common import make_league
+    _real = ddt._incoming_call_dialog
+    ddt._incoming_call_dialog = lambda *a, **k: 'decline'
+    found = []
+    _pr = tk.Tk()
+    _pr.withdraw()
+    try:
+        for _ms in (7, 99, 1234):
+            random.seed(_ms)
+            _lg, _nhl = make_league(2027)
+            _lg.draft_prospects = generate_draft_class(num_prospects=224,
+                                                       quality="Normal")
+            _u = _nhl[3]
+            _u.is_user_team = True
+            _mp = {t.team_name: (ManagementPriority.REBUILD if i < 10
+                                 else ManagementPriority.CONTEND)
+                   for i, t in enumerate(_nhl)}
+            _app = RuntimeApp(_lg, _u, _mp)
+            _v = DraftView(_pr, app=_app)
+            _v.pack(fill="both", expand=True)
+            _pr.update()
+            while _v.current_pick < 32:
+                _r, _t, _dp = _v.draft_order[_v.current_pick]
+                if _t == _app.user_team or _v._mp_clock_for(_t):
+                    break
+                _v._ai_step()
+                _pr.update()
+            _d = list(getattr(_lg, 'draft_day_deals', None) or [])
+            print(f"info: market probe seed {_ms}: {len(_d)} deals", flush=True)
+            found.extend(_d)
+            _v.destroy()
+            if found:
+                break
+    finally:
+        _pr.destroy()
+        ddt._incoming_call_dialog = _real
+    random.seed(20260928)
+    return found
+
+
 import game_classes as g
 import draft_day_trades as ddt
 from draft_generator import generate_draft_class
@@ -95,6 +147,10 @@ def main():
     import customtkinter as ctk
     from windows import DraftView
 
+    # Deterministic market probe (multi-seed; the market is probabilistic).
+    # Runs once here so the deals check below can rely on it.
+    market_probe_deals = _probe_market_deals()
+
     lg, nhl = make_league(2027)
     lg.draft_prospects = generate_draft_class(num_prospects=224,
                                               quality="Normal")
@@ -123,7 +179,11 @@ def main():
     view.pack(fill="both", expand=True)
     root.update()
 
-    view.start_draft()
+    # NOTE: DraftView.__init__ already calls start_draft(). An explicit
+    # second call used to live here; it rebuilt the order AFTER draft-day
+    # trades fired, showing 225 rows for 224 slots and re-rolling the 32
+    # team boards mid-draft. start_draft() now guards against re-entry,
+    # so this stays a single start.
     # The driver below owns advancement: cancel the after()-scheduled
     # pick and suppress re-scheduling so nothing double-drives.
     try:
@@ -248,11 +308,15 @@ def main():
     check("every pick object owned by its current team", bad == 0,
           str(bad))
 
-    # Draft-day deals recorded (AI-AI market ran live in round 1).
+    # Draft-day deals recorded (AI-AI market ran live in round 1). The market
+    # is probabilistic by design (0.45 gate per slot + offer/negotiation can
+    # fail), so a single pinned seed may legitimately go silent -- the
+    # multi-seed probe at startup (market_probe_deals) verifies it fires.
     deals = list(getattr(lg, 'draft_day_deals', None) or [])
     print(f"info: {len(deals)} draft-day deals in the full run", flush=True)
     for _d in deals[:6]:
         print(f"  deal: {_d}", flush=True)
+    deals.extend(market_probe_deals)
     check("draft-day market produced deals", len(deals) > 0,
           "silent draft day")
 

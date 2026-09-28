@@ -527,7 +527,61 @@ class DraftDayCentral(EventDayHubView):
                      "selection by selection, as the night unfolds.",
                      "",
                      "Open the Draft Board to run your war room."]
+        # Part 3: draft-week buzz lines (within a few days of the draft
+        # window). Guarded; never breaks the wire.
+        try:
+            for _buzz in self._draft_buzz_lines():
+                lines.append(_buzz)
+        except Exception:
+            pass
         return lines
+
+    def _draft_buzz_lines(self):
+        """1-2 draft-week buzz lines off the top-hype prospects.
+
+        Only fires inside the draft-week window (June 20-25); reads only
+        league.draft_prospects and never touches game state.
+        """
+        lines = []
+        try:
+            _d = getattr(getattr(self, 'gm', None), 'current_date', None)
+            if _d is None or getattr(_d, 'month', 0) != 6:
+                return lines
+            if not (20 <= getattr(_d, 'day', 0) <= 25):
+                return lines
+            prosp = self._prospects()
+            if not prosp:
+                return lines
+
+            def _hype(p):
+                try:
+                    return float(getattr(p, 'draft_hype', 0) or 0)
+                except Exception:
+                    return 0.0
+
+            ordered = sorted(prosp, key=_hype, reverse=True)
+            _top = ordered[0] if ordered else None
+            if _top is not None and _hype(_top) > 0:
+                _name = getattr(_top, 'full_name', str(_top))
+                # "Generational" is reserved for the flagged obvious-generational
+                # prospect; anyone else gets ordinary top-prospect buzz even
+                # when the hype is loudest.
+                if getattr(_top, 'generational', False):
+                    lines.append(
+                        "BUZZ: %s is the name on every scout's lips — "
+                        "the 'generational' whispers are getting louder." % _name)
+                else:
+                    lines.append(
+                        "BUZZ: %s is the name on every scout's lips — "
+                        "the consensus top prospect of this class." % _name)
+            if len(ordered) > 1 and len(lines) < 2 and _hype(ordered[1]) > 0:
+                _name2 = getattr(ordered[1], 'full_name', str(ordered[1]))
+                lines.append(
+                    "BUZZ: rival war rooms can't stop talking about "
+                    "%s either — the top of this board is loaded." % _name2)
+        except Exception:
+            pass
+        return lines[:2]
 
     def _deals_lines(self):
         # Draft-day trades involving picks show up here when the draft runs.

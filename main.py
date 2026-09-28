@@ -5842,6 +5842,13 @@ class HockeyManagerGUI(tk.Tk):
             
             # Clear caches periodically to prevent memory bloat
             if self.current_date.day == 1:  # First day of each month
+                # Part 3: draft-season build-up beat (Jan-Jun, once per
+                # month per year) + rights-lifecycle news flush. Guarded
+                # internally; never breaks the tick.
+                try:
+                    self._post_draft_season_beat()
+                except Exception as _dbe:
+                    print(f"Draft season beat failed (non-fatal): {_dbe}")
                 if hasattr(self, '_schedule_cache'):
                     self._schedule_cache.clear()
                 if hasattr(self, '_strength_cache'):
@@ -9502,6 +9509,16 @@ class HockeyManagerGUI(tk.Tk):
         if is_draft_day(today):
             held = set(getattr(league, 'draft_held_years', None) or [])
             if year not in held:
+                # Rights lifecycle BEFORE the draft: unsigned CHL prospects
+                # whose rights expire this summer re-enter THIS draft (the
+                # class generator folds league.draft_reentries in). The
+                # end_of_season backstop skips via the per-draft-year guard.
+                try:
+                    league._rollover_draft_rights(reference_year=year)
+                except Exception:
+                    debug_print("Draft-day rights rollover failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
                 try:
                     self._hold_entry_draft(year)
                 except Exception:
@@ -9584,6 +9601,62 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             debug_print(f"Event-day prompt failed ({event}): {e}")
 
+    def _post_draft_season_beat(self):
+        """Post the monthly draft build-up beat (Jan-Jun), once per month.
+
+        Part 3: season_beats() from draft_stories builds the narrative batch;
+        this hook only delivers it via add_news. Guarded by
+        self._draft_beats_posted {(year, month)} so a month never posts twice
+        (e.g. after a save/load). Also flushes league.rights_news, the
+        rights-lifecycle messages game_classes collects, posting and clearing
+        each string. Every path is wrapped so a missing inbox/news path or
+        missing attrs never crash the daily tick.
+        """
+        try:
+            month = getattr(self.current_date, "month", 0)
+            year = getattr(self.current_date, "year", 0)
+            if month not in (1, 2, 3, 4, 5, 6):
+                return
+            posted = getattr(self, "_draft_beats_posted", None)
+            if posted is None:
+                posted = set()
+                self._draft_beats_posted = posted
+            key = (year, month)
+            if key in posted:
+                return
+            league = getattr(self, "league", None)
+            prospects = list(getattr(league, "draft_prospects", None) or [])
+            if not prospects:
+                return
+            from draft_stories import season_beats
+            for _beat in (season_beats(prospects, year, month) or []):
+                try:
+                    self.add_news(
+                        "%s — %s" % (_beat.get('title', 'Draft'),
+                                     _beat.get('text', '')))
+                except Exception:
+                    pass
+            posted.add(key)
+        except Exception:
+            pass
+        # Rights-lifecycle flush: post + clear any collected messages.
+        try:
+            _league = getattr(self, "league", None)
+            _msgs = list(getattr(_league, "rights_news", None) or [])
+            for _m in _msgs:
+                try:
+                    self.add_news(str(_m))
+                except Exception:
+                    pass
+            try:
+                _live = getattr(_league, "rights_news", None)
+                if _live is not None:
+                    del _live[:]
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _hold_entry_draft(self, year):
         """Hold the annual entry draft"""
         print(f"🏒 ENTRY DRAFT {year} BEGINS! 🏒")
@@ -9596,24 +9669,57 @@ class HockeyManagerGUI(tk.Tk):
             print("Generating draft prospects...")
             from draft_generator import generate_draft_class
             draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
-            self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)
+            # draft_year / reentries params land with the draft_worker pass;
+            # only pass what the installed signature accepts so un-patched
+            # generators (and old saves) keep working.
+            _gen_kwargs = {"num_prospects": 224, "quality": draft_quality}
+            try:
+                import inspect as _inspect
+                _params = _inspect.signature(generate_draft_class).parameters
+                if "draft_year" in _params:
+                    _gen_kwargs["draft_year"] = year
+                if "reentries" in _params:
+                    _gen_kwargs["reentries"] = getattr(self.league, "draft_reentries", None)
+            except Exception:
+                pass
+            self.league.draft_prospects = generate_draft_class(**_gen_kwargs)
             print(f"Generated {len(self.league.draft_prospects)} draft prospects")
             self.league.draft_prospects_year = year
+            # Re-entries were folded into the class above; clear so they are
+            # never double-added in a later draft.
+            self.league.draft_reentries = []
             # Draft Story Engine: assign storylines to top prospects
             try:
                 from draft_stories import assign_prospect_storylines, deliver_prospect_stories
                 storylines = assign_prospect_storylines(self.league.draft_prospects)
                 # Store on league for draft-day drama (projected ranks)
                 self.league.prospect_storylines = storylines
-                # Projected rank = index in sorted-by-overall
+                # Projected rank = index in the public consensus order
+                # (draft_ranking), not current overall -- the projection is
+                # about where the prospect is expected to GO.
                 ranked = sorted(self.league.draft_prospects,
-                                key=lambda p: getattr(p, 'overall', 70), reverse=True)
+                                key=lambda p: getattr(p, 'draft_ranking', 0),
+                                reverse=True)
                 self.league.prospect_projected_rank = {
                     id(p): i + 1 for i, p in enumerate(ranked)
                 }
                 deliver_prospect_stories(self, storylines)
             except Exception as _dse:
                 print(f"Draft storylines failed (non-fatal): {_dse}")
+            # Part 3: headline storylines for the class -- posted as news
+            # items ("title — text"), following the add_news pattern below.
+            # Fully guarded: a missing news path never breaks the draft.
+            try:
+                from draft_stories import assign_headline_storylines as _ahsl
+                for _story in (_ahsl(self.league.draft_prospects, year) or []):
+                    try:
+                        self.add_news(
+                            "%s — %s" % (_story.get('title', 'Draft'),
+                                         _story.get('text', '')))
+                    except Exception:
+                        pass
+            except Exception as _ahse:
+                print(f"Draft headline storylines failed (non-fatal): {_ahse}")
         
         # Ensure draft picks are set up
         self.league.initialize_all_draft_picks()
@@ -11853,6 +11959,22 @@ class HockeyManagerGUI(tk.Tk):
         # Age players and reset stats
         self.league.end_of_season()
 
+        # Draft rights lifecycle: end_of_season() (game_classes) collected
+        # re-entry / UFA / retirement / warning messages on league.rights_news.
+        # Flush them to the inbox here (the monthly Jan-Jun beat hook would
+        # otherwise hold July's rights news until January).
+        try:
+            _rn = list(getattr(self.league, "rights_news", None) or [])
+            for _msg in _rn:
+                try:
+                    self.add_news(str(_msg))
+                except Exception:
+                    pass
+            if _rn:
+                self.league.rights_news = []
+        except Exception:
+            pass
+
         # A new schedule was generated: drop cached season dates/games so the
         # season-end safety net in simulate_day recomputes from the new slate
         # instead of the previous season's.
@@ -11863,8 +11985,54 @@ class HockeyManagerGUI(tk.Tk):
             self._strength_cache.clear()
 
         # Generate new draft class (quality from settings: Weak/Normal/Strong/Generational)
+        # The upcoming entry draft is held in June of next calendar year; stamp
+        # the class with that year and fold in this summer's rights re-entries
+        # (unsigned CHL prospects re-entering the draft). The class is
+        # regenerated for real on draft day in _hold_entry_draft, which clears
+        # league.draft_reentries after consuming them -- so this call must NOT
+        # clear the list.
         draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
-        self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)  # 7 rounds × 32 teams = 224 players
+        from draft_generator import generate_draft_class
+        _gen_kwargs = {"num_prospects": 224, "quality": draft_quality}
+        try:
+            import inspect as _inspect
+            _params = _inspect.signature(generate_draft_class).parameters
+            if "draft_year" in _params:
+                _gen_kwargs["draft_year"] = self.league.season_year + 1
+            if "reentries" in _params:
+                _gen_kwargs["reentries"] = getattr(self.league, "draft_reentries", None) or []
+        except Exception:
+            pass
+        self.league.draft_prospects = generate_draft_class(**_gen_kwargs)  # 7 rounds × 32 teams = 224 players
+
+        # Undrafted European free agents: a thin yearly batch (4-8, ~5) of
+        # older Euro-league players appended to the FA pool. Mostly AHL/tweener
+        # material with usually 0-1 plausible NHL gamble; true impact talent at
+        # ~10%/offseason, never scheduled. The AI sees them as ordinary free
+        # agents. Runs once per real offseason, before the July-1 jump
+        # (guarded by league._euro_fa_year -- a second pass for the same
+        # offseason would append a duplicate batch).
+        try:
+            from euro_free_agents import run_euro_free_agency
+            _efa_year = self.league.season_year
+            if getattr(self.league, "_euro_fa_year", None) != _efa_year:
+                _efa_summary = run_euro_free_agency(
+                    self.league, _efa_year, app=self) or {}
+                if _efa_summary.get("added"):
+                    self.league._euro_fa_year = _efa_year
+        except Exception:
+            pass
+
+        # Post-draft "steal of the draft" retrospective: late-round picks whose
+        # displayed stock has exploded since draft day get their retrospective
+        # now, once per player, rather than pre-draft hype they never had.
+        try:
+            from draft_stories import steal_retrospective
+            for _story in (steal_retrospective(self.league) or [])[:2]:
+                self.add_news(
+                    f"{_story.get('title', 'Draft')} — {_story.get('text', '')}")
+        except Exception:
+            pass
 
         # Reset the deadline manager's per-season state so last year's
         # trade activity doesn't leak into the new season's intel panel.

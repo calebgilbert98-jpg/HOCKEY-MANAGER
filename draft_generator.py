@@ -3,64 +3,237 @@
 
 import random
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import List, Dict, Tuple, Optional, Callable, Union
 from game_classes import Player, PlayerPosition, GameBalance
 
 # --- Constants for Data Generation ---
 # Using larger name pools makes for a more diverse game world.
+# --- Name pools: nationality-first ---
+# Every draft prospect gets a nationality FIRST (weighted below), then a
+# first+last name drawn from that nation's authentic pool. All pools are
+# stored ASCII-safe (see _to_ascii); get_random_name() normalizes defensively
+# so odd characters can never crash generation.
 FIRST_NAMES = {
-    "Canada": ["Aiden", "Liam", "Noah", "Logan", "Ethan", "Jacob", "Nathan", "Connor", "William", "Jack", "Owen", "Ryan", "Matty", "Shane", "Brandt", "Cole", "Mason", "Lucas", "Isaac", "Dylan"],
-    "USA": ["Jackson", "Wyatt", "Carter", "Luke", "Brady", "Blake", "Hunter", "Zach", "Tyler", "Brock", "Chase", "Austin", "Cody", "Seth", "Trevor", "Jake", "Jeremy", "Cam", "Johnny", "Brady"],
-    "Sweden": ["Erik", "Oscar", "Elias", "Anton", "Oliver", "William", "Filip", "Gustav", "Victor", "Emil", "Rasmus", "Lucas", "Nils", "Simon", "Marcus", "Joel", "Adam", "Jakob", "Linus", "Hampus"],
-    "Finland": ["Mikko", "Kaapo", "Patrik", "Joonas", "Lauri", "Aleksi", "Ville", "Juuso", "Eero", "Eetu", "Valtteri", "Miro", "Juha", "Janne", "Teuvo", "Sami", "Jari", "Artturi", "Jesse", "Kasperi"],
-    "Russia": ["Andrei", "Sergei", "Vladimir", "Alexander", "Ivan", "Dmitri", "Mikhail", "Nikita", "Evgeni", "Pavel", "Maxim", "Yuri", "Igor", "Kirill", "Fyodor", "Ilya", "Artem", "Slava", "Vasili", "Denis"],
-    "Czech": ["Jakub", "Jan", "Tomáš", "David", "Pavel", "Martin", "Filip", "Petr", "Jiří", "Dominik", "Radek", "Marek", "Michal", "Lukáš", "Josef", "Roman", "Ondrej", "Daniel", "Karel", "Miroslav"],
-    "Other": ["Juraj", "Marco", "Leon", "Darnell", "Nico", "Moritz", "Nino", "Timo", "Kevin", "Rafael", "Dominik", "Christoph", "Manuel", "David", "Thomas", "Marco", "Anze", "Jonas", "Mats", "Leo"]
+    "Canada": ["Aiden", "Liam", "Noah", "Logan", "Ethan", "Jacob", "Nathan", "Connor", "William", "Jack", "Owen", "Ryan", "Matthew", "Shane", "Brandt", "Cole", "Mason", "Lucas", "Isaac", "Dylan", "Tyler", "Brayden", "Carter", "Nolan", "Gavin", "Dawson", "Brett", "Kyle", "Adam", "Sean"],
+    "USA": ["Jackson", "Wyatt", "Carter", "Luke", "Brady", "Blake", "Hunter", "Zach", "Tyler", "Brock", "Chase", "Austin", "Cody", "Seth", "Trevor", "Jake", "Jeremy", "Cam", "Johnny", "Drew", "Logan", "Ryan", "Matt", "Nick", "Connor", "Dylan", "Kyle", "Alex", "Sam", "Will"],
+    "Sweden": ["Erik", "Oscar", "Elias", "Anton", "Oliver", "William", "Filip", "Gustav", "Victor", "Emil", "Rasmus", "Lucas", "Nils", "Simon", "Marcus", "Joel", "Adam", "Jakob", "Linus", "Hampus", "Isak", "Hugo", "Melker", "Viggo", "Albin", "Casper", "Theo", "Wilmer"],
+    "Finland": ["Mikko", "Kaapo", "Patrik", "Joonas", "Lauri", "Aleksi", "Ville", "Juuso", "Eero", "Eetu", "Valtteri", "Miro", "Juha", "Janne", "Teuvo", "Sami", "Jari", "Artturi", "Jesse", "Kasperi", "Olli", "Antti", "Topi", "Rasmus", "Leevi", "Niklas", "Saku", "Jesperi"],
+    "Russia": ["Andrei", "Sergei", "Vladimir", "Alexander", "Ivan", "Dmitri", "Mikhail", "Nikita", "Evgeni", "Pavel", "Maxim", "Yuri", "Igor", "Kirill", "Fyodor", "Ilya", "Artem", "Slava", "Vasili", "Denis", "Daniil", "Matvei", "Yegor", "Timur", "Bogdan", "Arseny", "Vladislav", "Oleg"],
+    "Czechia": ["Jakub", "Jan", "Tomas", "David", "Pavel", "Martin", "Filip", "Petr", "Jiri", "Dominik", "Radek", "Marek", "Michal", "Lukas", "Josef", "Roman", "Ondrej", "Daniel", "Karel", "Miroslav", "Vojtech", "Adam", "Simon", "Matej", "Krystof", "Stepan", "Vaclav", "Dalibor"],
+    "Slovakia": ["Juraj", "Martin", "Tomas", "Peter", "Michal", "Lukas", "Marek", "Filip", "Samuel", "Adam", "Jakub", "David", "Oliver", "Simon", "Daniel", "Patrik", "Alex", "Tobias", "Richard", "Branislav", "Erik", "Ivan", "Jozef", "Kristian", "Matus", "Sebastian", "Viktor", "Andreas"],
+    "Switzerland": ["Nico", "Nino", "Timo", "Kevin", "Marco", "Leon", "Luca", "Jonas", "Simon", "David", "Jan", "Lars", "Sven", "Roman", "Damien", "Tristan", "Andrea", "Gilles", "Noah", "Louis", "Yannick", "Reto", "Benjamin", "Dean", "Eliot", "Dario", "Sandro", "Fabian"],
+    "Germany": ["Leon", "Moritz", "Tim", "Lukas", "Nico", "Dominik", "Philipp", "Jonas", "Maximilian", "Felix", "Tobias", "Jan", "Erik", "Simon", "David", "Paul", "Bennett", "Marc", "Alexander", "Daniel", "Kevin", "Dennis", "Marcel", "Tom", "Fabio", "Julian", "Niklas", "Henri"],
+    "Latvia": ["Rodrigo", "Dans", "Zemgus", "Teodors", "Rihards", "Kristers", "Oskars", "Martins", "Janis", "Edgars", "Kaspars", "Andris", "Gints", "Maris", "Uvis", "Ralfs", "Roberts", "Arturs", "Emils", "Gustavs", "Daniels", "Rudolfs", "Sandis", "Elvis", "Ivars", "Haralds", "Renars", "Edzus"],
+    "Slovenia": ["Anze", "Jan", "Rok", "Luka", "Gasper", "Tilen", "Miha", "Ziga"],
+    "Norway": ["Mats", "Jonas", "Eskil", "Sander", "Andreas", "Martin", "Eirik", "Ludvig"],
+    "Denmark": ["Nikolaj", "Lars", "Frederik", "Mikkel", "Oliver", "Mathias", "Jeppe", "Rasmus"],
+    "Austria": ["Marco", "Thomas", "David", "Manuel", "Dominique", "Lukas", "Raphael", "Nico"],
+    "France": ["Antoine", "Pierre", "Stephane", "Alexandre", "Hugo", "Valentin", "Louis", "Tim"],
+    "Kazakhstan": ["Nikita", "Roman", "Dmitri", "Yevgeni", "Alexei", "Valeri", "Timur", "Anton"],
+    "Belarus": ["Andrei", "Sergei", "Dmitri", "Alexei", "Yegor", "Vladislav", "Mikhail", "Artyom"],
+    "Ukraine": ["Olexander", "Dmitri", "Bogdan", "Ruslan", "Vitali", "Andriy", "Igor", "Pavel"],
+    "Italy": ["Marco", "Luca", "Matteo", "Andrea", "Davide", "Tommaso", "Diego", "Alex"],
+    "Great Britain": ["Ben", "Liam", "Robert", "Jonathan", "Matthew", "Ollie", "Cade", "Logan"],
+    "Japan": ["Yuto", "Shogo", "Kenta", "Ren", "Takumi", "Hiro", "Daichi", "Kaito"],
+    "Australia": ["Jack", "Lachlan", "Cooper", "Riley", "Nathan", "Mitch", "Thomas", "Jayden"],
+    "Netherlands": ["Daan", "Lars", "Jeroen", "Kevin", "Mike", "Jordy", "Raphael", "Stef"],
+    "Hungary": ["Istvan", "Balazs", "Marton", "Vilmos", "Akos", "Gergo", "Csanad", "Adam"],
+    "Lithuania": ["Tadas", "Mantas", "Ugnius", "Dovydas", "Paulius", "Arnoldas", "Emilijus", "Lukas"],
+    "Poland": ["Bartosz", "Kamil", "Patryk", "Filip", "Mateusz", "Dominik", "Krystian", "Jakub"],
 }
 
 LAST_NAMES = {
-    "Canada": ["Smith", "Brown", "Wilson", "Campbell", "Thompson", "MacDonald", "Clark", "Johnston", "Wright", "Dubois", "Roy", "Dube", "Lavoie", "Gagnon", "Bouchard", "Leblanc", "Gauthier", "Poulin", "Morin", "Cote"],
-    "USA": ["Johnson", "Miller", "Williams", "Jones", "Brown", "Davis", "Anderson", "Wilson", "Taylor", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson", "Robinson", "Lewis", "Walker", "Young", "Allen"],
-    "Sweden": ["Andersson", "Karlsson", "Nilsson", "Eriksson", "Larsson", "Olsson", "Lindqvist", "Petersson", "Svensson", "Gustafsson", "Lundqvist", "Nyquist", "Hedman", "Ekman-Larsson", "Hörnqvist", "Bäckström", "Silfverberg", "Zetterberg", "Hjalmarsson", "Ekholm"],
-    "Finland": ["Koivu", "Laine", "Rantanen", "Ristolainen", "Lindell", "Barkov", "Granlund", "Haula", "Donskoi", "Armia", "Nieminen", "Lehkonen", "Heiskanen", "Lankinen", "Rinne", "Rask", "Saros", "Heinola", "Teravainen", "Kakko"],
-    "Russia": ["Ovechkin", "Malkin", "Kuznetsov", "Tarasenko", "Kucherov", "Vasilevskiy", "Bobrovsky", "Panarin", "Svechnikov", "Zadorov", "Provorov", "Zaitsev", "Orlov", "Podkolzin", "Romanov", "Kaprizov", "Kravtsov", "Shesterkin", "Sorokin", "Askarov"],
-    "Czech": ["Nečas", "Palát", "Voráček", "Krejčí", "Kaše", "Zadina", "Hronek", "Chytil", "Jaškin", "Faksa", "Zacha", "Polák", "Gudas", "Radil", "Simon", "Nosek", "Frk", "Šustr", "Rutta", "Jeřábek"],
-    "Other": ["Kopitar", "Josi", "Niederreiter", "Ehlers", "Meier", "Hischier", "Fiala", "Draisaitl", "Kahun", "Sturm", "Greiss", "Raffl", "Grabner", "Vanek", "Zuccarello", "Fasth", "Diaz", "Sbisa", "Streit", "Hansen"]
+    "Canada": ["Smith", "Brown", "Wilson", "Campbell", "Thompson", "MacDonald", "Clark", "Johnston", "Wright", "Dubois", "Roy", "Dube", "Lavoie", "Gagnon", "Bouchard", "Leblanc", "Gauthier", "Poulin", "Morin", "Cote", "Tremblay", "Pelletier", "Fortin", "Simard", "Lachance", "Couture", "Desjardins", "Charbonneau", "Beaulieu", "Fontaine", "Moreau", "Girard", "Lapointe", "Savard", "Boucher", "Caron", "Nadeau", "Paquette", "St-Pierre", "Martin", "Bernard", "Lefebvre", "Turcotte", "Ducharme", "Houle"],
+    "USA": ["Johnson", "Miller", "Williams", "Jones", "Brown", "Davis", "Anderson", "Wilson", "Taylor", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson", "Robinson", "Lewis", "Walker", "Young", "Allen", "King", "Wright", "Scott", "Green", "Baker", "Adams", "Nelson", "Carter", "Mitchell", "Perez", "Roberts", "Turner", "Phillips", "Campbell", "Parker", "Evans", "Edwards", "Collins", "Stewart", "Morris", "Murphy", "Cook", "Rogers", "Morgan", "Bell"],
+    "Sweden": ["Andersson", "Karlsson", "Nilsson", "Eriksson", "Larsson", "Olsson", "Lindqvist", "Petersson", "Svensson", "Gustafsson", "Lundqvist", "Nyqvist", "Hedman", "Ekman-Larsson", "Hornqvist", "Backstrom", "Silfverberg", "Zetterberg", "Hjalmarsson", "Ekholm", "Forsberg", "Sundin", "Lidstrom", "Alfredsson", "Naslund", "Samuelsson", "Franzen", "Kronwall", "Enstrom", "Steen", "Berglund", "Backlund", "Bratt", "Raymond", "Kempe", "Arvidsson", "Lindholm", "Rakell", "Johansson", "Klingberg", "Brodin", "Forsling", "Dahlin", "Karlstrom"],
+    "Finland": ["Koivu", "Laine", "Rantanen", "Ristolainen", "Lindell", "Barkov", "Granlund", "Haula", "Donskoi", "Armia", "Nieminen", "Lehkonen", "Heiskanen", "Lankinen", "Rinne", "Rask", "Saros", "Heinola", "Teravainen", "Kakko", "Selanne", "Kurri", "Tikkanen", "Numminen", "Timonen", "Kiprusoff", "Lehtonen", "Niemi", "Filppula", "Jokinen", "Korpikoski", "Pulkkinen", "Vatanen", "Maatta", "Nutivaara", "Honka", "Puljujarvi", "Kotkaniemi", "Hintz", "Lundell", "Tolvanen", "Kupari", "Maccelli", "Luostarinen"],
+    "Russia": ["Ovechkin", "Malkin", "Kuznetsov", "Tarasenko", "Kucherov", "Vasilevskiy", "Bobrovsky", "Panarin", "Svechnikov", "Zadorov", "Provorov", "Zaitsev", "Orlov", "Podkolzin", "Romanov", "Kaprizov", "Kravtsov", "Shesterkin", "Sorokin", "Askarov", "Datsyuk", "Fedorov", "Bure", "Mogilny", "Larionov", "Fetisov", "Kovalev", "Zubov", "Gonchar", "Markov", "Kulikov", "Voynov", "Emelin", "Nikulin", "Tyutin", "Volchenkov", "Medvedev", "Marchenko", "Michkov", "Voronkov", "Chinakhov", "Kostin", "Barbashev", "Trenin"],
+    "Czechia": ["Necas", "Palat", "Voracek", "Krejci", "Kase", "Zadina", "Hronek", "Chytil", "Jaskin", "Faksa", "Zacha", "Polak", "Gudas", "Radil", "Simon", "Nosek", "Frk", "Sustr", "Rutta", "Jerabek", "Jagr", "Hasek", "Elias", "Nedved", "Straka", "Hejduk", "Prospal", "Sykora", "Kubina", "Zidlicky", "Spacek", "Kaberle", "Rozsival", "Vokoun", "Pavelec", "Mrazek", "Francouz", "Vejmelka", "Dostal", "Rittich", "Hertl", "Vrana", "Kubalik", "Suchanek"],
+    "Slovakia": ["Chara", "Hossa", "Gaborik", "Demitra", "Satan", "Bondra", "Palffy", "Stumpel", "Nagy", "Handzus", "Visnovsky", "Meszaros", "Sekera", "Tatar", "Panik", "Cernak", "Fehervary", "Slafkovsky", "Nemec", "Ruzicka", "Hudacek", "Budaj", "Halak", "Laco", "Janus", "Dano", "Hrivik", "Cibak", "Sersen", "Starosta", "Valach", "Mihalik", "Granak", "Baranka", "Jurcina", "Lintner", "Kollar", "Bartovic", "Zednik", "Marincin", "Cajkovsky", "Cehlarik", "Lunter", "Skalicky"],
+    "Switzerland": ["Josi", "Niederreiter", "Meier", "Hischier", "Fiala", "Streit", "Sbisa", "Diaz", "Bartschi", "Brunner", "Wick", "Ambuhl", "Pluss", "Seger", "Blindenbacher", "Vauclair", "Forster", "Grossmann", "Du Bois", "Hollenstein", "Rufenacht", "Suri", "Bodenmann", "Martschini", "Malgin", "Moser", "Kukan", "Siegenthaler", "Muller", "Schmid", "Aeschlimann", "Berra", "Hiller", "Gerber", "Aebischer", "Genoni", "Mayer", "Rathgeb", "Untersander", "Heldner", "Geisser", "Egli", "Leuenberger", "Rod"],
+    "Germany": ["Draisaitl", "Seider", "Stutzle", "Peterka", "Reichel", "Sturm", "Ehrhoff", "Kahun", "Greiss", "Gogulla", "Hager", "Mauer", "Wolf", "Ehliz", "Plachta", "Tiffels", "Kastner", "Nowak", "Abeltshauser", "Brandt", "Daschner", "Wissmann", "Muller", "Fischbuch", "Pfoderl", "Loibl", "Eder", "Kink", "Schutz", "Hordler", "Uvira", "Pietta", "Akdag", "Hospelt", "Furchner", "Ullmann", "Felski", "Sulzer", "Holzer", "Rankel", "Baxmann", "Krueger", "Tripp", "Pielmeier"],
+    "Latvia": ["Girgensons", "Daugavins", "Kenins", "Kulda", "Bartulis", "Sotnieks", "Redlihs", "Freibergs", "Cibulskis", "Balinskis", "Jaks", "Rubins", "Zile", "Punnenovs", "Gudlevskis", "Merzlikins", "Silovs", "Abols", "Balcers", "Dzierkals", "Buncis", "Mamcics", "Jerofejevs", "Sprukts", "Vasiljevs", "Ozolins", "Irbe", "Skrastins", "Ankipans", "Cipulis", "Saulietis", "Berzins", "Sirokovs", "Upitis", "Kalnins", "Masalskis", "Muiznieks", "Lavins", "Dzerins", "Tribuncovs", "Galvins", "Andersons", "Bukarts", "Lipsbergs"],
+    "Slovenia": ["Kopitar", "Mursak", "Jeglic", "Urbas", "Verlic", "Sabolic", "Ograjensek", "Podlipnik", "Pintaric", "Kranjc"],
+    "Norway": ["Zuccarello", "Thoresen", "Olimb", "Holos", "Martinsen", "Bonsaksen", "Sorvik", "Roymark", "Bastiansen", "Spets"],
+    "Denmark": ["Ehlers", "Bjorkstrand", "Andersen", "Eller", "Hansen", "Jensen", "Nielsen", "Larsen", "Storm", "Boedker"],
+    "Austria": ["Vanek", "Raffl", "Grabner", "Pock", "Nodl", "Trattnig", "Koch", "Heinrich", "Schlacher", "Kaspitz"],
+    "France": ["Roussel", "Bellemare", "Da Costa", "Auvitu", "Janil", "Perret", "Bertrand", "Rech", "Claireaux", "Ritz"],
+    "Kazakhstan": ["Antipin", "Mikhailis", "Shestakov", "Savchenko", "Starchenko", "Rymarev", "Zhailauov", "Krasnoslobodtsev", "Polokhov", "Shalapov"],
+    "Belarus": ["Grabovski", "Kostitsyn", "Kolosov", "Gotovets", "Kovyrshin", "Demkov", "Sharangovich", "Protas", "Solovyov", "Khenkel"],
+    "Ukraine": ["Fedotenko", "Ponikarovsky", "Zherdev", "Babchuk", "Mikhnov", "Blagy", "Materukhin", "Varlamov", "Shakhvorostov", "Tymchenko"],
+    "Italy": ["Frigo", "Kostner", "Bernard", "Gander", "Insam", "Hofer", "Traversa", "Morini", "Glira", "Pietroniro"],
+    "Great Britain": ["Bowns", "Perlini", "Mosey", "Davies", "Richardson", "Dowd", "Lachowicz", "Phillips", "O'Connor", "Betteridge"],
+    "Japan": ["Tanaka", "Suzuki", "Sato", "Yamamoto", "Kobayashi", "Nakamura", "Ito", "Watanabe", "Hitosato", "Terao"],
+    "Australia": ["Walker", "Darge", "Humphries", "Todd", "Powell", "Webster", "Clark", "Harvey", "Cox", "Bell"],
+    "Netherlands": ["van der Velden", "de Jong", "Jansen", "van Dijk", "Bakker", "Visser", "Smit", "Meijer", "de Boer", "Mulder"],
+    "Hungary": ["Gallo", "Sofron", "Vas", "Bartalis", "Sarauer", "Erdely", "Nagy", "Sebok", "Horvath", "Stipsicz"],
+    "Lithuania": ["Bosas", "Kumeliauskas", "Bogdziul", "Katulis", "Alisauskas", "Gintautas", "Nekrasevicius", "Rumsevicius"],
+    "Poland": ["Pasiut", "Dziubinski", "Wanat", "Kolusz", "Bryk", "Ciura", "Kapica", "Laszkiewicz"],
 }
 
 BIRTHPLACES = {
     "Canada": [
-        "Toronto, ON", "Montreal, QC", "Vancouver, BC", "Calgary, AB", "Edmonton, AB", 
+        "Toronto, ON", "Montreal, QC", "Vancouver, BC", "Calgary, AB", "Edmonton, AB",
         "Winnipeg, MB", "Ottawa, ON", "Halifax, NS", "Quebec City, QC", "Mississauga, ON",
         "London, ON", "Kelowna, BC", "Regina, SK", "Saskatoon, SK", "Thunder Bay, ON"
     ],
     "USA": [
-        "Boston, MA", "Chicago, IL", "Minneapolis, MN", "Detroit, MI", "Buffalo, NY", 
+        "Boston, MA", "Chicago, IL", "Minneapolis, MN", "Detroit, MI", "Buffalo, NY",
         "St. Paul, MN", "New York, NY", "Grand Forks, ND", "Pittsburgh, PA", "Anchorage, AK",
         "Madison, WI", "Ann Arbor, MI", "St. Louis, MO", "Philadelphia, PA", "Las Vegas, NV"
     ],
     "Sweden": [
-        "Stockholm", "Gothenburg", "Malmo", "Uppsala", "Linkoping", 
+        "Stockholm", "Gothenburg", "Malmo", "Uppsala", "Linkoping",
         "Vasteras", "Orebro", "Umea", "Lulea", "Karlstad"
     ],
     "Finland": [
-        "Helsinki", "Tampere", "Turku", "Espoo", "Vantaa", 
+        "Helsinki", "Tampere", "Turku", "Espoo", "Vantaa",
         "Oulu", "Jyvaskyla", "Kuopio", "Lahti", "Pori"
     ],
     "Russia": [
-        "Moscow", "St. Petersburg", "Chelyabinsk", "Magnitogorsk", "Yaroslavl", 
+        "Moscow", "St. Petersburg", "Chelyabinsk", "Magnitogorsk", "Yaroslavl",
         "Yekaterinburg", "Omsk", "Novosibirsk", "Kazan", "Ufa"
     ],
-    "Czech": [
-        "Prague", "Brno", "Ostrava", "Kladno", "Plzen", 
+    "Czechia": [
+        "Prague", "Brno", "Ostrava", "Kladno", "Plzen",
         "Liberec", "Olomouc", "Pardubice", "Zlin", "Karlovy Vary"
     ],
-    "Other": [
-        "Bratislava, SVK", "Vienna, AUT", "Bern, CHE", "Zurich, CHE", "Berlin, DEU", 
-        "Munich, DEU", "Cologne, DEU", "Ljubljana, SVN", "Oslo, NOR", "Copenhagen, DNK"
-    ]
+    "Slovakia": [
+        "Bratislava", "Kosice", "Trencin", "Zilina", "Poprad",
+        "Nitra", "Banska Bystrica", "Martin"
+    ],
+    "Switzerland": [
+        "Bern", "Zurich", "Geneva", "Lausanne", "Davos",
+        "Fribourg", "Lugano", "St. Gallen"
+    ],
+    "Germany": [
+        "Berlin", "Munich", "Cologne", "Dusseldorf", "Mannheim",
+        "Hamburg", "Nuremberg", "Augsburg"
+    ],
+    "Latvia": [
+        "Riga", "Liepaja", "Daugavpils", "Jelgava", "Ventspils", "Ogre"
+    ],
+    "Slovenia": ["Ljubljana", "Jesenice", "Bled", "Kranj"],
+    "Norway": ["Oslo", "Stavanger", "Bergen", "Trondheim"],
+    "Denmark": ["Copenhagen", "Herning", "Aalborg", "Rodovre"],
+    "Austria": ["Vienna", "Graz", "Salzburg", "Innsbruck", "Klagenfurt"],
+    "France": ["Paris", "Lyon", "Grenoble", "Rouen", "Amiens"],
+    "Kazakhstan": ["Astana", "Almaty", "Karaganda", "Ust-Kamenogorsk"],
+    "Belarus": ["Minsk", "Grodno", "Gomel", "Vitebsk"],
+    "Ukraine": ["Kyiv", "Kharkiv", "Donetsk", "Odesa"],
+    "Italy": ["Milan", "Bolzano", "Asiago", "Cortina"],
+    "Great Britain": ["London", "Nottingham", "Sheffield", "Belfast", "Cardiff"],
+    "Japan": ["Tokyo", "Osaka", "Sapporo", "Nagoya"],
+    "Australia": ["Sydney", "Melbourne", "Perth", "Brisbane"],
+    "Netherlands": ["Amsterdam", "Rotterdam", "The Hague", "Tilburg"],
+    "Hungary": ["Budapest", "Szekesfehervar", "Miskolc", "Debrecen"],
+    "Lithuania": ["Vilnius", "Kaunas", "Klaipeda", "Elektrenai"],
+    "Poland": ["Warsaw", "Krakow", "Katowice", "Tychy", "Gdansk"],
 }
+
+# Legacy aliases: older callers may pass "Czech"/"Other" (pre-rename keys).
+FIRST_NAMES["Czech"] = FIRST_NAMES["Czechia"]
+LAST_NAMES["Czech"] = LAST_NAMES["Czechia"]
+BIRTHPLACES["Czech"] = BIRTHPLACES["Czechia"]
+FIRST_NAMES["Other"] = FIRST_NAMES["Slovenia"] + FIRST_NAMES["Norway"]
+LAST_NAMES["Other"] = LAST_NAMES["Slovenia"] + LAST_NAMES["Norway"]
+BIRTHPLACES["Other"] = BIRTHPLACES["Slovenia"] + BIRTHPLACES["Norway"]
+
+
+def _to_ascii(name: str) -> str:
+    """Transliterate a name to ASCII-safe text (s->s, c->c, z->z, a->a,
+    o->o, u->u, e->e, ...). Never raises on odd characters."""
+    import unicodedata
+    try:
+        return unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode("ascii")
+    except Exception:
+        return "".join(ch for ch in str(name) if ord(ch) < 128)
+
+
+# --- Nationality weights (real-draft-like) ---
+# Big-10 nations sum to 95.5%; the 16-nation obscure pool splits the remaining
+# 4.5% evenly (~0.28% each), matching real drafts' long tail of one-offs.
+NATIONALITY_WEIGHTS = {
+    "Canada": 0.40,
+    "USA": 0.25,
+    "Sweden": 0.08,
+    "Finland": 0.06,
+    "Russia": 0.06,
+    "Czechia": 0.03,
+    "Slovakia": 0.02,
+    "Switzerland": 0.02,
+    "Germany": 0.02,
+    "Latvia": 0.015,
+}
+_OBSCURE_NATIONS = [
+    "Slovenia", "Norway", "Denmark", "Austria", "France", "Kazakhstan",
+    "Belarus", "Ukraine", "Italy", "Great Britain", "Japan", "Australia",
+    "Netherlands", "Hungary", "Lithuania", "Poland",
+]
+for _on in _OBSCURE_NATIONS:
+    NATIONALITY_WEIGHTS[_on] = 0.045 / len(_OBSCURE_NATIONS)
+del _on
+
+# North-American nationalities: the 20-year-old age-out rule applies to these.
+_NA_NATIONALITIES = frozenset({"Canada", "USA"})
+
+# --- Junior leagues by nationality (plain strings; formal rights fields land
+# in game_classes.py via another worker) ---
+JUNIOR_LEAGUES = {
+    "Canada": ["OHL", "QMJHL", "WHL"],
+    "USA": ["USHL", "NTDP", "NCAA"],
+    "Sweden": ["J20 Nationell", "SHL"],
+    "Finland": ["U20 SM-sarja", "Liiga"],
+    "Russia": ["MHL", "KHL"],
+    "Czechia": ["Czech U20", "Extraliga"],
+    "Slovakia": ["Slovak U20", "Extraliga"],
+    "Switzerland": ["U20-Elit", "NL"],
+    "Germany": ["DNL", "DEL"],
+    "Latvia": ["MHL", "Latvian league"],
+    "Slovenia": ["AlpsHL", "ICEHL"],
+    "Norway": ["Eliteserien", "MHL"],
+    "Denmark": ["Metal Ligaen", "J20 Nationell"],
+    "Austria": ["AlpsHL", "ICEHL"],
+    "France": ["Ligue Magnus", "MHL"],
+    "Kazakhstan": ["MHL", "KHL"],
+    "Belarus": ["Belarus Extraliga", "MHL"],
+    "Ukraine": ["UHL", "MHL"],
+    "Italy": ["AlpsHL", "ICEHL"],
+    "Great Britain": ["EIHL", "NIHL"],
+    "Japan": ["Asia League", "JIHF"],
+    "Australia": ["AIHL", "ECSL"],
+    "Netherlands": ["BeNeLiga", "Eredivisie"],
+    "Hungary": ["Erste Liga", "MHL"],
+    "Lithuania": ["Baltic League", "MHL"],
+    "Poland": ["PHL", "MHL"],
+}
+
+# --- Goalie generation parameters (Task E) ---
+# GOALIE_SHARE: POSITION_DISTRIBUTION goalie weight 0.06 + floor 18 -> ~23
+#   of 224 (real drafts take ~20-25 goalies). Position floor is 18.
+# GOALIE_BASE_RANGE (20, 58) vs skater (24, 60): lower floor, wider spread.
+# GOALIE_RAWNESS_RANGE (0.85, 0.97): multiplier on a goalie's CURRENT
+#   goalie-specific attributes at generation. Ceilings (grade-driven archetype
+#   boosts) are untouched, so goalies carry a WIDER current-vs-potential gap
+#   than skaters -- lower floors, similar ceilings.
+# GOALIE_GEM_BOOM_PROB 0.06 / GOALIE_GEM_BUST_PROB 0.08: pre-seed_true_potential
+#   fat-tail roll for goalies -- higher boom AND higher bust probability than
+#   the flat gem table skaters use (fatter tails, not a flat low ceiling).
+# GUARANTEED_GOALIE_GEMS: 1-2 per class, drawn from rank 65+ (round 3+)
+#   goalies, true grade bumped up to +2 (capped per grade), flagged via
+#   player.hidden_gem = True so late-round goalie steals actually occur.
+GOALIE_BASE_RANGE = (20, 58)
+GOALIE_RAWNESS_RANGE = (0.85, 0.97)
+GOALIE_GEM_BOOM_PROB = 0.06
+GOALIE_GEM_BUST_PROB = 0.08
+_GEM_BUMP_CAP = {"F": 3, "D": 3, "D+": 2, "C-": 2, "C": 2,
+                 "C+": 1, "B-": 1, "B": 1}  # mirrors prospect_development
+
+
+def _assign_junior_league(nationality: str) -> str:
+    """Plausible junior/pro development league for a prospect's nationality."""
+    return random.choice(JUNIOR_LEAGUES.get(nationality, ["MHL", "Junior league"]))
 
 # --- Player Archetypes ---
 # Defines the attribute ranges for different player types. This makes balancing easier.
@@ -246,24 +419,18 @@ ARCHETYPES = {
 }
 
 # --- League and Draft Settings ---
-COUNTRY_DISTRIBUTION = {
-    "Canada": 0.45,   # 45% of players
-    "USA": 0.25,      # 25% of players
-    "Sweden": 0.08,   # 8% of players  
-    "Finland": 0.05,  # 5% of players
-    "Russia": 0.05,   # 5% of players
-    "Czech": 0.04,    # 4% of players
-    "Other": 0.08     # 8% of players
-}
+# Nationality-first weights (real-draft-like). COUNTRY_DISTRIBUTION is the
+# name older callers (get_random_nationality, player_generator) use.
+COUNTRY_DISTRIBUTION = dict(NATIONALITY_WEIGHTS)
 
 POSITION_DISTRIBUTION = {
-    PlayerPosition.CENTER: 0.22,
-    PlayerPosition.LEFT_WING: 0.19,
-    PlayerPosition.RIGHT_WING: 0.19,
-    PlayerPosition.LEFT_DEFENSE: 0.16,
-    PlayerPosition.RIGHT_DEFENSE: 0.16,
-    # Real drafts take ~18-22 goalies of 224 (~8-10%), not 16%.
-    PlayerPosition.GOALIE: 0.08
+    PlayerPosition.CENTER: 0.215,
+    PlayerPosition.LEFT_WING: 0.186,
+    PlayerPosition.RIGHT_WING: 0.186,
+    PlayerPosition.LEFT_DEFENSE: 0.157,
+    PlayerPosition.RIGHT_DEFENSE: 0.156,
+    # Real drafts take ~20-25 goalies of 224. Floor 18 + 0.06 share -> ~23.
+    PlayerPosition.GOALIE: 0.06
 }
 
 # --- Potential Distribution ---
@@ -340,10 +507,11 @@ def get_random_nationality(weighted=True) -> str:
         return random.choice(list(COUNTRY_DISTRIBUTION.keys()))
         
 def get_random_name(country: str) -> Tuple[str, str]:
-    """Returns a random first and last name appropriate for the given country."""
+    """Returns a random first and last name appropriate for the given country.
+    Names are normalized to ASCII-safe text (transliteration safety net)."""
     first_name = random.choice(FIRST_NAMES.get(country, FIRST_NAMES["Other"]))
     last_name = random.choice(LAST_NAMES.get(country, LAST_NAMES["Other"]))
-    return first_name, last_name
+    return _to_ascii(first_name), _to_ascii(last_name)
 
 def get_random_birthplace(country: str) -> str:
     """Returns a random birthplace for the given country."""
@@ -410,20 +578,125 @@ def calculate_draft_ranking(player: Player) -> float:
     return ranking_score
 
 
+# --- Draft eligibility (real NHL rules) ---
+
+def is_draft_eligible(birthdate, nationality, draft_year) -> bool:
+    """Real NHL draft eligibility.
+
+    birthdate: "YYYY-MM-DD" string. draft_year: the June draft year (int).
+    - Eligible iff the player turns 18 on/before Sept 15 of draft_year
+      (birthdate <= (draft_year-18)-09-15).
+    - North Americans (Canada, USA) age out at 20: must be born on/after
+      Sept 16 of (draft_year - 21). A 21-year-old NA is NOT eligible
+      (becomes a UFA; never draft-eligible again).
+    - Europeans (everyone else): no upper age limit.
+    Malformed input -> False (defensive).
+    """
+    try:
+        if not isinstance(birthdate, str):
+            return False
+        parts = birthdate.strip().split("-")
+        if len(parts) != 3:
+            return False
+        born = date(int(parts[0]), int(parts[1]), int(parts[2]))
+        draft_year = int(draft_year)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    # Younger edge: must turn 18 on/before Sept 15 of the draft year,
+    # i.e. born on/before Sept 15 eighteen years earlier.
+    if born > date(draft_year - 18, 9, 15):
+        return False
+    # Older edge (NA only): born on/after Sept 16 of draft_year - 21.
+    if (nationality or "") in _NA_NATIONALITIES:
+        if born < date(draft_year - 21, 9, 16):
+            return False
+    return True
+
+
+def _default_draft_year() -> int:
+    """Next June draft derived from today's date: if month >= 7 the upcoming
+    draft is next year's, otherwise it's this year's."""
+    today = date.today()
+    return today.year + 1 if today.month >= 7 else today.year
+
+
+def _random_birthdate_for_age(age: int, nationality: str, draft_year: int) -> str:
+    """Random "YYYY-MM-DD" birthdate making the player exactly `age` on
+    Sept 15 of draft_year, inside the is_draft_eligible window. age 21+ is
+    only valid for non-North-American nationalities (NA players age out
+    at 20); a ValueError is raised otherwise."""
+    if age >= 21 and (nationality or "") in _NA_NATIONALITIES:
+        raise ValueError(f"NA prospect cannot be {age} in the {draft_year} draft")
+    start = date(draft_year - age - 1, 9, 16)
+    end = date(draft_year - age, 9, 15)
+    # Defensive clamp to the NA upper bound in case of rounding drift.
+    if (nationality or "") in _NA_NATIONALITIES:
+        na_floor = date(draft_year - 21, 9, 16)
+        if start < na_floor:
+            start = na_floor
+    born = start + timedelta(days=random.randint(0, (end - start).days))
+    return born.isoformat()
+
+
+def _roll_prospect_age() -> int:
+    """Draft-class age mix: mostly 18, some 19, a few 20, rare 21-24
+    European overagers (handled by the caller forcing a non-NA nationality)."""
+    r = random.random()
+    if r < 0.72:
+        return 18
+    if r < 0.90:
+        return 19
+    if r < 0.97:
+        return 20
+    return random.randint(21, 24)
+
+
+def _random_european_nationality() -> str:
+    """Non-North-American nationality, weighted by NATIONALITY_WEIGHTS."""
+    pool = [(n, w) for n, w in NATIONALITY_WEIGHTS.items()
+            if n not in _NA_NATIONALITIES]
+    nations, weights = zip(*pool)
+    return random.choices(nations, weights=weights, k=1)[0]
+
+
+def _grade_ladder_index(grade: str) -> int:
+    """Index of a potential grade on the F..A+ ladder (local copy so this
+    module never hard-depends on prospect_development at import time)."""
+    ladder = ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
+    g = (grade or "C").strip()
+    if g not in ladder:
+        g = g[:1] if g[:1] in ladder else "C"
+        if g not in ladder:
+            g = "C"
+    return ladder.index(g)
+
+
+def _grade_ladder() -> list:
+    return ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
+
+
 def create_prospect(age: int = 18, 
                    position: Optional[PlayerPosition] = None, 
                    potential: Optional[str] = None,
                    nationality: Optional[str] = None,
-                   potential_distribution=None) -> Player:
+                   potential_distribution=None,
+                   draft_year: Optional[int] = None) -> Player:
     """
     Create a new prospect with the specified parameters.
     If parameters are not provided, they will be randomly generated.
     potential_distribution: override the potential grade distribution
         (used for draft class quality settings).
+    draft_year: the June draft this prospect is eligible for; defaults to the
+        next June draft derived from today's date. Birthdate is drawn from the
+        window that makes the prospect exactly `age` on Sept 15 of draft_year,
+        so birth_date/age always agree with is_draft_eligible().
     """
     # Determine nationality if not specified
     if nationality is None:
         nationality = get_random_nationality()
+
+    if draft_year is None:
+        draft_year = _default_draft_year()
     
     # Get a name appropriate for the nationality
     first_name, last_name = get_random_name(nationality)
@@ -486,11 +759,16 @@ def create_prospect(age: int = 18,
         else:
             player.handedness = random.choices(["Left", "Right"], weights=[25, 75])[0]
     
-    # Birth and draft information for prospects
-    birth_year = 2024 - age
-    player.birth_date = f"{birth_year}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}"
-    player.draft_year = birth_year + 18  # Eligible at 18
+    # Birth and draft information for prospects. The birthdate is drawn from
+    # the window that makes the prospect exactly `age` on Sept 15 of
+    # draft_year, so birth_date/age always satisfy is_draft_eligible().
+    player.birth_date = _random_birthdate_for_age(age, nationality, draft_year)
+    player.draft_year = draft_year
     player.draft_position = "Prospect"  # Will be set after draft
+
+    # Junior/pro development league, consistent with nationality (plain
+    # attribute; formal rights fields are added in game_classes.py).
+    player.junior_league = _assign_junior_league(nationality)
     
     # Career info for prospects
     player.pro_debut = "N/A"
@@ -546,11 +824,13 @@ def create_prospect(age: int = 18,
     for attr in _PROSPECT_BASE_ATTRS:
         setattr(player, attr, get_base_attribute_value(24, 60))
 
-    # Set goalie-specific attributes
+    # Set goalie-specific attributes. Goalies roll a lower, wider base range
+    # than skaters (GOALIE_BASE_RANGE): lower floors, similar ceilings.
     if position == PlayerPosition.GOALIE:
+        _glo, _ghi = GOALIE_BASE_RANGE
         for attr in ['goaltending', 'reflexes', 'positioning', 'rebound_control',
                      'puck_handling', 'glove_hand', 'stick_side', 'breakaway_skill']:
-            setattr(player, attr, get_base_attribute_value(24, 60))
+            setattr(player, attr, get_base_attribute_value(_glo, _ghi))
     
     # Set tendencies with defaults
     player.shooting_tendency = random.randint(30, 70)
@@ -573,33 +853,95 @@ def create_prospect(age: int = 18,
     for tendency, (min_val, max_val) in archetype_data.get("tendency", {}).items():
         setattr(player, tendency, random.randint(min_val, max_val))
     
+    # --- Goalie variance model (Task E) ---
+    # Goalies develop late and unpredictably: depress CURRENT ability relative
+    # to the displayed potential grade (GOALIE_RAWNESS_RANGE multiplier on
+    # goalie-specific attributes) while the grade-driven archetype boosts
+    # (ceilings) are untouched. Result: a WIDER current-vs-potential gap for
+    # goalies than skaters -- lower floors, similar ceilings.
+    if position == PlayerPosition.GOALIE:
+        _raw = random.uniform(*GOALIE_RAWNESS_RANGE)
+        for _attr in ('goaltending', 'reflexes', 'positioning', 'rebound_control',
+                      'puck_handling', 'glove_hand', 'stick_side', 'breakaway_skill',
+                      'confidence', 'focus', 'composure'):
+            _cur = getattr(player, _attr, None)
+            if isinstance(_cur, (int, float)):
+                setattr(player, _attr, max(GameBalance.MIN_ATTRIBUTE,
+                                          int(_cur * _raw)))
+
     # Calculate draft ranking for later sorting
     player.draft_ranking = calculate_draft_ranking(player)
-    
+
+    # Draft hype/pressure defaults (generate_draft_class refines these after
+    # rank-sorting so hype tracks draft stock). hidden_gem flags the
+    # guaranteed late-round goalie steals; the coordinator's realism pass
+    # may set it for skaters too.
+    player.draft_hype = 50
+    player.draft_pressure = 30 if age == 18 else 15
+    player.hidden_gem = False
+
     return player
 
-def generate_draft_class(num_prospects: int = 224, quality: str = "Normal") -> list[Player]:
+def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
+                        draft_year: Optional[int] = None,
+                        reentries: Optional[List[Player]] = None) -> list[Player]:
     """
-    Generates a list of new 18-year-old players for the draft,
-    with a realistic distribution of talent.
+    Generates a list of draft-eligible players for the draft, with a realistic
+    distribution of talent.
 
     quality: "Weak" | "Normal" | "Strong" | "Generational" — shifts the
         potential distribution up or down. "Normal" matches real NHL draft
         hit rates (~1 generational talent, ~11 elite/top-line per 224).
+    draft_year: the June draft this class is for. Defaults to the next June
+        draft derived from today's date (next year if month >= 7, else this
+        year). Every generated prospect's birthdate is drawn from the
+        is_draft_eligible() window for that year.
+    reentries: already-created Player objects (CHL overagers re-entering the
+        draft, supplied by another worker via league.draft_reentries).
+        Inserted FIRST, counted toward num_prospects, keeping their existing
+        age/birthdate/nationality; any re-entry failing is_draft_eligible()
+        for draft_year is skipped.
     """
+    if draft_year is None:
+        draft_year = _default_draft_year()
     distribution = DRAFT_QUALITY_DISTRIBUTIONS.get(quality, POTENTIAL_DISTRIBUTION)
-    prospects = []
-    
+    prospects: list[Player] = []
+
     # Ensure we have a minimum number of players at each position.
-    # Goalies get a lower floor: real drafts take ~18-22 of 224.
+    # Goalies keep a floor of 18 (real drafts take ~20-25 of 224); the 0.10
+    # share lands ~22 typically, the floor guards the low tail.
     position_counts = {pos: 0 for pos in PlayerPosition}
     min_per_position = {pos: 20 for pos in PlayerPosition}
-    min_per_position[PlayerPosition.GOALIE] = 10
-    
+    min_per_position[PlayerPosition.GOALIE] = 18
+
+    # Re-entries go first and count toward the total and position floors.
+    for _rp in (reentries or []):
+        try:
+            _ok = is_draft_eligible(getattr(_rp, "birth_date", ""),
+                                    getattr(_rp, "nationality", ""),
+                                    draft_year)
+        except Exception:
+            _ok = False
+        if not _ok:
+            continue
+        _rp.draft_year = draft_year
+        if not getattr(_rp, "draft_ranking", 0):
+            _rp.draft_ranking = calculate_draft_ranking(_rp)
+        if not getattr(_rp, "junior_league", ""):
+            _rp.junior_league = _assign_junior_league(
+                getattr(_rp, "nationality", "Canada"))
+        if not hasattr(_rp, "hidden_gem"):
+            _rp.hidden_gem = False
+        position_counts[_rp.primary_position] = \
+            position_counts.get(_rp.primary_position, 0) + 1
+        prospects.append(_rp)
+
     # Ensure we have a minimum number of players at each potential tier
     potential_counts = {pot: 0 for pot in distribution.keys()}
-    
+
     # Generate enough prospects to meet the requested total
+    _SKATER_POSITIONS = [p for p in PlayerPosition
+                         if p != PlayerPosition.GOALIE]
     while len(prospects) < num_prospects:
         # Determine if we need to force a specific position
         forced_position = None
@@ -607,34 +949,143 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal") -> l
             if count < min_per_position[pos]:
                 forced_position = pos
                 break
-        
+        # Soft cap: real drafts take ~20-25 goalies of 224. Once 25 are in,
+        # draw skaters instead (the floor above guarantees the low end).
+        if (forced_position is None
+                and position_counts.get(PlayerPosition.GOALIE, 0) >= 25):
+            forced_position = random.choice(_SKATER_POSITIONS)
+
+        # Age mix: mostly 18, some 19, a few 20, rare 21-24 Europeans.
+        # (21+ is only legal for non-NA nationalities, so force one.)
+        _age = _roll_prospect_age()
+        _nat = _random_european_nationality() if _age >= 21 else None
+
         # Generate the prospect
-        prospect = create_prospect(position=forced_position,
-                                   potential_distribution=distribution)
-        
+        prospect = create_prospect(age=_age,
+                                   position=forced_position,
+                                   nationality=_nat,
+                                   potential_distribution=distribution,
+                                   draft_year=draft_year)
+
+        # Defensive: never emit an ineligible prospect. (Birthdates are drawn
+        # from the eligible window, so this should never trigger.)
+        if not is_draft_eligible(prospect.birth_date, prospect.nationality,
+                                 draft_year):
+            continue
+
         # Update our counters
         position_counts[prospect.primary_position] += 1
         potential_counts[prospect.potential_grade] += 1
-        
+
         # Add to our list
         prospects.append(prospect)
-    
+
     # Sort prospects by draft ranking for convenience
     prospects.sort(key=lambda p: p.draft_ranking, reverse=True)
+
+    # Draft hype (0-100) tracks draft stock: ~100 at #1, decaying down the
+    # board. Draft pressure (0-100) runs hottest for hyped 18-year-olds.
+    for _i, _p in enumerate(prospects):
+        _p.draft_hype = max(2, min(100, int(100 * math.exp(-_i / 45.0)
+                                             + random.uniform(-4, 4))))
+        _press = _p.draft_hype * 0.6
+        if _p.age == 18:
+            _press += random.uniform(15, 30)
+        elif _p.age == 19:
+            _press += random.uniform(4, 10)
+        _p.draft_pressure = max(0, min(100, int(_press)))
 
     # Hidden gems: a few later picks secretly carry a higher TRUE ceiling
     # than their displayed grade (the Zetterberg/Datsyuk/Kucherov seeds).
     # Scouting -- or loud farm production -- reveals them.
+    # Goalies get fatter tails here (Task E): a pre-roll with higher bust AND
+    # higher boom probability than the flat gem table skaters use.
     try:
         import prospect_development as _pd
         _per_round = 32
+        _ladder = _grade_ladder()
         for _i, _p in enumerate(prospects):
+            if (_p.primary_position == PlayerPosition.GOALIE
+                    and not getattr(_p, "true_potential_grade", "")):
+                _r = random.random()
+                _idx = _grade_ladder_index(_p.potential_grade)
+                if _r < GOALIE_GEM_BOOM_PROB:
+                    _p.true_potential_grade = _ladder[
+                        min(_idx + random.choice([1, 2]), len(_ladder) - 1)]
+                elif _r < GOALIE_GEM_BOOM_PROB + GOALIE_GEM_BUST_PROB:
+                    _p.true_potential_grade = _ladder[max(_idx - 1, 0)]
             _pd.seed_true_potential(_p, draft_round=_i // _per_round + 1)
     except Exception:
         pass
 
-    print(f"Generated a new draft class with {len(prospects)} prospects (quality: {quality}).")
+    # Guarantee 1-2 hidden-gem goalies per class (Task E): drawn from round-3+
+    # goalies, true grade bumped up to +2 (capped per grade, mirroring
+    # prospect_development's bump caps), flagged via hidden_gem so late-round
+    # goalie steals actually occur. Seeded RNG (global random) keeps this
+    # deterministic-ish under a pinned seed.
+    try:
+        _ladder = _grade_ladder()
+        _candidates = [p for _i, p in enumerate(prospects)
+                       if p.primary_position == PlayerPosition.GOALIE
+                       and _i >= 64
+                       and not getattr(p, "hidden_gem", False)]
+        _n_gems = random.randint(1, 2)
+        for _g in random.sample(_candidates, min(_n_gems, len(_candidates))):
+            _idx = _grade_ladder_index(_g.potential_grade)
+            _cap = _GEM_BUMP_CAP.get((_g.potential_grade or "C").strip(), 1)
+            _bump = min(2, _cap)
+            _g.true_potential_grade = _ladder[min(_idx + _bump, len(_ladder) - 1)]
+            _g.hidden_gem = True
+    except Exception:
+        pass
+
+    # Hidden ELITE (the Datsyuk/Zetterberg/Kucherov case): a tiny fraction of
+    # round-4+ prospects carry a genuinely ELITE true ceiling (A-/A) behind a
+    # mid/late-round displayed grade. seed_true_potential's bump caps (+1/+2
+    # with per-grade maxima) can never reach elite from a "C+" display, so
+    # this separate rare roll exists. Displayed grade, hype, and draft slot
+    # are untouched -- scouts see a mid-rounder; reality holds a star.
+    # Rate: 0.5% of rounds 4-7 (~128 prospects) ~= 0.6/class. Most never get
+    # identified or developed; realized round-4+ stars stay ~0-2/decade
+    # league-wide. No schedule -- pure probability, some decades get none.
+    # (Additive: only sets true_potential_grade, which prospect_development
+    # already consumes as the real ceiling. No development logic touched.)
+    try:
+        _n_elite_hidden = 0
+        for _i, _p in enumerate(prospects):
+            if _i < 96:  # rounds 1-3: no hidden elites, only the gem table
+                continue
+            if getattr(_p, "generational", False):
+                continue
+            if random.random() < 0.005:
+                _p.true_potential_grade = "A" if random.random() < 0.25 else "A-"
+                _n_elite_hidden += 1
+    except Exception:
+        pass
+
+    # PERCEIVED-generational flag (the obvious McDavid everyone sees coming):
+    # true ceiling generational AND perceived #1. Probabilistic, never
+    # scheduled: the roll below is calibrated so the UNCONDITIONAL rate is
+    # ~14% (~once every 5-8 years). Only ~28% of classes have an A+
+    # consensus #1 at all, so the roll fires ~half the time such a class
+    # appears (0.50 x 0.28 ~= 0.14). A class whose top prospect isn't A+
+    # simply has no generational that year; some decades get two, some none.
+    # Only a flagged prospect gets the #1 lock on all 32 team boards and the
+    # wall-to-wall headline treatment. Everyone else -- even elite A+ names --
+    # is rankable 1st..15th by any team's scouts (awareness floor, order
+    # freedom).
+    try:
+        for _p in prospects:
+            _p.generational = False
+        if (prospects and random.random() < 0.50
+                and (prospects[0].potential_grade or "").strip() == "A+"):
+            prospects[0].generational = True
+            prospects[0].draft_hype = 100
+    except Exception:
+        pass
+
+    print(f"Generated a new draft class with {len(prospects)} prospects (quality: {quality}, draft year: {draft_year}).")
     print(f"Potential distribution: {potential_counts}")
-    
+
     return prospects
 

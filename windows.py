@@ -4942,6 +4942,17 @@ class DraftView(ctk.CTkFrame):
         self.current_pick = 0
         self.draft_order = []          # [round, team, draft_pick]
         self.picks_made = []           # (team_name, overall, player)
+        self._draft_started = False    # re-entry guard for start_draft()
+        # Per-team draft boards (team_draft_boards.build_team_boards):
+        # {team_name: [prospects in that team's order]}. None until
+        # start_draft() builds them; AI falls back to consensus when
+        # they are unavailable.
+        self.team_boards = None
+        # Pre-draft joint scouting reports
+        # (team_draft_boards.build_draft_reports): {team_name:
+        # {"team_name", "board", "projected_picks"}}. Built once per
+        # draft in start_draft; also stashed on the league.
+        self.team_reports = None
         self.selected_prospect = None
         self._armed_prospect = None  # M4: two-step inline pick confirmation
         self.strategy_var = tk.StringVar(master=self, value="BPA")
@@ -5010,8 +5021,20 @@ class DraftView(ctk.CTkFrame):
         tab_row.pack(fill='x', padx=12, pady=(0, 4))
         self._board_tab_var = tk.StringVar(master=self, value="Available")
         self._board_tab_btns = {}
-        for _tab in ("Available", "Results", "My Picks"):
-            _b = ctk.CTkButton(tab_row, text=_tab, width=90, height=26,
+        # The "Scout Report" tab is the user's pre-draft joint scouting
+        # report: the department's private board (top 40) + projected picks
+        # mapped onto owned slots. It lives here, above the fold, instead of
+        # in the war-room column where it fell below 900px.
+        _tab_widths = {"Available": 150, "Results": 80, "My Picks": 80,
+                       "Scout Report": 100}
+        for _tab in ("Available", "Results", "My Picks", "Scout Report"):
+            # The available board shows the PUBLIC consensus ranking,
+            # not any club's private list -- label it so.
+            _label = (("Available — Consensus" if _tab == "Available"
+                       else _tab))
+            _b = ctk.CTkButton(tab_row, text=_label,
+                               width=_tab_widths[_tab],
+                               height=26,
                                font=("Segoe UI", 10, 'bold'),
                                command=lambda t=_tab: self._draft_board_tab(t))
             _b.pack(side='left', padx=(0, 6))
@@ -5020,7 +5043,7 @@ class DraftView(ctk.CTkFrame):
         board_card = ctk.CTkFrame(left, fg_color=ct['CARD'], corner_radius=8)
         board_card.pack(fill='both', expand=True, padx=10, pady=(0, 10))
         self._board_tab_frames = {}
-        for _tab in ("Available", "Results", "My Picks"):
+        for _tab in ("Available", "Results", "My Picks", "Scout Report"):
             _f = tk.Frame(board_card, bg=ct['CARD'])
             self._board_tab_frames[_tab] = _f
         self.available_tree = self._create_available_board(
@@ -5029,6 +5052,14 @@ class DraftView(ctk.CTkFrame):
             self._board_tab_frames["Results"])
         self.mypicks_tree = self._create_mypicks_board(
             self._board_tab_frames["My Picks"])
+        # The joint scouting report lives in its own tab (read-only,
+        # scrollable): the user's private board + projected picks.
+        self.scouting_report_box = ctk.CTkTextbox(
+            self._board_tab_frames["Scout Report"],
+            fg_color=ct['CARD'], text_color=ct['TEXT'],
+            font=("Segoe UI", 10), state='disabled', wrap='word')
+        self.scouting_report_box.pack(fill='both', expand=True,
+                                      padx=8, pady=8)
         self._draft_board_tab("Available")
 
         # CENTER: war room
@@ -5230,7 +5261,8 @@ class DraftView(ctk.CTkFrame):
 
     # -- M1: tabbed draft board -------------------------------------------
     def _draft_board_tab(self, name):
-        """Switch the left column between Available / Results / My Picks."""
+        """Switch the left column between Available / Results / My Picks /
+        Scout Report."""
         self._board_tab_var.set(name)
         ct = self._ct
         for tab, btn in self._board_tab_btns.items():
@@ -5354,6 +5386,70 @@ class DraftView(ctk.CTkFrame):
                 getattr(player, 'potential_grade', '?')),
                 tags=(f"pot_{grade}",))
 
+    def _render_scouting_report(self):
+        """Fill the Scout Report tab from the user's pre-draft joint report:
+        the department's private ranking (top 40) plus projected picks mapped
+        onto our owned slots. User's team only -- other clubs' reports are
+        never rendered."""
+        box = getattr(self, 'scouting_report_box', None)
+        if box is None:
+            return
+        lines = []
+        try:
+            uname = self.app.user_team.team_name
+            rep = (getattr(self, 'team_reports', None) or {}).get(uname)
+        except Exception:
+            rep = None
+        if not rep:
+            lines = ["Scouting report unavailable."]
+        else:
+            try:
+                consensus = sorted(
+                    self.app.league.draft_prospects,
+                    key=lambda p: getattr(p, 'draft_ranking', 0),
+                    reverse=True)
+                crank = {id(p): i + 1 for i, p in enumerate(consensus)}
+            except Exception:
+                crank = {}
+            board = rep.get('board') or []
+
+            def _pos(p):
+                try:
+                    return p.primary_position.value
+                except Exception:
+                    return "?"
+
+            lines.append("JOINT BOARD — our department's ranking "
+                         f"(top 40 of {len(board)})")
+            for i, p in enumerate(board[:40], 1):
+                lines.append(
+                    f"{i:>2}. {getattr(p, 'full_name', '?')} "
+                    f"({_pos(p)}) · consensus #{crank.get(id(p), '?')}")
+            lines.append("")
+            lines.append("PROJECTED PICKS — if the draft falls per "
+                         "our board")
+            owned = rep.get('projected_picks') or []
+            if not owned:
+                lines.append("(no picks owned)")
+            for pr in owned:
+                pl = pr.get('prospect')
+                if pl is None:
+                    lines.append(f"Rd {pr.get('round')} · "
+                                 f"#{pr.get('overall')} → "
+                                 "(board exhausted)")
+                else:
+                    lines.append(f"Rd {pr.get('round')} · "
+                                 f"#{pr.get('overall')} → "
+                                 f"{getattr(pl, 'full_name', '?')} "
+                                 f"({_pos(pl)})")
+        try:
+            box.configure(state='normal')
+            box.delete('1.0', 'end')
+            box.insert('1.0', "\n".join(lines))
+            box.configure(state='disabled')
+        except Exception:
+            pass
+
     def _on_available_select(self, event=None):
         sel = self.available_tree.selection()
         if not sel:
@@ -5427,6 +5523,19 @@ class DraftView(ctk.CTkFrame):
                           f"{self.scmod.consensus_range(p)}")
         self._body(card, text=scout_line, dim=False).pack(
             anchor='w', padx=10, pady=(2, 0))
+        # Team-board rank: where the USER's own scouts slot him (fog-of-war
+        # safe -- it's their scouts' opinion, never true potential). Other
+        # teams' boards are never shown.
+        try:
+            from team_draft_boards import team_rank_of
+            _ut = getattr(self.app.user_team, 'team_name', None)
+            _trank = team_rank_of(getattr(self, 'team_boards', None),
+                                  _ut, p)
+            if _trank:
+                self._body(card, text=f"Our scouts rank him #{_trank}",
+                           dim=True).pack(anchor='w', padx=10)
+        except Exception:
+            pass
         details = []
         if report is not None:
             strengths = list(getattr(report, 'strengths', None) or [])[:2]
@@ -5470,6 +5579,13 @@ class DraftView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def start_draft(self):
+        # Re-entry guard: __init__ starts the draft, so an explicit second
+        # call (as the runtime QA once did) must not rebuild the order,
+        # re-roll the 32 team boards, or re-drive the market -- a rebuild
+        # after draft-day trades would show 225 rows for 224 slots and
+        # replace the boards mid-draft. Fresh views start unflagged.
+        if getattr(self, '_draft_started', False):
+            return
         # Make sure every team owns its picks (idempotent if already done)
         try:
             self.app.league.initialize_all_draft_picks()
@@ -5499,11 +5615,32 @@ class DraftView(ctk.CTkFrame):
                     self.draft_order.append([round_num, team, None])
         self.current_pick = 0
         self.picks_made = []
+        # Pre-draft joint scouting reports: every team's scouting +
+        # analytics department ranks the class once (their private board)
+        # and maps it onto the picks they own. Generated ONCE per draft
+        # here -- never per pick. AI teams draft from their report's
+        # board; the user's report is viewable in the war room.
+        # Imported here to avoid a module cycle.
+        try:
+            from team_draft_boards import build_draft_reports
+            self.team_reports = build_draft_reports(
+                self.app.league, self.draft_order)
+            self.team_boards = {
+                _n: _r["board"] for _n, _r in self.team_reports.items()}
+        except Exception:
+            self.team_reports = None
+            self.team_boards = None
+        try:
+            self.app.league.team_draft_reports = self.team_reports
+        except Exception:
+            pass
+        self._render_scouting_report()
         self.draft_results_tree.delete(*self.draft_results_tree.get_children())
         self.ticker.delete(0, tk.END)
         self._ticker("Welcome to draft night. The floor is buzzing.")
         self._refresh_shortlist()
         self.process_draft_pick()
+        self._draft_started = True
 
     # ------------------------------------------------------------------
     def _ticker(self, line):
@@ -5860,8 +5997,24 @@ class DraftView(ctk.CTkFrame):
             self.end_draft()
             return (False, False)
         needs = self.te.team_needs(team_on_clock)
-        # Consider top 12, weigh positional need + randomness
+        # Consider top 12 *of the picking team's own board* (consensus
+        # re-ranked by that club's scouts in start_draft); prospects
+        # missing from the board fall back behind everyone. Consensus
+        # ordering is the fallback when boards are unavailable.
         candidates = available[:12]
+        try:
+            _board = (getattr(self, 'team_boards', None) or {}).get(
+                getattr(team_on_clock, 'team_name', None))
+            if _board:
+                _bidx = {getattr(_p, 'id', None): _i
+                         for _i, _p in enumerate(_board)}
+                _n = len(_board)
+                candidates = sorted(
+                    available,
+                    key=lambda _p: (_bidx.get(getattr(_p, 'id', None), _n),
+                                    -getattr(_p, 'draft_ranking', 0)))[:12]
+        except Exception:
+            candidates = available[:12]
         round_num = self.draft_order[self.current_pick][0]
         scored = []
         for p in candidates:
@@ -5973,6 +6126,16 @@ class DraftView(ctk.CTkFrame):
         round_num, _t, _dp = self.draft_order[self.current_pick]
         overall = self.current_pick + 1
         team.add_player(player, "prospects")
+        # Draft rights: stamp immediately at pick time (CHL 2yr / NCAA 4yr /
+        # Europe 4yr from the player's junior league). The season rollover
+        # has a backstop for any prospect that slips through, but the pick
+        # path is the canonical stamper.
+        try:
+            _dy = getattr(self.app.league, "draft_prospects_year", None) \
+                or getattr(getattr(self.app, "current_date", None), "year", 2027)
+            self.app.league.stamp_draft_rights(player, team.team_name, _dy)
+        except Exception:
+            pass
         try:
             self.app.league.draft_prospects.remove(player)
         except ValueError:
