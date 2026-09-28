@@ -418,6 +418,12 @@ class PlayerProfile(InGamePopup):
             rs.ensure_reputation_fields(p)
         except Exception:
             pass
+        # Loyalty + ambition seed lazily so old saves show real values.
+        try:
+            import player_decision as _pd
+            _pd.ensure_decision_fields(p)
+        except Exception:
+            pass
         team = self._find_team()
 
         card = AppCard(parent)
@@ -454,8 +460,16 @@ class PlayerProfile(InGamePopup):
             self._create_attribute_bar(bars, "Happiness",
                                        getattr(p, "happiness", 50), card.card_bg,
                                        compact=True)
+            self._create_attribute_bar(bars, "Loyalty",
+                                       getattr(p, "loyalty", 50), card.card_bg,
+                                       compact=True)
+            _amb_labels = {"cup": "Stanley Cup", "money": "Money",
+                           "ice_time": "Ice Time", "stability": "Stability",
+                           "home": "Hometown"}
+            _amb = _amb_labels.get(getattr(p, "ambition", "") or "", "")
             rep_line = (f"Reputation  {getattr(p, 'reputation', 0)}/100"
-                        f"   •   Leadership  {getattr(p, 'leadership', 0)}/100")
+                        f"   •   Leadership  {getattr(p, 'leadership', 0)}/100"
+                        + (f"   •   Ambition: {_amb}" if _amb else ""))
             tk.Label(content, text=rep_line, font=AppFonts.SMALL,
                      fg=AppColors.TEXT_SECONDARY, bg=card.card_bg,
                      justify="left").pack(anchor="w", pady=(4, 2))

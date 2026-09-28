@@ -1160,6 +1160,18 @@ class PlayerProfileView(ctk.CTkFrame):
     def _ecosystem_reputation_rows(self, is_goalie=False):
         """Text rows for the Reputation & Personality section."""
         rows = [("Squad Status", getattr(self.player, "squad_status", "Rotation") or "Rotation")]
+        # Ambition: what drives his contract decisions (cup/money/ice/...).
+        try:
+            import player_decision as _pd
+            _pd.ensure_decision_fields(self.player)
+            _amb = getattr(self.player, "ambition", "") or ""
+            _labels = {"cup": "Stanley Cup", "money": "Money",
+                       "ice_time": "Ice Time", "stability": "Stability",
+                       "home": "Hometown"}
+            if _amb in _labels:
+                rows.append(("Ambition", _labels[_amb]))
+        except Exception:
+            pass
         if is_goalie:
             temp = getattr(self.player, "goalie_temperament", "") or ""
             if temp:
@@ -1215,12 +1227,20 @@ class PlayerProfileView(ctk.CTkFrame):
 
     def _create_personality_sections(self, parent, is_goalie=False):
         """Reputation/personality sections shared by the Personality tab."""
+        # Loyalty + ambition (player_decision.py) seed lazily so old saves
+        # show real values, not blanks.
+        try:
+            import player_decision as _pd
+            _pd.ensure_decision_fields(self.player)
+        except Exception:
+            pass
         # Reputation & Personality: the reputation ratchet, visible
         # controversy (hotheads cost less in trades), happiness at the club.
         self._create_attribute_section(parent, "Reputation & Personality", [
             ("Reputation", "reputation"),
             ("Controversy", "controversy"),
             ("Happiness", "happiness"),
+            ("Loyalty", "loyalty"),
         ])
         self._create_text_attribute_section(
             parent, "Standing", self._ecosystem_reputation_rows(is_goalie))
