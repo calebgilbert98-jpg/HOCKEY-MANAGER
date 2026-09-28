@@ -164,6 +164,11 @@ class GameSaveManager:
                 # multiplayer snapshots so every manager keeps their mail.
                 'inbox': [m.to_dict() for m in
                           getattr(getattr(team, 'inbox', None), 'messages', []) or []],
+                # Per-line matchup preferences from the lines screen.
+                'line_matchups': {
+                    'F': list((getattr(team, 'line_matchups', None) or {}).get('F') or [None] * 4)[:4],
+                    'D': list((getattr(team, 'line_matchups', None) or {}).get('D') or [None] * 3)[:3],
+                },
             }
             
             return team_data
@@ -731,6 +736,14 @@ class GameSaveManager:
             team.trade_block = team_data.get('trade_block', [])
             team.board_expectation = team_data.get('board_expectation')
             team.buyout_cap_hits = dict(team_data.get('buyout_cap_hits', {}) or {})
+            # Line matchup preferences. Absent in old saves -> all Auto.
+            _lm = team_data.get('line_matchups') or {}
+            _lmf = list(_lm.get('F') or [None] * 4)[:4]
+            _lmd = list(_lm.get('D') or [None] * 3)[:3]
+            team.line_matchups = {
+                'F': _lmf + [None] * (4 - len(_lmf)),
+                'D': _lmd + [None] * (3 - len(_lmd)),
+            }
             
             # Restore team stats
             if 'stats' in team_data:

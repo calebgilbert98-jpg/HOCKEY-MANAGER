@@ -302,6 +302,12 @@ def stoppage_change(sim: Any, team: Any, st: ShiftState,
 def _matching_response(away_line: int, sim: Any, home_team: Any) -> Tuple[int, int]:
     """Home team's line-matching response to the away team's declared line.
 
+    The user can override the automatic response per line via the lines
+    screen "Match to line" dropdowns (Team.line_matchups): the first of my
+    lines/pairs targeting the opponent's declared line gets the call, with
+    F and D chosen independently. Unset entries fall back to the auto
+    behavior below:
+
     vs 1st line -> checking line (3rd) + top D pair (1st)
     vs 4th line -> 1st line (exploit the mismatch)
     vs 2nd/3rd -> roll (keep current, signaled by returning current)
@@ -309,11 +315,21 @@ def _matching_response(away_line: int, sim: Any, home_team: Any) -> Tuple[int, i
     # We need the home team's current state to "roll" — get it
     st = get_shift_state(sim, home_team)
     if away_line == 1:
-        return 3, 1
+        auto_f, auto_d = 3, 1
     elif away_line == 4:
-        return 1, 1  # top pair with the top line to exploit
+        auto_f, auto_d = 1, 1  # top pair with the top line to exploit
     else:
-        return st.f_line, st.d_pair  # roll
+        auto_f, auto_d = st.f_line, st.d_pair  # roll
+
+    # User-set matchup preferences (1-4 opponent forward line, or None).
+    prefs = getattr(home_team, "line_matchups", None) or {}
+    f_prefs = list(prefs.get("F") or [])[:4] + [None] * 4
+    d_prefs = list(prefs.get("D") or [])[:3] + [None] * 3
+    want_f = next((i + 1 for i, want in enumerate(f_prefs[:4])
+                   if want == away_line), None)
+    want_d = next((i + 1 for i, want in enumerate(d_prefs[:3])
+                   if want == away_line), None)
+    return (want_f or auto_f, want_d or auto_d)
 
 
 def _goal_diff_for(sim: Any, team: Any, is_home: bool) -> int:

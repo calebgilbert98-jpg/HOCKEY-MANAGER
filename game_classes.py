@@ -2071,6 +2071,14 @@ class Team:
     tactic_penalty_kill: str = "Defensive"
     # Line matching: 'Aggressive', 'Standard', 'Conservative'
     tactic_line_matching: str = "Standard"
+    # Per-line matchup preferences (lines-screen "Match to line" dropdowns):
+    # which OPPONENT forward line (1-4) each of my lines/pairs wants to face
+    # at home with last change. None = coach's auto response. The sim reads
+    # these in shift_engine._matching_response; unset entries fall back to
+    # the automatic behavior. {'F': [None]*4, 'D': [None]*3}
+    line_matchups: dict = field(
+        default_factory=lambda: {"F": [None, None, None, None],
+                                  "D": [None, None, None]})
     # Dressing-room dynamics (Morale screen): event feed + who picks the lines
     dynamics_log: List[dict] = field(default_factory=list)
     line_control: str = "coach"  # 'coach' | 'gm'
