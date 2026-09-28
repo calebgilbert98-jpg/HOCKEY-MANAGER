@@ -66,6 +66,10 @@ class GameSaveManager:
                 # Draft and prospects
                 'draft_classes': getattr(self.game_manager, 'draft_classes', {}),
                 'scouting_reports': getattr(self.game_manager, 'scouting_reports', {}),
+                # Scout region assignments (set_scout_region). Were never
+                # serialized: every load unassigned all scouts.
+                'scout_region_assignments': dict(
+                    getattr(self.game_manager, 'scout_region_assignments', {}) or {}),
                 
                 # Free agency and waivers
                 'free_agents': self._serialize_free_agents(),
@@ -862,8 +866,8 @@ class GameSaveManager:
                     print(f"shot charts restore failed (non-fatal): {_sce}")
                     self.game_manager.shot_chart_store = None
 
-            for key in ['player_stats_history', 'team_stats_history', 'draft_classes', 
-                       'scouting_reports', 'waiver_claims', 'trade_history', 
+            for key in ['player_stats_history', 'team_stats_history', 'draft_classes',
+                       'scouting_reports', 'scout_region_assignments', 'waiver_claims', 'trade_history',
                        'contract_negotiations', 'inbox_messages', 'news_stories',
                        'training_programs']:
                 if key in save_data:

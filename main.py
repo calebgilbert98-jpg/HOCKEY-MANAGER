@@ -1650,8 +1650,16 @@ class HockeyManagerGUI(tk.Tk):
         self.tree_maps = {}
         self.scouting_assignments = {}
         self.open_windows = {}
-        self.current_date = START_DATE
-        self.game_manager.current_date = self.current_date  # Sync with game_manager for dashboard
+        # Don't clobber a pre-loaded date: a fresh GameManager is always
+        # exactly START_DATE here, so only reset in that case. A manager
+        # restored from a save (headless load-then-build flows) keeps its
+        # date; the GUI mirrors it.
+        _gm_date = getattr(game_manager, 'current_date', None)
+        if _gm_date in (None, START_DATE):
+            self.current_date = START_DATE
+            self.game_manager.current_date = self.current_date  # Sync with game_manager for dashboard
+        else:
+            self.current_date = _gm_date
         self.news_log = [{'date': self.current_date, 'story': "Welcome to the new season!"}]
         self.game_results = []  # Store completed game results for viewing
         # Derived lookup indexes over game_results (rebuilt lazily; never
@@ -9061,6 +9069,21 @@ class HockeyManagerGUI(tk.Tk):
                 # event-based stat pass below must be skipped to avoid
                 # double counting.
                 stats_from_events = False
+                # Narrative: GameSim modeled incidents live; record the
+                # night's stories (hat tricks, shutouts, steals) -- the
+                # visualizer's story_worthy() never reached the ledger.
+                # (Quick-sim games get this via the call below with
+                # roll_incidents=True; one call per game only.)
+                try:
+                    _nwent_ot = any(
+                        isinstance(_e, dict) and _e.get('period', 0) > 3
+                        for _e in (notable_events or []))
+                    self._narrative_postgame(
+                        sim_engine, home_team, away_team, scores,
+                        went_ot=_nwent_ot, roll_incidents=False,
+                        deliver_headlines=True, game_date=game_date)
+                except Exception:
+                    pass
             else:
                 # FM-style pre-match team talk (interactive, skipped in bulk sim)
                 opponent = away_team if home_team == self.user_team else home_team
@@ -9196,19 +9219,6 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 import headlines
                 headlines.drain_sim_headlines(self, sim_engine)
-            except Exception:
-                pass
-            # Narrative: GameSim modeled incidents live; record the night's
-            # stories (hat tricks, shutouts, steals) -- the visualizer's
-            # story_worthy() never reached the ledger.
-            try:
-                _nwent_ot = any(
-                    isinstance(_e, dict) and _e.get('period', 0) > 3
-                    for _e in (notable_events or []))
-                self._narrative_postgame(
-                    sim_engine, home_team, away_team, scores,
-                    went_ot=_nwent_ot, roll_incidents=False,
-                    deliver_headlines=True, game_date=game_date)
             except Exception:
                 pass
             # Legacy events: permanent season memory for outdoor games.
