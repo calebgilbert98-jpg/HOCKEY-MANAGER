@@ -16,7 +16,8 @@ import dressing_room as dr
 def make_player(name, nat="Canada", birthplace="", age=25, tenure="4+ years",
                 letter="", leadership=50, morale=70, pid=None,
                 relationships=None, drafted_year=None, ovr=75, gp=100,
-                goalie=False):
+                goalie=False, teamwork=50, selfishness=50, controversy=20,
+                ambition=""):
     p = SimpleNamespace(
         id=pid if pid is not None else name,
         full_name=name, name=name,
@@ -25,6 +26,8 @@ def make_player(name, nat="Canada", birthplace="", age=25, tenure="4+ years",
         morale=morale, relationships=dict(relationships or {}),
         drafted_year=drafted_year,
         primary_position=SimpleNamespace(value="G" if goalie else "C"),
+        teamwork=teamwork, selfishness=selfishness,
+        base_controversy=controversy, ambition=ambition,
         stats=SimpleNamespace(games_played=gp),
         overall_rating=lambda _o=ovr: _o,
     )
@@ -241,7 +244,68 @@ team10 = make_team(finns + [make_player(f"Q{i}", nat="Canada", age=30,
                                          tenure="4+ years")
                             for i in range(4)])
 g10 = dr.form_cliques(team10)
-check("the Finns", any(g["name"] == "The Finns" for g in g10))
+check("the Flying Finns", any(g["name"] == "The Flying Finns"
+                              for g in g10))
+
+yanks = [make_player(f"US{i}", nat="United States", age=26,
+                     tenure="2 years") for i in range(3)]
+team_y = make_team(yanks + [make_player(f"QY{i}", nat="Canada", age=31,
+                                        tenure="4+ years")
+                            for i in range(4)])
+gy = dr.form_cliques(team_y)
+check("the Yanks", any(g["name"] == "The Yanks" for g in gy))
+
+euro = [make_player(f"EU{i}", nat=n, age=a, tenure="2 years",
+                    birthplace=f"City{i}, RG")
+        for i, (n, a) in enumerate([("Sweden", 26), ("Finland", 27),
+                                    ("Czechia", 28), ("Norway", 27)])]
+team_eu = make_team(euro)
+geu = dr.form_cliques(team_eu)
+check("the Euro Corner", any(g["name"] == "The Euro Corner"
+                             for g in geu))
+
+mans = [make_player(f"TO{i}", nat=n, age=26 + i, tenure="2 years",
+                    birthplace="Toronto, ON")
+        for i, n in enumerate(["Canada", "United States", "Sweden"])]
+team_m = make_team(mans)
+gm = dr.form_cliques(team_m)
+check("the Toronto mans", any(g["name"] == "The Toronto mans"
+                              for g in gm))
+
+# 39-46: personality-scaled affinity -----------------------------------
+glue1 = make_player("Glue1", teamwork=95)
+glue2 = make_player("Glue2", teamwork=95)
+lone1 = make_player("Lone1", teamwork=20, selfishness=90, controversy=10)
+lone2 = make_player("Lone2", teamwork=20, selfishness=90, controversy=10)
+check("glue guys bond faster than loners",
+      dr.affinity(glue1, glue2) > dr.affinity(lone1, lone2))
+check("loner appetite below 1.0", dr._social_appetite(lone1) < 1.0)
+check("glue appetite above 1.0", dr._social_appetite(glue1) > 1.0)
+check("neutral appetite is 1.0",
+      dr._social_appetite(make_player("Neu")) == 1.0)
+
+home1 = make_player("Home1", birthplace="Oshawa, ON", ambition="hometown")
+home2 = make_player("Home2", birthplace="Oshawa, ON", ambition="hometown")
+plain1 = make_player("Plain1", birthplace="Oshawa, ON")
+plain2 = make_player("Plain2", birthplace="Oshawa, ON")
+check("homesick players weight hometown more",
+      dr.affinity(home1, home2) > dr.affinity(plain1, plain2))
+check("appetite bounded", 0.6 <= dr._social_appetite(lone1) <= 1.3)
+
+# 47-49: hidden Easter eggs for diverse groups --------------------------
+div = [make_player(f"D{i}", nat=n, age=a, tenure="2 years",
+                   birthplace=f"Town{i}, ON")
+       for i, (n, a) in enumerate([("Canada", 26), ("United States", 27),
+                                   ("Sweden", 28), ("Finland", 27)])]
+team_d = make_team(div)
+gd = dr.form_cliques(team_d)
+pool = list(dr._DIVERSE_SIZE_EGGS.get(4, [])) + dr._DIVERSE_EGGS
+check("diverse group gets an Easter egg",
+      len(gd) == 1 and gd[0]["name"] in pool)
+gd2 = dr.form_cliques(team_d)
+check("Easter egg deterministic", gd[0]["name"] == gd2[0]["name"])
+check("no 'Group N' fallback names",
+      not any(g["name"].startswith("Group ") for g in gd))
 
 kids_mixed = [make_player(f"KM{i}", nat=n, age=20 + i, tenure="This season")
               for i, n in enumerate(["Canada", "Sweden", "USA"])]

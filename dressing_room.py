@@ -896,48 +896,89 @@ def _draft_year_of(player: Any) -> Optional[int]:
     return None
 
 
+def _social_appetite(player: Any) -> float:
+    """How much a player leans into room bonds: 0.6 (loner) to 1.3
+    (glue guy). Team-first players invest more in the room; tough sells
+    and quiet men invest less. Scales every affinity component."""
+    app = 1.0
+    try:
+        tw = float(getattr(player, "teamwork", 50) or 50)
+        app += (tw - 50) / 250.0
+    except Exception:
+        pass
+    try:
+        _cocky, _hot, tough, quiet, _spot = _personality_of(player)
+        if tough:
+            app -= 0.20
+        elif quiet:
+            app -= 0.10
+    except Exception:
+        pass
+    return max(0.6, min(1.3, app))
+
+
+def _hometown_pull(player: Any) -> float:
+    """Homesick players (ambition: hometown) cling to hometown ties."""
+    try:
+        if str(getattr(player, "ambition", "") or "").strip().lower() \
+                == "hometown":
+            return 1.6
+    except Exception:
+        pass
+    return 1.0
+
+
 def affinity(a: Any, b: Any) -> int:
     """How much two players relate (0-100). Every component is small and
-    legible; no single trait decides a friendship on its own."""
+    legible; no single trait decides a friendship on its own. Personalities
+    scale the weights: glue guys bond faster, loners slower, and homesick
+    players weight hometown ties much more heavily."""
     if a is b or _pid(a) == _pid(b):
         return 100
-    score = 10.0  # baseline: same room, same grind
+    nat_c = 0.0
     if _norm_nationality(a) != "unknown" and \
             _norm_nationality(a) == _norm_nationality(b):
-        score += 22
+        nat_c = 22.0
+    town_c = 0.0
     ca, ra = _hometown_parts(a)
     cb, rb = _hometown_parts(b)
     if ca and ca == cb:
-        score += 16
+        town_c = 16.0
     elif ra and ra == rb:
-        score += 8
+        town_c = 8.0
+    age_c = 0.0
     aa, ab = _age_of(a), _age_of(b)
     if aa is not None and ab is not None:
         gap = abs(aa - ab)
         if gap <= 2:
-            score += 12
+            age_c += 12
         elif gap <= 4:
-            score += 6
+            age_c += 6
         elif gap <= 6:
-            score += 3
+            age_c += 3
         if aa <= 23 and ab <= 23:
-            score += 6   # the kids find each other
+            age_c += 6   # the kids find each other
         elif aa >= 33 and ab >= 33:
-            score += 4   # old guard
-    rel = _relationship_score(a, b)
-    if rel:
-        score += rel * 18
+            age_c += 4   # old guard
+    rel_c = _relationship_score(a, b) * 18
     # Circumstances: shared situation is shared language.
+    circ_c = 0.0
     ta, tb = _tenure_bucket(a), _tenure_bucket(b)
     if ta == tb:
-        score += 10 if ta == "new" else 4
+        circ_c += 10 if ta == "new" else 4
     da, db = _draft_year_of(a), _draft_year_of(b)
     if da is not None and da == db:
-        score += 6
+        circ_c += 6
     la = str(getattr(a, "captaincy", "") or "").upper() in ("C", "A")
     lb = str(getattr(b, "captaincy", "") or "").upper() in ("C", "A")
     if la and lb:
-        score += 5
+        circ_c += 5
+    # Personality scaling: the pair bonds at the mean of their appetites;
+    # a homesick player on either side deepens the hometown pull.
+    app = (_social_appetite(a) + _social_appetite(b)) / 2.0
+    home_mult = max(_hometown_pull(a), _hometown_pull(b))
+    score = 10.0 + app * (nat_c + home_mult * town_c + age_c + rel_c
+                          + circ_c)
     return _clamp(int(round(score)), 5, 97)
 
 
@@ -961,6 +1002,56 @@ def _tenure_bucket(player: Any) -> str:
     return "new"
 
 
+# Clever room names for national groups (non-core). Core groups keep
+# the legacy "The {noun} core".
+_NAT_SPECIAL_NAMES = {
+    "sweden": "The Swedish Mafia",
+    "finland": "The Flying Finns",
+    "russia": "The Russian Mafia",
+    "usa": "The Yanks",
+    "czechia": "The Czech Connection",
+    "canada": "The True North",
+}
+
+_EURO_NATS = {
+    "sweden", "finland", "russia", "czechia", "slovakia", "germany",
+    "switzerland", "norway", "denmark", "latvia", "belarus",
+    "kazakhstan", "austria", "france", "italy", "britain", "slovenia",
+    "hungary", "poland", "ukraine",
+}
+
+# Hidden Easter eggs for truly diverse groups (no dominant trait).
+# Deliberately undocumented in-game -- the room names itself.
+_DIVERSE_EGGS = [
+    "The Breakfast Club",
+    "The United Nations",
+    "The Motley Crew",
+    "The Fellowship",
+    "The Wild Bunch",
+    "The Rat Pack",
+    "The A-Team",
+    "The Lunch Pail Crew",
+    "The Island of Misfit Toys",
+    "The Committee",
+]
+_DIVERSE_SIZE_EGGS = {
+    3: ["The Three Amigos", "The Three Musketeers"],
+    4: ["The Four Horsemen"],
+    5: ["The Fab Five"],
+    7: ["The Magnificent Seven"],
+}
+
+
+def _diverse_egg_name(member_ids) -> str:
+    """Deterministic Easter egg: same members, same name, every time."""
+    import hashlib
+    pool = list(_DIVERSE_SIZE_EGGS.get(len(member_ids), [])) \
+        + _DIVERSE_EGGS
+    key = "|".join(sorted(str(i) for i in member_ids))
+    h = hashlib.md5(key.encode()).hexdigest()
+    return pool[int(h, 16) % len(pool)]
+
+
 def _is_goalie(p: Any) -> bool:
     try:
         pos = getattr(p, "primary_position", None)
@@ -975,7 +1066,9 @@ def _group_name(members: List[Any], idx: int) -> tuple:
 
     Returns (name, kind, nationality). Names use real dressing-room
     language: the goalies' union, the young Swedes, the Swedish Mafia,
-    the Toronto boys, the kids, the old guard."""
+    the Flying Finns, the Yanks, the Euro Corner, the Toronto mans,
+    the kids, the old guard -- and hidden Easter eggs for groups with
+    no dominant trait at all."""
     nats: Dict[str, int] = {}
     cities: Dict[str, int] = {}
     ages: List[int] = []
@@ -1024,19 +1117,23 @@ def _group_name(members: List[Any], idx: int) -> tuple:
     if nat_share >= 0.6 and known_nat:
         if top_bucket == "core":
             return f"The {noun} core", "nationality", noun
-        if top_nat == "sweden":
-            return "The Swedish Mafia", "nationality", noun
+        if top_nat in _NAT_SPECIAL_NAMES:
+            return _NAT_SPECIAL_NAMES[top_nat], "nationality", noun
         return f"The {plural}", "nationality", noun
     if city_share >= 0.6:
         cname = top_city[:1].upper() + top_city[1:]
-        return f"The {cname} boys", "hometown", noun
+        return f"The {cname} mans", "hometown", noun
+    euro_share = sum(c for nn, c in nats.items() if nn in _EURO_NATS) / n
+    if euro_share >= 0.6:
+        return "The Euro Corner", "europe", noun
     if mean_age <= 23:
         return "The kids", "young", noun
     if mean_age >= 33:
         return "The old guard", "veterans", noun
     if top_bucket == "core":
         return "The core", "tenure", noun
-    return f"Group {idx}", "mixed", noun
+    # No dominant trait: a hidden Easter egg, deterministic per members.
+    return _diverse_egg_name([_pid(m) for m in members]), "mixed", noun
 
 
 def form_cliques(team: Any, min_size: int = 3,

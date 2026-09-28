@@ -11,6 +11,7 @@ from tkinter import ttk
 import customtkinter as ctk
 
 import reputation_system as rs
+import dressing_room as dr_room
 
 
 class MoraleView(ctk.CTkFrame):
@@ -175,7 +176,7 @@ class MoraleView(ctk.CTkFrame):
         sg_card = self._make_card(right_col, "Social Groups")
         sg_card.pack(fill='x', pady=(0, 10))
         self.sg_body = ctk.CTkLabel(sg_card, text="", justify='left',
-                                    font=('Segoe UI', 10))
+                                    font=('Segoe UI', 10), wraplength=400)
         self.sg_body.pack(anchor='w', padx=12, pady=(0, 8))
         riv_card = self._make_card(right_col, "Rivalries & Bad Blood")
         riv_card.pack(fill='x')
@@ -360,7 +361,6 @@ class MoraleView(ctk.CTkFrame):
         coach = self._head_coach(team)
         chem = rs.team_chemistry(roster, ctx)
         hierarchy = rs.team_hierarchy(roster)
-        groups = rs.social_groups(roster)
         tier_of = {}
         for tier, ps in hierarchy.items():
             for p in ps:
@@ -459,9 +459,61 @@ class MoraleView(ctk.CTkFrame):
             more = f" +{len(ps) - 5}" if len(ps) > 5 else ""
             hier_lines.append(f"{tier} ({len(ps)}): {names}{more}")
         self.hier_body.configure(text="\n".join(hier_lines))
-        sg_lines = [f"{g} ({len(ps)})" for g, ps in groups.items()]
-        self.sg_body.configure(text="   •   ".join(sg_lines))
+        self.sg_body.configure(text=self._social_groups_text(team, roster))
         self._refresh_rivalries(team, coach, roster)
+
+    def _social_groups_text(self, team, roster):
+        """Social Groups card: room atmosphere, cohesion, and every
+        affinity clique with its leader and bond. Falls back quietly
+        if the clique engine can't read this roster."""
+        try:
+            cliques = dr_room.form_cliques(team)
+        except Exception:
+            cliques = []
+        lines = []
+        try:
+            atm = dr_room.room_atmosphere(team)
+            if isinstance(atm, dict):
+                label = atm.get("label", "Steady")
+            else:
+                label = atm[0]
+            coh = dr_room.cohesion(team)
+            aicon = {"Electric": "\u26a1", "Tight-knit": "\U0001f91d",
+                     "Steady": "\U0001f642", "Strained": "\U0001f61f",
+                     "Fractured": "\U0001f494"}.get(label, "\u2022")
+            lines.append(f"{aicon} Room: {label}  \u2022  "
+                         f"cohesion {int(round(coh))}%")
+        except Exception:
+            pass
+        for g in cliques:
+            try:
+                bond = float(g.get("bond", 0.5))
+            except Exception:
+                bond = 0.5
+            bdesc = "tight" if bond >= 0.75 else "solid" if bond >= 0.55 \
+                else "loose" if bond >= 0.4 else "fragile"
+            try:
+                infl = float(g.get("leader_influence", 0))
+            except Exception:
+                infl = 0
+            led = f" \u2014 led by {g['leader']}" \
+                if g.get("leader") and infl >= 70 else ""
+            members = g.get("members", []) or []
+            # form_cliques stores display-name strings
+            names = ", ".join(str(m).split()[0] for m in members[:6])
+            more = f" +{len(members) - 6}" if len(members) > 6 else ""
+            lines.append(f"\u2022 {g.get('name', 'Group')} ({len(members)}): "
+                         f"{names}{more}{led} [{bdesc}]")
+        try:
+            grouped = sum(len(g.get("members", []) or []) for g in cliques)
+            floaters = len(roster) - grouped
+            if floaters > 0:
+                lines.append(f"  {floaters} floater"
+                             f"{'s' if floaters != 1 else ''} outside the "
+                             f"circles")
+        except Exception:
+            pass
+        return "\n".join(lines) if lines else "No social circles formed yet."
 
     def _refresh_rivalries(self, team, coach, roster):
         try:
