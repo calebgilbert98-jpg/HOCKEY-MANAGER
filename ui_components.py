@@ -187,36 +187,36 @@ class PlayerProfileView(ctk.CTkFrame):
         center_column = ttk.Frame(main_container, style='PlayerTab.TFrame') 
         center_column.grid(row=1, column=1, sticky='nsew', padx=(1, 1))
         center_column.grid_columnconfigure(0, weight=1)
-        for i in range(4):
+        for i in range(3):
             center_column.grid_rowconfigure(i, weight=1)
             
         right_column = ttk.Frame(main_container, style='PlayerTab.TFrame')
         right_column.grid(row=1, column=2, sticky='nsew', padx=(1, 0))
         right_column.grid_columnconfigure(0, weight=1)
-        for i in range(6):  # Increased from 4 to 6 for additional content
+        for i in range(7):  # Increased for additional content
             right_column.grid_rowconfigure(i, weight=1)
         
-        # Left column content - Personal & Physical
+        # Left column content - Personal & Bio info
         self._create_enhanced_basic_info(left_column, 0)
-        self._create_physical_attributes(left_column, 1)
-        self._create_injury_history(left_column, 2)
-        self._create_career_progression(left_column, 3)
+        self._create_injury_history(left_column, 1)
+        self._create_career_progression(left_column, 2)
+        self._create_team_chemistry(left_column, 3)
         
-        # Center column content - Performance & Skills
+        # Center column content - Player Attributes (all attributes bucketed together)
         self._create_enhanced_key_attributes(center_column, 0)
-        self._create_performance_metrics(center_column, 1)
+        self._create_physical_attributes(center_column, 1)
         self._create_skill_development(center_column, 2)
-        self._create_team_chemistry(center_column, 3)
         
-        # Right column content - Contract & Management (Enhanced)
-        self._create_enhanced_contract_info(right_column, 0)
-        self._create_market_value_info(right_column, 1)
-        self._create_scouting_report(right_column, 2)
-        self._create_coaching_notes(right_column, 3)
+        # Right column content - Contract, Performance & Management
+        self._create_performance_metrics(right_column, 0)
+        self._create_enhanced_contract_info(right_column, 1)
+        self._create_market_value_info(right_column, 2)
+        self._create_scouting_report(right_column, 3)
+        self._create_coaching_notes(right_column, 4)
         
         # Add additional right column content to better utilize space
-        self._create_simple_comparison(right_column, 4)
-        self._create_league_standing(right_column, 5)
+        self._create_simple_comparison(right_column, 5)
+        self._create_league_standing(right_column, 6)
 
     def _create_enhanced_player_header(self, parent):
         """Creates an enhanced player header with comprehensive information."""
