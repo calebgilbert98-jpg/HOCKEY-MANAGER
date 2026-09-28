@@ -231,6 +231,9 @@ class GameSaveManager:
             # Prospect awards news + prospect-class year stamp (his draft
             # wave). Missing keys = old save -> graceful defaults.
             'prospect_awards_news': list(getattr(league, 'prospect_awards_news', []) or []),
+            # ELC slide headlines from the offseason rollover (CBA 9.1(d)).
+            # Missing key = old save -> empty news.
+            'elc_slide_news': list(getattr(league, 'elc_slide_news', []) or []),
             'draft_prospects_year': getattr(league, 'draft_prospects_year', None),
             # Draft class + staff pools. These were never serialized: every
             # save/load wiped the draft class (scouting wasted; the draft
@@ -1155,6 +1158,9 @@ class GameSaveManager:
             # draft flow regenerates the class when the stamp mismatches).
             league.prospect_awards_news = list(
                 league_data.get('prospect_awards_news', []) or [])
+            # ELC slide headlines. Old saves lack the key -> empty news.
+            league.elc_slide_news = list(
+                league_data.get('elc_slide_news', []) or [])
             league.draft_prospects_year = league_data.get('draft_prospects_year', None)
             # Draft class + staff pools (see serialize side). Old saves lack
             # the keys -> empty lists (draft regenerates its class at draft

@@ -123,7 +123,7 @@ for mode, kw in (("offer", {}), ("extension", {"is_extension": True})):
           f"btn_inside={inside}")
 
 # ---------------------------------------------------------------- inbox routing
-from main import HockeyManagerGUI
+from main import HockeyManagerGUI, GameManager
 fake = SimpleNamespace(
     league=SimpleNamespace(teams=[team], free_agents=[],
                            salary_cap_system=None, season_year=2026),
@@ -138,19 +138,26 @@ for meth in ("handle_contract_offer", "_finalize_contract_signing",
              "_clear_offered_clause",
              "_notify_contract_result", "_inbox_contract_result",
              "_find_inbox_player", "accept_contract_counter",
+             "_validate_contract_terms", "get_live_cap",
              "reopen_contract_negotiation"):
-    setattr(fake, meth, types.MethodType(getattr(HockeyManagerGUI, meth), fake))
+    _fn = getattr(HockeyManagerGUI, meth, None) or getattr(GameManager, meth)
+    setattr(fake, meth, types.MethodType(_fn, fake))
 
 fa = SimpleNamespace(
     full_name="Free Agent", id="fa1", age=27,
     primary_position=g.PlayerPosition.LEFT_WING,
     salary=0, contract_years=0,
     contract=SimpleNamespace(salary=0, years_remaining=0),
-    overall_rating=lambda: 15, value=5_000_000)
+    overall_rating=lambda: 75, value=5_000_000)
 fake.league.free_agents.append(fa)
 
-_ovr, _cap = 15, 83_500_000
-asking = int((_ovr * 100_000) / 83_500_000 * _cap)
+from salary_cap_system import base_ask_dollars as _bad_inbox
+def _prod_ask(_pos):
+    # Production ask for this fake (ovr 75, age 27, no cap system attached
+    # -> base dollars at the 104M cap, floored at the 750k ask floor).
+    return max(_bad_inbox(75, 27, False, _pos), 750_000)
+asking = _prod_ask("LEFT_WING")   # fa is a winger...
+asking_c = _prod_ask("C")         # ...p2/p3/p4 are centers (5% nudge)
 
 # accept path via inbox notify
 fa.salary, fa.contract_years = asking, 3
@@ -165,9 +172,9 @@ check("accept -> removed from FA", fa not in fake.league.free_agents)
 p2 = SimpleNamespace(
     full_name="Picky Player", id="p2", age=27,
     primary_position=g.PlayerPosition.CENTER,
-    salary=int(asking * 0.75), contract_years=2,
+    salary=int(asking_c * 0.87), contract_years=2,
     contract=SimpleNamespace(salary=0, years_remaining=0),
-    overall_rating=lambda: 15, value=5_000_000)
+    overall_rating=lambda: 75, value=5_000_000)
 team.roster.append(p2)
 fake.inbox.clear()
 res = fake.handle_contract_offer(p2, extension=True, notify="inbox")
@@ -175,9 +182,9 @@ res = fake.handle_contract_offer(p2, extension=True, notify="inbox")
 p3 = SimpleNamespace(
     full_name="Counter Player", id="p3", age=27,
     primary_position=g.PlayerPosition.CENTER,
-    salary=int(asking * 0.75), contract_years=2,
+    salary=int(asking_c * 0.87), contract_years=2,
     contract=SimpleNamespace(salary=0, years_remaining=0),
-    overall_rating=lambda: 15, value=5_000_000)
+    overall_rating=lambda: 75, value=5_000_000)
 fake.league.free_agents.append(p3)
 fake.inbox.clear()
 res = fake.handle_contract_offer(p3, extension=False, notify="inbox")
@@ -189,7 +196,9 @@ check("counter action_data pickle-safe",
 
 # accept the counter from the inbox
 ok = fake.accept_contract_counter(cm[0])
-check("inbox accept signs player", ok and p3.salary == asking and cm[0].action_done)
+check("inbox accept signs player",
+      ok and p3.salary == cm[0].action_data["asking_price"]
+      and cm[0].action_done)
 check("inbox accept posts confirmation",
       any(m.subject.startswith("Signed") for m in fake.inbox))
 
@@ -197,9 +206,9 @@ check("inbox accept posts confirmation",
 p4 = SimpleNamespace(
     full_name="Reject Player", id="p4", age=27,
     primary_position=g.PlayerPosition.CENTER,
-    salary=750_000, contract_years=2,
+    salary=int(asking_c * 0.65), contract_years=2,
     contract=SimpleNamespace(salary=0, years_remaining=0),
-    overall_rating=lambda: 15, value=5_000_000)
+    overall_rating=lambda: 75, value=5_000_000)
 fake.league.free_agents.append(p4)
 fake.inbox.clear()
 res = fake.handle_contract_offer(p4, extension=False, notify="inbox")

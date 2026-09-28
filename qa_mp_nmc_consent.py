@@ -60,7 +60,9 @@ def make_contract(nmc=False):
 def make_player(pid, nmc=False):
     return SimpleNamespace(id=pid, full_name=f"Player {pid}",
                            contract=make_contract(nmc),
-                           on_waivers=False, waiver_days=0)
+                           on_waivers=False, waiver_days=0,
+                           age=30, nhl_games_played=400,
+                           ahl_games_since_assignment=None)
 
 
 def make_team():

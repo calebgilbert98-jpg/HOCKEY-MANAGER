@@ -56,6 +56,7 @@ from stats_standings_window import StatsStandingsWindow, StatsStandingsView
 from ahl_stats_window import AHLStatsView
 from GAME_VIEWER import launch_game_viewer
 from draft_generator import generate_draft_class
+from draft_generator import age_on_sept15 as _age_on_sept15
 from database_manager import initialize_game_database
 from database_generator import generate_database, get_database_options
 from save_load_system import GameSaveManager
@@ -1610,6 +1611,18 @@ def _mix_hex(a, b, t=0.5):
         return a
 
 
+def _player_needs_waivers(player):
+    """Waiver eligibility, shared by the single- and multi-player demotion
+    paths: non-exempt players (25+ or 160+ NHL games) must clear the wire;
+    everyone else can be assigned quietly. Never raises."""
+    try:
+        _games = getattr(player, 'nhl_games_played', 0) or 0
+        _age = getattr(player, 'age', 0) or 0
+        return bool(_age >= 25 or _games >= 160)
+    except Exception:
+        return True
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
@@ -2195,6 +2208,14 @@ class HockeyManagerGUI(tk.Tk):
                             original_team.prospects.append(player)
                     else:
                         original_team.ahl_roster.append(player)
+                        # New-CBA paper-transaction rule: the assignment
+                        # stamps the recall gate -- he must play an AHL
+                        # game before he can come back up.
+                        try:
+                            import ahl_system as _ahl_stamp2
+                            _ahl_stamp2.stamp_ahl_assignment(player)
+                        except Exception:
+                            pass
                 else:
                     _to_junior = False
                 # Clearance is league news regardless of who runs the club.
@@ -6545,6 +6566,7 @@ class HockeyManagerGUI(tk.Tk):
             "release_player": self._mp_release_player,
             "send_to_minors": self._mp_send_to_minors,
             "call_up": self._mp_call_up,
+            "return_to_junior": self._mp_return_to_junior,
             "claim_waivers": self._mp_claim_waivers,
             "buyout_player": self._mp_buyout_player,
             "extend_contract": self._mp_extend_contract,
@@ -6702,6 +6724,40 @@ class HockeyManagerGUI(tk.Tk):
             _te_clr.clear_retention_state(player)
         except Exception:
             pass
+        # Market feedback: Caleb's market engine learns from MP signings
+        # exactly like user and AI signings. register_signing keeps only
+        # true market-setters (star + top-5 AAV) as comps, so a bold MP
+        # overpay for a star raises the next star's ask -- offers change
+        # the league. (The human fallout -- overpay verdict, fan beef --
+        # stays on the user/AI paths: the MP path has no agent ask to
+        # score the deal against.)
+        try:
+            _lg_mp = getattr(self, "league", None)
+            _cap_sys_mp = getattr(_lg_mp, "salary_cap_system", None)
+            if _cap_sys_mp is not None:
+                _ppos = getattr(player, "primary_position", "")
+                _ppos_name = (_ppos.value if hasattr(_ppos, "value")
+                              else str(_ppos))
+                try:
+                    from game_classes import to_100_scale as _t100mp
+                    _ovr100mp = int(_t100mp(player.overall_rating()))
+                except Exception:
+                    _ovr100mp = 75
+                if _cap_sys_mp.register_signing(
+                        getattr(player, "full_name", "Unknown"), salary,
+                        _ovr100mp, _ppos_name,
+                        int(getattr(player, "age", 27) or 27),
+                        int(getattr(_lg_mp, "season_year", 0) or 0)):
+                    try:
+                        self.news_log.append({
+                            'date': self.current_date,
+                            'story': (f"{player.full_name}'s ${salary:,} "
+                                      f"deal sets the market -- comparable "
+                                      f"stars will demand more.")})
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         try:
             fa_pool = self.free_agents() or []
             if player in fa_pool:
@@ -6784,7 +6840,54 @@ class HockeyManagerGUI(tk.Tk):
         return self._mp_demote_player(team, player)
 
     def _mp_demote_player(self, team, player):
-        """The actual waiver placement (runs after any NMC consent)."""
+        """The actual demotion (runs after any NMC consent).
+
+        Mirrors the single-player rulebook exactly: waiver-exempt
+        players (under 25 and under 160 NHL games) are assigned quietly
+        to the AHL; everyone else must clear the wire. The client's word
+        is never trusted -- eligibility is computed host-side.
+        """
+        try:
+            _needs = _player_needs_waivers(player)
+        except Exception:
+            _needs = True
+        if not _needs:
+            # Exempt: quiet demotion, same as single-player.
+            try:
+                (getattr(team, "roster", None) or []).remove(player)
+            except Exception:
+                pass
+            try:
+                _ahl = getattr(team, "ahl_roster", None)
+                if _ahl is None:
+                    _ahl = []
+                    try:
+                        team.ahl_roster = _ahl
+                    except Exception:
+                        pass
+                if player not in _ahl:
+                    _ahl.append(player)
+            except Exception:
+                pass
+            # New-CBA paper-transaction rule: he must play an AHL game
+            # before he can be recalled.
+            try:
+                import ahl_system as _ahl_stamp_mp
+                _ahl_stamp_mp.stamp_ahl_assignment(player)
+            except Exception:
+                pass
+            # Audition over -- the next call-up starts a fresh one.
+            try:
+                player.nhl_audition = None
+            except Exception:
+                pass
+            try:
+                self.add_news(f"{player.full_name} assigned to the AHL by "
+                              f"{team.team_name}.")
+            except Exception:
+                pass
+            return True, (f"{player.full_name} assigned to the AHL "
+                          f"(waiver-exempt).")
         player.on_waivers = True
         player.waiver_days = 2
         try:
@@ -6842,6 +6945,16 @@ class HockeyManagerGUI(tk.Tk):
             return False, "That player isn't on your club."
         if player not in (getattr(team, "ahl_roster", None) or []):
             return False, "That player isn't in the minors."
+        # New-CBA paper-transaction rule (same as single-player): a
+        # freshly assigned player must play at least one AHL game before
+        # he can be recalled.
+        try:
+            import ahl_system as _ahl_gate_mp
+            _block = _ahl_gate_mp.ahl_recall_block_reason(player)
+        except Exception:
+            _block = None
+        if _block:
+            return False, _block
         if len(getattr(team, "roster", []) or []) >= 23:
             return False, "Roster is full (23)."
         salary = int(getattr(getattr(player, "contract", None),
@@ -6863,6 +6976,69 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         return True, f"Recalled {player.full_name}."
+
+    def _mp_return_to_junior(self, params, team, manager):
+        """Return a prospect to his junior club: mirrors the single-player
+        'Return to Junior' (RosterView AHL tab -> move_player ahl->prospects).
+
+        Same gate as single-player: only SIGNED junior-aged (under-20)
+        CHL prospects qualify. An ex-college player can never go back
+        once he's signed an NHL deal; anyone else stays with the pro
+        club. The client's word is never trusted -- eligibility is
+        computed host-side.
+        """
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        if getattr(player, "contract", None) is None:
+            return False, (f"{player.full_name} isn't signed -- only "
+                            f"signed prospects can be returned to junior.")
+        try:
+            import game_classes as _gc_jr
+            _track = _gc_jr.junior_track_of(player)
+            _jage = int(getattr(player, "age", 20) or 20)
+        except Exception:
+            return False, "Couldn't verify his junior eligibility."
+        if not (_track == "CHL" and _jage < 20):
+            if _track == "NCAA":
+                _why = (f"{player.full_name} signed an NHL contract -- "
+                        f"that ended his NCAA eligibility. He can only "
+                        f"play in the NHL or AHL now, never back in "
+                        f"college.")
+            else:
+                _why = (f"Only junior-aged (under-20) CHL prospects can be "
+                        f"returned to junior. {player.full_name} stays "
+                        f"with the pro club.")
+            return False, _why
+        for _attr in ("roster", "ahl_roster"):
+            try:
+                _lst = getattr(team, _attr, None) or []
+                if player in _lst:
+                    _lst.remove(player)
+            except Exception:
+                pass
+        try:
+            _pros = getattr(team, "prospects", None)
+            if _pros is None:
+                _pros = []
+                try:
+                    team.prospects = _pros
+                except Exception:
+                    pass
+            if player not in _pros:
+                _pros.append(player)
+        except Exception:
+            pass
+        try:
+            player.playing_where = _gc_jr.junior_assignment_label(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} was returned to junior "
+                          f"({player.playing_where}) by {team.team_name}.")
+        except Exception:
+            pass
+        return True, f"{player.full_name} returned to junior."
 
     def _mp_claim_waivers(self, params, team, manager):
         """Claim off waivers: mirrors WaiversView.claim_from_waivers()."""
@@ -9902,6 +10078,19 @@ class HockeyManagerGUI(tk.Tk):
                     del _plive[:]
             except Exception:
                 pass
+            # ELC slide headlines (same pattern).
+            try:
+                _smsgs = list(getattr(_league, "elc_slide_news", None) or [])
+                for _m in _smsgs:
+                    try:
+                        self.add_news("📝 " + str(_m))
+                    except Exception:
+                        pass
+                _slive = getattr(_league, "elc_slide_news", None)
+                if _slive is not None:
+                    del _slive[:]
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -12374,6 +12563,18 @@ class HockeyManagerGUI(tk.Tk):
                 self.league.prospect_awards_news = []
         except Exception:
             pass
+        # ELC slide headlines from end_of_season (CBA 9.1(d)).
+        try:
+            _sn = list(getattr(self.league, "elc_slide_news", None) or [])
+            for _msg in _sn:
+                try:
+                    self.add_news("📝 " + str(_msg))
+                except Exception:
+                    pass
+            if _sn:
+                self.league.elc_slide_news = []
+        except Exception:
+            pass
 
         # Restricted free agency (rfa_system.py): qualifying offers at the
         # real CBA minimums, rare AI offer sheets with real pick
@@ -14640,10 +14841,9 @@ class HockeyManagerGUI(tk.Tk):
                     f"{_why}\n\nHe's staying on the roster.")
                 return
         # Waiver eligibility: non-exempt players (25+ or 160+ NHL games)
-        # must clear the wire -- no quiet burial of veterans.
-        _games = getattr(player, 'nhl_games_played', 0) or 0
-        _age = getattr(player, 'age', 0) or 0
-        if _age >= 25 or _games >= 160:
+        # must clear the wire -- no quiet burial of veterans. Shared with
+        # the multiplayer demotion path so both use one rulebook.
+        if _player_needs_waivers(player):
             player.on_waivers = True
             player.waiver_days = 2
             try:
@@ -14667,6 +14867,13 @@ class HockeyManagerGUI(tk.Tk):
         # Exempt: quiet demotion, as before.
         self.user_team.roster.remove(player)
         self.user_team.ahl_roster.append(player)
+        # New-CBA paper-transaction rule: he must play an AHL game before
+        # he can be recalled.
+        try:
+            import ahl_system as _ahl_stamp
+            _ahl_stamp.stamp_ahl_assignment(player)
+        except Exception:
+            pass
         # Audition over -- the next call-up starts a fresh one.
         try:
             player.nhl_audition = None
@@ -14675,6 +14882,16 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
 
     def call_up_to_nhl(self, player):
+        # New-CBA paper-transaction rule: a freshly assigned player must
+        # play at least one AHL game before he can be recalled.
+        try:
+            import ahl_system as _ahl_gate
+            _block = _ahl_gate.ahl_recall_block_reason(player)
+        except Exception:
+            _block = None
+        if _block:
+            messagebox.showwarning("Recall blocked (new CBA)", _block)
+            return
         self.user_team.ahl_roster.remove(player)
         self.user_team.roster.append(player)
         # Dressing room: a first-time NHL arrival shakes the room --
@@ -14699,10 +14916,12 @@ class HockeyManagerGUI(tk.Tk):
             player.nhl_audition = None
         self.update_all_views()
         
-    def open_contract_negotiation_window(self, player, is_extension=False):
+    def open_contract_negotiation_window(self, player, is_extension=False,
+                                         is_elc=False):
         # Extension window (real NHL: extensions only in the final year of
-        # a deal). One rulebook in transaction_windows.py.
-        if is_extension:
+        # a deal). One rulebook in transaction_windows.py. ELC signings are
+        # not extensions -- they go through unimpeded.
+        if is_extension and not is_elc:
             try:
                 import transaction_windows as _tw
                 _ok, _why = _tw.check_window(
@@ -14714,9 +14933,122 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
         from windows import ContractNegotiationView
-        title = f"Contract: {getattr(player, 'full_name', 'Player')}"
+        if is_elc:
+            title = (f"Entry-Level Contract: "
+                     f"{getattr(player, 'full_name', 'Player')}")
+        else:
+            title = f"Contract: {getattr(player, 'full_name', 'Player')}"
         self.show_screen('contract_negotiation', title,
-                         ContractNegotiationView, player, is_extension)
+                         ContractNegotiationView, player, is_extension,
+                         is_elc=is_elc)
+
+    def handle_elc_offer(self, player, salary, signing_bonus=0,
+                         performance_bonus=0):
+        """Negotiated ELC signing with an unsigned rights-held prospect.
+
+        Validates the ELC band (base inside [floor, ceiling], signing
+        bonus <= 10% of base, performance bonus <= $1M/yr), runs the
+        prospect handshake (accept / counter / reject), and on acceptance
+        finalizes through the league's canonical ELC path: contract with
+        bonuses, rights consumed, assigned to junior/AHL by eligibility.
+
+        Returns {verdict, counter, note}. "counter" carries the agent's
+        number for one-click acceptance in the view.
+        """
+        import salary_cap_system as _scs
+        league = getattr(self, 'league', None)
+        team = getattr(self, 'user_team', None)
+        try:
+            season = getattr(league, 'season_year', None)
+        except Exception:
+            season = None
+        # Guard: only the user's unsigned rights-held prospect.
+        try:
+            _own = (getattr(player, 'contract', None) is None
+                    and (getattr(player, 'rights_team', '') or '')
+                    == getattr(team, 'team_name', ''))
+        except Exception:
+            _own = False
+        if not _own or league is None or team is None:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "He isn't your unsigned prospect."}
+        try:
+            age = int(getattr(player, 'age', 20) or 20)
+        except Exception:
+            age = 20
+        # CBA 9.2: ELC term and eligibility use the player's age on
+        # September 15 of the signing year, not his current age.
+        try:
+            _s15 = _age_on_sept15(getattr(player, 'birth_date', ''), season)
+        except Exception:
+            _s15 = None
+        _elc_age = _s15 if _s15 is not None else age
+        floor, ceil, years = _scs.elc_band(_elc_age, season)
+        if years <= 0:
+            return {"verdict": "invalid", "counter": None,
+                    "note": ("He isn't ELC-eligible: at 25+, the Entry "
+                             "Level System no longer applies (new CBA -- "
+                             "the old European 25-27 exception is gone). "
+                             "Sign him to a standard contract instead.")}
+        try:
+            salary = int(salary)
+            signing_bonus = int(signing_bonus or 0)
+            performance_bonus = int(performance_bonus or 0)
+        except Exception:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "Bonuses must be numbers."}
+        max_signing = int(round(salary * _scs.ELC_SIGNING_BONUS_PCT))
+        if not (floor <= salary <= ceil):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"ELC base must sit inside the band "
+                             f"${floor:,} - ${ceil:,}/yr.")}
+        if not (0 <= signing_bonus <= max_signing):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Signing bonus is capped at 10% of base "
+                             f"(${max_signing:,}/yr).")}
+        if not (0 <= performance_bonus <= _scs.ELC_PERF_BONUS_MAX):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Performance bonus is capped at "
+                             f"${_scs.ELC_PERF_BONUS_MAX:,}/yr.")}
+        # 9.3(a): base salary + signing bonus (+ games-played bonuses,
+        # not modeled) may not exceed the max annual compensation.
+        # Schedule-A performance bonuses are capped separately.
+        if salary + signing_bonus > _scs.elc_max_annual_comp(season):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Base + signing bonus may not exceed the ELC "
+                             f"max of "
+                             f"${_scs.elc_max_annual_comp(season):,}/yr.")}
+        ask = _scs.elc_prospect_ask(player, season)
+        res = _scs.elc_handshake(ask, salary, signing_bonus,
+                                 performance_bonus)
+        if res["verdict"] != "accepted":
+            return res
+        try:
+            ok = bool(league.finalize_elc_signing(
+                team, player, salary, years, signing_bonus,
+                performance_bonus))
+        except Exception:
+            ok = False
+        if not ok:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "The signing couldn't be completed."}
+        try:
+            self.add_news(
+                f"{player.full_name} signs an entry-level contract with "
+                f"{getattr(team, 'team_name', 'the club')} "
+                f"(${salary:,}/yr x {years} yrs, ${signing_bonus:,} signing "
+                f"bonus, ${performance_bonus:,}/yr in performance bonuses).")
+        except Exception:
+            pass
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return {"verdict": "accepted", "counter": None,
+                "note": (f"Signed: ${salary:,}/yr x {years} yrs "
+                         f"(+${signing_bonus:,} SB, "
+                         f"+${performance_bonus:,}/yr perf). He'll report to "
+                         f"{getattr(player, 'playing_where', 'the minors')}.")}
 
     def _validate_contract_terms(self, person, salary, years, extension=False,
                                    team=None):
@@ -14877,7 +15209,14 @@ class HockeyManagerGUI(tk.Tk):
             _ovr100 = int(_ovr * 2)
         _pos = getattr(person, "primary_position", "")
         _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
-        _base_pct = (_ovr * 100_000) / 104_000_000  # ~0.096% per OVR point at the modern cap
+        try:
+            _on_elc = bool(getattr(getattr(person, "contract", None),
+                                  "entry_level", False))
+        except Exception:
+            _on_elc = False
+        from salary_cap_system import base_ask_dollars as _bad2
+        _base_pct = _bad2(_ovr100, getattr(person, "age", 27),
+                          _on_elc, _pos_name) / _live_cap
         if _cap_sys is not None:
             _season = getattr(getattr(self, 'league', None), 'season_year', 0)
             asking_price = _cap_sys.demand_for(

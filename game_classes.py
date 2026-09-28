@@ -208,6 +208,10 @@ class Contract:
     # counts salary minus the burial exemption instead).
     two_way: bool = False
     ahl_salary: int = 0
+    # Entry-level contract marker (CBA Article 9): set by
+    # League.finalize_elc_signing. The season rollover reads it for the
+    # slide rule; the trade/waiver engines treat ELCs as two-way.
+    entry_level: bool = False
     # When modified_ntc_teams is an approved-teams list (not a no-trade
     # list), set alongside it.
     modified_ntc_approved: bool = False
@@ -405,6 +409,12 @@ class Player:
     on_waivers: bool = False
     waiver_days: int = 0
     nhl_games_played: int = 0  # career NHL GP; seeded at generation, accrued per game played
+    # New-CBA paper-transaction rule (2026): a player assigned (loaned) to
+    # the AHL must play at least one AHL game before he can be recalled.
+    #   None -> grandfathered (old save / never assigned) -> recall OK
+    #   0    -> assigned, hasn't dressed yet              -> recall BLOCKED
+    #   >= 1 -> has played down there                     -> recall OK
+    ahl_games_since_assignment: Optional[int] = None
     # NHL games played in each PRECEDING season (most recent last).
     # Drives Calder eligibility (25-game / 6-game rules). European pro
     # leagues don't count -- only NHL GP is recorded here.
@@ -537,6 +547,10 @@ class Player:
     on_waivers: bool = False
     waiver_days: int = 0
     nhl_games_played: int = 0  # career NHL GP; seeded at generation, accrued per game played
+    # New-CBA paper-transaction rule (2026): a player assigned (loaned) to
+    # the AHL must play at least one AHL game before he can be recalled.
+    # None = grandfathered (old save / never assigned) -> recall OK.
+    ahl_games_since_assignment: Optional[int] = None
 
     def __post_init__(self):
         """Adjusts attributes based on position after initialization."""
@@ -2715,6 +2729,10 @@ class League:
     # Junior/college award headlines from prospect_accolades (flushed to
     # the inbox by the UI layer, same as rights_news).
     prospect_awards_news: List[str] = field(default_factory=list)
+    # ELC slide headlines from the offseason rollover (CBA 9.1(d)):
+    # "X's entry-level contract slides a year (<10 NHL games)". The UI
+    # layer posts these, same as rights_news. Old-save safe via getattr.
+    elc_slide_news: List[str] = field(default_factory=list)
     schedule: List[Tuple[date, Team, Team]] = field(default_factory=list)
     standings: Dict[str, Dict] = field(default_factory=dict)
     current_game_index: int = 0
@@ -5186,6 +5204,53 @@ class League:
                 del _prior[:-5]
             except Exception:
                 pass
+            # ELC slide (CBA 9.1(d)): an 18/19-year-old (Sept-15 signing
+            # age) who played fewer than 10 NHL games this season gets
+            # an extra contract year. Runs AFTER age_one_year's
+            # decrement, so the net effect is the season doesn't burn a
+            # year. Only players stamped by finalize_elc_signing carry
+            # the slide state -- older saves simply don't slide.
+            try:
+                _elc_c = getattr(player, "contract", None)
+                _elc_on = bool(getattr(_elc_c, "entry_level", False))
+                if _elc_on and getattr(_elc_c, "years_remaining", 0) > 0:
+                    from salary_cap_system import elc_slide_applies as _slide_ok
+                    try:
+                        _gp_s = int(getattr(getattr(player, "stats", None),
+                                            "games_played", 0) or 0)
+                    except Exception:
+                        _gp_s = 0
+                    if player.id not in nhl_ids:
+                        _gp_s = 0
+                    _sage_sign = getattr(player, "elc_signing_sept15_age",
+                                         None)
+                    if _sage_sign is not None and _slide_ok(
+                            _sage_sign,
+                            getattr(player, "elc_slides_used", 0) or 0,
+                            getattr(player, "elc_seasons_completed", 0) or 0,
+                            _gp_s,
+                            getattr(player, "birth_date", ""),
+                            getattr(player, "elc_signed_season", None)):
+                        _elc_c.years_remaining = \
+                            int(_elc_c.years_remaining) + 1
+                        player.elc_slides_used = \
+                            int(getattr(player, "elc_slides_used", 0) or 0) + 1
+                        try:
+                            _nm = getattr(player, "name", "A prospect")
+                            _box = getattr(self, "elc_slide_news", None)
+                            if not isinstance(_box, list):
+                                _box = []
+                                self.elc_slide_news = _box
+                            _box.append(
+                                f"{_nm}'s entry-level contract slides "
+                                f"a year (<10 NHL games).")
+                        except Exception:
+                            pass
+                if _elc_on:
+                    player.elc_seasons_completed = \
+                        int(getattr(player, "elc_seasons_completed", 0) or 0) + 1
+            except Exception:
+                pass
             player.stats = PlayerStats()
             # Fresh playoff ledger for the new season (the Conn Smythe race
             # reads it during the playoffs; wiped here with everything else).
@@ -5402,23 +5467,34 @@ class League:
         except Exception:
             pass
 
-    def sign_drafted_prospect(self, team, player):
-        """Sign an unsigned drafted prospect to an ELC-like deal.
+    def finalize_elc_signing(self, team, player, salary, years,
+                             signing_bonus=0, performance_bonus=0,
+                             ahl_salary=None):
+        """Sign an unsigned drafted prospect to explicit ELC terms.
 
-        Reuses the existing contract-creation path
-        (player_generator.PlayerGenerator.determine_contract_info, which
-        routes age <= 22 prospects through the ENTRY_LEVEL gate:
-        $775k-$975k x 3 years, two-way). No new cap logic: the deal is a
-        plain Contract assignment, and cap reads it through the existing
-        systems. On success the rights fields are cleared (the prospect is
-        no longer "unsigned") and playing_where is set by real
-        eligibility: junior-aged CHL prospects return to junior,
-        ex-college players go to the AHL (an NHL deal ends NCAA
-        eligibility -- never back to college), everyone else to the AHL;
-        returns True. Returns False when the prospect isn't this team's
-        unsigned rights-holder asset.
+        The shared finalizer for every ELC path: the auto-sign
+        (sign_drafted_prospect computes the terms) and the negotiated
+        offer (the ELC negotiation view / handle_elc_offer). One
+        rulebook: rights-holder check, ELC eligibility (Sept-15 signing
+        age through the 3/2/1 table -- 25+ is NOT ELC-eligible and is
+        refused), Contract creation (two-way, with signing + performance
+        bonuses, all capped to the CBA limits), rights consumption, and
+        eligibility-based assignment (junior-aged CHL -> junior, everyone
+        else -> AHL). Returns True on success.
+
+        Stamps the slide-rule state (signing Sept-15 age, slides used)
+        and preserves the draft history (drafted_by, signing season)
+        before the rights fields are cleared.
         """
         try:
+            from salary_cap_system import (
+                elc_years_for_age, elc_max_annual_comp,
+                elc_minor_salary_max, league_minimum_salary,
+                ELC_SIGNING_BONUS_PCT, ELC_PERF_BONUS_MAX)
+            try:
+                from draft_generator import age_on_sept15 as _age_on_sept15
+            except Exception:
+                _age_on_sept15 = None
             team_name = team if isinstance(team, str) else getattr(team, "team_name", "")
             team_obj = None
             if isinstance(team, str):
@@ -5434,23 +5510,81 @@ class League:
             if player not in prospects:
                 return False
             # Only the rights holder can sign; already-signed prospects
-            # (rights cleared) are skipped.
+            # (rights cleared) are skipped. The contract check is explicit:
+            # a prospect who somehow holds both is never re-signed.
+            if getattr(player, "contract", None) is not None:
+                return False
             rights_team = getattr(player, "rights_team", "") or ""
             if not rights_team or rights_team != getattr(team_obj, "team_name", ""):
                 return False
-            try:
-                from player_generator import PlayerGenerator
-                salary, years, two_way, ahl_salary = \
-                    PlayerGenerator().determine_contract_info(player, "NHL_ROOKIE")
-            except Exception:
-                salary, years, two_way, ahl_salary = 925000, 3, True, 85000
-            player.contract = Contract(salary=int(salary),
+            season_year = int(getattr(self, "season_year", 0) or 0) or None
+            # CBA 9.2: "age" for Article 9 is the player's age on
+            # September 15 of the signing year -- not his current age.
+            _sage = None
+            if _age_on_sept15 is not None:
+                try:
+                    _sage = _age_on_sept15(getattr(player, "birth_date", ""),
+                                           season_year or 2026)
+                except Exception:
+                    _sage = None
+            if _sage is None:
+                _sage = int(getattr(player, "age", 20) or 20)
+            # The 3/2/1 table is canonical: it overrides whatever term
+            # was passed in, and 0 years means not ELC-eligible (25+).
+            years = elc_years_for_age(_sage)
+            if years <= 0:
+                return False
+            # Cap the money to the CBA limits (fail closed -- a forged
+            # over-max offer never becomes a contract).
+            _max_annual = elc_max_annual_comp(season_year)
+            _min_annual = league_minimum_salary(season_year)
+            salary = int(salary or 0)
+            signing_bonus = int(signing_bonus or 0)
+            performance_bonus = int(performance_bonus or 0)
+            if not (_min_annual <= salary <= _max_annual):
+                return False
+            if signing_bonus < 0 or \
+                    signing_bonus > int(ELC_SIGNING_BONUS_PCT * salary):
+                return False
+            if not (0 <= performance_bonus <= ELC_PERF_BONUS_MAX):
+                return False
+            # 9.3(a): base salary + signing bonus (+ games-played
+            # bonuses, not modeled) may not exceed the max annual
+            # compensation. Schedule-A performance bonuses are capped
+            # separately and are NOT part of this aggregate.
+            if salary + signing_bonus > _max_annual:
+                return False
+            _draft_year = getattr(player, "drafted_year", 0) or 0
+            _minor_max = elc_minor_salary_max(_draft_year or season_year)
+            if ahl_salary is None:
+                try:
+                    from player_generator import PlayerGenerator
+                    _s, _y, _tw, ahl_salary = \
+                        PlayerGenerator().determine_contract_info(player, "NHL_ROOKIE")
+                except Exception:
+                    ahl_salary = None
+            ahl_salary = int(ahl_salary or _minor_max)
+            ahl_salary = max(0, min(ahl_salary, _minor_max))
+            player.contract = Contract(salary=salary,
                                        years_remaining=int(years),
-                                       two_way=bool(two_way),
-                                       ahl_salary=int(ahl_salary))
+                                       two_way=True,
+                                       ahl_salary=ahl_salary,
+                                       signing_bonus=signing_bonus,
+                                       performance_bonus=performance_bonus,
+                                       entry_level=True)
+            # Slide-rule state (CBA 9.1(d)): the rollover reads the
+            # signing Sept-15 age, the used-slide count, and the seasons
+            # completed under this SPC.
+            player.elc_signing_sept15_age = int(_sage)
+            player.elc_slides_used = 0
+            player.elc_seasons_completed = 0
+            player.elc_signed_season = int(season_year or 0) or None
             # Rights consumed: the prospect is now signed. drafted_year is
             # cleared too -- it now means "drafted but never signed", which
-            # the five-year unsigned-retirement scan relies on.
+            # the five-year unsigned-retirement scan relies on. The draft
+            # history itself is preserved first (drafted_by / signing
+            # season / pick stay on the player).
+            player.drafted_by = rights_team
             player.rights_team = ""
             player.rights_expiry_year = 0
             player.rights_type = ""
@@ -5464,7 +5598,6 @@ class League:
             # ex-college player can only go to the minors or the NHL,
             # never back to college. Everyone else starts in the AHL.
             _track = junior_track_of(player)
-            _sage = int(getattr(player, "age", 20) or 20)
             if _track == "CHL" and _sage < 20:
                 player.playing_where = junior_assignment_label(player)
             else:
@@ -5472,6 +5605,32 @@ class League:
             return True
         except Exception:
             return False
+
+    def sign_drafted_prospect(self, team, player):
+        """Sign an unsigned drafted prospect to an ELC-like deal.
+
+        Reuses the existing contract-creation path
+        (player_generator.PlayerGenerator.determine_contract_info, which
+        routes age <= 24 prospects through the ENTRY_LEVEL gate with the
+        real 3/2/1 signing-age term and the new-CBA band). No new cap
+        logic: the deal is a plain Contract assignment, and cap reads it
+        through the existing systems. On success the rights fields are
+        cleared (the prospect is no longer "unsigned") and playing_where
+        is set by real eligibility: junior-aged CHL prospects return to
+        junior, ex-college players go to the AHL (an NHL deal ends NCAA
+        eligibility -- never back to college), everyone else to the AHL;
+        returns True. Returns False when the prospect isn't this team's
+        unsigned rights-holder asset, or when he isn't ELC-eligible
+        (25+).
+        """
+        try:
+            from player_generator import PlayerGenerator
+            salary, years, two_way, ahl_salary = \
+                PlayerGenerator().determine_contract_info(player, "NHL_ROOKIE")
+        except Exception:
+            salary, years, two_way, ahl_salary = 925000, 3, True, 85000
+        return self.finalize_elc_signing(team, player, salary, years,
+                                         ahl_salary=ahl_salary)
 
     def invite_prospect_to_camp(self, team_name, player):
         """Invite an unsigned drafted prospect to development camp.

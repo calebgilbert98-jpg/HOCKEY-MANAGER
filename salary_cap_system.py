@@ -337,13 +337,128 @@ MINIMUM_SALARY_SCHEDULE = {
     2029: 1_000_000,  # 2029-30
 }
 
-# New-CBA entry-level maximum, defined PER CONTRACT YEAR (not a flat
-# number): $1.025M in year 1, $1.075M in year 2, $1.125M in year 3 --
-# $3.225M total base for a 3-year deal. TSN/Chris Johnston and Field
-# Level Media, July 2026 (McKenna's max ELC). Schedule A bonuses (up to
-# $1M) and Schedule B (up to $2.5M) per season are NOT modeled -- the
-# game has no performance-bonus system.
-ELC_MAX_BY_CONTRACT_YEAR = (1_025_000, 1_075_000, 1_125_000)
+# New-CBA entry-level maximum compensation (Article 29 of the MOU).
+# Starting in 2026-27 it is NO LONGER based on draft year: in each League
+# Year the max annual aggregate (Paragraph 1 salary + signing bonus +
+# games-played bonuses) is that season's league minimum + $175,000 --
+# $1.025M in 2026-27, $1.075M in 2027-28, $1.125M in 2028-29
+# (PuckPedia, "Entry Level Contract Maximum Compensation").
+# Schedule A bonuses (up to $1M/yr) are modeled separately below.
+def elc_max_annual_comp(season_year=None) -> int:
+    """Max ELC compensation in a given season (new-CBA 9.3(a))."""
+    sy = _season_year_or_current(season_year)
+    if sy >= 2026:
+        return league_minimum_salary(sy) + 175_000
+    if sy >= 2024:
+        return 975_000
+    if sy >= 2022:
+        return 950_000
+    return 925_000
+
+
+def elc_max_total(contract_years=3, season_year=None) -> int:
+    """Max total base compensation for an ELC of the given length.
+
+    The game models one flat salary for every contract year, so the
+    legal max total is the signing season's max annual compensation
+    times the term (e.g. $1.025M x 3 = $3.075M for a 2026-27 ELC).
+    """
+    yrs = max(1, min(3, int(contract_years or 3)))
+    return elc_max_salary(yrs, season_year) * yrs
+
+
+# 2026-27 cap the market bands were calibrated against.
+_ASK_BAND_CAP = 104_000_000
+
+
+def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
+                     position: str = "") -> int:
+    """Base annual salary a player asks for, BEFORE market-setter premium.
+
+    The 2026 summer market reset, shared by every negotiation path (user
+    contract talks, AI free agency, AI extensions): superstar 95+ asks
+    $14-19M, premium 90+ asks $9-13.5M -- the same bands the league's
+    contracts were generated on and the AI's own estimate mirrors. Below
+    the star tiers the regular youth / veteran / middle-class curves
+    apply. A player can only sign one ELC, so a player currently on an
+    ELC asks second-contract money, not the ELC band.
+
+    Bands are fractions of the 2026 $104M cap, so callers dividing by
+    the live cap get demands that scale as the cap climbs. Callers feed
+    the result through SalaryCapSystem.demand_for for the market premium.
+    """
+    try:
+        ovr100 = int(ovr100)
+    except Exception:
+        ovr100 = 75
+    try:
+        age = int(age)
+    except Exception:
+        age = 27
+    if ovr100 >= 95:
+        lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
+    elif ovr100 >= 90:
+        lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
+    elif age <= 22 and not on_elc:
+        # ELC-aged player asking for his (first) NHL deal.
+        try:
+            lo, hi = int(league_minimum_salary()), int(
+                elc_max_salary(3 if age <= 21 else 2))
+        except Exception:
+            lo, hi = 775_000, 975_000
+        f = (ovr100 - 62) / 28
+    elif age <= 25 and ovr100 < 80:
+        lo, hi, f = 1_200_000, 5_000_000, (ovr100 - 62) / 28
+    elif age >= 33 and ovr100 < 84:
+        try:
+            _vlo = int(league_minimum_salary())
+        except Exception:
+            _vlo = 775_000
+        lo, hi, f = _vlo, 3_750_000, (ovr100 - 62) / 28
+    else:
+        lo, hi, f = 1_000_000, 6_500_000, (ovr100 - 62) / 28
+    f = max(0.0, min(1.0, f))
+    base = lo + (hi - lo) * f
+    # Generation is position-blind; the established estimate carries a
+    # small positional nudge and the ask matches it.
+    _pos = str(position or "").upper()
+    if _pos.startswith("G"):
+        base *= 1.1
+    elif _pos.startswith("C"):
+        base *= 1.05
+    return int(base)
+
+
+def elc_max_salary(contract_years=3, season_year=None) -> int:
+    """Max flat salary for an ELC signed in the given season.
+
+    The game models one salary for every year of a contract, so the
+    faithful ceiling is the FIRST season's max -- the binding year,
+    since the per-season max only rises after that.
+    """
+    return elc_max_annual_comp(season_year)
+
+
+# 9.4 maximum minor-league compensation on an ELC, by draft year
+# (MOU table: 2026/27 -> $87.5k; 2028/29 -> $90k; 2030 -> $92.5k).
+def elc_minor_salary_max(draft_year=None) -> int:
+    """Max AHL salary on an ELC for a prospect of the given draft year."""
+    try:
+        dy = int(draft_year if draft_year is not None
+                 else _season_year_or_current())
+    except (TypeError, ValueError):
+        dy = _season_year_or_current()
+    if dy >= 2030:
+        return 92_500
+    if dy >= 2028:
+        return 90_000
+    if dy >= 2026:
+        return 87_500
+    if dy >= 2024:
+        return 85_000
+    if dy >= 2022:
+        return 82_500
+    return 80_000
 
 # New-CBA maximum contract term: 7 years re-signing with the same club,
 # 6 years signing elsewhere as a free agent (was 8/7). Existing deals are
@@ -386,26 +501,254 @@ def league_minimum_salary(season_year=None) -> int:
     return MINIMUM_SALARY_SCHEDULE.get(sy, 1_000_000)
 
 
-def elc_max_total(contract_years=3) -> int:
-    """Max total base compensation for an ELC of the given length."""
-    yrs = max(1, min(3, int(contract_years or 3)))
-    return sum(ELC_MAX_BY_CONTRACT_YEAR[:yrs])
-
-
-def elc_max_salary(contract_years=3) -> int:
-    """Max flat-salary equivalent (AAV) for an ELC of the given length.
-
-    The game models one salary for every year of a contract, so the
-    faithful ceiling is the deal's max total base divided by its length:
-    $1.075M for a 3-year ELC, $1.05M for a 2-year ELC.
-    """
-    yrs = max(1, min(3, int(contract_years or 3)))
-    return elc_max_total(yrs) // yrs
-
-
 def burial_exemption(season_year=None) -> int:
     """Burial exemption ($1.15M + league minimum) for a season."""
     return 1_150_000 + league_minimum_salary(season_year)
+
+
+# ---------------------------------------------------------------------------
+# Entry-level contract negotiation
+# ---------------------------------------------------------------------------
+# An ELC is the one deal a prospect's camp actually negotiates: base salary
+# inside the ELC band, a signing bonus (capped at 10% of base -- the real
+# CBA's signing-bonus limit), and attainable performance bonuses
+# (Schedule-A style, capped at $1M/yr). Term is NOT negotiable: it follows
+# the signing-age table. All tuning here is a judgment call -- flag before
+# changing.
+
+ELC_SIGNING_BONUS_PCT = 0.10   # of base salary, per year
+ELC_PERF_BONUS_MAX = 1_000_000  # per year, Schedule-A style
+ELC_BASE_RESPECT = 0.80       # base < 80% of the ask's base -> insult, rejected
+ELC_BONUS_WEIGHT = 0.5         # bonuses aren't guaranteed money
+
+
+def elc_years_for_age(age) -> int:
+    """Number of ELC years for a signing age (CBA 9.1(b) chart).
+
+    18-21 -> 3 years; 22-23 -> 2 years; 24 -> 1 year; 25+ -> 0, meaning
+    NOT in the Entry Level System at all. (The new CBA removed the old
+    European 25-27 one-year exception, so this is uniform for every
+    prospect.) Callers MUST refuse an ELC offer when this returns 0 --
+    never clamp or fall through.
+    """
+    try:
+        a = int(age or 0)
+    except Exception:
+        return 3
+    if a <= 21:
+        return 3
+    if a <= 23:
+        return 2
+    if a == 24:
+        return 1
+    return 0
+
+
+def elc_band(age, season_year=None):
+    """(floor, ceiling, years) for an ELC signed at this age.
+
+    Floor is the league minimum; ceiling is the 9.3(a) max annual
+    compensation for the signing season. years == 0 means the player is
+    NOT ELC-eligible (25+) -- the caller must refuse the offer.
+    """
+    years = elc_years_for_age(age)
+    floor = int(league_minimum_salary(season_year))
+    ceil = int(elc_max_annual_comp(season_year))
+    return max(0, floor), max(floor, ceil), years
+
+
+def _turns_20_late_in_signing_year(birth_date, signing_year) -> bool:
+    """The 9.1(d) slide exception: a nominal 19-year-old (Sept-15 age)
+    who turns 20 between September 16 and December 31 of the signing
+    year never gets the automatic extension."""
+    try:
+        parts = str(birth_date or "").strip().split("-")
+        by, bm, bd = int(parts[0]), int(parts[1]), int(parts[2])
+        sy = int(signing_year)
+    except (ValueError, TypeError, AttributeError, IndexError):
+        return False
+    if by != sy - 20:
+        return False
+    return (bm, bd) >= (9, 16)
+
+
+def elc_slide_applies(signing_sept15_age, slides_used, seasons_completed,
+                      nhl_games_this_season, birth_date=None,
+                      signing_year=None) -> bool:
+    """Whether an ELC slides at this season rollover (CBA 9.1(d)).
+
+    - Signed at 18 or 19 (Sept-15 age) and played fewer than 10 NHL
+      games in the first season under the SPC -> extend one year.
+    - Signed at 18, slid after year one, fewer than 10 NHL games in the
+      second season -> extend one more year (the double slide). The
+      second slide REQUIRES the first: seasons_completed must equal
+      slides_used (a slide happens at most once per completed season,
+      only in the first one/two seasons).
+    - Exception: a nominal 19-year-old who turns 20 between Sept 16 and
+      Dec 31 of the signing year is never slide-eligible.
+    Sliding extends Paragraph 1 salary and bonuses but NOT the signing
+    bonus (already paid); the game models that by extending years only.
+    """
+    try:
+        age = int(signing_sept15_age)
+        used = int(slides_used or 0)
+        done = int(seasons_completed or 0)
+        gp = int(nhl_games_this_season or 0)
+    except (TypeError, ValueError):
+        return False
+    if gp >= 10:
+        return False
+    if done != used:
+        return False
+    if age == 18:
+        return done < 2
+    if age == 19:
+        if _turns_20_late_in_signing_year(birth_date, signing_year):
+            return False
+        return done < 1
+    return False
+
+
+def elc_prospect_ask(player, season_year=None) -> Dict:
+    """The prospect camp's opening ask: salary, signing_bonus,
+    performance_bonus, plus a flavor line.
+
+    Pedigree anchors it (overall_pick / draft_round): a top-5 pick's camp
+    asks for the max, a 7th-rounder's takes the floor. Selfishness
+    (1-100, dealt at generation) pushes the ask up; anything unselfish
+    pulls it toward the floor. All clamped to the ELC band.
+
+    The band uses the CBA 9.2 Sept-15 signing age (deferred import --
+    salary_cap_system can't import draft_generator at module level).
+    """
+    try:
+        age = int(getattr(player, "age", 20) or 20)
+    except Exception:
+        age = 20
+    try:
+        from draft_generator import age_on_sept15 as _s15
+        _sv = _s15(getattr(player, "birth_date", ""), season_year)
+        if _sv is not None:
+            age = _sv
+    except Exception:
+        pass
+    floor, ceil, years = elc_band(age, season_year)
+    span = max(1, ceil - floor)
+
+    try:
+        pick = int(getattr(player, "overall_pick", 0) or 0)
+    except Exception:
+        pick = 0
+    try:
+        rnd = int(getattr(player, "draft_round", 0) or 0)
+    except Exception:
+        rnd = 0
+    if pick >= 1:
+        if pick <= 5:
+            pedigree, plabel = 1.0, "top-5 pick"
+        elif pick <= 32:
+            pedigree, plabel = 0.85, "first-rounder"
+        elif pick <= 64:
+            pedigree, plabel = 0.65, "second-rounder"
+        elif pick <= 96:
+            pedigree, plabel = 0.45, "third-rounder"
+        else:
+            pedigree, plabel = 0.25, "late-round pick"
+    elif rnd >= 1:
+        pedigree = {1: 0.85, 2: 0.65, 3: 0.45}.get(rnd, 0.25)
+        plabel = {1: "first-rounder", 2: "second-rounder",
+                  3: "third-rounder"}.get(rnd, "late-round pick")
+    else:
+        pedigree, plabel = 0.15, "undrafted free agent"
+
+    try:
+        selfish = float(getattr(player, "selfishness", 50) or 50)
+    except Exception:
+        selfish = 50.0
+    selfish = max(1.0, min(100.0, selfish))
+
+    ask_salary = floor + span * pedigree
+    # Selfishness swings the ask up to +/-15% of the band around neutral.
+    ask_salary += span * 0.15 * ((selfish - 50.0) / 50.0)
+    ask_salary = max(floor, min(ceil, int(round(ask_salary))))
+
+    if pick >= 1 and pick <= 32:
+        ask_signing = int(round(ask_salary * ELC_SIGNING_BONUS_PCT))
+    elif rnd in (2, 3) or (64 < pick <= 96):
+        ask_signing = int(round(ask_salary * ELC_SIGNING_BONUS_PCT * 0.5))
+    else:
+        ask_signing = 0
+
+    if pick >= 1 and pick <= 10:
+        ask_perf = ELC_PERF_BONUS_MAX
+    elif (pick >= 1 and pick <= 32) or rnd == 1:
+        ask_perf = ELC_PERF_BONUS_MAX // 2
+    elif rnd in (2, 3):
+        ask_perf = ELC_PERF_BONUS_MAX // 4
+    else:
+        ask_perf = 0
+
+    if pedigree >= 0.85:
+        flavor = (f"As a {plabel}, his camp expects the full ELC -- max "
+                  f"base, max signing bonus, and performance bonuses.")
+    elif pedigree >= 0.45:
+        flavor = (f"A {plabel}: his camp wants a strong ELC but knows "
+                  f"he has to earn the top of the band.")
+    else:
+        flavor = (f"A {plabel}, he's just happy for the opportunity -- "
+                  f"his camp isn't driving a hard bargain.")
+    if selfish >= 70:
+        flavor += " He's known to look after himself at the table."
+    elif selfish <= 30:
+        flavor += " By all accounts he's an easy sign."
+    return {
+        "salary": ask_salary,
+        "signing_bonus": ask_signing,
+        "performance_bonus": ask_perf,
+        "years": years,
+        "floor": floor,
+        "ceiling": ceil,
+        "flavor": flavor,
+    }
+
+
+def elc_offer_value(salary, signing_bonus, performance_bonus) -> int:
+    """Comparable value of an ELC offer: base + signing bonus + half the
+    performance bonus (bonuses aren't guaranteed money)."""
+    try:
+        return (int(salary or 0) + int(signing_bonus or 0)
+                + int(int(performance_bonus or 0) * ELC_BONUS_WEIGHT))
+    except Exception:
+        return 0
+
+
+def elc_handshake(ask: Dict, salary, signing_bonus, performance_bonus) -> Dict:
+    """Resolve one ELC offer against the camp's ask.
+
+    The base salary is the respect signal: meeting the ask's value signs
+    him; a base that's clearly lowballed (< 80% of the ask's base) gets a
+    flat rejection; anything in the neighborhood draws a counter at the
+    full ask. Returns {verdict, counter, note}.
+    """
+    ask_value = elc_offer_value(ask["salary"], ask["signing_bonus"],
+                                ask["performance_bonus"])
+    offer_value = elc_offer_value(salary, signing_bonus, performance_bonus)
+    if offer_value >= ask_value:
+        return {"verdict": "accepted", "counter": None,
+                "note": "The agent shakes your hand. Deal."}
+    ask_base = ask["salary"] or 1
+    if salary < ELC_BASE_RESPECT * ask_base and offer_value < 0.9 * ask_value:
+        short = ask_value - offer_value
+        return {"verdict": "rejected", "counter": None,
+                "note": (f"Rejected -- you're about ${short:,} short of where "
+                         f"his camp is. They'll listen to a better offer.")}
+    return {"verdict": "counter", "counter": {
+                "salary": ask["salary"],
+                "signing_bonus": ask["signing_bonus"],
+                "performance_bonus": ask["performance_bonus"],
+                "years": ask["years"]},
+            "note": ("Not quite -- the agent counters at his ask. "
+                     "Take it or adjust your offer.")}
 
 
 def max_contract_term(is_extension: bool) -> int:
