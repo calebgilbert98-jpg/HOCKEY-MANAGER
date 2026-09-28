@@ -86,6 +86,36 @@ STATE_SYNC = "state_sync"
 CONTINUE_DAY = "continue_day"
 CHECKPOINT_NOTICE = "checkpoint_notice"
 
+# Message types: EHM-style advance sync (all human managers ready up).
+# Every active manager -- host included -- marks themselves ready for the
+# day to advance; the host advances only when everyone is ready.
+READY = "ready"                    # client -> host   {} (done for today)
+UNREADY = "unready"                # client -> host   {} (rescind readiness)
+ADVANCE_STATUS = "advance_status"  # host -> all      {ready, waiting,
+                                   #  ready_count, needed_count, host_ready}
+
+# Message types: human-to-human trade negotiation.
+TRADE_OFFER = "trade_offer"        # host -> client   {offer_id, from_team,
+                                   #  from_manager, offer: {...}}
+TRADE_RESPONSE = "trade_response"  # client -> host   {offer_id,
+                                   #  decision: accept|reject}
+
+# Message types: NTC/NMC waiver prompts for a client's player.
+# Mirrors the single-player askyesnocancel: the client answers "ask" (ask
+# the player to waive), "remove" (pull him from the offer) or "cancel".
+NTC_WAIVER_REQUEST = "ntc_waiver_request"  # host -> client {waiver_id,
+                                           #  player_id, player_name,
+                                           #  clause, dest_team,
+                                           #  context: trade|waivers}
+NTC_WAIVER_ANSWER = "ntc_waiver_answer"    # client -> host {waiver_id,
+                                          #  player_id, choice:
+                                          #  ask|remove|cancel}
+
+# Message types: entry-draft pick clock for a client's team.
+DRAFT_CLOCK = "draft_clock"        # host -> client   {clock_id, team_id,
+                                   #  overall, round_num, prospects:
+                                   #  [{id, name, pos, ranking}]}
+
 # Message types: utility
 CHAT = "chat"
 PING = "ping"
@@ -97,6 +127,10 @@ ALL_TYPES = {
     HELLO, WELCOME, CLAIM_TEAM, TEAM_CLAIMED, LOBBY_STATE, START_GAME,
     ACTION, ACTION_ACK, ACTION_REJECT, REQUEST_STATE, STATE_SYNC,
     CONTINUE_DAY, CHECKPOINT_NOTICE,
+    READY, UNREADY, ADVANCE_STATUS,
+    TRADE_OFFER, TRADE_RESPONSE,
+    NTC_WAIVER_REQUEST, NTC_WAIVER_ANSWER,
+    DRAFT_CLOCK,
     CHAT, PING, PONG, ERROR, GOODBYE,
 }
 
@@ -118,6 +152,28 @@ SUPPORTED_ACTIONS = {
     "set_line_control", # params: {team_id, holder: coach|gm, approach?: discuss|seize}
     "declare_rivalry",  # params: {team_id, target_team, target_kind: team|coach}
     "renounce_rivalry", # params: {team_id, target_team, target_kind: team|coach}
+    # Roster management (Phase 2): the client's daily GM verbs, applied to
+    # the host's canonical state with the same validation the host's own
+    # windows use.
+    "sign_free_agent",  # params: {team_id, player_id, salary, years}
+    "release_player",   # params: {team_id, player_id}
+    "send_to_minors",   # params: {team_id, player_id, ntc_consent?}
+    "call_up",          # params: {team_id, player_id}
+    "claim_waivers",    # params: {team_id, player_id}
+    "buyout_player",    # params: {team_id, player_id}
+    "extend_contract",  # params: {team_id, player_id, salary, years,
+                        #          clause?: none|ntc|nmc|mntc, clause_teams?: int}
+    "propose_trade",    # params: {team_id, partner_team_id, offer: {...}}
+    "trade_response",   # params: {team_id, offer_id, decision: accept|reject}
+    "ntc_waiver_answer",# params: {team_id, player_id, approved: bool}
+    # Staff / scouting / practice / room (Phase 2).
+    "hire_staff",       # params: {team_id, staff_id, role, salary, years}
+    "fire_staff",       # params: {team_id, staff_id}
+    "assign_scout",     # params: {team_id, scout_id, assignment: {...}}
+    "set_practice",     # params: {team_id, focus, intensity}
+    "team_talk",        # params: {team_id, tone, situation, speaker?}
+    "press_conference", # params: {team_id, stance, topic?}
+    "draft_pick",       # params: {team_id, player_id} (entry draft, on the clock)
 }
 
 
@@ -229,6 +285,38 @@ def checkpoint_notice(label: str, game_date: str) -> Dict[str, Any]:
 
 def chat_msg(from_name: str, text: str) -> Dict[str, Any]:
     return {"type": CHAT, "from": from_name, "text": text}
+
+
+def advance_status(ready: List[str], waiting: List[str],
+                   host_ready: bool, all_ready: bool = False) -> Dict[str, Any]:
+    """ADVANCE_STATUS payload: who has readied for the day's advance."""
+    return {"type": ADVANCE_STATUS, "ready": ready, "waiting": waiting,
+            "ready_count": len(ready) + (1 if host_ready else 0),
+            "needed_count": len(ready) + len(waiting) + 1,
+            "host_ready": host_ready, "all_ready": all_ready}
+
+
+def trade_offer_msg(offer_id: str, from_team: str, from_manager: str,
+                    offer: Dict[str, Any]) -> Dict[str, Any]:
+    return {"type": TRADE_OFFER, "offer_id": offer_id,
+            "from_team": from_team, "from_manager": from_manager,
+            "offer": offer}
+
+
+def ntc_waiver_request_msg(waiver_id: str, player_id: str, player_name: str,
+                           clause: str, dest_team: str,
+                           context: str) -> Dict[str, Any]:
+    return {"type": NTC_WAIVER_REQUEST, "waiver_id": waiver_id,
+            "player_id": player_id, "player_name": player_name,
+            "clause": clause, "dest_team": dest_team, "context": context}
+
+
+def draft_clock_msg(clock_id: str, team_id: str, overall: int,
+                    round_num: int,
+                    prospects: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {"type": DRAFT_CLOCK, "clock_id": clock_id, "team_id": team_id,
+            "overall": overall, "round_num": round_num,
+            "prospects": prospects}
 
 
 def error_msg(message: str) -> Dict[str, Any]:

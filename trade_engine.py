@@ -1386,7 +1386,15 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
         if moved_names:
             press_event = {"players_involved": moved_names, "trade": True}
             for side in (user_team, partner_team):
-                if getattr(side, "is_user_team", False):
+                # Human-run clubs (local or MP) do their own press; AI clubs
+                # get the automated response.
+                _hum = False
+                try:
+                    import game_classes as _gc
+                    _hum = bool(_gc.is_human_managed(side))
+                except Exception:
+                    _hum = bool(getattr(side, "is_user_team", False))
+                if _hum:
                     continue
                 _dr.auto_press_response(side, press_event)
     except Exception:

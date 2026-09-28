@@ -5050,6 +5050,17 @@ class DraftView(ctk.CTkFrame):
 
     def close_view(self):
         """Close this screen (dashboard in screen mode, card in popup mode)."""
+        # MULTIPLAYER: stop a pending draft-clock wait and release the clock.
+        try:
+            if getattr(self, '_mp_wait_id', None):
+                self.after_cancel(self._mp_wait_id)
+        except Exception:
+            pass
+        self._mp_wait_id = None
+        try:
+            self.app._mp_clear_draft_clock()
+        except Exception:
+            pass
         fn = getattr(self, '_close_screen', None)
         if callable(fn):
             fn()
@@ -5272,6 +5283,39 @@ class DraftView(ctk.CTkFrame):
         else:
             self.next_pick_label.configure(text="No picks remaining")
 
+        # MULTIPLAYER: a team claimed by a remote human doesn't get an AI
+        # auto-pick -- its manager picks live on the draft clock (60s,
+        # then the AI makes the pick for them).
+        if not is_user:
+            try:
+                _mp_wait = bool(
+                    getattr(self.app, 'mp_host', None) is not None
+                    and not bool(getattr(team_on_clock, 'is_user_team',
+                                         False))
+                    and __import__('game_classes').is_human_managed(
+                        team_on_clock))
+            except Exception:
+                _mp_wait = False
+            if _mp_wait:
+                self.draft_button.configure(state='disabled')
+                self.auto_button.configure(state='disabled')
+                self.trade_pick_button.configure(state='disabled')
+                self.clock_label.configure(
+                    text=f"{team_on_clock.team_name} (GM deciding...)")
+                try:
+                    self.app._mp_open_draft_clock(
+                        team_on_clock, round_num, overall)
+                except Exception as e:
+                    print(f"draft clock failed (non-fatal): {e}")
+                try:
+                    if getattr(self, '_mp_wait_id', None):
+                        self.after_cancel(self._mp_wait_id)
+                except Exception:
+                    pass
+                self._mp_wait_id = self.after(
+                    1000, self._mp_check_client_pick)
+                return
+
         if not is_user:
             if self._ai_after_id:
                 try:
@@ -5279,6 +5323,59 @@ class DraftView(ctk.CTkFrame):
                 except Exception:
                     pass
             self._ai_after_id = self.after(650, self.ai_make_pick)
+
+    def _mp_check_client_pick(self):
+        """Draft-clock wait loop: execute the client's pick, auto-pick on
+        timeout, or keep waiting."""
+        self._mp_wait_id = None
+        try:
+            st = getattr(self.app, '_mp_draft_clock', None)
+        except Exception:
+            st = None
+        if not st or st.get("done"):
+            return
+        if self.current_pick >= len(self.draft_order):
+            return
+        _r, team_on_clock, _dp = self.draft_order[self.current_pick]
+        if st.get("team_id") != team_on_clock.team_name or \
+                st.get("overall") != self.current_pick + 1:
+            return  # stale clock (draft moved on without us)
+        pid = st.get("pick_id")
+        if pid:
+            prospect = None
+            try:
+                for p in getattr(self.app.league,
+                                 "draft_prospects", None) or []:
+                    if str(getattr(p, "id", "")) == str(pid):
+                        prospect = p
+                        break
+            except Exception:
+                pass
+            if prospect is not None:
+                st["done"] = True
+                try:
+                    self.app._mp_clear_draft_clock()
+                except Exception:
+                    pass
+                self.execute_pick(team_on_clock, prospect)
+                return
+            # Unknown id (race): keep waiting for a valid one.
+        import time as _time
+        if _time.time() > float(st.get("deadline", 0)):
+            st["done"] = True
+            try:
+                self.app._mp_clear_draft_clock()
+            except Exception:
+                pass
+            try:
+                self.app.mp_host.broadcast_chat(
+                    f"{team_on_clock.team_name} ran out the draft clock -- "
+                    f"auto-pick.")
+            except Exception:
+                pass
+            self.ai_make_pick()
+            return
+        self._mp_wait_id = self.after(1000, self._mp_check_client_pick)
 
     def ai_make_pick(self):
         self._ai_after_id = None
@@ -5611,6 +5708,16 @@ class DraftView(ctk.CTkFrame):
             except Exception:
                 pass
         self._ai_after_id = None
+        try:
+            if getattr(self, '_mp_wait_id', None):
+                self.after_cancel(self._mp_wait_id)
+        except Exception:
+            pass
+        self._mp_wait_id = None
+        try:
+            self.app._mp_clear_draft_clock()
+        except Exception:
+            pass
         self.draft_status_label.configure(text="Draft Complete")
         self.clock_label.configure(text="—")
         self.pick_info_label.configure(text="All 7 rounds complete")

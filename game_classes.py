@@ -2114,6 +2114,21 @@ class GMProfile:
         elif self.age > 70:
             self.age = 70
 
+def is_human_managed(team: object) -> bool:
+    """True when a real person runs this club: the local user's team OR a
+    team claimed by a multiplayer client (stamped on the host's canonical
+    Team by the MP bridge). AI systems must skip these clubs -- same rule
+    for the couch GM and the remote one."""
+    try:
+        if bool(getattr(team, "is_user_team", False)):
+            return True
+        if bool(getattr(team, "is_human_managed", False)):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 @dataclass
 class Team:
     """Represents a single hockey team with a deep organizational structure."""
@@ -2132,6 +2147,12 @@ class Team:
     lineup: Dict[str, Player] = field(default_factory=dict)
     
     is_user_team: bool = False
+    # Multiplayer: stamped True on the host's canonical Team when a remote
+    # client claims this club (and cleared when they leave). Lets every
+    # "skip the human" check cover client-managed clubs too -- the AI must
+    # never manage a team a real person is running. Old-save safe: read
+    # only via getattr(..., False) / is_human_managed().
+    is_human_managed: bool = False
     salary_cap: int = 104000000  # 2026-27 NHL cap (modern day)
     scouting_reports: Dict[int, ScoutingReport] = field(default_factory=dict)
     inbox: EmailInbox = field(default_factory=EmailInbox)  # Email inbox system

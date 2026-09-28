@@ -1678,6 +1678,25 @@ class HockeyManagerGUI(tk.Tk):
         # Client ACTION intents that arrive while a snapshot worker is
         # serializing game state wait here; replayed on "snapshot_done".
         self._mp_deferred_actions = []
+        # --- MULTIPLAYER (Phase 2): EHM-style advance sync ---
+        # Every active human manager (host included) must ready-up before
+        # the day advances. _mp_host_ready is this machine's vote as host;
+        # _mp_client_ready is this machine's vote as a client. The host's
+        # net layer tracks client votes; all_ready() combines both.
+        # _mp_advance_authorized is True only while the gate is firing the
+        # real advance -- simulate_day() refuses to run in host mode
+        # without it, so every path goes through the ready gate.
+        self._mp_host_ready = False
+        self._mp_client_ready = False
+        self._mp_advance_authorized = False
+        self._mp_gate_pending = False
+        # Human-to-human trade offers awaiting an answer:
+        # offer_id -> {offer, from_team, from_manager, from_client_id,
+        #              partner_team, partner_client_id|None (None = host's team)}
+        self._mp_pending_offers = {}
+        # NTC/NMC waiver prompts awaiting a client's player answer:
+        # player_id -> {offer snapshot..., kind: trade}
+        self._mp_pending_ntc = {}
         if self.mp_host is not None or self.mp_client is not None:
             self.after(400, self._poll_multiplayer)
         
@@ -1980,7 +1999,12 @@ class HockeyManagerGUI(tk.Tk):
                         continue
                         
                     # Skip user team (user must claim manually)
-                    if team.is_user_team:
+                    try:
+                        import game_classes as _gc
+                        _skip = bool(_gc.is_human_managed(team))
+                    except Exception:
+                        _skip = bool(getattr(team, 'is_user_team', False))
+                    if _skip:
                         continue
                         
                     # Check if team is interested (based on player quality and team needs)
@@ -2038,9 +2062,16 @@ class HockeyManagerGUI(tk.Tk):
                     player.waiver_days = 0
                     player.on_waivers = False
                     
-                    # Add to original team's AHL roster if they're the user team
+                    # Add to original team's AHL roster for human-run clubs
+                    # (they placed the player on waivers deliberately).
                     original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
-                    if original_team and original_team.is_user_team and hasattr(original_team, 'ahl_roster'):
+                    try:
+                        import game_classes as _gc2
+                        _human = bool(_gc2.is_human_managed(original_team)) \
+                            if original_team else False
+                    except Exception:
+                        _human = bool(getattr(original_team, 'is_user_team', False))
+                    if original_team and _human and hasattr(original_team, 'ahl_roster'):
                         if player in original_team.roster:
                             original_team.roster.remove(player)
                         original_team.ahl_roster.append(player)
@@ -2337,7 +2368,7 @@ class HockeyManagerGUI(tk.Tk):
                     parent=self,
                     game_manager=self.game_manager,
                     user_team=self.user_team,
-                    on_continue=self.simulate_day,
+                    on_continue=self._on_continue_pressed,
                     get_continue_state=self.get_continue_state,
                 )
                 
@@ -2484,6 +2515,8 @@ class HockeyManagerGUI(tk.Tk):
         # Season Flow Controls and Continue button
         season_controls_frame = ttk.Frame(top_bar, style='TitleBar.TFrame')
         season_controls_frame.pack(side="right", padx=(20, 0))
+        # Kept for the MP host's Force-advance button (Phase 2).
+        self._season_controls_frame = season_controls_frame
         
         # Automated Season Flow button
         from modern_widgets import RoundedButton
@@ -2497,7 +2530,7 @@ class HockeyManagerGUI(tk.Tk):
 
         # Continue button with better styling
         self.continue_btn = RoundedButton(season_controls_frame, text="Continue ▶",
-                                          command=self.simulate_day,
+                                          command=self._on_continue_pressed,
                                           bg=self.ACCENT_COLOR, radius=10,
                                           font=(self.FONT_FAMILY, 12, "bold"),
                                           padx=26, pady=12)
@@ -2657,7 +2690,7 @@ class HockeyManagerGUI(tk.Tk):
         next_frame = tk.Frame(menu_bar, bg=menu_bg)
         next_frame.pack(side="right", padx=(6, 2))
         self._next_day_btn = self._create_nav_pill(next_frame, "Next Day",
-                                                   self.simulate_day,
+                                                   self._on_continue_pressed,
                                                    tooltip="Advance to the next day")
         self.refresh_next_day_button()
 
@@ -2753,6 +2786,10 @@ class HockeyManagerGUI(tk.Tk):
     def refresh_next_day_button(self):
         """Update the fixed Next Day button label/state from continue state."""
         try:
+            if self._mp_host_mode() or self._mp_client_mode():
+                # MP ready-state labels are painted by
+                # _mp_refresh_continue_ui (which covers _next_day_btn too).
+                return
             btn = getattr(self, '_next_day_btn', None)
             if btn is None or not btn.winfo_exists():
                 return
@@ -2894,7 +2931,7 @@ class HockeyManagerGUI(tk.Tk):
         if self._qol_modal_open():
             return None
         try:
-            self.simulate_day()
+            self._on_continue_pressed()
         except Exception:
             pass
         return 'break'
@@ -5505,11 +5542,33 @@ class HockeyManagerGUI(tk.Tk):
 
     def simulate_day(self):
         """Completely reworked daily simulation that properly handles all scenarios"""
+        # MULTIPLAYER (Phase 2) advance gate: in host mode the day advances
+        # ONLY through the EHM ready gate (_mp_fire_authorized_advance sets
+        # _mp_advance_authorized). Any other path into here becomes a ready
+        # vote instead. Clients never advance -- they vote via Ready.
+        if getattr(self, 'mp_host', None) is not None \
+                and not getattr(self, '_mp_advance_authorized', False):
+            self._mp_toggle_host_ready()
+            return
+        if getattr(self, 'mp_client', None) is not None \
+                and getattr(self, 'mp_host', None) is None:
+            self._mp_toast("Only the host advances days -- "
+                           "use Ready to vote for the advance.")
+            return
         # BLOCKERS FIRST: pressing tasks (e.g. an active fantasy draft) must
         # be completed before the day advances. Show what is blocking and
         # offer a jump to it -- never silently do nothing.
         _label, blockers = self.get_continue_state()
         if blockers:
+            # A blocker that appeared after the host readied must rescind
+            # the vote -- the day can't advance like this.
+            if getattr(self, '_mp_host_ready', False):
+                self._mp_host_ready = False
+                try:
+                    _payload = self.mp_host.broadcast_advance_status(False)
+                except Exception:
+                    _payload = None
+                self._mp_refresh_continue_ui(_payload)
             self._show_continue_blockers(blockers)
             return
 
@@ -5529,6 +5588,12 @@ class HockeyManagerGUI(tk.Tk):
         # normally (games sim, date advances).
         if self._maybe_run_deadline_clock_tick():
             self._set_continue_feedback(False)
+            # MP: a clock tick IS the gated advance for deadline day -- sync
+            # the clients (trades break on ticks). Ready-cycle reset happens
+            # in _mp_fire_authorized_advance's finally block.
+            if getattr(self, 'mp_host', None) is not None \
+                    and getattr(self, '_mp_advance_authorized', False):
+                self._mp_after_deadline_tick()
             return
 
         # Resuming after the game-day inbox bundle: daily maintenance
@@ -5793,6 +5858,235 @@ class HockeyManagerGUI(tk.Tk):
             # label (blockers may have appeared or cleared).
             self._set_continue_feedback(False)
 
+    # --- MULTIPLAYER (Phase 2): EHM-style advance sync -------------------
+    # Eastside Hockey Manager network play: the day advances only when
+    # EVERY active human manager has hit Continue. Each manager's own
+    # Continue blockers (cap compliance, fantasy draft) gate their own
+    # ready vote; the host's blockers gate the actual advance.
+    # Additive over Caleb's Phase-1 netcode: the protocol/host/client
+    # below only ADD messages and ready tracking; the threading model
+    # (network threads never touch game objects) is unchanged.
+
+    def _mp_host_mode(self):
+        return getattr(self, 'mp_host', None) is not None
+
+    def _mp_client_mode(self):
+        return getattr(self, 'mp_client', None) is not None \
+            and getattr(self, 'mp_host', None) is None
+
+    def _on_continue_pressed(self):
+        """Every Continue button / Space shortcut funnels through here."""
+        if self._mp_host_mode():
+            # Host votes; the gate fires the real advance when all ready.
+            self._mp_toggle_host_ready()
+            return
+        if self._mp_client_mode():
+            self._mp_toggle_client_ready()
+            return
+        self.simulate_day()
+
+    def _mp_toggle_host_ready(self):
+        # EHM rule: you can't vote to continue while your own club has
+        # unresolved blockers -- fix them first.
+        if not self._mp_host_ready:
+            _label, blockers = self.get_continue_state()
+            if blockers:
+                self._show_continue_blockers(blockers)
+                return
+        self._mp_host_ready = not self._mp_host_ready
+        self._mp_toast("You are READY for the advance."
+                       if self._mp_host_ready else "You are no longer ready.")
+        self._mp_evaluate_advance_gate("host toggled")
+
+    def _mp_toggle_client_ready(self):
+        client = getattr(self, 'mp_client', None)
+        if client is None:
+            return
+        if not self._mp_client_ready:
+            _label, blockers = self.get_continue_state()
+            if blockers:
+                self._show_continue_blockers(blockers)
+                return
+        self._mp_client_ready = not self._mp_client_ready
+        try:
+            if self._mp_client_ready:
+                client.send_ready()
+                self._mp_toast("Ready sent -- waiting on the other managers.")
+            else:
+                client.send_unready()
+                self._mp_toast("Readiness rescinded.")
+        except Exception as e:
+            self._mp_client_ready = not self._mp_client_ready
+            self._mp_toast(f"Could not reach host: {e}")
+        self._mp_refresh_continue_ui()
+
+    def _mp_evaluate_advance_gate(self, why=""):
+        """Broadcast ADVANCE_STATUS; fire the day's advance when all active
+        managers (host included) are ready. Main thread only."""
+        host = getattr(self, 'mp_host', None)
+        if host is None:
+            return
+        if host.snapshot_busy:
+            # A snapshot worker is serializing: nobody may mutate game
+            # objects. Re-evaluate when it finishes (snapshot_done).
+            self._mp_gate_pending = True
+            try:
+                host.broadcast_advance_status(self._mp_host_ready)
+            except Exception:
+                pass
+            self._mp_refresh_continue_ui()
+            return
+        try:
+            payload = host.broadcast_advance_status(self._mp_host_ready)
+        except Exception as e:
+            print(f"Advance gate broadcast failed (non-fatal): {e}")
+            return
+        self._mp_refresh_continue_ui(payload)
+        if payload.get("all_ready"):
+            self._mp_fire_authorized_advance()
+
+    def _mp_fire_authorized_advance(self):
+        """Run the real day advance exactly once, through the normal
+        simulate_day() path (blockers still apply)."""
+        self._mp_advance_authorized = True
+        # Detect whether the advance was actually consumed: a normal day
+        # moves current_date; a deadline-day tick moves the trade-deadline
+        # clock instead (no announce_day there). A blocker refuses both --
+        # in that case every manager's vote stands and the cycle is NOT
+        # reset (the host just re-readies once the blocker clears).
+        _before_date = getattr(self, 'current_date', None)
+        try:
+            _before_clock = dict(
+                getattr(getattr(self, 'game_manager', None),
+                        'deadline_clock', None) or {})
+        except Exception:
+            _before_clock = {}
+        try:
+            self.simulate_day()
+        finally:
+            self._mp_advance_authorized = False
+            try:
+                _after_clock = dict(
+                    getattr(getattr(self, 'game_manager', None),
+                            'deadline_clock', None) or {})
+            except Exception:
+                _after_clock = {}
+            _consumed = (getattr(self, 'current_date', None) != _before_date
+                         or _after_clock != _before_clock)
+            # New cycle: everyone must ready up again for the next advance.
+            self._mp_host_ready = False
+            self._mp_gate_pending = False
+            if _consumed:
+                # The host's per-client ready set must reset here too --
+                # deadline 30-minute ticks never reach announce_day(), so
+                # without this a client's old vote would linger and the
+                # next tick could fire on the host's vote alone.
+                try:
+                    self.mp_host.reset_advance_cycle()
+                except Exception:
+                    pass
+            try:
+                payload = self.mp_host.broadcast_advance_status(False)
+            except Exception:
+                payload = None
+            self._mp_refresh_continue_ui(payload)
+
+    def _mp_force_advance(self):
+        """Host override for an AFK manager (EHM commissioner continue).
+
+        Skips the ready gate for THIS advance only; blockers still apply.
+        """
+        if not self._mp_host_mode():
+            return
+        from popup_system import messagebox
+        try:
+            ok = messagebox.askyesno(
+                "Force advance",
+                "Advance the day even though not every manager is ready?\n\n"
+                "Unready managers' clubs will simply miss this day's decisions.")
+        except Exception:
+            ok = True
+        if not ok:
+            return
+        self._mp_toast("Host forced the advance.")
+        self._mp_fire_authorized_advance()
+
+    def _mp_refresh_continue_ui(self, payload=None):
+        """Repaint every Continue button for the MP ready state."""
+        try:
+            if self._mp_host_mode():
+                ready = (payload or {}).get("ready_count", 0)
+                needed = (payload or {}).get("needed_count", 0)
+                me = "✓ READY" if self._mp_host_ready else "Ready?"
+                text = f"{me} ({ready}/{needed})" if needed else me
+                tip = ("Click when done for today -- the day advances when "
+                       "every manager is ready.")
+            elif self._mp_client_mode():
+                if payload is not None:
+                    waiting = payload.get("waiting", []) or []
+                    ready = payload.get("ready_count", 0)
+                    needed = payload.get("needed_count", 0)
+                    me = "✓ READY" if self._mp_client_ready else "Ready?"
+                    extra = f" -- waiting: {', '.join(waiting)}" \
+                        if waiting and not self._mp_client_ready else ""
+                    text = f"{me} ({ready}/{needed}){extra}"
+                else:
+                    text = ("✓ READY" if self._mp_client_ready
+                            else "Ready? (vote to advance)")
+                tip = ("Vote to advance the day. The host advances when "
+                       "every manager is ready.")
+            else:
+                self.refresh_next_day_button()
+                return
+            for btn in self._mp_continue_buttons():
+                try:
+                    btn.config(text=text)
+                except Exception:
+                    try:
+                        btn.configure(text=text)
+                    except Exception:
+                        pass
+            try:
+                _qol_add_tooltip(btn, tip)
+            except Exception:
+                pass
+            # NOTE: refresh_next_day_button() is MP-aware and returns early
+            # in MP modes -- the labels above already cover _next_day_btn.
+        except Exception:
+            pass
+
+    def _mp_continue_buttons(self):
+        out = []
+        for btn in (getattr(self, 'continue_btn', None),
+                    getattr(getattr(self, 'dashboard', None),
+                            'continue_btn', None)):
+            if btn is not None and btn not in out:
+                out.append(btn)
+        try:
+            nb = getattr(self, '_next_day_btn', None)
+            if nb is not None and nb not in out:
+                out.append(nb)
+        except Exception:
+            pass
+        return out
+
+    def _mp_after_deadline_tick(self):
+        """Sync clients after an authorized deadline-clock tick.
+
+        No date changes on a tick, so no CONTINUE_DAY -- just the fresh
+        state (trades break on ticks) plus a checkpoint, on the worker
+        thread like the normal end-of-day path.
+        """
+        try:
+            host = self.mp_host
+            label = f"Deadline clock {self.current_date}"
+            cpm = getattr(self, 'checkpoint_manager', None)
+            pre = (lambda: cpm.checkpoint(label)) \
+                if cpm is not None else None
+            host.broadcast_state_async(label, pre_broadcast=pre)
+        except Exception as e:
+            print(f"Multiplayer tick broadcast failed (non-fatal): {e}")
+
     # --- MULTIPLAYER (Phase 1): main-thread bridge ---------------------
     # Network threads NEVER touch widgets or game objects. They push plain
     # events onto host/client queues; _poll_multiplayer drains them here on
@@ -5816,26 +6110,70 @@ class HockeyManagerGUI(tk.Tk):
                 self.after(250, self._poll_multiplayer)
 
     def _apply_multiplayer_role_ui(self):
-        """Clients don't advance days -- only the host's Continue is live."""
-        if self.mp_client is None or self.mp_host is not None:
+        """Phase 2: EHM-style ready UI.
+
+        Host: Continue becomes the host's ready vote, plus a small
+        Force-advance override for AFK managers. Client: Continue becomes
+        the Ready/Unready vote (it used to be hard-disabled in Phase 1).
+        Retries until the buttons exist, like before.
+        """
+        if self.mp_client is None and self.mp_host is None:
             self._mp_role_ui_done = True
             return
-        btn = None
-        if hasattr(self, 'continue_btn'):
-            btn = self.continue_btn
-        elif hasattr(self, 'dashboard') and hasattr(self.dashboard, 'continue_btn'):
-            btn = self.dashboard.continue_btn
-        elif (hasattr(self, 'dashboard') and hasattr(self.dashboard, 'widgets')
-                and 'continue_btn' in self.dashboard.widgets):
-            btn = self.dashboard.widgets['continue_btn']
-        if btn is not None:
+        try:
+            if self._mp_host_mode():
+                if not self._mp_ensure_force_button():
+                    return  # dashboard not built yet; retry next tick
+                self._mp_refresh_continue_ui()
+            elif self._mp_client_mode():
+                buttons = self._mp_continue_buttons()
+                if not buttons:
+                    return  # not built yet; retry next tick
+                for btn in buttons:
+                    try:
+                        btn.config(state='normal')
+                    except Exception:
+                        pass
+                self._mp_refresh_continue_ui()
+            self._mp_role_ui_done = True
+        except Exception:
+            pass
+
+    def _mp_ensure_force_button(self):
+        """Host-only 'Force advance' override under the Continue button."""
+        if getattr(self, '_mp_force_btn', None) is not None:
             try:
-                btn.config(state='disabled')
+                if self._mp_force_btn.winfo_exists():
+                    return True
             except Exception:
                 pass
-            self._mp_role_ui_done = True
-        # If the button isn't built yet, leave the flag False so the next
-        # poll tick retries.
+        parent = getattr(self, '_season_controls_frame', None)
+        if parent is None:
+            return False
+        try:
+            if not parent.winfo_exists():
+                return False
+        except Exception:
+            return False
+        try:
+            from modern_widgets import RoundedButton
+            btn = RoundedButton(parent, text="Force advance",
+                                command=self._mp_force_advance,
+                                bg="#8a6d1b", radius=8,
+                                font=(self.FONT_FAMILY, 10, "bold"),
+                                padx=14, pady=6)
+            btn.pack(pady=(0, 5))
+            try:
+                _qol_add_tooltip(
+                    btn, "Host override: advance the day even if some "
+                         "managers aren't ready (for AFK players). "
+                         "Blockers still apply.")
+            except Exception:
+                pass
+            self._mp_force_btn = btn
+            return True
+        except Exception:
+            return False
 
     def _handle_host_event(self, kind, payload):
         if kind == "action":
@@ -5844,13 +6182,20 @@ class HockeyManagerGUI(tk.Tk):
             if self.mp_host.snapshot_busy:
                 self._mp_deferred_actions.append(payload)
                 return
-            ok, detail = self._apply_multiplayer_action(
+            res = self._apply_multiplayer_action(
                 payload.get("action"), payload.get("params", {}),
                 payload.get("manager", "?"))
+            # Phase-2 handlers may return (ok, detail, broadcast): a routed
+            # offer changes no state, so it needs no state broadcast.
+            if isinstance(res, tuple) and len(res) == 3:
+                ok, detail, broadcast = res
+            else:
+                ok, detail, broadcast = res[0], res[1], True
             try:
                 self.mp_host.resolve_action(
                     payload.get("client_id"), payload.get("seq", 0),
-                    ok, detail)
+                    bool(ok), str(detail),
+                    broadcast=bool(broadcast))
             except Exception as e:
                 print(f"resolve_action failed (non-fatal): {e}")
         elif kind == "snapshot_done":
@@ -5860,10 +6205,37 @@ class HockeyManagerGUI(tk.Tk):
                 self._mp_deferred_actions, []
             for p in deferred:
                 self._handle_host_event("action", p)
-        elif kind in ("manager_joined", "manager_left", "team_claimed"):
+            # A ready gate that fired mid-snapshot gets its advance now.
+            if getattr(self, '_mp_gate_pending', False):
+                self._mp_gate_pending = False
+                self._mp_evaluate_advance_gate("snapshot done")
+        elif kind == "advance_changed":
+            # A client readied/unreadied, claimed a team, or left: push the
+            # fresh status and fire the advance if everyone is ready.
+            self._mp_evaluate_advance_gate("readiness changed")
+        elif kind == "trade_response":
+            self._mp_resolve_trade_response(payload)
+        elif kind == "ntc_waiver_answer":
+            self._mp_resolve_ntc_answer(payload)
+        elif kind == "team_claimed":
+            team = self._mp_find_team(payload.get("team_id", ""))
+            if team is not None:
+                # A real person runs this club now: the AI must leave it
+                # alone (parity with the local user's is_user_team).
+                team.is_human_managed = True
             self._mp_toast(
                 f"{payload.get('name', '?')} "
-                f"{'joined' if kind == 'manager_joined' else 'left' if kind == 'manager_left' else 'claimed ' + str(payload.get('team_id', ''))}")
+                f"claimed {payload.get('team_id', '')}")
+        elif kind == "manager_left":
+            team = self._mp_find_team(payload.get("team_id", ""))
+            if team is not None:
+                # Nobody's driving: back to AI control.
+                team.is_human_managed = False
+            self._mp_toast(
+                f"{payload.get('name', '?')} left "
+                f"({payload.get('reason', '')})")
+        elif kind == "manager_joined":
+            self._mp_toast(f"{payload.get('name', '?')} joined")
         elif kind == "chat":
             self._mp_toast(f"{payload.get('from', '?')}: {payload.get('text', '')}")
 
@@ -5872,7 +6244,18 @@ class HockeyManagerGUI(tk.Tk):
             self._apply_multiplayer_snapshot(
                 payload.get("save_bytes", b""), payload.get("label", ""))
         elif kind == "day_advanced":
+            # New cycle: everyone votes again.
+            self._mp_client_ready = False
+            self._mp_refresh_continue_ui()
             self._mp_toast(f"Day advanced: {payload.get('game_date', '')}")
+        elif kind == "advance_status":
+            self._mp_refresh_continue_ui(payload)
+        elif kind == "trade_offer":
+            self._mp_show_trade_offer(payload)
+        elif kind == "ntc_waiver_request":
+            self._mp_answer_ntc_request(payload)
+        elif kind == "draft_clock":
+            self._mp_show_draft_clock(payload)
         elif kind == "action_ack":
             self._mp_toast(f"Accepted: {payload.get('action', '')} "
                             f"({payload.get('result', '')})")
@@ -5932,13 +6315,1277 @@ class HockeyManagerGUI(tk.Tk):
         if action in ("declare_rivalry", "renounce_rivalry"):
             return self._apply_rivalry_action(action, params, team)
         if action in ("sign_free_agent", "propose_trade", "release_player",
-                      "send_to_minors", "call_up"):
-            # TODO(Phase-1b): implement against the canonical Team objects.
-            # Contract: validate every param, mutate host state, return
-            # (True, human summary) or (False, reason). See
-            # docs/MULTIPLAYER_MERGE_GUIDE.md section 3.
-            return False, f"{action} is not implemented yet (Phase 1b)"
+                      "send_to_minors", "call_up", "claim_waivers",
+                      "buyout_player", "extend_contract", "hire_staff",
+                      "fire_staff", "assign_scout", "set_practice",
+                      "team_talk", "press_conference", "draft_pick"):
+            # Phase 2: authoritative host execution of the full management
+            # surface. Each handler validates every param against the
+            # canonical Team objects and returns (True, summary) or
+            # (False, reason); some return a (ok, detail, broadcast) triple
+            # when the state didn't change (e.g. an offer that is merely
+            # routed to another human needs no state broadcast).
+            return self._apply_management_action(action, params, team,
+                                                 manager)
         return False, f"unsupported action: {action}"
+
+    def _apply_management_action(self, action, params, team, manager):
+        """Dispatch a Phase-2 management action to its canonical handler."""
+        handler = {
+            "sign_free_agent": self._mp_sign_free_agent,
+            "release_player": self._mp_release_player,
+            "send_to_minors": self._mp_send_to_minors,
+            "call_up": self._mp_call_up,
+            "claim_waivers": self._mp_claim_waivers,
+            "buyout_player": self._mp_buyout_player,
+            "extend_contract": self._mp_extend_contract,
+            "hire_staff": self._mp_hire_staff,
+            "fire_staff": self._mp_fire_staff,
+            "assign_scout": self._mp_assign_scout,
+            "set_practice": self._mp_set_practice,
+            "team_talk": self._mp_team_talk,
+            "press_conference": self._mp_press_conference,
+            "propose_trade": self._mp_propose_trade,
+            "draft_pick": self._mp_draft_pick,
+        }.get(action)
+        if handler is None:
+            return False, f"unsupported action: {action}"
+        try:
+            return handler(params, team, manager)
+        except Exception as e:
+            print(f"MP action {action} failed: {e}")
+            return False, f"{action} failed: {e}"
+
+    # -- Phase 2 management-action helpers (host side) --------------------
+
+    def _mp_team_player(self, team, player_id):
+        """Find a player on a team's roster / AHL / prospects by id."""
+        pid = str(player_id or "")
+        for attr in ("roster", "ahl_roster", "prospects"):
+            for p in getattr(team, attr, None) or []:
+                if str(getattr(p, "id", "")) == pid:
+                    return p
+        return None
+
+    def _mp_team_pick(self, team, pick_id):
+        """Find a draft pick owned by a team by pick id."""
+        pid = str(pick_id or "")
+        try:
+            for picks in (getattr(team, "draft_picks", None) or {}).values():
+                for pk in picks or []:
+                    if str(getattr(pk, "id", "")) == pid:
+                        return pk
+        except Exception:
+            pass
+        return None
+
+    def _mp_find_free_agent(self, player_id):
+        pid = str(player_id or "")
+        try:
+            for p in self.free_agents() or []:
+                if str(getattr(p, "id", "")) == pid:
+                    return p
+        except Exception:
+            pass
+        return None
+
+    def _mp_cap_room(self, team):
+        try:
+            return int(getattr(team, "cap_space", 0) or 0)
+        except Exception:
+            return 0
+
+    def _mp_peer_session_for_team(self, team_id):
+        """session_id of the client managing team_id, or None."""
+        try:
+            peer = self.mp_host.find_peer_by_team(team_id)
+            return getattr(peer, "session_id", None)
+        except Exception:
+            return None
+
+    def _mp_is_claimed(self, team):
+        try:
+            import game_classes as _gc
+            if _gc.is_human_managed(team) \
+                    and not bool(getattr(team, "is_user_team", False)):
+                return True
+        except Exception:
+            pass
+        return False
+
+    # -- roster / contract actions (host side) ---------------------------
+
+    def _mp_sign_free_agent(self, params, team, manager):
+        """Sign a free agent: same contract mutation the FA view applies
+        (salary / years / signing bonus / NTC flag on the live contract)."""
+        player = self._mp_find_free_agent(params.get("player_id", ""))
+        if player is None:
+            return False, "That player is no longer a free agent."
+        try:
+            salary = int(params.get("salary", 0))
+            years = int(params.get("years", 0))
+        except (TypeError, ValueError):
+            return False, "Invalid contract terms."
+        if salary <= 0 or not 1 <= years <= 8:
+            return False, "Invalid contract terms."
+        if len(getattr(team, "roster", []) or []) >= 23:
+            return False, "Roster is full (23)."
+        if salary > self._mp_cap_room(team):
+            return False, "Not enough cap space."
+        bonus = 0
+        try:
+            bonus = max(0, int(params.get("signing_bonus", 0) or 0))
+        except (TypeError, ValueError):
+            pass
+        ntc = bool(params.get("ntc", False))
+        try:
+            import trade_engine as te
+            if ntc and not te.clause_eligible(player):
+                return False, \
+                    f"{player.full_name} isn't eligible for a no-trade clause."
+        except Exception:
+            pass
+        contract = getattr(player, "contract", None)
+        if contract is None:
+            return False, "That player has no contract to sign."
+        contract.salary = salary
+        contract.years_remaining = years
+        try:
+            contract.signing_bonus = bonus
+        except Exception:
+            pass
+        try:
+            contract.no_trade_clause = bool(ntc)
+        except Exception:
+            pass
+        try:
+            contract.ntc_waiver_for = ""
+        except Exception:
+            pass
+        try:
+            fa_pool = self.free_agents() or []
+            if player in fa_pool:
+                fa_pool.remove(player)
+        except Exception:
+            pass
+        team.add_player(player)
+        try:
+            self.add_news(
+                f"{player.full_name} signed by {team.team_name}: "
+                f"{years} years at ${salary:,}/year.")
+        except Exception:
+            pass
+        return True, f"Signed {player.full_name} ({years}y, ${salary:,}/yr)."
+
+    def _mp_release_player(self, params, team, manager):
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        team.remove_player(player)
+        try:
+            fa_pool = self.free_agents() or []
+            if player not in fa_pool:
+                fa_pool.append(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} released by {team.team_name}.")
+        except Exception:
+            pass
+        return True, f"Released {player.full_name}."
+
+    def _mp_send_to_minors(self, params, team, manager):
+        """Waive-and-assign: mirrors WaiversView.place_on_waivers()."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        if player not in (getattr(team, "roster", None) or []):
+            return False, "Only NHL-roster players go through waivers."
+        try:
+            import trade_engine as te
+            if te.nmc_blocks_assignment(player) \
+                    and not params.get("ntc_consent"):
+                return False, (
+                    f"{player.full_name} has a no-movement clause -- he "
+                    "must agree first (send ntc_consent=true).")
+        except Exception:
+            pass
+        player.on_waivers = True
+        player.waiver_days = 2
+        try:
+            if player not in self.waiver_list:
+                self.waiver_list.append(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} placed on waivers by "
+                          f"{team.team_name}.")
+        except Exception:
+            pass
+        return True, f"{player.full_name} placed on waivers."
+
+    def _mp_call_up(self, params, team, manager):
+        """Recall from the AHL: mirrors the waivers-view claim checks."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        if player not in (getattr(team, "ahl_roster", None) or []):
+            return False, "That player isn't in the minors."
+        if len(getattr(team, "roster", []) or []) >= 23:
+            return False, "Roster is full (23)."
+        salary = int(getattr(getattr(player, "contract", None),
+                             "salary", 0) or 0)
+        if salary > self._mp_cap_room(team):
+            return False, "Not enough cap space to recall him."
+        team.ahl_roster.remove(player)
+        team.roster.append(player)
+        try:
+            self.add_news(f"{player.full_name} recalled by {team.team_name}.")
+        except Exception:
+            pass
+        return True, f"Recalled {player.full_name}."
+
+    def _mp_claim_waivers(self, params, team, manager):
+        """Claim off waivers: mirrors WaiversView.claim_from_waivers()."""
+        pid = str(params.get("player_id", "") or "")
+        player = None
+        try:
+            for p in self.waiver_list or []:
+                if str(getattr(p, "id", "")) == pid:
+                    player = p
+                    break
+        except Exception:
+            pass
+        if player is None:
+            return False, "That player isn't on waivers."
+        if getattr(player, "team_name", "") == team.team_name:
+            return False, "You can't claim your own player."
+        if len(getattr(team, "roster", []) or []) >= 23:
+            return False, "Roster is full (23)."
+        salary = int(getattr(getattr(player, "contract", None),
+                             "salary", 0) or 0)
+        if salary > self._mp_cap_room(team):
+            return False, "Not enough cap space to claim him."
+        original = self._mp_find_team(getattr(player, "team_name", ""))
+        if original is not None:
+            try:
+                original.remove_player(player)
+            except Exception:
+                pass
+        team.add_player(player)
+        try:
+            player.on_waivers = False
+            player.waiver_days = 0
+        except Exception:
+            pass
+        try:
+            if player in self.waiver_list:
+                self.waiver_list.remove(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} claimed off waivers by "
+                          f"{team.team_name}.")
+        except Exception:
+            pass
+        return True, f"Claimed {player.full_name} off waivers."
+
+    def _mp_buyout_player(self, params, team, manager):
+        """Buy out a contract: same cap-hit schedule the buyout view
+        writes (team.buyout_cap_hits), player becomes a free agent."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        try:
+            import trade_engine as te
+            if te.nmc_blocks_assignment(player) \
+                    and not params.get("ntc_consent"):
+                return False, (
+                    f"{player.full_name} has a no-movement clause -- he "
+                    "must agree first (send ntc_consent=true).")
+        except Exception:
+            pass
+        try:
+            import windows as _w
+            _sched = _w.buyout_schedule(player)
+        except Exception as e:
+            return False, f"Buyout failed: {e}"
+        rows = getattr(_sched, "rows", None) or []
+        annual = int(getattr(_sched, "annual_cap_hit", 0) or 0)
+        byears = int(getattr(_sched, "buyout_years", 0) or 0)
+        if not rows:
+            return False, "Buyout schedule came back empty."
+        try:
+            season = int(getattr(getattr(self, "league", None),
+                                 "season_year", 2026))
+        except Exception:
+            season = 2026
+        hits = getattr(team, "buyout_cap_hits", None)
+        if hits is None:
+            hits = {}
+            team.buyout_cap_hits = hits
+        for _i, _hit, _s in rows:
+            yr = season + int(_i) - 1
+            hits[yr] = hits.get(yr, 0) + int(_hit)
+        team.remove_player(player)
+        try:
+            fa_pool = self.free_agents() or []
+            if player not in fa_pool:
+                fa_pool.append(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(
+                f"{player.full_name} bought out by {team.team_name} "
+                f"(dead cap ${annual:,}/yr x {byears}).")
+        except Exception:
+            pass
+        return True, (f"Bought out {player.full_name} "
+                      f"(dead cap ${annual:,}/yr x {byears}y).")
+
+    def _mp_extend_contract(self, params, team, manager):
+        """Extend / renegotiate a roster player's deal, clauses included."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        try:
+            salary = int(params.get("salary", 0))
+            years = int(params.get("years", 0))
+        except (TypeError, ValueError):
+            return False, "Invalid contract terms."
+        if salary <= 0 or not 1 <= years <= 8:
+            return False, "Invalid contract terms."
+        contract = getattr(player, "contract", None)
+        if contract is None:
+            return False, "That player has no contract to extend."
+        old_salary = int(getattr(contract, "salary", 0) or 0)
+        if salary - old_salary > self._mp_cap_room(team):
+            return False, "Not enough cap space for that raise."
+        kind = str(params.get("clause", "none") or "none").lower()
+        if kind not in ("none", "ntc", "nmc", "mntc"):
+            return False, f"Unknown clause: {params.get('clause')}"
+        # Clear, then re-stamp: apply_clause_to_contract enforces the real
+        # UFA-eligibility bar (a 23-year-old can't take an NMC).
+        try:
+            contract.no_trade_clause = False
+            contract.no_movement_clause = False
+            contract.modified_ntc_teams = 0
+        except Exception:
+            pass
+        if kind != "none":
+            try:
+                import trade_engine as te
+                list_size = 10
+                try:
+                    list_size = int(params.get("clause_teams", 10) or 10)
+                except (TypeError, ValueError):
+                    pass
+                if not te.apply_clause_to_contract(
+                        contract, kind, list_size=list_size, player=player):
+                    return False, (
+                        f"{player.full_name} isn't eligible for that clause.")
+            except Exception as e:
+                return False, f"Clause failed: {e}"
+        contract.salary = salary
+        contract.years_remaining = years
+        try:
+            contract.ntc_waiver_for = ""
+        except Exception:
+            pass
+        try:
+            self.add_news(
+                f"{player.full_name} extended by {team.team_name}: "
+                f"{years} years at ${salary:,}/year"
+                + (f" ({kind.upper()})" if kind != "none" else "") + ".")
+        except Exception:
+            pass
+        return True, (f"Extended {player.full_name} "
+                      f"({years}y, ${salary:,}/yr"
+                      f"{', ' + kind.upper() if kind != 'none' else ''}).")
+
+    # -- staff / scouting / practice actions (host side) ------------------
+
+    def _mp_hire_staff(self, params, team, manager):
+        """Hire from the staff free-agent pool: mirrors
+        sign_free_agent_staff() but against the client's club."""
+        sid = str(params.get("staff_id", "") or "")
+        staffer = None
+        try:
+            for s in getattr(getattr(self, "league", None),
+                             "free_agent_staff", None) or []:
+                if str(getattr(s, "id", "")) == sid:
+                    staffer = s
+                    break
+        except Exception:
+            pass
+        if staffer is None:
+            return False, "That staffer isn't available."
+        try:
+            salary = int(params.get("salary", 0))
+            years = int(params.get("years", 0))
+        except (TypeError, ValueError):
+            return False, "Invalid contract terms."
+        if salary <= 0 or not 1 <= years <= 5:
+            return False, "Invalid contract terms."
+        try:
+            pool = getattr(self.league, "free_agent_staff", None)
+            if pool is not None and staffer in pool:
+                pool.remove(staffer)
+        except Exception:
+            pass
+        try:
+            staffer.salary = salary
+            staffer.contract_years = years
+        except Exception:
+            pass
+        try:
+            if staffer not in list(getattr(team, "staff", []) or []):
+                team.staff.append(staffer)
+        except Exception:
+            pass
+        try:
+            import analytics_scouting as _as
+            _as.refresh_analytics_quality(team)
+        except Exception:
+            pass
+        name = getattr(staffer, "name",
+                       getattr(staffer, "full_name", "staffer"))
+        return True, f"Hired {name} ({years}y, ${salary:,}/yr)."
+
+    def _mp_fire_staff(self, params, team, manager):
+        """Release a staffer back to the pool: mirrors release_staff()."""
+        sid = str(params.get("staff_id", "") or "")
+        staffer = None
+        for s in getattr(team, "staff", None) or []:
+            if str(getattr(s, "id", "")) == sid:
+                staffer = s
+                break
+        if staffer is None:
+            return False, "That staffer isn't on your club."
+        try:
+            team.staff.remove(staffer)
+        except Exception:
+            pass
+        try:
+            pool = getattr(getattr(self, "league", None),
+                           "free_agent_staff", None)
+            if pool is not None and staffer not in pool:
+                pool.append(staffer)
+        except Exception:
+            pass
+        try:
+            import analytics_scouting as _as
+            _as.refresh_analytics_quality(team)
+        except Exception:
+            pass
+        name = getattr(staffer, "name",
+                       getattr(staffer, "full_name", "staffer"))
+        return True, f"Released {name}."
+
+    def _mp_assign_scout(self, params, team, manager):
+        """Assign a scout to a region: same storage the scouting screen
+        writes (game_manager.scout_region_assignments, keyed by scout)."""
+        sid = str(params.get("scout_id", "") or "")
+        region = params.get("region")
+        scout = None
+        try:
+            import scouting as _sc
+        except Exception:
+            return False, "Scouting isn't available."
+        for s in getattr(team, "staff", None) or []:
+            if str(getattr(s, "id", "")) == sid and _sc.is_scout(s):
+                scout = s
+                break
+        if scout is None:
+            return False, "That scout isn't on your staff."
+        if region is not None:
+            # Regions are free-form names; only reject an empty string,
+            # never a real region name.
+            region = str(region).strip() or None
+        try:
+            _sc.set_scout_region(
+                getattr(self, "game_manager", self), scout, region)
+        except Exception as e:
+            return False, f"Assignment failed: {e}"
+        name = getattr(scout, "name", getattr(scout, "full_name", "scout"))
+        return True, (f"{name} assigned to {region}."
+                      if region else f"{name} recalled from assignment.")
+
+    def _mp_set_practice(self, params, team, manager):
+        """Set training programs: writes the same game_manager.
+        training_programs entries the practice window creates."""
+        try:
+            from enhanced_practice_system import (
+                FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM)
+            from datetime import date as _date
+        except Exception:
+            return False, "Practice system isn't available."
+        focus = str(params.get("focus", "") or "").strip()
+        intensity = str(params.get("intensity", "") or "").strip()
+        if focus not in FOCUS_TO_PRACTICE_TYPE:
+            return False, (
+                f"Unknown focus '{focus}'. "
+                f"Valid: {', '.join(sorted(FOCUS_TO_PRACTICE_TYPE))}.")
+        if intensity not in INTENSITY_LABEL_TO_ENUM:
+            return False, (
+                f"Unknown intensity '{intensity}'. "
+                f"Valid: {', '.join(sorted(INTENSITY_LABEL_TO_ENUM))}.")
+        gm = getattr(self, "game_manager", None)
+        if gm is None:
+            return False, "No game manager."
+        if not hasattr(gm, "training_programs") or \
+                gm.training_programs is None:
+            gm.training_programs = {}
+        game_today = getattr(self, "current_date", None) or _date.today()
+        ids = params.get("player_ids") or []
+        if ids:
+            players = [self._mp_team_player(team, pid) for pid in ids]
+            players = [p for p in players if p is not None]
+            if not players:
+                return False, "No matching players on your club."
+        else:
+            players = list(getattr(team, "roster", []) or [])
+        try:
+            for p in players:
+                gm.training_programs[str(getattr(p, "id", ""))] = {
+                    "focus": focus, "intensity": intensity,
+                    "assigned": game_today,
+                    "team": getattr(team, "team_name", ""),
+                }
+        except Exception as e:
+            return False, f"Practice update failed: {e}"
+        return True, (f"Practice set: {focus} / {intensity} "
+                      f"for {len(players)} players.")
+
+    # -- dressing-room actions (host side) --------------------------------
+
+    def _mp_team_talk(self, params, team, manager):
+        """Deliver a team talk: the same give_talk() the coach's whiteboard
+        uses -- same tones, same momentum queue, same outcome tiers."""
+        try:
+            import dressing_room as _dr
+        except Exception:
+            return False, "Dressing room isn't available."
+        tone = str(params.get("tone", "calm") or "calm").lower()
+        if tone not in ("calm", "fired-up", "cautious"):
+            return False, "Tone must be calm, fired-up or cautious."
+        situation = str(params.get("situation", "pregame") or "pregame")
+        if situation not in ("pregame", "intermission"):
+            situation = "pregame"
+        speaker = str(params.get("speaker", "coach") or "coach")
+        if speaker not in ("coach", "captain"):
+            speaker = "coach"
+        score_state = str(params.get("score_state", "tied") or "tied")
+        if score_state not in ("leading", "trailing", "tied"):
+            score_state = "tied"
+        try:
+            rival = bool(params.get("rival", False))
+            streak = int(params.get("streak", 0) or 0)
+        except (TypeError, ValueError):
+            rival, streak = False, 0
+        try:
+            out = _dr.give_talk(
+                team, tone,
+                {"situation": situation, "score_state": score_state,
+                 "rival": rival, "streak": streak},
+                speaker)
+        except Exception as e:
+            return False, f"Team talk failed: {e}"
+        tier = (out or {}).get("tier", "steady") if isinstance(out, dict) \
+            else "steady"
+        return True, f"Team talk delivered ({tone}, {tier})."
+
+    def _mp_press_conference(self, params, team, manager):
+        """Answer the press: the same cascade_on_press() the podium UI
+        triggers -- stance maps straight onto the response choice."""
+        try:
+            import dressing_room as _dr
+        except Exception:
+            return False, "Dressing room isn't available."
+        stance = str(params.get("stance", "professional")
+                     or "professional").lower()
+        valid = ("confident", "supportive", "professional", "diplomatic",
+                 "critical", "dismissive", "controversial")
+        if stance not in valid:
+            return False, f"Stance must be one of: {', '.join(valid)}."
+        topic = str(params.get("topic", "") or "")
+        target = str(params.get("player", "") or "")
+        event = {"topic": topic}
+        if target:
+            event["player"] = target
+        try:
+            lines = _dr.cascade_on_press(team, event, stance)
+        except Exception as e:
+            return False, f"Press conference failed: {e}"
+        head = lines[0] if lines else "The room absorbs it."
+        return True, f"Press conference held ({stance}). {head}"
+
+    # -- human trade negotiation (host side) -------------------------------
+
+    def _mp_propose_trade(self, params, team, manager):
+        """Route a client's trade proposal: validate + resolve assets
+        against canonical state, clear movement-clause waivers (the
+        single-player askyesnocancel flow, over the wire), then send the
+        offer to an AI club, the host's club, or another human's club."""
+        import trade_engine as te
+        partner = self._mp_find_team(params.get("partner_team_id", ""))
+        if partner is None:
+            return False, "Unknown partner team."
+        if partner is team:
+            return False, "You can't trade with yourself."
+        offer = params.get("offer") or {}
+        if not isinstance(offer, dict):
+            return False, "Malformed offer."
+
+        def _ids(key):
+            v = offer.get(key) or []
+            return [str(x) for x in v] if isinstance(v, list) else []
+
+        out_pids, in_pids = _ids("players_out"), _ids("players_in")
+        out_kids, in_kids = _ids("picks_out"), _ids("picks_in")
+        if not out_pids and not out_kids:
+            return False, "You're not offering anything."
+        if not in_pids and not in_kids:
+            return False, "You're not asking for anything."
+        out_players = [self._mp_team_player(team, pid) for pid in out_pids]
+        in_players = [self._mp_team_player(partner, pid) for pid in in_pids]
+        out_picks = [self._mp_team_pick(team, kid) for kid in out_kids]
+        in_picks = [self._mp_team_pick(partner, kid) for kid in in_kids]
+        if any(p is None for p in out_players):
+            return False, "One of your offered players isn't on your roster."
+        if any(p is None for p in in_players):
+            return False, \
+                "One of the requested players isn't on their roster."
+        if any(k is None for k in out_picks):
+            return False, "One of your offered picks isn't yours."
+        if any(k is None for k in in_picks):
+            return False, "One of the requested picks isn't theirs."
+        retention = {}
+        for pid, pct in (offer.get("retention") or {}).items():
+            try:
+                pct = float(pct)
+            except (TypeError, ValueError):
+                return False, "Invalid retention term."
+            if not 0 < pct <= 50:
+                return False, "Retention must be 1-50%."
+            if str(pid) not in out_pids:
+                return False, "Retention on a player you're not moving."
+            retention[str(pid)] = pct
+        protection = {}
+        for kid, prot in (offer.get("pick_protection") or {}).items():
+            if prot not in ("", "top-3", "top-10", "lottery"):
+                return False, f"Unknown pick protection: {prot}."
+            if prot and str(kid) not in out_kids:
+                return False, "Protection on a pick you're not moving."
+            if prot:
+                protection[str(kid)] = prot
+
+        proposal = {
+            "proposer_team_id": team.team_name,
+            "partner_team_id": partner.team_name,
+            "manager": manager,
+            "players_out": out_pids,
+            "players_in": in_pids,
+            "picks_out": out_kids,
+            "picks_in": in_kids,
+            "retention": retention,
+            "pick_protection": protection,
+        }
+        # Movement-clause preflight on the proposer's own players, exactly
+        # like the trade screen's askyesnocancel: ask him / remove him /
+        # cancel. Over the wire this becomes NTC_WAIVER_REQUEST prompts.
+        league = getattr(self, "league", None)
+        try:
+            vetoes = te.trade_vetoes(team, partner, out_players, league)
+        except Exception:
+            vetoes = []
+        if vetoes:
+            return self._mp_begin_waiver_flow(proposal, team, partner,
+                                              vetoes, manager)
+        return self._mp_route_trade_offer(proposal)
+
+    def _mp_begin_waiver_flow(self, proposal, team, partner, vetoes,
+                              manager):
+        """Stash a proposal behind clause-waiver prompts; ask about the
+        first veto now. Returns (True, status, no-broadcast)."""
+        import uuid as _uuid
+        waiver_id = _uuid.uuid4().hex[:10]
+        session_id = self._mp_peer_session_for_team(team.team_name)
+        if session_id is None:
+            return False, "Could not reach your client."
+        self._mp_pending_ntc[waiver_id] = {
+            "proposal": proposal,
+            "vetoes": [{"player_id": str(getattr(v["player"], "id", "")),
+                        "player_name": getattr(v["player"], "full_name",
+                                               "player"),
+                        "clause": v.get("detail") or v.get("clause", "NTC"),
+                        "dest": partner.team_name}
+                       for v in vetoes],
+            "veto_idx": 0,
+            "team_id": team.team_name,
+            "partner_id": partner.team_name,
+        }
+        return self._mp_send_next_waiver(waiver_id, session_id)
+
+    def _mp_send_next_waiver(self, waiver_id, session_id):
+        pend = self._mp_pending_ntc.get(waiver_id)
+        if pend is None:
+            return False, "Waiver flow expired."
+        vetoes = pend["vetoes"]
+        if pend["veto_idx"] >= len(vetoes):
+            proposal = self._mp_pending_ntc.pop(waiver_id)["proposal"]
+            return self._mp_route_trade_offer(proposal)
+        v = vetoes[pend["veto_idx"]]
+        try:
+            self.mp_host.send_ntc_waiver_request(
+                session_id, waiver_id, v["player_id"], v["player_name"],
+                v["clause"], v["dest"], "trade")
+        except Exception:
+            self._mp_pending_ntc.pop(waiver_id, None)
+            return False, "Could not reach your client."
+        return (True,
+                f"{v['player_name']} has a {v['clause']} -- "
+                f"waiting on your call (ask him / remove / cancel).",
+                False)
+
+    def _mp_resolve_ntc_answer(self, payload):
+        """Host-side NTC_WAIVER_ANSWER: ask/remove/cancel for one veto,
+        then continue the waiver flow or route the (possibly trimmed)
+        proposal."""
+        import trade_engine as te
+        waiver_id = payload.get("waiver_id", "")
+        choice = payload.get("choice", "cancel")
+        pend = self._mp_pending_ntc.get(waiver_id)
+        if pend is None:
+            return
+        proposal = pend["proposal"]
+        vetoes = pend["vetoes"]
+        if pend["veto_idx"] >= len(vetoes):
+            self._mp_pending_ntc.pop(waiver_id, None)
+            return
+        v = vetoes[pend["veto_idx"]]
+        team = self._mp_find_team(pend["team_id"])
+        partner = self._mp_find_team(pend["partner_id"])
+        session_id = self._mp_peer_session_for_team(pend["team_id"])
+
+        def _drop(msg):
+            self._mp_pending_ntc.pop(waiver_id, None)
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {proposal['proposer_team_id']} -> "
+                    f"{proposal['partner_team_id']} died: {msg}")
+            except Exception:
+                pass
+
+        if team is None or partner is None:
+            _drop("a club is gone")
+            return
+        if choice == "cancel":
+            _drop(f"{proposal['manager']} cancelled")
+            return
+        if choice == "remove":
+            pid = v["player_id"]
+            if pid in proposal["players_out"]:
+                proposal["players_out"].remove(pid)
+            proposal["retention"].pop(pid, None)
+            if not proposal["players_out"] and not proposal["picks_out"]:
+                _drop("nothing left to offer")
+                return
+            pend["veto_idx"] += 1
+            self._mp_continue_waiver_flow(waiver_id, pend, _drop)
+            return
+        # choice == "ask": the player decides, same roll as single-player.
+        player = self._mp_team_player(team, v["player_id"])
+        if player is None:
+            _drop("player moved clubs mid-negotiation")
+            return
+        try:
+            league = getattr(self, "league", None)
+            granted, why = te.will_waive_ntc(player, team, partner, league)
+        except Exception as e:
+            granted, why = False, str(e)
+        if granted:
+            try:
+                player.contract.ntc_waiver_for = partner.team_name
+            except Exception:
+                pass
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{v['player_name']} waived his {v['clause']} for a move "
+                    f"to {partner.team_name}.")
+            except Exception:
+                pass
+            pend["veto_idx"] += 1
+            self._mp_continue_waiver_flow(waiver_id, pend, _drop)
+        else:
+            _drop(f"{v['player_name']} refused to waive ({why})")
+
+    def _mp_continue_waiver_flow(self, waiver_id, pend, _drop):
+        """Advance a waiver flow: next prompt, or route the offer when the
+        last veto is cleared."""
+        session_id = self._mp_peer_session_for_team(pend["team_id"])
+        if not session_id:
+            _drop("lost connection to proposer")
+            return
+        res = self._mp_send_next_waiver(waiver_id, session_id)
+        # _mp_send_next_waiver either queued the next prompt (True, …)
+        # or routed the finished offer; a routing failure kills the flow.
+        ok = res[0] if isinstance(res, tuple) else False
+        if not ok:
+            detail = res[1] if isinstance(res, tuple) and len(res) > 1 \
+                else "routing failed"
+            _drop(detail)
+
+    def _mp_route_trade_offer(self, proposal):
+        """Send a waiver-cleared proposal to its destination: instant AI
+        evaluation, a host popup, or a routed offer to another human.
+        Returns (ok, detail, broadcast)."""
+        import trade_engine as te
+        team = self._mp_find_team(proposal["proposer_team_id"])
+        partner = self._mp_find_team(proposal["partner_team_id"])
+        if team is None or partner is None:
+            return False, "A club involved is gone.", True
+        # Re-resolve assets against canonical state: rosters may have
+        # moved since the proposal was built (waiver prompts take time).
+        out_players = [self._mp_team_player(team, pid)
+                       for pid in proposal["players_out"]]
+        in_players = [self._mp_team_player(partner, pid)
+                      for pid in proposal["players_in"]]
+        out_picks = [self._mp_team_pick(team, kid)
+                     for kid in proposal["picks_out"]]
+        in_picks = [self._mp_team_pick(partner, kid)
+                    for kid in proposal["picks_in"]]
+        if any(p is None for p in out_players + in_players) or \
+                any(k is None for k in out_picks + in_picks):
+            self._mp_clear_proposal_waivers(proposal)
+            return False, \
+                "An asset changed clubs while you negotiated -- re-propose.", \
+                True
+        proposal["_out_players"] = out_players
+        proposal["_in_players"] = in_players
+        proposal["_out_picks"] = out_picks
+        proposal["_in_picks"] = in_picks
+
+        league = getattr(self, "league", None)
+        partner_session = self._mp_peer_session_for_team(partner.team_name)
+        is_host_team = bool(getattr(partner, "is_user_team", False))
+
+        if partner_session is not None:
+            # Human-to-human: the other manager gets the offer live.
+            import uuid as _uuid
+            offer_id = _uuid.uuid4().hex[:10]
+            self._mp_pending_offers[offer_id] = proposal
+            offer_wire = self._mp_serialize_offer(
+                proposal, out_players, in_players, out_picks, in_picks)
+            try:
+                peer_name = ""
+                try:
+                    peer = self.mp_host.find_peer_by_team(partner.team_name)
+                    peer_name = getattr(peer, "name", "")
+                except Exception:
+                    pass
+                self.mp_host.send_trade_offer(
+                    partner_session, offer_id, team.team_name,
+                    proposal["manager"], offer_wire)
+            except Exception:
+                self._mp_pending_offers.pop(offer_id, None)
+                self._mp_clear_proposal_waivers(proposal)
+                return False, "Could not reach the other manager.", True
+            return (True,
+                    f"Offer sent to {peer_name or partner.team_name} -- "
+                    f"awaiting their answer.",
+                    False)
+        if is_host_team:
+            return self._mp_offer_to_host(proposal, team, partner,
+                                          out_players, in_players,
+                                          out_picks, in_picks)
+        # AI club: clear the partner's movement-clause vetoes the way the
+        # AI deadline flow does (the player decides, same roll), then
+        # evaluate the deal.
+        try:
+            for _v in te.trade_vetoes(partner, team, in_players, league):
+                _p = _v["player"]
+                _ok, _why = te.will_waive_ntc(_p, partner, team, league)
+                if not _ok:
+                    self._mp_clear_proposal_waivers(proposal)
+                    try:
+                        self.mp_host.broadcast_chat(
+                            f"Trade {team.team_name} -> {partner.team_name} "
+                            f"died: {getattr(_p, 'full_name', 'player')} "
+                            f"refused to waive ({_why}).")
+                    except Exception:
+                        pass
+                    return False, (
+                        f"{getattr(_p, 'full_name', 'A player')} refused "
+                        f"to waive his clause -- deal is dead."), True
+                try:
+                    _p.contract.ntc_waiver_for = team.team_name
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            ev = te.evaluate_trade(out_players + out_picks,
+                                   in_players + in_picks,
+                                   user_team=team, partner_team=partner)
+            label = getattr(ev, "label", "")
+        except Exception:
+            label = ""
+        # "You overpay" is from the proposer's perspective -- good for AI.
+        if label in ("Fair deal", "You overpay"):
+            ok, detail = self._mp_execute_mp_trade(proposal)
+            return ok, detail, True
+        self._mp_clear_proposal_waivers(proposal)
+        try:
+            self.mp_host.broadcast_chat(
+                f"Trade {team.team_name} -> {partner.team_name} rejected "
+                f"({label or 'not fair value'}).")
+        except Exception:
+            pass
+        return False, \
+            f"{partner.team_name} rejected the offer ({label or 'value'}).", \
+            True
+
+    def _mp_serialize_offer(self, proposal, out_players, in_players,
+                            out_picks, in_picks):
+        import trade_engine as te
+
+        def _p(p):
+            kind = ""
+            try:
+                kind = (te.clause_of(p) or ("", ""))[0] or ""
+            except Exception:
+                pass
+            pos = getattr(getattr(p, "primary_position", None), "value",
+                          "?")
+            return {"id": str(getattr(p, "id", "")),
+                    "name": getattr(p, "full_name", "?"),
+                    "pos": pos,
+                    "ovr": int(getattr(p, "overall", 0) or 0),
+                    "salary": int(getattr(getattr(p, "contract", None),
+                                          "salary", 0) or 0),
+                    "clause": kind}
+
+        def _k(k):
+            return {"id": str(getattr(k, "id", "")),
+                    "desc": (f"{getattr(k, 'year', '?')} "
+                             f"Round {getattr(k, 'round', '?')} "
+                             f"({getattr(k, 'original_team', '')})")}
+
+        return {"players_out": [_p(p) for p in out_players],
+                "players_in": [_p(p) for p in in_players],
+                "picks_out": [_k(k) for k in out_picks],
+                "picks_in": [_k(k) for k in in_picks],
+                "retention": dict(proposal.get("retention") or {}),
+                "pick_protection": dict(proposal.get("pick_protection")
+                                        or {})}
+
+    def _mp_offer_to_host(self, proposal, team, partner, out_players,
+                          in_players, out_picks, in_picks):
+        """The proposal targets the host's own club: ask the host with the
+        same prompt the trade screen uses (waivers first, then accept)."""
+        import trade_engine as te
+        from popup_system import messagebox
+        league = getattr(self, "league", None)
+        # Host's own clause players: single-player askyesnocancel.
+        kept_in = list(in_players)
+        try:
+            for _v in te.trade_vetoes(partner, team, list(in_players),
+                                      league):
+                _p = _v["player"]
+                _pname = getattr(_p, "full_name", "player")
+                _ans = messagebox.askyesnocancel(
+                    "No-trade clause",
+                    f"{_pname} has a {_v.get('detail', 'clause')}.\n\n"
+                    f"Ask him to waive it for a move to {team.team_name}?\n\n"
+                    "Yes = ask him  |  No = remove him from the offer  |  "
+                    "Cancel = stop")
+                if _ans is None:
+                    self._mp_clear_proposal_waivers(proposal)
+                    return False, "You cancelled the offer.", True
+                if _ans is False:
+                    kept_in = [p for p in kept_in if p is not _p]
+                    continue
+                _ok, _why = te.will_waive_ntc(_p, partner, team, league)
+                if _ok:
+                    try:
+                        _p.contract.ntc_waiver_for = team.team_name
+                    except Exception:
+                        pass
+                    messagebox.showinfo("Waiver granted", _why)
+                else:
+                    messagebox.showwarning(
+                        "Waiver refused",
+                        f"{_why}\n\nHe's staying put -- the offer is dead.")
+                    self._mp_clear_proposal_waivers(proposal)
+                    return False, \
+                        f"{_pname} refused to waive -- offer dead.", True
+        except Exception:
+            pass
+        proposal["_in_players"] = kept_in
+        if not kept_in and not in_picks:
+            self._mp_clear_proposal_waivers(proposal)
+            return False, "Nothing left to ask for.", True
+
+        def _names(plist):
+            return ", ".join(getattr(p, "full_name", "?") for p in plist) \
+                or "none"
+
+        def _knames(klist):
+            return ", ".join(
+                f"{getattr(k, 'year', '?')} R{getattr(k, 'round', '?')}"
+                for k in klist) or "none"
+
+        try:
+            accept = messagebox.askyesno(
+                f"Trade offer from {proposal['manager']}",
+                f"{proposal['manager']} ({team.team_name}) offers:\n\n"
+                f"YOU RECEIVE: {_names(out_players)}\n"
+                f"Picks: {_knames(out_picks)}\n\n"
+                f"YOU SEND: {_names(kept_in)}\n"
+                f"Picks: {_knames(in_picks)}\n\n"
+                "Accept this trade?")
+        except Exception:
+            accept = False
+        if not accept:
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} "
+                    f"rejected by {partner.team_name}.")
+            except Exception:
+                pass
+            return False, "You rejected the offer.", True
+        ok, detail = self._mp_execute_mp_trade(proposal)
+        return ok, detail, True
+
+    def _mp_execute_mp_trade(self, proposal):
+        """Run a fully-cleared proposal through the canonical trade
+        engine: clause preflight, cap validation, retention, asset moves."""
+        import trade_engine as te
+        team = self._mp_find_team(proposal["proposer_team_id"])
+        partner = self._mp_find_team(proposal["partner_team_id"])
+        if team is None or partner is None:
+            return False, "A club involved is gone."
+        out_players = proposal.get("_out_players") or [
+            self._mp_team_player(team, pid)
+            for pid in proposal["players_out"]]
+        in_players = proposal.get("_in_players") or [
+            self._mp_team_player(partner, pid)
+            for pid in proposal["players_in"]]
+        out_picks = proposal.get("_out_picks") or [
+            self._mp_team_pick(team, kid) for kid in proposal["picks_out"]]
+        in_picks = proposal.get("_in_picks") or [
+            self._mp_team_pick(partner, kid) for kid in proposal["picks_in"]]
+        if any(p is None for p in out_players + in_players) or \
+                any(k is None for k in out_picks + in_picks):
+            self._mp_clear_proposal_waivers(proposal)
+            return False, "An asset changed clubs -- re-propose."
+        # Pick protection rides on the pick objects themselves.
+        for kid, prot in (proposal.get("pick_protection") or {}).items():
+            for k in out_picks:
+                if str(getattr(k, "id", "")) == str(kid):
+                    try:
+                        k.protection = prot
+                    except Exception:
+                        pass
+        retention = {}
+        for pid, pct in (proposal.get("retention") or {}).items():
+            for p in out_players:
+                if str(getattr(p, "id", "")) == str(pid):
+                    retention[str(getattr(p, "id", ""))] = float(pct)
+        try:
+            date_str = str(getattr(self, "current_date", ""))
+        except Exception:
+            date_str = ""
+        try:
+            result = te.execute_trade(
+                team, partner, out_players + out_picks,
+                in_players + in_picks, date_str=date_str,
+                league=getattr(self, "league", None),
+                board=getattr(self, "board", None),
+                retention=retention or None)
+        except Exception as e:
+            self._mp_clear_proposal_waivers(proposal)
+            return False, f"Trade engine refused: {e}"
+        if isinstance(result, str) and result.startswith("BLOCKED"):
+            self._mp_clear_proposal_waivers(proposal)
+            reason = result[len("BLOCKED:"):].strip() or "league office veto"
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} <-> {partner.team_name} "
+                    f"BLOCKED: {reason}")
+            except Exception:
+                pass
+            return False, f"League office blocked it: {reason}"
+        try:
+            self.mp_host.broadcast_chat(
+                f"TRADE: {team.team_name} <-> {partner.team_name} -- "
+                f"{len(out_players)} players, {len(out_picks)} picks "
+                f"each way. Done deal.")
+        except Exception:
+            pass
+        return True, "Trade completed."
+
+    def _mp_resolve_trade_response(self, payload):
+        """Host-side TRADE_RESPONSE: the other human answered an offer."""
+        import trade_engine as te
+        offer_id = payload.get("offer_id", "")
+        decision = payload.get("decision", "")
+        proposal = self._mp_pending_offers.pop(offer_id, None)
+        if proposal is None:
+            return
+        team = self._mp_find_team(proposal["proposer_team_id"])
+        partner = self._mp_find_team(proposal["partner_team_id"])
+        if team is None or partner is None:
+            return
+        if decision != "accept":
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} "
+                    f"rejected by {payload.get('manager', '?')}.")
+            except Exception:
+                pass
+            return
+        # Accepted: the partner's clause players get asked now -- the
+        # partner GM "asks him" by accepting, same roll as single-player.
+        league = getattr(self, "league", None)
+        in_players = [self._mp_team_player(partner, pid)
+                      for pid in proposal["players_in"]]
+        if any(p is None for p in in_players):
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} died: "
+                    f"an asset moved clubs.")
+            except Exception:
+                pass
+            return
+        try:
+            for _v in te.trade_vetoes(partner, team, in_players, league):
+                _p = _v["player"]
+                _ok, _why = te.will_waive_ntc(_p, partner, team, league)
+                if not _ok:
+                    self._mp_clear_proposal_waivers(proposal)
+                    try:
+                        self.mp_host.broadcast_chat(
+                            f"Trade {team.team_name} -> {partner.team_name} "
+                            f"died: {getattr(_p, 'full_name', 'player')} "
+                            f"refused to waive ({_why}).")
+                    except Exception:
+                        pass
+                    return
+                try:
+                    _p.contract.ntc_waiver_for = team.team_name
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        proposal["_in_players"] = in_players
+        ok, detail = self._mp_execute_mp_trade(proposal)
+        if not ok:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} "
+                    f"failed: {detail}")
+            except Exception:
+                pass
+
+    # -- entry-draft pick clock (host side) --------------------------------
+
+    def _mp_open_draft_clock(self, team, round_num, overall):
+        """Put a claimed team on the draft clock: notify its manager with
+        a shortlist; their draft_pick action answers. 60s, then BPA."""
+        import time as _time
+        import uuid as _uuid
+        clock_id = _uuid.uuid4().hex[:10]
+        try:
+            prospects = sorted(
+                getattr(getattr(self, "league", None),
+                        "draft_prospects", None) or [],
+                key=lambda p: getattr(p, "draft_ranking", 999))[:30]
+        except Exception:
+            prospects = []
+        wire = []
+        for p in prospects:
+            try:
+                wire.append({
+                    "id": str(getattr(p, "id", "")),
+                    "name": getattr(p, "full_name", "?"),
+                    "pos": getattr(getattr(p, "primary_position", None),
+                                   "value", "?"),
+                    "ranking": int(getattr(p, "draft_ranking", 0) or 0)})
+            except Exception:
+                continue
+        self._mp_draft_clock = {
+            "clock_id": clock_id, "team_id": team.team_name,
+            "overall": overall, "round_num": round_num,
+            "deadline": _time.time() + 60, "pick_id": None, "done": False,
+        }
+        session_id = self._mp_peer_session_for_team(team.team_name)
+        if session_id:
+            try:
+                self.mp_host.send_draft_clock(
+                    session_id, clock_id, team.team_name, overall,
+                    round_num, wire)
+            except Exception as e:
+                print(f"draft clock send failed: {e}")
+        try:
+            self._mp_toast(
+                f"{team.team_name} on the clock (pick #{overall}) -- "
+                f"waiting on their GM.")
+        except Exception:
+            pass
+
+    def _mp_draft_pick(self, params, team, manager):
+        """Answer the draft clock: validate the prospect is still
+        available; the DraftView's wait loop executes the pick on the
+        main thread."""
+        st = getattr(self, "_mp_draft_clock", None)
+        if not st or st.get("done"):
+            return False, "No pick is waiting on you.", True
+        if st.get("team_id") != team.team_name:
+            return False, "It's not your pick.", True
+        pid = str(params.get("player_id", "") or "")
+        if str(params.get("clock_id", "") or "") \
+                and params.get("clock_id") != st.get("clock_id"):
+            return False, "That clock expired -- wait for the next one.", \
+                True
+        prospect = None
+        try:
+            for p in getattr(getattr(self, "league", None),
+                             "draft_prospects", None) or []:
+                if str(getattr(p, "id", "")) == pid:
+                    prospect = p
+                    break
+        except Exception:
+            pass
+        if prospect is None:
+            return False, "That prospect is already drafted.", True
+        st["pick_id"] = pid
+        return True, \
+            f"Pick registered: {getattr(prospect, 'full_name', '?')}.", False
+
+    def _mp_clear_draft_clock(self):
+        try:
+            self._mp_draft_clock = None
+        except Exception:
+            pass
+
+    def _mp_clear_proposal_waivers(self, proposal):
+        """A dead deal spends nothing: clear one-transaction waivers."""
+        for pid in proposal.get("players_out", []) or []:
+            for tid in (proposal.get("proposer_team_id"),
+                        proposal.get("partner_team_id")):
+                team = self._mp_find_team(tid or "")
+                p = self._mp_team_player(team, pid) if team else None
+                if p is not None:
+                    try:
+                        p.contract.ntc_waiver_for = ""
+                    except Exception:
+                        pass
 
     # -- morale / coaching-room actions (host side) ----------------------
 
@@ -6123,6 +7770,161 @@ class HockeyManagerGUI(tk.Tk):
             toast.after(2500, toast.destroy)
         except Exception:
             pass
+
+    # -- client-side multiplayer dialogs ------------------------------------
+
+    def _mp_show_trade_offer(self, payload):
+        """Incoming human-to-human trade offer: Accept / Reject."""
+        from popup_system import messagebox
+        offer_id = payload.get("offer_id", "")
+        from_team = payload.get("from_team", "?")
+        manager = payload.get("manager", "?")
+        offer = payload.get("offer") or {}
+
+        def _p(p):
+            c = f" [{p.get('clause')}]" if p.get("clause") else ""
+            return (f"{p.get('name', '?')} ({p.get('pos', '?')}, "
+                    f"OVR {p.get('ovr', '?')}, "
+                    f"${p.get('salary', 0):,}){c}")
+
+        def _k(k):
+            return k.get("desc", "?")
+
+        lines = [f"{manager} ({from_team}) offers you a trade:",
+                 "",
+                 "YOU RECEIVE:"]
+        for p in offer.get("players_out", []):
+            lines.append(f"  - {_p(p)}")
+        for k in offer.get("picks_out", []):
+            lines.append(f"  - Pick: {_k(k)}")
+        for pid, pct in (offer.get("retention") or {}).items():
+            lines.append(f"    (retains {pct}% on a player)")
+        lines.append("")
+        lines.append("YOU SEND:")
+        for p in offer.get("players_in", []):
+            lines.append(f"  - {_p(p)}")
+        for k in offer.get("picks_in", []):
+            lines.append(f"  - Pick: {_k(k)}")
+        for kid, prot in (offer.get("pick_protection") or {}).items():
+            lines.append(f"    (protection: {prot})")
+        try:
+            accept = messagebox.askyesno(
+                "Trade offer", "\n".join(lines) +
+                "\n\nAccept this trade?")
+        except Exception:
+            accept = False
+        if self.mp_client is None:
+            return
+        try:
+            self.mp_client.send_trade_response(
+                offer_id, "accept" if accept else "reject")
+        except Exception as e:
+            self._mp_toast(f"Trade answer failed: {e}")
+            return
+        self._mp_toast("Trade accepted -- waiting on the league office."
+                       if accept else "Trade offer rejected.")
+
+    def _mp_answer_ntc_request(self, payload):
+        """No-trade/no-movement waiver prompt: same three choices as the
+        single-player trade screen (ask him / remove him / cancel)."""
+        from popup_system import messagebox
+        waiver_id = payload.get("waiver_id", "")
+        player_id = payload.get("player_id", "")
+        name = payload.get("player_name", "A player")
+        clause = payload.get("clause", "clause")
+        dest = payload.get("dest_team", "?")
+        try:
+            ans = messagebox.askyesnocancel(
+                "No-trade clause",
+                f"{name} has a {clause}.\n\n"
+                f"Ask him to waive it for a move to {dest}?\n\n"
+                "Yes = ask him  |  No = remove him from the offer  |  "
+                "Cancel = stop")
+        except Exception:
+            ans = None
+        choice = "ask" if ans is True else ("remove" if ans is False
+                                            else "cancel")
+        if self.mp_client is None:
+            return
+        try:
+            self.mp_client.send_ntc_waiver_answer(
+                player_id, choice, waiver_id=waiver_id)
+        except Exception as e:
+            self._mp_toast(f"Waiver answer failed: {e}")
+
+    def _mp_show_draft_clock(self, payload):
+        """You're on the clock: pick a prospect (60s, then auto-pick)."""
+        clock_id = payload.get("clock_id", "")
+        overall = payload.get("overall", 0)
+        round_num = payload.get("round_num", 0)
+        prospects = payload.get("prospects") or []
+        if not prospects:
+            return
+        win = tk.Toplevel(self)
+        win.title(f"Draft pick #{overall} -- you're on the clock")
+        win.geometry("520x560")
+        win.attributes("-topmost", True)
+        tk.Label(win, text=f"Pick #{overall} (Round {round_num}) -- "
+                           f"your selection",
+                 font=("Segoe UI", 12, "bold")).pack(pady=(10, 4))
+        self._mp_draft_answer = {"clock_id": clock_id, "answered": False}
+        state = {"left": 60}
+
+        def _countdown():
+            try:
+                if not win.winfo_exists():
+                    return
+                if self._mp_draft_answer.get("answered"):
+                    return
+                state["left"] -= 1
+                clock_var.set(f"Clock: {max(state['left'], 0)}s")
+                if state["left"] <= 0:
+                    win.destroy()
+                    self._mp_toast("Draft clock expired -- auto-pick.")
+                    return
+                win.after(1000, _countdown)
+            except Exception:
+                pass
+
+        clock_var = tk.StringVar(value="Clock: 60s")
+        tk.Label(win, textvariable=clock_var,
+                 font=("Segoe UI", 11)).pack(pady=(0, 6))
+        frame = tk.Frame(win)
+        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        lb = tk.Listbox(frame, font=("Segoe UI", 11), height=18)
+        lb.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+        for p in prospects:
+            lb.insert("end", f"#{p.get('ranking', '?')} "
+                             f"{p.get('name', '?')} ({p.get('pos', '?')})")
+
+        def _draft_selected():
+            try:
+                sel = lb.curselection()
+            except Exception:
+                sel = ()
+            if not sel:
+                return
+            p = prospects[sel[0]]
+            if self._mp_draft_answer.get("answered"):
+                return
+            self._mp_draft_answer["answered"] = True
+            try:
+                self.mp_client.send_action("draft_pick", {
+                    "clock_id": clock_id,
+                    "player_id": p.get("id", "")})
+            except Exception as e:
+                self._mp_toast(f"Draft pick failed: {e}")
+                return
+            win.destroy()
+            self._mp_toast(f"Drafted {p.get('name', '?')}.")
+
+        tk.Button(win, text="DRAFT SELECTED PROSPECT",
+                  font=("Segoe UI", 11, "bold"),
+                  command=_draft_selected).pack(pady=(0, 10))
+        win.after(1000, _countdown)
 
     def _check_season_complete(self):
         """Check if the regular season is complete by counting games played."""
@@ -6360,7 +8162,18 @@ class HockeyManagerGUI(tk.Tk):
                 pass
             for team in teams:
                 try:
-                    if _dr.is_user_team(team, getattr(self, "game_manager", self)):
+                    # Multiplayer parity: a club run by a remote human gets
+                    # the user's tick (their stored plan runs; crises are
+                    # flagged for the human's decision), never the AI tick.
+                    _human = _dr.is_user_team(
+                        team, getattr(self, "game_manager", self))
+                    if not _human:
+                        try:
+                            import game_classes as _gc
+                            _human = bool(_gc.is_human_managed(team))
+                        except Exception:
+                            pass
+                    if _human:
                         _dr.user_room_politics_tick(
                             team, date_str=date_str, league=league)
                     else:
@@ -10818,7 +12631,7 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
             self._continue_after_bundle = True
-            self.simulate_day()
+            self._on_continue_pressed()
         except Exception as e:
             print(f"Game-day resolve error (non-fatal): {e}")
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
 from enum import Enum
 from datetime import date, timedelta
-from game_classes import Player, Team, PlayerPosition, Contract
+from game_classes import Player, Team, PlayerPosition, Contract, is_human_managed
 from salary_cap_system import SalaryCapSystem, DEFAULT_CAP
 
 
@@ -92,7 +92,7 @@ class AITeamManager:
     def initialize_team_strategies(self, teams: List[Team]):
         """Initialize AI strategies for all CPU teams"""
         for team in teams:
-            if getattr(team, 'is_user_team', False):  # Skip user team
+            if is_human_managed(team):  # Skip human clubs (local + MP clients)
                 continue
 
             strategy = self._generate_team_strategy(team)
@@ -245,7 +245,7 @@ class AITeamManager:
             return decisions
         
         for team in teams:
-            if getattr(team, 'is_user_team', False):
+            if is_human_managed(team):
                 continue
 
             strategy = self.team_strategies.get(team.team_name)
