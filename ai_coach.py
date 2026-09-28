@@ -106,3 +106,59 @@ def maybe_adjust_tactics(team, games_played, goals_for, goals_against):
         team.tactic_dz_coverage = 'open'
         return 'press'
     return None
+
+
+# E7: adaptive AI — track what the player does and adjust.
+# Maps a player's observed tendency to the AI's counter.
+COUNTERS = {
+    # Player runs umbrella PP (lots of point shots) -> collapse the slot
+    'pp_umbrella': {'tactic_dz_coverage': 'collapse',
+                    'tactic_pk': 'tight_box'},
+    # Player funnels (slot attack) -> open up, challenge
+    'pp_funnel': {'tactic_dz_coverage': 'open',
+                  'tactic_pk': 'diamond'},
+    # Player dumps and chases (weak breakout) -> aggressive forecheck
+    'weak_breakout': {'tactic_forecheck': '2-1-2',
+                      'tactic_neutral_zone': '2-1-2'},
+    # Player plays collapse D -> crash the net
+    'dz_collapse': {'tactic_offense': 'Crash the Net',
+                    'tactic_pp': 'funnel'},
+}
+
+
+class OpponentTracker:
+    """E7: remembers what a specific opponent does, game to game."""
+
+    def __init__(self):
+        # opponent_name -> {'games': int, 'tendencies': {key: count}}
+        self._data = {}
+
+    def observe(self, opponent_name, game_tendencies):
+        """game_tendencies: dict like {'pp_umbrella': True, ...}."""
+        d = self._data.setdefault(opponent_name,
+                                  {'games': 0, 'tendencies': {}})
+        d['games'] += 1
+        for k, v in game_tendencies.items():
+            if v:
+                d['tendencies'][k] = d['tendencies'].get(k, 0) + 1
+
+    def adapt(self, ai_team, opponent_name):
+        """Adjust the AI team's tactics to counter observed tendencies.
+
+        Returns a list of human-readable adjustments for the pre-game report.
+        """
+        d = self._data.get(opponent_name)
+        if not d or d['games'] < 3:
+            return []  # need a sample before adjusting
+        adjustments = []
+        for tendency, count in d['tendencies'].items():
+            # Persistent tendency (seen in >60% of games)?
+            if count / d['games'] > 0.6 and tendency in COUNTERS:
+                for attr, value in COUNTERS[tendency].items():
+                    old = getattr(ai_team, attr, None)
+                    if old != value:
+                        setattr(ai_team, attr, value)
+                        adjustments.append(
+                            f"adjusted {attr} to {value} "
+                            f"(countering your {tendency})")
+        return adjustments
