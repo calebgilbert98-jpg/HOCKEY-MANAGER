@@ -2187,16 +2187,12 @@ class HockeyManagerGUI(tk.Tk):
                 player.waiver_days = 0
                 player.on_waivers = False
                 
-                # Add to original team's AHL roster for human-run clubs
-                # (they placed the player on waivers deliberately).
+                # Add to original team's AHL roster on clearance: waiving is
+                # always a demotion move (cap burial or AHL shuttle), for
+                # AI clubs exactly as for the user's. (BUG-019: AI clubs
+                # now use the wire, so this branch fires for them too.)
                 original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
-                try:
-                    import game_classes as _gc2
-                    _human = bool(_gc2.is_human_managed(original_team)) \
-                        if original_team else False
-                except Exception:
-                    _human = bool(getattr(original_team, 'is_user_team', False))
-                if original_team and _human and hasattr(original_team, 'ahl_roster'):
+                if original_team and hasattr(original_team, 'ahl_roster'):
                     if player in original_team.roster:
                         original_team.roster.remove(player)
                     # CHL-NHL agreement: a cleared under-20 CHL prospect
@@ -8747,6 +8743,30 @@ class HockeyManagerGUI(tk.Tk):
                 pass
         if self.current_date.weekday() in [0, 3]:  # Monday and Thursday only
             self.process_waivers()
+
+        # AI waiver management (BUG-019): cap casualties, AHL shuttle,
+        # and early-October camp cuts. Runs Mondays after claim
+        # processing; fresh placements enter the wire with a 2-day clock
+        # so there are no same-day claims. Never touches the user's club.
+        if self.current_date.weekday() == 0:  # Monday only
+            try:
+                import waiver_logic as _wl
+                _mdate = self.current_date
+                _camp = (_mdate.month == 10 and _mdate.day <= 7 and int(
+                    getattr(self.league, "_waiver_camp_year", 0) or 0)
+                    != _mdate.year)
+                if _camp:
+                    try:
+                        self.league._waiver_camp_year = _mdate.year
+                    except Exception:
+                        pass
+                _wl.process_ai_waivers(
+                    self.league, app=self,
+                    rng=getattr(self, "_rng", None), camp_cuts=_camp)
+            except Exception:
+                debug_print("AI waivers failed (non-fatal):")
+                import traceback
+                traceback.print_exc()
         
         # Generate daily emails - optimized
         if self.current_date.weekday() == 0:  # Weekly summary instead of daily
@@ -14834,6 +14854,13 @@ class HockeyManagerGUI(tk.Tk):
         if 'trade_block' not in self.open_windows or not self.open_windows['trade_block'].winfo_exists():
             self.open_windows['trade_block'] = TradeBlockWindow(self)
         self.open_windows['trade_block'].focus_set()
+
+    def open_offer_sheet_window(self):
+        """Open the Offer Sheet window (sign a rival RFA). BUG-020."""
+        if 'offer_sheet' not in self.open_windows or not self.open_windows['offer_sheet'].winfo_exists():
+            from offer_sheet_ui import OfferSheetWindow
+            self.open_windows['offer_sheet'] = OfferSheetWindow(self)
+        self.open_windows['offer_sheet'].focus_set()
         
     def open_contract_extensions_window(self):
         """Open the Contract Extensions screen (full-screen jump)."""

@@ -2853,7 +2853,11 @@ class FreeAgencyView(ctk.CTkFrame):
                                command=self.refresh_market).pack(
             side="left", padx=(0, 10))
         self._secondary_button(bulk, text="Export List",
-                               command=self.export_free_agents).pack(side="left")
+                               command=self.export_free_agents).pack(
+            side="left", padx=(0, 10))
+        self._secondary_button(bulk, text="📝 Offer Sheets",
+                               command=self.app.open_offer_sheet_window).pack(
+            side="left")
 
         controls = ctk.CTkFrame(footer, fg_color="transparent")
         controls.pack(side="right")

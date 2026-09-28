@@ -890,13 +890,39 @@ def _transfer_pick(pick, from_team, to_team) -> None:
         for yr, pool in (getattr(from_team, "draft_picks", {}) or {}).items():
             if pick in pool:
                 pool.remove(pick)
-        pool = (getattr(to_team, "draft_picks", {}) or {}).setdefault(
-            getattr(pick, "year", 0), [])
+        # NB: (getattr(...) or {}) would build a throwaway dict when the
+        # receiver's pool map is empty -- the pick would silently vanish.
+        pools = getattr(to_team, "draft_picks", None)
+        if not isinstance(pools, dict):
+            pools = {}
+            try:
+                to_team.draft_picks = pools
+            except Exception:
+                pass
+        pool = pools.setdefault(getattr(pick, "year", 0), [])
         if pick not in pool:
             pool.append(pick)
     except Exception:
         pass
     _ = to_names
+
+
+# ---------------------------------------------------------------------------
+# Public helpers for the offer-sheet UI (offer_sheet_ui.py)
+# ---------------------------------------------------------------------------
+
+def own_pick_available(team, year: int, round_no: int):
+    """Public wrapper: the team's own untraded pick for (year, round)."""
+    return _own_pick(team, year, int(round_no))
+
+
+def market_value_estimate(player) -> int:
+    """Public wrapper: the engine's market read for an RFA (UI display)."""
+    try:
+        return int(_market_value(player) or 0)
+    except Exception:
+        return 0
+
 
 
 def execute_offer_sheet(league, offering_team, original_team, player,
