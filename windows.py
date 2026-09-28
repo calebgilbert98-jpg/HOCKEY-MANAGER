@@ -3944,14 +3944,73 @@ class FreeAgencyWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-def gm_trade_value_badges(ai_manager, team):
-    """badge_fn for CTkPlayerList: how THIS team's GM values each player.
+def _perceiver_ctx(app, ai_manager, holder_team):
+    """What the USER (perceiver) brings to the read: my scouts' eyes, my
+    history with his GM, his poker face, and the standings situation.
+    Every lookup is defensive -- a missing piece just yields a neutral ctx.
+    """
+    ctx = {}
+    try:
+        user_team = app.user_team
+        league = app.league
+    except Exception:
+        return ctx
+    try:  # my scouts: good staff read him cleanly, bad staff file noise
+        from team_draft_boards import scouting_quality as _sq
+        ctx["scout_quality01"] = _sq(user_team) / 100.0
+    except Exception:
+        pass
+    try:  # my relationship with his GM: rivalry vs good relations
+        import reputation_system as _rs
+        ctx["respect01"] = _rs.gm_gm_respect(
+            league, user_team, holder_team) / 100.0
+        ctx["heat01"] = _rs.gm_gm_heat(league, user_team, holder_team) / 100.0
+    except Exception:
+        pass
+    try:  # franchise rivalry: bad blood between the TEAMS, not just the GMs
+        import reputation_system as _rs
+        _rivs = getattr(league, "rivalries", None) or []
+        _rh = _rs.get_rivalry_heat(_rivs, user_team, holder_team)
+        ctx["team_heat01"] = float(_rh.get("heat", 0)) / 100.0
+    except Exception:
+        pass
+    try:  # his poker face: a skilled veteran leaks less than a rookie
+        import ai_extension_planning as _aep
+        ident = (ai_manager.gm_identities.get(holder_team.team_name)
+                 if ai_manager is not None else None)
+        ctx["holder_skill01"] = _aep.gm_ability01(ident)
+    except Exception:
+        pass
+    try:  # the situation: same division + the standings race
+        _ud = getattr(user_team, "division", "") or ""
+        _hd = getattr(holder_team, "division", "") or ""
+        ctx["same_division"] = bool(_ud and _ud == _hd)
+    except Exception:
+        pass
+    try:
+        import trade_storylines as _ts
+        ctx["holder_stance"] = _ts.stance(app, holder_team.team_name)
+    except Exception:
+        pass
+    try:
+        ctx["perceiver_key"] = getattr(user_team, "team_name", "user")
+    except Exception:
+        pass
+    return ctx
+
+
+def gm_trade_value_badges(ai_manager, team, app=None, level="NHL"):
+    """badge_fn for CTkPlayerList: the USER's read of how THIS team's GM
+    values each player.
 
     EHM-style trade screen: at a glance you see who the other GM considers
     UNTOUCHABLE / CORE / VALUED / GETTABLE. Built on the same
     franchise_score the extension forward book uses, so the tag and the
-    money the GM reserves always agree. Falls back to a neutral read when
-    the AI manager or the GM identity isn't available.
+    money the GM reserves always agree -- but filtered through YOUR
+    scouts, YOUR relationship with his GM, his poker face, and the
+    standings situation (see perceived_trade_value). Prospects get a
+    PROSPECT prefix so the level is unmistakable. Falls back to a neutral
+    read when the AI manager or the GM identity isn't available.
     """
     try:
         identity = ai_manager.gm_identities.get(team.team_name)
@@ -3965,10 +4024,15 @@ def gm_trade_value_badges(ai_manager, team):
         import ai_extension_planning as _aep
     except Exception:
         return None
+    ctx = _perceiver_ctx(app, ai_manager, team) if app is not None else {}
+    _prospect = (level or "NHL") == "Prospects"
 
     def _badge(player):
         try:
-            label, color, _s = _aep.trade_value_tier(player, identity, strategy)
+            label, color, _p, _t = _aep.perceived_trade_value(
+                player, identity, strategy, ctx)
+            if _prospect:
+                label = f"PROSPECT \u00b7 {label}"
             return (label, color)
         except Exception:
             return None
@@ -4240,8 +4304,11 @@ class TradeWindow(InGamePopup):
         return sorted(players, key=lambda p: p.overall_rating(), reverse=True)
 
     def _refresh_user_list(self):
+        _lvl = self._user_level.get()
+        _badge = (lambda _p: ("PROSPECT", "#a1a1aa")) \
+            if _lvl == "Prospects" else None
         self.user_list.set_players(
-            self._level_roster(self.parent.user_team, self._user_level.get()))
+            self._level_roster(self.parent.user_team, _lvl), badge_fn=_badge)
 
     def update_views(self):
         self._refresh_user_list()
@@ -4257,7 +4324,9 @@ class TradeWindow(InGamePopup):
             lvl = self._partner_level.get() if hasattr(self, '_partner_level') else "NHL"
             self.partner_title.configure(text=f"{team.team_name} ({lvl})")
             try:
-                _badge_fn = gm_trade_value_badges(self.parent.ai_manager, team)
+                _badge_fn = gm_trade_value_badges(
+                    self.parent.ai_manager, team,
+                    app=self.parent, level=lvl)
             except Exception:
                 _badge_fn = None
             self.partner_list.set_players(self._level_roster(team, lvl),

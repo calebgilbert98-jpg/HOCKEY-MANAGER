@@ -31,6 +31,8 @@ ExtensionPlan fields:
     crunch        True when even the core doesn't fit -- pieces only, no depth
 """
 
+import hashlib
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -311,6 +313,87 @@ def trade_value_tier(player, identity=None, strategy=None):
             return label, color, round(s, 1)
     label, color = _TRADE_TIERS[-1][1], _TRADE_TIERS[-1][2]
     return label, color, round(s, 1)
+
+
+def _stable_noise(player, perceiver_key: str) -> float:
+    """Deterministic pseudo-noise in [-1, 1] for one player+perceiver pair.
+
+    Stable across refreshes (no RNG in the hot path): the same scout
+    looking at the same player always files the same report.
+    """
+    try:
+        pid = str(getattr(player, "id", None)
+                  or getattr(player, "full_name", ""))
+    except Exception:
+        pid = ""
+    h = hashlib.md5(f"{pid}|{perceiver_key or 'league'}".encode()).digest()
+    return (int.from_bytes(h[:4], "big") / 0xFFFFFFFF) * 2.0 - 1.0
+
+
+def perceived_trade_value(player, holder_identity=None, holder_strategy=None,
+                          ctx=None):
+    """(label, color, perceived, true): the PERCEIVER's read of how the
+    holder GM values the player.
+
+    The tag on the trade screen is not the holder's true valuation -- it is
+    what your people think his valuation is, and that read is colored by:
+
+    - your scouts (ctx['scout_quality01']): good scouts read him cleanly;
+      bad scouts file noisy reports (deterministic per player+perceiver).
+    - his poker face (ctx['holder_skill01'], gm_ability01): a skilled
+      veteran GM leaks less; a rookie's intentions show. Scales the noise.
+    - your relationship (ctx['respect01'], ctx['heat01'] with his GM,
+      ctx['team_heat01'] for the franchise rivalry): bad blood / rivalry
+      and he won't deal with YOU -- he reads less available (tag shifts
+      up). Good relations -- shifts down. A personal grudge and a
+      franchise blood feud stack: he'd rather lose the trade than feed you.
+    - the situation: same division + holder buying/bubble while you're both
+      in the race = he won't strengthen a direct rival (shifts up); holder
+      selling / in a slump writing off the playoffs = open for business
+      (shifts down).
+
+    So you can read a guy as UNTOUCHABLE while another GM -- no rivalry,
+    good relations, player leaving the division -- reads him a tier lower.
+    ctx keys are all optional with sane defaults.
+    """
+    ctx = ctx or {}
+    true = franchise_score(player, holder_identity, holder_strategy)
+
+    def _f(key, default):
+        try:
+            return float(ctx.get(key, default))
+        except Exception:
+            return default
+
+    scout_q = max(0.0, min(1.0, _f("scout_quality01", 0.5)))
+    holder_skill = max(0.0, min(1.0, _f("holder_skill01", 0.5)))
+    respect = max(0.0, min(1.0, _f("respect01", 0.5)))
+    heat = max(0.0, min(1.0, _f("heat01", 0.0)))
+    team_heat = max(0.0, min(1.0, _f("team_heat01", 0.0)))
+    same_div = bool(ctx.get("same_division", False))
+    stance = str(ctx.get("holder_stance", "neutral") or "neutral").lower()
+    pkey = str(ctx.get("perceiver_key", "league") or "league")
+
+    perceived = true
+    # --- information: my scouts vs his poker face ---
+    amp = 14.0 * (1.0 - scout_q) * (0.35 + 0.65 * holder_skill)
+    perceived += _stable_noise(player, pkey) * amp
+    # --- relationship: how he feels about ME moves the read ---
+    perceived += (0.5 - respect) * 10.0 + heat * 12.0 + team_heat * 10.0
+    # --- situation: the standings shape his willingness ---
+    if stance == "seller":
+        perceived -= 8.0  # writing off the playoffs: open for business
+    elif stance == "bubble":
+        perceived -= 3.0  # motivated, listening
+    if same_div and stance in ("buyer", "bubble"):
+        perceived += 10.0  # won't strengthen a direct rival in the race
+    perceived = max(0.0, min(100.0, perceived))
+
+    for floor, label, color in _TRADE_TIERS:
+        if perceived >= floor:
+            return label, color, round(perceived, 1), round(true, 1)
+    label, color = _TRADE_TIERS[-1][1], _TRADE_TIERS[-1][2]
+    return label, color, round(perceived, 1), round(true, 1)
 
 
 @dataclass

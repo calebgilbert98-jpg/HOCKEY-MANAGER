@@ -231,9 +231,211 @@ def test_scout_perception():
           == aep.trade_value_tier(kid, oldschool, None))
 
 
+def _holder():
+    return SimpleNamespace(team_name="H", patience=0.5, loyalty=0.9,
+                           aggression=0.5, adaptability=0.5,
+                           experience_years=10, tenure_years=2, reputation=50)
+
+
+class PP:
+    """Player fake with a stable id + age for perception/widget tests."""
+
+    def __init__(self, n, ovr, age, grade, pos="CENTER"):
+        self.full_name = n
+        self._ovr = ovr
+        self.age = age
+        self.id = n
+        self.contract = C(5_000_000, 2)
+        self.potential_grade = grade
+        self.true_potential_grade = ""
+        self.draft_round = 1
+        self.drafted_by = "H"
+        self.rights_team = "H"
+        self.primary_position = SimpleNamespace(name=pos)
+
+    def overall_rating(self):
+        return self._ovr
+
+
+def test_perceived_value():
+    print("== perceived trade value (whose eyes) ==")
+    holder = _holder()
+    star = PP("Star94", 94, 26, "A")
+    true = aep.franchise_score(star, holder, None)
+    check("fixture sits just under UNTOUCHABLE", 75.0 < true < 80.0,
+          f"{true:.1f}")
+
+    def ctx(**kw):
+        base = dict(scout_quality01=0.95, respect01=0.5, heat01=0.0,
+                    holder_skill01=0.5, same_division=False,
+                    holder_stance="neutral", perceiver_key="ME")
+        base.update(kw)
+        return base
+
+    label, _c, per, tru = aep.perceived_trade_value(
+        star, holder, None, ctx())
+    check("good scouts + neutral read ~= true value",
+          abs(per - tru) <= 1.0, f"{per} vs {tru}")
+
+    # Muck's scenario: I see UNTOUCHABLE, a friendly GM sees just below.
+    me = ctx(respect01=0.05, heat01=0.8, same_division=True,
+             holder_stance="buyer")
+    other = ctx(respect01=0.95, heat01=0.0, holder_stance="seller")
+    mine = aep.perceived_trade_value(star, holder, None, me)
+    theirs = aep.perceived_trade_value(star, holder, None, other)
+    check("rival/division/buyer: I read UNTOUCHABLE",
+          mine[0] == "UNTOUCHABLE", str(mine[2]))
+    check("friendly/seller: they read a tier below (CORE)",
+          theirs[0] == "CORE", str(theirs[2]))
+    check("same player, same holder -- the read is perceiver-relative",
+          mine[2] > theirs[2] + 15.0, f"{mine[2]} vs {theirs[2]}")
+
+    # Situation ordering: won't strengthen a rival > neutral > firesale.
+    up = aep.perceived_trade_value(
+        star, holder, None,
+        ctx(same_division=True, holder_stance="buyer"))[2]
+    mid = aep.perceived_trade_value(star, holder, None, ctx())[2]
+    down = aep.perceived_trade_value(
+        star, holder, None, ctx(holder_stance="seller"))[2]
+    check("situation shifts the read (rival-buyer > neutral > seller)",
+          up > mid > down, f"{up}/{mid}/{down}")
+
+    # Scout quality bounds the noise; the read stays deterministic.
+    bad = ctx(scout_quality01=0.1)
+    p_bad = aep.perceived_trade_value(star, holder, None, bad)
+    check("bad scouts: noisy but bounded",
+          abs(p_bad[2] - p_bad[3]) <= 8.6, f"{p_bad[2]} vs {p_bad[3]}")
+    check("perception is deterministic (no RNG in the hot path)",
+          aep.perceived_trade_value(star, holder, None, bad)
+          == aep.perceived_trade_value(star, holder, None, bad))
+    # ...but a different perceiver can genuinely read him differently.
+    seen = {aep.perceived_trade_value(
+        star, holder, None, ctx(scout_quality01=0.1,
+                               perceiver_key=f"GM{i}"))[2]
+        for i in range(6)}
+    check("different GMs' scouts file different reports", len(seen) > 1,
+          str(sorted(seen)))
+
+    # Franchise rivalry: the TEAMS' bad blood, on top of the GMs' personal one.
+    calm = aep.perceived_trade_value(
+        star, holder, None, ctx(team_heat01=0.0))[2]
+    feud = aep.perceived_trade_value(
+        star, holder, None, ctx(team_heat01=1.0))[2]
+    check("franchise blood feud: he won't feed a rival (+10)",
+          abs(feud - calm - 10.0) < 1e-9, f"{feud} vs {calm}")
+    stacked = aep.perceived_trade_value(
+        star, holder, None,
+        ctx(respect01=0.0, heat01=1.0, team_heat01=1.0))[2]
+    check("personal grudge + franchise feud stack",
+          stacked > feud, f"{stacked} vs {feud}")
+
+    # Skilled holder = better poker face = noisier read for bad scouts.
+    amp_lo = abs(aep.perceived_trade_value(
+        star, holder, None,
+        ctx(scout_quality01=0.0, holder_skill01=0.0,
+            perceiver_key="K1"))[2] - true)
+    amp_hi = abs(aep.perceived_trade_value(
+        star, holder, None,
+        ctx(scout_quality01=0.0, holder_skill01=1.0,
+            perceiver_key="K1"))[2] - true)
+    check("veteran holder leaks less (noise scales with his skill)",
+          amp_hi >= amp_lo, f"{amp_hi:.1f} vs {amp_lo:.1f}")
+
+
+def test_prospect_tags_and_ages():
+    print("== prospect tags + ages on the trade screen ==")
+    import windows
+    from ai_team_management import AITeamManager
+    mgr = AITeamManager()
+    team = SimpleNamespace(team_name="H", roster=[])
+    mgr.gm_identities["H"] = _holder()
+    mgr.team_strategies["H"] = SimpleNamespace(
+        priority=SimpleNamespace(value="CONTEND"))
+    kid = PP("Kid", 76, 20, "B")
+
+    fn = windows.gm_trade_value_badges(mgr, team, app=None, level="Prospects")
+    text, color = fn(kid)
+    check("prospects are specially tagged",
+          text.startswith("PROSPECT \u00b7 "), text)
+    check("prospect tag keeps a real tier",
+          text.split(" \u00b7 ")[1] in ("UNTOUCHABLE", "CORE", "VALUED",
+                                         "GETTABLE"), text)
+    fn2 = windows.gm_trade_value_badges(mgr, team, app=None, level="NHL")
+    check("NHL level has no prospect prefix",
+          not fn2(kid)[0].startswith("PROSPECT"), fn2(kid)[0])
+
+    # _perceiver_ctx from a fake app: every lookup defensive, never raises.
+    user = SimpleNamespace(team_name="ME", division="Atlantic", staff=[])
+    holder_t = SimpleNamespace(team_name="H", division="Atlantic")
+    app = SimpleNamespace(user_team=user, league=SimpleNamespace(teams=[]))
+    cx = windows._perceiver_ctx(app, mgr, holder_t)
+    check("ctx: my (staff-less) scouts read league-average",
+          cx.get("scout_quality01") == 0.5, str(cx.get("scout_quality01")))
+    check("ctx: unknown relationship reads neutral",
+          cx.get("respect01") == 0.5 and cx.get("heat01") == 0.0,
+          f"{cx.get('respect01')}/{cx.get('heat01')}")
+    check("ctx: same division detected",
+          cx.get("same_division") is True)
+    check("ctx: holder skill is a 0..1 read",
+          0.0 <= cx.get("holder_skill01", -1) <= 1.0)
+    check("ctx: perceiver key is my team",
+          cx.get("perceiver_key") == "ME")
+    check("ctx: stance falls back gracefully",
+          cx.get("holder_stance", "neutral") in ("buyer", "seller", "bubble",
+                                                 "neutral"))
+    check("ctx: no franchise heat by default", cx.get("team_heat01") == 0.0,
+          str(cx.get("team_heat01")))
+    # Plant a real team-team rivalry and re-read the ctx.
+    import reputation_system as _rs
+    _rivs = []
+    _rs.add_rivalry(_rivs, SimpleNamespace(team_name="ME", roster=[]),
+                    SimpleNamespace(team_name="H", roster=[]),
+                    "team_team", 70, "playoff feud", "Seven-game war")
+    app2 = SimpleNamespace(
+        user_team=SimpleNamespace(team_name="ME", division="Atlantic",
+                                  staff=[], roster=[]),
+        league=SimpleNamespace(teams=[], rivalries=_rivs))
+    cx2 = windows._perceiver_ctx(
+        app2, mgr, SimpleNamespace(team_name="H", division="Atlantic",
+                                   roster=[]))
+    check("ctx: franchise rivalry heat flows through",
+          abs(cx2.get("team_heat01", -1) - 0.7) < 1e-9,
+          str(cx2.get("team_heat01")))
+
+    # Ages beside positions in the widget.
+    import customtkinter as ctk
+    from ctk_theme import CTkPlayerList
+    root = ctk.CTk()
+    root.geometry("520x300")
+    lst = CTkPlayerList(root)
+    lst.pack(fill="both", expand=True)
+    vets = [PP("Oldie", 83, 34, "C", "DEFENSE"), PP("Young", 76, 20, "B")]
+    lst.set_players(vets)
+    root.update()
+
+    def _texts(frame):
+        out = []
+        for w in frame.winfo_children():
+            try:
+                out.append(w.cget("text"))
+            except Exception:
+                pass
+        return out
+    t0 = _texts(lst._rows[0][0])
+    t1 = _texts(lst._rows[1][0])
+    check("age shown beside position (34)",
+          any("34" in t for t in t0), str(t0))
+    check("age shown beside position (20)",
+          any("20" in t for t in t1), str(t1))
+    check("position still shown", any("Defense" in t for t in t0), str(t0))
+    root.destroy()
+
+
 if __name__ == "__main__":
     test_tiers()
     test_scout_perception()
+    test_perceived_value()
+    test_prospect_tags_and_ages()
     test_gm_subjectivity()
     test_badge_fn_wiring()
     try:

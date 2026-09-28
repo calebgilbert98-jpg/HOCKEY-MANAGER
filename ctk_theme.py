@@ -175,13 +175,20 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
             pos = player.primary_position.name.replace("_", " ").title()
         except Exception:
             pass
+        try:
+            _age = getattr(player, "age", None)
+            _age_txt = f" \u00b7 {int(_age)}" \
+                if _age is not None else ""
+        except Exception:
+            _age_txt = ""
 
         name_lbl = ctk.CTkLabel(row, text=name, font=("Segoe UI", 12),
                                 text_color=TEXT, anchor="w")
         name_lbl.pack(side="left", padx=(8, 4), pady=6)
-        if pos:
-            pos_lbl = ctk.CTkLabel(row, text=pos, font=("Segoe UI", 10),
-                                   text_color=TEXT_FAINT, anchor="w", width=90)
+        if pos or _age_txt:
+            pos_lbl = ctk.CTkLabel(row, text=f"{pos}{_age_txt}",
+                                   font=("Segoe UI", 10),
+                                   text_color=TEXT_FAINT, anchor="w", width=118)
             pos_lbl.pack(side="left", padx=4)
 
         ovr_color = self._ovr_color(ovr)
@@ -204,7 +211,7 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
                 if _btext:
                     badge_lbl = ctk.CTkLabel(
                         row, text=str(_btext), font=("Segoe UI", 9, "bold"),
-                        text_color=_bcolor or TEXT_DIM, anchor="e", width=92)
+                        text_color=_bcolor or TEXT_DIM, anchor="e", width=170)
                     badge_lbl.pack(side="right", padx=(4, 2))
 
         _bind = [w for w in (row, name_lbl, ovr_lbl, badge_lbl) if w is not None]

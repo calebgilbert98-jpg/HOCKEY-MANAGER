@@ -72,12 +72,37 @@ call. Established stars are unaffected (face value dominates their score).
 `trade_value_tier(player, identity, strategy)` → `(label, color, score)` —
 the same `franchise_score`, so the tag and the money the GM reserves always
 agree. `UNTOUCHABLE` (80+, red — true cornerstones only), `CORE` (50+,
-gold), `VALUED` (35+, teal), `GETTABLE` (dim). Wired in `windows.py`:
-`gm_trade_value_badges(ai_manager, team)` builds the `badge_fn` that
-`CTkPlayerList.set_players(..., badge_fn=...)` renders on the partner's
-roster — with a legend under the level selector. The user's own list shows
-no tags (he knows his own values). Falls back to a neutral read when the
-AI manager/identity is unavailable.
+gold), `VALUED` (35+, teal), `GETTABLE` (dim).
+
+## Perceived value: whose eyes are reading (perceived_trade_value)
+
+The badge is NOT the holder's true tag — it is the USER's read of it, via
+`perceived_trade_value(player, holder_identity, holder_strategy, ctx)` →
+`(label, color, perceived, true)`. The read is colored by:
+
+- **My scouts** (`scout_quality01` from `team_draft_boards.scouting_quality`
+  on the user's club): good scouts read him cleanly; bad scouts file noisy
+  reports (deterministic per player+perceiver — same scout, same report).
+- **His poker face** (`holder_skill01` = `gm_ability01`): a skilled veteran
+  leaks less; a rookie's intentions show. Scales the noise.
+- **GM relationship** (`respect01`/`heat01` via `reputation_system.gm_gm_*`):
+  bad blood and he won't deal with YOU — the tag shifts up; good relations
+  shift it down.
+- **Franchise rivalry** (`team_heat01` via `get_rivalry_heat` on
+  `league.rivalries`): bad blood between the TEAMS stacks with the personal
+  grudge — he'd rather lose the trade than feed a rival.
+- **The situation**: same division + holder buying/bubble in the race =
+  he won't strengthen a direct rival (+10, less available); holder selling
+  / writing off the playoffs = open for business (−8).
+
+So you can read a guy as UNTOUCHABLE while another GM — no rivalry, good
+relations, player leaving the division — reads the same player a tier
+below. Wired in `windows.py`: `_perceiver_ctx(app, ai_manager, team)`
+builds the ctx defensively (every lookup falls back to neutral);
+`gm_trade_value_badges(ai_manager, team, app, level)` renders it.
+Prospects level prefixes `PROSPECT ·` on the tag; the user's own list gets
+a plain `PROSPECT` marker (he knows his own values). `CTkPlayerList` also
+shows ages beside positions now (`Center · 29`).
 
 ## What NOT to touch
 - The offer math in `_evaluate_contract_extensions` (ask × boldness, room
@@ -90,7 +115,11 @@ AI manager/identity is unavailable.
 `qa_ai_extension_planning.py` — 32 checks: piece ID (incl. the low-overall
 future piece), GM subjectivity, ability-graded projection, reservation math,
 the $15M-man scenario, crunch, personality pricing, rulebook parity, wiring.
-`qa_trade_values.py` — 33 checks: tier bands, tag/book agreement, GM
+`qa_trade_values.py` — 59 checks: tier bands, tag/book agreement, GM
 subjectivity (incl. scout_trust boundaries, the scout-overrule case, star
-stability, determinism), badge_fn wiring from the real `AITeamManager`,
-headless `CTkPlayerList` badge rendering + backward compatibility.
+stability, determinism), the perceiver-relative read (Muck's
+rival-vs-friendly scenario, situation ordering, scout-noise bounds,
+poker-face scaling, GM + franchise rivalry stacking, ctx built from a fake
+app incl. a planted team-team rivalry), prospect tags, ages beside
+positions, badge_fn wiring from the real `AITeamManager`, headless
+`CTkPlayerList` badge rendering + backward compatibility.
