@@ -54,3 +54,4 @@ face_cache/
 test_extract/
 *.exe
 *.ipynb
+qa_output/

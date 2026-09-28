@@ -539,6 +539,9 @@ class GameSim:
         self.notable_events = []
         self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
         self.pbp_listeners = []
+        # Parity engine: per-game multiplier cache (computed once, lazily).
+        # Set in _parity_factor(); None until the first shot of the game.
+        self._parity_mult = None
         # Headline specs for the lore system (drained by the caller after the
         # game via headlines.drain_sim_headlines). Brawls are rare enough
         # that one list-append per game is the entire overhead.
@@ -2237,6 +2240,19 @@ class GameSim:
                              is_playoff=_is_po)
                 if _note:
                     self.notable_events.append({'player': _pl, 'event': _note})
+        except Exception:
+            pass
+
+        # -- Parity engine: feed the finished result into cross-game team
+        # form (streaks carried across games) and the season table that
+        # drives target-on-back / trap-game compression. Additive; never
+        # touches stat flow.
+        try:
+            import parity_engine as _pe2
+            _pe2.record_result(
+                self.home_team, self.away_team,
+                self.home_score > self.away_score,
+                went_ot=self.period > 3)
         except Exception:
             pass
 
@@ -4716,6 +4732,13 @@ class GameSim:
         # Team tactics shape finishing: systems and special-teams approach
         # move xG up/down for both sides.
         expected_goal = min(0.95, expected_goal * self._team_tactics_xg_factor(
+            attacking_team, defending_team))
+
+        # Parity engine: cross-game form + the corrective layer (coach
+        # adjustments on skids, new-coach bounce, veteran pride,
+        # target-on-back, trap-game flatness). Same shared decision both
+        # engines call; this engine applies it on shot quality.
+        expected_goal = min(0.95, expected_goal * self._parity_factor(
             attacking_team, defending_team))
 
         # Man-advantage finishing: extra space and tired penalty killers mean
@@ -8840,6 +8863,28 @@ class GameSim:
             pass
 
         return max(0.75, min(1.35, factor))
+
+    def _parity_factor(self, attacking_team, defending_team):
+        """Parity-engine multiplier for the attacking side, cached per game.
+
+        Same shared decision both engines call (parity_engine.
+        pregame_multiplier); this engine applies it on shot quality next
+        to the tactics xG factor. Never raises; inert (1.0) on failure.
+        """
+        try:
+            if self._parity_mult is None:
+                import parity_engine as _pe
+                _po = bool(getattr(self, "is_playoff", False))
+                self._parity_mult = {
+                    self.home_team.team_name: _pe.pregame_multiplier(
+                        self.home_team, self.away_team, playoffs=_po),
+                    self.away_team.team_name: _pe.pregame_multiplier(
+                        self.away_team, self.home_team, playoffs=_po),
+                }
+            return self._parity_mult.get(
+                getattr(attacking_team, "team_name", ""), 1.0)
+        except Exception:
+            return 1.0
 
     def _get_tactical_system_bonus(self, team, situation):
         """

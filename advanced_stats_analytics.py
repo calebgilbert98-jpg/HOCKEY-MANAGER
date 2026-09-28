@@ -1,6 +1,15 @@
 # advanced_stats_analytics.py
 # Part 3: Advanced Statistics & Analytics Integration
 # Real-time analytics and insights like professional broadcasts
+#
+# STATUS (2026-09-28): DORMANT. This real-time event engine is not wired to any
+# shipped screen -- stats_standings_window.py populated it on every open but
+# never displayed it, so the wiring was removed. The live advanced stats shown
+# in-game come from advanced_metrics.py. Kept (not deleted) because
+# HeatMapGenerator / PossessionTracker are candidates for a future live-game
+# analytics tab. NOTE: PlayerStats.plus_minus, _is_scoring_chance, and
+# _is_high_danger_chance are unimplemented stubs -- do not display their
+# outputs until they are implemented and validated.
 
 import tkinter as tk
 from tkinter import ttk

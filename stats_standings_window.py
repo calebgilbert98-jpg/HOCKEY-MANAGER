@@ -16,13 +16,9 @@ from datetime import datetime, timedelta
 
 import customtkinter as ctk
 
-# Import our advanced analytics system
-try:
-    from advanced_stats_analytics import RealTimeStatsEngine, PlayerStats, TeamStats
-    ANALYTICS_AVAILABLE = True
-except ImportError:
-    ANALYTICS_AVAILABLE = False
-    print("Warning: Advanced analytics system not available, using fallback data")
+# (advanced_stats_analytics import removed 2026-09-28: the real-time engine was
+# populated on every screen open but never displayed. Live advanced stats on
+# the stats screens come from advanced_metrics.)
 
 try:
     from team_identity_system import (jersey_chip as _jersey_chip,
@@ -110,11 +106,9 @@ class StatsStandingsView(ctk.CTkFrame):
             'stat_type': 'Overall'
         }
 
-        # Initialize analytics engine if available
-        self.analytics_engine = None
-        if ANALYTICS_AVAILABLE:
-            self.analytics_engine = RealTimeStatsEngine()
-            self._initialize_analytics_from_game_data()
+        # (Real-time analytics engine unwired 2026-09-28: advanced_stats_analytics
+        # was populated on every screen open but never displayed anywhere. The
+        # live advanced stats on this screen come from advanced_metrics.)
 
         # Dark styling for the multi-column tables (styled ttk.Treeview,
         # per the migration guide)
@@ -292,69 +286,6 @@ class StatsStandingsView(ctk.CTkFrame):
         inner = ctk.CTkFrame(scroll, fg_color="transparent")
         inner.pack(fill="both", expand=True)
         return inner
-        
-    def _initialize_analytics_from_game_data(self):
-        """Initialize analytics engine with current game data"""
-        try:
-            if not self.app.game_manager or not self.app.game_manager.league:
-                return
-                
-            # Find NHL teams
-            nhl_teams = []
-            if hasattr(self.app.game_manager.league, 'teams'):
-                nhl_teams = self.app.game_manager.league.teams
-            elif hasattr(self.app.game_manager.league, 'leagues'):
-                for league in self.app.game_manager.league.leagues:
-                    if hasattr(league, 'name') and "National Hockey League" in league.name:
-                        nhl_teams = league.teams
-                        break
-            
-            if not nhl_teams:
-                return
-                
-            # Initialize analytics for each team
-            for team in nhl_teams:
-                if hasattr(team, 'roster') and team.roster:
-                    # Convert team data to analytics format
-                    home_players = []
-                    for player in team.roster:
-                        home_players.append({
-                            'id': f"{team.team_name}_{getattr(player, 'full_name', 'Unknown')}",
-                            'name': getattr(player, 'full_name', 'Unknown'),
-                            'position': getattr(player, 'primary_position', 'C')
-                        })
-                    
-                    # Initialize analytics (this would normally be done at game start)
-                    if len(home_players) > 0:
-                        self.analytics_engine.initialize_game(
-                            team.team_name, 
-                            "TBD",  # Actual opponent will be determined from schedule data
-                            home_players, 
-                            []  # Away players would be empty for this initialization
-                        )
-                        
-                        # Populate with existing player stats if available
-                        for player in team.roster:
-                            player_id = f"{team.team_name}_{getattr(player, 'full_name', 'Unknown')}"
-                            if player_id in self.analytics_engine.player_stats:
-                                stats = self.analytics_engine.player_stats[player_id]
-                                # Update with real data from player object
-                                stats.goals = getattr(player, 'goals', 0)
-                                stats.assists = getattr(player, 'assists', 0)
-                                stats.shots = getattr(player, 'shots', 0)
-                                stats.hits = getattr(player, 'hits', 0)
-                                stats.blocks = getattr(player, 'blocks', 0)
-                                stats.ice_time = getattr(player, 'ice_time', 0.0)
-                        
-                        # Update team stats
-                        if team.team_name in self.analytics_engine.team_stats:
-                            team_stats = self.analytics_engine.team_stats[team.team_name]
-                            team_stats.goals = getattr(team, 'goals_for', 0)
-                            team_stats.shots = getattr(team, 'shots_for', 0)
-                            team_stats.hits = getattr(team, 'hits_for', 0)
-                            
-        except Exception as e:
-            print(f"Warning: Could not initialize analytics from game data: {e}")
     
     # ------------------------------------------------------------------
     # Tabview with a guard for the CTk 6.0.0 deferred grid-forget race.
@@ -510,7 +441,7 @@ class StatsStandingsView(ctk.CTkFrame):
                     if hasattr(team, 'roster'):
                         total_players += len(team.roster)
                 
-                summary = f"{team_count} teams • {total_players:,} players • Analytics: {'Active' if self.analytics_engine else 'Unavailable'}"
+                summary = f"{team_count} teams • {total_players:,} players"
                 self.data_summary_label.configure(text=summary)
             else:
                 self.data_summary_label.configure(text="No league data available")

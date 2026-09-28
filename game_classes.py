@@ -2685,6 +2685,25 @@ class League:
             season_year = self.season_year
         print(f"🏒 Generating league schedule for {season_year}-{season_year+1} season...")
 
+        # Fresh schedule = fresh season: reset the parity engine's season
+        # table (target-on-back / trap-game tiers) and every team's
+        # cross-game form. Additive; never raises.
+        try:
+            import parity_engine as _pe
+            _pe.new_season()
+            for _t in getattr(self, "teams", []) or []:
+                try:
+                    # Keep the current coach key: a new season is not a
+                    # coaching change (no phantom new-coach bounce).
+                    _ck = _pe._coach_key(_t)
+                    _t._parity_state = {"form": 0.0, "streak": 0,
+                                        "winless": 0, "coach_key": _ck,
+                                        "new_coach_games": 0}
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # Set up seasonal rotation seed
         if rotation_seed is None:
             rotation_seed = season_year

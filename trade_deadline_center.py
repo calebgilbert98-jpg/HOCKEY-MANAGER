@@ -1808,23 +1808,6 @@ class DeadlineMarketBrowser(InGamePopup):
         current_text = self.ticker_label.cget('text')
         new_text = f"{current_text} --- {trade}"
         self.ticker_label.config(text=new_text)
-        
-    # Button command methods (placeholders for now)
-    def _open_emergency_trade(self):
-        """Open emergency trade interface"""
-        if hasattr(self.parent, 'open_trade_window'):
-            self.parent.open_trade_window()
-        
-    def _open_quick_proposals(self):
-        """Open quick trade proposals"""
-        # Placeholder - could open simplified trade interface
-        pass
-        
-    def _open_market_analysis(self):
-        """Open market analysis window"""
-        # Placeholder - could show detailed market data
-        pass
-        
     def _close_deadline_center(self):
         """Close the trade deadline center"""
         self.auto_trades_active = False

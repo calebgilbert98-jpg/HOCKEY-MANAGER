@@ -301,6 +301,12 @@ class AdvancedGameSim:
         # side, computed once here -- the per-shot loop only reads.
         self._init_systems_edge()
 
+        # Parity engine: cross-game form + the corrective layer (coach
+        # adjustments, new-coach bounce, veteran pride, target-on-back,
+        # trap games). Same shared decision GameSim calls; this engine
+        # applies it on shot probability.
+        self._init_parity_edge()
+
         # Initialize performance cache
         from performance_optimizations import get_global_cache
         self.cache = get_global_cache()
@@ -511,6 +517,26 @@ class AdvancedGameSim:
             _tx.ensure_team_tactics(self.away_team)
             self._systems_matchup = _tx.matchup_modifiers(self.home_team,
                                                           self.away_team)
+        except Exception:
+            pass
+
+    def _init_parity_edge(self):
+        """Parity-engine multiplier per side, computed ONCE per game here
+        in __init__ -- the per-shot hot loop below only reads the stored
+        value. Same shared decision GameSim calls
+        (parity_engine.pregame_multiplier); never raises."""
+        self._parity_matchup = {"home": 1.0, "away": 1.0}
+        try:
+            import parity_engine as _pe
+            _po = bool(getattr(self, "is_playoff", False))
+            self._parity_matchup = {
+                "home": _pe.pregame_multiplier(self.home_team,
+                                               self.away_team,
+                                               playoffs=_po),
+                "away": _pe.pregame_multiplier(self.away_team,
+                                               self.home_team,
+                                               playoffs=_po),
+            }
         except Exception:
             pass
 
@@ -1007,6 +1033,14 @@ class AdvancedGameSim:
             _sv = _m.get("home_shot_vol" if _h else "away_shot_vol", 1.0)
             import tactics as _txl
             shot_prob *= _sv * _txl.SHOT_LIFT
+            # Parity engine: cross-game form + corrective layer (same
+            # shared decision GameSim applies on shot quality; this
+            # engine applies it on shot probability).
+            try:
+                _pm = self._parity_matchup or {}
+                shot_prob *= _pm.get("home" if _h else "away", 1.0)
+            except Exception:
+                pass
             # Rush identity: rush teams shoot off the rush instead of
             # taking the extra pass -- shift mass pass -> shot.
             _rush = _m.get("home_rush" if _h else "away_rush", 1.0)
@@ -1163,6 +1197,8 @@ class AdvancedGameSim:
             scores = (self.score[self.home_team.team_name], self.score[self.away_team.team_name])
             notable_events = [e for e in self.events if e['event'] == 'Goal' or e['event'] == 'Shootout Goal']
             self._record_mesh_performances()
+            # Shootout => the game went past regulation.
+            self._record_parity_result(winner, scores, went_ot=True)
             return winner, loser, scores, self.events, notable_events
         if self.score[self.home_team.team_name] > self.score[self.away_team.team_name]:
             winner, loser = self.home_team, self.away_team
@@ -1174,8 +1210,21 @@ class AdvancedGameSim:
         # Gameplay injuries: small chance per game (NHL: ~1 injury per 3-4 games)
         self._process_gameplay_injuries()
         self._record_mesh_performances()
+        self._record_parity_result(winner, scores,
+                                   went_ot=self.period > 3)
 
         return winner, loser, scores, self.events, notable_events
+
+    def _record_parity_result(self, winner, scores, went_ot=False):
+        """Feed the finished result into the parity engine (cross-game team
+        form + season table). Additive; never raises; never touches stats."""
+        try:
+            import parity_engine as _pe
+            _pe.record_result(
+                self.home_team, self.away_team,
+                winner == self.home_team, went_ot=bool(went_ot))
+        except Exception:
+            pass
 
     def _record_mesh_performances(self):
         """Feed finished-game lines into the mesh form tracker (moments ->
