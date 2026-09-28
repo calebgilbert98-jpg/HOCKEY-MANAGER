@@ -418,7 +418,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.start_button = tk.Button(action_frame,
                                      text="START GAME",
                                      font=AppFonts.H2,
-                                     bg=AppColors.ACCENT, fg='white',
+                                     bg=AppColors.ACCENT, fg=AppColors.ACCENT_TEXT,
                                      relief='flat', bd=0,
                                      pady=15, padx=40,
                                      cursor='hand2',
@@ -1212,7 +1212,7 @@ This profile will influence player relationships, media interactions, and trade 
         tk.Button(wiz_frame,
                   text="Open Setup Wizard",
                   font=AppFonts.BODY_BOLD,
-                  bg=AppColors.ACCENT, fg=AppColors.TEXT_PRIMARY,
+                  bg=AppColors.ACCENT, fg=AppColors.ACCENT_TEXT,
                   relief='flat', bd=0, pady=10, padx=40,
                   cursor='hand2',
                   command=self._open_setup_wizard).pack()
@@ -1995,7 +1995,7 @@ This profile will influence player relationships, media interactions, and trade 
         btn_frame.pack(fill='x', padx=15, pady=(0, 15))
         
         load_btn = tk.Button(btn_frame, text="Load Selected Game",
-                           bg=AppColors.ACCENT, fg='white',
+                           bg=AppColors.ACCENT, fg=AppColors.ACCENT_TEXT,
                            font=AppFonts.BODY_BOLD, relief='flat', bd=0,
                            pady=10, padx=25, cursor='hand2',
                            command=self._load_selected_save)
@@ -2932,7 +2932,8 @@ This profile will influence player relationships, media interactions, and trade 
         for button in start_buttons:
             if ready:
                 try:
-                    button.configure(state='normal', bg=AppColors.ACCENT, fg='white')
+                    button.configure(state='normal', bg=AppColors.ACCENT,
+                                     fg=AppColors.ACCENT_TEXT)
                 except:
                     pass
             else:

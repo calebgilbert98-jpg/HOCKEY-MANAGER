@@ -38,6 +38,12 @@ class AppColors:
     ACCENT = "#00ceb8"          # Primary accent
     ACCENT_DIM = "#00a894"      # Darker accent for hover
     ACCENT_BG = "#0d2b28"       # Accent background (subtle)
+    # Contrast-safe text colors, kept in step with ACCENT by
+    # App._update_team_colors: ACCENT_TEXT is readable ON the accent,
+    # ACCENT_ON_DARK is the accent itself made readable on dark
+    # backgrounds. Both guarantee WCAG AA (4.5:1).
+    ACCENT_TEXT = "#0e0e11"     # dark text on the default teal
+    ACCENT_ON_DARK = "#00ceb8"  # default teal, already safe on dark
     
     # Semantic
     SUCCESS = "#3fb950"         # Green (wins, positive)
@@ -286,7 +292,9 @@ class PillBadge(tk.Frame):
     def __init__(self, parent, text="", bg=None, fg=None, 
                  font=None, padx=12, pady=4, **kwargs):
         bg = bg or AppColors.ACCENT_BG
-        fg = fg or AppColors.ACCENT
+        # ACCENT itself can be unreadable on the dark whisper bg for some
+        # team colors -- use the contrast-safe variant.
+        fg = fg or AppColors.ACCENT_ON_DARK
         
         super().__init__(parent, bg=bg, **kwargs)
         
@@ -325,7 +333,7 @@ class AppButton(tk.Canvas):
         if style == "primary":
             self.bg_color = AppColors.ACCENT
             self.hover_color = AppColors.ACCENT_DIM
-            self.text_color = "#ffffff"
+            self.text_color = AppColors.ACCENT_TEXT
         else:  # secondary
             self.bg_color = AppColors.BG_ELEVATED
             self.hover_color = AppColors.BG_HOVER

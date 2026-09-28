@@ -120,7 +120,7 @@ class NHLTeamIdentity:
                 primary="#F74902",      # Orange
                 secondary="#000000",    # Black
                 accent="#FFFFFF",       # White
-                text_on_primary="#FFFFFF",
+                text_on_primary="#000000",
                 text_on_secondary="#FFFFFF"
             ),
             "Pittsburgh Penguins": TeamColors(
@@ -185,7 +185,7 @@ class NHLTeamIdentity:
                 primary="#69BE28",      # Rock Black
                 secondary="#154734",    # Salt Lake Blue
                 accent="#FFFFFF",       # White
-                text_on_primary="#FFFFFF",
+                text_on_primary="#000000",
                 text_on_secondary="#FFFFFF"
             ),
             "Winnipeg Jets": TeamColors(
@@ -230,7 +230,7 @@ class NHLTeamIdentity:
                 secondary="#EA7200",    # Orange
                 accent="#000000",       # Black
                 text_on_primary="#FFFFFF",
-                text_on_secondary="#FFFFFF"
+                text_on_secondary="#000000"
             ),
             "Seattle Kraken": TeamColors(
                 primary="#001628",      # Deep Sea Blue
@@ -312,6 +312,12 @@ nhl_identity = NHLTeamIdentity()
 
 _DEFAULT_ACCENT = ("#00ceb8", "#00a896", "#0e0e11")  # legacy teal
 
+# WCAG AA minimum for normal text. Every (text, background) pair the
+# module hands out is guaranteed to meet it -- team colors are shifted
+# the smallest possible amount toward white/black when they don't.
+_WCAG_AA = 4.5
+_DARK_BG = "#0e0e11"  # CONTENT_BG / window background
+
 
 def _luminance(hex_color: str) -> float:
     """Relative luminance of a hex color, 0 (black) to 1 (white)."""
@@ -321,6 +327,72 @@ def _luminance(hex_color: str) -> float:
         return 0.2126 * r + 0.7152 * g + 0.0722 * b
     except Exception:
         return 0.5
+
+
+def _wcag_luminance(hex_color: str) -> float:
+    """Gamma-corrected relative luminance per WCAG 2.x."""
+    try:
+        h = hex_color.lstrip("#")
+        rgb = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+
+        def lin(c):
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+        r, g, b = (lin(c) for c in rgb)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    except Exception:
+        return 0.5
+
+
+def contrast_ratio(fg: str, bg: str) -> float:
+    """WCAG contrast ratio of a (text, background) pair. Never raises."""
+    try:
+        l1, l2 = _wcag_luminance(fg), _wcag_luminance(bg)
+        hi, lo = (l1, l2) if l1 >= l2 else (l2, l1)
+        return (hi + 0.05) / (lo + 0.05)
+    except Exception:
+        return 1.0
+
+
+def _mix_hex(a: str, b: str, t: float) -> str:
+    """Mix two hex colors; t=0 -> a, t=1 -> b. Never raises."""
+    try:
+        ah, bh = a.lstrip("#"), b.lstrip("#")
+        ar, ag, ab = (int(ah[i:i + 2], 16) for i in (0, 2, 4))
+        br, bg_, bb = (int(bh[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (
+            round(ar + (br - ar) * t),
+            round(ag + (bg_ - ag) * t),
+            round(ab + (bb - ab) * t))
+    except Exception:
+        return a
+
+
+def ensure_text_contrast(fg: str, bg: str, minimum: float = _WCAG_AA) -> str:
+    """Return fg moved the smallest possible amount toward white or black
+    so it reaches `minimum` contrast on bg.
+
+    Team colors keep their hue identity -- a dark red becomes a lighter
+    red, never gray -- and already-passing colors come back untouched.
+    Never raises.
+    """
+    try:
+        if contrast_ratio(fg, bg) >= minimum:
+            return fg
+        best = None
+        for target in ("#ffffff", "#000000"):
+            lo, hi = 0.0, 1.0  # fraction toward target; want smallest hi that passes
+            for _ in range(12):
+                mid = (lo + hi) / 2
+                if contrast_ratio(_mix_hex(fg, target, mid), bg) >= minimum:
+                    hi = mid
+                else:
+                    lo = mid
+            if best is None or hi < best[0]:
+                best = (hi, _mix_hex(fg, target, hi))
+        return best[1] if best else fg
+    except Exception:
+        return fg
 
 
 def _darken(hex_color: str, factor: float = 0.85) -> str:
@@ -338,7 +410,11 @@ def accent_for_team(team_name) -> tuple:
 
     Uses the team's primary color unless it is too dark to read on the
     dark UI, in which case the secondary color is used. Unknown or
-    missing names fall back to the legacy teal. Never raises.
+    missing names fall back to the legacy teal.
+
+    The returned text color is guaranteed WCAG AA (4.5:1) on both the
+    accent and the hover backgrounds -- the team's color is shifted the
+    smallest possible amount when it would otherwise fail. Never raises.
     """
     colors = None
     try:
@@ -357,14 +433,30 @@ def accent_for_team(team_name) -> tuple:
         base, text = colors.secondary, colors.text_on_secondary
     else:
         base, text = colors.primary, colors.text_on_primary
-    return base, _darken(base, 0.85), text
+    text = ensure_text_contrast(text, base)
+    hover = _darken(base, 0.85)
+    if contrast_ratio(text, hover) < _WCAG_AA:
+        # Ease the hover darkening toward the base until the text passes.
+        lo, hi = 0.85, 1.0
+        for _ in range(12):
+            mid = (lo + hi) / 2
+            if contrast_ratio(text, _darken(base, mid)) >= _WCAG_AA:
+                hi = mid
+            else:
+                lo = mid
+        hover = _darken(base, hi)
+    return base, hover, text
 
 
 def text_color_for_team(team_name) -> str:
     """Team-colored text that stays readable on the dark UI: the primary
     color, unless it is too dark to read on near-black, in which case the
     secondary is used. Unknown names fall back to the legacy teal.
-    Never raises.
+
+    The returned color is guaranteed WCAG AA (4.5:1) on the dark UI
+    background -- it is lightened the smallest possible amount toward
+    white when the raw team color would fail, so the hue identity is
+    kept. Never raises.
     """
     try:
         colors = nhl_identity.get_team_colors(team_name)
@@ -377,8 +469,10 @@ def text_color_for_team(team_name) -> str:
         if colors is None:
             return _DEFAULT_ACCENT[0]
         if _luminance(colors.primary) < 0.15:
-            return colors.secondary
-        return colors.primary
+            candidate = colors.secondary
+        else:
+            candidate = colors.primary
+        return ensure_text_contrast(candidate, _DARK_BG)
     except Exception:
         return _DEFAULT_ACCENT[0]
 

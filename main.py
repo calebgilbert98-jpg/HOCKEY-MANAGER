@@ -3669,6 +3669,16 @@ class HockeyManagerGUI(tk.Tk):
                 AppColors.ACCENT = accent
                 AppColors.ACCENT_DIM = hover
                 AppColors.ACCENT_BG = _mix_hex(accent, "#0e0e11", 0.85)
+                # Contrast-safe text colors for the team accent: _text is
+                # readable ON the accent (standings, buttons); the on-dark
+                # variant is the accent itself made readable on dark bgs.
+                AppColors.ACCENT_TEXT = _text
+                from team_identity_system import ensure_text_contrast
+                # The on-dark variant is ensured against the actual whisper
+                # bg it sits on (PillBadge), not pure dark -- the whisper is
+                # a touch lighter and that matters at the margin.
+                AppColors.ACCENT_ON_DARK = ensure_text_contrast(
+                    accent, AppColors.ACCENT_BG)
         except Exception:
             pass
 
