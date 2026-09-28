@@ -4645,52 +4645,68 @@ def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
     """Score a completed trade's fallout. Never raises.
 
     ratio_a = value team A receives / value team A gives (>=1 means A won).
-    A fleece builds A's "shark" stature but the fleeced GM holds a personal
-    grudge; getting worked costs stature; fair dealing builds trust both
-    ways. Feeds the board's (previously uncalled) record_big_event hook.
+    Muck's rule: a trade never moves league-wide stature -- other GMs don't
+    grade your deals. The fallout lands where it belongs: the fans/room
+    cheer a fleece and fume when you get worked for a key piece (dynamics
+    feed), the owners react through the board, and the counterparty holds
+    a personal grudge (pairwise gm_gm heat, not league opinion).
     """
-    out: Dict[str, Any] = {"rep_a": 0, "rep_b": 0, "heat": 0, "notes": []}
+    out: Dict[str, Any] = {"heat": 0, "notes": []}
     try:
         ratio = float(ratio_a)
     except Exception:
         return out
     try:
+        aname = _ename(gm_persona(team_a))
         if ratio >= 1.30:
-            _nudge_gm_rep(team_a, 2, "trade_fleece")
-            out["rep_a"] = 2
+            # The building loves a fleece; the owners too. The GM on the
+            # other end remembers -- personally.
+            try:
+                record_team_event(
+                    team_a, "trade_fleece",
+                    f"{aname} worked the phones and won the deal. "
+                    f"The fans are buzzing.",
+                    morale_delta=2, tone="up")
+            except Exception:
+                pass
             try:
                 store = _rivalry_store(league) if league is not None else []
                 r = add_rivalry(
                     store, gm_persona(team_b), gm_persona(team_a), "gm_gm",
                     40, "trade_fleece",
-                    f"{_ename(gm_persona(team_b))} got worked by "
-                    f"{_ename(gm_persona(team_a))} in a lopsided deal.",
+                    f"{_ename(gm_persona(team_b))} got worked by {aname} "
+                    f"in a lopsided deal.",
                     grudge=50)
                 if r:
                     out["heat"] = 40
             except Exception:
                 pass
-            out["notes"].append("the league saw the fleece")
+            out["notes"].append("fans cheer the fleece")
             if board_a is not None:
                 try:
                     board_a.record_big_event("good_trade")
                 except Exception:
                     pass
         elif ratio <= 0.75:
-            _nudge_gm_rep(team_a, -2, "trade_fleeced")
-            out["rep_a"] = -2
-            out["notes"].append("the league saw you get worked")
+            # Took too little for a key piece: the room and the fans groan,
+            # the owners notice. The league's opinion of you doesn't move.
+            try:
+                record_team_event(
+                    team_a, "trade_fleeced",
+                    f"{aname} sold low and the fans know it. The building "
+                    f"is restless.",
+                    morale_delta=-2, tone="down")
+            except Exception:
+                pass
+            out["notes"].append("fans fume at the sell-low")
             if board_a is not None:
                 try:
                     board_a.record_big_event("bad_trade")
                 except Exception:
                     pass
         elif 0.90 <= ratio <= 1.10:
-            _nudge_gm_rep(team_a, 1, "trade_fair")
-            _nudge_gm_rep(team_b, 1, "trade_fair")
-            out["rep_a"] = 1
-            out["rep_b"] = 1
-            out["notes"].append("fair dealing builds trust")
+            # Fair dealing, quiet approval -- no stature swing either way.
+            out["notes"].append("a fair deal, no drama")
     except Exception:
         pass
     return out
