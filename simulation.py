@@ -7542,7 +7542,32 @@ class GameSim:
             return self._resolve_turnover(puck_carrier, potential_hitter, TurnoverType.FORCED_ERROR)
         elif hit_result == HitResult.PENALTY_DRAWN:
             self._resolve_penalty(potential_hitter, hitting_team)
+        elif hit_result == HitResult.INJURY_CAUSED:
+            self._apply_game_injury(puck_carrier, potential_hitter)
         return None
+
+    def _apply_game_injury(self, injured_player, hitting_player=None):
+        """Apply an in-game injury from a hit. Player leaves the game."""
+        try:
+            injury_types = [
+                ('upper body', 3, 14),   # name, min days, max days
+                ('lower body', 5, 21),
+                ('head', 7, 30),
+                ('shoulder', 4, 18),
+            ]
+            inj_type, min_d, max_d = random.choice(injury_types)
+            days = random.randint(min_d, max_d)
+            injured_player.injury_status = f"{inj_type} ({days} days)"
+            injured_player.injury_days = days
+            if injured_player.id in self.game_stats:
+                self.game_stats[injured_player.id]['injured'] = True
+                self.game_stats[injured_player.id]['injury_type'] = inj_type
+            hitter = getattr(hitting_player, 'name', 'opponent') if hitting_player else 'opponent'
+            self._log_event(
+                f"INJURY: {getattr(injured_player, 'name', 'player')} "
+                f"hurt on a hit from {hitter} ({inj_type}).")
+        except Exception:
+            pass
 
     def _attempt_hit(self, hitting_player, target_player, hit_type=HitType.BODY_CHECK):
         """
@@ -7602,10 +7627,10 @@ class GameSim:
         """
         # Base result probabilities
         results = [
-            (HitResult.SUCCESSFUL, 0.6),
+            (HitResult.SUCCESSFUL, 0.635),
             (HitResult.TURNOVER_CAUSED, 0.25),
             (HitResult.PENALTY_DRAWN, 0.06),
-            (HitResult.INJURY_CAUSED, 0.05)
+            (HitResult.INJURY_CAUSED, 0.015)  # ~0.5/game at NHL hit rates
         ]
 
         # Trait: Iron Man recipients are harder to injure (0.75x chance).
