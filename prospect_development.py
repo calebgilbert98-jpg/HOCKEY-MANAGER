@@ -420,14 +420,23 @@ def development_environment_factor(player: Any,
     the factor damps toward 1.0 for them.
     """
     age = getattr(player, "age", 25) or 25
-    if age > 26:
+    # The whole development curve slides with the player's arc (late
+    # bloomers peak later, early peaks earlier) -- so the environment's
+    # age windows slide with it. Otherwise the env curve would fight the
+    # arc curve (e.g. muting a late bloomer's delayed prime).
+    try:
+        _shift = {"standard": 0, "late_bloomer": 2, "early_peak": -2}.get(
+            getattr(player, "development_arc", "standard"), 0)
+    except Exception:
+        _shift = 0
+    if age > 26 + _shift:
         return 1.0  # veterans are past the growth curve anyway
 
     factor = 1.0
-    # 1. The prime window: real development starts 17-20.
-    if age <= 20:
+    # 1. The prime window: real development starts 17-20 (shifted by arc).
+    if age <= 20 + _shift:
         factor *= 1.20
-    elif age <= 23:
+    elif age <= 23 + _shift:
         factor *= 1.05
     else:
         factor *= 0.90
@@ -449,7 +458,7 @@ def development_environment_factor(player: Any,
     factor *= max(0.90, min(1.12, 1.0 + edge * 0.08))
 
     # 5. Generational talent develops regardless -- damp toward neutral.
-    if age <= 23 and true_grade(player).strip().upper() == "A+":
+    if age <= 23 + _shift and true_grade(player).strip().upper() == "A+":
         factor = 1.0 + (factor - 1.0) * 0.4
 
     return round(max(0.70, min(1.50, factor)), 3)

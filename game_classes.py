@@ -37,6 +37,46 @@ class GameBalance:
     MAX_SCOUTING_VIEWINGS = 15
 
 
+# --- Development arcs: individual career-trajectory variance ---
+# A player's arc is ONE factor in the development chain, never an override.
+# It composes multiplicatively with the existing factors: potential-grade
+# development_speed/peak_age (prospect generation), work ethic/determination,
+# coach influence, training modifiers, and the environment factor (league
+# quality, morale, opportunity). Same arc + different situation = different
+# career; that is the point.
+ARC_PEAK_SHIFT = {"standard": 0, "late_bloomer": 2, "early_peak": -2}
+ARC_SPEED_MULT = {"standard": 1.0, "late_bloomer": 0.85, "early_peak": 1.15}
+# How strongly the player's growth responds to his situation (env_factor):
+# late bloomers are unlocked by good situations and buried by bad ones;
+# early peaks are talent-driven and less situation-sensitive.
+ARC_ENV_SENSITIVITY = {"standard": 1.0, "late_bloomer": 1.3, "early_peak": 0.7}
+
+
+def roll_development_arc(potential_grade=None):
+    """Roll a development arc, nudged by prospect-generation factors.
+
+    Base odds: standard 70 / late_bloomer 15 / early_peak 15. The nudge
+    mirrors the grade curve the draft generator already encodes (lower
+    grades peak later -- the Zetterberg/Datsyuk shape): C/D/F prospects
+    lean late_bloomer, A prospects lean early_peak. Randomness stays
+    dominant so individuals still surprise.
+    """
+    late_w, early_w = 15, 15
+    g = (potential_grade or "").strip().upper()
+    if g[:1] in ("C", "D", "F"):
+        late_w, early_w = 25, 8
+    elif g[:1] == "A":
+        late_w, early_w = 8, 23
+    std_w = 100 - late_w - early_w
+    return random.choices(["standard", "late_bloomer", "early_peak"],
+                          weights=[std_w, late_w, early_w])[0]
+
+
+def arc_peak_shift(player):
+    """Years the player's whole development curve slides by arc."""
+    return ARC_PEAK_SHIFT.get(getattr(player, "development_arc", "standard"), 0)
+
+
 def to_100_scale(value):
     """DEPRECATED: Attributes are now native 100-scale. This is kept for
     backward compatibility with old saves and external callers.
@@ -222,13 +262,11 @@ class Player:
     # Football Manager-style career fields (happiness, squad status, chats)
     happiness: int = 70  # 0-100, how happy the player is at the club
 
-    # Development arc: career trajectory variance (late bloomers / early peaks)
-    # standard: normal development curve (70%)
-    # late_bloomer: slower early, peaks later (28-30), declines slower (15%)
-    # early_peak: faster early, peaks earlier (24-25), declines earlier (15%)
-    development_arc: str = field(default_factory=lambda: random.choices(
-        ["standard", "late_bloomer", "early_peak"],
-        weights=[0.7, 0.15, 0.15])[0])
+    # Development arc: career trajectory variance (late bloomers / early peaks).
+    # Rolled at creation; create_prospect re-rolls with a nudge from the
+    # prospect's potential grade so arcs stay inclusive of generation factors.
+    # The arc is one multiplicative factor among many -- never an override.
+    development_arc: str = field(default_factory=roll_development_arc)
 
     # Reputation system (ratchet 0-100; visible attitude/volatility 0-100)
     reputation: int = 0
@@ -717,13 +755,26 @@ class Player:
         potential_cap = self._potential_cap()
         dev = self._grade_development()
 
+        # Development arc: the player's individual trajectory variance, wired
+        # in as a factor alongside the grade factors -- it shifts the grade's
+        # peak age, scales its development speed, and tunes how strongly the
+        # player's situation (env_factor: league quality, morale, opportunity)
+        # moves his growth. Same grade + same arc + different situation =
+        # different career. Nothing here overrides the grade curve; the arc
+        # multiplies with it.
+        arc = getattr(self, "development_arc", "standard")
+        peak_shift = ARC_PEAK_SHIFT.get(arc, 0)
+        speed_mult = ARC_SPEED_MULT.get(arc, 1.0)
+        env_sens = ARC_ENV_SENSITIVITY.get(arc, 1.0)
+
         # Development closes a fraction of the gap to the player's ceiling
         # each year: prospects surge, established players refine slowly.
         # Higher-touted grades develop faster (development_speed) but stop
         # earlier (peak_age); late-round types grow slower and longer.
         # Peak age is the last developing year: a late-blooming grade keeps
-        # growing long after an early-peaking one has stopped.
-        if self.age <= dev["peak_age"] and self.overall_rating() < potential_cap:
+        # growing long after an early-peaking one has stopped. The arc slides
+        # that whole window for the individual.
+        if self.age <= dev["peak_age"] + peak_shift and self.overall_rating() < potential_cap:
             gap = potential_cap - self.overall_rating()
             if self.age <= 20:
                 frac = 0.25
@@ -733,11 +784,15 @@ class Player:
                 frac = 0.10
             else:
                 frac = 0.05
-            frac *= dev["development_speed"]
+            frac *= dev["development_speed"] * speed_mult
             # Farm/junior environment: the 17-20 window, league quality,
             # morale, and opportunity compound here (EHM on steroids).
+            # Arc x circumstance: a late bloomer is unlocked (or buried) by
+            # his situation far more than a talent-driven early peak is.
             try:
-                frac *= max(0.5, min(1.6, float(env_factor)))
+                env_mult = max(0.5, min(1.6, float(env_factor)))
+                env_mult = 1.0 + (env_mult - 1.0) * env_sens
+                frac *= env_mult
             except Exception:
                 pass
             frac *= random.uniform(0.8, 1.2)
@@ -756,7 +811,7 @@ class Player:
             attr_points = max(1, int(gain / per_point))
             for _ in range(attr_points):
                 self._change_random_attribute(1)
-        elif self.age > GameBalance.PEAK_AGE_END:
+        elif self.age > GameBalance.PEAK_AGE_END + peak_shift:
             if random.random() < GameBalance.DECLINE_CHANCE:
                 self._change_random_attribute(-1)
 
@@ -4709,9 +4764,15 @@ class League:
                 pass
             try:
                 _on_nhl = player.id in nhl_ids
+                # Env eligibility slides with the arc: a late bloomer's
+                # situation still matters at 27-28; an early peak's stops
+                # mattering sooner. (development_environment_factor itself
+                # returns 1.0 past the shifted window, so this is just the
+                # gate matching the curve.)
                 _env = _pd.development_environment_factor(
                     player, league="NHL" if _on_nhl else None) \
-                    if (_pd is not None and (getattr(player, "age", 99) or 99) <= 26) \
+                    if (_pd is not None and (getattr(player, "age", 99) or 99)
+                        <= 26 + arc_peak_shift(player)) \
                     else 1.0
             except Exception:
                 _env = 1.0

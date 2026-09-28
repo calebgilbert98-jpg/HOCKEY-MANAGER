@@ -7826,8 +7826,16 @@ class HockeyManagerGUI(tk.Tk):
                             except Exception:
                                 pass
                             
-                            # Apply development to attributes based on player age and stage
-                            if player.age <= 27:  # Only develop younger players
+                            # Apply development to attributes based on player age and stage.
+                            # The age gates slide with the player's development arc
+                            # (late bloomers develop longer, early peaks decline
+                            # sooner) -- the gates themselves are untouched.
+                            try:
+                                from game_classes import arc_peak_shift as _arc_shift
+                                _shift = _arc_shift(player)
+                            except Exception:
+                                _shift = 0
+                            if player.age <= 27 + _shift:  # Only develop younger players
                                 import random
                                 
                                 # Determine which attributes can develop
@@ -7862,8 +7870,8 @@ class HockeyManagerGUI(tk.Tk):
                                                         'new_value': new_val
                                                     })
                             
-                            # Age-related decline for older players
-                            elif player.age >= 33:
+                            # Age-related decline for older players (arc slides the gate)
+                            elif player.age >= 33 + _shift:
                                 import random
                                 decline_chance = (player.age - 32) * 0.02  # 2% per year over 32
                                 

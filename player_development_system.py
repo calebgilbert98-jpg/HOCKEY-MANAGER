@@ -196,7 +196,7 @@ class PlayerDevelopmentEngine:
             elif stage == DevelopmentStage.PRIME_EARLY:
                 base_rate *= 0.5  # Peak ends sooner
             elif stage == DevelopmentStage.PRIME:
-                base_rate = -0.1  # Early decline (was +0.1 maintenance)
+                base_rate -= 0.2  # Early decline (0.1 maintenance -> -0.1)
             elif stage in (DevelopmentStage.VETERAN, DevelopmentStage.AGING):
                 base_rate *= 1.3  # Faster decline (more negative)
         

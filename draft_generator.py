@@ -471,6 +471,14 @@ def create_prospect(age: int = 18,
     player.birthplace = birthplace
     player.nationality = nationality
     player.potential_grade = potential
+    # Development arc: re-roll with the prospect's grade nudging the odds so
+    # arcs stay inclusive of generation factors (lower grades lean
+    # late-bloomer, elite grades lean early-peak; randomness still dominates).
+    try:
+        from game_classes import roll_development_arc as _roll_arc
+        player.development_arc = _roll_arc(potential)
+    except Exception:
+        pass
     
     # Generate realistic physical attributes for prospects
     if position == PlayerPosition.GOALIE:
