@@ -965,7 +965,9 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
                 date_str = self.app.current_date.isoformat()
             except Exception:
                 pass
-            fire_coach(team, reason="fired", date_str=date_str)
+            fire_coach(team, reason="fired", date_str=date_str,
+                       league=getattr(getattr(self, "app", None),
+                                      "league", None))
         except Exception:
             pass
         self.refresh()
@@ -2103,15 +2105,27 @@ def _remove_staff_member(team: Any, coach: Any) -> None:
 
 
 def fire_coach(team: Any, reason: str = "fired",
-               date_str: str = "") -> Optional[Dict[str, Any]]:
+               date_str: str = "", league: Any = None) -> Optional[Dict[str, Any]]:
     """Fire the head coach: he joins the carousel, the room reacts.
 
     Addition by subtraction for the quit-on-coach crowd; grief for the
     bonded; uncertainty for everyone else.
+
+    league (optional): when provided, the firing is recorded in the
+    league's rivalries -- the coach blames the GM, and the grudge
+    follows the coach to his next job. Additive: rivalries only.
     """
     coach = _room_head_coach(team)
     if coach is None:
         return None
+    if league is not None:
+        try:
+            from reputation_system import record_firing as _rf
+            _rivs = getattr(league, "rivalries", None)
+            if isinstance(_rivs, list):
+                _rf(_rivs, coach, team)
+        except Exception:
+            pass
     entry = remember_coach(coach, team, reason=reason, date_str=date_str)
     cname = entry["name"]
     roster = _roster(team)

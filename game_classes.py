@@ -5239,6 +5239,20 @@ class League:
             prune_iconic_games(self)
         except Exception:
             pass
+        # Rivalry lifecycle: yearly offseason decay, plus the full
+        # review (solidify / simmer / fade / bury) every third season,
+        # exactly as designed. Regional hate never fully dies; declared
+        # and solidified feuds have floors. Guarded so it can never
+        # break the season rollover.
+        try:
+            import reputation_system as _rs
+            _rivs = getattr(self, "rivalries", None)
+            if isinstance(_rivs, list) and _rivs:
+                _rs.decay_rivalries(_rivs, years=1)
+                if int(self.season_year or 0) % 3 == 0:
+                    _rs.review_rivalries(_rivs, years=3)
+        except Exception:
+            pass
         # Keep the draft-pick future discount anchored to the live season.
         try:
             set_pick_value_anchor_year(self.season_year)

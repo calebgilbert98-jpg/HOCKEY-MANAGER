@@ -2079,6 +2079,16 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
             _rs.apply_fresh_start(player, old_team, new_team, teams=teams)
         except Exception:
             pass
+        # Rivalry lifecycle: a player changes sweaters. Personal bad
+        # blood (injuries, personal escalation) follows the MAN -- it's
+        # his, not the team's. Ambient stuff he merely encouraged is
+        # left behind or cools. Additive: rivalries only.
+        try:
+            _rivs = getattr(league, "rivalries", None)
+            if isinstance(_rivs, list):
+                _rs.on_player_transfer(_rivs, player, old_team, new_team)
+        except Exception:
+            pass
         # Dressing-room cascade (module 03): the old room reacts to the
         # departure, the new room absorbs the arrival.
         try:

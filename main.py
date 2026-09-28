@@ -365,6 +365,14 @@ class GameManager:
             if hasattr(self.league, 'generate_schedule'):
                 self.league.generate_schedule()
             
+            # Rivalry lifecycle: seed the regional feuds (Battle of
+            # Alberta, Original Six bad blood, ...) for a brand-new
+            # league. Guarded: existing saves keep their lived-in state.
+            try:
+                self._seed_regional_rivalries()
+            except Exception as e:
+                print(f"Regional rivalry seeding skipped: {e}")
+
             print(f"Database generation complete! {len(self.league.get_all_players())} total players.")
             print(f"Teams with players: {len([t for t in self.league.teams if len(t.roster) > 0])}")
             print(f"Teams with staff: {len([t for t in self.league.teams if len(t.staff) > 0])}")
@@ -645,6 +653,30 @@ NHL League Office""",
         self.user_team.inbox.add_message(draft_email)
         print(f"Fantasy draft message added to {self.user_team.team_name} inbox")
 
+    def _seed_regional_rivalries(self):
+        """Seed regional rivalries for a brand-new league.
+
+        Guarded so existing saves keep their lived-in state: only runs
+        when the league's rivalry ledger is empty. Idempotent -- the
+        underlying add is merge-by-max, so a double call can't duplicate.
+        """
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        rivs = getattr(league, "rivalries", None)
+        if not isinstance(rivs, list) or rivs:
+            return
+        teams = list(getattr(league, "teams", []) or [])
+        if not teams:
+            return
+        try:
+            from reputation_system import seed_regional_rivalries
+            n = seed_regional_rivalries(rivs, teams)
+            if n:
+                print(f"Seeded {n} regional rivalries.")
+        except Exception:
+            pass
+
     def setup_new_game(self):
         """Initializes a new game world with teams, players, and staff using the comprehensive database system."""
         print("Setting up a new game with comprehensive player database...")
@@ -696,6 +728,12 @@ NHL League Office""",
         print(f"Free agents available: {len(self.database_manager.get_free_agents())}")
         print(f"International players: {len(self.database_manager.international_players)}")
         print(f"Draft eligible players: {len(self.database_manager.draft_eligibles)}")
+        # Rivalry lifecycle: seed the regional feuds for a brand-new
+        # league. Guarded: existing saves keep their lived-in state.
+        try:
+            self._seed_regional_rivalries()
+        except Exception as e:
+            print(f"Regional rivalry seeding skipped: {e}")
 
     def _generate_players(self, count):
         """
@@ -11780,23 +11818,45 @@ class HockeyManagerGUI(tk.Tk):
             team = roster_map.get(_pid) or getattr(p, "team_name", "Unknown") or "Unknown"
             return {"name": name, "team": team, "stats": ""}
 
-        def _top(race):
+        def _top(race, award_name=None):
             try:
                 r = race()
-                return r[0] if r else None
+                top = r[0] if r else None
+                # Rivalry lifecycle: a photo-finish award race gets
+                # personal. Top two within 5% on the race's own score
+                # reads as a genuinely contested vote. Runaways don't
+                # make enemies. Additive: rivalries only.
+                if award_name and r and len(r) >= 2:
+                    try:
+                        s1 = float(r[0].get("score", 0) or 0)
+                        s2 = float(r[1].get("score", 0) or 0)
+                        if s1 > 0 and (s1 - s2) / s1 < 0.05:
+                            p1, p2 = r[0].get("player"), r[1].get("player")
+                            if p1 is not None and p2 is not None \
+                                    and p1 is not p2:
+                                from reputation_system import \
+                                    record_award_race as _rar
+                                _rivs = getattr(
+                                    getattr(self, "league", None),
+                                    "rivalries", None)
+                                if isinstance(_rivs, list):
+                                    _rar(_rivs, p1, p2, award_name)
+                    except Exception:
+                        pass
+                return top
             except Exception:
                 return None
 
         # Hart Trophy - MVP (points + team success)
         e = _top(lambda: ar.hart_race(players, team_pct,
-                                   roster_map=roster_map))
+                                   roster_map=roster_map), "Hart Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
         awards["Hart Trophy (MVP)"] = info
 
         # Art Ross - pure points
-        e = _top(lambda: ar.art_ross_race(players))
+        e = _top(lambda: ar.art_ross_race(players), "Art Ross Trophy")
         info = _info(e)
         if info:
             p = e["player"]
@@ -11805,7 +11865,7 @@ class HockeyManagerGUI(tk.Tk):
         awards["Art Ross Trophy (Scoring Leader)"] = info
 
         # Rocket Richard - pure goals
-        e = _top(lambda: ar.rocket_race(players))
+        e = _top(lambda: ar.rocket_race(players), "Rocket Richard Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['goals']} goals"
@@ -11814,7 +11874,7 @@ class HockeyManagerGUI(tk.Tk):
         awards['Maurice "Rocket" Richard Trophy'] = info
 
         # Vezina - best goalie (SV%/GAA/wins + GSAx cross-check)
-        e = _top(lambda: ar.vezina_race(players))
+        e = _top(lambda: ar.vezina_race(players), "Vezina Trophy")
         info = _info(e)
         if info:
             p = e["player"]
@@ -11823,21 +11883,21 @@ class HockeyManagerGUI(tk.Tk):
         awards["Vezina Trophy (Best Goalie)"] = info
 
         # Norris - best defenseman (modern offense-first voting)
-        e = _top(lambda: ar.norris_race(players))
+        e = _top(lambda: ar.norris_race(players), "Norris Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['points']} pts"
         awards["Norris Trophy (Best Defenseman)"] = info
 
         # Selke - best defensive forward
-        e = _top(lambda: ar.selke_race(players))
+        e = _top(lambda: ar.selke_race(players), "Selke Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['score']:.1f} defensive score"
         awards["Selke Trophy (Defensive Forward)"] = info
 
         # Lady Byng - skill + sportsmanship (points discounted by PIM)
-        e = _top(lambda: ar.byng_race(players))
+        e = _top(lambda: ar.byng_race(players), "Lady Byng Trophy")
         info = _info(e)
         if info:
             p = e["player"]
@@ -11846,7 +11906,7 @@ class HockeyManagerGUI(tk.Tk):
 
         # Calder - rookie of the year (NHL rookie eligibility)
         _syr = ar.calder_season_year(getattr(self, "current_date", None))
-        e = _top(lambda: ar.calder_race(players, season_year=_syr))
+        e = _top(lambda: ar.calder_race(players, season_year=_syr), "Calder Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['points']} pts (rookie)"

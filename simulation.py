@@ -8430,6 +8430,22 @@ class GameSim:
             _rgi(self.rivalries, hitting_team, target_team, kind, detail)
         except Exception:
             pass
+        # Rivalry lifecycle: a major injury becomes personal bad blood
+        # between the two men -- the room wants payback. The offseason
+        # review can solidify it into entrenched hatred. Only the sim's
+        # top severity tier qualifies; season_ending marks the 20+ game
+        # catastrophes. Additive: rivalries only.
+        try:
+            _gm = games_missed
+        except NameError:
+            _gm = 0
+        if _gm >= 8:
+            try:
+                from reputation_system import record_major_injury as _rmi
+                _rmi(self.rivalries, victim, hitter,
+                     season_ending=bool(_gm >= 20))
+            except Exception:
+                pass
 
     def _resolve_turnover(self, player_losing_puck, player_gaining_puck, turnover_type):
         """
