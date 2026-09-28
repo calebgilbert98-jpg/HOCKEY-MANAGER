@@ -987,19 +987,21 @@ class InboxWindow(InGamePopup):
                     size=11, padx=10, pady=(4, 2))
         self._action_section("YOUR MOVE")
         btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
-        btn_row.pack(anchor='w', padx=10, pady=6)
+        btn_row.pack(fill="x", padx=10, pady=6)
+        # Vertical full-width buttons: the preview pane is narrow (~330px) and
+        # a single row clips the third action.
         self._primary_button(
             btn_row, text=f"Accept ${asking:,}/yr",
             command=lambda m=message: self._on_contract_counter_accept(m)
-        ).pack(side='left', padx=(0, 8))
+        ).pack(fill="x", pady=(0, 8))
         self._secondary_button(
             btn_row, text="New Offer",
             command=lambda m=message: self._on_contract_counter_new_offer(m)
-        ).pack(side='left', padx=(0, 8))
+        ).pack(fill="x", pady=(0, 8))
         self._secondary_button(
             btn_row, text="Walk Away",
             command=lambda m=message: self._on_contract_counter_walkaway(m)
-        ).pack(side='left')
+        ).pack(fill="x")
         self._iwrap("Close this inbox any time -- the offer waits for you.",
                     size=10, dim=True, padx=10, pady=(6, 0))
 

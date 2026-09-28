@@ -1030,7 +1030,7 @@ class StaffManagementWindow(InGamePopup):
         details_window = InGamePopup(self)
         details_window.title(f"Staff Details - {staff.full_name}")
         details_window.configure(fg_color=ct['BG'])
-        details_window.geometry("680x940")
+        details_window.geometry("680x820")
         details_window.transient(self)
 
         # Main frame (scrollable so the tall dialog always fits)
@@ -1158,9 +1158,9 @@ class StaffManagementWindow(InGamePopup):
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", pady=2)
         ctk.CTkLabel(row, text=label, font=(self._ff, 10),
-                     text_color=ct['TEXT_DIM'], width=150,
+                     text_color=ct['TEXT_DIM'], width=130,
                      anchor="w").pack(side="left")
-        bar = ctk.CTkProgressBar(row, width=150, height=8,
+        bar = ctk.CTkProgressBar(row, width=110, height=8,
                                  progress_color=ct['TEAL'])
         bar.pack(side="left", padx=(4, 8))
         try:
