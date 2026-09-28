@@ -3868,6 +3868,232 @@ def generate_personality(entity: Any, hothead_chance: float = 0.08) -> int:
         return 20
 
 
+# ---------------------------------------------------------------------------
+# Generation blends: every batch of new players gets a real mix.
+#
+# The room model reads three separate axes off a player -- public drama
+# (base_controversy), temper (aggressiveness + low composure), and quiet
+# difficulty (selfishness + low teamwork) -- so generation deals them as a
+# BLEND, not one label. A saint can have a hot head; a tough sell can avoid
+# every camera; a showman can be all spotlight and no temper. Archetype
+# leans the odds, never locks them; a per-class tilt gives each draft class
+# its own character, so the league's personality shifts as the seasons turn.
+# Identity is dealt once, here, at generation -- never re-dealt.
+# ---------------------------------------------------------------------------
+
+_GENERATION_BLENDS = (
+    "professional",   # low drama, even temper, team-first
+    "quiet",          # very low drama, keeps to himself
+    "showman",        # high drama, low temper -- loves the spotlight
+    "saint_hothead",  # low drama, high temper -- saint with a hot head
+    "tough_sell",     # low drama, high difficulty -- quiet, hard to please
+    "volatile",       # high drama + high temper
+)
+
+_BLEND_WEIGHTS = {
+    "professional": 52.0,
+    "quiet": 12.0,
+    "showman": 10.0,
+    "saint_hothead": 9.0,
+    "tough_sell": 9.0,
+    "volatile": 8.0,
+}
+
+# tilt -> {blend: weight multiplier}
+_CLASS_TILTS = {
+    "fiery": {"saint_hothead": 1.8, "volatile": 1.8},
+    "circus": {"showman": 1.8, "volatile": 1.8},
+    "sulky": {"tough_sell": 2.0},
+    "professional": {"professional": 1.5, "quiet": 1.5},
+}
+
+
+# A little room for the unexpected: a small share of prospects get a
+# WILDCARD -- one axis twisted away from their blend. The kid stays a
+# coherent person, just not the one the scouts expected: the quiet
+# professional with a hidden hot head, the showman with a real bite.
+# The blend fingerprint records what everyone expected; personality_twist
+# records the surprise. Nothing here can break the game -- every downstream
+# effect is one-time and bounded -- but every class gets a few stories
+# nobody saw coming.
+_WILDCARD_CHANCE = 0.04
+_WILDCARD_TWISTS = {
+    "professional": ("hidden_temper", "quiet_edge"),
+    "quiet": ("quiet_edge", "hidden_temper"),
+    "showman": ("spotlight_bite",),
+    "saint_hothead": ("public_edge",),
+    "tough_sell": ("thin_skin",),
+    "volatile": ("soft_center",),
+}
+# twist -> axis it flips
+_TWIST_AXES = {
+    "hidden_temper": "temper_high",
+    "spotlight_bite": "temper_high",
+    "thin_skin": "temper_high",
+    "public_edge": "drama_high",
+    "quiet_edge": "difficult_high",
+    "soft_center": "temper_low",
+}
+
+
+def _blend_archetype_lean(archetype_name: Any) -> Dict[str, float]:
+    """Archetype leans the blend odds -- a lean, never a lock."""
+    name = str(archetype_name or "").lower()
+    if any(k in name for k in ("enforc", "tough guy", "grind", "pest",
+                               "agitat")):
+        return {"saint_hothead": 2.2, "volatile": 2.0, "professional": 0.8}
+    if any(k in name for k in ("sniper", "playmaker", "finesse", "snipe",
+                               "dangler", "offensive")):
+        return {"showman": 1.8, "volatile": 1.4}
+    if any(k in name for k in ("two-way", "twoway", "defensive", "shutdown",
+                               "checker", "stay-at-home", "stay at home")):
+        return {"professional": 1.4, "quiet": 1.3, "volatile": 0.6}
+    if any(k in name for k in ("goalie", "goaltender", "netminder")):
+        return {"quiet": 1.3, "professional": 1.2}
+    return {}
+
+
+def _set_trait(player: Any, attr: str, lo: int, hi: int) -> None:
+    try:
+        setattr(player, attr, max(1, min(99, random.randint(lo, hi))))
+    except Exception:
+        pass
+
+
+def _apply_blend(player: Any, blend: str, twist: str = "") -> None:
+    """Reshape the raw traits so the whole game reads one coherent person.
+
+    Drama shapes discipline/composure/aggressiveness (which the locked
+    base_controversy is then dealt from); temper overrides aggressiveness
+    and composure; difficulty sets selfishness (dealt here -- real players
+    never had one) and teamwork. A wildcard twist flips exactly one axis,
+    so the surprise is still a legible person. Tendencies follow
+    temperament.
+    """
+    drama_high = blend in ("showman", "volatile")
+    temper_high = blend in ("saint_hothead", "volatile")
+    difficult_high = blend == "tough_sell"
+    _axis = _TWIST_AXES.get(twist, "")
+    if _axis == "drama_high":
+        drama_high = True
+    elif _axis == "temper_high":
+        temper_high = True
+    elif _axis == "temper_low":
+        temper_high = False
+    elif _axis == "difficult_high":
+        difficult_high = True
+
+    if drama_high:
+        _set_trait(player, "discipline", 30, 45)
+        _set_trait(player, "composure", 35, 50)
+        _set_trait(player, "aggressiveness", 55, 75)
+    else:
+        _set_trait(player, "discipline", 60, 80)
+        _set_trait(player, "composure", 60, 80)
+        _set_trait(player, "aggressiveness", 35, 55)
+    if temper_high:
+        _set_trait(player, "aggressiveness", 72, 90)
+        _set_trait(player, "composure", 25, 42)
+    else:
+        _set_trait(player, "composure", 55, 75)
+        _set_trait(player, "aggressiveness", 30, 52)
+    if difficult_high:
+        _set_trait(player, "selfishness", 68, 90)
+        _set_trait(player, "teamwork", 25, 42)
+    else:
+        _set_trait(player, "selfishness", 30, 52)
+        _set_trait(player, "teamwork", 55, 78)
+
+    # Tendencies follow temperament: hot heads hit, showmen shoot.
+    try:
+        if temper_high:
+            _ht = int(getattr(player, "hitting_tendency", 50) or 50)
+            player.hitting_tendency = max(_ht, random.randint(55, 85))
+        if blend == "showman":
+            _st = int(getattr(player, "shooting_tendency", 50) or 50)
+            player.shooting_tendency = max(_st, random.randint(55, 85))
+    except Exception:
+        pass
+    # A visible fingerprint of the deal (for QA and draft stories):
+    # what everyone expected, plus the surprise if there was one.
+    try:
+        player.personality_blend = blend
+        player.personality_twist = twist
+    except Exception:
+        pass
+
+
+def roll_class_tilt() -> Optional[str]:
+    """Roll one draft class's character. Most classes are neutral; some
+    come in with a temperament of their own."""
+    try:
+        if random.random() < 0.55:
+            return None
+        return random.choice(["fiery", "circus", "sulky", "professional"])
+    except Exception:
+        return None
+
+
+def deal_generation_blend(player: Any,
+                          tilt: Optional[str] = None) -> int:
+    """Deal one generated player's personality blend. Idempotent: a player
+    who already has a locked base_controversy keeps it -- identity is
+    dealt once, at generation, never re-dealt."""
+    try:
+        if isinstance(getattr(player, "base_controversy", None), int):
+            return player.base_controversy
+        weights = dict(_BLEND_WEIGHTS)
+        for _b, _m in _blend_archetype_lean(
+                getattr(player, "archetype", "")).items():
+            weights[_b] = weights.get(_b, 0.0) * _m
+        for _b, _m in _CLASS_TILTS.get(tilt or "", {}).items():
+            weights[_b] = weights.get(_b, 0.0) * _m
+        _total = sum(weights.values()) or 1.0
+        _roll = random.random() * _total
+        _blend = "professional"
+        for _name in _GENERATION_BLENDS:
+            _roll -= weights.get(_name, 0.0)
+            if _roll <= 0:
+                _blend = _name
+                break
+        # The unexpected: one twisted axis, rarely. Still a coherent
+        # person -- just not the one the scouts expected.
+        _twist = ""
+        try:
+            if random.random() < _WILDCARD_CHANCE:
+                _options = _WILDCARD_TWISTS.get(_blend, ())
+                if _options:
+                    _twist = random.choice(_options)
+        except Exception:
+            _twist = ""
+        _apply_blend(player, _blend, twist=_twist)
+        # Deal the locked drama from the reshaped traits -- with no outlier
+        # roll. The blend already deals rare combos deliberately; an extra
+        # dice roll here would break the combo's coherence (a saint with a
+        # 70 controversy isn't a saint). The blend's declared drama (after
+        # any wildcard twist) gets the final word over the estimator --
+        # "saint despite the numbers".
+        _drama_high = _blend in ("showman", "volatile") \
+            or _TWIST_AXES.get(_twist, "") == "drama_high"
+        try:
+            if getattr(player, "base_controversy", None) is None:
+                _deal_base_controversy(player, 0.0)
+                if _drama_high:
+                    player.base_controversy = max(
+                        40, player.base_controversy)
+                    player.controversy = max(40, player.controversy)
+                else:
+                    player.base_controversy = min(
+                        39, player.base_controversy)
+                    player.controversy = min(39, player.controversy)
+            ensure_reputation_fields(player)
+            return player.base_controversy
+        except Exception:
+            return 20
+    except Exception:
+        return getattr(player, "base_controversy", 20) or 20
+
+
 
 def _draft_overall(p: Any) -> Optional[int]:
     try:
