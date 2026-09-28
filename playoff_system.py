@@ -305,6 +305,35 @@ class PlayoffBracket:
                         _s._ledger_recorded = True
         except Exception:
             pass
+        # Rivalry lifecycle: a completed playoff series leaves heat --
+        # seven-game wars and upsets leave more. Recorded once per
+        # series, here, before winners move on. Additive: rivalries only.
+        try:
+            from reputation_system import record_playoff_series as _rps
+            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+            if isinstance(_rivs, list):
+                for _s in current_series:
+                    if not getattr(_s, "is_complete", False) or \
+                            getattr(_s, "_rivalry_recorded", False):
+                        continue
+                    _w = getattr(_s, "winner", None)
+                    _t1, _t2 = getattr(_s, "team1", None), \
+                        getattr(_s, "team2", None)
+                    _l = _t2 if _w is _t1 else (_t1 if _w is _t2 else None)
+                    if _w is not None and _l is not None:
+                        _games = int(getattr(_s, "games_played", 7) or 7)
+                        try:
+                            _wp = int(getattr(_w, "standings_position", 99)
+                                      or 99)
+                            _lp = int(getattr(_l, "standings_position", 99)
+                                      or 99)
+                        except Exception:
+                            _wp, _lp = 99, 99
+                        _rps(_rivs, _w, _l, games=_games,
+                             upset=bool(_wp > _lp))
+                    _s._rivalry_recorded = True
+        except Exception:
+            pass
         winners = [series.winner for series in current_series if series.is_complete and series.winner]
 
         if round_name == 'wild_card':

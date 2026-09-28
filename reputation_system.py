@@ -1497,7 +1497,7 @@ def apply_mistreat_player(team: Any, coach: Any, player: Any,
     player.happiness = max(0, (getattr(player, "happiness", 70) or 70) - 15)
     player.controversy = min(100, (player.controversy or 0) + 5)
     pop = team_perception(player, roster=roster)
-    ff = fan_favourite_score(player, team)
+    ff = fan_favourite_score(player, team, rivalries=rivalries)
     fav = ff["score"] >= 70
     friends = [p for p in roster
                if p is not player and _ensure_relationships(p).get(player.id, 0) >= 50]
@@ -2518,6 +2518,14 @@ def record_playoff_series(rivalries: list, winner: Any, loser: Any,
     out.append(add_rivalry(rivalries, winner, loser, "team_team", heat,
                            "playoff_series", story, grudge=60,
                            career_cost=40 if games >= 7 else 20))
+    # Direction stamp: who ended whose season. The transfer lifecycle uses
+    # it to spot a player joining the team that just eliminated his old
+    # club. Additive: old records simply lack the keys.
+    try:
+        out[-1]["playoff_winner"] = _ekey(winner)
+        out[-1]["playoff_loser"] = _ekey(loser)
+    except Exception:
+        pass
     return out
 
 
@@ -2541,8 +2549,29 @@ def record_firing(rivalries: list, coach: Any, team: Any) -> Dict[str, Any]:
 
 
 def record_award_race(rivalries: list, pa: Any, pb: Any, award: str) -> Dict[str, Any]:
+    """An award race got personal -- but only for players with the
+    personality to take it that way. A photo finish between two
+    even-keeled pros is just a good race; it takes a hothead (or a
+    fiery goalie) to carry it as a grudge. Gated on the LOCKED
+    personality baseline (controversy_baseline: base_controversy dealt
+    at generation from discipline/composure/aggressiveness), not the
+    incident ratchet -- a saint who had one bad week doesn't suddenly
+    take Hart snubs personally, and a quiet hothead still has the
+    nature. Either man qualifying is enough: he's the one who bristles.
+    Returns the record, or {} when neither man has the attitude."""
+    def _takes_it_personally(p: Any) -> bool:
+        try:
+            if str(getattr(p, "goalie_temperament", "") or "").lower() == "fiery":
+                return True
+            return int(controversy_baseline(p)) >= 40
+        except Exception:
+            return False
+    if not (_takes_it_personally(pa) or _takes_it_personally(pb)):
+        return {}
+    # A spark, not a fire: the beef is real but small. If the grudge has
+    # legs it can still solidify at a review; most of these just fade.
     return add_rivalry(
-        rivalries, pa, pb, "player_player", 25, "award_race",
+        rivalries, pa, pb, "player_player", 10, "award_race",
         f"{_ename(pa)} vs {_ename(pb)}: {award} race got personal.",
         grudge=35)
 
@@ -2629,7 +2658,8 @@ def fan_tier_label(score: float) -> str:
     return "Anonymous"
 
 
-def fan_favourite_score(player: Any, team: Any = None) -> Dict[str, Any]:
+def fan_favourite_score(player: Any, team: Any = None,
+                        rivalries: Optional[list] = None) -> Dict[str, Any]:
     """0-100 how much the fans adore this player, and why."""
     ensure_reputation_fields(player)
     score = 15.0
@@ -2683,13 +2713,40 @@ def fan_favourite_score(player: Any, team: Any = None) -> Dict[str, Any]:
             reasons.append("Phenom hype")
     except Exception:
         pass
+    # Fan hate: a betrayal the fanbase hasn't forgiven. The ledger holds
+    # it; the score reads it when the store is handed in.
+    try:
+        if rivalries is not None and team is not None:
+            _hk = _ekey(team)
+            _pk = _ekey(player)
+            _hate_words = {
+                "defection": "Defected to a hated rival -- the fans boo him",
+                "elimination_defection": "Joined the team that ended their season",
+                "trade_demand": "Blindsided the fanbase with a trade demand",
+            }
+            for _r in get_rivalries_for(rivalries, player):
+                if _r.get("kind") != "fan_player":
+                    continue
+                _other = _r["b"] if _r.get("a") == _pk else _r.get("a")
+                if _other != _hk:
+                    continue
+                _pen = min(40, int((_r.get("intensity", 0) or 0) * 0.6))
+                if _pen > 0:
+                    score -= _pen
+                    reasons.append(_hate_words.get(
+                        _r.get("origin"),
+                        "The fans haven't forgiven him") + f" (-{_pen})")
+    except Exception:
+        pass
     score = max(0, min(100, round(score)))
     return {"score": score, "tier": fan_tier_label(score), "reasons": reasons}
 
 
-def is_fan_favourite(player: Any, team: Any = None) -> bool:
+def is_fan_favourite(player: Any, team: Any = None,
+                     rivalries: Optional[list] = None) -> bool:
     try:
-        return fan_favourite_score(player, team)["score"] >= 70
+        return fan_favourite_score(
+            player, team, rivalries=rivalries)["score"] >= 70
     except Exception:
         return False
 
@@ -2908,7 +2965,9 @@ def player_news_reaction(team: Any, player: Any, kind: str,
     """kind: trade_rumor | benched | injured | milestone | award |
     retirement | extension_signed. Returns what happened."""
     ensure_reputation_fields(player)
-    ff = fan_favourite_score(player, team)
+    ff = fan_favourite_score(
+        player, team,
+        rivalries=_rivalry_store(league) if league is not None else None)
     fav = ff["score"] >= 70
     name = getattr(player, "full_name", "Player").split()
     name = name[0] if name else "Player"
@@ -3125,6 +3184,26 @@ def review_rivalries(rivalries: list, years: int = 3) -> List[Dict[str, Any]]:
     return verdicts
 
 
+def record_fan_hate(rivalries: list, player: Any, hated_by: Any,
+                    origin: str, story: str, intensity: int = 50,
+                    grudge: int = 60) -> Dict[str, Any]:
+    """The fanbase turns on a player. origin: defection (crossed to a hated
+    rival), elimination_defection (joined the team that just ended his old
+    club's season), trade_demand (blindsided everyone by asking out).
+    kind="fan_player" so it never feeds game tension like a team_team feud
+    -- it feeds fan sentiment, and the first-game-back homecoming moment.
+    Each record carries faced=False until that homecoming is consumed.
+    """
+    try:
+        r = add_rivalry(rivalries, player, hated_by, "fan_player", intensity,
+                        origin, story, grudge=grudge)
+        if r and "faced" not in r:
+            r["faced"] = False
+        return r
+    except Exception:
+        return {}
+
+
 def on_player_transfer(rivalries: list, player: Any,
                        from_team: Any = None,
                        to_team: Any = None) -> Dict[str, Any]:
@@ -3152,10 +3231,80 @@ def on_player_transfer(rivalries: list, player: Any,
                 left.append(r)
     except Exception:
         pass
+    # Fan hate: the old barn doesn't forget a betrayal. Crossing to a
+    # franchise rival, or joining the team that just ended his old club's
+    # season, turns the old fanbase. (A blindsiding trade demand is
+    # recorded where the demand goes public, in headlines.)
+    try:
+        if from_team is not None and to_team is not None \
+                and from_team is not to_team:
+            _fk, _tk = _ekey(from_team), _ekey(to_team)
+            _fn, _tn = _ename(from_team), _ename(to_team)
+            _pn = _ename(player)
+            _rival = rivalry_between(rivalries, from_team, to_team,
+                                     "team_team")
+            if _rival is not None and (_rival.get("intensity", 0) or 0) >= 50:
+                record_fan_hate(
+                    rivalries, player, from_team, "defection",
+                    f"{_pn} defected to hated rival {_tn}. "
+                    f"The {_fn} faithful boo him now.",
+                    intensity=55, grudge=70)
+            else:
+                for _r in (rivalries or []):
+                    try:
+                        if _r.get("kind") != "team_team" \
+                                or _r.get("origin") != "playoff_series":
+                            continue
+                        if {_r.get("a"), _r.get("b")} != {_fk, _tk}:
+                            continue
+                        if _rivalry_age_years(_r) >= 1.0:
+                            continue
+                        if _r.get("playoff_winner") != _tk \
+                                or _r.get("playoff_loser") != _fk:
+                            continue
+                        record_fan_hate(
+                            rivalries, player, from_team,
+                            "elimination_defection",
+                            f"{_pn} joined {_tn} -- the team that just ended "
+                            f"{_fn}'s season. The faithful haven't forgiven him.",
+                            intensity=45, grudge=60)
+                        break
+                    except Exception:
+                        continue
+    except Exception:
+        pass
     return {"carried": carried, "left_behind": left,
             "text": (f"{_ename(player)} moved. "
                      f"{len(carried)} personal beef(s) follow him; "
                      f"{len(left)} ambient one(s) left behind.")}
+
+
+def consume_homecomings(rivalries: list, home_team: Any,
+                        away_team: Any) -> List[Dict[str, Any]]:
+    """First game back in the old barn after a perceived betrayal. Finds
+    away players the home fans hate (un-faced fan_player records), marks
+    each faced so the moment fires exactly once, and returns the hit list
+    for the sim to make the building rowdy. Never raises."""
+    out: List[Dict[str, Any]] = []
+    try:
+        _hk = _ekey(home_team)
+        for _p in (getattr(away_team, "roster", None) or []):
+            _pk = _ekey(_p)
+            for _r in get_rivalries_for(rivalries, _p):
+                if _r.get("kind") != "fan_player" or _r.get("faced"):
+                    continue
+                _other = _r["b"] if _r.get("a") == _pk else _r.get("a")
+                if _other != _hk:
+                    continue
+                if _r.get("origin") not in ("defection",
+                                            "elimination_defection"):
+                    continue
+                _r["faced"] = True
+                out.append({"player": _p, "record": _r})
+                break
+    except Exception:
+        pass
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -3717,6 +3866,33 @@ def game_tension_breakdown(home_team: Any, away_team: Any, rivalries: list,
             for inc in (r.get("incidents") or []):
                 incidents.append(inc)
         t += rivalry_pts
+        # Hostile homecomings: an away player the home fans hate (betrayal),
+        # back for the first time. Read-only -- the sim consumes the
+        # one-time flag when the game is actually played.
+        try:
+            _hk = _ekey(home_team)
+            _hc_n = 0
+            for _p in (getattr(away_team, "roster", None) or []):
+                if _hc_n >= 2:
+                    break
+                _pk = _ekey(_p)
+                for _r in get_rivalries_for(rivalries, _p):
+                    if _r.get("kind") != "fan_player" or _r.get("faced"):
+                        continue
+                    _other = _r["b"] if _r.get("a") == _pk else _r.get("a")
+                    if _other != _hk:
+                        continue
+                    if _r.get("origin") not in ("defection",
+                                                "elimination_defection"):
+                        continue
+                    drivers.append({
+                        "label": f"Hostile homecoming: {_ename(_p)} returns",
+                        "points": 10.0})
+                    t += 10.0
+                    _hc_n += 1
+                    break
+        except Exception:
+            pass
         # Fights and penalty minutes: chippiness is measurable.
         if recent_fights:
             pts = min(24.0, recent_fights * 6.0)
@@ -3847,6 +4023,232 @@ def generate_personality(entity: Any, hothead_chance: float = 0.08) -> int:
         return _deal_base_controversy(entity, hothead_chance)
     except Exception:
         return 20
+
+
+# ---------------------------------------------------------------------------
+# Generation blends: every batch of new players gets a real mix.
+#
+# The room model reads three separate axes off a player -- public drama
+# (base_controversy), temper (aggressiveness + low composure), and quiet
+# difficulty (selfishness + low teamwork) -- so generation deals them as a
+# BLEND, not one label. A saint can have a hot head; a tough sell can avoid
+# every camera; a showman can be all spotlight and no temper. Archetype
+# leans the odds, never locks them; a per-class tilt gives each draft class
+# its own character, so the league's personality shifts as the seasons turn.
+# Identity is dealt once, here, at generation -- never re-dealt.
+# ---------------------------------------------------------------------------
+
+_GENERATION_BLENDS = (
+    "professional",   # low drama, even temper, team-first
+    "quiet",          # very low drama, keeps to himself
+    "showman",        # high drama, low temper -- loves the spotlight
+    "saint_hothead",  # low drama, high temper -- saint with a hot head
+    "tough_sell",     # low drama, high difficulty -- quiet, hard to please
+    "volatile",       # high drama + high temper
+)
+
+_BLEND_WEIGHTS = {
+    "professional": 52.0,
+    "quiet": 12.0,
+    "showman": 10.0,
+    "saint_hothead": 9.0,
+    "tough_sell": 9.0,
+    "volatile": 8.0,
+}
+
+# tilt -> {blend: weight multiplier}
+_CLASS_TILTS = {
+    "fiery": {"saint_hothead": 1.8, "volatile": 1.8},
+    "circus": {"showman": 1.8, "volatile": 1.8},
+    "sulky": {"tough_sell": 2.0},
+    "professional": {"professional": 1.5, "quiet": 1.5},
+}
+
+
+# A little room for the unexpected: a small share of prospects get a
+# WILDCARD -- one axis twisted away from their blend. The kid stays a
+# coherent person, just not the one the scouts expected: the quiet
+# professional with a hidden hot head, the showman with a real bite.
+# The blend fingerprint records what everyone expected; personality_twist
+# records the surprise. Nothing here can break the game -- every downstream
+# effect is one-time and bounded -- but every class gets a few stories
+# nobody saw coming.
+_WILDCARD_CHANCE = 0.04
+_WILDCARD_TWISTS = {
+    "professional": ("hidden_temper", "quiet_edge"),
+    "quiet": ("quiet_edge", "hidden_temper"),
+    "showman": ("spotlight_bite",),
+    "saint_hothead": ("public_edge",),
+    "tough_sell": ("thin_skin",),
+    "volatile": ("soft_center",),
+}
+# twist -> axis it flips
+_TWIST_AXES = {
+    "hidden_temper": "temper_high",
+    "spotlight_bite": "temper_high",
+    "thin_skin": "temper_high",
+    "public_edge": "drama_high",
+    "quiet_edge": "difficult_high",
+    "soft_center": "temper_low",
+}
+
+
+def _blend_archetype_lean(archetype_name: Any) -> Dict[str, float]:
+    """Archetype leans the blend odds -- a lean, never a lock."""
+    name = str(archetype_name or "").lower()
+    if any(k in name for k in ("enforc", "tough guy", "grind", "pest",
+                               "agitat")):
+        return {"saint_hothead": 2.2, "volatile": 2.0, "professional": 0.8}
+    if any(k in name for k in ("sniper", "playmaker", "finesse", "snipe",
+                               "dangler", "offensive")):
+        return {"showman": 1.8, "volatile": 1.4}
+    if any(k in name for k in ("two-way", "twoway", "defensive", "shutdown",
+                               "checker", "stay-at-home", "stay at home")):
+        return {"professional": 1.4, "quiet": 1.3, "volatile": 0.6}
+    if any(k in name for k in ("goalie", "goaltender", "netminder")):
+        return {"quiet": 1.3, "professional": 1.2}
+    return {}
+
+
+def _set_trait(player: Any, attr: str, lo: int, hi: int) -> None:
+    try:
+        setattr(player, attr, max(1, min(99, random.randint(lo, hi))))
+    except Exception:
+        pass
+
+
+def _apply_blend(player: Any, blend: str, twist: str = "") -> None:
+    """Reshape the raw traits so the whole game reads one coherent person.
+
+    Drama shapes discipline/composure/aggressiveness (which the locked
+    base_controversy is then dealt from); temper overrides aggressiveness
+    and composure; difficulty sets selfishness (dealt here -- real players
+    never had one) and teamwork. A wildcard twist flips exactly one axis,
+    so the surprise is still a legible person. Tendencies follow
+    temperament.
+    """
+    drama_high = blend in ("showman", "volatile")
+    temper_high = blend in ("saint_hothead", "volatile")
+    difficult_high = blend == "tough_sell"
+    _axis = _TWIST_AXES.get(twist, "")
+    if _axis == "drama_high":
+        drama_high = True
+    elif _axis == "temper_high":
+        temper_high = True
+    elif _axis == "temper_low":
+        temper_high = False
+    elif _axis == "difficult_high":
+        difficult_high = True
+
+    if drama_high:
+        _set_trait(player, "discipline", 30, 45)
+        _set_trait(player, "composure", 35, 50)
+        _set_trait(player, "aggressiveness", 55, 75)
+    else:
+        _set_trait(player, "discipline", 60, 80)
+        _set_trait(player, "composure", 60, 80)
+        _set_trait(player, "aggressiveness", 35, 55)
+    if temper_high:
+        _set_trait(player, "aggressiveness", 72, 90)
+        _set_trait(player, "composure", 25, 42)
+    else:
+        _set_trait(player, "composure", 55, 75)
+        _set_trait(player, "aggressiveness", 30, 52)
+    if difficult_high:
+        _set_trait(player, "selfishness", 68, 90)
+        _set_trait(player, "teamwork", 25, 42)
+    else:
+        _set_trait(player, "selfishness", 30, 52)
+        _set_trait(player, "teamwork", 55, 78)
+
+    # Tendencies follow temperament: hot heads hit, showmen shoot.
+    try:
+        if temper_high:
+            _ht = int(getattr(player, "hitting_tendency", 50) or 50)
+            player.hitting_tendency = max(_ht, random.randint(55, 85))
+        if blend == "showman":
+            _st = int(getattr(player, "shooting_tendency", 50) or 50)
+            player.shooting_tendency = max(_st, random.randint(55, 85))
+    except Exception:
+        pass
+    # A visible fingerprint of the deal (for QA and draft stories):
+    # what everyone expected, plus the surprise if there was one.
+    try:
+        player.personality_blend = blend
+        player.personality_twist = twist
+    except Exception:
+        pass
+
+
+def roll_class_tilt() -> Optional[str]:
+    """Roll one draft class's character. Most classes are neutral; some
+    come in with a temperament of their own."""
+    try:
+        if random.random() < 0.55:
+            return None
+        return random.choice(["fiery", "circus", "sulky", "professional"])
+    except Exception:
+        return None
+
+
+def deal_generation_blend(player: Any,
+                          tilt: Optional[str] = None) -> int:
+    """Deal one generated player's personality blend. Idempotent: a player
+    who already has a locked base_controversy keeps it -- identity is
+    dealt once, at generation, never re-dealt."""
+    try:
+        if isinstance(getattr(player, "base_controversy", None), int):
+            return player.base_controversy
+        weights = dict(_BLEND_WEIGHTS)
+        for _b, _m in _blend_archetype_lean(
+                getattr(player, "archetype", "")).items():
+            weights[_b] = weights.get(_b, 0.0) * _m
+        for _b, _m in _CLASS_TILTS.get(tilt or "", {}).items():
+            weights[_b] = weights.get(_b, 0.0) * _m
+        _total = sum(weights.values()) or 1.0
+        _roll = random.random() * _total
+        _blend = "professional"
+        for _name in _GENERATION_BLENDS:
+            _roll -= weights.get(_name, 0.0)
+            if _roll <= 0:
+                _blend = _name
+                break
+        # The unexpected: one twisted axis, rarely. Still a coherent
+        # person -- just not the one the scouts expected.
+        _twist = ""
+        try:
+            if random.random() < _WILDCARD_CHANCE:
+                _options = _WILDCARD_TWISTS.get(_blend, ())
+                if _options:
+                    _twist = random.choice(_options)
+        except Exception:
+            _twist = ""
+        _apply_blend(player, _blend, twist=_twist)
+        # Deal the locked drama from the reshaped traits -- with no outlier
+        # roll. The blend already deals rare combos deliberately; an extra
+        # dice roll here would break the combo's coherence (a saint with a
+        # 70 controversy isn't a saint). The blend's declared drama (after
+        # any wildcard twist) gets the final word over the estimator --
+        # "saint despite the numbers".
+        _drama_high = _blend in ("showman", "volatile") \
+            or _TWIST_AXES.get(_twist, "") == "drama_high"
+        try:
+            if getattr(player, "base_controversy", None) is None:
+                _deal_base_controversy(player, 0.0)
+                if _drama_high:
+                    player.base_controversy = max(
+                        40, player.base_controversy)
+                    player.controversy = max(40, player.controversy)
+                else:
+                    player.base_controversy = min(
+                        39, player.base_controversy)
+                    player.controversy = min(39, player.controversy)
+            ensure_reputation_fields(player)
+            return player.base_controversy
+        except Exception:
+            return 20
+    except Exception:
+        return getattr(player, "base_controversy", 20) or 20
 
 
 
@@ -4485,7 +4887,10 @@ def evaluate_contract_decision(player: Any, aav: float, expected_aav: float,
 
     fav = False
     try:
-        fav = fan_favourite_score(player, team)["score"] >= 70
+        fav = fan_favourite_score(
+            player, team,
+            rivalries=_rivalry_store(league)
+            if league is not None else None)["score"] >= 70
     except Exception:
         pass
 

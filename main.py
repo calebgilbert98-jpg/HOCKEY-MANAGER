@@ -365,6 +365,14 @@ class GameManager:
             if hasattr(self.league, 'generate_schedule'):
                 self.league.generate_schedule()
             
+            # Rivalry lifecycle: seed the regional feuds (Battle of
+            # Alberta, Original Six bad blood, ...) for a brand-new
+            # league. Guarded: existing saves keep their lived-in state.
+            try:
+                self._seed_regional_rivalries()
+            except Exception as e:
+                print(f"Regional rivalry seeding skipped: {e}")
+
             print(f"Database generation complete! {len(self.league.get_all_players())} total players.")
             print(f"Teams with players: {len([t for t in self.league.teams if len(t.roster) > 0])}")
             print(f"Teams with staff: {len([t for t in self.league.teams if len(t.staff) > 0])}")
@@ -645,6 +653,30 @@ NHL League Office""",
         self.user_team.inbox.add_message(draft_email)
         print(f"Fantasy draft message added to {self.user_team.team_name} inbox")
 
+    def _seed_regional_rivalries(self):
+        """Seed regional rivalries for a brand-new league.
+
+        Guarded so existing saves keep their lived-in state: only runs
+        when the league's rivalry ledger is empty. Idempotent -- the
+        underlying add is merge-by-max, so a double call can't duplicate.
+        """
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        rivs = getattr(league, "rivalries", None)
+        if not isinstance(rivs, list) or rivs:
+            return
+        teams = list(getattr(league, "teams", []) or [])
+        if not teams:
+            return
+        try:
+            from reputation_system import seed_regional_rivalries
+            n = seed_regional_rivalries(rivs, teams)
+            if n:
+                print(f"Seeded {n} regional rivalries.")
+        except Exception:
+            pass
+
     def setup_new_game(self):
         """Initializes a new game world with teams, players, and staff using the comprehensive database system."""
         print("Setting up a new game with comprehensive player database...")
@@ -696,6 +728,12 @@ NHL League Office""",
         print(f"Free agents available: {len(self.database_manager.get_free_agents())}")
         print(f"International players: {len(self.database_manager.international_players)}")
         print(f"Draft eligible players: {len(self.database_manager.draft_eligibles)}")
+        # Rivalry lifecycle: seed the regional feuds for a brand-new
+        # league. Guarded: existing saves keep their lived-in state.
+        try:
+            self._seed_regional_rivalries()
+        except Exception as e:
+            print(f"Regional rivalry seeding skipped: {e}")
 
     def _generate_players(self, count):
         """
@@ -2088,6 +2126,26 @@ class HockeyManagerGUI(tk.Tk):
                 # Add to claiming team
                 claiming_team.add_player(player)
                 player.team_name = claiming_team.team_name
+
+                # Rivalry lifecycle: a waiver claim is a transfer -- his
+                # personal beefs follow him; ambient noise stays behind.
+                try:
+                    from reputation_system import on_player_transfer as _opt
+                    _rivs = getattr(getattr(self, "league", None),
+                                    "rivalries", None)
+                    if isinstance(_rivs, list):
+                        _opt(_rivs, player, from_team=original_team,
+                             to_team=claiming_team)
+                except Exception:
+                    pass
+                # Dressing room: the room reacts to WHO arrives, bounded.
+                try:
+                    import dressing_room as _dr_arr
+                    _dr_arr.cascade_on_arrival(
+                        claiming_team, player, how="waiver claim",
+                        date_str=str(getattr(self, "current_date", "")))
+                except Exception:
+                    pass
                 
                 # Reset waiver status
                 player.on_waivers = False
@@ -5860,6 +5918,19 @@ class HockeyManagerGUI(tk.Tk):
             except Exception as e:
                 # Don't crash the game if AI fails
                 print(f"AI manager error (non-fatal): {e}")
+            # AI signings write their own headlines (signings,
+            # market-setters, contract fallout) -- flush them into the
+            # news feed with today's date.
+            try:
+                _ai_mgr = getattr(getattr(self, "game_manager", None),
+                                  "ai_manager", None)
+                _drain = getattr(_ai_mgr, "drain_pending_news", None)
+                if callable(_drain):
+                    for _story in _drain():
+                        self.news_log.append({'date': self.current_date,
+                                              'story': _story})
+            except Exception:
+                pass
             
             # ALWAYS advance date and update UI (whether games existed or not)
             # Milestones hit today: ledger + four-viewpoint headlines, once
@@ -6638,6 +6709,23 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         team.add_player(player)
+        # Rivalry lifecycle: an MP free-agent signing is a transfer, same
+        # as the single-player path -- personal beefs follow the man.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=None, to_team=team)
+        except Exception:
+            pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="signing",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
         try:
             self.add_news(
                 f"{player.full_name} signed by {team.team_name}: "
@@ -6753,6 +6841,14 @@ class HockeyManagerGUI(tk.Tk):
             return False, "Not enough cap space to recall him."
         team.ahl_roster.remove(player)
         team.roster.append(player)
+        # Dressing room: first-time NHL arrival only (guarded inside).
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="callup",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
         try:
             self.add_news(f"{player.full_name} recalled by {team.team_name}.")
         except Exception:
@@ -6787,6 +6883,23 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
         team.add_player(player)
+        # Rivalry lifecycle: a waiver claim is a transfer, same as the
+        # single-player path -- personal beefs follow the man.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=original, to_team=team)
+        except Exception:
+            pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="waiver claim",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
         try:
             player.on_waivers = False
             player.waiver_days = 0
@@ -8854,7 +8967,9 @@ class HockeyManagerGUI(tk.Tk):
                 went_ot=bool(went_ot), shootout=bool(shootout),
                 rivalries=rivalries, ledger=active_ledger(),
                 roll_incidents=bool(roll_incidents),
-                game_date=game_date)
+                game_date=game_date,
+                season_year=getattr(getattr(self, "league", None),
+                                    "season_year", None))
             if roll_incidents and sim_engine is not None:
                 try:
                     if not getattr(sim_engine, "_fights_total", 0):
@@ -11802,23 +11917,48 @@ class HockeyManagerGUI(tk.Tk):
             team = roster_map.get(_pid) or getattr(p, "team_name", "Unknown") or "Unknown"
             return {"name": name, "team": team, "stats": ""}
 
-        def _top(race):
+        def _top(race, award_name=None):
             try:
                 r = race()
-                return r[0] if r else None
+                top = r[0] if r else None
+                # Rivalry lifecycle: a photo-finish award race gets
+                # personal -- but only when at least one man has the
+                # personality to take it personally (record_award_race
+                # gates on base_controversy / fiery temperament).
+                # Top two within 5% on the race's own score reads as a
+                # genuinely contested vote. Runaways don't make enemies.
+                # Additive: rivalries only.
+                if award_name and r and len(r) >= 2:
+                    try:
+                        s1 = float(r[0].get("score", 0) or 0)
+                        s2 = float(r[1].get("score", 0) or 0)
+                        if s1 > 0 and (s1 - s2) / s1 < 0.05:
+                            p1, p2 = r[0].get("player"), r[1].get("player")
+                            if p1 is not None and p2 is not None \
+                                    and p1 is not p2:
+                                from reputation_system import \
+                                    record_award_race as _rar
+                                _rivs = getattr(
+                                    getattr(self, "league", None),
+                                    "rivalries", None)
+                                if isinstance(_rivs, list):
+                                    _rar(_rivs, p1, p2, award_name)
+                    except Exception:
+                        pass
+                return top
             except Exception:
                 return None
 
         # Hart Trophy - MVP (points + team success)
         e = _top(lambda: ar.hart_race(players, team_pct,
-                                   roster_map=roster_map))
+                                   roster_map=roster_map), "Hart Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
         awards["Hart Trophy (MVP)"] = info
 
         # Art Ross - pure points
-        e = _top(lambda: ar.art_ross_race(players))
+        e = _top(lambda: ar.art_ross_race(players), "Art Ross Trophy")
         info = _info(e)
         if info:
             p = e["player"]
@@ -11827,7 +11967,7 @@ class HockeyManagerGUI(tk.Tk):
         awards["Art Ross Trophy (Scoring Leader)"] = info
 
         # Rocket Richard - pure goals
-        e = _top(lambda: ar.rocket_race(players))
+        e = _top(lambda: ar.rocket_race(players), "Rocket Richard Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['goals']} goals"
@@ -11836,7 +11976,7 @@ class HockeyManagerGUI(tk.Tk):
         awards['Maurice "Rocket" Richard Trophy'] = info
 
         # Vezina - best goalie (SV%/GAA/wins + GSAx cross-check)
-        e = _top(lambda: ar.vezina_race(players))
+        e = _top(lambda: ar.vezina_race(players), "Vezina Trophy")
         info = _info(e)
         if info:
             p = e["player"]
@@ -11845,21 +11985,21 @@ class HockeyManagerGUI(tk.Tk):
         awards["Vezina Trophy (Best Goalie)"] = info
 
         # Norris - best defenseman (modern offense-first voting)
-        e = _top(lambda: ar.norris_race(players))
+        e = _top(lambda: ar.norris_race(players), "Norris Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['points']} pts"
         awards["Norris Trophy (Best Defenseman)"] = info
 
         # Selke - best defensive forward
-        e = _top(lambda: ar.selke_race(players))
+        e = _top(lambda: ar.selke_race(players), "Selke Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['score']:.1f} defensive score"
         awards["Selke Trophy (Defensive Forward)"] = info
 
         # Lady Byng - skill + sportsmanship (points discounted by PIM)
-        e = _top(lambda: ar.byng_race(players))
+        e = _top(lambda: ar.byng_race(players), "Lady Byng Trophy")
         info = _info(e)
         if info:
             p = e["player"]
@@ -11868,7 +12008,7 @@ class HockeyManagerGUI(tk.Tk):
 
         # Calder - rookie of the year (NHL rookie eligibility)
         _syr = ar.calder_season_year(getattr(self, "current_date", None))
-        e = _top(lambda: ar.calder_race(players, season_year=_syr))
+        e = _top(lambda: ar.calder_race(players, season_year=_syr), "Calder Trophy")
         info = _info(e)
         if info:
             info["stats"] = f"{e['points']} pts (rookie)"
@@ -14499,6 +14639,16 @@ class HockeyManagerGUI(tk.Tk):
     def call_up_to_nhl(self, player):
         self.user_team.ahl_roster.remove(player)
         self.user_team.roster.append(player)
+        # Dressing room: a first-time NHL arrival shakes the room --
+        # the room reacts to WHO he is (blue-chip hype vs depth plug).
+        # Re-callups are guarded inside (first appearance per team only).
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                self.user_team, player, how="callup",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
         # Stamp the audition baseline: production from this point on is his
         # live NHL audition -- situational readiness reacts to it within days.
         try:
@@ -14802,6 +14952,25 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
             self.user_team.add_player(person, "roster")
+            # Rivalry lifecycle: a free-agent signing is a transfer -- his
+            # personal beefs follow him to the new room; ambient noise he
+            # merely encouraged stays behind. Same chokepoint as trades.
+            try:
+                from reputation_system import on_player_transfer as _opt
+                _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+                if isinstance(_rivs, list):
+                    _opt(_rivs, person, from_team=None, to_team=self.user_team)
+            except Exception:
+                pass
+            # Dressing room: a new face in the room -- the room reacts to
+            # WHO he is (blue-chip hype, veteran gravity), bounded.
+            try:
+                import dressing_room as _dr_arr
+                _dr_arr.cascade_on_arrival(
+                    self.user_team, person, how="signing",
+                    date_str=str(getattr(self, "current_date", "")))
+            except Exception:
+                pass
         self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})
 
         # Generate media event for signing (if media system enabled)

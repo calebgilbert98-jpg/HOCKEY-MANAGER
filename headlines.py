@@ -729,4 +729,21 @@ def _headline_trade_request(app, game_date, player, team):
             msg.related_team = tname
         except Exception:
             pass
-        deliver(app, msg, involved=(tname,))
+        # Blindsided fanbase: a beloved star asking out stings. The fans turn
+    # on him -- a fringe malcontent asking out surprises nobody.
+    try:
+        import reputation_system as _rs
+        _gm = getattr(app, "game_manager", None)
+        _league = getattr(_gm, "league", None) or getattr(app, "league", None)
+        if _league is not None and _rs.is_fan_favourite(player, team):
+            _rs.record_fan_hate(
+                _rs._rivalry_store(_league), player, team, "trade_demand",
+                f"{pname} blindsided the {tname} faithful with a trade demand.",
+                intensity=40, grudge=55)
+            _rs.record_team_event(
+                team, "fan_backlash",
+                f"The fanbase is stunned -- {pname} demanded a trade.",
+                morale_delta=-2, tone="down")
+    except Exception:
+        pass
+    deliver(app, msg, involved=(tname,))

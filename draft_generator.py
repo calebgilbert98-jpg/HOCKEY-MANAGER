@@ -727,7 +727,8 @@ def create_prospect(age: int = 18,
                    potential: Optional[str] = None,
                    nationality: Optional[str] = None,
                    potential_distribution=None,
-                   draft_year: Optional[int] = None) -> Player:
+                   draft_year: Optional[int] = None,
+                   personality_tilt: Optional[str] = None) -> Player:
     """
     Create a new prospect with the specified parameters.
     If parameters are not provided, they will be randomly generated.
@@ -737,6 +738,9 @@ def create_prospect(age: int = 18,
         next June draft derived from today's date. Birthdate is drawn from the
         window that makes the prospect exactly `age` on Sept 15 of draft_year,
         so birth_date/age always agree with is_draft_eligible().
+    personality_tilt: this draft class's character ("fiery", "circus",
+        "sulky", "professional", or None) -- leans the personality-blend
+        odds so each class has its own temperament.
     """
     # Determine nationality if not specified
     if nationality is None:
@@ -916,6 +920,19 @@ def create_prospect(age: int = 18,
                 setattr(player, _attr, max(GameBalance.MIN_ATTRIBUTE,
                                           int(_cur * _raw)))
 
+    # Personality blend: every prospect gets a real mix of drama, temper,
+    # and difficulty -- identity dealt once, here, at generation. The class
+    # tilt (if any) gives this draft class its own character.
+    try:
+        player.archetype = archetype_name
+    except Exception:
+        pass
+    try:
+        import reputation_system as _rs
+        _rs.deal_generation_blend(player, tilt=personality_tilt)
+    except Exception:
+        pass
+
     # Calculate draft ranking for later sorting
     player.draft_ranking = calculate_draft_ranking(player)
 
@@ -954,6 +971,16 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
     distribution = DRAFT_QUALITY_DISTRIBUTIONS.get(quality, POTENTIAL_DISTRIBUTION)
     prospects: list[Player] = []
 
+    # Class character: most drafts are neutral, but some classes come in
+    # with a temperament of their own -- a fiery class, a circus class, a
+    # sulky one, a professional one. The league's personality shifts as the
+    # seasons turn.
+    try:
+        import reputation_system as _rs_tilt
+        _class_tilt = _rs_tilt.roll_class_tilt()
+    except Exception:
+        _class_tilt = None
+
     # Ensure we have a minimum number of players at each position.
     # Goalies keep a floor of 18 (real drafts take ~20-25 of 224); the 0.10
     # share lands ~22 typically, the floor guards the low tail.
@@ -979,6 +1006,15 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
                 getattr(_rp, "nationality", "Canada"))
         if not hasattr(_rp, "hidden_gem"):
             _rp.hidden_gem = False
+        # Legacy re-entries never got a personality dealt (draft prospects
+        # only started receiving one now): deal once, here. No blend
+        # reshape -- their attributes are already set, so the deal reads
+        # them as-is. Identity dealt once, never re-dealt.
+        try:
+            import reputation_system as _rs_re
+            _rs_re.generate_personality(_rp)
+        except Exception:
+            pass
         position_counts[_rp.primary_position] = \
             position_counts.get(_rp.primary_position, 0) + 1
         prospects.append(_rp)
@@ -1012,7 +1048,8 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
                                    position=forced_position,
                                    nationality=_nat,
                                    potential_distribution=distribution,
-                                   draft_year=draft_year)
+                                   draft_year=draft_year,
+                                   personality_tilt=_class_tilt)
 
         # Defensive: never emit an ineligible prospect. (Birthdates are drawn
         # from the eligible window, so this should never trigger.)

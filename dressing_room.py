@@ -22,6 +22,7 @@ through the same give_talk() path the user's talks use.
 from __future__ import annotations
 
 import random
+import re
 from typing import Any, Dict, List, Optional
 
 TONES = ("calm", "fired-up", "cautious")
@@ -150,6 +151,12 @@ def influence_of(player: Any) -> int:
         pass
     ty = tenure_years(player)
     base += {4: 8, 3: 5, 2: 2}.get(ty, 0)
+    # League stature: a bona fide vet carries weight from day one, so a
+    # new arrival with a real resume doesn't enter as "Fringe".
+    try:
+        base += league_stature_of(player)
+    except Exception:
+        pass
     return _clamp(base, 5, 99)
 
 
@@ -161,9 +168,550 @@ def _tier(player: Any, influence: int) -> str:
         return "Alternate"
     if influence >= 70:
         return "Veteran core"
+    # A hyped kid is never "Fringe" or "Regular" in the room's eyes --
+    # everyone knows why the top-10 pick is here.
+    try:
+        if influence < 70 and arrival_archetype(player) == "blue_chip":
+            return "Top prospect"
+    except Exception:
+        pass
     if influence >= 45:
         return "Regular"
     return "Fringe"
+
+
+# --------------------------------------------------------------------------
+# Arrival archetypes: the room reacts to WHO walks in, not just that
+# someone did. A top-10 pick and a bona fide vet move the room in
+# different ways -- felt, never fatal. Every delta here is small and
+# one-time; nothing compounds into a death spiral or a free Cup.
+# --------------------------------------------------------------------------
+
+def _draft_overall(player: Any) -> Optional[int]:
+    """Overall draft number from the 'Round R, Pick P' string, else None."""
+    try:
+        s = str(getattr(player, "draft_position", "") or "")
+        m = re.search(r"Round\s*(\d+)\s*,\s*Pick\s*(\d+)", s, re.IGNORECASE)
+        if m:
+            return (int(m.group(1)) - 1) * 32 + int(m.group(2))
+    except Exception:
+        pass
+    return None
+
+
+def arrival_archetype(player: Any) -> str:
+    """Classify a newcomer: 'blue_chip' | 'veteran' | 'regular'.
+
+    blue_chip: a top-10 draft pick (or an elite teenager) -- the room
+      knows the hype before he says a word.
+    veteran: a bona fide league vet -- 30+ with a real resume (rating,
+      mileage, or a letter). A 34-year-old depth plug is 'regular'.
+    regular: everyone else.
+    """
+    try:
+        age = int(getattr(player, "age", 25) or 25)
+    except Exception:
+        age = 25
+    try:
+        ovr = int(player.overall_rating())
+    except Exception:
+        ovr = 70
+    try:
+        gp = int(getattr(getattr(player, "stats", None),
+                         "games_played", 0) or 0)
+    except Exception:
+        gp = 0
+    pick = _draft_overall(player)
+    if age <= 21 and pick is not None and pick <= 10:
+        return "blue_chip"
+    if age <= 20 and ovr >= 80:
+        return "blue_chip"
+    letter = str(getattr(player, "captaincy", "") or "").upper() in ("C", "A")
+    if age >= 30 and (ovr >= 82 or gp >= 500 or letter):
+        return "veteran"
+    # Stardom doesn't wait for 30: a bona fide star or a thousand-game
+    # man is a vet in any room, at any age.
+    if ovr >= 86 or gp >= 700:
+        return "veteran"
+    return "regular"
+
+
+def league_stature_of(player: Any) -> int:
+    """Bonus room influence from league stature (0-24, never raises)."""
+    try:
+        ovr = int(player.overall_rating())
+    except Exception:
+        ovr = 70
+    try:
+        gp = int(getattr(getattr(player, "stats", None),
+                         "games_played", 0) or 0)
+    except Exception:
+        gp = 0
+    s = 0
+    if ovr >= 85:
+        s += 14
+    elif ovr >= 80:
+        s += 7
+    s += min(10, gp // 100)
+    return min(24, s)
+
+
+def _room_vet_core(team: Any, arriving: Any):
+    """(veteran_count, top5_avg_influence), ignoring the arrival himself."""
+    try:
+        rows = [r for r in hierarchy(team) if r["id"] != _pid(arriving)]
+    except Exception:
+        return 0, 0
+    n_vets = sum(1 for r in rows
+                 if r["tier"] in ("Captain", "Alternate", "Veteran core"))
+    top = rows[:5]
+    avg = (sum(r["influence"] for r in top) / len(top)) if top else 0
+    return n_vets, avg
+
+
+def _vet_character(team: Any, arriving: Any):
+    """Mean (leadership, drama, temper) of the vet core, ignoring the
+    arrival himself. Drama is the public circus; temper is the hot head
+    that tests rookies -- a room of saints can still be a hard room."""
+    leads: List[float] = []
+    dramas: List[float] = []
+    tempers: List[float] = []
+    try:
+        me = _pid(arriving)
+        rows = hierarchy(team)
+    except Exception:
+        return 50.0, 20.0, 45.0
+    for r in rows:
+        if r["id"] == me:
+            continue
+        if r["tier"] not in ("Captain", "Alternate", "Veteran core"):
+            continue
+        p = r["player"]
+        try:
+            leads.append(float(getattr(p, "leadership", 50) or 50))
+        except Exception:
+            pass
+        try:
+            # LOCKED baseline, not the incident ratchet -- who they are.
+            _e = getattr(p, "base_controversy", 20)
+            dramas.append(20.0 if _e is None else float(_e))
+        except Exception:
+            pass
+        try:
+            tempers.append(_temper_of(p))
+        except Exception:
+            pass
+    lead = sum(leads) / len(leads) if leads else 50.0
+    drama = sum(dramas) / len(dramas) if dramas else 20.0
+    temper = sum(tempers) / len(tempers) if tempers else 45.0
+    return lead, drama, temper
+
+
+def _norm_pair(player: Any, name1: str, default1: float,
+               name2: str, default2: float):
+    """Read two traits on a shared 0-100 scale. Same convention as the
+    reputation system's locked baseline: if both read <= 20 the player
+    is on the EHM 1-20 scale and both are scaled up."""
+    try:
+        v1 = float(getattr(player, name1, default1))
+    except Exception:
+        v1 = float(default1)
+    try:
+        v2 = float(getattr(player, name2, default2))
+    except Exception:
+        v2 = float(default2)
+    if max(v1, v2) <= 20:
+        v1, v2 = v1 * 5, v2 * 5
+    return max(0.0, min(100.0, v1)), max(0.0, min(100.0, v2))
+
+
+def _temper_of(player: Any) -> float:
+    """Hot-headedness: temper that snaps. Distinct from public drama --
+    a saint can have a hot head."""
+    aggr, comp = _norm_pair(player, "aggressiveness", 50, "composure", 60)
+    return aggr * 0.6 + (100 - comp) * 0.4
+
+
+def _difficult_of(player: Any) -> float:
+    """Me-first difficulty: the tough sell. Low drama by definition --
+    he doesn't do circuses -- but hard to work with when the
+    circumstances displease him."""
+    self_, team = _norm_pair(player, "selfishness", 50, "teamwork", 60)
+    return self_ * 0.5 + (100 - team) * 0.5
+
+
+def _personality_of(arriving: Any):
+    """The arrival's personality blend: (cocky, hothead, tough_sell,
+    quiet, spotlight). Drama, temper, and difficulty are separate axes --
+    saints can have hot heads, and quiet men can be difficult."""
+    _cont = getattr(arriving, "base_controversy", 20)
+    try:
+        drama = 20.0 if _cont is None else float(_cont)
+    except Exception:
+        drama = 20.0
+    temper = _temper_of(arriving)
+    difficult = _difficult_of(arriving)
+    pick = _draft_overall(arriving)
+    cocky = drama >= 40
+    hothead = temper >= 65
+    tough_sell = difficult >= 65 and drama < 40
+    quiet = drama <= 15 and temper < 65
+    return (cocky, hothead, tough_sell, quiet,
+            pick is not None and pick <= 3)
+
+
+def _room_situation(team: Any, arriving: Any):
+    """The team's side: room mood (mean morale, results proxy) and roster
+    strength (mean overall, contender proxy), ignoring the arrival.
+    Returns (mood, strength)."""
+    me = _pid(arriving)
+    moods: List[float] = []
+    ovrs: List[float] = []
+    for p in _roster(team):
+        try:
+            if _pid(p) == me:
+                continue
+        except Exception:
+            pass
+        try:
+            moods.append(float(getattr(p, "morale", 70) or 70))
+        except Exception:
+            pass
+        try:
+            ovrs.append(float(p.overall_rating()))
+        except Exception:
+            ovrs.append(70.0)
+    mood = sum(moods) / len(moods) if moods else 70.0
+    strength = sum(ovrs) / len(ovrs) if ovrs else 70.0
+    return mood, strength
+
+
+def _cohort_character(team: Any, arriving: Any):
+    """The young-talent cluster (23 and under, ignoring the arrival):
+    drama, temper, and results. Returns (members, drama, temper, mood).
+    A driven cluster thrives together; a hot, showy, or losing one is a
+    bad influence -- each for its own reason."""
+    me = _pid(arriving)
+    members: List[Any] = []
+    for p in _roster(team):
+        try:
+            if _pid(p) == me:
+                continue
+            age = int(getattr(p, "age", 99) or 99)
+        except Exception:
+            continue
+        if age <= 23:
+            members.append(p)
+    dramas: List[float] = []
+    tempers: List[float] = []
+    moods: List[float] = []
+    for p in members:
+        try:
+            _e = getattr(p, "base_controversy", 20)
+            dramas.append(20.0 if _e is None else float(_e))
+        except Exception:
+            pass
+        try:
+            tempers.append(_temper_of(p))
+        except Exception:
+            pass
+        try:
+            moods.append(float(getattr(p, "morale", 70) or 70))
+        except Exception:
+            pass
+    drama = sum(dramas) / len(dramas) if dramas else 20.0
+    temper = sum(tempers) / len(tempers) if tempers else 45.0
+    mood = sum(moods) / len(moods) if moods else 70.0
+    return members, drama, temper, mood
+
+
+def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
+                      date_str: str = "") -> List[str]:
+    """Shared arrival core: record him, then let the room react to WHO
+    he is. Used by trades (arriving branch) and every non-trade join
+    (signings, offer sheets, waiver claims, callups). All callers are
+    exception-guarded; this never raises."""
+    lines: List[str] = []
+    dr = ensure_dressing_room_fields(team)
+    aname = _name(arriving)
+    arch = arrival_archetype(arriving)
+
+    # Record the arrival (idempotent): powers integration_of and the
+    # first-appearance guard in cascade_on_arrival.
+    try:
+        pid = _pid(arriving)
+        if pid not in dr["arrivals"]:
+            try:
+                gp = int(getattr(getattr(arriving, "stats", None),
+                                 "games_played", 0) or 0)
+            except Exception:
+                gp = 0
+            dr["arrivals"][pid] = {"gp_at_arrival": gp,
+                                   "archetype": arch, "how": how}
+    except Exception:
+        pass
+
+    # Best-fit clique: nationality match first (shared with the old
+    # trade path -- regulars keep their exact old behavior).
+    best = None
+    anat = str(getattr(arriving, "nationality", "") or "")
+    for c in form_cliques(team):
+        if c["nationality"] == anat:
+            best = c
+            break
+
+    cap = captain_of(team)
+    cap_is_arriving = cap is not None and cap is arriving
+    n_vets, _top_avg = _room_vet_core(team, arriving)
+
+    if arch == "blue_chip":
+        pick = _draft_overall(arriving)
+        pick_txt = f"the #{pick} overall pick" if pick else "the blue-chip kid"
+        cocky, hothead, tough_sell, quiet, spotlight = \
+            _personality_of(arriving)
+        mood, strength = _room_situation(team, arriving)
+        crisis = mood < 55
+        content = mood >= 72
+        win_now = strength >= 81
+        if n_vets >= 3:
+            # A veteran room's PERSONALITIES decide the welcome, not the
+            # headcount: a great leadership group is the best possible
+            # landing for a rookie; only a demanding room tests him. The
+            # kid's own swagger and the team's situation shape it further.
+            _lead, _drama, _temper = _vet_character(team, arriving)
+            fiery = _temper >= 65
+            circus = _drama >= 40
+            demanding = fiery or circus
+            sheltering = _lead >= 70 and not demanding
+            if demanding:
+                flavor = "fiery" if _temper >= _drama else "circus"
+                if flavor == "fiery":
+                    if cocky and hothead:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks in talking "
+                                 f"and looking for a fight. This will be "
+                                 f"fun for everyone but him.")
+                    elif cocky:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks in talking. "
+                                 f"This room eats rookies with mouths.")
+                    elif hothead:
+                        kid_delta = -3
+                        story = (f"{aname}, {pick_txt}, doesn't say a word "
+                                 f"and doesn't take a step back. They'll "
+                                 f"respect that -- after the test.")
+                    elif tough_sell:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks into a room "
+                                 f"that eats rookies. The vets will find "
+                                 f"out what he's made of -- and who it's for.")
+                    elif quiet:
+                        kid_delta = -3
+                        story = (f"{aname}, {pick_txt}, keeps his head "
+                                 f"down. The vets will test him anyway.")
+                    else:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks into a room "
+                                 f"that eats rookies. The vets will test "
+                                 f"him; the kids are buzzing.")
+                else:
+                    if cocky and not hothead:
+                        kid_delta = -1
+                        story = (f"{aname}, {pick_txt}, walks into a "
+                                 f"circus -- and he'll fit right into it.")
+                    elif hothead:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks into a "
+                                 f"circus. They'll try to get a rise out of him.")
+                    elif quiet:
+                        kid_delta = -3
+                        story = (f"{aname}, {pick_txt}, walks into a "
+                                 f"circus. Every word he says will be a "
+                                 f"headline -- he doesn't say many.")
+                    else:
+                        kid_delta = -4
+                        story = (f"{aname}, {pick_txt}, walks into a "
+                                 f"circus. The cameras love a new act.")
+                if kid_delta <= -3:
+                    for p in _roster(team):
+                        if p is arriving:
+                            continue
+                        try:
+                            pa = int(getattr(p, "age", 99) or 99)
+                        except Exception:
+                            pa = 99
+                        if pa <= 23:
+                            _bump(p, +2)
+            elif sheltering:
+                if cocky:
+                    kid_delta = +2
+                    story = (f"{aname}, {pick_txt}, couldn't ask for a "
+                             f"better room. The vets will keep the kid's "
+                             f"feet on the ground.")
+                elif hothead:
+                    kid_delta = +3
+                    story = (f"{aname}, {pick_txt}, couldn't ask for a "
+                             f"better room. The vets will point that "
+                             f"temper at the other team.")
+                elif tough_sell:
+                    kid_delta = +2
+                    story = (f"{aname}, {pick_txt}, lands in a well-led "
+                             f"room. The vets know how to handle his type.")
+                else:
+                    kid_delta = +3
+                    story = (f"{aname}, {pick_txt}, couldn't ask for a "
+                             f"better room. The vets will look after the kid.")
+            else:
+                kid_delta = -1
+                story = (f"{aname}, {pick_txt}, joins a veteran room. "
+                         f"All eyes on the kid.")
+            # One situational beat: the room's situation gets a say, but
+            # never more than one -- legible, never making or breaking.
+            if crisis:
+                kid_delta -= 1
+                if tough_sell:
+                    story += " He already doesn't like the circumstances."
+                else:
+                    story += (" The room is losing, and nobody's in the "
+                              "mood to babysit.")
+            elif win_now and not sheltering:
+                kid_delta -= 1
+                story += " They need him to produce right now."
+            elif spotlight and not sheltering:
+                kid_delta -= 1
+                story += " The spotlight follows him everywhere he goes."
+            elif content and not demanding and not sheltering:
+                kid_delta += 1
+                story += " A happy room makes for a soft landing."
+            kid_delta = max(-4, min(3, kid_delta))
+            _bump(arriving, kid_delta)
+            lines.append(story)
+        else:
+            # Young room: the kid cohort's character decides whether he
+            # thrives or drifts -- drama, temper, results, situation, each
+            # with its own flavor.
+            cohort, c_drama, c_temper, c_mood = _cohort_character(
+                team, arriving)
+            wild = c_temper >= 65 or c_drama >= 40 or c_mood < 55
+            driven = c_drama < 30 and c_temper < 55 and c_mood >= 60
+            if driven and cohort:
+                _bump(arriving, +3)
+                for p in cohort:
+                    _bump(p, +1)
+                story = (f"{aname}, {pick_txt}, lands with a young core "
+                         f"that pushes each other. Iron sharpens iron.")
+            elif wild and cohort:
+                _bump(arriving, +1)
+                if c_temper >= 65 and c_temper >= c_drama:
+                    story = (f"{aname}, {pick_txt}, joins a young room "
+                             f"that runs hot. He'll have to keep his head "
+                             f"straight.")
+                elif c_drama >= 40 and c_drama > c_temper:
+                    story = (f"{aname}, {pick_txt}, joins a young room "
+                             f"that loves the spotlight. He'll have to "
+                             f"keep his head straight.")
+                else:
+                    story = (f"{aname}, {pick_txt}, joins a young room "
+                             f"that's losing and pointing fingers. He'll "
+                             f"have to keep his head straight.")
+                if cocky or hothead:
+                    story += (" He looks like he'll fit right in -- "
+                              "that's the worry.")
+            else:
+                _bump(arriving, +2)
+                for p in _roster(team):
+                    if p is not arriving:
+                        _bump(p, +1)
+                story = (f"{aname}, {pick_txt}, joins a young room. "
+                         f"The future just walked in.")
+            if spotlight:
+                story += " Everyone already knows his name."
+            lines.append(story)
+    elif arch == "veteran":
+        # Respect travels: a softer landing than a nobody gets.
+        if best is not None:
+            lines.append(f"{aname} lands with the {best['name'].lower()} -- "
+                         f"a vet knows how to find his people.")
+        else:
+            _bump(arriving, -2)
+            lines.append(f"{aname} arrives. Even outsiders respect the resume.")
+        _vcocky, _vhot, _vtough, _vquiet, _vspot = _personality_of(arriving)
+        try:
+            _vmood, _vstr = _room_situation(team, arriving)
+        except Exception:
+            _vmood = 70.0
+        if _vtough and _vmood < 55:
+            # Tough sell, bad circumstances: difficult until they change.
+            _bump(arriving, -2)
+            lines.append(f"{aname} doesn't like the circumstances. "
+                         f"He'll be difficult until they change.")
+        vet_inf = influence_of(arriving)
+        cap_letter = (str(getattr(cap, "captaincy", "") or "").upper()
+                      if cap is not None else "")
+        cap_inf = influence_of(cap) if cap is not None else 0
+        try:
+            vet_age = int(getattr(arriving, "age", 35) or 35)
+        except Exception:
+            vet_age = 35
+        if cap is not None and not cap_is_arriving and cap_letter == "C":
+            if vet_inf > cap_inf and vet_age < 33:
+                # Alpha meets alpha: bounded friction, they'll sort it out.
+                _bump(cap, -2)
+                _bump(arriving, -2)
+                lines.append(f"Two alphas, one room: {aname} and "
+                             f"{_name(cap)} will sort out the pecking order.")
+            elif cap_inf >= 70:
+                # Strong captain: the vet slots in as a trusted lieutenant.
+                _bump(cap, +2)
+                lines.append(f"{_name(cap)} has a lieutenant he trusts. "
+                             f"The hierarchy holds.")
+            # Else: a middling captain and a vet who knows his place --
+            # the room just nods. No drama needed.
+        elif cap_is_arriving or cap_letter != "C" or cap_inf < 55:
+            # No real voice in the room: the vet fills the vacuum.
+            for p in _roster(team):
+                if p is not arriving:
+                    _bump(p, +1)
+            lines.append(f"{aname} fills the leadership vacuum. "
+                         f"The room stands a little taller.")
+        # Else: solid non-letter voice the vet doesn't outrank -- quiet
+        # respect, no lines needed.
+    else:
+        # Regular: the long-standing behavior, unchanged.
+        if best is not None:
+            _bump(arriving, -2)
+            lines.append(f"{aname} lands with the {best['name'].lower()} -- "
+                         f"familiar faces help.")
+        else:
+            _bump(arriving, -6)
+            lines.append(f"{aname} arrives an outsider. The room will "
+                         f"decide about him.")
+
+    prefix = f"[{date_str}] " if date_str else ""
+    # NOTE: no logging here -- the caller logs (cascade_on_trade logs
+    # every line once at the end; cascade_on_arrival logs below).
+    return [(prefix + ln) for ln in lines]
+
+
+def cascade_on_arrival(team: Any, arriving: Any, how: str = "signing",
+                       date_str: str = "") -> List[str]:
+    """A new man joins the NHL room outside a trade: UFA signing, offer
+    sheet, waiver claim, ELC promotion / callup.
+
+    First NHL-room appearance per team only -- a re-callup doesn't
+    re-shake the room. (Departures pop the arrival record, so a
+    re-acquired player counts as new again.)
+    """
+    try:
+        dr = ensure_dressing_room_fields(team)
+        if _pid(arriving) in dr["arrivals"]:
+            return []
+        lines = _arrival_reaction(team, arriving, how=how, date_str=date_str)
+        for ln in lines:
+            _log(team, ln)
+        return lines
+    except Exception:
+        return []
 
 
 def hierarchy(team: Any) -> List[Dict[str, Any]]:
@@ -330,36 +878,29 @@ def cascade_on_trade(team: Any, traded: Any = None, arriving: Any = None,
             lines.append(f"{tname_p} was dealt. The room feels it.")
         if clique is not None:
             lines.append(f"The {clique['name'].lower()} take it hardest.")
-
-    if arriving is not None:
-        aname = _name(arriving)
-        # Best-fit clique: nationality match first, then tenure.
-        best = None
-        anat = str(getattr(arriving, "nationality", "") or "")
-        for c in form_cliques(team):
-            if c["nationality"] == anat:
-                best = c
-                break
+        # A departure clears his arrival record: if he's ever re-acquired,
+        # the room treats him as a new face again.
         try:
-            gp = int(getattr(arriving, "stats", None)
-                     and getattr(arriving.stats, "games_played", 0) or 0)
-        except Exception:
-            gp = 0
-        try:
-            dr["arrivals"][_pid(arriving)] = {"gp_at_arrival": gp}
+            dr["arrivals"].pop(_pid(traded), None)
         except Exception:
             pass
-        if best is not None:
-            _bump(arriving, -2)
-            lines.append(f"{aname} lands with the {best['name'].lower()} -- "
-                         f"familiar faces help.")
-        else:
-            _bump(arriving, -6)
-            lines.append(f"{aname} arrives an outsider. The room will "
-                         f"decide about him.")
+
+    if arriving is not None:
+        # Who he is shapes the welcome -- blue chips and bona fide vets
+        # move the room differently than a depth plug. Shared core with
+        # every non-trade arrival path.
+        try:
+            lines.extend(_arrival_reaction(team, arriving, how="trade",
+                                           date_str=date_str))
+        except Exception:
+            pass
 
     for ln in lines:
-        _log(team, (f"[{date_str}] " if date_str else "") + ln)
+        # _arrival_reaction already date-prefixes its lines; the trade's own
+        # departure lines still need it. Never double-prefix.
+        if date_str and not ln.startswith("["):
+            ln = f"[{date_str}] " + ln
+        _log(team, ln)
     return lines
 
 
@@ -965,7 +1506,9 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
                 date_str = self.app.current_date.isoformat()
             except Exception:
                 pass
-            fire_coach(team, reason="fired", date_str=date_str)
+            fire_coach(team, reason="fired", date_str=date_str,
+                       league=getattr(getattr(self, "app", None),
+                                      "league", None))
         except Exception:
             pass
         self.refresh()
@@ -1180,9 +1723,19 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
             for p in _roster(team):
                 integ = integration_of(team, p)
                 if integ < 100:
+                    _arch = ""
+                    try:
+                        _rec = (ensure_dressing_room_fields(team)
+                                ["arrivals"].get(_pid(p)) or {})
+                        _arch = str(_rec.get("archetype", "") or "")
+                    except Exception:
+                        _arch = ""
+                    _tag = {"blue_chip": " (top-10 pick)",
+                            "veteran": " (veteran presence)"}.get(_arch, "")
                     ctk.CTkLabel(
                         self.sg_scroll,
-                        text=f"{_name(p)} settling in: {integ}% integrated",
+                        text=f"{_name(p)}{_tag} settling in: "
+                             f"{integ}% integrated",
                         font=("Segoe UI", 10, "italic"),
                         text_color=ct["BLUE"]).pack(anchor="w", pady=1)
         except Exception:
@@ -2103,15 +2656,27 @@ def _remove_staff_member(team: Any, coach: Any) -> None:
 
 
 def fire_coach(team: Any, reason: str = "fired",
-               date_str: str = "") -> Optional[Dict[str, Any]]:
+               date_str: str = "", league: Any = None) -> Optional[Dict[str, Any]]:
     """Fire the head coach: he joins the carousel, the room reacts.
 
     Addition by subtraction for the quit-on-coach crowd; grief for the
     bonded; uncertainty for everyone else.
+
+    league (optional): when provided, the firing is recorded in the
+    league's rivalries -- the coach blames the GM, and the grudge
+    follows the coach to his next job. Additive: rivalries only.
     """
     coach = _room_head_coach(team)
     if coach is None:
         return None
+    if league is not None:
+        try:
+            from reputation_system import record_firing as _rf
+            _rivs = getattr(league, "rivalries", None)
+            if isinstance(_rivs, list):
+                _rf(_rivs, coach, team)
+        except Exception:
+            pass
     entry = remember_coach(coach, team, reason=reason, date_str=date_str)
     cname = entry["name"]
     roster = _roster(team)

@@ -523,10 +523,12 @@ class PlayerGenerator:
                 _per = random.randint(5, 30)  # fringe / late-bloomer
             player.nhl_games_played = min(1400, _seasons * _per)
 
-        # Deal a locked personality: identity is forever, volatility is scenario.
+        # Deal a locked personality blend: identity is forever, volatility
+        # is scenario. The blend gives every generated batch a real mix of
+        # drama, temper, and difficulty instead of one flat type.
         try:
             import reputation_system as _rs
-            _rs.generate_personality(player)
+            _rs.deal_generation_blend(player)
         except Exception:
             pass
 

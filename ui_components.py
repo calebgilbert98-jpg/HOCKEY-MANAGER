@@ -2523,7 +2523,8 @@ class PlayerProfileView(ctk.CTkFrame):
                          reverse=True)
 
         _emoji = {"hat_trick": "🎩", "four_point": "⭐", "five_point": "🌟",
-                  "shutout": "🧱", "forty_saves": "🥅", "steal": "🥅"}
+                  "shutout": "🧱", "forty_saves": "🥅", "steal": "🥅",
+                  "iconic_game": "🏛️"}
         if not moments:
             ttk.Label(moments_frame, text="No signature games yet.",
                       style='PlayerInfo.TLabel').pack(anchor='w')

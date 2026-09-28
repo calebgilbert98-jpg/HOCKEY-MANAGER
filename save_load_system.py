@@ -19,6 +19,20 @@ from dataclasses import asdict
 import sys
 
 
+def _safe_asdict(obj: Any) -> Dict[str, Any]:
+    """asdict() for a dataclass, else its __dict__, else {}. Never raises."""
+    try:
+        if obj is None:
+            return {}
+        try:
+            return asdict(obj)
+        except Exception:
+            d = getattr(obj, "__dict__", None)
+            return dict(d) if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
 class GameSaveManager:
     """Manages saving and loading of complete game states"""
     
@@ -234,6 +248,40 @@ class GameSaveManager:
             # Live playoff bracket (mid-tournament saves keep every game).
             # Missing key = old save -> no bracket, projections shown.
             'playoff_bracket': self._serialize_playoff_bracket(league),
+            # Immortality: retired-player snapshots (HOF ballot arcs live
+            # here). Was never serialized -- every save deleted them from
+            # the universe. Missing key = old save -> empty.
+            'retired_players': [dict(r) for r in
+                                (getattr(league, 'retired_players', None) or [])],
+            # Milestone idempotency: which (player, milestone) pairs already
+            # got their ceremony. Without this, a load re-fires every past
+            # milestone. Missing key = old save -> rebuilt from scratch.
+            '_milestone_celebrated': [list(k) for k in
+                                     (getattr(league, '_milestone_celebrated', None) or set())],
+            # Draft-steal retrospective idempotency: which players already
+            # got their steal story. Same bug class as milestones -- a load
+            # re-fires every past retrospective without this.
+            # Missing key = old save -> rebuilt from scratch.
+            'steal_retro_posted': list(getattr(league, 'steal_retro_posted', None) or set()),
+            # Copycat-league dynasty tracking: defending-champ identity +
+            # the core systems that won. The AI GM defending-champ leash
+            # and dynasty-blueprint heat read these; without them a load
+            # resets both. Missing keys = old save -> fresh tracking.
+            '_last_cup_champ': getattr(league, '_last_cup_champ', None),
+            '_last_champ_core': sorted(getattr(league, '_last_champ_core', None) or []),
+            '_blueprint_dynasties': dict(getattr(league, '_blueprint_dynasties', None) or {}),
+            # Media story state: ongoing narratives, coach-vs-reporter
+            # beefs, fines. Stored as plain dicts (objects rebuilt on
+            # restore). Without these, media arcs vanish mid-story on load.
+            # Missing keys = old save -> no active stories.
+            'media_narratives': [dict(getattr(n, '__dict__', None) or {})
+                                 for n in (getattr(league, 'media_narratives', None) or [])],
+            'coach_media_beefs': [dict(getattr(b, '__dict__', None) or {})
+                                  for b in (getattr(league, 'coach_media_beefs', None) or [])],
+            'media_fines': [dict(f) for f in
+                            (getattr(league, 'media_fines', None) or [])],
+            # Draft Day Central deals feed (summaries). Missing = old save.
+            'draft_day_deals': list(getattr(league, 'draft_day_deals', None) or []),
         }
         
         # Serialize all teams
@@ -286,6 +334,76 @@ class GameSaveManager:
                     'F': list((getattr(team, 'line_matchups', None) or {}).get('F') or [None] * 4)[:4],
                     'D': list((getattr(team, 'line_matchups', None) or {}).get('D') or [None] * 3)[:3],
                 },
+                # Retired numbers in the rafters. Was never serialized --
+                # loads re-issued them to rookies. Missing = old save.
+                'retired_numbers': [dict(r) for r in
+                                    (getattr(team, 'retired_numbers', None) or [])],
+                # Queued pregame ceremony (jersey retirement / HOF night).
+                # Dropped on load before; the electric building never
+                # happened. Missing = old save -> none pending.
+                '_pending_ceremony': (dict(getattr(team, '_pending_ceremony'))
+                                      if isinstance(getattr(team, '_pending_ceremony', None), dict)
+                                      else None),
+                # Iconic games: the franchise's remembered nights. Plain
+                # dicts, capped at 30 by the writer. The per-team
+                # "starred" flag is what survives seasons -- unstarred
+                # entries are pruned at rollover. Missing = old save.
+                'iconic_games': [dict(e) for e in
+                                 (getattr(team, 'iconic_games', None) or [])
+                                 if isinstance(e, dict)][:30],
+                # Team dynamics feed (the Morale screen story). Capped at
+                # 100 by the writer; the code promises it survives saves.
+                # Missing = old save -> empty feed.
+                'dynamics_log': [dict(e) for e in
+                                 (getattr(team, 'dynamics_log', None) or [])][-100:],
+                # Dressing-room story state: mood lines, pending talks,
+                # arrival tracking. Missing = old save -> fresh room.
+                'dressing_room': {
+                    k: (list(v) if isinstance(v, list)
+                        else (dict(v) if isinstance(v, dict) else v))
+                    for k, v in (getattr(team, 'dressing_room', None) or {}).items()
+                },
+                # Pro-scout storyline state: steal/sell watches + filed tips
+                # awaiting grading. Keys are player ids (pickle preserves
+                # them); values are plain dicts. Missing = old save.
+                'scout_watches': {
+                    w: {k: dict(v) for k, v in
+                        (getattr(team, w, None) or {}).items()}
+                    for w in ('steal_watch', 'sell_watch', 'scout_buy_tips',
+                              'scout_sell_tips', 'tip_ledger')
+                },
+                # Standing line-control decision (coach vs GM). Missing =
+                # old save -> 'coach', matching the dataclass default.
+                'line_control': getattr(team, 'line_control', 'coach') or 'coach',
+                # Tactics choices + earned familiarity + saved preferences.
+                # Missing = old save -> defaults, same as a fresh club.
+                'tactics': {
+                    'even_strength': getattr(team, 'tactic_even_strength', 'Balanced'),
+                    'power_play': getattr(team, 'tactic_power_play', 'Offensive'),
+                    'penalty_kill': getattr(team, 'tactic_penalty_kill', 'Defensive'),
+                    'line_matching': getattr(team, 'tactic_line_matching', 'Standard'),
+                    'forecheck': getattr(team, 'tactic_forecheck', '2-1-2'),
+                    'offense': getattr(team, 'tactic_offense', 'Spread'),
+                    'familiarity': float(getattr(team, 'tactics_familiarity', 85) or 85),
+                    'installed_by': getattr(team, 'tactics_installed_by', None),
+                    'preferred': dict(getattr(team, 'preferred_tactics', None) or {}),
+                },
+                # Parity-engine form/streak state. Missing = old save.
+                '_parity_state': dict(getattr(team, '_parity_state', None) or {}),
+                # Analytics-GM identity: department quality, philosophy,
+                # baseline, last GM name (detects front-office changes).
+                'analytics_identity': {
+                    'quality': int(getattr(team, 'analytics_quality', 35) or 0),
+                    'philosophy': float(getattr(team, 'analytics_philosophy', 30.0) or 0.0),
+                    'baseline': float(getattr(team, 'philosophy_baseline', 30.0) or 0.0),
+                    'prev_gm_name': getattr(team, '_prev_gm_name', '') or '',
+                },
+                # Analytics-hub snapshots (capped at 10 by the writer).
+                'analytics_games': [dict(r) for r in
+                                    (getattr(team, 'analytics_games', None) or [])][-10:],
+                # GM name + profile. Missing = old save -> defaults.
+                'gm_name': getattr(team, 'gm_name', 'General Manager') or 'General Manager',
+                'gm_profile': _safe_asdict(getattr(team, 'gm_profile', None)),
             }
             
             return team_data
@@ -946,6 +1064,67 @@ class GameSaveManager:
             league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
             league.rivalries = [dict(r) for r in
                                 (league_data.get('rivalries', None) or [])]
+            # Immortality restores: retired-player snapshots (HOF ballot
+            # arcs) and the milestone idempotency set. Absent in old
+            # saves -> empty, same as a fresh league.
+            league.retired_players = [dict(r) for r in
+                                      (league_data.get('retired_players', None) or [])]
+            try:
+                league._milestone_celebrated = set(
+                    tuple(k) for k in
+                    (league_data.get('_milestone_celebrated', None) or []))
+            except Exception:
+                league._milestone_celebrated = set()
+            # Draft-steal retrospective idempotency. Absent in old
+            # saves -> empty, same as a fresh league.
+            try:
+                league.steal_retro_posted = set(
+                    league_data.get('steal_retro_posted', None) or [])
+            except Exception:
+                league.steal_retro_posted = set()
+            # Copycat-league dynasty tracking. Absent in old saves ->
+            # no defending champ, no dynasty runs -- same as fresh.
+            league._last_cup_champ = league_data.get('_last_cup_champ', None)
+            try:
+                league._last_champ_core = frozenset(
+                    league_data.get('_last_champ_core', None) or [])
+            except Exception:
+                league._last_champ_core = frozenset()
+            try:
+                league._blueprint_dynasties = dict(
+                    league_data.get('_blueprint_dynasties', None) or {})
+            except Exception:
+                league._blueprint_dynasties = {}
+            # Media story state: rebuild Narrative / CoachMediaBeef
+            # objects from their plain-dict snapshots; fines are
+            # already dicts. Absent in old saves -> no active stories.
+            try:
+                from media_engine import Narrative, CoachMediaBeef
+                _narrs = []
+                for _nd in (league_data.get('media_narratives', None) or []):
+                    try:
+                        _n = Narrative.__new__(Narrative)
+                        _n.__dict__.update(dict(_nd))
+                        _narrs.append(_n)
+                    except Exception:
+                        continue
+                league.media_narratives = _narrs
+                _beefs = []
+                for _bd in (league_data.get('coach_media_beefs', None) or []):
+                    try:
+                        _b = CoachMediaBeef.__new__(CoachMediaBeef)
+                        _b.__dict__.update(dict(_bd))
+                        _beefs.append(_b)
+                    except Exception:
+                        continue
+                league.coach_media_beefs = _beefs
+            except Exception:
+                league.media_narratives = []
+                league.coach_media_beefs = []
+            league.media_fines = [dict(f) for f in
+                                  (league_data.get('media_fines', None) or [])]
+            league.draft_day_deals = list(
+                league_data.get('draft_day_deals', None) or [])
             try:
                 league.lottery_results = {
                     int(k): [dict(r) for r in v]
@@ -1162,6 +1341,85 @@ class GameSaveManager:
                 'F': _lmf + [None] * (4 - len(_lmf)),
                 'D': _lmd + [None] * (3 - len(_lmd)),
             }
+            # Retired numbers in the rafters + any queued pregame ceremony.
+            # Absent in old saves -> empty / none, same as a fresh club.
+            team.retired_numbers = [dict(r) for r in
+                                    (team_data.get('retired_numbers', None) or [])]
+            _pc = team_data.get('_pending_ceremony', None)
+            team._pending_ceremony = dict(_pc) if isinstance(_pc, dict) else None
+            # Iconic games: the franchise's remembered nights, with the
+            # per-team starred flags. Absent in old saves -> empty.
+            team.iconic_games = [dict(e) for e in
+                                 (team_data.get('iconic_games', None) or [])
+                                 if isinstance(e, dict)][:30]
+            # Team dynamics feed + dressing-room story state. Absent in
+            # old saves -> empty, same as a fresh club.
+            team.dynamics_log = [dict(e) for e in
+                                 (team_data.get('dynamics_log', None) or [])][-100:]
+            _dr = team_data.get('dressing_room', None)
+            team.dressing_room = {
+                k: (list(v) if isinstance(v, list)
+                    else (dict(v) if isinstance(v, dict) else v))
+                for k, v in _dr.items()
+            } if isinstance(_dr, dict) else {}
+            # Pro-scout storyline state (steal/sell watches, filed tips).
+            _sw = team_data.get('scout_watches', None) or {}
+            for _w in ('steal_watch', 'sell_watch', 'scout_buy_tips',
+                       'scout_sell_tips', 'tip_ledger'):
+                try:
+                    setattr(team, _w, {
+                        k: dict(v) for k, v in
+                        ((_sw.get(_w, None)) or {}).items()})
+                except Exception:
+                    setattr(team, _w, {})
+            # Standing line-control decision. Absent = old save -> coach.
+            team.line_control = team_data.get('line_control', None) or 'coach'
+            # Tactics choices + earned familiarity + saved preferences.
+            _tx = team_data.get('tactics', None) or {}
+            team.tactic_even_strength = _tx.get('even_strength', 'Balanced')
+            team.tactic_power_play = _tx.get('power_play', 'Offensive')
+            team.tactic_penalty_kill = _tx.get('penalty_kill', 'Defensive')
+            team.tactic_line_matching = _tx.get('line_matching', 'Standard')
+            team.tactic_forecheck = _tx.get('forecheck', '2-1-2')
+            team.tactic_offense = _tx.get('offense', 'Spread')
+            try:
+                team.tactics_familiarity = float(_tx.get('familiarity', 85) or 85)
+            except Exception:
+                team.tactics_familiarity = 85.0
+            team.tactics_installed_by = _tx.get('installed_by', None)
+            team.preferred_tactics = dict(_tx.get('preferred', None) or {})
+            # Parity-engine form/streak state.
+            team._parity_state = dict(team_data.get('_parity_state', None) or {})
+            # Analytics-GM identity.
+            _ai = team_data.get('analytics_identity', None) or {}
+            try:
+                team.analytics_quality = int(_ai.get('quality', 35) or 0)
+            except Exception:
+                team.analytics_quality = 35
+            try:
+                team.analytics_philosophy = float(_ai.get('philosophy', 30.0) or 0.0)
+            except Exception:
+                team.analytics_philosophy = 30.0
+            try:
+                team.philosophy_baseline = float(_ai.get('baseline', 30.0) or 0.0)
+            except Exception:
+                team.philosophy_baseline = 30.0
+            team._prev_gm_name = _ai.get('prev_gm_name', '') or ''
+            # Analytics-hub snapshots (writer caps at 10).
+            team.analytics_games = [dict(r) for r in
+                                    (team_data.get('analytics_games', None) or [])][-10:]
+            # GM name + profile. Absent in old saves -> defaults.
+            team.gm_name = team_data.get('gm_name', None) or 'General Manager'
+            _gp = team_data.get('gm_profile', None)
+            if isinstance(_gp, dict) and _gp:
+                try:
+                    from game_classes import GMProfile
+                    import dataclasses
+                    _gfields = {f.name for f in dataclasses.fields(GMProfile)}
+                    team.gm_profile = GMProfile(**{
+                        k: v for k, v in _gp.items() if k in _gfields})
+                except Exception:
+                    pass
             
             # Restore team stats
             if 'stats' in team_data:

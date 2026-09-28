@@ -89,6 +89,11 @@ class AITeamManager:
         # Decision-making parameters
         self.decision_frequency = 7  # Check every 7 days
         self.last_decision_date = date.today()
+
+        # Stories queued by AI signings (signing, market-setter, contract
+        # fallout). The app flushes these into the news feed; the manager
+        # holds no app ref.
+        self._pending_news: List[str] = []
         
         # Market analysis cache
         self.player_values: Dict[str, int] = {}
@@ -99,6 +104,16 @@ class AITeamManager:
         """Attach the league's salary cap system for cap-relative demands."""
         self._cap_system = cap_system
         self._league_ref = league
+
+    def drain_pending_news(self) -> List[str]:
+        """Stories queued by AI signings. The app flushes these into the
+        news feed with today's date."""
+        try:
+            pend = getattr(self, "_pending_news", None)
+            self._pending_news = []
+            return list(pend) if isinstance(pend, list) else []
+        except Exception:
+            return []
 
     def _team_gm(self, team: Team):
         """Return the team's General Manager staff member, if any."""
@@ -381,8 +396,9 @@ class AITeamManager:
                     team, strategy, identity, sec, current_date)
                 team_decisions.extend(sign_decisions)
 
-            # Execute the decisions this manager owns end-to-end (signings,
-            # gated promotions). Trade/FA/extension offers remain proposals.
+            # Execute the decisions this manager owns end-to-end (FA
+            # signings, prospect signings, gated promotions).
+            # Trade/extension offers remain proposals.
             self._execute_decisions(team, team_decisions)
 
             decisions.extend(team_decisions)
@@ -435,6 +451,111 @@ class AITeamManager:
             self.team_strategies[team.team_name] = self._generate_team_strategy(
                 team, identity, sec)
     
+    def _player_ask(self, player: Player, overall: Optional[float] = None,
+                    league=None) -> int:
+        """What the player demands: the same asking machinery the user
+        faces. Base demand as % of cap scaled by the live cap, plus any
+        market-setter premium, floored at $750k. Mirrors
+        handle_contract_offer exactly, so the AI and the user negotiate
+        against the same player."""
+        try:
+            from game_classes import to_100_scale as _t100
+            _ovr100 = int(_t100(overall if overall is not None
+                               else player.overall_rating()))
+        except Exception:
+            try:
+                _ovr100 = int(overall if overall is not None
+                             else player.overall_rating())
+            except Exception:
+                _ovr100 = 75
+        _pos = getattr(player, "primary_position", "")
+        _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
+        _age = int(getattr(player, "age", 27) or 27)
+        _lg = league if league is not None else getattr(self, "_league_ref",
+                                                       None)
+        _season = int(getattr(_lg, "season_year", 0) or 0)
+        _cap_sys = self._cap_system
+        try:
+            _cap = _cap_sys.current_cap if _cap_sys is not None \
+                else DEFAULT_CAP
+        except Exception:
+            _cap = DEFAULT_CAP
+        _base_pct = (_ovr100 * 100_000) / 104_000_000
+        try:
+            if _cap_sys is not None:
+                _ask = _cap_sys.demand_for(_base_pct, _ovr100, _pos_name,
+                                           _age, _season)
+            else:
+                _ask = int(_base_pct * _cap)
+        except Exception:
+            _ask = int(_base_pct * _cap)
+        return max(_ask, 750_000)
+
+    def _offer_boldness(self, team: Team, strategy: TeamStrategy,
+                        player: Player, ovr: float, ask: int,
+                        available_budget: int) -> float:
+        """How far above (or below) the player's ask this GM bids.
+
+        The ask is what the player demands; the factor is the GM's
+        competitive edge, in [0.90, 1.25]. The floor still signs -- the
+        handshake accepts at 90% of ask -- so a disciplined GM banks the
+        small discount and a bold GM pays real money for it. Boldness is
+        never the default; it takes the right circumstances, all
+        GM-side:
+          - risk tolerance: the core dial. A gambler bids over; a
+            cautious GM bids just under.
+          - the missing piece: a contender whose #1 need is an impact
+            player (85+) pays the overpay to complete the roster.
+          - cap comfort: room after the deal invites boldness; a tight
+            cap enforces discipline.
+          - the seat: never bold under owner warning (the board leash);
+            tenured winners stay conservative and trust their read; only
+            a hot-seat GM wired to panic reaches out of desperation.
+          - rebuilders never win bidding wars for veterans.
+        """
+        factor = 0.95 + 0.10 * strategy.risk_tolerance  # 0.95 - 1.05
+        sec = self.gm_security.get(team.team_name)
+
+        if strategy.priority == ManagementPriority.CONTEND:
+            try:
+                _needs = strategy.position_needs or []
+                _missing = (bool(_needs)
+                            and player.primary_position == _needs[0]
+                            and ovr >= 85)
+            except Exception:
+                _missing = False
+            if _missing:
+                factor += 0.08
+
+        try:
+            _comfort = available_budget / max(1, strategy.budget_limit)
+        except Exception:
+            _comfort = 0.0
+        if _comfort > 0.25:
+            factor += 0.05
+        elif _comfort < 0.08:
+            factor -= 0.05
+
+        if sec is not None:
+            if sec.owner_warning:
+                # Board leash: no bold offers on the way out.
+                factor = min(factor, 1.0)
+            elif sec.tenured_winner:
+                # Conservative winner: doesn't bid against himself.
+                factor -= 0.03
+            elif sec.hot_seat:
+                _ident = self.gm_identities.get(team.team_name)
+                _pr = _ident.pressure_response \
+                    if _ident is not None else 0.5
+                if _pr >= 0.5:
+                    # Desperate and wired to panic: reaches.
+                    factor += 0.05
+
+        if strategy.priority == ManagementPriority.REBUILD:
+            factor = min(factor, 1.0)
+
+        return max(0.90, min(1.25, factor))
+
     def _evaluate_free_agency(self, team: Team, strategy: TeamStrategy,
                              free_agents: List[Player], current_date: date) -> List[AIDecision]:
         """Evaluate free agent signings for a team"""
@@ -464,10 +585,19 @@ class AITeamManager:
                     continue
 
                 ovr = fa.overall_rating()
-                # Estimate salary demand
-                estimated_salary = self._estimate_player_salary(fa, ovr)
-                if estimated_salary <= available_budget:
-                    suitable_fas.append((fa, estimated_salary, ovr))
+                # The offer: the player's ask, scaled by how bold this
+                # GM is feeling -- his risk tolerance, the seat he's in,
+                # whether this is the missing piece, and how comfortable
+                # the cap is. No artificial ceiling on any UFA, Euro
+                # imports included: the AI may bid anything from just
+                # under the ask to a real overpay. Whether the player
+                # ACCEPTS is decided realistically at execution time.
+                ask = self._player_ask(fa, ovr)
+                boldness = self._offer_boldness(team, strategy, fa, ovr,
+                                               ask, available_budget)
+                offer = int(ask * boldness)
+                if offer <= available_budget:
+                    suitable_fas.append((fa, offer, ovr, boldness))
 
         # Sort by priority (overall rating vs cost)
         suitable_fas.sort(key=lambda x: x[2] / (x[1] / 1_000_000), reverse=True)
@@ -490,7 +620,7 @@ class AITeamManager:
                 interest_threshold = 0.72
 
         # Make offers to top candidates
-        for fa, estimated_salary, ovr in suitable_fas[:3]:  # Top 3 candidates
+        for fa, offer, ovr, boldness in suitable_fas[:3]:  # Top 3 candidates
             priority_score = self._calculate_fa_priority(fa, strategy, team, ovr)
 
             if priority_score > interest_threshold:
@@ -499,12 +629,15 @@ class AITeamManager:
                     decision_type="free_agent_offer",
                     target_player=fa,
                     offer_details={
-                        "salary": estimated_salary,
+                        "salary": offer,
                         "term": self._determine_contract_length(fa, strategy),
                         "no_trade_clause": ovr > 85
                     },
                     priority_score=priority_score,
-                    reasoning=f"Addresses {fa.primary_position.value} need, fits strategy",
+                    reasoning=(f"Addresses {fa.primary_position.value} need, "
+                               f"fits strategy"
+                               + (" -- bold bid for the missing piece"
+                                  if boldness >= 1.10 else "")),
                     timestamp=current_date
                 )
                 decisions.append(decision)
@@ -654,6 +787,177 @@ class AITeamManager:
 
         return decisions
 
+    def _execute_free_agent_signing(self, team: Team, decision: "AIDecision",
+                                      league) -> bool:
+        """Execute one AI free-agent signing end-to-end.
+
+        Same rulebook as the user/MP paths: draft lock, 23-man roster
+        limit, league-minimum salary, a live budget re-check (not the
+        evaluation-time number), and the 6-year external max from the new
+        CBA. The handshake is realistic: the player weighs the offer
+        against the SAME asking machinery the user faces (cap-relative
+        base demand plus any market-setter premium, floored at $750k).
+        At 90%+ of his ask he signs; at 70-90% the AI meets the ask when
+        the budget allows, otherwise the player walks; below 70% he walks
+        outright. The AI may offer anything from the minimum to its full
+        cap room -- selectivity lives in WHICH players get offers
+        (priority threshold, needs, budget), not in an artificial
+        ceiling. The rivalry transfer hooks fire so the ledger can't go
+        stale: his personal beefs follow him to the new room.
+        Returns True when a signing completed.
+        """
+        p = getattr(decision, "target_player", None)
+        details = getattr(decision, "offer_details", None) or {}
+        if p is None:
+            return False
+        try:
+            # Still on the market?
+            fa_pool = getattr(league, "free_agents", None)
+            if not isinstance(fa_pool, list) or p not in fa_pool:
+                return False
+            # Draft lock: shared rule, no sidestepping the draft.
+            try:
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(p):
+                    return False
+            except Exception:
+                pass
+            # A real hole: roster room and the position still a need.
+            roster = getattr(team, "roster", None) or []
+            if len(roster) >= 23:
+                return False
+            strategy = self.team_strategies.get(team.team_name)
+            if strategy is None or \
+                    getattr(p, "primary_position", None) not in \
+                    (strategy.position_needs or []):
+                return False
+            # Terms: 6-year external max (new CBA). The offer itself may be
+            # anything from the minimum to the full cap room.
+            offered = int(details.get("salary", 0) or 0)
+            years = max(1, min(6, int(details.get("term", 1) or 1)))
+            # The handshake: what would he take? The SAME asking
+            # machinery the user faces, so the AI and the user negotiate
+            # against the same player.
+            _ask = self._player_ask(p, league=league)
+            # The user's rulebook, without a counter loop: 90%+ of ask
+            # signs on the spot; 70-90% is the counter zone, where the AI
+            # meets the ask when the budget allows and walks otherwise;
+            # below 70% the player is insulted and walks outright.
+            if offered >= 0.9 * _ask:
+                salary = offered
+            elif offered >= 0.7 * _ask:
+                salary = _ask
+            else:
+                return False
+            try:
+                from salary_cap_system import league_minimum_salary as _min_fn
+                _floor = _min_fn(getattr(league, "season_year", None))
+            except Exception:
+                _floor = 850_000
+            if salary < _floor:
+                return False
+            # Live budget re-check against the strategy's spending limit.
+            try:
+                current = sum(int(getattr(x, "salary", 750_000) or 750_000)
+                              for x in roster)
+            except Exception:
+                current = 0
+            if salary > (strategy.budget_limit - current):
+                return False
+            # The handshake: offer is estimated market value -- accepted.
+            p.salary = salary
+            p.contract_years = years
+            # A new SPC starts with no retained salary, same as every path.
+            try:
+                import trade_engine as _te_clr
+                _te_clr.clear_retention_state(p)
+            except Exception:
+                pass
+            _contract = getattr(p, "contract", None)
+            if _contract is not None:
+                _contract.salary = salary
+                _contract.years_remaining = years
+                if details.get("no_trade_clause"):
+                    try:
+                        import trade_engine as _te2
+                        if _te2.clause_eligible(p):
+                            _te2.apply_clause_to_contract(
+                                _contract, "ntc", 10, player=p)
+                    except Exception:
+                        pass
+            fa_pool.remove(p)
+            team.add_player(p, "roster")
+            # Rivalry lifecycle: a signing is a transfer.
+            try:
+                from reputation_system import on_player_transfer as _opt
+                _rivs = getattr(league, "rivalries", None)
+                if isinstance(_rivs, list):
+                    _opt(_rivs, p, from_team=None, to_team=team)
+            except Exception:
+                pass
+            # Dressing room: AI rooms react to WHO arrives, same as the
+            # user's room -- even playing field.
+            try:
+                import dressing_room as _dr_arr
+                _dr_arr.cascade_on_arrival(team, p, how="signing")
+            except Exception:
+                pass
+            # Market feedback: Caleb's market engine learns from EVERY
+            # signing, not just the user's. register_signing keeps only
+            # true market-setters (star + top-5 AAV) as comps; those comps
+            # feed market_premium, which is exactly what the handshake's
+            # _player_ask prices in. So a bold AI overpay for a star
+            # raises the next star's ask -- offers change the league.
+            # The human fallout lands on AI GMs exactly like the user:
+            # overpay verdict, fan beef, GM rep, GM-GM heat.
+            _set_market = False
+            try:
+                _cap_sys2 = getattr(league, "salary_cap_system", None)
+                if _cap_sys2 is not None:
+                    _p2 = getattr(p, "primary_position", "")
+                    _pn2 = _p2.value if hasattr(_p2, "value") else str(_p2)
+                    try:
+                        from game_classes import to_100_scale as _t100b
+                        _ovr100b = int(_t100b(p.overall_rating()))
+                    except Exception:
+                        _ovr100b = 75
+                    _set_market = bool(_cap_sys2.register_signing(
+                        getattr(p, "full_name", "Unknown"), salary,
+                        _ovr100b, _pn2,
+                        int(getattr(p, "age", 27) or 27),
+                        int(getattr(league, "season_year", 0) or 0)))
+            except Exception:
+                pass
+            try:
+                from reputation_system import evaluate_contract_decision \
+                    as _ecd
+                _cd = _ecd(p, salary, _ask, team=team, league=league,
+                           market_setter=bool(_set_market))
+            except Exception:
+                _cd = {}
+            # Stories queue on the manager; the app flushes them into the
+            # news feed with today's date (the manager holds no app ref).
+            try:
+                _pname = getattr(p, "full_name", "Unknown")
+                _stories = [
+                    f"The {team.team_name} have signed {_pname} to a "
+                    f"{years}-year contract."]
+                if _set_market:
+                    _stories.append(
+                        f"{_pname}'s ${salary:,} deal sets the market -- "
+                        f"comparable stars will demand more.")
+                if isinstance(_cd, dict) and _cd.get("story"):
+                    _stories.append(_cd["story"])
+                _pend = getattr(self, "_pending_news", None)
+                if not isinstance(_pend, list):
+                    _pend = self._pending_news = []
+                _pend.extend(_stories)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     def _execute_decisions(self, team: Team, decisions: List[AIDecision]):
         """Execute the decisions this manager owns end-to-end.
 
@@ -665,10 +969,18 @@ class AITeamManager:
         league = getattr(self, "_league_ref", None)
         if league is None:
             return
+        _fa_signed = False  # at most one signing per team per weekly tick:
+        # the evaluation proposes up to 3 targets, but executing all of
+        # them would drain the pool in a week. First valid handshake wins.
         for d in decisions:
             try:
                 p = d.target_player
                 if p is None:
+                    continue
+                if d.decision_type == "free_agent_offer":
+                    if not _fa_signed and self._execute_free_agent_signing(
+                            team, d, league):
+                        _fa_signed = True
                     continue
                 if d.decision_type == "sign_prospect":
                     if getattr(p, "contract", None) is not None:

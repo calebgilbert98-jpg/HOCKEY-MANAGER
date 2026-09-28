@@ -463,17 +463,19 @@ def process_postgame(sim: Any, home: Any, away: Any,
                      ledger: Any = None,
                      is_playoff: bool = False, series_game: int = 0,
                      roll_incidents: bool = True,
-                     game_date: Any = None) -> Dict[str, Any]:
+                     game_date: Any = None,
+                     season_year: Any = None) -> Dict[str, Any]:
     """One call per finished game. Rolls incidents (quick-sim only --
     GameSim models them live), records game stories (both engines), and
     logs career moments to the players who earned them.
 
     Returns {"fights": int, "brawl": bool, "incidents": [...],
-    "stories": [...], "moments": int}. Never raises; never touches
-    scoring or stats.
+    "stories": [...], "moments": int, "iconic": bool}. Never raises;
+    never touches scoring or stats.
     """
     out: Dict[str, Any] = {"fights": 0, "brawl": False,
-                           "incidents": [], "stories": [], "moments": 0}
+                           "incidents": [], "stories": [], "moments": 0,
+                           "iconic": False}
     rivalries = rivalries if rivalries is not None else []
     try:
         if roll_incidents:
@@ -489,6 +491,20 @@ def process_postgame(sim: Any, home: Any, away: Any,
         out["moments"] = log_player_moments(sim, home, away, home_score,
                                             away_score, game_date=game_date,
                                             is_playoff=is_playoff)
+        # Iconic games: the nights the franchise remembers. Detection
+        # reuses the same game data -- a few integer comparisons, no
+        # extra sim pass. Records on both clubs + the stars' logs.
+        try:
+            from iconic_games import detect_and_record
+            _icon = detect_and_record(
+                home, away, home_score, away_score, sim,
+                went_ot=went_ot, shootout=shootout,
+                rivalries=rivalries, is_playoff=is_playoff,
+                series_game=series_game, brawl=out.get("brawl", False),
+                game_date=game_date, season_year=season_year)
+            out["iconic"] = _icon is not None
+        except Exception:
+            pass
     except Exception:
         pass
     return out
