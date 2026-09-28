@@ -414,23 +414,249 @@ def league_leaders_advanced(players: List[Any], category: str,
 # ---------------------------------------------------------------------------
 # Metric glossary (for UI tooltips)
 # ---------------------------------------------------------------------------
+# HONESTY NOTE: every metric below is a MODEL-DERIVED ESTIMATE built from
+# the player's attributes (shooting, awareness, positioning...) and his
+# box-score production (goals, shots, ice time). This game does NOT track
+# shot locations, optical data, or puck tracking -- there is no "real"
+# xG here the way an NHL analytics department has it. Treat these numbers
+# as the front office's best statistical guess, not measured truth: useful
+# for comparing players and spotting trends, not for declaring exactly how
+# many goals a shot "should" have been.
 
 GLOSSARY: Dict[str, str] = {
-    "CF%": "Corsi For %: share of all shot attempts (shots+misses+blocks) for the player's team while on ice. Raw possession proxy.",
-    "FF%": "Fenwick For %: like Corsi but excludes blocked shots. Slightly more repeatable.",
-    "xGF%": "Expected-goal share while on ice: xGF/(xGF+xGA). Shot-quality-aware possession; the best predictive process metric.",
-    "ixG": "Individual expected goals: goal-probability value of the player's own shots (location, angle, shot quality).",
-    "PDO": "On-ice shooting % + on-ice save % (avg 1.000). High PDO = likely lucky; regresses to the mean.",
-    "OZ%": "Offensive-zone start %: deployment context. High OZ% = sheltered offensive minutes.",
-    "P/60": "Points per 60 minutes: TOI-normalized production; fair across roles.",
-    "Game Score": "Single-number game rating weighting goals, assists, shots, blocks and penalties.",
-    "GSAx": "Goals Saved Above Expected: expected goals against minus actual goals allowed. Positive = above expected.",
-    "GSAA": "Goals Saved Above Average: expected goals allowed at league-average save % minus actual goals allowed.",
-    "HDSV%": "High-danger save %: the most predictive single-season goalie stat.",
-    "QS%": "Quality-start %: share of starts with above-average save %.",
-    "SH%": "Shooting %: goals divided by shots on goal.",
-    "GF%": "Goal share at even strength: actual results vs the xGF% process.",
-    "PP%": "Power-play conversion rate (modeled from PP personnel when actuals unavailable).",
-    "PK%": "Penalty-kill success rate (modeled from PK personnel when actuals unavailable).",
-    "SRS": "Simple Rating System: goal differential per game (schedule-naive).",
+    "_about": ("These are model-derived estimates from player attributes and "
+               "box-score production -- not optical or puck-tracking data. "
+               "Useful for comparing players and spotting trends; not measured truth."),
+    "CF%": ("Modeled Corsi share: estimated share of shot attempts for the player's "
+            "team while he's on ice. Useful: who tilts the ice. Not: real attempt counts."),
+    "FF%": ("Modeled Fenwick share: like Corsi but unblocked attempts only. Useful: a "
+            "slightly cleaner possession read. Not: tracked data."),
+    "xGF%": ("Modeled expected-goal share while on ice. Useful: the best guess at "
+             "who drives quality play. Not: real shot-location data -- quality is inferred "
+             "from attributes and role, not measured."),
+    "ixG": ("Modeled individual expected goals: what the player's shot volume and "
+            "shooting attributes suggest he 'should' have scored. Useful: spotting finishing "
+            "luck (ixG >> goals = snake-bitten). Not: a real shot chart."),
+    "PDO": ("On-ice shooting % + on-ice save % (averages 1.000). Useful: high PDO "
+            "usually means luck that regresses. Fairly attribute-independent, so this one "
+            "is closer to observed results than the modeled metrics."),
+    "OZ%": ("Modeled offensive-zone start share: deployment context. Useful: high OZ% "
+            "means sheltered offensive minutes -- discount the raw scoring a little. "
+            "Not: real faceoff-location tracking."),
+    "P/60": ("Points per 60 minutes, TOI-normalized. Useful: fair scoring comparison "
+             "across roles and ice time. Note: ice time itself is estimated from role "
+             "and rating when the sim doesn't track it."),
+    "Game Score": ("Single-number game rating weighting goals, assists, shots, blocks, "
+                   "penalties. Useful: one-glance night-by-night form. Not: a scouting report."),
+    "GSAx": ("Modeled goals saved above expected: estimated shot difficulty (from team "
+             "defense and workload) minus goals allowed. Useful: separating the goalie from "
+             "his defense. Not: real expected-goals-against from tracking."),
+    "GSAA": ("Goals saved above average: league-average expectation minus actual. Useful: "
+             "quick era-adjusted comparison. Rougher than GSAx."),
+    "HDSV%": ("Modeled high-danger save %: estimated from save % and workload, not real "
+              "danger tracking. Useful: directional read on clutch shot-stopping. "
+              "Treat small gaps with skepticism."),
+    "QS%": ("Quality-start share: starts with above-average save %. Mostly observed "
+            "results, lightly modeled. Useful: consistency check."),
+    "SH%": ("Shooting %: goals / shots on goal. Observed, not modeled. Useful: high SH% "
+            "over small samples screams regression."),
+    "GF%": ("Goal share at even strength: actual results vs the xGF% process. Useful: "
+            "results-vs-process gap -- the heart of the analytics puzzle."),
+    "PP%": ("Power-play conversion rate. Modeled from PP personnel when actuals are "
+            "unavailable. Useful: unit quality estimate. Not: tracked outcomes."),
+    "PK%": ("Penalty-kill success rate. Modeled from PK personnel when actuals are "
+            "unavailable. Useful: unit quality estimate. Not: tracked outcomes."),
+    "SRS": ("Simple Rating System: goal differential per game, schedule-naive. "
+            "Observed results. Useful: rough team strength."),
 }
+
+
+# ======================================================================
+# ANALYTICS DEPARTMENT LENS (wave 1 -- information asymmetry)
+#
+# Department quality controls confidence intervals, data lag and noise
+# in the numbers the user SEES -- never the actual player outcome and
+# never the ground-truth analysis (scout tips, trade AI reads, award
+# races all use the true functions above).
+#
+# Honest modeling: only MODELED metrics get noise + confidence
+# intervals. Observed box-score facts (hits, save %, points/60) are
+# exact -- a bad department can't miscount the scoresheet, it just
+# models the unmeasured parts poorly. Data lag is real: weak
+# departments rebuild their models every N days, and the snapshot
+# carries its as-of date.
+# ======================================================================
+
+# Modeled (not directly measured) fields per dataclass.
+SKATER_MODELED_FIELDS = ("ixg", "ixg_per60", "cf_pct", "ff_pct",
+                         "xgf_pct", "pdo", "oz_pct")
+GOALIE_MODELED_FIELDS = ("gsax", "hdsv_pct", "qs_pct")
+
+
+@dataclass
+class DisplayMetrics:
+    """What one department's lens shows for one player."""
+    values: Dict[str, float]      # displayed value per metric field
+    ci: Dict[str, float]          # 90% CI half-width per modeled field
+    modeled_fields: tuple         # which fields are modeled (noisy)
+    as_of: str                    # snapshot date (ISO)
+    quality: int                  # department quality 0-100
+    tier: str                     # honest tier label
+    lag_days: int                 # refresh cadence in days
+
+
+def department_refresh_days(quality: int) -> int:
+    """How often the department rebuilds its models (data lag)."""
+    try:
+        q = int(quality)
+    except Exception:
+        q = 35
+    if q >= 75:
+        return 1
+    if q >= 50:
+        return 3
+    if q >= 25:
+        return 7
+    return 14
+
+
+def _department_tier(quality: int) -> str:
+    try:
+        import analytics_scouting as _as
+        return _as.department_tier_label(quality)
+    except Exception:
+        return "Analytics department"
+
+
+def _lens_noise(quality: int) -> float:
+    """Relative noise sigma for modeled metrics. 0 at quality 100."""
+    try:
+        q = max(0, min(100, int(quality)))
+    except Exception:
+        q = 35
+    return 0.15 * (100 - q) / 100.0
+
+
+def _lens_entry(player: Any, quality: int, date_str: str) -> Dict[str, Any]:
+    """Department-lens entry for ONE player, computed on demand.
+
+    Noise is seeded per (player, date, field) so numbers are stable
+    for the whole refresh window -- no flicker between views. The same
+    entry is used for roster players (cached in the snapshot) and for
+    any other player viewed through this club's department (e.g. an
+    opponent on the player card): the user club's department is the
+    lens, whoever the player plays for.
+    """
+    import random as _r
+    import dataclasses as _dc
+    sigma = _lens_noise(quality)
+    pid = getattr(player, "id", id(player))
+    try:
+        if _is_goalie(player):
+            true_m = goalie_advanced(player)
+            modeled = GOALIE_MODELED_FIELDS
+        else:
+            true_m = skater_advanced(player)
+            modeled = SKATER_MODELED_FIELDS
+    except Exception:
+        return {"values": {}, "ci": {}, "modeled": (),
+                "is_goalie": False}
+    values: Dict[str, float] = {}
+    ci: Dict[str, float] = {}
+    for f in _dc.fields(true_m):
+        v = getattr(true_m, f.name)
+        if f.name in modeled and isinstance(v, (int, float)):
+            rng = _r.Random(f"{pid}|{date_str}|{f.name}")
+            noisy = float(v) * (1.0 + rng.gauss(0, sigma))
+            values[f.name] = noisy
+            ci[f.name] = 1.64 * abs(float(v)) * sigma
+        else:
+            values[f.name] = v
+    return {"values": values, "ci": ci, "modeled": modeled,
+            "is_goalie": bool(_is_goalie(player))}
+
+
+def _team_snapshot(team: Any, date_str: str) -> Dict[str, Any]:
+    """Per-team cached department snapshot; rebuilds when stale."""
+    import random as _r
+    from datetime import date as _date
+    try:
+        quality = int(getattr(team, "analytics_quality", 35) or 35)
+    except Exception:
+        quality = 35
+    snap = getattr(team, "_analytics_snapshot", None) or {}
+    refresh = department_refresh_days(quality)
+    stale = True
+    if isinstance(snap, dict) and snap.get("date") and snap.get("quality") == quality:
+        try:
+            age = (_date.fromisoformat(date_str)
+                   - _date.fromisoformat(str(snap["date"]))).days
+            stale = age >= refresh or age < 0
+        except Exception:
+            stale = True
+    if not stale and isinstance(snap.get("players"), dict):
+        return snap
+    # Rebuild: one lens entry per roster player via the shared helper.
+    players: Dict[Any, Dict[str, Any]] = {}
+    for p in list(getattr(team, "roster", []) or []):
+        try:
+            pid = getattr(p, "id", id(p))
+            players[pid] = _lens_entry(p, quality, date_str)
+        except Exception:
+            pass
+    snap = {"date": date_str, "quality": quality, "players": players}
+    try:
+        team._analytics_snapshot = snap
+    except Exception:
+        pass
+    return snap
+
+
+def _snapshot_entry(player: Any, team: Any, date_str: str,
+                    quality: int) -> Dict[str, Any]:
+    """Lens entry for any player through this team's department.
+
+    Roster players come from the cached snapshot; everyone else
+    (opponents, free agents) is computed on the fly with the same
+    seeded noise, so the numbers stay stable for the refresh window.
+    """
+    snap = _team_snapshot(team, date_str)
+    pid = getattr(player, "id", id(player))
+    entry = (snap.get("players") or {}).get(pid)
+    if entry:
+        return entry
+    return _lens_entry(player, quality, date_str)
+
+
+def display_skater_metrics(player: Any, team: Any,
+                           date_str: str) -> DisplayMetrics:
+    """Department-lens view of a skater's advanced metrics."""
+    snap = _team_snapshot(team, date_str)
+    quality = int(snap.get("quality", 35) or 35)
+    entry = _snapshot_entry(player, team, date_str, quality)
+    return DisplayMetrics(
+        values=dict(entry.get("values") or {}),
+        ci=dict(entry.get("ci") or {}),
+        modeled_fields=tuple(entry.get("modeled") or SKATER_MODELED_FIELDS),
+        as_of=str(snap.get("date") or date_str),
+        quality=quality,
+        tier=_department_tier(quality),
+        lag_days=department_refresh_days(quality),
+    )
+
+
+def display_goalie_metrics(player: Any, team: Any,
+                           date_str: str) -> DisplayMetrics:
+    """Department-lens view of a goalie's advanced metrics."""
+    snap = _team_snapshot(team, date_str)
+    quality = int(snap.get("quality", 35) or 35)
+    entry = _snapshot_entry(player, team, date_str, quality)
+    return DisplayMetrics(
+        values=dict(entry.get("values") or {}),
+        ci=dict(entry.get("ci") or {}),
+        modeled_fields=tuple(entry.get("modeled") or GOALIE_MODELED_FIELDS),
+        as_of=str(snap.get("date") or date_str),
+        quality=quality,
+        tier=_department_tier(quality),
+        lag_days=department_refresh_days(quality),
+    )

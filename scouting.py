@@ -142,9 +142,10 @@ def process_regional_scouting(gm):
         scout = by_id.get(scout_id)
         if scout is None:
             continue
-        # Efficiency scales with scout skill
-        eff = (getattr(scout, 'judging_player_ability', 10) +
-               getattr(scout, 'judging_player_potential', 10)) / 40
+        # Efficiency scales with scout skill. Staff attrs are native
+        # 1-100, so normalize to the 0-1 range the old 1-20 math had.
+        eff = (getattr(scout, 'judging_player_ability', 50) +
+               getattr(scout, 'judging_player_potential', 50)) / 200
         if random.random() > 0.35 * eff + 0.1:
             continue
         if region == 'Top 50 Prospects':

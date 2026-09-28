@@ -216,6 +216,7 @@ class PlayerProfile(InGamePopup):
 
     def _page_analytics(self, parent):
         self._create_deep_dive(parent)
+        self._page_scout_insights(parent)
 
     def _page_dynamics(self, parent):
         self._create_dynamics(parent)
@@ -567,7 +568,14 @@ class PlayerProfile(InGamePopup):
 
     def _create_deep_dive(self, parent):
         """Analytics: deep-dive advanced metrics -- offense, possession,
-        defense, and goaltending -- in the style of NHL analytics sites."""
+        defense, and goaltending -- in the style of NHL analytics sites.
+
+        Shown through the club's analytics department lens: modeled
+        metrics carry the department's noise and confidence intervals,
+        and the snapshot shows its as-of date (data lag). Observed
+        box-score facts are exact. Better departments, sharper picture
+        -- never sharper players.
+        """
         import advanced_metrics as am
         p = self.player
         try:
@@ -575,15 +583,61 @@ class PlayerProfile(InGamePopup):
         except Exception:
             is_goalie = False
 
+        # Department lens: the numbers YOUR club sees. Every viewed
+        # player -- own roster or opponent -- is rendered through the
+        # user club's analytics department, so hiring a better
+        # department is the only way to sharpen this picture.
+        lens = None
+        try:
+            parent_app = getattr(self, "parent_app", None)
+            team = getattr(parent_app, "user_team", None) or self._find_team()
+            date_str = str(getattr(parent_app, "current_date", ""))
+            if team is not None:
+                if is_goalie:
+                    lens = am.display_goalie_metrics(p, team, date_str)
+                else:
+                    lens = am.display_skater_metrics(p, team, date_str)
+        except Exception:
+            lens = None
+
+        def _val(field, fallback):
+            if lens is not None and field in lens.values:
+                return lens.values[field]
+            return fallback
+
+        def _with_ci(field, text, pct100=False):
+            # Honest uncertainty: modeled metrics show the department's
+            # 90% confidence interval. Observed facts stay exact.
+            # pct100: metric is stored 0-100 (CI already in points);
+            # otherwise a fraction metric shown as % (CI x100).
+            if lens is not None and field in lens.ci:
+                ci = lens.ci[field]
+                if text.rstrip().endswith("%"):
+                    if pct100:
+                        return f"{text} ±{ci:.1f} pts"
+                    return f"{text} ±{ci * 100:.1f} pts"
+                return f"{text} ±{ci:.1f}"
+            return text
+
         card = AppCard(parent)
         card.pack(fill="x", pady=(0, 16))
         content = card.get_content_frame()
         tk.Label(content, text="Deep Dive — Advanced Analytics",
                  font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
                  bg=card.card_bg).pack(anchor="w", pady=(0, 4))
+        if lens is not None:
+            tk.Label(content,
+                     text=f"{lens.tier}  •  models as of {lens.as_of} "
+                          f"(rebuilt every {lens.lag_days} day"
+                          f"{'s' if lens.lag_days != 1 else ''})",
+                     font=AppFonts.SMALL, fg=AppColors.ACCENT,
+                     bg=card.card_bg).pack(anchor="w", pady=(0, 4))
         tk.Label(content,
-                 text="Possession and shot-quality metrics are modeled from attributes "
-                      "and usage, like public xG models.",
+                 text="Estimates, not tracking data: modeled metrics are shown "
+                      "with your department's confidence interval (±); observed "
+                      "box-score facts are exact. No shot locations are tracked. "
+                      "Useful for comparing players and spotting trends -- not measured truth. "
+                      "Hover ⓘ on any metric for what it is (and isn't).",
                  font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                  bg=card.card_bg, wraplength=640, justify="left").pack(anchor="w", pady=(0, 12))
 
@@ -608,40 +662,140 @@ class PlayerProfile(InGamePopup):
             if is_goalie:
                 m = am.goalie_advanced(p)
                 _section("Goaltending — Above Expected", [
-                    ("GSAx", f"{m.gsax:+.1f}", am.GLOSSARY["GSAx"]),
-                    ("GSAA", f"{m.gsaa:+.1f}", am.GLOSSARY["GSAA"]),
-                    ("High-danger SV%", f"{m.hdsv_pct:.3f}", am.GLOSSARY["HDSV%"]),
-                    ("Quality-start %", f"{m.qs_pct:.1%}", am.GLOSSARY["QS%"]),
+                    ("GSAx", _with_ci("gsax", f"{_val('gsax', m.gsax):+.1f}"), am.GLOSSARY["GSAx"]),
+                    ("GSAA", f"{_val('gsaa', m.gsaa):+.1f}", am.GLOSSARY["GSAA"]),
+                    ("High-danger SV%", _with_ci("hdsv_pct", f"{_val('hdsv_pct', m.hdsv_pct):.3f}"), am.GLOSSARY["HDSV%"]),
+                    ("Quality-start %", _with_ci("qs_pct", f"{_val('qs_pct', m.qs_pct):.1%}"), am.GLOSSARY["QS%"]),
                 ])
                 _section("Workload", [
-                    ("Save %", f"{m.sv_pct:.3f}", None),
-                    ("GAA", f"{m.gaa:.2f}", None),
-                    ("Shots against / 60", f"{m.sa_per60:.1f}", None),
+                    ("Save %", f"{_val('sv_pct', m.sv_pct):.3f}", None),
+                    ("GAA", f"{_val('gaa', m.gaa):.2f}", None),
+                    ("Shots against / 60", f"{_val('sa_per60', m.sa_per60):.1f}", None),
                 ])
             else:
                 m = am.skater_advanced(p)
                 _section("Offense — Finishing & Creation", [
-                    ("Shooting %", f"{m.sh_pct:.1f}%", am.GLOSSARY["SH%"]),
-                    ("Individual xG", f"{m.ixg:.1f}", am.GLOSSARY["ixG"]),
-                    ("Goals / 60", f"{m.g_per60:.2f}", None),
-                    ("Points / 60", f"{m.p_per60:.2f}", am.GLOSSARY["P/60"]),
-                    ("Game Score", f"{m.game_score:.1f}", am.GLOSSARY["Game Score"]),
+                    ("Shooting %", f"{_val('sh_pct', m.sh_pct):.1f}%", am.GLOSSARY["SH%"]),
+                    ("Individual xG", _with_ci("ixg", f"{_val('ixg', m.ixg):.1f}"), am.GLOSSARY["ixG"]),
+                    ("Goals / 60", f"{_val('g_per60', m.g_per60):.2f}", None),
+                    ("Points / 60", f"{_val('p_per60', m.p_per60):.2f}", am.GLOSSARY["P/60"]),
+                    ("Game Score", f"{_val('game_score', m.game_score):.1f}", am.GLOSSARY["Game Score"]),
                 ])
                 _section("Possession — Driving Play", [
-                    ("Corsi %", f"{m.cf_pct:.1f}%", am.GLOSSARY["CF%"]),
-                    ("Fenwick %", f"{m.ff_pct:.1f}%", am.GLOSSARY["FF%"]),
-                    ("Expected-goal share", f"{m.xgf_pct:.1f}%", am.GLOSSARY["xGF%"]),
-                    ("Offensive-zone starts", f"{m.oz_pct:.1f}%", am.GLOSSARY["OZ%"]),
+                    ("Corsi %", _with_ci("cf_pct", f"{_val('cf_pct', m.cf_pct):.1f}%", True), am.GLOSSARY["CF%"]),
+                    ("Fenwick %", _with_ci("ff_pct", f"{_val('ff_pct', m.ff_pct):.1f}%", True), am.GLOSSARY["FF%"]),
+                    ("Expected-goal share", _with_ci("xgf_pct", f"{_val('xgf_pct', m.xgf_pct):.1f}%", True), am.GLOSSARY["xGF%"]),
+                    ("Offensive-zone starts", _with_ci("oz_pct", f"{_val('oz_pct', m.oz_pct):.1f}%", True), am.GLOSSARY["OZ%"]),
                 ])
                 _section("Defense & Luck", [
-                    ("PDO", f"{m.pdo:.3f}", am.GLOSSARY["PDO"]),
-                    ("Hits", str(m.hits), None),
-                    ("Blocked shots", str(m.blocks), None),
+                    ("PDO", _with_ci("pdo", f"{_val('pdo', m.pdo):.3f}"), am.GLOSSARY["PDO"]),
+                    ("Hits", str(int(_val("hits", m.hits))), None),
+                    ("Blocked shots", str(int(_val("blocks", m.blocks))), None),
                 ])
         except Exception as e:
             tk.Label(content, text=f"Analytics unavailable ({e})",
                      font=AppFonts.BODY, fg=AppColors.TEXT_SECONDARY,
                      bg=card.card_bg).pack(anchor="w")
+
+
+    def _page_scout_insights(self, parent):
+        """Active scout insights on this player: open reads, track records,
+        and any performance review the player is under.
+
+        Reads show evidence, uncertainty, provenance and the scout
+        responsible -- the analyst's puzzle, not an answer key.
+        """
+        p = self.player
+        pid = getattr(p, "id", id(p))
+        league = getattr(getattr(self, "parent_app", None), "league", None)
+        teams = list(getattr(league, "teams", []) or []) if league else []
+
+        reads = []   # (team_name, scout_name, record, kind, reason, date)
+        watches = []  # human-readable review lines
+        for t in teams:
+            try:
+                import analytics_scouting as _as
+            except ImportError:
+                break
+            tname = getattr(t, "team_name", "")
+            for entry in (getattr(t, "tip_ledger", None) or {}).values():
+                try:
+                    if entry.get("player_id") != pid:
+                        continue
+                    scout = self._find_staff_by_id(t, entry.get("scout_id"))
+                    record = _as.scout_record_line(scout) if scout else "no record"
+                    reads.append((tname, entry.get("scout_name", "?"), record,
+                                  entry.get("kind", ""), entry.get("reason", ""),
+                                  entry.get("date", "")))
+                except Exception:
+                    pass
+            for w in (getattr(t, "sell_watch", None) or {}).values():
+                try:
+                    if w.get("player_id") == pid:
+                        watches.append(
+                            f"{tname} are reviewing this player after moving him "
+                            f"({w.get('gp_since', 0)} GP since the deal). If his "
+                            f"production collapses, their scout called the peak.")
+                except Exception:
+                    pass
+            for w in (getattr(t, "steal_watch", None) or {}).values():
+                try:
+                    if w.get("player_id") == pid:
+                        watches.append(
+                            f"{tname} are watching this acquisition "
+                            f"({w.get('gp_since', 0)} GP since the deal). If he "
+                            f"breaks out, their scout called the steal.")
+                except Exception:
+                    pass
+
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        content = card.get_content_frame()
+        tk.Label(content, text="Scout Insights",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=card.card_bg).pack(anchor="w", pady=(0, 4))
+        if not reads and not watches:
+            tk.Label(content,
+                     text="No scout has filed a read on this player yet. "
+                          "Pro scouts file reads on the 1st of each month -- "
+                          "their track records are graded against what happens next.",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=card.card_bg, wraplength=640,
+                     justify="left").pack(anchor="w")
+            return
+        for tname, sname, record, kind, reason, date in reads[:6]:
+            kind_txt = "buy read" if kind == "buy" else "sell read" if kind == "sell" else "read"
+            tk.Label(content,
+                     text=f"{sname} ({tname}) — {record}",
+                     font=AppFonts.BODY_BOLD, fg=AppColors.TEXT_PRIMARY,
+                     bg=card.card_bg, wraplength=640,
+                     justify="left").pack(anchor="w", pady=(6, 0))
+            detail = f"Filed a {kind_txt} on {date}."
+            if reason:
+                detail += f" Evidence: {reason}"
+            tk.Label(content, text=detail,
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=card.card_bg, wraplength=640,
+                     justify="left").pack(anchor="w")
+        for line in watches[:4]:
+            tk.Label(content, text="◈ " + line,
+                     font=AppFonts.SMALL, fg=AppColors.ACCENT,
+                     bg=card.card_bg, wraplength=640,
+                     justify="left").pack(anchor="w", pady=(4, 0))
+
+    def _find_staff_by_id(self, team, staff_id):
+        """Locate a staffer on a team by id (for track-record display)."""
+        if not staff_id:
+            return None
+        try:
+            for s in (getattr(team, "staff", []) or []):
+                if getattr(s, "id", None) == staff_id:
+                    return s
+        except Exception:
+            pass
+        return None
+
+
 
     def _show_glossary_tip(self, event, text):
         try:
