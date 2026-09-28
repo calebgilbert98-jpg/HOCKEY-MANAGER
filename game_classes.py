@@ -234,6 +234,13 @@ class PlayerStats:
     save_percentage: float = 0.0  # 0-1 decimal
     goals_against_avg: float = 0.0
 
+    # Defensive season record (shutdown defensemen need a performance
+    # trail, not just points). Rolled per game from defensive attributes
+    # by roll_defensive_game_stats(); read by update_potential_from_season.
+    hits: int = 0
+    takeaways: int = 0
+    blocked_shots: int = 0
+
     @property
     def points(self) -> int:
         return self.goals + self.assists
@@ -247,6 +254,41 @@ class PlayerStats:
 
         games = max(self.wins + self.losses, 1)
         self.goals_against_avg = self.goals_against / games
+
+
+def roll_defensive_game_stats(player, rng=None):
+    """One game's defensive record for a skater, from his attributes.
+
+    The single shared roll behind every sim path (lightweight batch,
+    AdvancedGameSim user games, watched GameSim): a shutdown defenseman's
+    season leaves a statistical trail in player.stats (hits, takeaways,
+    blocked_shots) that update_potential_from_season reads. Uniform across
+    paths so the evaluator's thresholds mean the same thing everywhere.
+
+    Returns (hits, takeaways, blocked_shots). Never raises.
+    """
+    import math as _math
+    _r = rng or random
+    try:
+        _pos = getattr(getattr(player, "primary_position", None),
+                       "value", "") or ""
+        _is_d = str(_pos).upper() in ("D", "LD", "RD")
+        _da = float(getattr(player, "defensive_awareness", 50) or 50)
+        _chk = float(getattr(player, "checking", 50) or 50)
+        _poke = float(getattr(player, "pokecheck", 50) or 50)
+
+        def _draw(mean):
+            if mean <= 0:
+                return 0
+            return max(0, int(round(_r.gauss(mean, _math.sqrt(mean)))))
+
+        hits = _draw(0.55 * (_chk / 50.0) * (1.3 if _is_d else 1.0))
+        takeaways = _draw(0.40 * (_poke / 50.0))
+        blocked = _draw((1.15 if _is_d else 0.35) * (_da / 50.0))
+        return hits, takeaways, blocked
+    except Exception:
+        return 0, 0, 0
+
 
 player_id_counter = itertools.count()
 
@@ -818,6 +860,24 @@ class Player:
                 breakout = True
             elif ppg < bust_ppg and idx >= self.POTENTIAL_LADDER.index("B-"):
                 bust = True
+
+            # Shutdown defensemen: an elite defensive season moves the
+            # ceiling too -- the evaluator was offense-only and never saw
+            # them. Strong defensive play also shields a low-scoring D
+            # from the bust tag: he's earning his grade in his own end.
+            try:
+                _pos = getattr(getattr(self, "primary_position", None),
+                               "value", "")
+                if str(_pos).upper() in ("D", "LD", "RD"):
+                    _st = self.stats
+                    _def_rate = ((getattr(_st, "blocked_shots", 0) or 0)
+                                 + (getattr(_st, "takeaways", 0) or 0)) / gp
+                    if _def_rate >= 2.4:
+                        breakout = True
+                    elif _def_rate >= 1.9:
+                        bust = False
+            except Exception:
+                pass
 
         # Apply movement (probabilistic, one step)
         if breakout and idx < len(self.POTENTIAL_LADDER) - 1:
@@ -3319,6 +3379,14 @@ class League:
     # "X's entry-level contract slides a year (<10 NHL games)". The UI
     # layer posts these, same as rights_news. Old-save safe via getattr.
     elc_slide_news: List[str] = field(default_factory=list)
+    # Rivalry-review verdicts from the triennial offseason review
+    # (solidified / entrenched / buried / declared only). The UI layer
+    # posts these, same as rights_news. Old-save safe via getattr.
+    rivalry_review_news: List[str] = field(default_factory=list)
+    # Staff breakthrough headlines from the offseason rollover: coaches
+    # who made a career leap this year. The UI layer posts these, same
+    # as rights_news. Old-save safe via getattr.
+    staff_breakthrough_news: List[str] = field(default_factory=list)
     schedule: List[Tuple[date, Team, Team]] = field(default_factory=list)
     standings: Dict[str, Dict] = field(default_factory=dict)
     current_game_index: int = 0
@@ -6060,7 +6128,19 @@ class League:
             if isinstance(_rivs, list) and _rivs:
                 _rs.decay_rivalries(_rivs, years=1)
                 if int(self.season_year or 0) % 3 == 0:
-                    _rs.review_rivalries(_rivs, years=3)
+                    _verdicts = _rs.review_rivalries(_rivs, years=3) or []
+                    # Verdicts worth headlining: only real transitions, not
+                    # the routine simmer/fade noise.
+                    _news = [str(_v.get("text", ""))
+                             for _v in _verdicts
+                             if str(_v.get("outcome", "")) in
+                             ("solidified", "entrenched", "buried", "declared")]
+                    if _news:
+                        _rbox = getattr(self, "rivalry_review_news", None)
+                        if not isinstance(_rbox, list):
+                            _rbox = []
+                            self.rivalry_review_news = _rbox
+                        _rbox.extend(_news)
         except Exception:
             pass
         # Keep the draft-pick future discount anchored to the live season.
@@ -6365,6 +6445,16 @@ class League:
                 player.playing_where = junior_assignment_label(player)
             else:
                 player.playing_where = "AHL"
+            # Rivalry lifecycle: a signing is a transfer. ELC kids almost
+            # never carry ledger history, but the chokepoint stays uniform
+            # -- every signing path funnels through on_player_transfer.
+            try:
+                from reputation_system import on_player_transfer as _opt
+                _rivs = getattr(self, "rivalries", None)
+                if isinstance(_rivs, list):
+                    _opt(_rivs, player, from_team=None, to_team=team_obj)
+            except Exception:
+                pass
             return True
         except Exception:
             return False

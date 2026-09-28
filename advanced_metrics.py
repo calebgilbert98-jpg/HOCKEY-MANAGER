@@ -62,6 +62,26 @@ def _stats(player: Any) -> Any:
     return getattr(player, "season_stats", None) or s or player
 
 
+def _def_stat(player: Any, st: Any, *names: str, default: Any = 0) -> Any:
+    """Defensive-trail read: hits / takeaways / blocked_shots.
+
+    The sim writes scoring to direct Player attributes in the detailed
+    paths but ALWAYS writes the defensive trail to player.stats, so
+    read it there first; fall back to the primary stat source and the
+    player itself (older saves/objects may carry "blocks").
+    """
+    seen = set()
+    for src in (getattr(player, "stats", None), st, player):
+        if src is None or id(src) in seen:
+            continue
+        seen.add(id(src))
+        for n in names:
+            v = getattr(src, n, None)
+            if v:
+                return v
+    return default
+
+
 def _parse_toi(toi_str: str) -> float:
     """Parse 'MM:SS' average TOI into minutes (float)."""
     try:
@@ -144,8 +164,10 @@ def skater_advanced(player: Any, team_avg_sh_pct: float = 9.5,
 
     # --- Actuals ---
     m.sh_pct = (goals / shots * 100.0) if shots else 0.0
-    m.hits = getattr(st, "hits", 0) or 0
-    m.blocks = getattr(st, "blocks", 0) or 0
+    # Defensive trail: always written to player.stats by the sim (every
+    # path), never to direct attributes -- read it there first.
+    m.hits = int(_def_stat(player, st, "hits"))
+    m.blocks = int(_def_stat(player, st, "blocked_shots", "blocks"))
     if toi_hours > 0:
         m.p_per60 = (goals + assists) / toi_hours
         m.g_per60 = goals / toi_hours
@@ -269,6 +291,91 @@ def goalie_advanced(player: Any, league_avg_sv_pct: float = 0.905) -> GoalieAdva
         overall = 75.0
     m.qs_pct = round(max(0.0, min(1.0,
                         0.45 + (consistency - 50) * 0.006 + (overall - 75) * 0.008)), 3)
+    return m
+
+
+# ---------------------------------------------------------------------------
+# Prospect metrics (farm / junior / college seasons)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProspectAdvanced:
+    """Advanced read on a prospect's farm season.
+
+    Prospects have no NHL sample, so the analytics are NHLe-translated
+    production vs age/league expectations, plus two-way signal from
+    plus/minus rate. Same idea as the pro metrics: separate the
+    production from the context that produced it.
+    """
+    nhle_ppg: float = 0.0      # NHL-equivalent points per game (model)
+    nhle_vs_expected: float = 0.0  # ratio: actual NHLe / age+overall-expected
+    pm_per_gp: float = 0.0     # plus/minus per game (two-way signal)
+    league: str = ""
+    gp: int = 0
+
+
+def _farm_nhle_factor(league: str) -> float:
+    """NHLe translation factor for a farm league, guarded import."""
+    try:
+        from prospect_development import LEAGUE_ENVIRONMENTS as _env
+        e = _env.get(league or "")
+        if e:
+            return float(e.get("nhle", 0.0) or 0.0)
+    except Exception:
+        pass
+    # Fallback table mirrors prospect_development.LEAGUE_ENVIRONMENTS.
+    return {"OHL": 0.30, "WHL": 0.30, "QMJHL": 0.28, "USHL": 0.27,
+            "NCAA": 0.41, "SHL": 0.59, "AHL": 0.55}.get(league or "", 0.30)
+
+
+def _farm_league_par(league: str) -> int:
+    try:
+        from prospect_development import LEAGUE_ENVIRONMENTS as _env
+        e = _env.get(league or "")
+        if e:
+            return int(e.get("par", 64) or 64)
+    except Exception:
+        pass
+    return 64
+
+
+def prospect_advanced(player: Any) -> ProspectAdvanced:
+    """Compute advanced metrics for a prospect from his farm season.
+
+    Pure function; returns zeros when there is no farm season yet.
+    """
+    m = ProspectAdvanced()
+    season = getattr(player, "farm_season", None) or {}
+    gp = int(season.get("gp", 0) or 0)
+    if gp <= 0:
+        return m
+    league = str(season.get("league", "") or "")
+    m.league = league
+    m.gp = gp
+    ppg = float(season.get("ppg", 0.0) or 0.0)
+    m.nhle_ppg = round(ppg * _farm_nhle_factor(league), 3)
+    m.pm_per_gp = round(float(season.get("plus_minus", 0) or 0) / gp, 3)
+
+    # Expected NHLe from overall + age: inverts the prospect sim's own
+    # scoring model (prospect_development.simulate_prospect_season) so the
+    # ratio measures over/under-performance, not raw talent.
+    try:
+        ovr_fn = getattr(player, "overall_rating", None)
+        ovr = float(ovr_fn()) if callable(ovr_fn) else 70.0
+    except Exception:
+        ovr = 70.0
+    age = int(getattr(player, "age", 19) or 19)
+    par = _farm_league_par(league)
+    exp_ppg = 1.0 + (ovr - par) * 0.055
+    # Age scoring curve mirrors the sim: younger producers are rarer.
+    if age <= 17:
+        exp_ppg *= 0.75
+    elif age == 18:
+        exp_ppg *= 0.90
+    elif age >= 21:
+        exp_ppg *= 1.15
+    exp_ppg = max(0.05, min(2.6, exp_ppg)) * _farm_nhle_factor(league)
+    m.nhle_vs_expected = round(m.nhle_ppg / exp_ppg, 2) if exp_ppg > 0 else 0.0
     return m
 
 

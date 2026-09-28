@@ -351,6 +351,10 @@ check("signing: MP path (_mp_sign_free_agent) calls on_player_transfer",
 _rfa_src = open("rfa_system.py").read()
 check("signing: RFA offer sheet (execute_offer_sheet) calls on_player_transfer",
       "on_player_transfer" in _rfa_src)
+_elc_src = _method_src("game_classes.py", "finalize_elc_signing")
+check("signing: ELC path (finalize_elc_signing) calls on_player_transfer",
+      "on_player_transfer" in (_elc_src or ""),
+      "wired" if _elc_src else "method not found")
 
 # Behavioral: FA signing with from_team=None (no old club).
 fa_man = _mkplayer(40, "Signed Star", overall=88)

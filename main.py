@@ -9789,6 +9789,24 @@ class HockeyManagerGUI(tk.Tk):
             for team in [home_team, away_team]:
                 for player in team.roster:
                     player.stats.games_played += 1
+            # Defensive record: same shared roll as every other sim path --
+            # shutdown defensemen leave a hits/takeaways/blocks trail.
+            try:
+                from game_classes import roll_defensive_game_stats as _rdg
+                for team in [home_team, away_team]:
+                    for player in team.roster:
+                        try:
+                            if getattr(getattr(player, "primary_position",
+                                               None), "name", "") == "G":
+                                continue
+                            _h, _t, _b = _rdg(player)
+                            player.stats.hits += _h
+                            player.stats.takeaways += _t
+                            player.stats.blocked_shots += _b
+                        except Exception:
+                            continue
+            except Exception:
+                pass
         
         # Update news log for user team games
         if self.user_team in (home_team, away_team):
@@ -10148,6 +10166,34 @@ class HockeyManagerGUI(tk.Tk):
                 _plive = getattr(_league, "prospect_awards_news", None)
                 if _plive is not None:
                     del _plive[:]
+            except Exception:
+                pass
+            # Rivalry-review verdicts from end_of_season (same pattern).
+            try:
+                _rmsgs = list(getattr(_league, "rivalry_review_news", None)
+                              or [])
+                for _m in _rmsgs:
+                    try:
+                        self.add_news("⚔️ " + str(_m))
+                    except Exception:
+                        pass
+                _rlive = getattr(_league, "rivalry_review_news", None)
+                if _rlive is not None:
+                    del _rlive[:]
+            except Exception:
+                pass
+            # Staff breakthrough headlines (same pattern).
+            try:
+                _bmsgs = list(getattr(_league, "staff_breakthrough_news",
+                                      None) or [])
+                for _m in _bmsgs:
+                    try:
+                        self.add_news("📈 " + str(_m))
+                    except Exception:
+                        pass
+                _blive = getattr(_league, "staff_breakthrough_news", None)
+                if _blive is not None:
+                    del _blive[:]
             except Exception:
                 pass
             # ELC slide headlines (same pattern).
@@ -11293,6 +11339,20 @@ class HockeyManagerGUI(tk.Tk):
             for player in dressed_skaters:
                 player.stats.games_played += 1
                 self._check_player_records(player)
+
+            # Defensive record: every dressed skater leaves a hits /
+            # takeaways / blocks trail (shutdown defensemen need a
+            # performance record, not just points). Same shared roll as
+            # every other sim path, so evaluator thresholds are uniform.
+            try:
+                from game_classes import roll_defensive_game_stats as _rdg
+                for player in dressed_skaters:
+                    _h, _t, _b = _rdg(player)
+                    player.stats.hits += _h
+                    player.stats.takeaways += _t
+                    player.stats.blocked_shots += _b
+            except Exception:
+                pass
         
         # Goalie stats: shots_against MUST equal opposing team's shots (coherence!)
         for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
@@ -12686,6 +12746,32 @@ class HockeyManagerGUI(tk.Tk):
                 self.league.prospect_awards_news = []
         except Exception:
             pass
+        # Rivalry-review verdicts from end_of_season.
+        try:
+            _rn = list(getattr(self.league, "rivalry_review_news", None)
+                       or [])
+            for _msg in _rn:
+                try:
+                    self.add_news("⚔️ " + str(_msg))
+                except Exception:
+                    pass
+            if _rn:
+                self.league.rivalry_review_news = []
+        except Exception:
+            pass
+        # Staff breakthrough headlines from end_of_season.
+        try:
+            _bn = list(getattr(self.league, "staff_breakthrough_news", None)
+                       or [])
+            for _msg in _bn:
+                try:
+                    self.add_news("📈 " + str(_msg))
+                except Exception:
+                    pass
+            if _bn:
+                self.league.staff_breakthrough_news = []
+        except Exception:
+            pass
         # ELC slide headlines from end_of_season (CBA 9.1(d)).
         try:
             _sn = list(getattr(self.league, "elc_slide_news", None) or [])
@@ -13068,19 +13154,29 @@ class HockeyManagerGUI(tk.Tk):
                 all_players.extend(getattr(t, "roster", []) or [])
             if not all_players:
                 return
-            user_team = getattr(self, "user_team", None)
-            user_name = getattr(user_team, "team_name", "") if user_team else ""
+            # Prospects get the same analytics treatment: every club's
+            # farm pool is scanned for standouts, so underlying farm
+            # numbers (not just pedigree) move prospect trade value.
+            all_prospects = []
+            for t in teams:
+                all_prospects.extend(getattr(t, "prospects", []) or [])
+            # Signed minor-leaguers: same light farm metrics as the
+            # prospects, labeled AHL so the scout card reads honestly.
+            # This is the gem-finder for the farm -- cheap NHLe /
+            # expectation / plus-minus reads, not NHL-grade shot
+            # tracking, so the monthly pass stays fast.
+            all_ahl = []
+            for t in teams:
+                all_ahl.extend(getattr(t, "ahl_roster", []) or [])
             date_str = str(getattr(self, "current_date",
                                    __import__("datetime").date.today()))
             for team in teams:
-                tname = getattr(team, "team_name", "")
                 scout_mod.ensure_analytics_fields(team)
                 staff = list(getattr(team, "staff", []) or [])
                 scouts = [s for s in staff
                           if getattr(s, "role", None) in pro_roles] if pro_roles else []
                 if not scouts:
                     continue
-                is_user = (tname == user_name)
                 # Fresh sheet each month; stale reads don't linger.
                 team.scout_buy_tips = {}
                 team.scout_sell_tips = {}
@@ -13096,6 +13192,27 @@ class HockeyManagerGUI(tk.Tk):
                         user_team=team, limit=2)
                     sell_tips = scout_mod.scout_sell_high_tips(
                         s, team, limit=2)
+                    # Prospect reads ride the same rails: filed into the
+                    # buy-tip book, graded by the same ledger, priced by
+                    # scout_adjusted_value(), and printed to the user's
+                    # news feed below. Analytics matter for the kids too.
+                    prospect_tips = []
+                    if all_prospects:
+                        try:
+                            prospect_tips = scout_mod.scout_prospect_tips(
+                                s, all_prospects, user_team=team, limit=2)
+                        except Exception:
+                            prospect_tips = []
+                    ahl_tips = []
+                    if all_ahl:
+                        try:
+                            ahl_tips = scout_mod.scout_prospect_tips(
+                                s, all_ahl, user_team=team, limit=2,
+                                kind="AHL")
+                        except Exception:
+                            ahl_tips = []
+                    buy_tips = (list(buy_tips) + list(prospect_tips)
+                                + list(ahl_tips))
                     # File every read in the ledger: the scout's call is
                     # graded against what happens later. This is what
                     # builds (or exposes) track records.
@@ -13113,11 +13230,13 @@ class HockeyManagerGUI(tk.Tk):
                                 reason=tip.get("reason", ""))
                         except Exception:
                             pass
-                    # File the reads where the trade engine reads them --
-                    # for EVERY club, user included. AI GMs consume these
-                    # mechanically in scout_adjusted_value(); the user reads
-                    # the same reads in the news feed and adjusts by hand.
-                    # Same capability, different interface: user parity.
+                    # Tips are private to the club whose scout filed them --
+                    # filed where the trade engine reads them, and shown on
+                    # the scout's own staff card (open reads). They are
+                    # NEVER broadcast in the news feed: no league-wide
+                    # "hey look what someone found". The news feed carries
+                    # performance headlines (hat tricks, shutouts); scout
+                    # reads are your staff's private reports to you.
                     bt = getattr(team, "scout_buy_tips", None)
                     if bt is None:
                         team.scout_buy_tips = bt = {}
@@ -13130,39 +13249,25 @@ class HockeyManagerGUI(tk.Tk):
                         bt[pid] = {"jpa": tip["scout_jpa"],
                                    "correct": tip["correct"],
                                    "scout": tip["scout"],
-                                   "scout_id": getattr(s, "id", "")}
+                                   "scout_id": getattr(s, "id", ""),
+                                   "name": tip.get("name", "?"),
+                                   "pteam": tip.get("team", "?"),
+                                   "kind": tip.get("kind", ""),
+                                   "reason": tip.get("reason", ""),
+                                   "risks": list(tip.get("risks", "") or []),
+                                   "confidence": tip.get("confidence", "")}
                     for tip in sell_tips:
                         p = tip["player"]
                         pid = getattr(p, "id", id(p))
                         st[pid] = {"jpa": tip["scout_jpa"],
                                    "correct": tip["correct"],
                                    "scout": tip["scout"],
-                                   "scout_id": getattr(s, "id", "")}
-                    if is_user:
-                        for tip in buy_tips:
-                            record = scout_mod.scout_record_line(s)
-                            story = (
-                                f"SCOUT READ -- {tip['scout']} ({record}): "
-                                f"{tip['name']} ({tip['team']}). "
-                                f"Evidence: {tip['reason']} "
-                                f"Uncertainty: {tip['confidence']} confidence.")
-                            if tip["risks"]:
-                                story += f" Risk: {'; '.join(tip['risks'])}"
-                            try:
-                                self.add_news(story)
-                            except Exception:
-                                pass
-                        for tip in sell_tips:
-                            record = scout_mod.scout_record_line(s)
-                            story = (
-                                f"SCOUT READ -- {tip['scout']} ({record}): "
-                                f"{tip['name']} -- regression signs. "
-                                f"Evidence: {tip['reason']} "
-                                f"Uncertainty: {tip['confidence']} confidence.")
-                            try:
-                                self.add_news(story)
-                            except Exception:
-                                pass
+                                   "scout_id": getattr(s, "id", ""),
+                                   "name": tip.get("name", "?"),
+                                   "kind": tip.get("kind", ""),
+                                   "reason": tip.get("reason", ""),
+                                   "risks": list(tip.get("risks", "") or []),
+                                   "confidence": tip.get("confidence", "")}
         except Exception:
             pass
 

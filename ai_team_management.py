@@ -584,6 +584,76 @@ class AITeamManager:
 
         return max(0.90, min(1.25, factor))
 
+    def _analytics_offer_multiplier(self, player: Player,
+                                    team: Team) -> float:
+        """Process-vs-results adjustment to AI contract offers.
+
+        The advanced-metrics read on the player nudges what the AI is
+        willing to pay: a snake-bitten driver (elite xGF%, terrible PDO)
+        is worth more than his point total says; a passenger riding
+        hot percentages (high PDO, weak process) is worth less. The
+        nudge scales with the club's analytics_philosophy -- the same
+        gate the trade engine uses -- so an old-school room still pays
+        for the scoresheet while a progressive room pays for process.
+        The league never converges on one formula.
+
+        Bounded to +/-12%: analytics inform the offer, they don't set
+        it. The player's ask (Caleb's machinery) remains the anchor.
+        Returns 1.0 for goalies without a sample, prospects, and on any
+        error.
+        """
+        try:
+            philo = max(0.05, min(0.95, float(
+                getattr(team, "analytics_philosophy", 30.0) or 30.0)
+                / 100.0))
+        except Exception:
+            philo = 0.30
+        try:
+            import advanced_metrics as _am
+            from game_classes import PlayerPosition
+
+            def _gp(pl: Any) -> int:
+                # Mirror advanced_metrics._stats: authoritative totals
+                # live on the Player; .stats is the secondary store.
+                g = int(getattr(pl, "games_played", 0) or 0)
+                if g:
+                    return g
+                st = getattr(pl, "stats", None)
+                return int(getattr(st, "games_played", 0) or 0)
+
+            mult = 1.0
+            is_goalie = (getattr(player, "primary_position", None)
+                         == PlayerPosition.GOALIE)
+            if is_goalie:
+                if _gp(player) >= 15:
+                    m = _am.goalie_advanced(player)
+                    # Positive GSAx on a mediocre SV%: the process is
+                    # better than the results -- pay for the saves.
+                    if m.gsax >= 5.0 and m.sv_pct < 0.905:
+                        mult += 0.10 * philo * min(
+                            1.0, (m.gsax - 5.0) / 15.0 + 0.3)
+                    # Negative GSAx behind a shiny SV%: the record is
+                    # better than the goaltending -- don't pay for wins.
+                    elif m.gsax <= -5.0 and m.sv_pct >= 0.905:
+                        mult -= 0.08 * philo * min(
+                            1.0, (-m.gsax - 5.0) / 15.0 + 0.3)
+            else:
+                if _gp(player) >= 20:
+                    m = _am.skater_advanced(player)
+                    # Snake-bitten driver: elite process, no luck.
+                    if m.pdo < 0.995 and m.xgf_pct >= 52.0:
+                        mult += 0.12 * philo * min(
+                            1.0, (0.995 - m.pdo) * 60.0
+                            + (m.xgf_pct - 52.0) * 0.08)
+                    # Passenger: percentages doing the heavy lifting.
+                    elif m.pdo > 1.015 and m.xgf_pct <= 48.0:
+                        mult -= 0.10 * philo * min(
+                            1.0, (m.pdo - 1.015) * 60.0
+                            + (48.0 - m.xgf_pct) * 0.08)
+            return max(0.88, min(1.12, mult))
+        except Exception:
+            return 1.0
+
     def _evaluate_free_agency(self, team: Team, strategy: TeamStrategy,
                              free_agents: List[Player], current_date: date) -> List[AIDecision]:
         """Evaluate free agent signings for a team"""
@@ -630,7 +700,12 @@ class AITeamManager:
                 ask = self._player_ask(fa, ovr)
                 boldness = self._offer_boldness(team, strategy, fa, ovr,
                                                ask, available_budget)
-                offer = int(ask * boldness)
+                # Analytics read: a progressive room pays for process
+                # (elite xGF%, terrible PDO) and discounts passengers
+                # riding hot percentages; an old-school room pays the
+                # scoresheet. Bounded, philosophy-gated.
+                offer = int(ask * boldness
+                            * self._analytics_offer_multiplier(fa, team))
                 if offer <= available_budget:
                     suitable_fas.append((fa, offer, ovr, boldness))
 
@@ -1389,7 +1464,12 @@ class AITeamManager:
                         _ask_e, max(0, _room_e))
                 except Exception:
                     _bold_e = 0.95
-                _offer_e = int(_ask_e * _bold_e)
+                # Analytics read, same as the UFA path: process over
+                # results for progressive rooms, scoresheet for
+                # old-school ones. The ask stays the anchor.
+                _offer_e = int(_ask_e * _bold_e
+                               * self._analytics_offer_multiplier(player,
+                                                                  team))
                 if _offer_e > max(0, _room_e):
                     # Can't afford the ask: skip rather than insult him.
                     continue

@@ -2196,6 +2196,34 @@ class GameSim:
             except Exception:
                 pass
 
+        # Defensive record: the shared attribute-driven roll, so a watched
+        # game produces the same statistical distribution as every other
+        # sim path (shutdown defensemen need a season trail for the
+        # potential evaluator, not just points).
+        try:
+            from game_classes import roll_defensive_game_stats as _rdg
+            _seen_ids = set()
+            for stats in self.game_stats.values():
+                player = stats.get('player')
+                if player is None:
+                    continue
+                try:
+                    _pid = getattr(player, 'id', None)
+                    if _pid in _seen_ids:
+                        continue
+                    _seen_ids.add(_pid)
+                    if getattr(getattr(player, 'primary_position', None),
+                               'value', '') == 'G':
+                        continue
+                    _h, _t, _b = _rdg(player)
+                    player.stats.hits += _h
+                    player.stats.takeaways += _t
+                    player.stats.blocked_shots += _b
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
         # Flush per-game goalie stats into season stats so saves / shots
         # against / goals against accumulate on every GameSim path.
         for stats in self.game_stats.values():

@@ -353,6 +353,23 @@ def evaluate_prospect_season(player: Any, rng: Any = random) -> Optional[str]:
             breakout = True
         elif nhle < bu_ppg and t_idx >= b_line:
             bust = True
+        # Shutdown defensemen: the farm season models plus/minus from
+        # defensive play -- an elite shutdown season moves the true
+        # ceiling, and strong two-way play shields a low-scoring D from
+        # the bust tag. (The evaluator was offense-only.)
+        try:
+            _pos = getattr(getattr(player, "primary_position", None),
+                           "value", "")
+            if str(_pos).upper() in ("D", "LD", "RD"):
+                _gp = float(season.get("gp", 0) or 0)
+                if _gp > 0:
+                    _pm_rate = float(season.get("plus_minus", 0) or 0) / _gp
+                    if _pm_rate >= 0.25:
+                        breakout = True
+                    elif _pm_rate >= 0.10:
+                        bust = False
+        except Exception:
+            pass
 
     result = None
     if breakout and t_idx < len(ladder) - 1:

@@ -3302,6 +3302,92 @@ class FreeAgencyView(ctk.CTkFrame):
                 except Exception:
                     pass
             ctk.CTkFrame(box, fg_color="transparent", height=6).pack()
+        self._staff_open_reads_section(scroll, staff)
+
+    def _staff_open_reads_section(self, scroll, staff):
+        """This scout's current open reads -- private to your club.
+
+        Scout tips are never broadcast in the news feed; they are your
+        staff's private reports to you. Buy reads (targets) and sell
+        reads (your own players showing regression signs) filed this
+        month live here, with the evidence, the uncertainty, and the
+        risks exactly as the scout wrote them. Accuracy is the scout's
+        own: a better eye writes better reads.
+        """
+        ct = self._ct
+        try:
+            sid = getattr(staff, "id", None)
+            user_team = getattr(getattr(self, "app", None), "user_team",
+                                None)
+            if sid is None or user_team is None:
+                return
+            buys = [(pid, t) for pid, t in
+                    (getattr(user_team, "scout_buy_tips", None) or {}).items()
+                    if isinstance(t, dict) and t.get("scout_id") == sid]
+            sells = [(pid, t) for pid, t in
+                     (getattr(user_team, "scout_sell_tips", None) or {}).items()
+                     if isinstance(t, dict) and t.get("scout_id") == sid]
+        except Exception:
+            return
+        if not buys and not sells:
+            return
+        box = ctk.CTkFrame(scroll, fg_color=ct['CARD'], corner_radius=8)
+        box.pack(fill="x", pady=(10, 4))
+        self._heading(box, text="Open Reads", size=12).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        self._body(box, text=("Private to your club -- never broadcast. "
+                              "Act on them, or wait for the ledger to grade "
+                              "them."),
+                   dim=True, size=10).pack(anchor="w", padx=12, pady=(0, 6))
+
+        def _read_row(tip, direction):
+            try:
+                kind = tip.get("kind", "") or ""
+                tag = f" [{kind}]" if kind in ("AHL", "PROSPECT") else ""
+                name = tip.get("name", "?")
+                pteam = tip.get("pteam", "")
+                head = (f"{name}{tag} ({pteam})" if pteam
+                        else f"{name}{tag}")
+                if direction == "sell":
+                    head += " -- regression signs"
+                row = ctk.CTkFrame(box, fg_color="transparent")
+                row.pack(fill="x", padx=12, pady=2)
+                dot = ctk.CTkLabel(row,
+                                   text="▲" if direction == "buy" else "▼",
+                                   font=("Segoe UI", 10, "bold"),
+                                   text_color=(ct['GREEN'] if direction == "buy"
+                                               else ct['GOLD']),
+                                   width=18)
+                dot.pack(side="left")
+                col = ctk.CTkFrame(row, fg_color="transparent")
+                col.pack(side="left", fill="x", expand=True)
+                self._body(col, text=head, size=11).pack(anchor="w")
+                reason = tip.get("reason", "")
+                conf = tip.get("confidence", "")
+                if reason or conf:
+                    sub = reason
+                    if conf:
+                        sub += f" ({conf} confidence)" if sub else \
+                            f"{conf} confidence"
+                    self._body(col, text=sub, dim=True,
+                               size=10).pack(anchor="w")
+                for r in (tip.get("risks", "") or [])[:2]:
+                    self._body(col, text=f"Risk: {r}", dim=True,
+                               size=10).pack(anchor="w")
+            except Exception:
+                pass
+
+        if buys:
+            self._body(box, text="Buy reads", size=11).pack(
+                anchor="w", padx=12, pady=(4, 0))
+            for _, tip in buys:
+                _read_row(tip, "buy")
+        if sells:
+            self._body(box, text="Sell reads", size=11).pack(
+                anchor="w", padx=12, pady=(4, 0))
+            for _, tip in sells:
+                _read_row(tip, "sell")
+        ctk.CTkFrame(box, fg_color="transparent", height=6).pack()
 
     def _fa_attr_row(self, parent, name, value):
         """One attribute row with a meter (used by staff profiles)."""
@@ -9727,6 +9813,15 @@ class ContractNegotiationView(ctk.CTkFrame):
         ttk.Label(salary_row, text="Annual salary: $",
                   style="TLabel").pack(side=tk.LEFT)
         init_sal = self._session.get("draft_salary") or "750000"
+        if self.is_elc and self._elc_floor is not None:
+            # Never prefill below the displayed ELC floor -- the offer
+            # would be dead on arrival.
+            try:
+                init_sal = str(max(
+                    int(str(init_sal).replace(",", "").strip() or 0),
+                    int(self._elc_floor)))
+            except Exception:
+                init_sal = str(self._elc_floor)
         self.salary_var = tk.StringVar(master=self, value=str(init_sal))
         ttk.Entry(salary_row, textvariable=self.salary_var,
                   width=16).pack(side=tk.LEFT, padx=(6, 0))
@@ -9746,7 +9841,7 @@ class ContractNegotiationView(ctk.CTkFrame):
             ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
             ttk.Label(years_row,
                       text=f"{int(self._elc_years or 3)} year(s)  "
-                           f"(ELC term set by signing age -- not negotiable)",
+                           f"(ELC term set by signing age — not negotiable)",
                       style="TLabel").pack(side=tk.LEFT, padx=(8, 0))
         else:
             ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
@@ -9870,7 +9965,7 @@ class ContractNegotiationView(ctk.CTkFrame):
                 f"Entry-Level Contract: base must sit inside the band "
                 f"(${self._elc_floor:,}-${self._elc_ceil:,}/yr); term is "
                 f"fixed at {int(self._elc_years or 3)} year(s). No trade "
-                f"protection on an ELC -- signing and performance bonuses "
+                f"protection on an ELC — signing and performance bonuses "
                 f"are the sweetener.")
 
         btn_row = ttk.Frame(left, style="Card.TFrame")
@@ -9987,7 +10082,7 @@ class ContractNegotiationView(ctk.CTkFrame):
                 val = _te.clause_annual_value(self.player, key)
                 self.clause_hint_var.set(
                     f"Offering {_te.clause_offer_label(key, self.clause_size_var.get())} "
-                    f"-- worth about ${val:,}/yr to him.")
+                    f"— worth about ${val:,}/yr to him.")
         except Exception:
             self.clause_hint_var.set("")
 
@@ -10086,7 +10181,7 @@ class ContractNegotiationView(ctk.CTkFrame):
             lines.append("")
             lines.append(
                 f"ELC band: ${ask['floor']:,}-${ask['ceiling']:,}/yr base. "
-                f"Term is fixed at {ask['years']} year(s) by signing age -- "
+                f"Term is fixed at {ask['years']} year(s) by signing age — "
                 f"the one thing you can't negotiate.")
         except Exception as e:
             lines.append(f"(ask unavailable: {e})")

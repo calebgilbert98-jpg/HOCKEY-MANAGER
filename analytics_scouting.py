@@ -134,6 +134,17 @@ def _skater_value_signals(p, team_pct: float) -> Tuple[float, List[str], List[st
         signals.append(f"Young driver: age {age} with {m.xgf_pct:.1f}% xGF% "
                        f"-- breakout curve ahead of production curve")
 
+    # 6. Rookie flash: 21-and-under, tiny sample, elite process. The score
+    #    is hard-capped and the sample risk is always disclosed -- the
+    #    puzzle is honest about the uncertainty. Without this clause the
+    #    hard GP gates above make rookies analytically invisible.
+    if age <= 21 and 8 <= gp < 20 and m.xgf_pct >= 56.0:
+        score += min(10.0, (m.xgf_pct - 56.0) * 1.5
+                     + max(0.0, m.p_per60 - 2.0) * 2.0)
+        signals.append(f"Rookie flash: age {age}, {m.xgf_pct:.1f}% xGF% in "
+                       f"{gp} GP -- process is elite, sample is not")
+        risks.append(f"Small sample: only {gp} GP -- could be a hot month")
+
     # --- Risks (the puzzle must be fair) ---
     if gp < 30:
         risks.append(f"Small sample: only {gp} GP")
@@ -202,7 +213,10 @@ def find_buy_low(players: List[Any], teams: List[Any],
         if exclude_team and tname == exclude_team:
             continue
         gp = _gp(p)
-        if gp < min_gp:
+        # Rookies get a small-sample lane: 21-and-under with 8+ GP can
+        # flash a (capped, risk-disclosed) rookie signal instead of being
+        # invisible behind the veteran sample gates.
+        if gp < min_gp and not (_age(p) <= 21 and gp >= 8):
             continue
         team = tmap.get(tname)
         tpct = _team_pct(team) if team is not None else 0.5
@@ -293,6 +307,138 @@ def find_sell_high(players: List[Any], limit: int = 15,
             "salary": _salary(p),
             "years_left": _contract_years(p),
             "points": pts,
+            "gp": gp,
+        })
+    out.sort(key=lambda r: r["value_score"], reverse=True)
+    return out[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Prospect standouts: analytics for the kids with no NHL sample
+# ---------------------------------------------------------------------------
+
+def _prospect_value_signals(p) -> Tuple[float, List[str], List[str]]:
+    """Return (value_score, signals, risks) for a prospect.
+
+    Same shape as _skater_value_signals: estimated surplus -- how much
+    better the underlying farm production is than the pedigree/overall
+    suggests. Higher = bigger steal.
+    """
+    try:
+        import advanced_metrics as _am
+        m = _am.prospect_advanced(p)
+    except Exception:
+        return 0.0, [], []
+    gp = int(m.gp)
+    if gp <= 0:
+        return 0.0, [], []
+
+    score = 0.0
+    signals: List[str] = []
+    risks: List[str] = []
+
+    # 1. Out-producing the pedigree: NHLe well above what his overall
+    #    says he should produce at his age. The classic late-bloomer /
+    #    draft-steal tell.
+    if m.nhle_vs_expected >= 1.4:
+        score += min(30.0, (m.nhle_vs_expected - 1.4) * 25.0 + 8.0)
+        signals.append(f"Out-producing pedigree: {m.nhle_ppg:.2f} NHLe P/GP "
+                       f"({m.nhle_vs_expected:.1f}x expected for his "
+                       f"overall/age in {m.league or 'juniors'})")
+
+    # 2. Two-way standout: dominant plus/minus rate at even strength.
+    if m.pm_per_gp >= 0.40:
+        score += min(15.0, (m.pm_per_gp - 0.40) * 30.0 + 5.0)
+        signals.append(f"Two-way standout: {m.pm_per_gp:+.2f} +/- per game "
+                       f"over {gp} GP")
+
+    # 3. Breakout form: the development engine itself flagged a breakout.
+    try:
+        form = str(getattr(p, "farm_result", "") or "")
+    except Exception:
+        form = ""
+    if form == "breakout":
+        score += 8.0
+        signals.append("Breakout form: development staff flagged a leap "
+                       "this season")
+
+    # 4. Draft steal brewing: late pick (or undrafted) producing like a
+    #    first-rounder's NHLe line.
+    try:
+        dround = int(getattr(p, "draft_round", 0) or 0)
+    except Exception:
+        dround = 0
+    if dround >= 4 and m.nhle_ppg >= 0.45:
+        score += min(12.0, (m.nhle_ppg - 0.45) * 30.0 + 4.0)
+        signals.append(f"Draft steal brewing: round-{dround} pick at "
+                       f"{m.nhle_ppg:.2f} NHLe P/GP")
+
+    # --- Risks (the puzzle must be fair) ---
+    # League-aware wording: the AHL is a men's pro league, so its
+    # translation risk reads differently and "old for the level"
+    # doesn't apply the way it does in juniors.
+    _is_ahl = str(m.league or "").upper() == "AHL"
+    if _is_ahl:
+        risks.append("Translation risk: AHL scoring doesn't always cross "
+                     "over to the NHL")
+    else:
+        risks.append("Translation risk: NHLe is an estimate -- junior scoring "
+                     "doesn't always cross over")
+    if gp < 30:
+        risks.append(f"Small sample: only {gp} farm GP")
+    age = _age(p)
+    if age >= 20 and not _is_ahl:
+        risks.append(f"Old for the level: age {age} still in {m.league or 'juniors'}")
+    if m.nhle_vs_expected > 0 and m.nhle_vs_expected < 1.0:
+        risks.append("Production lags his pedigree -- the bet is on the "
+                     "tools, not the numbers")
+
+    return round(score, 1), signals, risks
+
+
+def find_prospect_standouts(prospects: List[Any], teams: List[Any],
+                            limit: int = 25, min_gp: int = 20,
+                            exclude_team: str = "",
+                            kind: str = "PROSPECT") -> List[Dict[str, Any]]:
+    """Farm-league buy-low scan: the kid out-producing his pedigree.
+
+    Mirrors find_buy_low's result shape so the same tip machinery (scout
+    tips -> trade valuation -> news feed) consumes it unchanged.
+    exclude_team: skip this team's prospects (usually the user's own).
+    kind: "PROSPECT" for unsigned/junior kids, "AHL" for signed
+    minor-leaguers -- the same light metrics, labeled so the news feed
+    reads honestly.
+    """
+    out = []
+    for p in prospects or []:
+        try:
+            owner = getattr(p, "team_name", "") or ""
+        except Exception:
+            owner = ""
+        if exclude_team and owner == exclude_team:
+            continue
+        try:
+            import advanced_metrics as _am
+            gp = int((_am.prospect_advanced(p)).gp)
+        except Exception:
+            continue
+        if gp < min_gp:
+            continue
+        score, signals, risks = _prospect_value_signals(p)
+        if score < 8.0 or not signals:
+            continue
+        out.append({
+            "player": p,
+            "name": getattr(p, "full_name", getattr(p, "name", "?")),
+            "kind": kind,
+            "team": owner,
+            "value_score": score,
+            "signals": signals,
+            "risks": risks,
+            "age": _age(p),
+            "salary": 0,
+            "years_left": 0,
+            "points": 0,
             "gp": gp,
         })
     out.sort(key=lambda r: r["value_score"], reverse=True)
@@ -775,6 +921,92 @@ def scout_value_tips(scout: Any, players: List[Any], teams: List[Any],
     return tips[:limit]
 
 
+def scout_prospect_tips(scout: Any, prospects: List[Any],
+                        user_team: Any = None, limit: int = 2,
+                        rng=None, kind: str = "PROSPECT") -> List[Dict[str, Any]]:
+    """A single scout's prospect reads: truth filtered through their eye.
+
+    The farm-league mirror of scout_value_tips. The scout scans every
+    club's prospect pool and reports which kids are out-producing their
+    pedigree. Same perception filter -- good scouts name real
+    standouts, bad scouts chase ghosts -- and the same tip shape, so
+    the trade engine's scout_adjusted_value() prices them mechanically
+    and the user reads the same reads in the news feed. Even playing
+    field: the kid the AI won't sell low is the kid your scout warned
+    you not to sell low.
+
+    kind "AHL" scans signed minor-leaguers instead of junior kids --
+    same light metrics (NHLe, expectation, plus/minus), labeled so the
+    news feed reads honestly.
+    """
+    import random as _r
+    rng = rng or _r
+    jpa = _scout_jpa(scout)
+    sname = getattr(scout, "full_name", getattr(scout, "name", "Your scout"))
+    uname = getattr(user_team, "team_name", "") if user_team else ""
+
+    truth = find_prospect_standouts(prospects, [], limit=40,
+                                    exclude_team=uname, kind=kind)
+    truth_ids = {id(c["player"]) for c in truth}
+
+    tips: List[Dict[str, Any]] = []
+
+    # True positives: the scout spots some fraction of real standouts.
+    for c in truth:
+        if len(tips) >= limit:
+            break
+        if rng.random() < _detect_chance(jpa, c["value_score"]):
+            _fallback_reason = ("Farm numbers stand out" if kind != "AHL"
+                                else "AHL numbers stand out")
+            tips.append({
+                "player": c["player"],
+                "name": c["name"],
+                "team": c["team"],
+                "kind": kind,
+                "scout": sname,
+                "scout_jpa": jpa,
+                "correct": True,
+                "reason": c["signals"][0] if c["signals"] else _fallback_reason,
+                "risks": c["risks"],
+                "confidence": "High" if jpa >= 16 else "Medium" if jpa >= 11 else "Low",
+            })
+
+    # False positives: bad scouts chase ghosts in the junior ranks too.
+    if len(tips) < limit and rng.random() < _false_positive_chance(jpa):
+        candidates = [p for p in (prospects or [])
+                      if id(p) not in truth_ids
+                      and (getattr(p, "team_name", "") or "") != uname]
+        if candidates:
+            ghost = rng.choice(candidates)
+            gname = getattr(ghost, "full_name", getattr(ghost, "name", "?"))
+            if kind == "AHL":
+                ghost_reasons = [
+                    "He's going to be a player -- just watch",
+                    "The AHL numbers are coming, I can feel it",
+                    "My guy in the minors won't stop raving about him",
+                ]
+            else:
+                ghost_reasons = [
+                    "He's going to be a player -- just watch",
+                    "The tools are all there, the numbers will follow",
+                    "My guy in juniors won't stop raving about him",
+                ]
+            tips.append({
+                "player": ghost,
+                "name": gname,
+                "team": getattr(ghost, "team_name", "?"),
+                "kind": kind,
+                "scout": sname,
+                "scout_jpa": jpa,
+                "correct": False,
+                "reason": rng.choice(ghost_reasons),
+                "risks": ["Scout's call -- verify against the numbers yourself"],
+                "confidence": "Low",
+            })
+
+    return tips[:limit]
+
+
 def scout_ability_label(jpa: int) -> str:
     """Human-readable scout tier for the UI."""
     if jpa >= 16:
@@ -974,6 +1206,19 @@ def record_tip_call(scout: Any, team: Any, kind: str, player: Any,
         except Exception:
             is_goalie = False
         gp = int(getattr(player, "games_played", 0) or 0)
+        # Farm snapshot: signed minor-leaguers (and junior prospects)
+        # carry their season in farm_season, not in NHL totals. Without
+        # this the pre-tip baseline is zeros and grading misfires.
+        farm_league, pre_farm_gp, pre_farm_ppg = "", 0, 0.0
+        try:
+            _fs = getattr(player, "farm_season", None) or {}
+            _fgp = int(_fs.get("gp", 0) or 0)
+            if gp <= 0 and _fgp > 0:
+                farm_league = str(_fs.get("league", "") or "")
+                pre_farm_gp = _fgp
+                pre_farm_ppg = float(_fs.get("ppg", 0.0) or 0.0)
+        except Exception:
+            pass
         if is_goalie:
             sa = int(getattr(player, "shots_against", 0) or 0)
             sv = int(getattr(player, "saves", 0) or 0)
@@ -998,6 +1243,9 @@ def record_tip_call(scout: Any, team: Any, kind: str, player: Any,
             "pre_gp": gp,
             "pre_pgp": float(pre_pgp),
             "pre_sv": pre_sv,
+            "farm_league": farm_league,
+            "pre_farm_gp": pre_farm_gp,
+            "pre_farm_ppg": float(pre_farm_ppg),
         }
         rec = scout.tip_record
         rec["calls"] = int(rec.get("calls", 0) or 0) + 1
@@ -1091,11 +1339,15 @@ def grade_tip_ledger(teams: List[Any], date_str: str) -> Dict[str, int]:
         as_of = _date.fromisoformat(date_str)
     except Exception:
         return out
-    # Player lookup across every roster (players change teams).
+    # Player lookup across every roster (players change teams). AHL
+    # rosters included: signed minor-leaguers' tips must stay
+    # observable, or every AHL read would be dropped as unobservable.
     by_id: Dict[Any, Any] = {}
     for t in teams or []:
         for p in list(getattr(t, "roster", []) or []):
             by_id[getattr(p, "id", id(p))] = p
+        for p in list(getattr(t, "ahl_roster", []) or []):
+            by_id.setdefault(getattr(p, "id", id(p)), p)
     for team in teams or []:
         try:
             ensure_analytics_fields(team)
@@ -1123,6 +1375,40 @@ def grade_tip_ledger(teams: List[Any], date_str: str) -> Dict[str, int]:
                     del ledger[key]
                     continue
                 is_goalie = bool(e.get("is_goalie"))
+                pre_farm_gp = int(e.get("pre_farm_gp", 0) or 0)
+                farm_hit = None  # None = not a farm-graded tip
+                if pre_farm_gp > 0:
+                    # Farm-graded tip: judge on farm production movement,
+                    # not NHL totals (which are zeros for minor-leaguers).
+                    try:
+                        _fs = getattr(player, "farm_season", None) or {}
+                        _fgp = int(_fs.get("gp", 0) or 0)
+                        _fppg = float(_fs.get("ppg", 0.0) or 0.0)
+                    except Exception:
+                        _fgp, _fppg = 0, 0.0
+                    if _fgp < pre_farm_gp:
+                        # Season rollover: re-baseline, keep watching.
+                        e["pre_farm_gp"] = _fgp
+                        e["pre_farm_ppg"] = _fppg
+                        e["date"] = date_str
+                        continue
+                    farm_window = _fgp - pre_farm_gp
+                    if farm_window < 10:
+                        continue  # not enough evidence yet; keep open
+                    kind = e.get("kind", "buy")
+                    _pre = float(e.get("pre_farm_ppg", 0.0) or 0.0)
+                    if kind == "buy":
+                        farm_hit = ((_fppg - _pre) >= 0.20) or (_fppg >= 0.90)
+                    else:
+                        farm_hit = (_pre > 0.20) and (_fppg <= _pre * 0.75)
+                    out["hits" if farm_hit else "misses"] += 1
+                    _scout = find_scout_by_id(team, e.get("scout_id", ""))
+                    if _scout is not None:
+                        grade_scout_call(
+                            _scout, "hit" if farm_hit else "miss",
+                            str(e.get("player_name", "?")), kind, date_str)
+                    del ledger[key]
+                    continue
                 gp_now, ppg_now, sv_now = _player_pace(player, is_goalie)
                 gp_then = int(e.get("pre_gp", 0) or 0)
                 window_gp = gp_now - gp_then

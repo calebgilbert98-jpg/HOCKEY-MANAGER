@@ -980,6 +980,27 @@ def execute_offer_sheet(league, offering_team, original_team, player,
             app.add_news(story)
         except Exception:
             pass
+    # Market: an offer sheet is a real signing -- star offer sheets move
+    # future comparable asks, exactly like user/AI/MP signings.
+    try:
+        _cap_sys = getattr(league, "salary_cap_system", None)
+        if _cap_sys is not None:
+            try:
+                from game_classes import to_100_scale as _t100
+                _ovr100 = int(_t100(player.overall_rating()))
+            except Exception:
+                try:
+                    _ovr100 = int(player.overall_rating() * 2)
+                except Exception:
+                    _ovr100 = 75
+            _pos = getattr(player, "primary_position", "")
+            _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
+            _cap_sys.register_signing(
+                pname, aav, _ovr100, _pos_name,
+                int(getattr(player, "age", 27) or 27),
+                int(getattr(league, "season_year", 0) or 0))
+    except Exception:
+        pass
     # Reputation: the existing heat/grudge hooks.
     try:
         import reputation_system as _rep

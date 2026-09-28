@@ -234,6 +234,12 @@ class GameSaveManager:
             # ELC slide headlines from the offseason rollover (CBA 9.1(d)).
             # Missing key = old save -> empty news.
             'elc_slide_news': list(getattr(league, 'elc_slide_news', []) or []),
+            # Rivalry-review verdicts from the triennial offseason review.
+            # Missing key = old save -> empty news.
+            'rivalry_review_news': list(getattr(league, 'rivalry_review_news', []) or []),
+            # Staff breakthrough headlines from the offseason rollover.
+            # Missing key = old save -> empty news.
+            'staff_breakthrough_news': list(getattr(league, 'staff_breakthrough_news', []) or []),
             'draft_prospects_year': getattr(league, 'draft_prospects_year', None),
             # Draft class + staff pools. These were never serialized: every
             # save/load wiped the draft class (scouting wasted; the draft
@@ -1182,6 +1188,13 @@ class GameSaveManager:
             # ELC slide headlines. Old saves lack the key -> empty news.
             league.elc_slide_news = list(
                 league_data.get('elc_slide_news', []) or [])
+            # Rivalry-review verdicts. Old saves lack the key -> empty news.
+            league.rivalry_review_news = list(
+                league_data.get('rivalry_review_news', []) or [])
+            # Staff breakthrough headlines. Old saves lack the key ->
+            # empty news.
+            league.staff_breakthrough_news = list(
+                league_data.get('staff_breakthrough_news', []) or [])
             league.draft_prospects_year = league_data.get('draft_prospects_year', None)
             # Draft class + staff pools (see serialize side). Old saves lack
             # the keys -> empty lists (draft regenerates its class at draft
