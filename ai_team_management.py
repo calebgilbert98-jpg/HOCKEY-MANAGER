@@ -381,8 +381,9 @@ class AITeamManager:
                     team, strategy, identity, sec, current_date)
                 team_decisions.extend(sign_decisions)
 
-            # Execute the decisions this manager owns end-to-end (signings,
-            # gated promotions). Trade/FA/extension offers remain proposals.
+            # Execute the decisions this manager owns end-to-end (FA
+            # signings, prospect signings, gated promotions).
+            # Trade/extension offers remain proposals.
             self._execute_decisions(team, team_decisions)
 
             decisions.extend(team_decisions)
@@ -466,6 +467,11 @@ class AITeamManager:
                 ovr = fa.overall_rating()
                 # Estimate salary demand
                 estimated_salary = self._estimate_player_salary(fa, ovr)
+                # Euro imports are gambles: the AI treats every one as a
+                # league-min/ELC flier, never a mid-cap bet (their estimate
+                # curve was built for established NHLers, not KHL stars).
+                if getattr(fa, "is_euro_import", False):
+                    estimated_salary = min(estimated_salary, 1_000_000)
                 if estimated_salary <= available_budget:
                     suitable_fas.append((fa, estimated_salary, ovr))
 
@@ -654,6 +660,99 @@ class AITeamManager:
 
         return decisions
 
+    def _execute_free_agent_signing(self, team: Team, decision: "AIDecision",
+                                      league) -> bool:
+        """Execute one AI free-agent signing end-to-end.
+
+        Same rulebook as the user/MP paths: draft lock, 23-man roster
+        limit, league-minimum salary, a live budget re-check (not the
+        evaluation-time number), and the 6-year external max from the new
+        CBA. The player accepts: the AI offers its estimated market value
+        -- the same estimator the market is built on -- so there is no
+        haggling. Selectivity lives in WHICH players get offers (priority
+        threshold, needs, budget), not in the handshake. The rivalry
+        transfer hooks fire so the ledger can't go stale: his personal
+        beefs follow him to the new room.
+        Returns True when a signing completed.
+        """
+        p = getattr(decision, "target_player", None)
+        details = getattr(decision, "offer_details", None) or {}
+        if p is None:
+            return False
+        try:
+            # Still on the market?
+            fa_pool = getattr(league, "free_agents", None)
+            if not isinstance(fa_pool, list) or p not in fa_pool:
+                return False
+            # Draft lock: shared rule, no sidestepping the draft.
+            try:
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(p):
+                    return False
+            except Exception:
+                pass
+            # A real hole: roster room and the position still a need.
+            roster = getattr(team, "roster", None) or []
+            if len(roster) >= 23:
+                return False
+            strategy = self.team_strategies.get(team.team_name)
+            if strategy is None or \
+                    getattr(p, "primary_position", None) not in \
+                    (strategy.position_needs or []):
+                return False
+            # Terms: league minimum floor, 6-year external max.
+            salary = int(details.get("salary", 0) or 0)
+            years = max(1, min(6, int(details.get("term", 1) or 1)))
+            try:
+                from salary_cap_system import league_minimum_salary as _min_fn
+                _floor = _min_fn(getattr(league, "season_year", None))
+            except Exception:
+                _floor = 850_000
+            if salary < _floor:
+                return False
+            # Live budget re-check against the strategy's spending limit.
+            try:
+                current = sum(int(getattr(x, "salary", 750_000) or 750_000)
+                              for x in roster)
+            except Exception:
+                current = 0
+            if salary > (strategy.budget_limit - current):
+                return False
+            # The handshake: offer is estimated market value -- accepted.
+            p.salary = salary
+            p.contract_years = years
+            # A new SPC starts with no retained salary, same as every path.
+            try:
+                import trade_engine as _te_clr
+                _te_clr.clear_retention_state(p)
+            except Exception:
+                pass
+            _contract = getattr(p, "contract", None)
+            if _contract is not None:
+                _contract.salary = salary
+                _contract.years_remaining = years
+                if details.get("no_trade_clause"):
+                    try:
+                        import trade_engine as _te2
+                        if _te2.clause_eligible(p):
+                            _te2.apply_clause_to_contract(
+                                _contract, "ntc", 10, player=p)
+                    except Exception:
+                        pass
+            fa_pool.remove(p)
+            team.add_player(p, "roster")
+            # Rivalry lifecycle: a signing is a transfer.
+            try:
+                from reputation_system import on_player_transfer as _opt
+                _rivs = getattr(league, "rivalries", None)
+                if isinstance(_rivs, list):
+                    _opt(_rivs, p, from_team=None, to_team=team)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     def _execute_decisions(self, team: Team, decisions: List[AIDecision]):
         """Execute the decisions this manager owns end-to-end.
 
@@ -665,10 +764,18 @@ class AITeamManager:
         league = getattr(self, "_league_ref", None)
         if league is None:
             return
+        _fa_signed = False  # at most one signing per team per weekly tick:
+        # the evaluation proposes up to 3 targets, but executing all of
+        # them would drain the pool in a week. First valid handshake wins.
         for d in decisions:
             try:
                 p = d.target_player
                 if p is None:
+                    continue
+                if d.decision_type == "free_agent_offer":
+                    if not _fa_signed and self._execute_free_agent_signing(
+                            team, d, league):
+                        _fa_signed = True
                     continue
                 if d.decision_type == "sign_prospect":
                     if getattr(p, "contract", None) is not None:

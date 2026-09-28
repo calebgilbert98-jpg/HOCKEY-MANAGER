@@ -2118,6 +2118,18 @@ class HockeyManagerGUI(tk.Tk):
                 # Add to claiming team
                 claiming_team.add_player(player)
                 player.team_name = claiming_team.team_name
+
+                # Rivalry lifecycle: a waiver claim is a transfer -- his
+                # personal beefs follow him; ambient noise stays behind.
+                try:
+                    from reputation_system import on_player_transfer as _opt
+                    _rivs = getattr(getattr(self, "league", None),
+                                    "rivalries", None)
+                    if isinstance(_rivs, list):
+                        _opt(_rivs, player, from_team=original_team,
+                             to_team=claiming_team)
+                except Exception:
+                    pass
                 
                 # Reset waiver status
                 player.on_waivers = False
@@ -6812,6 +6824,15 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
         team.add_player(player)
+        # Rivalry lifecycle: a waiver claim is a transfer, same as the
+        # single-player path -- personal beefs follow the man.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=original, to_team=team)
+        except Exception:
+            pass
         try:
             player.on_waivers = False
             player.waiver_days = 0

@@ -23,6 +23,7 @@ import ast
 import os
 import random
 import sys
+from datetime import date
 from types import SimpleNamespace
 from unittest import mock
 
@@ -366,6 +367,135 @@ check("signing: personal beef follows the FA to his new club",
       _carried == ["major_injury"], f"carried={_carried}")
 check("signing: ambient beef does not follow the FA",
       "award_race" in _left, f"left={_left}")
+
+# ------------------------------------------------- AI FA executor + claims
+import ai_team_management as aim
+from game_classes import PlayerPosition
+
+
+class _FakeTeam:
+    def __init__(self, name, roster):
+        self.team_name = name
+        self.roster = list(roster)
+
+    def add_player(self, player, roster_type="roster"):
+        self.roster.append(player)
+        player.team_name = self.team_name
+
+
+def _mkfa(pid, name, pos, ovr=80, salary=0, euro=False):
+    p = SimpleNamespace(
+        id=pid, full_name=name, primary_position=pos, age=27,
+        salary=salary, contract_years=0,
+        contract=SimpleNamespace(salary=salary, years_remaining=0,
+                                 no_trade_clause=False),
+        is_euro_import=euro, team_name="",
+        overall_rating=lambda _o=ovr: _o)
+    return p
+
+
+def _mkstrategy(needs, budget=95_000_000):
+    return aim.TeamStrategy(
+        priority=aim.ManagementPriority.CONTEND,
+        trade_preference=aim.TradePreference.MODERATE,
+        budget_limit=budget, min_roster_age=20, max_roster_age=36,
+        position_needs=list(needs), salary_cap_tolerance=0.9,
+        prefer_youth=False, prefer_experience=False, risk_tolerance=0.5,
+        will_trade_picks=True, will_trade_prospects=True,
+        rebuilding_timeline=3)
+
+
+def _mkmgr(league, team, strategy):
+    mgr = aim.AITeamManager()
+    mgr._league_ref = league
+    mgr.team_strategies[team.team_name] = strategy
+    return mgr
+
+
+def _mkdecision(p, salary=2_500_000, term=3):
+    return SimpleNamespace(
+        decision_type="free_agent_offer", target_player=p,
+        offer_details={"salary": salary, "term": term,
+                       "no_trade_clause": False})
+
+
+# Success: hole + need + budget -> signed, pool shrinks, hook fires.
+fa1 = _mkfa(50, "AI Target", PlayerPosition.CENTER, ovr=82)
+fa1.base_controversy = 62
+lg_fa = SimpleNamespace(free_agents=[fa1], rivalries=[], season_year=2026)
+rs.record_award_race(lg_fa.rivalries, fa1, _mkfa(51, "Foe", PlayerPosition.CENTER),
+                     "Hart Trophy")
+hole_roster = [_mkfa(60 + i, f"Roster{i}", PlayerPosition.CENTER, salary=3_000_000)
+               for i in range(20)]
+t1 = _FakeTeam("AI Club", hole_roster)
+m1 = _mkmgr(lg_fa, t1, _mkstrategy([PlayerPosition.CENTER]))
+ok = m1._execute_free_agent_signing(t1, _mkdecision(fa1), lg_fa)
+check("ai fa: hole + need + budget -> signed",
+      ok and fa1 not in lg_fa.free_agents and fa1 in t1.roster
+      and fa1.team_name == "AI Club" and fa1.salary == 2_500_000
+      and fa1.contract_years == 3,
+      f"ok={ok} roster={len(t1.roster)}")
+check("ai fa: transfer hook fired on signing",
+      len([r for r in lg_fa.rivalries if r["origin"] == "award_race"]) == 0,
+      f"rivalries={len(lg_fa.rivalries)}")
+
+# Guards: no double-sign, no full roster, no over-budget, no wrong position.
+lg2 = SimpleNamespace(free_agents=[], rivalries=[], season_year=2026)
+m2 = _mkmgr(lg2, t1, _mkstrategy([PlayerPosition.CENTER]))
+check("ai fa: already-signed player is not re-signed",
+      not m2._execute_free_agent_signing(t1, _mkdecision(fa1), lg2)
+      and len(t1.roster) == 21)
+full = _FakeTeam("Full Club",
+                 [_mkfa(70 + i, f"F{i}", PlayerPosition.CENTER, salary=3_000_000)
+                  for i in range(23)])
+lg3 = SimpleNamespace(free_agents=[_mkfa(80, "Extra", PlayerPosition.CENTER)],
+                      rivalries=[], season_year=2026)
+m3 = _mkmgr(lg3, full, _mkstrategy([PlayerPosition.CENTER]))
+check("ai fa: 23-man roster blocks signing",
+      not m3._execute_free_agent_signing(full, _mkdecision(lg3.free_agents[0]), lg3)
+      and len(lg3.free_agents) == 1)
+poor = _FakeTeam("Poor Club", [])
+lg4 = SimpleNamespace(free_agents=[_mkfa(81, "Rich", PlayerPosition.CENTER)],
+                      rivalries=[], season_year=2026)
+m4 = _mkmgr(lg4, poor, _mkstrategy([PlayerPosition.CENTER], budget=1_000_000))
+check("ai fa: over-budget offer is not executed",
+      not m4._execute_free_agent_signing(poor, _mkdecision(lg4.free_agents[0]), lg4))
+check("ai fa: wrong position is not executed",
+      not m1._execute_free_agent_signing(
+          t1, _mkdecision(_mkfa(82, "Winger", PlayerPosition.LEFT_WING)),
+          SimpleNamespace(free_agents=[], rivalries=[], season_year=2026)))
+
+# Throttle: one signing per team per tick, even with three valid targets.
+t5 = _FakeTeam("Throttle Club", [])
+lg5 = SimpleNamespace(
+    free_agents=[_mkfa(90 + i, f"T{i}", PlayerPosition.CENTER) for i in range(3)],
+    rivalries=[], season_year=2026)
+m5 = _mkmgr(lg5, t5, _mkstrategy([PlayerPosition.CENTER]))
+m5._execute_decisions(t5, [_mkdecision(p) for p in list(lg5.free_agents)])
+check("ai fa: at most one signing per tick",
+      len(t5.roster) == 1 and len(lg5.free_agents) == 2,
+      f"roster={len(t5.roster)} pool={len(lg5.free_agents)}")
+
+# Euro guard: imports are league-min gambles, never mid-cap bets.
+euro = _mkfa(100, "Euro Star", PlayerPosition.CENTER, ovr=88, euro=True)
+lg6 = SimpleNamespace(free_agents=[euro], rivalries=[], season_year=2026)
+t6 = _FakeTeam("Euro Club", [])
+m6 = _mkmgr(lg6, t6, _mkstrategy([PlayerPosition.CENTER], budget=95_000_000))
+decisions = m6._evaluate_free_agency(
+    t6, m6.team_strategies["Euro Club"], lg6.free_agents, date(2026, 7, 2))
+_euro_offers = [d for d in decisions if d.target_player is euro]
+check("ai fa: euro import offer capped at $1M",
+      len(_euro_offers) == 1
+      and _euro_offers[0].offer_details["salary"] <= 1_000_000,
+      f"offer={_euro_offers[0].offer_details['salary'] if _euro_offers else None}")
+
+# Waiver claims call the transfer hook on both paths.
+_pw_src = _method_src("main.py", "process_waivers")
+check("claims: single-player process_waivers calls on_player_transfer",
+      "on_player_transfer" in _pw_src)
+_mc_src = _method_src("main.py", "_mp_claim_waivers")
+check("claims: MP _mp_claim_waivers calls on_player_transfer",
+      "on_player_transfer" in _mc_src)
 
 print(f"\n{ PASS } passed, { FAIL } failed")
 for f in FAILURES:
