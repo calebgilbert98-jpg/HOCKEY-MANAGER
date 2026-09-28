@@ -4586,14 +4586,19 @@ class GameSim:
                        attacking_team=attacking_team.team_name,
                        defending_team=defending_team.team_name,
                        shooter_pos=(round(_bsx, 1), round(_bsy, 1)))
-        # Loose puck off the block -- both teams scramble for it
-        if random.random() < 0.55:
+        # Blocked shot sprays the puck -- possession model decides: usually
+        # loose at the block spot or gathered by the defense, sometimes the
+        # shooter keeps it, never a silent retain by default.
+        try:
+            import possession_model as _pmb
+            _bout = _pmb.after_shot("block")
+        except Exception:
+            _bout = "loose"
+        if _bout in ("loose", "defense"):
             self._ppos_ensure()
             bx, by = self._ppos_get(blocker)
             self.puck_pos = self._clamp_boards(bx, by)
-            self.possession_team = None
-            self.possession_player = None
-            self.possession_time = 0
+        self._apply_shot_outcome(_bout, attacking_team, defending_team)
 
     def _handle_missed_shot(self, shooter, attacking_team, location, shot_type):
         """Handle a missed shot event."""
@@ -4618,15 +4623,21 @@ class GameSim:
                        shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
                        location=location.value if hasattr(location, "value") else str(location),
                        shooter_pos=(round(_msx, 1), round(_msy, 1)))
-        # Missed shot rims around -- loose puck battle behind the net
-        if random.random() < 0.40:
+        # Missed shot rims around -- possession model decides: usually
+        # retrieved or loose behind the net, sometimes out of play.
+        try:
+            import possession_model as _pmm
+            _mout = _pmm.after_shot("miss")
+        except Exception:
+            _mout = "retain"
+        _defending = (self.away_team if attacking_team is self.home_team
+                      else self.home_team)
+        if _mout in ("loose", "defense"):
             self._ppos_ensure()
             nx = 189.0 if attacking_team is self.home_team else 11.0
             self.puck_pos = self._clamp_boards(nx + random.uniform(-8, 8),
-                                                 42.5 + random.uniform(-14, 14))
-            self.possession_team = None
-            self.possession_player = None
-            self.possession_time = 0
+                                               42.5 + random.uniform(-14, 14))
+        self._apply_shot_outcome(_mout, attacking_team, _defending)
 
     def _apply_archetype_matchup(self, quality, attacking_team, defending_team):
         """
@@ -5123,8 +5134,71 @@ class GameSim:
                                         'high', 8.0, ShotType.REBOUND)
                 self._record_goaltender_stats(goalie, 'save', SaveType.PAD_SAVE, 0.22, 'high')
                 self._log_event(f"Rebound chance by {best_attacker.full_name}, saved by {goalie.full_name}!", "SAVE")
+                # Possession model: the rebound save breaks up like any save.
+                try:
+                    import possession_model as _pmr
+                    _rout = _pmr.after_shot("save", quality=0.55)
+                except Exception:
+                    _rout = "retain"
+                self._apply_shot_outcome(_rout, attacking_team,
+                                         defending_team, goalie=goalie)
+        else:
+            # Defender wins the scramble: the siege is broken honestly --
+            # the puck is cleared or goes loose, never silently retained.
+            # (This was the second stickiness leak: the old code just
+            # returned, leaving the attack in the O-zone.)
+            try:
+                import possession_model as _pmr2
+                _dout = _pmr2.after_shot("save", quality=0.55)
+                if _dout == _pmr2.RETAIN:
+                    _dout = _pmr2.DEFENSE  # won the battle: usually comes away with it
+            except Exception:
+                _dout = "defense"
+            self._apply_shot_outcome(
+                _dout, attacking_team, defending_team,
+                goalie=self._selected_goalie(defending_team))
         
         return False
+
+    def _apply_shot_outcome(self, outcome, attacking_team, defending_team,
+                            goalie=None):
+        """Apply the possession model's post-shot decision (shared decision).
+
+        FREEZE  -> whistle, faceoff (the old goalie-freeze path).
+        DEFENSE -> defending team gains clean possession; their breakout
+                   comes next tick (the siege is broken, honestly).
+        LOOSE   -> puck loose; the battle resolves next tick.
+        RETAIN  -> nothing: the attack keeps the O-zone (the old default).
+        """
+        try:
+            import possession_model as _pm
+        except Exception:
+            return  # fail safe: retain, exactly the old behavior
+        if outcome == _pm.FREEZE and defending_team is not None:
+            self._log_event(
+                f"{goalie.full_name} covers the puck for a faceoff."
+                if goalie is not None else "Puck covered for a faceoff.",
+                "STOPPAGE")
+            self._emit_pbp("goalie_freeze", goalie=goalie,
+                           team=defending_team.team_name,
+                           home_score=self.home_score,
+                           away_score=self.away_score)
+            self._forced_faceoff_team = None
+            self.possession_team = self._resolve_faceoff(reason="stoppage")
+            self.possession_player = None
+            self.current_situation = self._get_current_situation()
+        elif outcome == _pm.DEFENSE and defending_team is not None:
+            self.possession_team = defending_team
+            self.possession_player = None
+            self.possession_time = 0
+            self._log_event(f"{defending_team.team_name} clears the rebound.",
+                            "CLEAR")
+        elif outcome == _pm.LOOSE:
+            self.possession_team = None
+            self.possession_player = None
+            self.possession_time = 0
+            self._log_event("Puck is loose after the shot.", "LOOSE_PUCK")
+        # RETAIN: intentional no-op -- the attack keeps buzzing.
 
     def _handle_save(self, goalie, shooter, shot_type, quality, defending_team=None,
                      shot_impact=1, distance=None):
@@ -5166,26 +5240,33 @@ class GameSim:
                        shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
                        impact={0: "tired", 1: "normal", 2: "big"}[save_impact],
                        story=_story)
-        # NHL: on a controlled save the goalie often covers the puck for a
-        # whistle -- faceoff at the nearest end-zone dot in his own end.
-        # More likely on dangerous looks / under sustained pressure.
-        # (Kept modest: each whistle breaks up the attack's sustained
-        # pressure, so too many freezes would drag scoring below target.)
+        # Possession model (shared decision): a save breaks the attack up
+        # like real hockey -- covers, clearances and loose pucks -- instead
+        # of the old ~91% silent retain that chained saves into marathon
+        # sieges (single-game SOG std ~13 vs real ~6). The OZ per-tick shot
+        # rate is tuned against these tables so the ~29 SOG mean holds:
+        # more, shorter possessions, same total volume. Goalie-personality
+        # channels (freeze_mult, rebound_shift) stay live inside the model.
         try:
             q = float(quality)
         except (TypeError, ValueError):
             q = 0.4
-        if defending_team is not None and random.random() < (0.06 + 0.08 * q) * _freeze_mult:
-            self._log_event(f"{goalie.full_name} covers the puck for a faceoff.",
-                            "STOPPAGE")
-            self._emit_pbp("goalie_freeze", goalie=goalie,
-                           team=defending_team.team_name,
-                           home_score=self.home_score,
-                           away_score=self.away_score)
-            self._forced_faceoff_team = None
-            self.possession_team = self._resolve_faceoff(reason="stoppage")
-            self.possession_player = None
-            self.current_situation = self._get_current_situation()
+        _outcome = "retain"
+        try:
+            import possession_model as _pm2
+            import goalie_personality as _gp4
+            try:
+                _rshift = _gp4.rebound_shift(goalie)
+            except Exception:
+                _rshift = 0.0
+            _outcome = _pm2.after_shot("save", quality=q,
+                                       freeze_mult=_freeze_mult,
+                                       rebound_shift=_rshift)
+        except Exception:
+            pass
+        _attacking = self._get_player_team(shooter)
+        self._apply_shot_outcome(_outcome, _attacking, defending_team,
+                                 goalie=goalie)
 
 
     def _resolve_faceoff(self, reason=None, offending_team=None):
@@ -6669,6 +6750,83 @@ class GameSim:
         except Exception:
             pass
 
+    def _attempt_keep_in(self, attacking_team, defending_team):
+        """The point man tries to hold the blue line as the puck drifts out.
+
+        Returns True when the puck is kept in (play continues in the OZ
+        with the puck at the point); False when the exit stands. Driven
+        by the pinching defenseman's awareness/hands against the pressure
+        on him -- good puck-moving D hold it ~2 in 3, pylons ~1 in 3.
+        A nearby forechecker can still blow it up (rare).
+        """
+        import random as _r
+        dmen = [p for p in self._get_on_ice(attacking_team)
+                if p.primary_position == PlayerPosition.DEFENSE]
+        if not dmen:
+            # Fallback: anyone on the roster who plays the point.
+            try:
+                dmen = [p for p in attacking_team.roster
+                        if getattr(p, "primary_position", None)
+                        == PlayerPosition.DEFENSE][:2]
+            except Exception:
+                dmen = []
+        if not dmen:
+            return False
+        # The point man nearest the puck does the keeping.
+        try:
+            px, py = self._ppos_get(self.possession_player)
+            pincher = min(dmen,
+                          key=lambda d: abs(self._ppos_get(d)[0] - px)
+                          + abs(self._ppos_get(d)[1] - py))
+        except Exception:
+            pincher = _r.choice(dmen)
+        skill = (pincher.defensive_awareness + pincher.puck_handling
+                 + pincher.composure) / 3.0
+        keep_prob = max(0.40, min(0.80, 0.60 + (skill - 68.0) * 0.012))
+        # A forechecker bearing down contests the keep -- if he wins the
+        # battle he takes the puck (turnover), not just the zone exit.
+        try:
+            _fcheckers = [p for p in self._get_on_ice(defending_team)
+                          if p.primary_position != PlayerPosition.GOALIE]
+            _fc = min(_fcheckers,
+                      key=lambda f: abs(self._ppos_get(f)[0] - px)
+                      + abs(self._ppos_get(f)[1] - py)) if _fcheckers else None
+            if _fc is not None:
+                _fskill = (_fc.forechecking + _fc.checking
+                           + _fc.anticipation) / 3.0
+                # Forechecker wins outright ~1 in 4 contested keeps.
+                if _r.random() < max(0.10, min(0.40,
+                                               0.25 + (_fskill - 68.0) * 0.010)):
+                    self._log_event(
+                        f"{_fc.full_name} blows up the keep-in, takes the puck.",
+                        "TURNOVER")
+                    self._turnover_possession(defending_team)
+                    return False
+        except Exception:
+            pass
+        # Heavy forecheck pressure makes the keep harder.
+        try:
+            import tactics as _txk
+            keep_prob *= max(0.85, min(1.0,
+                                       2.0 - _txk.resolve_team_tactics(
+                                           defending_team).get("pressure", 1.0)))
+        except Exception:
+            pass
+        if _r.random() < keep_prob:
+            self._log_event(f"{pincher.full_name} holds the line, keeps it in.",
+                            "KEEP_IN")
+            # Puck stays at the point in the OZ; the pincher has it.
+            self._ppos_ensure()
+            nx = 128.0 if attacking_team is self.home_team else 72.0
+            try:
+                self.puck_pos = self._clamp_boards(
+                    nx, self._ppos_get(pincher)[1])
+            except Exception:
+                pass
+            self.possession_player = pincher
+            return True
+        return False
+
     def _resolve_offensive_zone_play(self, attacking_team, defending_team):
         """
         Stage 3 Enhancement: Enhanced offensive zone play with special situations.
@@ -6715,6 +6873,10 @@ class GameSim:
         # Tuned for the hockey-IQ update: the playmaking (draw-and-dish,
         # seam passes) creates better chances, so we need fewer of them
         # to hit the scoring target.
+        # Base OZ event mix. The league-wide volume knob is
+        # tactics.SHOT_LIFT (recalibrated for the honest possession model);
+        # the base stays moderate so the 0.85 clamp below preserves the
+        # turnover/cycle texture and team-to-team shot_vol spread.
         shot_chance = 0.54
         turnover_chance = 0.2
         cycle_chance = 0.2
@@ -6862,9 +7024,17 @@ class GameSim:
         # Random events in offensive zone -- but only if the puck is still
         # there. The setup sequence can carry it back out (D-to-D, a
         # broken play); shooting from the neutral zone isn't hockey IQ.
+        # Before conceding the exit, the point man tries to HOLD THE BLUE
+        # LINE -- pinching to keep the puck in is one of a defenseman's
+        # core jobs, and the position sim was conceding it too cheaply
+        # (~1 in 4 OZ ticks died here, starving shot volume). Attribute-
+        # driven, never guaranteed; on a failure the exit stands.
         self._refresh_zone_state(attacking_team)
         if self.current_zone != Zone.OFFENSIVE_ZONE:
-            return "ZONE_EXIT"
+            if not self._attempt_keep_in(attacking_team, defending_team):
+                return "ZONE_EXIT"
+            self.current_zone = Zone.OFFENSIVE_ZONE
+            self.zone_time = 0
         # Attribute IQ: smart carriers are selective about when they
         # shoot. High offensive awareness + decision making in a
         # dangerous spot means take it; the same brain on the perimeter
@@ -6883,17 +7053,59 @@ class GameSim:
             else:
                 shot_chance *= 1.0 - iq_factor * 0.8
             shot_chance = max(0.2, min(0.85, shot_chance))
+        # Proportional split: the 0.85 clamp used to push shot+turnover
+        # past 1.0, silently killing the cycle/maintain branches (and any
+        # follow-up attached to them). Now the non-shot outcomes split
+        # whatever probability is left after the shot, by their relative
+        # weights -- P(shot) is unchanged, texture is revived.
+        _leftover = max(0.0, 1.0 - shot_chance)
+        _w_sum = turnover_chance + cycle_chance + maintain_chance
+        if _w_sum > 0 and _leftover < turnover_chance + cycle_chance:
+            turnover_chance = _leftover * turnover_chance / _w_sum
+            cycle_chance = _leftover * cycle_chance / _w_sum
+            # maintain_chance takes the rest implicitly in the else branch.
         event_roll = random.random()
-        
+
+        def _follow_up():
+            # Sustained pressure produces a second look within the same
+            # 8-20s tick -- a cycle down low generates 2-3 shots in that
+            # span in real hockey, not one. Bounded: one extra roll, shot
+            # or clear only, no recursion. The possession model still
+            # governs what happens after any shot, so chains stay honest.
+            # The look comes from down low (forwards, net-front) -- that's
+            # where sustained pressure lives, not the point. And it's
+            # decisive: a team cycling down low gets the puck to the net
+            # ~5 in 6 (the defense is scrambling, not set).
+            _fr = random.random()
+            if _fr < 0.85:
+                _fwds = [p for p in attacking_skaters
+                         if p.primary_position != PlayerPosition.DEFENSE
+                         and p.primary_position != PlayerPosition.GOALIE]
+                _fs = (self._weighted_skater_choice(_fwds, "shoot")
+                       if _fwds else
+                       self._weighted_skater_choice(attacking_skaters, "shoot"))
+                self._resolve_scoring_chance(_fs, attacking_team,
+                                             defending_team)
+            elif _fr < shot_chance + turnover_chance:
+                return self._attempt_zone_clear(defending_team,
+                                                attacking_team)
+            return None
+
         if event_roll < shot_chance:
             shooter = self._weighted_skater_choice(attacking_skaters, "shoot")
             self._resolve_scoring_chance(shooter, attacking_team, defending_team)
         elif event_roll < shot_chance + turnover_chance:
             return self._attempt_zone_clear(defending_team, attacking_team)
         elif event_roll < shot_chance + turnover_chance + cycle_chance:
-            return self._resolve_offensive_cycle(attacking_team, defending_team)
+            _cr = self._resolve_offensive_cycle(attacking_team, defending_team)
+            if _cr == "CYCLE":
+                _follow_up()
+            return _cr
         else:
-            return self._maintain_offensive_possession(attacking_team)
+            _mr = self._maintain_offensive_possession(attacking_team)
+            if _mr == "MAINTAIN_POSSESSION":
+                _follow_up()
+            return _mr
 
     def _handle_overtime(self):
         """Simulates overtime.

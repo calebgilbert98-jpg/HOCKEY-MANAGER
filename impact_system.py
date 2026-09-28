@@ -252,6 +252,10 @@ def classify_hit_impact(hitter: Any, target: Any, ctx: ImpactContext) -> int:
 
     arch = _archetype(hitter).lower()
     if "enforcer" in arch:
+        # FLAG (Muck, 2026-09-28): enforcers roll ~34% big-hit -- deliberately
+        # above the ~30% band. Big hits are an enforcer's claim to fame and
+        # roster value in this league; do not "normalize" this bonus down
+        # without his call.
         pb += 0.08
     elif "grinder" in arch or "power forward" in arch or "powerforward" in arch:
         pb += 0.05
