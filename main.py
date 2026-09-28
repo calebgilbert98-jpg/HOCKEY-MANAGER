@@ -8475,6 +8475,21 @@ class HockeyManagerGUI(tk.Tk):
             draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
             self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)
             print(f"Generated {len(self.league.draft_prospects)} draft prospects")
+            # Draft Story Engine: assign storylines to top prospects
+            try:
+                from draft_stories import assign_prospect_storylines, deliver_prospect_stories
+                storylines = assign_prospect_storylines(self.league.draft_prospects)
+                # Store on league for draft-day drama (projected ranks)
+                self.league.prospect_storylines = storylines
+                # Projected rank = index in sorted-by-overall
+                ranked = sorted(self.league.draft_prospects,
+                                key=lambda p: getattr(p, 'overall', 70), reverse=True)
+                self.league.prospect_projected_rank = {
+                    id(p): i + 1 for i, p in enumerate(ranked)
+                }
+                deliver_prospect_stories(self, storylines)
+            except Exception as _dse:
+                print(f"Draft storylines failed (non-fatal): {_dse}")
         
         # Ensure draft picks are set up
         self.league.initialize_all_draft_picks()

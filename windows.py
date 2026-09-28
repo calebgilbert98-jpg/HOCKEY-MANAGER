@@ -4780,6 +4780,26 @@ class DraftWindow(InGamePopup):
         self._ticker(self.dn.ticker_line(overall, team.team_name, player,
                                          round_num, reach=reach, steal=steal))
         self.picks_made.append((team.team_name, overall, player))
+        # Draft Story Engine: fire pick drama (reach/steal/surprise)
+        try:
+            from draft_stories import draft_pick_drama
+            # Get projected rank from league
+            proj_rank = None
+            try:
+                proj_map = getattr(self.parent.league, 'prospect_projected_rank', {})
+                proj_rank = proj_map.get(id(player))
+            except Exception:
+                pass
+            if proj_rank is None:
+                # Fallback: use reach/steal flags to estimate
+                proj_rank = overall  # no drama if unknown
+            # Only fire for notable picks (top 3, or reach/steal)
+            if overall <= 3 or reach or steal:
+                # Get app reference (parent is HockeyManagerGUI)
+                app = self.parent
+                draft_pick_drama(app, overall, player, team, proj_rank)
+        except Exception:
+            pass
         try:
             self.parent.news_log.append({
                 'date': self.parent.current_date, 'type': 'draft',
