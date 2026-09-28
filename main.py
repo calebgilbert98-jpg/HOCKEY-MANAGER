@@ -9663,6 +9663,20 @@ class HockeyManagerGUI(tk.Tk):
                     del _live[:]
             except Exception:
                 pass
+            # Prospect junior/college award headlines (same pattern).
+            try:
+                _pmsgs = list(getattr(_league, "prospect_awards_news", None)
+                              or [])
+                for _m in _pmsgs:
+                    try:
+                        self.add_news("🏆 " + str(_m))
+                    except Exception:
+                        pass
+                _plive = getattr(_league, "prospect_awards_news", None)
+                if _plive is not None:
+                    del _plive[:]
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -12019,6 +12033,19 @@ class HockeyManagerGUI(tk.Tk):
                     pass
             if _rn:
                 self.league.rights_news = []
+        except Exception:
+            pass
+        # Prospect junior/college award headlines from end_of_season.
+        try:
+            _pn = list(getattr(self.league, "prospect_awards_news", None)
+                       or [])
+            for _msg in _pn:
+                try:
+                    self.add_news("🏆 " + str(_msg))
+                except Exception:
+                    pass
+            if _pn:
+                self.league.prospect_awards_news = []
         except Exception:
             pass
 

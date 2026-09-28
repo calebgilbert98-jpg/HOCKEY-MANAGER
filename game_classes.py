@@ -2610,6 +2610,9 @@ class League:
     # (re-entries, UFAs, retirements, holdout warnings, league changes).
     # The UI layer posts these; old-save safe, same getattr caveat as above.
     rights_news: List[str] = field(default_factory=list)
+    # Junior/college award headlines from prospect_accolades (flushed to
+    # the inbox by the UI layer, same as rights_news).
+    prospect_awards_news: List[str] = field(default_factory=list)
     schedule: List[Tuple[date, Team, Team]] = field(default_factory=list)
     standings: Dict[str, Dict] = field(default_factory=dict)
     current_game_index: int = 0
@@ -5087,7 +5090,31 @@ class League:
                 player.ahl_stats = PlayerStats()
             except Exception:
                 pass
-        
+
+        # Junior/college awards for prospects: one lightweight pass over
+        # the farm_season data the prospect offseason sim just produced
+        # (Memorial Cup, league honors, Hobey Baker, WJC medals). Pure
+        # Python, no UI, no per-day cost. Guarded so it can never break
+        # the season rollover.
+        try:
+            import prospect_accolades as _pa
+            _ending = int(getattr(self, "season_year", 0) or 0)
+            # Isolated RNG: end_of_season callers may rely on the global
+            # stream; awards are cosmetic and stay on their own.
+            _msgs = _pa.roll_prospect_awards(
+                self,
+                f"{_ending}-{str(_ending + 1)[2:]}",
+                str(_ending + 1),
+                rng=random.Random())
+            if _msgs:
+                _box = getattr(self, "prospect_awards_news", None)
+                if not isinstance(_box, list):
+                    _box = []
+                    self.prospect_awards_news = _box
+                _box.extend(str(_m) for _m in _msgs)
+        except Exception:
+            pass
+
         self.season_year += 1
 
         # Advance the salary cap for the new season (2-4% growth).

@@ -1134,5 +1134,19 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
     print(f"Generated a new draft class with {len(prospects)} prospects (quality: {quality}, draft year: {draft_year}).")
     print(f"Potential distribution: {potential_counts}")
 
+    # Prospect reputation + pre-draft junior stories: a light, one-pass
+    # seeding (perceived potential only -- never hidden truth). Guarded so
+    # a data bug here can never break class generation.
+    try:
+        import prospect_accolades as _pa
+        # Isolated RNG: the global stream must stay exactly as it was
+        # before this hook (downstream board/story code is seed-sensitive).
+        _pa_stats = _pa.seed_draft_class(prospects, draft_year,
+                                         rng=random.Random())
+        print(f"Prospect accolades: {int(_pa_stats.get('seeded', 0))} repped, "
+              f"{int(_pa_stats.get('storied', 0))} with junior stories.")
+    except Exception:
+        pass
+
     return prospects
 
