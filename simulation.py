@@ -625,6 +625,8 @@ class GameSim:
         
         # Stage 7: Micro-events and game flow
         self.momentum = GameMomentum.NEUTRAL  # Current game momentum
+        self.shot_log = []  # Module 04: per-shot analytics records
+        self.zone_entry_log = []  # Module 04: per-entry records
         self.game_flow = GameFlow.NORMAL  # Current pace of play
         self.pressure_level = PressureLevel.MODERATE  # Current pressure level
         self.situational_context = SituationalContext.GAME_OPENING
@@ -2036,12 +2038,25 @@ class GameSim:
             except Exception:
                 pass
 
+        # Dressing-room talks (module 03): pre-game words move the
+        # first-period momentum needle.
+        try:
+            self._apply_dressing_room_pregame()
+        except Exception:
+            pass
+
         for p in range(1, 4):
             self.period = p
             self.clock = 1200
             self._period_length = 1200
             self._emit_pbp("period_start", period=p)
             if p == 3:
+                # Intermission talks (module 03): second-break words move
+                # the third-period momentum needle.
+                try:
+                    self._apply_dressing_room_intermission()
+                except Exception:
+                    pass
                 # The Maurice spot develops mid-game: a coach getting run out
                 # of the building may send his guys out now.
                 self._reevaluate_punishment_orders()
@@ -2218,7 +2233,31 @@ class GameSim:
             log_game(self)
         except Exception:
             pass
+        # Module 04: persist per-game analytics records (never raises).
+        try:
+            self._persist_analytics()
+        except Exception:
+            pass
     
+    def _apply_dressing_room_pregame(self):
+        """Module 03: pre-game talks move the first-period momentum needle.
+
+        Additive and safe: impact_system.nudge_momentum caps the swing.
+        """
+        try:
+            import dressing_room as _dr
+            _dr.apply_pregame_talks(self)
+        except Exception:
+            pass
+
+    def _apply_dressing_room_intermission(self):
+        """Module 03: intermission talks move the third-period needle."""
+        try:
+            import dressing_room as _dr
+            _dr.apply_intermission_talk(self)
+        except Exception:
+            pass
+
     def _ai_tactics_intermission(self):
         """Between periods, a coach in control may tweak his systems.
 
@@ -2715,6 +2754,9 @@ class GameSim:
             self.team_stats[team.team_name]['controlled_entries'] += 1
             self._log_event(f"{player.full_name} carries the puck into the zone", "ZONE_ENTRY")
         
+        # Module 04: log the entry for the Analytics Hub.
+        self._analytics_record_entry(player, team, entry_type)
+
         return "ZONE_ENTRY"
 
     def _turnover_possession(self, new_team):
@@ -4087,6 +4129,11 @@ class GameSim:
         blocking_outcome = self._check_shot_blocking(shooter, defending_team, shot_location)
         if blocking_outcome['blocked']:
             self._handle_blocked_shot(shooter, blocking_outcome['blocker'], attacking_team, defending_team)
+            # Module 04: blocked attempts still count as shot attempts.
+            self._analytics_record_shot(shooter, attacking_team,
+                                        defending_team, shot_location,
+                                        distance, None, 0.0)
+            self._analytics_tag_shot("blocked")
             return
         
         # Determine shot type based on player attributes and situation
@@ -4706,6 +4753,10 @@ class GameSim:
         
         # Update shot statistics regardless of outcome
         self._update_shot_stats(shooter, attacking_team, defending_team, quality, distance, shot_type)
+        # Module 04: log the shot for the Analytics Hub (outcome tagged below).
+        self._analytics_record_shot(shooter, attacking_team, defending_team,
+                                    location, distance, shot_type,
+                                    expected_goal)
         
         # Apply shot skill bonus to save probability
         adjusted_save_prob = save_probability * (1.0 - (shot_skill_bonus / 200))  # Slight reduction for good passes
@@ -4745,6 +4796,7 @@ class GameSim:
                 _cz_verdict = "goal"
             if _cz_verdict == "disallowed":
                 # Waved off after review: no stats, restart with a faceoff.
+                self._analytics_tag_shot("disallowed")
                 self._resolve_faceoff(reason="disallowed goal",
                                        offending_team=attacking_team)
             else:
@@ -4752,6 +4804,7 @@ class GameSim:
             
                 # Record the goal
                 self._record_goaltender_stats(goalie, 'goal', save_type, expected_goal, quality)
+                self._analytics_tag_shot("goal")
             
                 # Handle assists
                 assists = []
@@ -4831,6 +4884,7 @@ class GameSim:
             
             # Record the save
             self._record_goaltender_stats(goalie, 'save', save_type, expected_goal, quality)
+            self._analytics_tag_shot("save")
             
             # Handle rebound outcome
             if rebound_control in [ReboundControl.WEAK_REBOUND, ReboundControl.DANGEROUS_REBOUND]:
@@ -6330,6 +6384,145 @@ class GameSim:
         
         self.team_stats[att_team_name]['corsi_for'] += 1
         self.team_stats[def_team_name]['corsi_against'] += 1
+
+    # -- Module 04: analytics recording (additive; never affects sim) ----
+    def _analytics_logs(self):
+        if not hasattr(self, "shot_log") or self.shot_log is None:
+            self.shot_log = []
+        if not hasattr(self, "zone_entry_log") or self.zone_entry_log is None:
+            self.zone_entry_log = []
+        return self.shot_log, self.zone_entry_log
+
+    def _analytics_line_of(self, player, team):
+        """Forward line number of a player (L1..L4), '-' if unknown."""
+        try:
+            fw = [p for p in team.roster if p.primary_position in
+                  (PlayerPosition.CENTER, PlayerPosition.LEFT_WING,
+                   PlayerPosition.RIGHT_WING)]
+            return f"L{fw.index(player) // 3 + 1}"
+        except Exception:
+            return "-"
+
+    def _analytics_record_shot(self, shooter, attacking_team, defending_team,
+                               location, distance, shot_type, xg):
+        """Log one shot attempt for the Analytics Hub (module 04)."""
+        try:
+            shots, _ = self._analytics_logs()
+            try:
+                sx, sy = self._shot_spot_coords(location, attacking_team)
+            except Exception:
+                sx, sy = 0.0, 0.0
+            shots.append({
+                "shooter_id": getattr(shooter, "id", None),
+                "shooter": getattr(shooter, "full_name",
+                                   getattr(shooter, "name", "?")),
+                "team": getattr(attacking_team, "team_name", ""),
+                "opp": getattr(defending_team, "team_name", ""),
+                "period": int(getattr(self, "period", 1) or 1),
+                "clock": round(float(getattr(self, "clock", 0) or 0), 1),
+                "location": getattr(location, "name", str(location)),
+                "x": round(float(sx), 1), "y": round(float(sy), 1),
+                "distance": round(float(distance or 0), 1),
+                "shot_type": getattr(shot_type, "name", str(shot_type)),
+                "xg": round(float(xg or 0), 3),
+                "outcome": "pending",
+                "line": self._analytics_line_of(shooter, attacking_team),
+            })
+        except Exception:
+            pass
+
+    def _analytics_tag_shot(self, outcome):
+        """Stamp the outcome on the most recent logged shot."""
+        try:
+            shots, _ = self._analytics_logs()
+            if shots:
+                shots[-1]["outcome"] = outcome
+        except Exception:
+            pass
+
+    def _analytics_record_entry(self, player, team, entry_type):
+        """Log one successful zone entry for the Analytics Hub."""
+        try:
+            _, entries = self._analytics_logs()
+            try:
+                px, py = self._ppos_get(player)
+            except Exception:
+                try:
+                    px, py = self.puck_pos
+                except Exception:
+                    px, py = 0.0, 0.0
+            entries.append({
+                "carrier_id": getattr(player, "id", None),
+                "carrier": getattr(player, "full_name",
+                                   getattr(player, "name", "?")),
+                "team": getattr(team, "team_name", ""),
+                "period": int(getattr(self, "period", 1) or 1),
+                "clock": round(float(getattr(self, "clock", 0) or 0), 1),
+                "type": getattr(entry_type, "name", str(entry_type)),
+                "x": round(float(px), 1), "y": round(float(py), 1),
+                "line": self._analytics_line_of(player, team),
+            })
+        except Exception:
+            pass
+
+    def _persist_analytics(self):
+        """Module 04: keep the last 10 games of analytics per team.
+
+        Called once per game from _emit_telemetry. Old-save safe: the
+        hub reads via getattr.
+        """
+        try:
+            home = getattr(self, "home_team", None)
+            away = getattr(self, "away_team", None)
+            if home is None or away is None:
+                return
+            shots, entries = self._analytics_logs()
+            try:
+                momentum = []
+                for _m in getattr(self, "momentum_history", []):
+                    if isinstance(_m, dict):
+                        _d = dict(_m)
+                    else:
+                        # Tuple form (period, momentum) from nudge_momentum.
+                        try:
+                            _p, _mo = _m
+                        except Exception:
+                            continue
+                        _d = {"period": _p, "time": 0,
+                              "trigger": "team talk",
+                              "momentum": _mo}
+                    _mo = _d.get("momentum")
+                    _d["momentum"] = getattr(_mo, "value", str(_mo))
+                    momentum.append(_d)
+            except Exception:
+                momentum = []
+            try:
+                lines = {str(k): {"chemistry": round(float(v), 1)}
+                         for k, v in
+                         getattr(self, "line_chemistry", {}).items()}
+            except Exception:
+                lines = {}
+            rec = {
+                "date": str(getattr(self, "game_date", "") or ""),
+                "home": getattr(home, "team_name", ""),
+                "away": getattr(away, "team_name", ""),
+                "score": (int(getattr(self, "home_score", 0) or 0),
+                          int(getattr(self, "away_score", 0) or 0)),
+                "shots": [dict(s) for s in shots],
+                "momentum": momentum,
+                "entries": [dict(e) for e in entries],
+                "lines": lines,
+            }
+            for team in (home, away):
+                try:
+                    lst = list(getattr(team, "analytics_games", None) or [])
+                    lst.append(rec)
+                    del lst[:-10]
+                    team.analytics_games = lst
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _resolve_offensive_zone_play(self, attacking_team, defending_team):
         """

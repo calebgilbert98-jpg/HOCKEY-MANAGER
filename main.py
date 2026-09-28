@@ -3351,8 +3351,11 @@ class HockeyManagerGUI(tk.Tk):
             def on_cancel():
                 print("Team selection cancelled - exiting...")
                 selection_window.destroy()
-                self.destroy()  # Close the main app too
-                sys.exit()
+                # _quit_app tears the root down without hanging even if a
+                # widget's destroy() raises; sys.exit then skips the rest
+                # of __init__ exactly like before.
+                self._quit_app()
+                sys.exit(0)
             
             button_frame = tk.Frame(selection_window, bg='#181818')
             button_frame.pack(pady=10)
@@ -4105,6 +4108,16 @@ class HockeyManagerGUI(tk.Tk):
         self._create_nav_pill(left_menu_frame, "Morale",
                               self.open_morale_window,
                               tooltip="Morale: team chemistry, hierarchy, and player attitudes")
+
+        # Dressing Room button (module 03: social groups, talks, cascades)
+        self._create_nav_pill(left_menu_frame, "Dressing Room",
+                              self.open_dressing_room,
+                              tooltip="Dressing Room: hierarchy, social groups, team talks")
+
+        # Analytics Hub button (module 04: xG maps, momentum, entries, lines)
+        self._create_nav_pill(left_menu_frame, "Analytics",
+                              self.open_analytics_hub,
+                              tooltip="Analytics Hub: shot/xG maps, momentum graphs, zone entries, line trends")
 
         # Tactics button (systems, familiarity, fit -- the whiteboard)
         self._create_nav_pill(left_menu_frame, "Tactics",
@@ -10921,6 +10934,21 @@ class HockeyManagerGUI(tk.Tk):
         """Open the Team Morale tab (chemistry, hierarchy, social groups)."""
         return self.show_screen('morale', 'Team Morale', MoraleView)
 
+    def open_dressing_room(self):
+        """Open the Dressing Room screen (module 03: hierarchy, social
+        groups, team talks, room feed)."""
+        from dressing_room import DressingRoomView
+        return self.show_screen('dressing_room', 'Dressing Room',
+                                DressingRoomView)
+
+    def open_analytics_hub(self):
+        """Open the Analytics Hub screen (module 04: shot/xG maps,
+        momentum graphs, zone-entry maps, line trends, Ask the analyst).
+        The player-card Analytics tabs are preserved untouched."""
+        from analytics_hub import AnalyticsHubView
+        return self.show_screen('analytics_hub', 'Analytics Hub',
+                                AnalyticsHubView)
+
     def open_tactics_window(self):
         """Open the Team Tactics screen (systems, familiarity, fit)."""
         return self.show_screen('tactics', 'Tactics', TacticsView)
@@ -11912,12 +11940,68 @@ class HockeyManagerGUI(tk.Tk):
 
         def _on_save_done(result):
             if result.get('saved'):
-                # Defer destroy so the view can finish closing first
-                self.after(100, self.destroy)
+                # Defer teardown so the view can finish closing first
+                self.after(100, self._quit_app)
             # cancelled: user stays in game; screen already closed itself
 
         self.show_screen("save_game", "Save Game", SaveLoadView,
                          mode='save', on_done=_on_save_done)
+
+    def _quit_app(self):
+        """Terminate the application unconditionally.
+
+        A bare ``self.destroy()`` is not enough: if any widget's
+        Python-side ``destroy()`` raises mid-teardown (seen in the wild
+        with a half-constructed customtkinter button whose ``__init__``
+        never set ``_font``), the exception aborts the root teardown,
+        the Tcl interpreter stays alive, and the process never exits --
+        the "game doesn't close" hang. So: try the polite destroy, check
+        whether the root actually went away, fall back to a Tcl-level
+        destroy that bypasses Python ``destroy()`` overrides, then quit
+        the mainloop. A watchdog guarantees the process is gone either
+        way (clean-shutdown bookkeeping runs first so the launcher does
+        not mistake this for a crash).
+        """
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        try:
+            alive = bool(self.winfo_exists())
+        except Exception:
+            alive = False
+        if alive:
+            try:
+                # Tcl-level teardown: bypasses Python destroy() overrides
+                # that can raise on half-built widgets.
+                self.tk.call("destroy", self._w)
+            except Exception:
+                pass
+            try:
+                alive = bool(self.winfo_exists())
+            except Exception:
+                alive = False
+        try:
+            self.quit()
+        except Exception:
+            pass
+        if alive:
+            # Last resort: the interpreter is still up. The user asked to
+            # quit and nothing is unsaved on any path that reaches here.
+            try:
+                self.after(1200, self._emergency_exit)
+            except Exception:
+                self._emergency_exit()
+
+    def _emergency_exit(self):
+        """Final guarantee that the process terminates on quit."""
+        try:
+            from checkpoint_manager import mark_clean_shutdown
+            mark_clean_shutdown()
+        except Exception:
+            pass
+        import os
+        os._exit(0)
 
     def on_closing(self):
         """Handle application closing with enhanced save prompt"""
@@ -11941,7 +12025,7 @@ class HockeyManagerGUI(tk.Tk):
                         
             elif response is False:  # No - exit without saving
                 if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit without saving?"):
-                    self.destroy()
+                    self._quit_app()
             # Cancel - do nothing, return to game
         else:
             # For existing saves, offer quick save option
@@ -11961,7 +12045,7 @@ class HockeyManagerGUI(tk.Tk):
                         success = self.save_manager.save_game(compress=True)
                         if success:
                             messagebox.showinfo("Game Saved", "Your progress has been saved!")
-                            self.destroy()
+                            self._quit_app()
                         else:
                             # If quick save fails, offer enhanced save screen
                             if messagebox.askyesno("Quick Save Failed", "Quick save failed. Open save dialog instead?"):
@@ -11973,11 +12057,11 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception as e:
                     messagebox.showerror("Save Error", f"Failed to save: {str(e)}")
                     if messagebox.askyesno("Exit Anyway?", "Save failed. Do you still want to exit?"):
-                        self.destroy()
+                        self._quit_app()
                         
             elif response is False:  # No - exit without saving
                 if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit without saving?"):
-                    self.destroy()
+                    self._quit_app()
             # Cancel - do nothing, return to game
             
     def open_calendar_window(self):
