@@ -7,16 +7,27 @@ import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
 from typing import List, Optional
+import customtkinter as ctk
 from game_classes import Player, PlayerPosition, to_100_scale
 from game_classes import debug_print
 from scouting_profiles import displayed_overall
 
-class PlayerBrowserWindow(InGamePopup):
-    """Standalone player browser with guaranteed player display"""
-    
-    def __init__(self, parent, players: List[Player], title="Available Players"):
-        super().__init__(parent)
-        self.parent = parent
+class PlayerBrowserView(ctk.CTkFrame):
+    """Standalone player browser view with guaranteed player display.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy PlayerBrowserWindow popup card.
+    """
+
+    def __init__(self, parent, players: List[Player], title="Available Players",
+                 app=None, on_select=None):
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color='#181818')
+        # Set by show_screen() (dashboard) or the PlayerBrowserWindow wrapper (card).
+        self._close_screen = None
+        # Optional callback for screen mode (replaces the wait_window flow).
+        self._on_select = on_select
         self.players = players
         self.selected_player = None
 
@@ -45,12 +56,7 @@ class PlayerBrowserWindow(InGamePopup):
                 continue
         self._rows = []              # filtered + sorted (player, values, rating)
         self.filtered_players = []   # players only, same order as _rows
-        
-        # Window setup
-        self.title(title)
-        self.geometry("1200x800")
-        self.configure(background='#181818')
-        
+
         # Initialize filter variables
         self.search_var = tk.StringVar()
         self.position_var = tk.StringVar(value="All")
@@ -184,7 +190,7 @@ class PlayerBrowserWindow(InGamePopup):
         self.next_btn.pack(side=tk.LEFT, padx=2)
         
         # Close button
-        close_btn = tk.Button(button_frame, text="Close", command=self.destroy,
+        close_btn = tk.Button(button_frame, text="Close", command=self.close_view,
                              bg='#2A2A2A', fg='#FFFFFF', activebackground='#3A3A3A')
         close_btn.pack(side=tk.RIGHT)
         
@@ -302,12 +308,9 @@ class PlayerBrowserWindow(InGamePopup):
                 self.info_label.configure(text="Error selecting player")
         
     def _user_team(self):
-        """User's team for fog-of-war display (via parent GUI)."""
+        """User's team for fog-of-war display (via app)."""
         try:
-            gm = getattr(self.parent, 'game_manager', None)
-            if gm is None:
-                gm = getattr(self.parent, 'parent', None)
-                gm = getattr(gm, 'game_manager', None) if gm else None
+            gm = getattr(self.app, 'game_manager', None)
             return getattr(gm, 'user_team', None) if gm else None
         except Exception:
             return None
@@ -332,25 +335,41 @@ class PlayerBrowserWindow(InGamePopup):
         if result:
             # Set result and close
             self.result = self.selected_player
-            self.destroy()
+            cb = getattr(self, '_on_select', None)
+            if callable(cb):
+                try:
+                    cb(self.selected_player)
+                except Exception:
+                    pass
+            self.close_view()
         
     def get_selected_player(self):
         """Get the selected player (for external use)"""
         return getattr(self, 'result', None)
 
-class SimpleDraftOrderWindow(InGamePopup):
-    """Simple draft order display window"""
-    
-    def __init__(self, parent, draft_manager):
-        super().__init__(parent)
-        self.parent = parent
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class SimpleDraftOrderView(ctk.CTkFrame):
+    """Simple draft order display view.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy SimpleDraftOrderWindow popup card.
+    """
+
+    def __init__(self, parent, draft_manager, app=None):
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color='#181818')
+        # Set by show_screen() (dashboard) or the SimpleDraftOrderWindow wrapper (card).
+        self._close_screen = None
         self.draft_manager = draft_manager
-        
-        # Window setup
-        self.title("🎯 Draft Order")
-        self.geometry("800x600")
-        self.configure(background='#181818')
-        
+
         self.setup_ui()
         self.populate_draft_order()
         
@@ -411,7 +430,7 @@ class SimpleDraftOrderWindow(InGamePopup):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Close button
-        close_btn = tk.Button(main_frame, text="Close", command=self.destroy,
+        close_btn = tk.Button(main_frame, text="Close", command=self.close_view,
                              bg='#2A2A2A', fg='#FFFFFF', activebackground='#3A3A3A')
         close_btn.pack(pady=(10, 0))
         
@@ -453,3 +472,69 @@ class SimpleDraftOrderWindow(InGamePopup):
                 self.tree.see(item)
                 
         debug_print(f"DEBUG: Added {len(self.tree.get_children())} picks to draft order")
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+
+class PlayerBrowserWindow(InGamePopup):
+    """Popup wrapper around PlayerBrowserView (backward compatibility).
+
+    New code should embed PlayerBrowserView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('player_browser', title, PlayerBrowserView,
+    players)`` instead of opening this card. For the fantasy draft's
+    blocking wait_window flow, prefer the view's ``on_select`` callback.
+    """
+
+    def __init__(self, parent, players: List[Player], title="Available Players"):
+        super().__init__(parent)
+        self.title(title)
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = PlayerBrowserView(self, players, title, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def get_selected_player(self):
+        return self._view.get_selected_player()
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class SimpleDraftOrderWindow(InGamePopup):
+    """Popup wrapper around SimpleDraftOrderView (backward compatibility).
+
+    New code should embed SimpleDraftOrderView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('draft_order', 'Draft Order',
+    SimpleDraftOrderView, draft_manager)`` instead of opening this card.
+    """
+
+    def __init__(self, parent, draft_manager):
+        super().__init__(parent)
+        self.title("Draft Order")
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = SimpleDraftOrderView(self, draft_manager, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

@@ -14,13 +14,19 @@ Degrades gracefully for quick-simmed games that only carry scores.
 """
 
 import customtkinter as ctk
+from popup_system import InGamePopup
 
 
-class GameBoxScoreWindow(ctk.CTkToplevel):
+class GameBoxScoreView(ctk.CTkFrame):
+    """Game box score view (embedded full-screen).
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy GameBoxScoreWindow popup card.
+    """
     TABS = ("Scoring Summary", "Player Stats", "Team Stats")
 
-    def __init__(self, parent, game_result, initial_tab="Scoring Summary"):
-        super().__init__(parent)
+    def __init__(self, parent, game_result, initial_tab="Scoring Summary", app=None):
         from ctk_theme import (
             BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT,
             TEAL, GOLD, GREEN, RED,
@@ -28,11 +34,11 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
         self._c = dict(BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER, TEXT=TEXT,
                        TEXT_DIM=TEXT_DIM, TEXT_FAINT=TEXT_FAINT, TEAL=TEAL,
                        GOLD=GOLD, GREEN=GREEN, RED=RED)
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color=BG)
+        # Set by show_screen() (dashboard) or the GameBoxScoreWindow wrapper (card).
+        self._close_screen = None
         self.result = game_result
-        self.title("Box Score")
-        self.configure(fg_color=BG)
-        self.geometry("760x640")
-        self.minsize(680, 520)
 
         r = self.result
         home, away = r.get('home_team'), r.get('away_team')
@@ -154,7 +160,15 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                 pass
 
         from ctk_theme import secondary_button
-        secondary_button(self, text="Close", command=self.destroy).pack(pady=(0, 14))
+        secondary_button(self, text="Close", command=self.close_view).pack(pady=(0, 14))
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # Scoring Summary tab
@@ -449,3 +463,30 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                          fg_color=bg, corner_radius=4).grid(
                              row=ri, column=2, padx=6, pady=2)
         frame.grid_columnconfigure(0, weight=1)
+
+
+class GameBoxScoreWindow(InGamePopup):
+    """Popup wrapper around GameBoxScoreView (backward compatibility).
+
+    New code should embed GameBoxScoreView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('box_score', 'Box Score', GameBoxScoreView,
+    game_result)`` instead of opening this card.
+    """
+
+    def __init__(self, parent, game_result, initial_tab="Scoring Summary"):
+        super().__init__(parent)
+        self.title("Box Score")
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = GameBoxScoreView(self, game_result, initial_tab, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

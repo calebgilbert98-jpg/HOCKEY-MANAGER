@@ -258,20 +258,19 @@ def make_config(mode="quick", database_size="medium", leagues=None,
 # Wizard UI
 # ---------------------------------------------------------------------------
 
-class NewGameSetupWizard(InGamePopup):
-    """New-career setup wizard. Calls on_start(config) then closes."""
+class NewGameSetupView(tk.Frame):
+    """New-career setup wizard as an embedded full-screen view.
 
-    def __init__(self, parent, on_start_callback):
+    Calls on_start(config) then closes itself. Pass ``app`` for the
+    application object; when omitted, ``parent`` doubles as the app
+    (standalone / popup-wrapper use).
+    """
+
+    def __init__(self, parent, on_start_callback, app=None):
         super().__init__(parent)
+        self.app = app if app is not None else parent
         self.on_start_callback = on_start_callback
-        self.title("Puck Dynasty \u2014 New Career Setup")
-        self.geometry("920x790")
         self.configure(bg=BG)
-        self.resizable(False, False)
-        try:
-            self.transient(parent)
-        except Exception:
-            pass
 
         # State
         self.mode_var = tk.StringVar(value="quick")
@@ -297,7 +296,44 @@ class NewGameSetupWizard(InGamePopup):
 
         self._build()
         self._show_mode("quick")
-        self._center()
+
+
+    def _show_banner(self, text, kind="info"):
+        """Show an in-view message banner (replaces messagebox popups)."""
+        colors = {"info": ("#1a3a5c", "#4a9eff"), "error": ("#5c1a1a", "#ff6b6b"),
+                  "warn": ("#5c4a1a", "#ffcc00"), "ok": ("#1a5c2a", "#51cf66")}
+        bg, fg = colors.get(kind, colors["info"])
+        banner = getattr(self, "_banner", None)
+        if banner is None:
+            try:
+                import customtkinter as ctk
+                banner = ctk.CTkLabel(self, text="", fg_color=bg, text_color=fg,
+                                      corner_radius=6)
+                banner.pack(fill="x", padx=12, pady=(8, 0))
+                try:
+                    banner.lower()
+                except Exception:
+                    pass
+                self._banner = banner
+            except Exception:
+                return
+        banner.configure(text=text, fg_color=bg, text_color=fg)
+        # auto-clear after 6s
+        try:
+            after = getattr(self, "_banner_after", None)
+            if after:
+                self.after_cancel(after)
+            self._banner_after = self.after(6000, lambda: banner.configure(text=""))
+        except Exception:
+            pass
+
+    def close_view(self):
+        """Close this screen via the screen manager, or destroy as fallback."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # -- layout ---------------------------------------------------------
     def _build(self):
@@ -343,28 +379,18 @@ class NewGameSetupWizard(InGamePopup):
         footer.pack(fill="x", padx=24, pady=(6, 18))
         if _HAS_MODERN:
             self._cancel_btn = RoundedButton(footer, text="Cancel", bg="#2A3346", fg=TEXT,
-                          command=self.destroy, padx=18, pady=8)
+                          command=self.close_view, padx=18, pady=8)
             self._cancel_btn.pack(side="right", padx=(8, 0))
             self._start_btn = RoundedButton(footer, text="Start Career \u2192", bg=ACCENT,
                                             fg="white", font=(FONT, 12, "bold"),
                                             command=self._on_start, padx=26, pady=10)
             self._start_btn.pack(side="right")
         else:
-            self._cancel_btn = tk.Button(footer, text="Cancel", command=self.destroy)
+            self._cancel_btn = tk.Button(footer, text="Cancel", command=self.close_view)
             self._cancel_btn.pack(side="right", padx=(8, 0))
             self._start_btn = tk.Button(footer, text="Start Career \u2192", bg=ACCENT, fg="white",
                       activebackground=ACCENT, command=self._on_start)
             self._start_btn.pack(side="right")
-
-    def _center(self):
-        self.update_idletasks()
-        try:
-            px, py = self.master.winfo_rootx(), self.master.winfo_rooty()
-            pw, ph = self.master.winfo_width(), self.master.winfo_height()
-            x, y = px + (pw - 920) // 2, py + (ph - 790) // 2
-        except Exception:
-            x = y = 60
-        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
     def _on_mode_seg(self, value):
         self._show_mode({"Quick Start": "quick",
@@ -390,13 +416,7 @@ class NewGameSetupWizard(InGamePopup):
                 self._start_btn.pack(side="right")
         except Exception:
             pass
-        # Size the window to the content: quick/import are compact, custom
-        # needs the full height for all sections.
-        try:
-            self.geometry("920x560" if mode in ("quick", "import") else "920x790")
-            self._center()
-        except Exception:
-            pass
+        # (Full-screen view: no window resizing; the mode pages simply swap.)
 
     # -- shared section widgets ------------------------------------------
     def _section(self, parent, title, subtitle=""):
@@ -645,7 +665,7 @@ class NewGameSetupWizard(InGamePopup):
         try:
             self.on_start_callback(cfg)
         finally:
-            self.destroy()
+            self.close_view()
 
     def _on_size(self, label):
         key = {"Small": "small", "Medium": "medium", "Large": "large"}.get(label, label)
@@ -710,7 +730,39 @@ class NewGameSetupWizard(InGamePopup):
         try:
             self.on_start_callback(cfg)
         finally:
-            self.destroy()
+            self.close_view()
+
+
+class NewGameSetupWizard(InGamePopup):
+    """Popup wrapper around NewGameSetupView (backward compatibility).
+
+    New code should embed NewGameSetupView as a full-screen view instead
+    of opening this card.
+    """
+
+    def __init__(self, parent, on_start_callback):
+        super().__init__(parent)
+        self.title("Puck Dynasty \u2014 New Career Setup")
+        self.geometry("920x790")
+        self.resizable(False, False)
+        try:
+            self.transient(parent)
+        except Exception:
+            pass
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = NewGameSetupView(self, on_start_callback, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 
 
 def open_setup_wizard(parent, on_start_callback):

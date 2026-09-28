@@ -10674,7 +10674,7 @@ class HockeyManagerGUI(tk.Tk):
     def open_fantasy_draft_window(self):
         """Open the Fantasy Draft window."""
         try:
-            from fantasy_draft import FantasyDraftWindow
+            from fantasy_draft import FantasyDraftView
             
             # Check if fantasy draft is available or needed
             if not hasattr(self.game_manager, 'pending_fantasy_draft') or not self.game_manager.pending_fantasy_draft:
@@ -10682,9 +10682,8 @@ class HockeyManagerGUI(tk.Tk):
                                   "Fantasy draft is only available when starting a new game with the fantasy draft option enabled.")
                 return
                 
-            if 'fantasy_draft' not in self.open_windows or not self.open_windows['fantasy_draft'].winfo_exists():
-                self.open_windows['fantasy_draft'] = FantasyDraftWindow(self, self.game_manager)
-            self.open_windows['fantasy_draft'].focus_set()
+            self.show_screen("fantasy_draft", "Fantasy Draft", FantasyDraftView,
+                             self.game_manager)
         except Exception as e:
             print(f"Error opening fantasy draft window: {e}")
             import traceback
@@ -11522,15 +11521,13 @@ class HockeyManagerGUI(tk.Tk):
     
     def open_save_window(self):
         """Open the Save Game window."""
-        if 'save_game' not in self.open_windows or not self.open_windows['save_game'].winfo_exists():
-            self.open_windows['save_game'] = SaveLoadWindow(self, mode='save')
-        self.open_windows['save_game'].focus_set()
+        from save_load_system import SaveLoadView
+        self.show_screen("save_game", "Save Game", SaveLoadView, mode='save')
         
     def open_load_window(self):
         """Open the Load Game window."""
-        if 'load_game' not in self.open_windows or not self.open_windows['load_game'].winfo_exists():
-            self.open_windows['load_game'] = SaveLoadWindow(self, mode='load')
-        self.open_windows['load_game'].focus_set()
+        from save_load_system import SaveLoadView
+        self.show_screen("load_game", "Load Game", SaveLoadView, mode='load')
         
     def open_playoffs_window(self):
         """Open the NHL Playoffs window."""
@@ -11580,6 +11577,20 @@ class HockeyManagerGUI(tk.Tk):
         """Set up the window close protocol to prompt for saving"""
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
     
+
+    def _open_save_screen_for_exit(self):
+        """Show the save screen; exit the app if the save completes."""
+        from save_load_system import SaveLoadView
+
+        def _on_save_done(result):
+            if result.get('saved'):
+                # Defer destroy so the view can finish closing first
+                self.after(100, self.destroy)
+            # cancelled: user stays in game; screen already closed itself
+
+        self.show_screen("save_game", "Save Game", SaveLoadView,
+                         mode='save', on_done=_on_save_done)
+
     def on_closing(self):
         """Handle application closing with enhanced save prompt"""
         # Check if this is a new game or if there are unsaved changes
@@ -11594,36 +11605,11 @@ class HockeyManagerGUI(tk.Tk):
                 icon='question'
             )
             
-            if response is True:  # Yes - show enhanced save dialog
+            if response is True:  # Yes - show enhanced save screen
                 try:
-                    # Open the enhanced save window
-                    from save_load_system import SaveLoadWindow
-                    save_window = SaveLoadWindow(self, mode='save')
-                    
-                    # Wait for the save window to close with timeout protection
-                    try:
-                        self.wait_window(save_window)
-                    except tk.TclError:
-                        # Handle case where window was already destroyed
-                        pass
-                    
-                    # Check result and close appropriately
-                    if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                        # Save was successful, safe to exit
-                        self.destroy()
-                    elif hasattr(save_window, 'was_cancelled') and save_window.was_cancelled:
-                        # User cancelled, remain in game
-                        pass
-                    else:
-                        # Unclear state, ask user
-                        if messagebox.askyesno("Exit Confirmation", "Save dialog closed unexpectedly. Exit anyway?"):
-                            self.destroy()
-                    
+                    self._open_save_screen_for_exit()
                 except Exception as e:
-                    messagebox.showerror("Save Error", f"Failed to open save dialog: {str(e)}")
-                    # Ask if they still want to exit
-                    if messagebox.askyesno("Exit Anyway?", "Save dialog failed. Do you still want to exit?"):
-                        self.destroy()
+                    messagebox.showerror("Save Error", f"Failed to open save screen: {str(e)}")
                         
             elif response is False:  # No - exit without saving
                 if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit without saving?"):
@@ -11649,26 +11635,12 @@ class HockeyManagerGUI(tk.Tk):
                             messagebox.showinfo("Game Saved", "Your progress has been saved!")
                             self.destroy()
                         else:
-                            # If quick save fails, offer enhanced save dialog
+                            # If quick save fails, offer enhanced save screen
                             if messagebox.askyesno("Quick Save Failed", "Quick save failed. Open save dialog instead?"):
-                                from save_load_system import SaveLoadWindow
-                                save_window = SaveLoadWindow(self, mode='save')
-                                try:
-                                    self.wait_window(save_window)
-                                except tk.TclError:
-                                    pass
-                                if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                                    self.destroy()
+                                self._open_save_screen_for_exit()
                     else:
-                        # No save manager, show enhanced save dialog
-                        from save_load_system import SaveLoadWindow
-                        save_window = SaveLoadWindow(self, mode='save')
-                        try:
-                            self.wait_window(save_window)
-                        except tk.TclError:
-                            pass
-                        if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                            self.destroy()
+                        # No save manager, show enhanced save screen
+                        self._open_save_screen_for_exit()
                             
                 except Exception as e:
                     messagebox.showerror("Save Error", f"Failed to save: {str(e)}")
@@ -11689,10 +11661,8 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_settings_window(self):
         """Open the comprehensive settings window."""
-        if 'settings' not in self.open_windows or not self.open_windows['settings'].winfo_exists():
-            from settings_window import SettingsWindow
-            self.open_windows['settings'] = SettingsWindow(self)
-        self.open_windows['settings'].focus_set()
+        from settings_window import SettingsView
+        self.show_screen("settings", "Settings", SettingsView)
         
     def apply_settings(self, settings):
         """Apply settings changes from the settings window."""
@@ -15644,10 +15614,8 @@ class GMOptionsView(ctk.CTkFrame):
 
     def open_shortlist_window(self):
         """Open the player shortlist management window"""
-        from shortlist_system import ShortlistWindow
-        if 'shortlist' not in self.app.open_windows or not self.app.open_windows['shortlist'].winfo_exists():
-            self.app.open_windows['shortlist'] = ShortlistWindow(self.parent)
-        self.app.open_windows['shortlist'].focus_set()
+        from shortlist_system import ShortlistView
+        self.app.show_screen("shortlist", "Shortlist", ShortlistView)
 
     def open_gm_dashboard(self):
         """Open GM dashboard with key team metrics"""

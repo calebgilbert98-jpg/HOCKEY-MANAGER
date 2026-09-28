@@ -6,37 +6,42 @@ Shows real-time performance statistics and optimization reports
 import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
+import customtkinter as ctk
 import threading
 import time
 
 
-class PerformanceMonitorWindow(InGamePopup):
-    """Window for monitoring game performance and optimization statistics"""
-    
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Performance Monitor")
-        self.geometry("800x600")
-        self.configure(background=parent.BG_COLOR)
-        
+class PerformanceMonitorView(ctk.CTkFrame):
+    """Performance monitoring view: real-time stats and optimization reports.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy PerformanceMonitorWindow popup card.
+    """
+
+    def __init__(self, parent, app=None):
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color=self.app.BG_COLOR)
+        # Set by show_screen() (dashboard) or the PerformanceMonitorWindow wrapper (card).
+        self._close_screen = None
+
         # Auto-refresh settings
         self.auto_refresh = True
         self.refresh_interval = 5  # seconds
         self.last_refresh = 0
-        
+
         self._create_interface()
         self._start_auto_refresh()
     
     def _create_interface(self):
         """Create the performance monitoring interface"""
         # Main container
-        main_frame = tk.Frame(self, bg=self.parent.BG_COLOR)
+        main_frame = tk.Frame(self, bg=self.app.BG_COLOR)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         
         # Control frame
-        control_frame = tk.Frame(main_frame, bg=self.parent.BG_COLOR)
+        control_frame = tk.Frame(main_frame, bg=self.app.BG_COLOR)
         control_frame.pack(fill='x', pady=(0, 10))
         
         # Refresh button
@@ -44,9 +49,9 @@ class PerformanceMonitorWindow(InGamePopup):
             control_frame,
             text="Refresh Now",
             command=self._refresh_data,
-            bg=self.parent.ACCENT_COLOR,
+            bg=self.app.ACCENT_COLOR,
             fg='white',
-            font=(self.parent.FONT_FAMILY, 10)
+            font=(self.app.FONT_FAMILY, 10)
         )
         refresh_btn.pack(side='left', padx=(0, 10))
         
@@ -57,9 +62,9 @@ class PerformanceMonitorWindow(InGamePopup):
             text="Auto-refresh (5s)",
             variable=self.auto_refresh_var,
             command=self._toggle_auto_refresh,
-            bg=self.parent.BG_COLOR,
-            fg=self.parent.TEXT_COLOR,
-            font=(self.parent.FONT_FAMILY, 10)
+            bg=self.app.BG_COLOR,
+            fg=self.app.TEXT_COLOR,
+            font=(self.app.FONT_FAMILY, 10)
         )
         auto_refresh_check.pack(side='left')
         
@@ -79,7 +84,7 @@ class PerformanceMonitorWindow(InGamePopup):
     
     def _create_overview_tab(self):
         """Create the overview tab"""
-        overview_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        overview_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(overview_frame, text="Overview")
         
         # Scrollable text area
@@ -88,9 +93,9 @@ class PerformanceMonitorWindow(InGamePopup):
         
         self.overview_text = tk.Text(
             text_frame,
-            bg=self.parent.CONTENT_BG,
-            fg=self.parent.TEXT_COLOR,
-            font=(self.parent.FONT_FAMILY, 9),
+            bg=self.app.CONTENT_BG,
+            fg=self.app.TEXT_COLOR,
+            font=(self.app.FONT_FAMILY, 9),
             wrap='word'
         )
         
@@ -102,18 +107,18 @@ class PerformanceMonitorWindow(InGamePopup):
     
     def _create_memory_tab(self):
         """Create the memory monitoring tab"""
-        memory_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        memory_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(memory_frame, text="Memory")
         
         # Memory stats display
-        stats_frame = tk.Frame(memory_frame, bg=self.parent.CONTENT_BG)
+        stats_frame = tk.Frame(memory_frame, bg=self.app.CONTENT_BG)
         stats_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         self.memory_text = tk.Text(
             stats_frame,
-            bg=self.parent.CONTENT_BG,
-            fg=self.parent.TEXT_COLOR,
-            font=(self.parent.FONT_FAMILY, 9),
+            bg=self.app.CONTENT_BG,
+            fg=self.app.TEXT_COLOR,
+            font=(self.app.FONT_FAMILY, 9),
             wrap='word'
         )
         
@@ -124,16 +129,16 @@ class PerformanceMonitorWindow(InGamePopup):
         memory_scrollbar.pack(side='right', fill='y')
         
         # Memory control buttons
-        button_frame = tk.Frame(memory_frame, bg=self.parent.CONTENT_BG)
+        button_frame = tk.Frame(memory_frame, bg=self.app.CONTENT_BG)
         button_frame.pack(fill='x', padx=10, pady=(0, 10))
         
         optimize_btn = tk.Button(
             button_frame,
             text="Optimize Memory",
             command=self._optimize_memory,
-            bg=self.parent.ACCENT_COLOR,
+            bg=self.app.ACCENT_COLOR,
             fg='white',
-            font=(self.parent.FONT_FAMILY, 10)
+            font=(self.app.FONT_FAMILY, 10)
         )
         optimize_btn.pack(side='left', padx=(0, 10))
         
@@ -141,15 +146,15 @@ class PerformanceMonitorWindow(InGamePopup):
             button_frame,
             text="Force Garbage Collection",
             command=self._force_garbage_collection,
-            bg=self.parent.ACCENT_COLOR,
+            bg=self.app.ACCENT_COLOR,
             fg='white',
-            font=(self.parent.FONT_FAMILY, 10)
+            font=(self.app.FONT_FAMILY, 10)
         )
         gc_btn.pack(side='left')
     
     def _create_database_tab(self):
         """Create the database performance tab"""
-        database_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        database_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(database_frame, text="Database")
         
         text_frame = tk.Frame(database_frame)
@@ -157,9 +162,9 @@ class PerformanceMonitorWindow(InGamePopup):
         
         self.database_text = tk.Text(
             text_frame,
-            bg=self.parent.CONTENT_BG,
-            fg=self.parent.TEXT_COLOR,
-            font=(self.parent.FONT_FAMILY, 9),
+            bg=self.app.CONTENT_BG,
+            fg=self.app.TEXT_COLOR,
+            font=(self.app.FONT_FAMILY, 9),
             wrap='word'
         )
         
@@ -171,7 +176,7 @@ class PerformanceMonitorWindow(InGamePopup):
     
     def _create_simulation_tab(self):
         """Create the simulation performance tab"""
-        simulation_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        simulation_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(simulation_frame, text="Simulation")
         
         text_frame = tk.Frame(simulation_frame)
@@ -179,9 +184,9 @@ class PerformanceMonitorWindow(InGamePopup):
         
         self.simulation_text = tk.Text(
             text_frame,
-            bg=self.parent.CONTENT_BG,
-            fg=self.parent.TEXT_COLOR,
-            font=(self.parent.FONT_FAMILY, 9),
+            bg=self.app.CONTENT_BG,
+            fg=self.app.TEXT_COLOR,
+            font=(self.app.FONT_FAMILY, 9),
             wrap='word'
         )
         
@@ -193,18 +198,18 @@ class PerformanceMonitorWindow(InGamePopup):
     
     def _create_ui_tab(self):
         """Create the UI/UX performance tab (Phase 3)"""
-        ui_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        ui_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(ui_frame, text="UI/UX")
         
         # UI stats display
-        stats_frame = tk.Frame(ui_frame, bg=self.parent.CONTENT_BG)
+        stats_frame = tk.Frame(ui_frame, bg=self.app.CONTENT_BG)
         stats_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         self.ui_text = tk.Text(
             stats_frame,
-            bg=self.parent.CONTENT_BG,
-            fg=self.parent.TEXT_COLOR,
-            font=(self.parent.FONT_FAMILY, 9),
+            bg=self.app.CONTENT_BG,
+            fg=self.app.TEXT_COLOR,
+            font=(self.app.FONT_FAMILY, 9),
             wrap='word'
         )
         
@@ -315,8 +320,8 @@ class PerformanceMonitorWindow(InGamePopup):
             ]
             
             # Add system information
-            if hasattr(self.parent, 'memory_optimizer') and self.parent.memory_optimizer:
-                memory_optimizer = self.parent.memory_optimizer
+            if hasattr(self.app, 'memory_optimizer') and self.app.memory_optimizer:
+                memory_optimizer = self.app.memory_optimizer
                 memory_stats = memory_optimizer.monitor.get_current_stats()
                 report.extend([
                     f"System Memory Usage: {memory_stats.memory_percent:.1f}%",
@@ -326,8 +331,8 @@ class PerformanceMonitorWindow(InGamePopup):
                 ])
             
             # Add performance statistics
-            if hasattr(self.parent, 'db_manager') and self.parent.db_manager:
-                db_stats = self.parent.db_manager.player_index.get_stats()
+            if hasattr(self.app, 'db_manager') and self.app.db_manager:
+                db_stats = self.app.db_manager.player_index.get_stats()
                 report.extend([
                     f"Database Lookups: {db_stats['total_lookups']}",
                     f"Cache Hit Rate: {db_stats['cache_hit_rate']}",
@@ -343,8 +348,8 @@ class PerformanceMonitorWindow(InGamePopup):
     def _get_memory_data(self) -> str:
         """Get memory performance data"""
         try:
-            if hasattr(self.parent, 'memory_optimizer') and self.parent.memory_optimizer:
-                return self.parent.memory_optimizer.get_optimization_report()
+            if hasattr(self.app, 'memory_optimizer') and self.app.memory_optimizer:
+                return self.app.memory_optimizer.get_optimization_report()
             else:
                 return "Memory optimizer not available"
         except Exception as e:
@@ -353,8 +358,8 @@ class PerformanceMonitorWindow(InGamePopup):
     def _get_database_data(self) -> str:
         """Get database performance data"""
         try:
-            if hasattr(self.parent, 'db_manager') and self.parent.db_manager:
-                return self.parent.db_manager.get_performance_report()
+            if hasattr(self.app, 'db_manager') and self.app.db_manager:
+                return self.app.db_manager.get_performance_report()
             else:
                 return "Database manager not available"
         except Exception as e:
@@ -383,8 +388,8 @@ class PerformanceMonitorWindow(InGamePopup):
                 report.append("Performance cache not available\n")
             
             # Get lazy loading stats
-            if hasattr(self.parent, 'lazy_manager') and self.parent.lazy_manager:
-                lazy_report = self.parent.lazy_manager.get_performance_report()
+            if hasattr(self.app, 'lazy_manager') and self.app.lazy_manager:
+                lazy_report = self.app.lazy_manager.get_performance_report()
                 report.append(lazy_report)
             else:
                 report.append("Lazy loading not available")
@@ -404,8 +409,8 @@ class PerformanceMonitorWindow(InGamePopup):
             ]
             
             # UI Optimization Manager stats
-            if hasattr(self.parent, 'ui_optimizer') and self.parent.ui_optimizer:
-                ui_report = self.parent.ui_optimizer.get_performance_report()
+            if hasattr(self.app, 'ui_optimizer') and self.app.ui_optimizer:
+                ui_report = self.app.ui_optimizer.get_performance_report()
                 report.extend([
                     "UI Optimization Manager:",
                     f"  Average Render Time: {ui_report['average_render_time']:.3f}s",
@@ -421,8 +426,8 @@ class PerformanceMonitorWindow(InGamePopup):
                 report.append("")
             
             # Rendering Manager stats  
-            if hasattr(self.parent, 'rendering_manager') and self.parent.rendering_manager:
-                render_stats = self.parent.rendering_manager.get_render_stats()
+            if hasattr(self.app, 'rendering_manager') and self.app.rendering_manager:
+                render_stats = self.app.rendering_manager.get_render_stats()
                 report.extend([
                     "Rendering Manager:",
                     f"  Visible Widgets: {render_stats['visible_widgets']}",
@@ -439,8 +444,8 @@ class PerformanceMonitorWindow(InGamePopup):
                 report.append("")
             
             # UI Performance Metrics
-            if hasattr(self.parent, 'ui_metrics') and self.parent.ui_metrics:
-                metrics = self.parent.ui_metrics
+            if hasattr(self.app, 'ui_metrics') and self.app.ui_metrics:
+                metrics = self.app.ui_metrics
                 report.extend([
                     "Performance Metrics:",
                     f"  Recent Render Times: {len(metrics.render_times)} samples",
@@ -486,8 +491,8 @@ class PerformanceMonitorWindow(InGamePopup):
     def _optimize_memory(self):
         """Trigger memory optimization"""
         try:
-            if hasattr(self.parent, 'memory_optimizer') and self.parent.memory_optimizer:
-                self.parent.memory_optimizer.optimize_memory(aggressive=True)
+            if hasattr(self.app, 'memory_optimizer') and self.app.memory_optimizer:
+                self.app.memory_optimizer.optimize_memory(aggressive=True)
                 self._refresh_memory()
         except Exception as e:
             print(f"Memory optimization error: {e}")
@@ -502,7 +507,52 @@ class PerformanceMonitorWindow(InGamePopup):
         except Exception as e:
             print(f"Garbage collection error: {e}")
     
+    def close_view(self):
+        """Stop auto-refresh, then close (dashboard in screen mode, card in popup mode)."""
+        self.auto_refresh = False
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def destroy(self):
-        """Clean up when window is closed"""
+        """Clean up when the view is torn down."""
         self.auto_refresh = False
         super().destroy()
+
+
+class PerformanceMonitorWindow(InGamePopup):
+    """Popup wrapper around PerformanceMonitorView (backward compatibility).
+
+    New code should embed PerformanceMonitorView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('performance_monitor',
+    'Performance Monitor', PerformanceMonitorView)`` instead of opening
+    this card.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Performance Monitor")
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = PerformanceMonitorView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def destroy(self):
+        # Stop the view's auto-refresh thread before tearing down the card.
+        try:
+            self.__dict__.get("_view").auto_refresh = False
+        except Exception:
+            pass
+        super().destroy()
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

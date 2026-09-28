@@ -600,9 +600,11 @@ TIP: {"Higher engagement = more storylines but more interactions" if status['eng
                             "Interview handled with professional responses.")
 
     def _handle_event(self, event, view=None):
-        """Open interactive interview window."""
-        InterviewWindow(self, view if view is not None else self._event_view(event),
-                        event)
+        """Open the interactive interview as an embedded screen."""
+        self.app.show_screen(
+            'interview', 'Interview', InterviewView,
+            view if view is not None else self._event_view(event),
+            event, media_view=self)
 
 class MediaCenterWindow(InGamePopup):
     """Popup wrapper around MediaCenterView (backward compatibility)."""
@@ -620,10 +622,11 @@ class MediaCenterWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class InterviewWindow(InGamePopup):
-    """Interactive interview window for media events"""
+class InterviewView(ctk.CTkFrame):
+    """Interactive interview for media events, as an embedded focus card."""
 
-    def __init__(self, parent, event, raw_event=None):
+    def __init__(self, parent, event, raw_event=None, app=None,
+                 media_view=None, on_done=None, _response_style=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, BG, PANEL, CARD, BORDER,
@@ -638,43 +641,59 @@ class InterviewWindow(InGamePopup):
         self._body = body
         init_ctk_theme()
 
-        super().__init__(parent)
-        self.parent = parent
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the InterviewWindow wrapper
         self.event = event          # uniform dict-like view (display)
         self.raw_event = raw_event if raw_event is not None else event
+        self.media_view = media_view  # MediaCenterView that owns event resolution
+        self.on_done = on_done
+        self._response_style = _response_style or "professional"
 
-        # FIX: old code joined words (replace('_','')) -> "Postgameinterview".
-        # Spaces keep the event type readable.
-        self.title(f"{event['type'].replace('_', ' ').title()}")
         self.configure(fg_color=BG)
-        self.geometry("820x640")
-        self.minsize(700, 520)
-        self.resizable(True, True)
-
-        # Make modal
-        self.transient(parent)
-        self.grab_set()
 
         self._create_interview_interface()
         self._populate_questions()
+        try:
+            self.response_var.set(self._response_style)
+        except Exception:
+            pass
 
-        # Center on parent
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() // 2) \
-            - (self.winfo_width() // 2)
-        y = parent.winfo_y() + (parent.winfo_height() // 2) \
-            - (self.winfo_height() // 2)
-        self.geometry(f"+{x}+{y}")
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _screen_mgr(self):
+        """The app-level screen manager (owns show_screen)."""
+        mv = self.media_view
+        if mv is not None:
+            mgr_app = getattr(mv, "app", None)
+            if mgr_app is not None and hasattr(mgr_app, "show_screen"):
+                return mgr_app
+        if hasattr(self.app, "show_screen"):
+            return self.app
+        return None
 
     def _card(self, parent, **kw):
+        # Sub-cards use PANEL so they stand out against the CARD focus card.
         ct = self._ct
-        return ctk.CTkFrame(parent, fg_color=ct['CARD'], corner_radius=12, **kw)
+        return ctk.CTkFrame(parent, fg_color=ct['PANEL'], corner_radius=12, **kw)
 
     def _create_interview_interface(self):
-        """Create the interview interface."""
+        """Create the interview interface inside a centered focus card."""
         ct = self._ct
-        main = ctk.CTkFrame(self, fg_color=ct['BG'], corner_radius=0)
-        main.pack(fill='both', expand=True, padx=15, pady=15)
+        # Focus card: full-screen view, content in a centered card.
+        center = ctk.CTkFrame(self, fg_color="transparent")
+        center.pack(expand=True, fill="both")
+        card_holder = ctk.CTkFrame(center, fg_color=ct['BG'], corner_radius=0)
+        card_holder.pack(expand=True, padx=24, pady=24)
+        main = ctk.CTkFrame(card_holder, fg_color=ct['CARD'],
+                            corner_radius=12, width=700)
+        main.pack(padx=2, pady=2)
 
         self._create_interview_header(main)
         self._create_questions_area(main)
@@ -760,12 +779,12 @@ class InterviewWindow(InGamePopup):
     def _create_action_buttons(self, parent):
         """Action buttons row."""
         buttons = ctk.CTkFrame(parent, fg_color="transparent")
-        buttons.pack(fill='x')
+        buttons.pack(fill='x', padx=15, pady=(0, 15))
         self._secondary_button(
             buttons, "Preview Answers",
             command=self._preview_responses).pack(side='left')
         self._secondary_button(
-            buttons, "Cancel", command=self.destroy).pack(
+            buttons, "Cancel", command=self.close_view).pack(
                 side='right', padx=(8, 0))
         self._primary_button(
             buttons, "Give Interview",
@@ -803,7 +822,7 @@ class InterviewWindow(InGamePopup):
         return "Media availability"
 
     def _preview_responses(self):
-        """Show preview of how answers would sound."""
+        """Show preview of how answers would sound (as a screen)."""
         response_style = self.response_var.get()
         questions = self.event.get('questions', [])
 
@@ -811,7 +830,15 @@ class InterviewWindow(InGamePopup):
             messagebox.showinfo("No Questions", "No questions to preview.")
             return
 
-        PreviewWindow(self, response_style, questions)
+        mgr = self._screen_mgr()
+        if mgr is None:
+            return
+        mgr.show_screen('response_preview', 'Response Preview', PreviewView,
+                        response_style, questions,
+                        interview_event=self.event,
+                        interview_raw_event=self.raw_event,
+                        media_view=self.media_view,
+                        on_done=self.on_done)
 
     def _generate_sample_responses(self, questions, style):
         """Generate sample responses in the chosen style."""
@@ -868,7 +895,12 @@ class InterviewWindow(InGamePopup):
         response_style = self.response_var.get()
 
         # Handle the media response (tolerates dict/object backend mismatch)
-        self.parent._resolve_event(self.raw_event, response_style)
+        mv = self.media_view
+        if mv is not None:
+            try:
+                mv._resolve_event(self.raw_event, response_style)
+            except Exception:
+                pass
 
         # Show result
         impact_messages = {
@@ -882,15 +914,51 @@ class InterviewWindow(InGamePopup):
                             "Interview completed successfully!\n\n"
                             f"{impact_messages[impact_level]}")
 
-        # Update parent and close
-        self.parent._update_display()
-        self.destroy()
+        # Update the media center view, then report completion and close
+        if mv is not None:
+            try:
+                mv._update_display()
+            except Exception:
+                pass
+        cb = getattr(self, "on_done", None)
+        if callable(cb):
+            try:
+                cb(response_style)
+            except Exception:
+                pass
+        self.close_view()
 
 
-class PreviewWindow(InGamePopup):
-    """Read-only preview of sample answers for the chosen response style."""
+class InterviewWindow(InGamePopup):
+    """Popup wrapper around InterviewView (backward compatibility)."""
+    def __init__(self, parent, event, raw_event=None, on_done=None):
+        super().__init__(parent)
+        media_view = parent if hasattr(parent, "_resolve_event") else None
+        app = parent if media_view is None else None
+        self._view = InterviewView(self, event, raw_event, app=app,
+                                   media_view=media_view, on_done=on_done)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 
-    def __init__(self, parent, response_style, questions):
+
+class PreviewView(ctk.CTkFrame):
+    """Read-only preview of sample answers, as an embedded focus card.
+
+    Closing returns to the interview screen (rebuilt with the same event
+    and response style), mirroring the old modal-over-interview flow.
+    """
+
+    def __init__(self, parent, response_style, questions, app=None,
+                 interview_event=None, interview_raw_event=None,
+                 media_view=None, on_done=None):
         from ctk_theme import (
             init_ctk_theme, secondary_button, heading, body,
             BG, CARD, PANEL, BORDER, TEXT,
@@ -902,31 +970,102 @@ class PreviewWindow(InGamePopup):
                         TEXT=TEXT)
         init_ctk_theme()
 
-        super().__init__(parent)
-        self.title("Response Preview")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the PreviewWindow wrapper
+        self.response_style = response_style
+        self.questions = questions
+        self.interview_event = interview_event
+        self.interview_raw_event = interview_raw_event
+        self.media_view = media_view
+        self.on_done = on_done
         self.configure(fg_color=BG)
-        self.geometry("640x460")
-        self.minsize(560, 400)
-        self.transient(parent)
 
-        main = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        main.pack(fill='both', expand=True, padx=15, pady=15)
+        # Focus card: full-screen view, content in a centered card.
+        center = ctk.CTkFrame(self, fg_color="transparent")
+        center.pack(expand=True, fill="both")
+        card_holder = ctk.CTkFrame(center, fg_color=BG, corner_radius=0)
+        card_holder.pack(expand=True, padx=24, pady=24)
+        main = ctk.CTkFrame(card_holder, fg_color=CARD, corner_radius=12,
+                            width=620)
+        main.pack(padx=2, pady=2)
 
-        card = ctk.CTkFrame(main, fg_color=CARD, corner_radius=12)
-        card.pack(fill='both', expand=True, pady=(0, 12))
+        card = ctk.CTkFrame(main, fg_color=PANEL, corner_radius=12)
+        card.pack(fill='both', expand=True, padx=15, pady=(15, 12))
         self._heading(card, f"Preview: {response_style.title()} Style",
                       size=16).pack(anchor='w', padx=14, pady=(12, 8))
 
         text_widget = ctk.CTkTextbox(
             card, wrap='word', corner_radius=8,
-            fg_color=PANEL, border_color=BORDER, border_width=1,
+            fg_color=BG, border_color=BORDER, border_width=1,
             text_color=TEXT, font=('Segoe UI', 10))
         text_widget.pack(fill='both', expand=True, padx=14, pady=(0, 14))
 
-        preview_content = parent._generate_sample_responses(questions[:2],
-                                                            response_style)
+        preview_content = self._sample_responses()
         text_widget.insert('1.0', preview_content)
         text_widget.configure(state='disabled')
 
         self._secondary_button(main, "Close Preview",
-                               command=self.destroy).pack()
+                               command=self._close).pack(pady=(0, 15))
+
+    def _sample_responses(self):
+        """Generate sample responses via the interview's template engine."""
+        try:
+            # _generate_sample_responses is pure (uses only its arguments).
+            return InterviewView._generate_sample_responses(
+                None, self.questions[:2], self.response_style)
+        except Exception:
+            return ""
+
+    def _close(self):
+        """Return to the interview screen (or dashboard if unavailable)."""
+        mgr = self._screen_mgr()
+        if (mgr is not None and self.interview_event is not None):
+            mgr.show_screen('interview', 'Interview', InterviewView,
+                            self.interview_event, self.interview_raw_event,
+                            media_view=self.media_view, on_done=self.on_done,
+                            _response_style=self.response_style)
+        else:
+            self.close_view()
+
+    def _screen_mgr(self):
+        mv = self.media_view
+        if mv is not None:
+            mgr_app = getattr(mv, "app", None)
+            if mgr_app is not None and hasattr(mgr_app, "show_screen"):
+                return mgr_app
+        if hasattr(self.app, "show_screen"):
+            return self.app
+        return None
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+
+class PreviewWindow(InGamePopup):
+    """Popup wrapper around PreviewView (backward compatibility)."""
+    def __init__(self, parent, response_style, questions):
+        super().__init__(parent)
+        interview_view = parent if hasattr(parent, "_generate_sample_responses") else None
+        app = parent if interview_view is None else None
+        self._view = PreviewView(
+            self, response_style, questions, app=app,
+            interview_event=getattr(interview_view, "event", None),
+            interview_raw_event=getattr(interview_view, "raw_event", None),
+            media_view=getattr(interview_view, "media_view", None),
+            on_done=getattr(interview_view, "on_done", None))
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

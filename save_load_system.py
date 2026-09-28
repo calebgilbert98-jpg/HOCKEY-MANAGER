@@ -9,6 +9,8 @@ import os
 import tkinter as tk
 from tkinter import ttk, filedialog
 from popup_system import messagebox, InGamePopup, simpledialog
+import customtkinter as ctk
+from ctk_theme import BG
 from datetime import datetime, date, timedelta
 from typing import Dict, Any, Optional
 import gzip
@@ -1137,268 +1139,348 @@ class GameSaveManager:
             return []
 
 
-class SaveLoadWindow(InGamePopup):
-    """UI window for saving and loading games"""
-    
-    def __init__(self, parent, mode='save'):
-        super().__init__(parent)
-        self.parent = parent
+
+
+class SaveLoadView(ctk.CTkFrame):
+    """UI view for saving and loading games (full-screen).
+
+    Blocking callers (e.g. the exit-to-desktop flow) should pass
+    ``on_done`` -- it is called with a result dict
+    ``{'saved': bool, 'cancelled': bool, 'loaded': bool,
+    'loaded_path': str|None}`` before the view closes.
+    """
+
+    def __init__(self, parent, app=None, mode='save', on_done=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SaveLoadWindow wrapper
+        self.configure(fg_color=BG)
         self.mode = mode  # 'save' or 'load'
-        self.save_manager = GameSaveManager(parent)
+        self.on_done = on_done
+        self.save_manager = GameSaveManager(self.app)
         self.save_completed = False  # Flag for exit handling
         self.loaded_file_path = None  # For load mode integration
         self.was_cancelled = False  # Track if dialog was cancelled
-        
-        self.title(f"{'Save' if mode == 'save' else 'Load'} Game")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("820x700")
-        
-        # Set up proper close protocol to handle X button clicks
-        self.protocol("WM_DELETE_WINDOW", self.on_window_close)
-        
-        # Make dialog modal
-        self.transient(parent)
-        self.grab_set()
-        
+
         self._create_interface()
         self._refresh_file_list()
-    
+
+
+    def _show_banner(self, text, kind="info"):
+        """Show an in-view message banner (replaces messagebox popups)."""
+        colors = {"info": ("#1a3a5c", "#4a9eff"), "error": ("#5c1a1a", "#ff6b6b"),
+                  "warn": ("#5c4a1a", "#ffcc00"), "ok": ("#1a5c2a", "#51cf66")}
+        bg, fg = colors.get(kind, colors["info"])
+        banner = getattr(self, "_banner", None)
+        if banner is None:
+            try:
+                import customtkinter as ctk
+                banner = ctk.CTkLabel(self, text="", fg_color=bg, text_color=fg,
+                                      corner_radius=6)
+                banner.pack(fill="x", padx=12, pady=(8, 0))
+                try:
+                    banner.lower()
+                except Exception:
+                    pass
+                self._banner = banner
+            except Exception:
+                return
+        banner.configure(text=text, fg_color=bg, text_color=fg)
+        # auto-clear after 6s
+        try:
+            after = getattr(self, "_banner_after", None)
+            if after:
+                self.after_cancel(after)
+            self._banner_after = self.after(6000, lambda: banner.configure(text=""))
+        except Exception:
+            pass
+
+    def _ask_confirm(self, text, on_yes, on_no=None):
+        """Show an in-view Yes/No panel (replaces messagebox.askyesno)."""
+        old = getattr(self, "_confirm_panel", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+        import customtkinter as ctk
+        panel = ctk.CTkFrame(self, fg_color="#2a2a3a", corner_radius=8)
+        panel.pack(fill="x", padx=12, pady=8)
+        ctk.CTkLabel(panel, text=text, wraplength=520).pack(padx=12, pady=(10, 6))
+        btns = ctk.CTkFrame(panel, fg_color="transparent")
+        btns.pack(pady=(0, 10))
+
+        def _yes():
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+            self._confirm_panel = None
+            on_yes()
+
+        def _no():
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+            self._confirm_panel = None
+            if on_no:
+                on_no()
+
+        ctk.CTkButton(btns, text="Yes", command=_yes, width=90).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="No", command=_no, width=90).pack(side="left", padx=6)
+        self._confirm_panel = panel
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _notify_done(self, result):
+        """Fire the on_done callback (blocking-flow replacement)."""
+        cb = getattr(self, 'on_done', None)
+        if callable(cb):
+            try:
+                cb(result)
+            except Exception:
+                pass
+
+    def _result(self):
+        return {'saved': self.save_completed,
+                'cancelled': self.was_cancelled,
+                'loaded': self.loaded_file_path is not None,
+                'loaded_path': self.loaded_file_path}
+
     def on_window_close(self):
-        """Handle window close events (X button, Alt+F4, etc.)"""
+        """Handle window close events (X button, Alt+F4, Cancel buttons)."""
         # Set appropriate flags based on whether save was completed
         if not self.save_completed:
             self.was_cancelled = True
-        
-        # Release modal grab safely
-        try:
-            self.grab_release()
-        except Exception:
-            pass
-        
-        # Destroy window safely
-        try:
-            self.destroy()
-        except Exception:
-            pass
-    
+
+        self._notify_done(self._result())
+        self.close_view()
+
     def _create_interface(self):
         """Create the save/load interface"""
         main_frame = ttk.Frame(self, style='Content.TFrame')
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
-        
+
         # Title
         title_text = f"{'Save Game' if self.mode == 'save' else 'Load Game'}"
         title_label = ttk.Label(main_frame, text=title_text, style='Title.TLabel',
-                               font=(self.parent.FONT_FAMILY, 20, 'bold'))
+                               font=(self.app.FONT_FAMILY, 20, 'bold'))
         title_label.pack(pady=(0, 20))
-        
+
         if self.mode == 'save':
             self._create_save_interface(main_frame)
         else:
             self._create_load_interface(main_frame)
-    
+
     def _create_save_interface(self, parent):
         """Create enhanced save game interface"""
         # Create notebook for organized save interface
         save_notebook = ttk.Notebook(parent, style='TNotebook')
         save_notebook.pack(fill='both', expand=True)
-        
+
         # Quick Save Tab
         quick_tab = ttk.Frame(save_notebook, style='Content.TFrame')
         save_notebook.add(quick_tab, text="Quick Save")
         self._create_quick_save_tab(quick_tab)
-        
+
         # Advanced Save Tab
         advanced_tab = ttk.Frame(save_notebook, style='Content.TFrame')
         save_notebook.add(advanced_tab, text="Advanced Save")
         self._create_advanced_save_tab(advanced_tab)
-        
+
         # Manage Saves Tab
         manage_tab = ttk.Frame(save_notebook, style='Content.TFrame')
         save_notebook.add(manage_tab, text="Manage Saves")
         self._create_manage_saves_tab(manage_tab)
-    
+
     def _create_quick_save_tab(self, parent):
         """Create quick save interface"""
         # Game preview
         preview_frame = ttk.LabelFrame(parent, text="Current Game", style='Card.TLabelframe')
         preview_frame.pack(fill='x', padx=10, pady=10)
-        
+
         preview_content = self._get_game_preview()
         preview_label = ttk.Label(preview_frame, text=preview_content,
                                  style='Card.TLabel', justify='left')
         preview_label.pack(padx=10, pady=10, anchor='w')
-        
+
         # Quick save slots
         slots_frame = ttk.LabelFrame(parent, text="Quick Save Slots", style='Card.TLabelframe')
         slots_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
+
         self._create_quick_save_slots(slots_frame)
-        
+
         # Quick save buttons
         quick_buttons_frame = ttk.Frame(parent, style='Content.TFrame')
         quick_buttons_frame.pack(fill='x', padx=10, pady=10)
-        
-        ttk.Button(quick_buttons_frame, text="Cancel", 
-                  command=self.on_window_close, 
+
+        ttk.Button(quick_buttons_frame, text="Cancel",
+                  command=self.on_window_close,
                   style='TButton').pack(side='right')
-    
+
     def _create_advanced_save_tab(self, parent):
         """Create advanced save interface with full customization"""
         # Save naming section
         naming_frame = ttk.LabelFrame(parent, text="Save Details", style='Card.TLabelframe')
         naming_frame.pack(fill='x', padx=10, pady=10)
-        
+
         # Save name with suggestions
         name_row = ttk.Frame(naming_frame, style='Content.TFrame')
         name_row.pack(fill='x', padx=10, pady=5)
-        
+
         ttk.Label(name_row, text="Save Name:", style='Content.TLabel').pack(side='left')
-        
+
         self.save_name_var = tk.StringVar()
-        name_entry = ttk.Entry(name_row, textvariable=self.save_name_var, 
+        name_entry = ttk.Entry(name_row, textvariable=self.save_name_var,
                               style='TEntry', width=30)
         name_entry.pack(side='left', padx=(10, 5))
-        
+
         # Generate suggested names
-        suggestions_btn = ttk.Button(name_row, text="Suggestions", 
+        suggestions_btn = ttk.Button(name_row, text="Suggestions",
                                    command=self._show_name_suggestions,
                                    style='TButton')
         suggestions_btn.pack(side='left', padx=5)
-        
+
         # Set default name
         self._set_default_save_name()
-        
+
         # Save description
         desc_row = ttk.Frame(naming_frame, style='Content.TFrame')
         desc_row.pack(fill='x', padx=10, pady=5)
-        
+
         ttk.Label(desc_row, text="Description:", style='Content.TLabel').pack(anchor='w')
-        
+
         self.description_text = tk.Text(desc_row, height=3, width=50, wrap='word',
-                                       font=(self.parent.FONT_FAMILY, 9))
+                                       font=(self.app.FONT_FAMILY, 9))
         self.description_text.pack(fill='x', pady=(5, 0))
-        
+
         # Save category/folder
         category_row = ttk.Frame(naming_frame, style='Content.TFrame')
         category_row.pack(fill='x', padx=10, pady=5)
-        
+
         ttk.Label(category_row, text="Category:", style='Content.TLabel').pack(side='left')
-        
+
         self.category_var = tk.StringVar()
         category_combo = ttk.Combobox(category_row, textvariable=self.category_var,
                                      values=self._get_save_categories(),
                                      style='TCombobox', width=20)
         category_combo.pack(side='left', padx=(10, 0))
         category_combo.set("General")
-        
+
         # Save options
         options_frame = ttk.LabelFrame(parent, text="Save Options", style='Card.TLabelframe')
         options_frame.pack(fill='x', padx=10, pady=10)
-        
+
         options_grid = ttk.Frame(options_frame, style='Content.TFrame')
         options_grid.pack(fill='x', padx=10, pady=10)
-        
+
         self.compress_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(options_grid, text="Compress save file (recommended)", 
+        ttk.Checkbutton(options_grid, text="Compress save file (recommended)",
                        variable=self.compress_var, style='TCheckbutton').grid(row=0, column=0, sticky='w')
-        
+
         self.backup_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options_grid, text="Create backup of existing save", 
+        ttk.Checkbutton(options_grid, text="Create backup of existing save",
                        variable=self.backup_var, style='TCheckbutton').grid(row=1, column=0, sticky='w')
-        
+
         self.auto_screenshot_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(options_grid, text="Save screenshot for preview", 
+        ttk.Checkbutton(options_grid, text="Save screenshot for preview",
                        variable=self.auto_screenshot_var, style='TCheckbutton').grid(row=0, column=1, sticky='w', padx=(20, 0))
-        
+
         self.include_stats_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(options_grid, text="Include detailed statistics", 
+        ttk.Checkbutton(options_grid, text="Include detailed statistics",
                        variable=self.include_stats_var, style='TCheckbutton').grid(row=1, column=1, sticky='w', padx=(20, 0))
-        
+
         # Save buttons
         buttons_frame = ttk.Frame(parent, style='Content.TFrame')
         buttons_frame.pack(fill='x', padx=10, pady=10)
-        
-        save_btn = ttk.Button(buttons_frame, text="Save Game", 
-                             command=self._advanced_save_game, 
+
+        save_btn = ttk.Button(buttons_frame, text="Save Game",
+                             command=self._advanced_save_game,
                              style='Accent.TButton')
         save_btn.pack(side='left', padx=(0, 10))
-        
-        save_as_btn = ttk.Button(buttons_frame, text="Save As...", 
-                                command=self._save_as_dialog, 
+
+        save_as_btn = ttk.Button(buttons_frame, text="Save As...",
+                                command=self._save_as_dialog,
                                 style='TButton')
         save_as_btn.pack(side='left', padx=(0, 10))
-        
-        cancel_btn = ttk.Button(buttons_frame, text="Cancel", 
-                               command=self.on_window_close, 
+
+        cancel_btn = ttk.Button(buttons_frame, text="Cancel",
+                               command=self.on_window_close,
                                style='TButton')
         cancel_btn.pack(side='right')
-    
+
     def _create_manage_saves_tab(self, parent):
         """Create save file management interface"""
         # File operations toolbar
         toolbar_frame = ttk.Frame(parent, style='Content.TFrame')
         toolbar_frame.pack(fill='x', padx=10, pady=10)
-        
-        ttk.Button(toolbar_frame, text="Open Save Folder", 
+
+        ttk.Button(toolbar_frame, text="Open Save Folder",
                   command=self._open_save_folder, style='TButton').pack(side='left', padx=(0, 5))
-        
-        ttk.Button(toolbar_frame, text="Export Save", 
+
+        ttk.Button(toolbar_frame, text="Export Save",
                   command=self._export_save, style='TButton').pack(side='left', padx=5)
-        
-        ttk.Button(toolbar_frame, text="Import Save", 
+
+        ttk.Button(toolbar_frame, text="Import Save",
                   command=self._import_save, style='TButton').pack(side='left', padx=5)
-        
-        ttk.Button(toolbar_frame, text="Delete Selected", 
+
+        ttk.Button(toolbar_frame, text="Delete Selected",
                   command=self._delete_selected_save, style='TButton').pack(side='left', padx=5)
-        
+
         # Enhanced file list with more details
         self._create_enhanced_file_list(parent, "Save File Manager")
-    
+
     def _create_quick_save_slots(self, parent):
         """Create quick save slots interface"""
         slots_info = self._get_quick_save_slots()
-        
+
         for i in range(6):  # 6 quick save slots
             slot_frame = ttk.Frame(parent, style='Content.TFrame')
             slot_frame.pack(fill='x', padx=10, pady=5)
-            
+
             slot_info = slots_info.get(f"slot_{i+1}", {})
-            
+
             # Slot number
-            slot_label = ttk.Label(slot_frame, text=f"Slot {i+1}:", 
+            slot_label = ttk.Label(slot_frame, text=f"Slot {i+1}:",
                                   style='Content.TLabel', width=8)
             slot_label.pack(side='left')
-            
+
             if slot_info:
                 # Existing save
                 info_text = f"{slot_info['name']} - {slot_info['date']} - {slot_info['team']}"
-                info_label = ttk.Label(slot_frame, text=info_text, 
+                info_label = ttk.Label(slot_frame, text=info_text,
                                       style='Content.TLabel', width=50)
                 info_label.pack(side='left', padx=(5, 0))
-                
-                ttk.Button(slot_frame, text="Overwrite", 
+
+                ttk.Button(slot_frame, text="Overwrite",
                           command=lambda s=i+1: self._quick_save_to_slot(s),
                           style='TButton').pack(side='right', padx=(0, 5))
-                
-                ttk.Button(slot_frame, text="Load", 
+
+                ttk.Button(slot_frame, text="Load",
                           command=lambda s=i+1: self._quick_load_from_slot(s),
                           style='TButton').pack(side='right', padx=5)
             else:
                 # Empty slot
-                empty_label = ttk.Label(slot_frame, text="<Empty Slot>", 
+                empty_label = ttk.Label(slot_frame, text="<Empty Slot>",
                                        style='Content.TLabel', foreground='gray')
                 empty_label.pack(side='left', padx=(5, 0))
-                
-                ttk.Button(slot_frame, text="Save Here", 
+
+                ttk.Button(slot_frame, text="Save Here",
                           command=lambda s=i+1: self._quick_save_to_slot(s),
                           style='TButton').pack(side='right')
-    
+
     def _create_enhanced_file_list(self, parent, title):
         """Create enhanced file list with more details"""
         list_frame = ttk.LabelFrame(parent, text=title, style='Card.TLabelframe')
         list_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
+
         # Enhanced columns with more information
         columns = {
             'filename': ('File Name', 180),
@@ -1411,64 +1493,64 @@ class SaveLoadWindow(InGamePopup):
             'type': ('Type', 80),
             'filepath': ('', 0)  # Hidden column for storing file paths
         }
-        
-        self.file_tree = ttk.Treeview(list_frame, columns=list(columns.keys()), 
+
+        self.file_tree = ttk.Treeview(list_frame, columns=list(columns.keys()),
                                      show='headings', height=12)
-        
+
         for col_id, (header, width) in columns.items():
             self.file_tree.heading(col_id, text=header, command=lambda c=col_id: self._sort_files(c))
             self.file_tree.column(col_id, width=width, anchor='w')
-        
+
         # Scrollbars
         v_scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=self.file_tree.yview)
         h_scrollbar = ttk.Scrollbar(list_frame, orient='horizontal', command=self.file_tree.xview)
         self.file_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
+
         self.file_tree.grid(row=0, column=0, sticky='nsew', padx=10, pady=10)
         v_scrollbar.grid(row=0, column=1, sticky='ns', pady=10)
         h_scrollbar.grid(row=1, column=0, sticky='ew', padx=10)
-        
+
         list_frame.grid_rowconfigure(0, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
-        
+
         # Context menu for file operations
         self._create_file_context_menu()
-        
+
         # Bind selection event
         self.file_tree.bind('<<TreeviewSelect>>', self._on_enhanced_file_select)
         self.file_tree.bind('<Double-1>', self._on_file_double_click)
         self.file_tree.bind('<Button-3>', self._show_file_context_menu)
-    
+
     def _create_load_interface(self, parent):
         """Create load game interface"""
         # Load instructions
-        instruction_label = ttk.Label(parent, 
+        instruction_label = ttk.Label(parent,
                                     text="Select a save file to load:",
                                     style='Content.TLabel')
         instruction_label.pack(pady=(0, 10))
-        
+
         # File list
         self._create_file_list(parent, "Available Save Files")
-        
+
         # Load buttons
         load_buttons_frame = ttk.Frame(parent, style='Content.TFrame')
         load_buttons_frame.pack(fill='x', pady=(10, 0))
-        
-        self.load_btn = ttk.Button(load_buttons_frame, text="Load Selected Game", 
+
+        self.load_btn = ttk.Button(load_buttons_frame, text="Load Selected Game",
                                   command=self._load_game, style='Accent.TButton',
                                   state='disabled')
         self.load_btn.pack(side='left')
-        
-        cancel_btn = ttk.Button(load_buttons_frame, text="Cancel", 
-                               command=self.on_window_close, 
+
+        cancel_btn = ttk.Button(load_buttons_frame, text="Cancel",
+                               command=self.on_window_close,
                                style='TButton')
         cancel_btn.pack(side='right')
-    
+
     def _create_file_list(self, parent, title):
         """Create the file list display"""
         list_frame = ttk.LabelFrame(parent, text=title, style='Card.TLabelframe')
         list_frame.pack(fill='both', expand=True, pady=(10, 0))
-        
+
         # Create treeview for file list
         columns = {
             'filename': ('File Name', 200),
@@ -1476,35 +1558,35 @@ class SaveLoadWindow(InGamePopup):
             'modified': ('Last Modified', 150),
             'type': ('Type', 80)
         }
-        
-        self.file_tree = ttk.Treeview(list_frame, columns=list(columns.keys()), 
+
+        self.file_tree = ttk.Treeview(list_frame, columns=list(columns.keys()),
                                      show='headings', height=15)
-        
+
         for col_id, (header, width) in columns.items():
             self.file_tree.heading(col_id, text=header)
             self.file_tree.column(col_id, width=width, anchor='w')
-        
+
         # Scrollbar for file list
         scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=self.file_tree.yview)
         self.file_tree.configure(yscrollcommand=scrollbar.set)
-        
+
         self.file_tree.pack(side='left', fill='both', expand=True, padx=(10, 0), pady=10)
         scrollbar.pack(side='right', fill='y', pady=10)
-        
+
         # Bind selection event for load mode
         if self.mode == 'load':
             self.file_tree.bind('<<TreeviewSelect>>', self._on_file_select)
             self.file_tree.bind('<Double-1>', self._on_file_double_click)
-    
+
     def _refresh_file_list(self):
         """Refresh the list of save files with enhanced information"""
         # Clear existing items
         for item in self.file_tree.get_children():
             self.file_tree.delete(item)
-        
+
         # Get save files with enhanced metadata
         save_files = self.save_manager.get_save_files()
-        
+
         for save_file in save_files:
             filename = save_file['filename']
             description = save_file.get('description', '')[:50] + ('...' if len(save_file.get('description', '')) > 50 else '')
@@ -1515,72 +1597,74 @@ class SaveLoadWindow(InGamePopup):
                     game_date = game_date[:10]  # Show just the date part
                 except:
                     pass
-            
+
             size_mb = round(save_file['size'] / (1024 * 1024), 2)
             modified = save_file['modified'].strftime("%m/%d %H:%M")
             category = save_file.get('category', 'General')
             file_type = "Autosave" if save_file['is_autosave'] else "Manual"
-            
+
             values = (filename, description, team, game_date, f"{size_mb} MB", modified, category, file_type)
-            
+
             item_id = self.file_tree.insert('', 'end', values=values)
             # Store full file info as item data
             self.file_tree.set(item_id, 'filepath', save_file['filepath'])
-    
+
     def _on_file_select(self, event):
         """Handle file selection in load mode"""
         if self.mode == 'load':
             selection = self.file_tree.selection()
             self.load_btn.config(state='normal' if selection else 'disabled')
-    
+
     def _on_file_double_click(self, event):
         """Handle double-click on file in load mode"""
         if self.mode == 'load':
             self._load_game()
-    
     def _save_game(self):
         """Save the current game using basic interface"""
         save_name = self.save_name_var.get().strip()
         if not save_name:
-            messagebox.showerror("Error", "Please enter a save name")
+            self._show_banner("Please enter a save name", "error")
             return
-        
+
         # Add .hm extension if not present
         if not save_name.endswith('.hm'):
             save_name += '.hm'
-        
+
         # Check if file already exists
         filepath = os.path.join(self.save_manager.save_directory, save_name)
         if os.path.exists(filepath):
-            result = messagebox.askyesno("File Exists", 
-                                       f"Save file '{save_name}' already exists. Overwrite?")
-            if not result:
-                return
-        
+            self._ask_confirm(f"Save file '{save_name}' already exists. Overwrite?",
+                              lambda: self._do_save_game(save_name))
+            return
+        self._do_save_game(save_name)
+
+    def _do_save_game(self, save_name):
+        """Perform the actual save (after overwrite confirmation)."""
         # Perform save
         success = self.save_manager.save_game(save_name, self.compress_var.get())
-        
+
         if success:
-            messagebox.showinfo("Save Complete", f"Game saved successfully as '{save_name}'")
+            self._show_banner(f"Game saved successfully as '{save_name}'", "ok")
             self._refresh_file_list()
             self.save_completed = True  # Flag for exit handling
-            self.parent.on_game_saved()
-            # Close the dialog after successful save
-            self.on_window_close()
+            self.app.on_game_saved()
+            # Close the view after successful save
+            self._notify_done(self._result())
+            self.close_view()
         else:
-            messagebox.showerror("Save Failed", "Failed to save game")
-    
+            self._show_banner("Failed to save game", "error")
+
     def _advanced_save_game(self):
         """Save game with advanced options"""
         save_name = self.save_name_var.get().strip()
         if not save_name:
-            messagebox.showerror("Error", "Please enter a save name")
+            self._show_banner("Please enter a save name", "error")
             return
-        
+
         # Add .hm extension if not present
         if not save_name.endswith('.hm'):
             save_name += '.hm'
-        
+
         # Create category folder if needed
         category = self.category_var.get().strip()
         if category and category != "General":
@@ -1590,7 +1674,7 @@ class SaveLoadWindow(InGamePopup):
             filepath = os.path.join(category_dir, save_name)
         else:
             filepath = os.path.join(self.save_manager.save_directory, save_name)
-        
+
         # Check if file already exists and handle backup
         if os.path.exists(filepath):
             if self.backup_var.get():
@@ -1602,12 +1686,16 @@ class SaveLoadWindow(InGamePopup):
                     print(f"Backup created: {backup_path}")
                 except Exception as e:
                     print(f"Failed to create backup: {e}")
-            
-            result = messagebox.askyesno("File Exists", 
-                                       f"Save file '{save_name}' already exists. Overwrite?")
-            if not result:
-                return
-        
+
+            result = None
+            self._ask_confirm(f"Save file '{save_name}' already exists. Overwrite?",
+                              lambda: self._do_advanced_save(save_name, filepath, category))
+            return
+
+        self._do_advanced_save(save_name, filepath, category)
+
+    def _do_advanced_save(self, save_name, filepath, category):
+        """Perform the advanced save (after overwrite confirmation)."""
         # Prepare enhanced save data
         enhanced_data = {
             'description': self.description_text.get('1.0', 'end-1c').strip(),
@@ -1615,45 +1703,46 @@ class SaveLoadWindow(InGamePopup):
             'include_stats': self.include_stats_var.get(),
             'screenshot': self.auto_screenshot_var.get()
         }
-        
+
         # Perform enhanced save
-        success = self.save_manager.save_enhanced_game(save_name, 
-                                                      self.compress_var.get(), 
-                                                      enhanced_data, 
+        success = self.save_manager.save_enhanced_game(save_name,
+                                                      self.compress_var.get(),
+                                                      enhanced_data,
                                                       filepath)
-        
+
         if success:
-            messagebox.showinfo("Save Complete", f"Game saved successfully as '{save_name}'")
+            self._show_banner(f"Game saved successfully as '{save_name}'", "ok")
             self._refresh_file_list()
             self.save_completed = True  # Flag for exit handling
-            self.parent.on_game_saved()
-            # Close the dialog after successful save
-            self.on_window_close()
+            self.app.on_game_saved()
+            # Close the view after successful save
+            self._notify_done(self._result())
+            self.close_view()
         else:
-            messagebox.showerror("Save Failed", "Failed to save game")
-    
+            self._show_banner("Failed to save game", "error")
+
     def _save_as_dialog(self):
         """Open save as dialog"""
         from tkinter import filedialog
-        
+
         filename = filedialog.asksaveasfilename(
             title="Save Game As...",
             defaultextension=".hm",
             filetypes=[("Hockey Manager Save", "*.hm"), ("All Files", "*.*")],
             initialdir=self.save_manager.save_directory
         )
-        
+
         if filename:
             # Extract just the filename for the entry
             import os
             base_name = os.path.basename(filename)
             self.save_name_var.set(base_name.replace('.hm', ''))
             self._advanced_save_game()
-    
+
     def _quick_save_to_slot(self, slot_number):
         """Save to a quick save slot"""
         slot_name = f"QuickSave_Slot_{slot_number}"
-        
+
         # Create quick save data
         enhanced_data = {
             'description': f"Quick Save Slot {slot_number}",
@@ -1662,65 +1751,66 @@ class SaveLoadWindow(InGamePopup):
             'screenshot': False,
             'slot_number': slot_number
         }
-        
+
         # Ensure QuickSaves directory exists
         quick_saves_dir = os.path.join(self.save_manager.save_directory, "QuickSaves")
         if not os.path.exists(quick_saves_dir):
             os.makedirs(quick_saves_dir)
-        
+
         filepath = os.path.join(quick_saves_dir, f"{slot_name}.hm")
-        
+
         success = self.save_manager.save_enhanced_game(slot_name + ".hm", True, enhanced_data, filepath)
-        
+
         if success:
-            messagebox.showinfo("Quick Save", f"Game saved to Quick Save Slot {slot_number}")
+            self._show_banner(f"Game saved to Quick Save Slot {slot_number}", "ok")
             self._refresh_quick_save_slots()
             self.save_completed = True  # Flag for exit handling
-            self.parent.on_game_saved()
-            # Close the dialog after successful quick save
-            self.on_window_close()
+            self.app.on_game_saved()
+            # Close the view after successful quick save
+            self._notify_done(self._result())
+            self.close_view()
         else:
-            messagebox.showerror("Quick Save Failed", f"Failed to save to slot {slot_number}")
-    
+            self._show_banner(f"Failed to save to slot {slot_number}", "error")
+
     def _quick_load_from_slot(self, slot_number):
         """Load from a quick save slot"""
         slot_name = f"QuickSave_Slot_{slot_number}.hm"
         filepath = os.path.join(self.save_manager.save_directory, "QuickSaves", slot_name)
-        
+
         if os.path.exists(filepath):
             self.save_manager.load_game(filepath)
         else:
-            messagebox.showerror("Load Error", f"Quick Save Slot {slot_number} is empty")
-    
+            self._show_banner(f"Quick Save Slot {slot_number} is empty", "error")
+
     def _get_game_preview(self):
         """Get current game state preview"""
         try:
             preview_lines = []
-            
-            if hasattr(self.parent, 'user_team') and self.parent.user_team:
-                preview_lines.append(f"Team: {self.parent.user_team.team_name}")
-                
+
+            if hasattr(self.app, 'user_team') and self.app.user_team:
+                preview_lines.append(f"Team: {self.app.user_team.team_name}")
+
                 # Add roster info
-                roster_count = len(getattr(self.parent.user_team, 'roster', []))
+                roster_count = len(getattr(self.app.user_team, 'roster', []))
                 preview_lines.append(f"Roster Size: {roster_count} players")
-            
-            if hasattr(self.parent, 'current_date'):
-                preview_lines.append(f"Current Date: {self.parent.current_date}")
-            
-            if hasattr(self.parent, 'league') and self.parent.league:
-                preview_lines.append(f"Season: {getattr(self.parent.league, 'season_year', 'Unknown')}")
-            
+
+            if hasattr(self.app, 'current_date'):
+                preview_lines.append(f"Current Date: {self.app.current_date}")
+
+            if hasattr(self.app, 'league') and self.app.league:
+                preview_lines.append(f"Season: {getattr(self.app.league, 'season_year', 'Unknown')}")
+
             # Add record if available
-            if hasattr(self.parent, 'user_team') and self.parent.user_team:
-                wins = getattr(self.parent.user_team, 'wins', 0)
-                losses = getattr(self.parent.user_team, 'losses', 0)
+            if hasattr(self.app, 'user_team') and self.app.user_team:
+                wins = getattr(self.app.user_team, 'wins', 0)
+                losses = getattr(self.app.user_team, 'losses', 0)
                 preview_lines.append(f"Record: {wins}-{losses}")
-            
+
             return "\n".join(preview_lines) if preview_lines else "Game information not available"
-            
+
         except Exception as e:
             return f"Error getting game preview: {str(e)}"
-    
+
     def _set_default_save_name(self):
         """Set a smart default save name"""
         suggestions = self._generate_name_suggestions()
@@ -1730,32 +1820,32 @@ class SaveLoadWindow(InGamePopup):
             # Fallback to timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.save_name_var.set(f"HockeyManager_{timestamp}")
-    
+
     def _generate_name_suggestions(self):
         """Generate smart save name suggestions"""
         suggestions = []
-        
+
         try:
             # Base info
             team_name = "HockeyManager"
-            if hasattr(self.parent, 'user_team') and self.parent.user_team:
-                team_name = self.parent.user_team.team_name.replace(" ", "_")
-            
+            if hasattr(self.app, 'user_team') and self.app.user_team:
+                team_name = self.app.user_team.team_name.replace(" ", "_")
+
             # Date info
             now = datetime.now()
             date_str = now.strftime("%Y%m%d")
             time_str = now.strftime("%H%M")
-            
+
             # Game date if available
             game_date_str = ""
-            if hasattr(self.parent, 'current_date'):
-                game_date_str = self.parent.current_date.strftime("%m_%d")
-            
+            if hasattr(self.app, 'current_date'):
+                game_date_str = self.app.current_date.strftime("%m_%d")
+
             # Season info
             season_str = ""
-            if hasattr(self.parent, 'league') and self.parent.league:
-                season_str = f"_{getattr(self.parent.league, 'season_year', '')}"
-            
+            if hasattr(self.app, 'league') and self.app.league:
+                season_str = f"_{getattr(self.app.league, 'season_year', '')}"
+
             # Generate suggestions
             suggestions.extend([
                 f"{team_name}_{date_str}_{time_str}",
@@ -1764,63 +1854,63 @@ class SaveLoadWindow(InGamePopup):
                 f"{team_name}_Milestone_{date_str}",
                 f"Save_{team_name}_{now.strftime('%b%d')}"
             ])
-            
+
             # Filter out empty suggestions
             suggestions = [s for s in suggestions if s and not s.endswith('_')]
-            
+
         except Exception as e:
             print(f"Error generating suggestions: {e}")
             suggestions = [f"HockeyManager_{datetime.now().strftime('%Y%m%d_%H%M%S')}"]
-        
+
         return suggestions[:5]  # Return top 5 suggestions
-    
+
     def _show_name_suggestions(self):
         """Show save name suggestions dialog"""
         suggestions = self._generate_name_suggestions()
-        
+
         # Create suggestion window
         suggestion_window = InGamePopup(self)
         suggestion_window.title("Save Name Suggestions")
         suggestion_window.geometry("400x300")
-        suggestion_window.configure(background=self.parent.BG_COLOR)
-        
-        ttk.Label(suggestion_window, text="Choose a save name:", 
+        suggestion_window.configure(background=self.app.BG_COLOR)
+
+        ttk.Label(suggestion_window, text="Choose a save name:",
                  style='Content.TLabel').pack(pady=10)
-        
+
         # Suggestions listbox
         listbox_frame = ttk.Frame(suggestion_window, style='Content.TFrame')
         listbox_frame.pack(fill='both', expand=True, padx=20, pady=10)
-        
+
         suggestions_listbox = tk.Listbox(listbox_frame, height=10,
-                                        font=(self.parent.FONT_FAMILY, 10))
+                                        font=(self.app.FONT_FAMILY, 10))
         suggestions_listbox.pack(fill='both', expand=True)
-        
+
         for suggestion in suggestions:
             suggestions_listbox.insert('end', suggestion)
-        
+
         # Buttons
         button_frame = ttk.Frame(suggestion_window, style='Content.TFrame')
         button_frame.pack(pady=10)
-        
+
         def use_selected():
             selection = suggestions_listbox.curselection()
             if selection:
                 self.save_name_var.set(suggestions[selection[0]])
             suggestion_window.destroy()
-        
+
         ttk.Button(button_frame, text="Use Selected", command=use_selected,
                   style='Accent.TButton').pack(side='left', padx=5)
         ttk.Button(button_frame, text="Cancel", command=suggestion_window.destroy,
                   style='TButton').pack(side='left', padx=5)
-        
+
         # Select first suggestion by default
         if suggestions:
             suggestions_listbox.selection_set(0)
-    
+
     def _get_save_categories(self):
         """Get list of save categories"""
         categories = ["General", "Milestones", "Backups", "Experiments", "Seasons"]
-        
+
         # Add existing categories from save directory
         try:
             save_dir = self.save_manager.save_directory
@@ -1831,29 +1921,29 @@ class SaveLoadWindow(InGamePopup):
                         categories.append(item)
         except Exception as e:
             print(f"Error reading categories: {e}")
-        
+
         return sorted(categories)
-    
+
     def _get_quick_save_slots(self):
         """Get information about quick save slots"""
         slots = {}
         quick_saves_dir = os.path.join(self.save_manager.save_directory, "QuickSaves")
-        
+
         if os.path.exists(quick_saves_dir):
             for i in range(1, 7):  # Slots 1-6
                 slot_file = f"QuickSave_Slot_{i}.hm"
                 slot_path = os.path.join(quick_saves_dir, slot_file)
-                
+
                 if os.path.exists(slot_path):
                     try:
                         # Get file info
                         stat = os.stat(slot_path)
                         modified = datetime.fromtimestamp(stat.st_mtime)
-                        
+
                         # Try to get save data for more info
                         save_data = self.save_manager._load_save_metadata(slot_path)
                         team_name = save_data.get('user_team', 'Unknown') if save_data else 'Unknown'
-                        
+
                         slots[f"slot_{i}"] = {
                             'name': f"Quick Save {i}",
                             'date': modified.strftime("%m/%d %H:%M"),
@@ -1862,20 +1952,20 @@ class SaveLoadWindow(InGamePopup):
                         }
                     except Exception as e:
                         print(f"Error reading slot {i}: {e}")
-        
+
         return slots
-    
+
     def _refresh_quick_save_slots(self):
         """Refresh the quick save slots display"""
         # This would be called to update the quick save slots UI
         # For now, we'll implement this when the tab is visible
         pass
-    
+
     def _open_save_folder(self):
         """Open the saves folder in file explorer"""
         import subprocess
         import os
-        
+
         save_dir = self.save_manager.save_directory
         if os.path.exists(save_dir):
             try:
@@ -1889,21 +1979,21 @@ class SaveLoadWindow(InGamePopup):
                 else:
                     subprocess.run(['xdg-open', save_dir])
             except Exception as e:
-                messagebox.showerror("Error", f"Could not open save folder: {e}")
+                self._show_banner(f"Could not open save folder: {e}", "error")
         else:
-            messagebox.showerror("Error", "Save folder does not exist")
-    
+            self._show_banner("Save folder does not exist", "error")
+
     def _export_save(self):
         """Export selected save file"""
         selection = self.file_tree.selection()
         if not selection:
-            messagebox.showwarning("No Selection", "Please select a save file to export")
+            self._show_banner("Please select a save file to export", "warn")
             return
-        
+
         # Get selected file path
         item = selection[0]
         filepath = self.file_tree.set(item, 'filepath')
-        
+
         # Ask for export location
         from tkinter import filedialog
         export_path = filedialog.asksaveasfilename(
@@ -1911,77 +2001,82 @@ class SaveLoadWindow(InGamePopup):
             defaultextension=".hm",
             filetypes=[("Hockey Manager Save", "*.hm"), ("All Files", "*.*")]
         )
-        
+
         if export_path:
             try:
                 import shutil
                 shutil.copy2(filepath, export_path)
-                messagebox.showinfo("Export Complete", f"Save file exported to:\n{export_path}")
+                self._show_banner(f"Save file exported to:\n{export_path}", "ok")
             except Exception as e:
-                messagebox.showerror("Export Failed", f"Failed to export save file:\n{str(e)}")
-    
+                self._show_banner(f"Failed to export save file:\n{str(e)}", "error")
+
     def _import_save(self):
         """Import a save file"""
         from tkinter import filedialog
-        
+
         import_path = filedialog.askopenfilename(
             title="Import Save File",
             filetypes=[("Hockey Manager Save", "*.hm"), ("All Files", "*.*")]
         )
-        
+
         if import_path:
             try:
                 import shutil
                 import os
-                
+
                 # Get destination path
                 filename = os.path.basename(import_path)
                 dest_path = os.path.join(self.save_manager.save_directory, filename)
-                
+
                 # Check if file already exists
                 if os.path.exists(dest_path):
-                    result = messagebox.askyesno("File Exists", 
-                                               f"A save file named '{filename}' already exists. Overwrite?")
-                    if not result:
-                        return
-                
-                shutil.copy2(import_path, dest_path)
-                messagebox.showinfo("Import Complete", f"Save file imported successfully")
-                self._refresh_file_list()
-                
+                    self._ask_confirm(f"A save file named '{filename}' already exists. Overwrite?",
+                                      lambda: self._do_import_file(import_path, dest_path))
+                    return
+
+                self._do_import_file(import_path, dest_path)
+
             except Exception as e:
-                messagebox.showerror("Import Failed", f"Failed to import save file:\n{str(e)}")
-    
+                self._show_banner(f"Failed to import save file:\n{str(e)}", "error")
+
+    def _do_import_file(self, import_path, dest_path):
+        """Copy the import file (after overwrite confirmation)."""
+        import shutil
+        shutil.copy2(import_path, dest_path)
+        self._show_banner("Save file imported successfully", "ok")
+        self._refresh_file_list()
+
     def _delete_selected_save(self):
         """Delete selected save file"""
         selection = self.file_tree.selection()
         if not selection:
-            messagebox.showwarning("No Selection", "Please select a save file to delete")
+            self._show_banner("Please select a save file to delete", "warn")
             return
-        
+
         # Get selected file info
         item = selection[0]
         filename = self.file_tree.set(item, 'filename')
         filepath = self.file_tree.set(item, 'filepath')
-        
+
         # Confirm deletion
-        result = messagebox.askyesno("Confirm Delete", 
-                                   f"Are you sure you want to delete '{filename}'?\n\nThis action cannot be undone.")
-        
-        if result:
-            try:
-                os.remove(filepath)
-                messagebox.showinfo("Delete Complete", f"Save file '{filename}' has been deleted")
-                self._refresh_file_list()
-            except Exception as e:
-                messagebox.showerror("Delete Failed", f"Failed to delete save file:\n{str(e)}")
-    
+        self._ask_confirm(f"Are you sure you want to delete '{filename}'?\n\nThis action cannot be undone.",
+                          lambda: self._do_delete_save(filepath, filename))
+
+    def _do_delete_save(self, filepath, filename):
+        """Delete the save file (after confirmation)."""
+        try:
+            os.remove(filepath)
+            self._show_banner(f"Save file '{filename}' has been deleted", "ok")
+            self._refresh_file_list()
+        except Exception as e:
+            self._show_banner(f"Failed to delete save file:\n{str(e)}", "error")
+
     def _sort_files(self, column):
         """Sort files by column"""
         # Implementation for sorting the file list
         # This would sort the treeview by the selected column
         pass
-    
+
     def _create_file_context_menu(self):
         """Create context menu for file operations"""
         self.context_menu = tk.Menu(self, tearoff=0)
@@ -1991,112 +2086,112 @@ class SaveLoadWindow(InGamePopup):
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Delete", command=self._delete_selected_save)
         self.context_menu.add_command(label="Properties", command=self._show_file_properties)
-    
+
     def _show_file_context_menu(self, event):
         """Show context menu for file operations"""
         try:
             self.context_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.context_menu.grab_release()
-    
+
     def _context_load_file(self):
         """Load file from context menu"""
         if hasattr(self, '_load_game'):
             self._load_game()
-    
+
     def _context_rename_file(self):
         """Rename file from context menu"""
         selection = self.file_tree.selection()
         if not selection:
             return
-        
+
         # Get current filename
         item = selection[0]
         current_name = self.file_tree.set(item, 'filename')
         current_path = self.file_tree.set(item, 'filepath')
-        
+
         # Simple rename dialog
-        new_name = tk.simpledialog.askstring("Rename File", 
+        new_name = simpledialog.askstring("Rename File",
                                            f"Enter new name for '{current_name}':",
                                            initialvalue=current_name.replace('.hm', ''))
-        
+
         if new_name and new_name.strip():
             if not new_name.endswith('.hm'):
                 new_name += '.hm'
-            
+
             new_path = os.path.join(os.path.dirname(current_path), new_name)
-            
+
             try:
                 os.rename(current_path, new_path)
-                messagebox.showinfo("Rename Complete", f"File renamed to '{new_name}'")
+                self._show_banner(f"File renamed to '{new_name}'", "ok")
                 self._refresh_file_list()
             except Exception as e:
-                messagebox.showerror("Rename Failed", f"Failed to rename file:\n{str(e)}")
-    
+                self._show_banner(f"Failed to rename file:\n{str(e)}", "error")
+
     def _show_file_properties(self):
         """Show detailed properties of selected file"""
         selection = self.file_tree.selection()
         if not selection:
             return
-        
+
         item = selection[0]
         filepath = self.file_tree.set(item, 'filepath')
-        
+
         # Load save metadata
         try:
             save_data = self.save_manager._load_save_metadata(filepath)
             if save_data:
                 self._show_save_properties_dialog(save_data, filepath)
             else:
-                messagebox.showerror("Error", "Could not read save file properties")
+                self._show_banner("Could not read save file properties", "error")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to read file properties:\n{str(e)}")
-    
+            self._show_banner(f"Failed to read file properties:\n{str(e)}", "error")
+
     def _show_save_properties_dialog(self, save_data, filepath):
         """Show save file properties in a dialog"""
         # Create properties window
         props_window = InGamePopup(self)
         props_window.title("Save File Properties")
         props_window.geometry("500x400")
-        props_window.configure(background=self.parent.BG_COLOR)
-        
+        props_window.configure(background=self.app.BG_COLOR)
+
         # Create scrollable text widget to show properties
         text_frame = ttk.Frame(props_window, style='Content.TFrame')
         text_frame.pack(fill='both', expand=True, padx=20, pady=20)
-        
-        text_widget = tk.Text(text_frame, wrap='word', 
-                             font=(self.parent.FONT_FAMILY, 10))
+
+        text_widget = tk.Text(text_frame, wrap='word',
+                             font=(self.app.FONT_FAMILY, 10))
         scrollbar = ttk.Scrollbar(text_frame, orient='vertical', command=text_widget.yview)
         text_widget.configure(yscrollcommand=scrollbar.set)
-        
+
         text_widget.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
-        
+
         # Format properties text
         props_text = self._format_save_properties(save_data, filepath)
         text_widget.insert('1.0', props_text)
         text_widget.config(state='disabled')
-        
+
         # Close button
         ttk.Button(props_window, text="Close", command=props_window.destroy,
                   style='TButton').pack(pady=10)
-    
+
     def _format_save_properties(self, save_data, filepath):
         """Format save data into readable properties text"""
         lines = []
         lines.append("=== SAVE FILE PROPERTIES ===\n")
-        
+
         # File info
         lines.append(f"File Path: {filepath}")
-        
+
         if os.path.exists(filepath):
             stat = os.stat(filepath)
             lines.append(f"File Size: {round(stat.st_size / (1024 * 1024), 2)} MB")
             lines.append(f"Created: {datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')}")
             lines.append(f"Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
-        
+
         lines.append("")
-        
+
         # Save data info
         lines.append("=== GAME DATA ===")
         lines.append(f"Save Version: {save_data.get('version', 'Unknown')}")
@@ -2104,7 +2199,7 @@ class SaveLoadWindow(InGamePopup):
         lines.append(f"User Team: {save_data.get('user_team', 'Unknown')}")
         lines.append(f"Season Year: {save_data.get('season_year', 'Unknown')}")
         lines.append(f"Game Date: {save_data.get('game_date', 'Unknown')}")
-        
+
         # Enhanced data if available
         if 'enhanced_data' in save_data:
             enhanced = save_data['enhanced_data']
@@ -2113,47 +2208,79 @@ class SaveLoadWindow(InGamePopup):
             lines.append(f"Description: {enhanced.get('description', 'None')}")
             lines.append(f"Category: {enhanced.get('category', 'General')}")
             lines.append(f"Include Stats: {enhanced.get('include_stats', True)}")
-        
+
         return "\n".join(lines)
-    
+
     def _on_enhanced_file_select(self, event):
         """Handle enhanced file selection"""
         if hasattr(self, 'load_btn'):
             selection = self.file_tree.selection()
             self.load_btn.config(state='normal' if selection else 'disabled')
-    
+
     def _load_game(self):
         """Load the selected game"""
         selection = self.file_tree.selection()
         if not selection:
-            messagebox.showerror("Error", "Please select a save file to load")
+            self._show_banner("Please select a save file to load", "error")
             return
-        
+
         # Get selected file path
         item = selection[0]
         filepath = self.file_tree.set(item, 'filepath')
         filename = self.file_tree.item(item)['values'][0]
-        
+
         # Confirm load
-        result = messagebox.askyesno("Load Game", 
-                                   f"Load game from '{filename}'?\n\n"
-                                   f"This will replace your current game progress.")
-        
-        if not result:
-            return
-        
+        self._ask_confirm(f"Load game from '{filename}'?\n\nThis will replace your current game progress.",
+                          lambda: self._do_load_game(filepath))
+        return
+
+    def _do_load_game(self, filepath):
+        """Perform the load (after confirmation)."""
         # Perform load
         success = self.save_manager.load_game(filepath)
-        
+
         if success:
             # Store loaded file path for main menu integration
             self.loaded_file_path = filepath
             # Notify parent if it has the callback
-            if hasattr(self.parent, 'on_game_loaded'):
-                self.parent.on_game_loaded()
-            self.destroy()  # Close the load window
+            if hasattr(self.app, 'on_game_loaded'):
+                self.app.on_game_loaded()
+            # Close the view after successful load
+            self._notify_done(self._result())
+            self.close_view()
         else:
-            messagebox.showerror("Load Failed", "Failed to load game")
+            self._show_banner("Failed to load game", "error")
+
+
+class SaveLoadWindow(InGamePopup):
+    """Popup wrapper around SaveLoadView (backward compatibility).
+
+    Keeps the old modal semantics so existing wait_window() call sites
+    keep working until they are converted to the on_done pattern.
+    """
+
+    def __init__(self, parent, mode='save'):
+        super().__init__(parent, modal=True)
+        self.title(f"{'Save' if mode == 'save' else 'Load'} Game")
+        app = (getattr(parent, 'app', None)
+               or getattr(parent, 'parent', None) or parent)
+        self._view = SaveLoadView(self, app=app, mode=mode)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._view.on_window_close)
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
 
 
 def test_save_system():
