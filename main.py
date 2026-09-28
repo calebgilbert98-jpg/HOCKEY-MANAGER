@@ -4106,6 +4106,11 @@ class HockeyManagerGUI(tk.Tk):
                               self.open_morale_window,
                               tooltip="Morale: team chemistry, hierarchy, and player attitudes")
 
+        # Dressing Room button (module 03: social groups, talks, cascades)
+        self._create_nav_pill(left_menu_frame, "Dressing Room",
+                              self.open_dressing_room,
+                              tooltip="Dressing Room: hierarchy, social groups, team talks")
+
         # Tactics button (systems, familiarity, fit -- the whiteboard)
         self._create_nav_pill(left_menu_frame, "Tactics",
                               self.open_tactics_window,
@@ -10883,6 +10888,13 @@ class HockeyManagerGUI(tk.Tk):
     def open_morale_window(self):
         """Open the Team Morale tab (chemistry, hierarchy, social groups)."""
         return self.show_screen('morale', 'Team Morale', MoraleView)
+
+    def open_dressing_room(self):
+        """Open the Dressing Room screen (module 03: hierarchy, social
+        groups, team talks, room feed)."""
+        from dressing_room import DressingRoomView
+        return self.show_screen('dressing_room', 'Dressing Room',
+                                DressingRoomView)
 
     def open_tactics_window(self):
         """Open the Team Tactics screen (systems, familiarity, fit)."""

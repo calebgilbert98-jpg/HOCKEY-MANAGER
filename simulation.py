@@ -2036,12 +2036,25 @@ class GameSim:
             except Exception:
                 pass
 
+        # Dressing-room talks (module 03): pre-game words move the
+        # first-period momentum needle.
+        try:
+            self._apply_dressing_room_pregame()
+        except Exception:
+            pass
+
         for p in range(1, 4):
             self.period = p
             self.clock = 1200
             self._period_length = 1200
             self._emit_pbp("period_start", period=p)
             if p == 3:
+                # Intermission talks (module 03): second-break words move
+                # the third-period momentum needle.
+                try:
+                    self._apply_dressing_room_intermission()
+                except Exception:
+                    pass
                 # The Maurice spot develops mid-game: a coach getting run out
                 # of the building may send his guys out now.
                 self._reevaluate_punishment_orders()
@@ -2219,6 +2232,25 @@ class GameSim:
         except Exception:
             pass
     
+    def _apply_dressing_room_pregame(self):
+        """Module 03: pre-game talks move the first-period momentum needle.
+
+        Additive and safe: impact_system.nudge_momentum caps the swing.
+        """
+        try:
+            import dressing_room as _dr
+            _dr.apply_pregame_talks(self)
+        except Exception:
+            pass
+
+    def _apply_dressing_room_intermission(self):
+        """Module 03: intermission talks move the third-period needle."""
+        try:
+            import dressing_room as _dr
+            _dr.apply_intermission_talk(self)
+        except Exception:
+            pass
+
     def _ai_tactics_intermission(self):
         """Between periods, a coach in control may tweak his systems.
 

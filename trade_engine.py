@@ -452,6 +452,14 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
             _rs.apply_fresh_start(player, old_team, new_team, teams=teams)
         except Exception:
             pass
+        # Dressing-room cascade (module 03): the old room reacts to the
+        # departure, the new room absorbs the arrival.
+        try:
+            import dressing_room as _dr
+            _dr.cascade_on_trade(old_team, traded=player, date_str=date_str)
+            _dr.cascade_on_trade(new_team, arriving=player, date_str=date_str)
+        except Exception:
+            pass
         # Steal watch: was this player scout-tipped to the acquiring team?
         try:
             pid = getattr(player, "id", id(player))

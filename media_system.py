@@ -413,6 +413,15 @@ class MediaSystem:
         
         # Apply consequences based on response
         self._apply_media_consequences(event, response_choice)
+
+        # Dressing-room cascade (module 03): the room hears the presser.
+        try:
+            import dressing_room as _dr
+            _team = getattr(self.game_manager, "user_team", None)
+            if _team is not None and isinstance(event, dict):
+                _dr.cascade_on_press(_team, event, response_choice)
+        except Exception:
+            pass
     
     def _apply_media_consequences(self, event, response_choice):
         """Apply consequences of media interactions"""
