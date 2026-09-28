@@ -989,6 +989,12 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
     min_per_position[PlayerPosition.GOALIE] = 18
 
     # Re-entries go first and count toward the total and position floors.
+    # Re-entries are real pre-existing players, so a name clash between two
+    # of them is normalized deterministically (first keeps the name, later
+    # ones take Jr./II/III/IV, then a numeric disambiguator) -- never by
+    # random re-roll, which would rewrite a real player's identity.
+    _reentry_names = set()
+    _REENTRY_SUFFIXES = ("Jr.", "II", "III", "IV")
     for _rp in (reentries or []):
         try:
             _ok = is_draft_eligible(getattr(_rp, "birth_date", ""),
@@ -998,6 +1004,22 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
             _ok = False
         if not _ok:
             continue
+        _rkey = (getattr(_rp, "first_name", ""),
+                 getattr(_rp, "last_name", ""))
+        if _rkey in _reentry_names:
+            _bfn, _bln = _rkey
+            for _sfx in _REENTRY_SUFFIXES:
+                if (_bfn, f"{_bln} {_sfx}") not in _reentry_names:
+                    _rp.last_name = f"{_bln} {_sfx}"
+                    _rkey = (_bfn, _rp.last_name)
+                    break
+            else:
+                _i = 2
+                while (_bfn, f"{_bln} {_i}") in _reentry_names:
+                    _i += 1
+                _rp.last_name = f"{_bln} {_i}"
+                _rkey = (_bfn, _rp.last_name)
+        _reentry_names.add(_rkey)
         _rp.draft_year = draft_year
         if not getattr(_rp, "draft_ranking", 0):
             _rp.draft_ranking = calculate_draft_ranking(_rp)
@@ -1021,6 +1043,48 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
 
     # Ensure we have a minimum number of players at each potential tier
     potential_counts = {pot: 0 for pot in distribution.keys()}
+
+    # Name dedup: no two prospects in one class share a full name.
+    # Repetitive draft classes break the fiction that these are 224
+    # distinct kids. Seeded with the re-entries so a generated kid can't
+    # collide with them either.
+    _used_names = {(getattr(_p, "first_name", ""), getattr(_p, "last_name", ""))
+                   for _p in prospects}
+    _SUFFIXES = ("Jr.", "II", "III", "IV")
+
+    def _unique_name(prospect):
+        """Ensure prospect.first/last_name is unique in this class.
+
+        Bounded re-rolls first (keeps the name pool natural); the
+        deterministic suffix fallback guarantees termination even if the
+        pool is pathological -- no collision is ever accepted.
+        """
+        _key = (prospect.first_name, prospect.last_name)
+        for _ in range(8):
+            if _key not in _used_names:
+                break
+            _fn, _ln = get_random_name(prospect.nationality)
+            prospect.first_name, prospect.last_name = _fn, _ln
+            _key = (_fn, _ln)
+        if _key in _used_names:
+            _base_fn, _base_ln = _key
+            for _sfx in _SUFFIXES:
+                _cand = (_base_fn, f"{_base_ln} {_sfx}")
+                if _cand not in _used_names:
+                    prospect.first_name, prospect.last_name = _cand
+                    _key = _cand
+                    break
+            else:
+                # Absolute fallback: numeric disambiguator. Unreachable in
+                # practice (4 suffixes x re-rolls), but termination is
+                # guaranteed, not hoped for.
+                _i = 2
+                while (_base_fn, f"{_base_ln} {_i}") in _used_names:
+                    _i += 1
+                prospect.first_name = _base_fn
+                prospect.last_name = f"{_base_ln} {_i}"
+                _key = (prospect.first_name, prospect.last_name)
+        _used_names.add(_key)
 
     # Generate enough prospects to meet the requested total
     _SKATER_POSITIONS = [p for p in PlayerPosition
@@ -1056,6 +1120,10 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
         if not is_draft_eligible(prospect.birth_date, prospect.nationality,
                                  draft_year):
             continue
+
+        # Name dedup: a full-name collision gets a re-roll (bounded), then
+        # a deterministic suffix -- every class has 224 distinct names.
+        _unique_name(prospect)
 
         # Update our counters
         position_counts[prospect.primary_position] += 1

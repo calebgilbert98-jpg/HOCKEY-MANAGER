@@ -228,6 +228,16 @@ class GameSaveManager:
             'intl_history': [dict(h) for h in
                              (getattr(league, 'intl_history', None) or [])],
             'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
+            # Years the draft was actually conducted (idempotency guard).
+            # Missing key = old save -> empty list.
+            'draft_conducted_years': sorted(
+                getattr(league, 'draft_conducted_years', None) or []),
+            # Draft grades history {str(year): [(team, grade, ratio)]}.
+            # Missing key = old save -> empty dict.
+            'draft_grades_history': {
+                str(k): [[t, g, float(r)] for t, g, r in (v or [])]
+                for k, v in (getattr(league, 'draft_grades_history', None)
+                             or {}).items()},
             # Prospect awards news + prospect-class year stamp (his draft
             # wave). Missing keys = old save -> graceful defaults.
             'prospect_awards_news': list(getattr(league, 'prospect_awards_news', []) or []),
@@ -1180,6 +1190,20 @@ class GameSaveManager:
             # Tentpole event state (years the entry draft was held, event
             # prompts already shown). Defaults keep old saves working.
             league.draft_held_years = list(league_data.get('draft_held_years', []) or [])
+            # Years the draft's picks were actually conducted (idempotency
+            # guard for the headless conductor / war room). Old saves lack
+            # the key -> empty list (nothing was stamped yet).
+            league.draft_conducted_years = sorted(
+                league_data.get('draft_conducted_years', None) or [])
+            # Draft grades history {str(year): [(team, grade, ratio)]}.
+            # Old saves lack the key -> empty dict.
+            try:
+                _dgh = league_data.get('draft_grades_history', None) or {}
+                league.draft_grades_history = {
+                    str(k): [(t, g, float(r)) for t, g, r in (v or [])]
+                    for k, v in _dgh.items()}
+            except Exception:
+                league.draft_grades_history = {}
             # Prospect awards news + prospect-class year stamp (his draft
             # wave). Old saves lack the keys -> empty news, None year (his
             # draft flow regenerates the class when the stamp mismatches).

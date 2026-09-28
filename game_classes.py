@@ -3394,6 +3394,12 @@ class League:
     # Tentpole event state (persisted in saves): years the entry draft was
     # held, and (event, year) pairs the user was already prompted about.
     draft_held_years: List[int] = field(default_factory=list)
+    # Years the entry draft's picks were actually conducted (war room or
+    # headless conductor). Guards against double-conducting a draft.
+    draft_conducted_years: List[int] = field(default_factory=list)
+    # Draft grades by year ({str(year): [(team, grade, ratio)]}), persisted
+    # so the war room's review modal and future seasons can look back.
+    draft_grades_history: Dict[str, list] = field(default_factory=dict)
     event_day_prompted: List[List] = field(default_factory=list)
     # Draft lottery state (persisted in saves): televised reveal rows per
     # year ({pick, team, original_team, odds_pct, movement}) and the years

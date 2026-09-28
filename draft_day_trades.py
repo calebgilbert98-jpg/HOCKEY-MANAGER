@@ -430,6 +430,33 @@ def _build_trade_up_offer(te, proposer, proposer_pick, holder, year):
     return gives, [holder_pick]
 
 
+def _emit_trade_rumor(league, app, line, ticker_fn=None):
+    """Rumor-mill line for trade-up interest that never became a deal.
+
+    Always labeled RUMOR -- never reads as a completed transaction.
+    Bounded per draft (3) so the news feed doesn't flood.
+    """
+    try:
+        if league is None:
+            return
+        _n = int(getattr(league, '_trade_up_rumors', 0) or 0)
+        if _n >= 3:
+            return
+        league._trade_up_rumors = _n + 1
+        try:
+            if app is not None:
+                app.add_news(line)
+        except Exception:
+            pass
+        if ticker_fn is not None:
+            try:
+                ticker_fn(line)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _attempt_trade_up(team, overall, pick, league, year, board, app,
                       ai_manager, order):
     """One team tries to move up. Returns a deal summary or None."""
@@ -460,6 +487,23 @@ def _attempt_trade_up(team, overall, pick, league, year, board, app,
     done = _negotiate(te, team, holder, gives, gets, league, app,
                       holder_eagerness=eagerness)
     if done is None:
+        # Real interest, no deal: the phones were busy. Rumor mill, not a
+        # transaction -- clearly labeled, performance/transaction-grounded
+        # like real life.
+        try:
+            _pname = getattr(prospect, 'full_name', 'their guy')
+            try:
+                _ppos = prospect.primary_position.value
+            except Exception:
+                _ppos = "?"
+            _emit_trade_rumor(
+                league, app,
+                f"RUMOR: {team.team_name} explored moving up from "
+                f"#{overall} to #{target_overall} ({holder.team_name}'s "
+                f"slot) -- believed to be for {_pname} ({_ppos}) -- but no "
+                f"deal materialized.")
+        except Exception:
+            pass
         return None
     summary = _describe_swap(te, team, holder, overall, target_overall)
     _record_deal(league, app, summary)
@@ -549,6 +593,11 @@ def run_draft_day_trading(league, year, app=None, max_deals=4):
     """
     import trade_engine as te  # noqa: F401
     deals = []
+    try:
+        # Fresh rumor-mill budget each draft day.
+        league._trade_up_rumors = 0
+    except Exception:
+        pass
     try:
         ai_manager = app.ai_manager if app is not None else None
     except Exception:
@@ -681,7 +730,16 @@ def on_clock_check(view):
                 if not mine:
                     continue
                 best = (score, t2, mine[0], o2)
-        if best is None or random.random() > 0.45:
+        if best is None:
+            return False
+        if random.random() > 0.45:
+            # Real interest, no deal: the phones were busy. Rumor mill.
+            _s, proposer, _pk, p_overall = best
+            _emit_trade_rumor(
+                league, view.app,
+                f"RUMOR: {proposer.team_name} was calling about moving up "
+                f"to #{overall} -- nothing came of it.",
+                ticker_fn=getattr(view, '_ticker', None))
             return False
         _s, proposer, proposer_pick, p_overall = best
         offer = _build_trade_up_offer(te, proposer, proposer_pick,

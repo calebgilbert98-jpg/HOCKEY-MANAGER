@@ -12503,8 +12503,13 @@ class HockeyManagerGUI(tk.Tk):
                     held.add(draft_year)
                     league.lottery_held_years = sorted(held)
             # 2. Entry draft -- setup (class, lottery order, news, storylines).
+            # Skip entirely when the year's picks were already conducted
+            # (interactive war room): regenerating the class would orphan
+            # the drafted prospects and the conductor is idempotent anyway.
             draft_done = set(getattr(league, 'draft_held_years', None) or [])
-            if draft_year not in draft_done:
+            conducted = set(
+                getattr(league, 'draft_conducted_years', None) or [])
+            if draft_year not in draft_done and draft_year not in conducted:
                 self.current_date = date(draft_year, 6, 24)
                 try:
                     self._hold_entry_draft(draft_year)
@@ -12533,108 +12538,23 @@ class HockeyManagerGUI(tk.Tk):
 
     def _auto_conduct_entry_draft(self, draft_year):
         """Headless full entry draft: every pick made with the draft board's
-        AI selection logic (no UI). Prospects go to team prospect pools."""
-        import random
-        import trade_engine as te
-        league = self.league
+        AI selection logic (no UI). Prospects go to team prospect pools.
+
+        Delegates to draft_night.conduct_entry_draft -- the ONE headless
+        conductor, shared with the automated season flow. The war room's
+        _do_ai_pick uses the same ai_select_prospect, so all three paths
+        pick identically.
+        """
         try:
-            league.initialize_all_draft_picks()
+            from draft_night import conduct_entry_draft
+            picks = conduct_entry_draft(self.league, draft_year, app=self)
+            if picks:
+                print(f"Auto-draft complete: {len(picks)} picks made.",
+                      flush=True)
         except Exception:
-            pass
-        try:
-            order = league.get_draft_order(draft_year)
-        except Exception:
-            order = []
-        if not order:
-            return
-        picks_made = []
-        for overall_pick, team, _dp in order:
-            available = sorted(getattr(league, 'draft_prospects', []) or [],
-                               key=lambda p: getattr(p, 'draft_ranking', 0),
-                               reverse=True)
-            if not available:
-                break
-            try:
-                needs = te.team_needs(team)
-            except Exception:
-                needs = []
-            try:
-                round_num = getattr(_dp, 'round', 1) if _dp is not None else 1
-            except Exception:
-                round_num = 1
-            # Mirror DraftView.ai_make_pick: top-12 candidates, need-weighted.
-            candidates = available[:12]
-            scored = []
-            for p in candidates:
-                try:
-                    pos = p.primary_position.value
-                except Exception:
-                    pos = "?"
-                base = getattr(p, 'draft_ranking', 0)
-                if pos in (needs or [])[:2]:
-                    base *= 1.08
-                if pos == 'G' and round_num <= 1:
-                    base *= 0.80  # goalies rarely go top-10
-                base *= random.uniform(0.94, 1.06)
-                scored.append((base, p))
-            scored.sort(key=lambda s: s[0], reverse=True)
-            # Real NHL rule (mirrors DraftView.execute_pick): a club that
-            # held a prospect's rights and lost them unsigned may not
-            # re-select him in the immediate re-entry draft. Walk down the
-            # board past banned prospects.
-            selected = None
-            _team_name = getattr(team, 'team_name', '')
-            for _base, _p in scored:
-                try:
-                    _banned_from = str(
-                        getattr(_p, 'draft_reentry_from', '') or '')
-                except Exception:
-                    _banned_from = ''
-                if _banned_from and _banned_from == _team_name:
-                    continue
-                selected = _p
-                break
-            if selected is None:
-                continue
-            try:
-                team.add_player(selected, "prospects")
-            except Exception:
-                continue
-            # Draft rights: stamp at pick time (CHL 4yr/3yr, NCAA+Europe
-            # 4yr -- new CBA), same as the interactive path. The re-entry
-            # ban is spent once he's selected by anyone.
-            try:
-                league.stamp_draft_rights(selected, _team_name,
-                                          int(draft_year))
-            except Exception:
-                pass
-            try:
-                selected.draft_reentry_from = ""
-            except Exception:
-                pass
-            try:
-                league.draft_prospects.remove(selected)
-            except Exception:
-                pass
-            picks_made.append((getattr(team, 'team_name', '?'), overall_pick,
-                               getattr(selected, 'full_name',
-                                       getattr(selected, 'name', '?'))))
-        if not picks_made:
-            return
-        # News wire: top 10 + the user's haul.
-        try:
-            lines = [f"#{ov} {pn} ({tn})" for tn, ov, pn in picks_made[:10]]
-            user_name = getattr(getattr(self, 'user_team', None), 'team_name', '')
-            user_picks = [f"#{ov} {pn}" for tn, ov, pn in picks_made
-                          if tn == user_name][:7]
-            story = (f"The {draft_year} NHL Entry Draft is complete. "
-                     f"Top 10: " + "; ".join(lines) + ".")
-            if user_picks:
-                story += f" Your picks: " + "; ".join(user_picks) + "."
-            self.add_news(story)
-            print(f"Auto-draft complete: {len(picks_made)} picks made.", flush=True)
-        except Exception:
-            pass
+            debug_print("Tentpole auto-draft failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
 
     def _start_offseason(self):
         """Start the offseason phase."""

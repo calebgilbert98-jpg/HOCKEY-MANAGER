@@ -448,8 +448,29 @@ class AutomatedSeasonFlow:
         print("🏆 Stanley Cup Finals: The ultimate prize awaits!")
         
     def _entry_draft(self):
-        """Entry draft day"""
+        """Entry draft day.
+
+        In auto-advance/headless seasons nobody opens the war-room UI, so
+        the draft class would sit orphaned forever. Conduct it through the
+        shared headless conductor (same pick logic as the war room's AI) --
+        unless the draft was already conducted this year (interactive war
+        room or an earlier tick), in which case this is a no-op.
+        """
         print("📋 Entry Draft: Building the future!")
+        try:
+            league = getattr(getattr(self, "game_manager", None), "league", None)
+            if league is None:
+                return
+            year = getattr(league, 'draft_prospects_year', None) \
+                or getattr(league, 'season_year', None)
+            from draft_night import conduct_entry_draft
+            picks = conduct_entry_draft(
+                league, year, app=getattr(self, "game_manager", None))
+            if picks:
+                print(f"📋 Entry Draft: {len(picks)} picks conducted "
+                      f"(headless).")
+        except Exception as _e:
+            print(f"📋 Entry Draft: headless draft failed (non-fatal): {_e}")
         
     def _free_agency_opens(self):
         """Free agency period begins"""

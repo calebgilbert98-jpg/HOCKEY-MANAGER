@@ -501,7 +501,8 @@ class RosterView(ctk.CTkFrame):
             'draft_round': ('Round', 60),
             'league': ('League', 100),
             'development': ('Development', 80),
-            'eta': ('ETA', 60)
+            'eta': ('ETA', 60),
+            'rights': ('Rights', 90),
         }
 
         self.prospects_tree = self.create_enhanced_treeview(prospects_frame, prospects_columns, 'prospects')
@@ -1034,6 +1035,8 @@ class RosterView(ctk.CTkFrame):
         elif roster_type == 'prospects':
             self._primary_button(actions, text="Promote to AHL",
                                  command=lambda: self.bulk_move_players('prospects', 'ahl')).pack(side="left", padx=3)
+            self._secondary_button(actions, text="Rights Watch",
+                                   command=self.open_rights_watch).pack(side="left", padx=3)
 
     # ------------------------------------------------------------------
     # Tables
@@ -1144,6 +1147,133 @@ class RosterView(ctk.CTkFrame):
             pass
         return False
 
+    def _rights_status(self, player):
+        """Signed vs unsigned rights status for the prospects table.
+
+        Shows only the user's own rights bookkeeping -- expiry year and
+        warning state. No scouting truth leaks: nothing here reveals a
+        prospect's hidden potential.
+        """
+        try:
+            _c = getattr(player, 'contract', None)
+            if (_c is not None and getattr(_c, 'salary', 0)
+                    and getattr(_c, 'years_remaining', 0) > 0):
+                return "Signed"
+        except Exception:
+            pass
+        try:
+            _rt = getattr(player, 'rights_team', '') or ''
+            _exp = int(getattr(player, 'rights_expiry_year', 0) or 0)
+        except Exception:
+            _rt, _exp = '', 0
+        try:
+            _uname = getattr(getattr(self.app, 'user_team', None),
+                             'team_name', '')
+            _yr = int(getattr(getattr(self.app, 'league', None),
+                              'season_year', 0) or 0)
+        except Exception:
+            _uname, _yr = '', 0
+        if _rt and _exp and (_rt == _uname or not _uname):
+            _warn = "⚠ " if _yr and _exp - _yr <= 1 else ""
+            return f"{_warn}Rights '{str(_exp)[2:]}"
+        return "—"
+
+    def _unsigned_rights_prospects(self):
+        """The user's unsigned rights-held prospects, soonest expiry
+        first."""
+        try:
+            _team = self.app.user_team
+            _uname = getattr(_team, 'team_name', '')
+            _pool = list(getattr(_team, 'prospects', []) or [])
+        except Exception:
+            return []
+        _out = []
+        for _p in _pool:
+            try:
+                _c = getattr(_p, 'contract', None)
+                if (_c is not None and getattr(_c, 'salary', 0)
+                        and getattr(_c, 'years_remaining', 0) > 0):
+                    continue  # signed
+                if (getattr(_p, 'rights_team', '') or '') != _uname:
+                    continue
+                _exp = int(getattr(_p, 'rights_expiry_year', 0) or 0)
+                if not _exp:
+                    continue
+                _out.append((_exp, _p))
+            except Exception:
+                continue
+        _out.sort(key=lambda _t: (_t[0], getattr(_t[1], 'full_name', '')))
+        return [p for _e, p in _out]
+
+    def open_rights_watch(self):
+        """Rights Watch: every unsigned rights-held prospect, soonest
+        expiry first, with warning states and one-click ELC talks."""
+        ct = self._ct
+        dlg = InGamePopup(self)
+        dlg.title("Rights Watch")
+        dlg.geometry("620x520")
+        dlg.configure(fg_color=ct['BG'])
+        dlg.transient(self)
+        self._heading(dlg, text="Rights Watch", size=16).pack(pady=(14, 2))
+        self._body(
+            dlg,
+            text=("Your unsigned rights-held prospects. Sign them to an "
+                  "entry-level deal before their rights expire, or they "
+                  "re-enter the draft and you lose them for nothing."),
+            size=10, dim=True, wraplength=560).pack(pady=(0, 8))
+        try:
+            _yr = int(getattr(getattr(self.app, 'league', None),
+                              'season_year', 0) or 0)
+        except Exception:
+            _yr = 0
+        _prospects = self._unsigned_rights_prospects()
+        _list_frame = ctk.CTkFrame(dlg, fg_color=ct['CARD'], corner_radius=8)
+        _list_frame.pack(fill='both', expand=True, padx=14, pady=6)
+        lb = tk.Listbox(_list_frame, bg=ct['CARD'], fg=ct['TEXT'],
+                        relief='flat', font=("Segoe UI", 11),
+                        selectbackground=ct['ROW_SELECTED'],
+                        highlightthickness=0, activestyle='none')
+        lb.pack(fill='both', expand=True, padx=8, pady=8)
+        if not _prospects:
+            lb.insert(tk.END, "  No unsigned rights-held prospects. "
+                              "Every drafted prospect is signed.")
+        for _p in _prospects:
+            _exp = int(getattr(_p, 'rights_expiry_year', 0) or 0)
+            try:
+                _pos = _p.primary_position.value
+            except Exception:
+                _pos = "?"
+            _left = _exp - _yr if _yr else None
+            if _left is not None and _left <= 0:
+                _state, _color = "EXPIRES THIS YEAR", ct['RED']
+            elif _left == 1:
+                _state, _color = "1 year left", "#e8b93c"
+            else:
+                _state, _color = f"{_left} years left", ct['TEXT_DIM']
+            lb.insert(tk.END,
+                      f"  {getattr(_p, 'full_name', '?'):<24} {_pos:<3} "
+                      f"age {getattr(_p, 'age', '?'):<3}  "
+                      f"rights thru {_exp}  -- {_state}")
+            lb.itemconfig(tk.END, foreground=_color)
+
+        def _open_elc():
+            _sel = lb.curselection()
+            if not _sel or not _prospects:
+                return
+            _p = _prospects[_sel[0]]
+            try:
+                self.app.open_contract_negotiation_window(_p, is_elc=True)
+            except Exception:
+                pass
+            dlg.destroy()
+
+        _btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        _btn_row.pack(pady=(0, 12))
+        self._primary_button(_btn_row, text="Open ELC talks",
+                             command=_open_elc).pack(side="left", padx=6)
+        self._secondary_button(_btn_row, text="Close",
+                               command=dlg.destroy).pack(side="left", padx=6)
+
     def populate_roster_tree(self, tree, players, roster_type):
         """Populate table with player data."""
         # Clear existing items
@@ -1198,9 +1328,11 @@ class RosterView(ctk.CTkFrame):
                           getattr(player, 'current_league', '') or 'Amateur')
                 development = self.calculate_development_trend(player)
                 eta = self.calculate_eta(player)
+                rights = self._rights_status(player)
                 # Remove salary and contract columns for prospects, add prospect-specific data
                 values = [checkbox, name, position, age, overall, potential,
-                         draft_year, draft_round, league, development, eta]
+                         draft_year, draft_round, league, development, eta,
+                         rights]
 
             # Insert item
             item_id = tree.insert('', 'end', values=values)
@@ -5462,6 +5594,11 @@ class DraftView(ctk.CTkFrame):
         self.strategy_var = tk.StringVar(master=self, value="BPA")
         self.pos_filter_var = tk.StringVar(master=self, value="All Positions")
         self._ai_after_id = None
+        # Single-player draft clock (item 1): per-draft RNG for ticker +
+        # AI selection (item 3: deterministic replays).
+        self._draft_rng = random.Random()
+        self._sp_clock_id = None
+        self._sp_clock_left = 0
 
         ct = self._ct
 
@@ -6101,12 +6238,26 @@ class DraftView(ctk.CTkFrame):
             order = self.app.league.get_draft_order(current_year)
         except Exception:
             order = []
-        for overall_pick, team, draft_pick in order:
+        # Deterministic per-draft RNG: replays with the same seed pick
+        # identically; every slot draws from it (item 3).
+        try:
+            self._draft_rng = random.Random(
+                self.dn.stable_draft_seed(current_year))
+        except Exception:
+            self._draft_rng = random.Random()
+        # get_draft_order returns (overall_pick, team, draft_pick); the ROUND
+        # lives on draft_pick.round (1-7). The overall pick number is the
+        # authoritative first element -- never the enumeration index.
+        for overall, team, draft_pick in (order or []):
             try:
-                draft_pick.overall_pick = overall_pick
+                round_num = int(getattr(draft_pick, 'round', 0) or 0)
+            except Exception:
+                round_num = 0
+            try:
+                draft_pick.overall_pick = overall
             except Exception:
                 pass
-            self.draft_order.append([draft_pick.round, team, draft_pick])
+            self.draft_order.append([round_num, team, draft_pick])
         if not self.draft_order:
             standings = getattr(self.app.league, 'standings', None) or {}
             _nhl = [t for t in self.app.league.teams
@@ -6312,6 +6463,64 @@ class DraftView(ctk.CTkFrame):
         else:
             self.next_pick_label.configure(text="No picks remaining")
 
+    def _start_sp_draft_clock(self):
+        """Single-player draft countdown for the local human's pick.
+
+        Expiry auto-picks via the user's own strategy (BPA/Need) so the
+        draft can never stall. The tick defers while a modal draft dialog
+        (trade offer/counter) holds the grab -- the clock never fires
+        under a dialog.
+        """
+        self._cancel_sp_draft_clock()
+        try:
+            _secs = int((self.app.get_settings().get('draft', {}) or {}
+                         ).get('clock_seconds', 60))
+        except Exception:
+            _secs = 60
+        if _secs <= 0:
+            return
+        self._sp_clock_left = _secs
+        self._sp_clock_tick()
+
+    def _cancel_sp_draft_clock(self):
+        _id = getattr(self, '_sp_clock_id', None)
+        if _id:
+            try:
+                self.after_cancel(_id)
+            except Exception:
+                pass
+        self._sp_clock_id = None
+
+    def _sp_clock_tick(self):
+        self._sp_clock_id = None
+        if self.current_pick >= len(self.draft_order):
+            return
+        _r, _team, _dp = self.draft_order[self.current_pick]
+        if _team != self.app.user_team:
+            return
+        try:
+            if self.grab_current() is not None:
+                # Modal open (trade offer/counter): defer, don't fire.
+                self._sp_clock_id = self.after(1000, self._sp_clock_tick)
+                return
+        except Exception:
+            pass
+        if self._sp_clock_left <= 0:
+            try:
+                self._ticker(f"{_team.team_name} ran out the clock -- "
+                             f"auto-pick.")
+            except Exception:
+                pass
+            self.auto_pick()
+            return
+        try:
+            self.clock_label.configure(
+                text=f"{_team.team_name} ({self._sp_clock_left}s)")
+        except Exception:
+            pass
+        self._sp_clock_left -= 1
+        self._sp_clock_id = self.after(1000, self._sp_clock_tick)
+
     def _ai_step(self):
         """One synchronous AI step for sim mode. Returns True to continue."""
         if self.current_pick >= len(self.draft_order):
@@ -6403,6 +6612,15 @@ class DraftView(ctk.CTkFrame):
                 pass
 
         # Your next pick info is handled inside _refresh_clock_ui.
+
+        # SINGLE-PLAYER draft clock (item 1): the local human's pick runs
+        # a countdown; expiry auto-picks via their own strategy. Purely
+        # single-player (mp_host is None) -- multiplayer keeps its own
+        # 60s host clock untouched.
+        if is_user and getattr(self.app, 'mp_host', None) is None:
+            self._start_sp_draft_clock()
+        else:
+            self._cancel_sp_draft_clock()
 
         # MULTIPLAYER: a team claimed by a remote human doesn't get an AI
         # auto-pick -- its manager picks live on the draft clock (60s,
@@ -6508,7 +6726,12 @@ class DraftView(ctk.CTkFrame):
         self._mp_wait_id = self.after(1000, self._mp_check_client_pick)
 
     def _do_ai_pick(self):
-        """Execute one AI pick synchronously. Returns (reach, steal)."""
+        """Execute one AI pick synchronously. Returns (reach, steal).
+
+        Selection itself lives in draft_night.ai_select_prospect -- the
+        same implementation the headless conductor uses, so the war room
+        and the sim can't diverge.
+        """
         if self.current_pick >= len(self.draft_order):
             return (False, False)
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
@@ -6523,56 +6746,29 @@ class DraftView(ctk.CTkFrame):
         if not available:
             self.end_draft()
             return (False, False)
-        needs = self.te.team_needs(team_on_clock)
-        # Consider top 12 *of the picking team's own board* (consensus
-        # re-ranked by that club's scouts in start_draft); prospects
-        # missing from the board fall back behind everyone. Consensus
-        # ordering is the fallback when boards are unavailable.
-        candidates = available[:12]
         try:
-            _board = (getattr(self, 'team_boards', None) or {}).get(
-                getattr(team_on_clock, 'team_name', None))
-            if _board:
-                _bidx = {getattr(_p, 'id', None): _i
-                         for _i, _p in enumerate(_board)}
-                _n = len(_board)
-                candidates = sorted(
-                    available,
-                    key=lambda _p: (_bidx.get(getattr(_p, 'id', None), _n),
-                                    -getattr(_p, 'draft_ranking', 0)))[:12]
+            needs = self.te.team_needs(team_on_clock)
         except Exception:
-            candidates = available[:12]
+            needs = []
+        try:
+            board = (getattr(self, 'team_boards', None) or {}).get(
+                getattr(team_on_clock, 'team_name', None))
+        except Exception:
+            board = None
+        try:
+            _strat = self.app.ai_manager.get_team_strategy(
+                getattr(team_on_clock, 'team_name', ''))
+            priority = getattr(_strat, 'priority', None)
+        except Exception:
+            priority = None
         round_num = self.draft_order[self.current_pick][0]
-        scored = []
-        for p in candidates:
-            try:
-                pos = p.primary_position.value
-            except Exception:
-                pos = "?"
-            base = getattr(p, 'draft_ranking', 0)
-            if pos in needs[:2]:
-                base *= 1.08
-            if pos == 'G' and round_num <= 1:
-                base *= 0.80  # goalies rarely go top-10
-            # Franchise situation: contenders draft for readiness (higher
-            # current overall), rebuilders draft for ceiling (potential
-            # grade). Modest tilt -- BPA still rules the board.
-            try:
-                from draft_day_trades import franchise_pick_multiplier
-                _strat = self.app.ai_manager.get_team_strategy(
-                    team_on_clock.team_name)
-                base *= franchise_pick_multiplier(
-                    p, getattr(_strat, 'priority', None))
-            except Exception:
-                pass
-            base *= random.uniform(0.94, 1.06)
-            scored.append((base, p))
-        scored.sort(key=lambda s: s[0], reverse=True)
-        selected = scored[0][1]
-        # Reach / steal detection for the ticker
-        idx = available.index(selected)
-        reach = idx >= 8
-        steal = idx == 0 and self.current_pick >= 4
+        overall = self.current_pick + 1
+        selected, reach, steal = self.dn.ai_select_prospect(
+            team_on_clock, available, board, needs, round_num, priority,
+            self._draft_rng, overall=overall)
+        if selected is None:
+            self.end_draft()
+            return (False, False)
         self.execute_pick(team_on_clock, selected,
                           reach=reach, steal=steal)
         return (reach, steal)
@@ -6709,7 +6905,8 @@ class DraftView(ctk.CTkFrame):
             getattr(player, 'potential_grade', '?')),
             tags=(f"pot_{pot_grade}",))
         self._ticker(self.dn.ticker_line(overall, team.team_name, player,
-                                         round_num, reach=reach, steal=steal))
+                                         round_num, reach=reach, steal=steal,
+                                         rng=self._draft_rng))
         self.picks_made.append((team.team_name, overall, player))
         # Draft Story Engine: fire pick drama (reach/steal/surprise)
         try:
@@ -6862,10 +7059,14 @@ class DraftView(ctk.CTkFrame):
                 if not messagebox.askyesno("Counter-offer",
                                            f"{resp.message}\n\nAccept?"):
                     return
-                self._execute_pick_swap(j, user_pick, partner_pick,
-                                        resp.want_added, resp.will_add)
+                _done = self._execute_pick_swap(
+                    j, user_pick, partner_pick,
+                    resp.want_added, resp.will_add)
             else:
-                self._execute_pick_swap(j, user_pick, partner_pick, [], [])
+                _done = self._execute_pick_swap(
+                    j, user_pick, partner_pick, [], [])
+            if not _done:
+                return  # legality preflight blocked it; dialog stays open
             dlg.destroy()
             messagebox.showinfo("Trade Complete", "Pick swap completed.")
             self.process_draft_pick()
@@ -6883,10 +7084,88 @@ class DraftView(ctk.CTkFrame):
             if entry[2] is draft_pick:
                 entry[1] = new_team
 
+    def _validate_pick_swap(self, partner_team, user_pick, partner_pick,
+                              want_added, will_add):
+        """Centralized legality preflight for a draft pick swap: the two
+        base picks PLUS any counter-added assets. Mirrors the gates
+        trade_engine enforces for full trades -- freeze/deadline,
+        ownership, cap in both directions, NTC/NMC consent.
+
+        The counter path used to skip all of this: an AI counter could
+        add a player who'd since moved, blow either cap, or carry an
+        un-waived clause straight into the swap. Returns (ok, message).
+        """
+        te = self.te
+        league = self.app.league
+        user_team = self.app.user_team
+        user_gives = [user_pick] + list(want_added or [])
+        partner_gives = [partner_pick] + list(will_add or [])
+        # 1. Freeze / deadline gate
+        try:
+            _dstr = str(getattr(self.app, 'current_date', ''))
+            if not te.trades_allowed(_dstr, league):
+                return (False, "Trading is frozen right now "
+                               "(trade freeze / deadline).")
+        except Exception:
+            pass
+        # 2. Ownership -- counter-added assets may have moved since the
+        # counter was built.
+        for a in user_gives:
+            if te._is_pick(a):
+                if str(getattr(a, 'current_team', '')) != \
+                        user_team.team_name:
+                    return (False, f"You no longer own "
+                                   f"{te.asset_label(a)}.")
+            elif a not in (getattr(user_team, 'roster', []) or []):
+                return (False, f"{getattr(a, 'full_name', 'A player')} is "
+                                "no longer on your roster.")
+        for a in partner_gives:
+            if te._is_pick(a):
+                if str(getattr(a, 'current_team', '')) != \
+                        partner_team.team_name:
+                    return (False, f"{partner_team.team_name} no longer "
+                                   f"owns {te.asset_label(a)}.")
+            elif a not in (getattr(partner_team, 'roster', []) or []):
+                return (False, f"{getattr(a, 'full_name', 'A player')} is "
+                                "no longer on their roster.")
+        # 3. Cap, both directions
+        try:
+            if not te._cap_ok_after(user_team, user_gives, partner_gives):
+                return (False, "This trade puts YOU over the salary cap.")
+        except Exception:
+            pass
+        try:
+            if not te._cap_ok_after(partner_team, partner_gives, user_gives):
+                return (False, f"This trade puts {partner_team.team_name} "
+                                "over the salary cap.")
+        except Exception:
+            pass
+        # 4. NTC/NMC consent on every moving player
+        try:
+            for _from, _to, _assets in (
+                    (user_team, partner_team, user_gives),
+                    (partner_team, user_team, partner_gives)):
+                _skaters = [a for a in _assets if not te._is_pick(a)]
+                for _v in te.trade_vetoes(_from, _to, _skaters, league):
+                    _ok, _why = te.will_waive_ntc(
+                        _v["player"], _from, _to, league)
+                    if not _ok:
+                        return (False, _why or "A no-trade clause blocks "
+                                             "this deal.")
+        except Exception:
+            pass
+        return (True, "")
+
     def _execute_pick_swap(self, partner_idx, user_pick, partner_pick,
                            want_added, will_add):
         user_team = self.app.user_team
         partner_team = self.draft_order[partner_idx][1]
+        # Legality preflight: the counter path used to skip every gate.
+        _ok, _why = self._validate_pick_swap(
+            partner_team, user_pick, partner_pick, want_added, will_add)
+        if not _ok:
+            messagebox.showerror("Trade blocked", _why)
+            return False
         # Swap the picks
         self._swap_pick_owner(user_pick, partner_team)
         self._swap_pick_owner(partner_pick, user_team)
@@ -6909,34 +7188,79 @@ class DraftView(ctk.CTkFrame):
                     user_team.add_player(a)
                 except Exception:
                     pass
-        # History + news
+        # History + news. CompletedTrade records the FULL deal -- the two
+        # base picks plus every counter-added asset (the old record
+        # silently dropped the extras).
         gm = getattr(self.app, 'game_manager', None)
         summary = (f"{user_team.team_name} acquires pick "
                    f"#{partner_idx + 1} from {partner_team.team_name}.")
+        _user_gives = [user_pick] + list(want_added or [])
+        _partner_gives = [partner_pick] + list(will_add or [])
         if gm is not None:
             if not hasattr(gm, 'trade_history'):
                 gm.trade_history = []
             gm.trade_history.append(self.te.CompletedTrade(
                 str(getattr(gm, 'current_date', '')), user_team.team_name,
                 partner_team.team_name,
-                [self.te.asset_label(user_pick)],
-                [self.te.asset_label(partner_pick)], summary))
+                [self.te.asset_label(a) for a in _user_gives],
+                [self.te.asset_label(a) for a in _partner_gives], summary))
         try:
             self.app.add_news_story(f"DRAFT TRADE: {summary}")
         except Exception:
             pass
         self._ticker(f"TRADE: {summary}")
+        return True
 
     # ------------------------------------------------------------------
     def show_grades(self):
+        """Draft review: grade + value-vs-slot for every team, the best
+        value pick of the draft, and the user's own picks -- persisted to
+        league.draft_grades_history so past drafts can be revisited.
+
+        Grades measure the draft, not hidden truth: they compare each
+        club's haul against slot value (the public draft board), never
+        against a prospect's true ceiling.
+        """
         ct = self._ct
-        grades = self.dn.draft_grades(self.picks_made)
+        try:
+            _lg = self.app.league
+            _dy = int(getattr(_lg, 'draft_prospects_year', None)
+                      or getattr(_lg, 'season_year', 0) or 0)
+            grades = self.dn.persist_draft_grades(
+                _lg, _dy, self.picks_made)
+        except Exception:
+            grades = self.dn.draft_grades(self.picks_made)
         dlg = InGamePopup(self)
         dlg.title("Draft Grades")
-        dlg.geometry("420x540")
+        dlg.geometry("560x680")
         dlg.configure(fg_color=ct['BG'])
         dlg.transient(self)
-        self._heading(dlg, text="Draft Grades", size=16).pack(pady=14)
+        self._heading(dlg, text="Draft Grades", size=16).pack(pady=(14, 2))
+        self._body(
+            dlg,
+            text=("How each club's haul stacks up against slot value, "
+                  "curved across all 32 teams. A+ is a franchise-altering "
+                  "night; F means the board said the picks were reaches."),
+            size=10, dim=True, wraplength=500).pack(pady=(0, 8))
+
+        # Best value pick of the draft (value / slot value).
+        _best_line = ""
+        try:
+            _best = max(
+                self.picks_made,
+                key=lambda _t: (self.dn.drafted_player_value(_t[2])
+                                / max(1.0, self.dn.pick_slot_value(_t[1]))))
+            _btn, _bov, _bp = _best
+            _br = (self.dn.drafted_player_value(_bp)
+                   / max(1.0, self.dn.pick_slot_value(_bov)))
+            _best_line = (f"Best value: #{_bov} "
+                          f"{getattr(_bp, 'full_name', '?')} ({_btn}) -- "
+                          f"{_br:.2f}x slot value")
+        except Exception:
+            pass
+        if _best_line:
+            self._body(dlg, text=_best_line, size=11).pack(pady=(0, 6))
+
         grades_card = ctk.CTkFrame(dlg, fg_color=ct['CARD'], corner_radius=8)
         grades_card.pack(fill='both', expand=True, padx=14, pady=6)
         lb = tk.Listbox(grades_card, bg=ct['CARD'], fg=ct['TEXT'],
@@ -6945,16 +7269,35 @@ class DraftView(ctk.CTkFrame):
                         highlightthickness=0, activestyle='none')
         lb.pack(fill='both', expand=True, padx=8, pady=8)
         user_grade = None
+        _uname = getattr(getattr(self.app, 'user_team', None),
+                         'team_name', '')
         for team, grade, ratio in grades:
-            lb.insert(tk.END, f"  {grade}   {team}")
-            lb.itemconfig(tk.END, foreground=self._pot_color(grade))
-            if team == self.app.user_team.team_name:
+            lb.insert(tk.END, f"  {grade:>2}   {team:<28}  {ratio:.2f}x")
+            lb.itemconfig(tk.END, foreground=self.dn.grade_color(grade))
+            if team == _uname:
                 user_grade = grade
+        # The user's own picks, so the review answers "how did I do".
+        _mine = [(ov, p) for tn, ov, p in self.picks_made if tn == _uname]
+        if _mine:
+            self._body(dlg, text="Your picks:", size=11).pack(
+                pady=(6, 0))
+            _lines = []
+            for _ov, _p in _mine[:9]:
+                try:
+                    _pos = _p.primary_position.value
+                except Exception:
+                    _pos = "?"
+                _lines.append(f"#{_ov} {getattr(_p, 'full_name', '?')} "
+                              f"({_pos})")
+            self._body(dlg, text="   ".join(_lines), size=10, dim=True,
+                       wraplength=520).pack(pady=(0, 4))
         if user_grade:
             ug = ctk.CTkLabel(dlg, text=f"Your draft grade: {user_grade}",
                               font=("Segoe UI", 13, 'bold'),
-                              text_color=self._pot_color(user_grade))
+                              text_color=self.dn.grade_color(user_grade))
             ug.pack(pady=10)
+        self._primary_button(dlg, text="Close",
+                             command=dlg.destroy).pack(pady=(0, 12))
 
     def end_draft(self):
         # Terminate the pick order: a draft that ends early (e.g. the
@@ -7001,6 +7344,21 @@ class DraftView(ctk.CTkFrame):
                 except Exception:
                     pass
             _lg.undrafted_pool = _left
+        except Exception:
+            pass
+        # Stamp this draft year as conducted (idempotency guard): the
+        # headless conductor and the offseason guarantee both respect it,
+        # so a war-room draft can never be re-conducted by the sim.
+        try:
+            _lg = self.app.league
+            _dy = int(getattr(_lg, 'draft_prospects_year', None)
+                      or getattr(_lg, 'season_year', 0) or 0)
+            self.dn.mark_draft_conducted(_lg, _dy)
+        except Exception:
+            pass
+        # Stop the single-player draft clock (item 1).
+        try:
+            self._cancel_sp_draft_clock()
         except Exception:
             pass
         self.show_grades()
