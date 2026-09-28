@@ -39,6 +39,14 @@ MIGRATE_50_TO_100_ATTRS = frozenset([
 SAVE_VERSION_100_SCALE = '2.0'
 
 
+def _parse_version(v):
+    """Parse a version string into a comparable tuple of ints."""
+    try:
+        return tuple(int(x) for x in str(v).split('.'))
+    except (ValueError, AttributeError):
+        return (0,)
+
+
 class GameSaveManager:
     """Manages saving and loading of complete game states"""
     
@@ -545,7 +553,8 @@ class GameSaveManager:
                                      f"Save file version {version} may not be fully compatible")
             # Legacy migration: saves before 2.0 used 1-50 attribute scale;
             # 2.0+ uses native 1-100. Scale old attributes up on load.
-            self._migrate_50_to_100 = (str(version) < SAVE_VERSION_100_SCALE)
+            self._migrate_50_to_100 = (
+                _parse_version(version) < _parse_version(SAVE_VERSION_100_SCALE))
             if self._migrate_50_to_100:
                 print(f"Migrating save v{version} attributes from 1-50 to 1-100 scale")
             
