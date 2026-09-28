@@ -479,6 +479,58 @@ def main():
     except Exception as e:
         check("fail", "legacy inbox popup wrapper", False, str(e))
 
+    # ---------------- dressing room (module 03) ----------------
+    from dressing_room import DressingRoomView
+    import dressing_room as _drmod
+    dr_roster = []
+    nats = [("Canada", "4+ years"), ("Sweden", "4+ years"),
+            ("USA", "2-3 years"), ("Finland", "rookie")]
+    for i in range(16):
+        nat, ten = nats[i % 4]
+        pl = g.Player(first_name=f"Room{i}", last_name="Player", age=24 + i % 8,
+                      primary_position=g.PlayerPosition.CENTER,
+                      jersey_number=10 + i)
+        pl.nationality = nat
+        pl.team_tenure = ten
+        pl.captaincy = "C" if i == 0 else ("A" if i == 1 else "")
+        pl.leadership = 85 if i == 0 else 60
+        pl.morale = 70
+        _drmod.ensure_dressing_room_fields(pl)
+        dr_roster.append(pl)
+    dr_team = SimpleNamespace(team_name="Dressing Club", roster=dr_roster,
+                             staff=[], streak=0)
+    _drmod.ensure_dressing_room_fields(dr_team)
+    dr_app = SimpleNamespace(league=league, user_team=dr_team,
+                             open_windows={},
+                             BG_COLOR="#1a1a2e", CONTENT_BG="#0e0e11",
+                             TEXT_COLOR="#ffffff", FONT_FAMILY="Helvetica")
+    dr_holder = tk.Frame(root, width=1600, height=900)
+    dr_holder.pack(fill="both", expand=True)
+    try:
+        drv = DressingRoomView(dr_holder, app=dr_app)
+        drv.pack(fill="both", expand=True)
+        root.update(); root.update()
+        shot(drv, f"{args.shots}/dressing_room_{args.res}.png")
+        try:
+            ww, wh = drv.winfo_width(), drv.winfo_height()
+            rw, rh = root.winfo_width(), root.winfo_height()
+            check("fail", f"dressing room fills app window ({ww}x{wh} in {rw}x{rh})",
+                  abs(ww - rw) <= 4 and abs(wh - rh) <= 4)
+        except Exception as e:
+            check("fail", "dressing room fill measurable", False, str(e))
+        # NB: no check_fit -- that asserts popup-within-92%-of-window, but
+        # the dressing room is a full-screen view (like the inbox above).
+        check_fonts("dressing room", drv)
+        check_contrast("dressing room", drv)
+        check_clipping("dressing room", drv)
+        check_nested_scroll("dressing room", drv)
+        check("fail", "dressing room exposes close_view contract",
+              callable(getattr(drv, "close_view", None)))
+    except Exception as e:
+        check("fail", "dressing room view constructs", False, str(e))
+    dr_holder.destroy()
+    root.update()
+
     print(f"\n{PASS and len(PASS)} passed, {len(FAIL)} failed, {len(WARN)} warnings")
     return 1 if FAIL else 0
 

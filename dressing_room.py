@@ -173,12 +173,24 @@ def _tenure_bucket(player: Any) -> str:
     return "new"
 
 
-def form_cliques(team: Any, min_size: int = 3) -> List[Dict[str, Any]]:
+def form_cliques(team: Any, min_size: int = 3,
+                 extra: Any = None) -> List[Dict[str, Any]]:
     """Group the room by tenure + nationality (only where data exists).
 
     Returns clique dicts; players in no clique are floaters.
+
+    ``extra``: a player no longer on the roster (e.g. just traded away)
+    to include in the grouping anyway. Departure cascades run after the
+    roster move, so without this the room can't tell which clique it lost.
     """
     roster = _roster(team)
+    if extra is not None:
+        try:
+            eid = _pid(extra)
+            if all(_pid(p) != eid for p in roster):
+                roster = list(roster) + [extra]
+        except Exception:
+            pass
     buckets: Dict[tuple, List[Any]] = {}
     for p in roster:
         nat = str(getattr(p, "nationality", "") or "").strip() or "Unknown"
@@ -209,9 +221,10 @@ def form_cliques(team: Any, min_size: int = 3) -> List[Dict[str, Any]]:
     return cliques
 
 
-def clique_of(team: Any, player: Any) -> Optional[Dict[str, Any]]:
+def clique_of(team: Any, player: Any,
+              extra: Any = None) -> Optional[Dict[str, Any]]:
     pid = _pid(player)
-    for c in form_cliques(team):
+    for c in form_cliques(team, extra=extra):
         if pid in c["member_ids"]:
             return c
     return None
@@ -268,7 +281,10 @@ def cascade_on_trade(team: Any, traded: Any = None, arriving: Any = None,
                   and influence_of(cap) >= 70)
         if steady:
             base_hit = max(1, int(round(base_hit * 0.5)))
-        clique = clique_of(team, traded)
+        # The departed player is already off the roster by the time the
+        # post-trade hook runs -- include him in the grouping so the room
+        # knows which clique it lost.
+        clique = clique_of(team, traded, extra=traded)
         for p in _roster(team):
             if p is traded:
                 continue
@@ -333,7 +349,43 @@ def integration_of(team: Any, player: Any) -> int:
     return _clamp(base + played * 8, 0, 100)
 
 
-def cascade_on_press(team: Any, event: Dict[str, Any],
+def _event_player_names(event: Any):
+    """Yield candidate player-name strings from a media event payload.
+
+    media_system.py is inconsistent: some events are plain dicts, others
+    are MediaEvent dataclasses carrying a ``details`` dict. Trade events
+    name players under list keys (``traded_players``/``received_players``),
+    signings under ``player``. This normalizes every shape the backend
+    actually produces.
+    """
+    data = event
+    if not isinstance(data, dict):
+        try:
+            data = getattr(event, "details", None)
+        except Exception:
+            data = None
+    if not isinstance(data, dict):
+        return
+    for key in ("player_name", "player", "target", "subject"):
+        try:
+            v = data.get(key)
+        except Exception:
+            v = None
+        if isinstance(v, str) and v.strip():
+            yield v.strip()
+    for key in ("players_involved", "traded_players", "received_players",
+                "players"):
+        try:
+            v = data.get(key)
+        except Exception:
+            v = None
+        if isinstance(v, (list, tuple)):
+            for item in v:
+                if isinstance(item, str) and item.strip():
+                    yield item.strip()
+
+
+def cascade_on_press(team: Any, event: Any,
                      response_choice: str) -> List[str]:
     """Press answers ripple through the room -- individuals AND groups."""
     lines: List[str] = []
@@ -342,10 +394,9 @@ def cascade_on_press(team: Any, event: Dict[str, Any],
         return lines
     by_name = {_name(p).lower(): p for p in roster}
     target = None
-    for key in ("player_name", "player", "target"):
-        v = event.get(key) if isinstance(event, dict) else None
-        if isinstance(v, str) and v.lower() in by_name:
-            target = by_name[v.lower()]
+    for cand in _event_player_names(event):
+        if cand.lower() in by_name:
+            target = by_name[cand.lower()]
             break
 
     def _clique_bump(player: Any, delta: float) -> None:
