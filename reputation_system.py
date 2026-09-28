@@ -1497,7 +1497,7 @@ def apply_mistreat_player(team: Any, coach: Any, player: Any,
     player.happiness = max(0, (getattr(player, "happiness", 70) or 70) - 15)
     player.controversy = min(100, (player.controversy or 0) + 5)
     pop = team_perception(player, roster=roster)
-    ff = fan_favourite_score(player, team)
+    ff = fan_favourite_score(player, team, rivalries=rivalries)
     fav = ff["score"] >= 70
     friends = [p for p in roster
                if p is not player and _ensure_relationships(p).get(player.id, 0) >= 50]
@@ -2518,6 +2518,14 @@ def record_playoff_series(rivalries: list, winner: Any, loser: Any,
     out.append(add_rivalry(rivalries, winner, loser, "team_team", heat,
                            "playoff_series", story, grudge=60,
                            career_cost=40 if games >= 7 else 20))
+    # Direction stamp: who ended whose season. The transfer lifecycle uses
+    # it to spot a player joining the team that just eliminated his old
+    # club. Additive: old records simply lack the keys.
+    try:
+        out[-1]["playoff_winner"] = _ekey(winner)
+        out[-1]["playoff_loser"] = _ekey(loser)
+    except Exception:
+        pass
     return out
 
 
@@ -2560,8 +2568,10 @@ def record_award_race(rivalries: list, pa: Any, pb: Any, award: str) -> Dict[str
             return False
     if not (_takes_it_personally(pa) or _takes_it_personally(pb)):
         return {}
+    # A spark, not a fire: the beef is real but small. If the grudge has
+    # legs it can still solidify at a review; most of these just fade.
     return add_rivalry(
-        rivalries, pa, pb, "player_player", 25, "award_race",
+        rivalries, pa, pb, "player_player", 10, "award_race",
         f"{_ename(pa)} vs {_ename(pb)}: {award} race got personal.",
         grudge=35)
 
@@ -2648,7 +2658,8 @@ def fan_tier_label(score: float) -> str:
     return "Anonymous"
 
 
-def fan_favourite_score(player: Any, team: Any = None) -> Dict[str, Any]:
+def fan_favourite_score(player: Any, team: Any = None,
+                        rivalries: Optional[list] = None) -> Dict[str, Any]:
     """0-100 how much the fans adore this player, and why."""
     ensure_reputation_fields(player)
     score = 15.0
@@ -2702,13 +2713,40 @@ def fan_favourite_score(player: Any, team: Any = None) -> Dict[str, Any]:
             reasons.append("Phenom hype")
     except Exception:
         pass
+    # Fan hate: a betrayal the fanbase hasn't forgiven. The ledger holds
+    # it; the score reads it when the store is handed in.
+    try:
+        if rivalries is not None and team is not None:
+            _hk = _ekey(team)
+            _pk = _ekey(player)
+            _hate_words = {
+                "defection": "Defected to a hated rival -- the fans boo him",
+                "elimination_defection": "Joined the team that ended their season",
+                "trade_demand": "Blindsided the fanbase with a trade demand",
+            }
+            for _r in get_rivalries_for(rivalries, player):
+                if _r.get("kind") != "fan_player":
+                    continue
+                _other = _r["b"] if _r.get("a") == _pk else _r.get("a")
+                if _other != _hk:
+                    continue
+                _pen = min(40, int((_r.get("intensity", 0) or 0) * 0.6))
+                if _pen > 0:
+                    score -= _pen
+                    reasons.append(_hate_words.get(
+                        _r.get("origin"),
+                        "The fans haven't forgiven him") + f" (-{_pen})")
+    except Exception:
+        pass
     score = max(0, min(100, round(score)))
     return {"score": score, "tier": fan_tier_label(score), "reasons": reasons}
 
 
-def is_fan_favourite(player: Any, team: Any = None) -> bool:
+def is_fan_favourite(player: Any, team: Any = None,
+                     rivalries: Optional[list] = None) -> bool:
     try:
-        return fan_favourite_score(player, team)["score"] >= 70
+        return fan_favourite_score(
+            player, team, rivalries=rivalries)["score"] >= 70
     except Exception:
         return False
 
@@ -2927,7 +2965,9 @@ def player_news_reaction(team: Any, player: Any, kind: str,
     """kind: trade_rumor | benched | injured | milestone | award |
     retirement | extension_signed. Returns what happened."""
     ensure_reputation_fields(player)
-    ff = fan_favourite_score(player, team)
+    ff = fan_favourite_score(
+        player, team,
+        rivalries=_rivalry_store(league) if league is not None else None)
     fav = ff["score"] >= 70
     name = getattr(player, "full_name", "Player").split()
     name = name[0] if name else "Player"
@@ -3144,6 +3184,26 @@ def review_rivalries(rivalries: list, years: int = 3) -> List[Dict[str, Any]]:
     return verdicts
 
 
+def record_fan_hate(rivalries: list, player: Any, hated_by: Any,
+                    origin: str, story: str, intensity: int = 50,
+                    grudge: int = 60) -> Dict[str, Any]:
+    """The fanbase turns on a player. origin: defection (crossed to a hated
+    rival), elimination_defection (joined the team that just ended his old
+    club's season), trade_demand (blindsided everyone by asking out).
+    kind="fan_player" so it never feeds game tension like a team_team feud
+    -- it feeds fan sentiment, and the first-game-back homecoming moment.
+    Each record carries faced=False until that homecoming is consumed.
+    """
+    try:
+        r = add_rivalry(rivalries, player, hated_by, "fan_player", intensity,
+                        origin, story, grudge=grudge)
+        if r and "faced" not in r:
+            r["faced"] = False
+        return r
+    except Exception:
+        return {}
+
+
 def on_player_transfer(rivalries: list, player: Any,
                        from_team: Any = None,
                        to_team: Any = None) -> Dict[str, Any]:
@@ -3171,10 +3231,80 @@ def on_player_transfer(rivalries: list, player: Any,
                 left.append(r)
     except Exception:
         pass
+    # Fan hate: the old barn doesn't forget a betrayal. Crossing to a
+    # franchise rival, or joining the team that just ended his old club's
+    # season, turns the old fanbase. (A blindsiding trade demand is
+    # recorded where the demand goes public, in headlines.)
+    try:
+        if from_team is not None and to_team is not None \
+                and from_team is not to_team:
+            _fk, _tk = _ekey(from_team), _ekey(to_team)
+            _fn, _tn = _ename(from_team), _ename(to_team)
+            _pn = _ename(player)
+            _rival = rivalry_between(rivalries, from_team, to_team,
+                                     "team_team")
+            if _rival is not None and (_rival.get("intensity", 0) or 0) >= 50:
+                record_fan_hate(
+                    rivalries, player, from_team, "defection",
+                    f"{_pn} defected to hated rival {_tn}. "
+                    f"The {_fn} faithful boo him now.",
+                    intensity=55, grudge=70)
+            else:
+                for _r in (rivalries or []):
+                    try:
+                        if _r.get("kind") != "team_team" \
+                                or _r.get("origin") != "playoff_series":
+                            continue
+                        if {_r.get("a"), _r.get("b")} != {_fk, _tk}:
+                            continue
+                        if _rivalry_age_years(_r) >= 1.0:
+                            continue
+                        if _r.get("playoff_winner") != _tk \
+                                or _r.get("playoff_loser") != _fk:
+                            continue
+                        record_fan_hate(
+                            rivalries, player, from_team,
+                            "elimination_defection",
+                            f"{_pn} joined {_tn} -- the team that just ended "
+                            f"{_fn}'s season. The faithful haven't forgiven him.",
+                            intensity=45, grudge=60)
+                        break
+                    except Exception:
+                        continue
+    except Exception:
+        pass
     return {"carried": carried, "left_behind": left,
             "text": (f"{_ename(player)} moved. "
                      f"{len(carried)} personal beef(s) follow him; "
                      f"{len(left)} ambient one(s) left behind.")}
+
+
+def consume_homecomings(rivalries: list, home_team: Any,
+                        away_team: Any) -> List[Dict[str, Any]]:
+    """First game back in the old barn after a perceived betrayal. Finds
+    away players the home fans hate (un-faced fan_player records), marks
+    each faced so the moment fires exactly once, and returns the hit list
+    for the sim to make the building rowdy. Never raises."""
+    out: List[Dict[str, Any]] = []
+    try:
+        _hk = _ekey(home_team)
+        for _p in (getattr(away_team, "roster", None) or []):
+            _pk = _ekey(_p)
+            for _r in get_rivalries_for(rivalries, _p):
+                if _r.get("kind") != "fan_player" or _r.get("faced"):
+                    continue
+                _other = _r["b"] if _r.get("a") == _pk else _r.get("a")
+                if _other != _hk:
+                    continue
+                if _r.get("origin") not in ("defection",
+                                            "elimination_defection"):
+                    continue
+                _r["faced"] = True
+                out.append({"player": _p, "record": _r})
+                break
+    except Exception:
+        pass
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -3736,6 +3866,33 @@ def game_tension_breakdown(home_team: Any, away_team: Any, rivalries: list,
             for inc in (r.get("incidents") or []):
                 incidents.append(inc)
         t += rivalry_pts
+        # Hostile homecomings: an away player the home fans hate (betrayal),
+        # back for the first time. Read-only -- the sim consumes the
+        # one-time flag when the game is actually played.
+        try:
+            _hk = _ekey(home_team)
+            _hc_n = 0
+            for _p in (getattr(away_team, "roster", None) or []):
+                if _hc_n >= 2:
+                    break
+                _pk = _ekey(_p)
+                for _r in get_rivalries_for(rivalries, _p):
+                    if _r.get("kind") != "fan_player" or _r.get("faced"):
+                        continue
+                    _other = _r["b"] if _r.get("a") == _pk else _r.get("a")
+                    if _other != _hk:
+                        continue
+                    if _r.get("origin") not in ("defection",
+                                                "elimination_defection"):
+                        continue
+                    drivers.append({
+                        "label": f"Hostile homecoming: {_ename(_p)} returns",
+                        "points": 10.0})
+                    t += 10.0
+                    _hc_n += 1
+                    break
+        except Exception:
+            pass
         # Fights and penalty minutes: chippiness is measurable.
         if recent_fights:
             pts = min(24.0, recent_fights * 6.0)
@@ -4730,7 +4887,10 @@ def evaluate_contract_decision(player: Any, aav: float, expected_aav: float,
 
     fav = False
     try:
-        fav = fan_favourite_score(player, team)["score"] >= 70
+        fav = fan_favourite_score(
+            player, team,
+            rivalries=_rivalry_store(league)
+            if league is not None else None)["score"] >= 70
     except Exception:
         pass
 

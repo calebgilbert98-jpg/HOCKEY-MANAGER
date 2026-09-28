@@ -141,8 +141,9 @@ lg2.add_team(_mkteam("Team A", "A"))
 lg2.add_team(_mkteam("Team B", "B"))
 lg2.season_year = 2026  # -> 2027; 2027 % 3 != 0 => decay only
 pc, pd = _mkplayer(3, "Mild One"), _mkplayer(4, "Mild Two")
-pc.base_controversy = 60  # personality to take the snub personally
-rs.record_award_race(lg2.rivalries, pc, pd, "Hart Trophy")
+# A mid-size beef (award races now spark at 10 and can die in one quiet
+# offseason -- by design -- so the decay probe uses a meatier one).
+rs.record_major_injury(lg2.rivalries, pc, pd, season_ending=False)
 r2 = rivalry_between(lg2.rivalries, pc, pd)
 i2 = r2["intensity"]
 lg2.end_of_season()

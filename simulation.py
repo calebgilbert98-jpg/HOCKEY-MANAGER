@@ -549,6 +549,25 @@ class GameSim:
         # Pre-game punishment orders need score/period fields set first.
         self._init_situations()
         self._evaluate_punishment_orders()
+        # Hostile homecomings: first game back in the old barn after a
+        # perceived betrayal. The building is rowdy -- crowd energy and mood
+        # carry it (the designed channel: mood moves finishing), and the
+        # tension breakdown above already added the driver. One night only.
+        try:
+            import reputation_system as _rs_hc
+            for _hit in _rs_hc.consume_homecomings(
+                    self.rivalries, self.home_team, self.away_team):
+                _pname = getattr(_hit["player"], "full_name",
+                                 "The returnee").strip() or "The returnee"
+                _barn = getattr(self.home_team, "team_name", "the old barn")
+                self._log_event(
+                    f"Pregame -- {_pname} returns to {_barn} for the first "
+                    f"time since the betrayal. Expect a hostile reception.",
+                    "SITUATION")
+                self._crowd_energy = min(100.0, self._crowd_energy + 15.0)
+                self._crowd_mood = min(100.0, self._crowd_mood + 10.0)
+        except Exception:
+            pass
 
         # Recent shooters: keeps one sniper from monopolizing every shot.
         # After you shoot, the puck moves on -- someone else shoots next.
