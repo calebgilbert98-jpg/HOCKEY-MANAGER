@@ -36,6 +36,7 @@ class RebuiltNHLGameViewer:
         
         # Game data
         self.event_log = event_log or []
+        self.filtered_log = self.event_log  # E5: active view (may be filtered)
         self.duration = duration
         self.home_team = home_team
         self.away_team = away_team
@@ -318,7 +319,72 @@ class RebuiltNHLGameViewer:
                                  state="readonly", width=8)
         speed_menu.pack(side='left', padx=5)
         speed_menu.bind('<<ComboboxSelected>>', self.on_speed_change)
-        
+
+        # E5: viewing mode (Watch All / Highlights / Text)
+        mode_frame = tk.Frame(controls_frame, bg='#1a2332')
+        mode_frame.pack(side='right', padx=20, pady=10)
+
+        tk.Label(mode_frame, text="View:",
+                font=('Segoe UI', 10), fg='white', bg='#1a2332').pack(side='left')
+
+        self.mode_var = tk.StringVar(value="Watch All")
+        mode_menu = ttk.Combobox(mode_frame, textvariable=self.mode_var,
+                                values=["Watch All", "Highlights", "Text"],
+                                state="readonly", width=12)
+        mode_menu.pack(side='left', padx=5)
+        mode_menu.bind('<<ComboboxSelected>>', self.on_mode_change)
+
+    def on_mode_change(self, event=None):
+        """E5: switch viewing mode."""
+        mode = self.mode_var.get()
+        if mode == "Highlights":
+            # Filter to highlight events only
+            self.filtered_log = [e for e in self.event_log
+                               if self._is_highlight(e)]
+        elif mode == "Text":
+            # Text mode: show PBP in a scrollable text widget
+            self._show_text_mode()
+            return
+        else:
+            self.filtered_log = self.event_log
+        self.event_index = 0
+        self.current_time = 0
+        self._hide_text_mode()
+
+    def _is_highlight(self, event):
+        """E5: is this event highlight-worthy?"""
+        et = str(event.get('type', '')).lower()
+        if 'goal' in et:
+            return True
+        if 'save' in et and event.get('danger', '').lower() == 'high':
+            return True
+        if 'penalty' in et and event.get('minutes', 0) >= 5:
+            return True
+        if 'fight' in str(event.get('desc', '')).lower():
+            return True
+        return False
+
+    def _show_text_mode(self):
+        """E5: display PBP as scrolling text instead of animation."""
+        if not hasattr(self, 'text_widget'):
+            self.text_widget = tk.Text(self.main_frame, height=20, width=80,
+                                      bg='#0d1117', fg='#c9d1d9',
+                                      font=('Consolas', 10))
+            self.text_widget.pack(fill='both', expand=True, padx=10, pady=10)
+        self.text_widget.delete('1.0', 'end')
+        for e in self.event_log:
+            desc = e.get('desc', e.get('type', ''))
+            ts = e.get('timestamp', 0)
+            mins = int(ts // 60)
+            secs = int(ts % 60)
+            self.text_widget.insert('end', f"[{mins:02d}:{secs:02d}] {desc}\n")
+        self.text_widget.see('end')
+
+    def _hide_text_mode(self):
+        """E5: hide text widget when leaving Text mode."""
+        if hasattr(self, 'text_widget'):
+            self.text_widget.pack_forget()
+
     def create_status_bar(self):
         """Create status bar for debugging and info"""
         self.status_label = tk.Label(self.main_frame, text="Ready", 
@@ -679,7 +745,7 @@ class RebuiltNHLGameViewer:
         if not self.animation_running:
             return
             
-        if self.is_playing and self.event_index < len(self.event_log):
+        if self.is_playing and self.event_index < len(self.filtered_log):
             # Process events at current time
             self.process_current_events()
             
@@ -694,10 +760,10 @@ class RebuiltNHLGameViewer:
     
     def process_current_events(self):
         """Process events that should happen at current time"""
-        while (self.event_index < len(self.event_log) and 
-               self.event_log[self.event_index].get('timestamp', 0) <= self.current_time):
+        while (self.event_index < len(self.filtered_log) and 
+               self.filtered_log[self.event_index].get('timestamp', 0) <= self.current_time):
             
-            event = self.event_log[self.event_index]
+            event = self.filtered_log[self.event_index]
             self.process_event(event)
             self.event_index += 1
     

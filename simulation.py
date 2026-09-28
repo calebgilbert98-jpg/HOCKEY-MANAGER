@@ -7020,6 +7020,32 @@ class GameSim:
                 "TEAM_TALK")
         return mod
 
+    def get_highlight_events(self):
+        """E5: return only highlight-worthy events for Highlights mode.
+
+        Goals, high-danger saves, big hits, major penalties, fights.
+        Used by the viewer to skip the routine play-by-play.
+        """
+        highlights = []
+        for e in getattr(self, 'event_log', []):
+            et = e.get('type', '')
+            # Goals are always highlights
+            if et in ('goal', 'GOAL', EventType.GOAL.value):
+                highlights.append(e)
+            # Big saves (high-danger)
+            elif et in ('save', 'SAVE', EventType.SAVE.value):
+                if e.get('danger', '') in ('high', 'HIGH'):
+                    highlights.append(e)
+            # Major penalties and fights
+            elif et in ('penalty', 'PENALTY', EventType.PENALTY.value):
+                if e.get('minutes', 0) >= 5 or 'fight' in str(e.get('desc', '')).lower():
+                    highlights.append(e)
+            # Big hits
+            elif et in ('hit', 'HIT', EventType.HIT.value):
+                if e.get('big', False):
+                    highlights.append(e)
+        return highlights
+
     def _maybe_pull_goalies(self):
         """Once-per-tick: trailing teams pull on the fly with OZ possession."""
         for team in (self.home_team, self.away_team):
