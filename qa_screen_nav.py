@@ -60,6 +60,9 @@ def make_harness():
     h.show_screen = m.HockeyManagerGUI.show_screen.__get__(h)
     h._teardown_screen = m.HockeyManagerGUI._teardown_screen.__get__(h)
     h.show_dashboard = m.HockeyManagerGUI.show_dashboard.__get__(h)
+    h._push_screen_history = m.HockeyManagerGUI._push_screen_history.__get__(h)
+    h._update_nav_history_buttons = lambda: None
+    h._suppress_history = False
     return root, h, menubar
 
 
@@ -159,5 +162,98 @@ def main():
     return 1 if FAIL else 0
 
 
+
+def test_nav_history():
+    """Back/forward history tracking."""
+    import main as m
+    root, h, menubar = make_harness()
+    h.show_screen("roster", "Roster", FakeView, tag="roster")
+    h.show_screen("inbox", "Inbox", FakeView, tag="inbox")
+    root.update()
+    hist = getattr(h, '_screen_history', [])
+    check("nav history tracks screens", hist == ["roster", "inbox"], f"got {hist}")
+    check("nav history index", h._history_index == 1)
+    root.destroy()
+
+def test_cap_blocker():
+    """Over-cap roster blocks day advancement."""
+    import main as m
+    from types import SimpleNamespace
+    from game_classes import Player, PlayerPosition
+    root = tk.Tk()
+    h = SimpleNamespace()
+    p = Player("A", "B", 25, PlayerPosition.CENTER, 90)
+    p.contract = SimpleNamespace(salary=15000000)
+    team = SimpleNamespace(roster=[p]*10, salary_cap=87500000, ahl_roster=[], prospects=[])
+    h.user_team = team
+    h.league = SimpleNamespace(salary_cap=87500000)
+    h.game_manager = SimpleNamespace(pending_fantasy_draft=False)
+    h._career_prompts_allowed = lambda: False
+    h._is_user_game_day = lambda: False
+    h.is_trade_deadline_day = lambda: False
+    h.open_fantasy_draft_window = lambda: None
+    h.open_trade_window = lambda: None
+    h.get_continue_state = m.HockeyManagerGUI.get_continue_state.__get__(h)
+    h._cap_compliance_blocker = m.HockeyManagerGUI._cap_compliance_blocker.__get__(h)
+    h.is_over_cap = m.HockeyManagerGUI.is_over_cap.__get__(h)
+    label, blockers = h.get_continue_state()
+    check("cap blocker fires when over cap",
+          any(b['id'] == 'salary_cap' for b in blockers))
+    check("is_over_cap true", h.is_over_cap())
+    root.destroy()
+
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
+    test_nav_history()
+    test_cap_blocker()
+    sys.exit(0 if not FAIL else 1)
+
+
+def test_nav_history():
+    """Back/forward history tracking."""
+    import main as m
+    root, h, menubar = make_harness()
+    h.show_screen("roster", "Roster", FakeView, tag="roster")
+    h.show_screen("inbox", "Inbox", FakeView, tag="inbox")
+    root.update()
+    hist = getattr(h, '_screen_history', [])
+    assert hist == ["roster", "inbox"], f"history: {hist}"
+    assert h._history_index == 1
+    # Simulate back
+    h._history_index = 0
+    assert h._screen_history[h._history_index] == "roster"
+    root.destroy()
+    print("  ok   nav history tracks screens")
+
+def test_cap_blocker():
+    """Over-cap roster blocks day advancement."""
+    import main as m
+    from game_classes import Player, PlayerPosition
+    root = tk.Tk()
+    h = SimpleNamespace()
+    # Mock team over cap
+    p = Player("A", "B", 25, PlayerPosition.CENTER, 90)
+    p.contract = SimpleNamespace(salary=15000000)
+    team = SimpleNamespace(roster=[p]*10, salary_cap=87500000, ahl_roster=[], prospects=[])
+    h.user_team = team
+    h.league = SimpleNamespace(salary_cap=87500000)
+    h.game_manager = SimpleNamespace(pending_fantasy_draft=False)
+    h._career_prompts_allowed = lambda: False
+    h._is_user_game_day = lambda: False
+    h.is_trade_deadline_day = lambda: False
+    h.open_fantasy_draft_window = lambda: None
+    h.open_trade_window = lambda: None
+    h.get_continue_state = m.HockeyManagerGUI.get_continue_state.__get__(h)
+    h._cap_compliance_blocker = m.HockeyManagerGUI._cap_compliance_blocker.__get__(h)
+    h.is_over_cap = m.HockeyManagerGUI.is_over_cap.__get__(h)
+    label, blockers = h.get_continue_state()
+    assert any(b['id'] == 'salary_cap' for b in blockers), f"blockers: {[b['id'] for b in blockers]}"
+    assert h.is_over_cap()
+    print("  ok   cap blocker fires when over cap")
+    root.destroy()
+
+if __name__ == "__main__":
+    main()
+    test_nav_history()
+    test_cap_blocker()
+    sys.exit(0 if not FAIL else 1)

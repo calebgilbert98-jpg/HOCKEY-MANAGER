@@ -975,10 +975,11 @@ class HomeDashboard:
         mor = [getattr(p, "morale", 7) or 7 for p in roster]
         avg = sum(mor) / len(mor)
         label = morale_label(int(round(avg)))
+        avg100 = avg * 10
 
         head = tk.Frame(content, bg=bg)
         head.pack(fill="x")
-        tk.Label(head, text=f"{avg:.1f} / 10", font=AppFonts.H2,
+        tk.Label(head, text=f"{avg100:.0f}/100", font=AppFonts.H2,
                  fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
         tk.Label(head, text=label, font=AppFonts.SMALL_BOLD,
                  fg=AppColors.TEXT_SECONDARY, bg=bg).pack(
