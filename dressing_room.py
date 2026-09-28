@@ -6,8 +6,23 @@ built on the reputation (01) and coaching-engagement (02) foundations.
 What it models:
 - Hierarchy: the captain and alternates carry extra influence; veteran
   voices outrank fringe players. Influence is visible, never hidden.
-- Social groups: cliques form by tenure and -- only where the data
-  exists -- nationality. Players with no group are floaters.
+- Social groups: FM24-style affinity clustering. Pairwise bonds compose
+  nationality, hometown (city beats region), pre-existing relationships,
+  age proximity (the kids find each other), and shared circumstances
+  (draft class, both new, letters, tenure band). The room dynamic feeds
+  back: high spirits loosen circles, a sour room closes ranks. Players
+  with no group are floaters.
+- Room dynamic: cohesion (how tight the room is) and atmosphere
+  (spirits x cohesion). High spirits and cohesion are what let strong
+  leaders keep morale in check.
+- Leaders steadying: a group voice with real influence (70+) halves
+  ambient hits for his guys while he's in good spirits himself; his
+  gloom spreads if he's not. After a shock, strong leaders pull their
+  lowest guys back from the brink -- never a spiral, never free.
+- Cascades: trades and press answers ripple through individuals AND
+  their groups. A captain with real influence steadies the room.
+- Newcomers: best-fit by affinity, not passport. A strong leader in
+  good spirits takes a newcomer under his wing.
 - Cascades: trades and press answers ripple through individuals AND
   their groups. A captain with real influence steadies the room.
 - Team talks: pre-game and intermission talks in calm / fired-up /
@@ -451,14 +466,23 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
     except Exception:
         pass
 
-    # Best-fit clique: nationality match first (shared with the old
-    # trade path -- regulars keep their exact old behavior).
-    best = None
-    anat = str(getattr(arriving, "nationality", "") or "")
+    # Best-fit group: who he actually relates to -- affinity across
+    # nationality, hometown, age, history and circumstance, not just a
+    # passport match. The bar is deliberately softer than the grouping
+    # join bar: any shared nationality still finds familiar faces (the
+    # old behavior), and hometown/age/history can qualify too.
+    best, best_aff = None, 0.0
     for c in form_cliques(team):
-        if c["nationality"] == anat:
-            best = c
-            break
+        try:
+            members = [p for p in _roster(team)
+                       if _pid(p) in c["member_ids"]]
+            v = _mean_affinity_to(arriving, members)
+        except Exception:
+            v = 0.0
+        if v > best_aff:
+            best, best_aff = c, v
+    if best_aff < 30:
+        best = None
 
     cap = captain_of(team)
     cap_is_arriving = cap is not None and cap is arriving
@@ -677,11 +701,23 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
         # Else: solid non-letter voice the vet doesn't outrank -- quiet
         # respect, no lines needed.
     else:
-        # Regular: the long-standing behavior, unchanged.
+        # Regular: the long-standing behavior, unchanged -- except a
+        # strong leader in good spirits takes the edge off the landing.
         if best is not None:
-            _bump(arriving, -2)
+            lid = best.get("leader_id")
+            wing = (lid is not None
+                    and int(best.get("leader_influence", 0) or 0) >= 70)
+            if wing:
+                try:
+                    lp = next(p for p in _roster(team) if _pid(p) == lid)
+                    wing = _clamp(getattr(lp, "morale", 70)) >= 65
+                except Exception:
+                    wing = False
+            _bump(arriving, -1 if wing else -2)
             lines.append(f"{aname} lands with the {best['name'].lower()} -- "
                          f"familiar faces help.")
+            if wing:
+                lines.append(f"{best['leader']} has taken him under his wing.")
         else:
             _bump(arriving, -6)
             lines.append(f"{aname} arrives an outsider. The room will "
@@ -739,6 +775,174 @@ def captain_of(team: Any) -> Optional[Any]:
 
 
 # --------------------------------------------------------------------------
+# FM24-style social affinity: who relates to whom
+#
+# A pairwise bond (0-100) composed from everything the room can see:
+# nationality, hometown (city beats region), pre-existing relationships,
+# age proximity (young players cluster), and shared circumstances
+# (same draft class, both new, both wearing letters, same tenure band).
+# The room dynamic feeds back in: high spirits loosen circles, a sour
+# room closes ranks -- via the join threshold in form_cliques.
+# --------------------------------------------------------------------------
+
+_NAT_NORM = {
+    "canada": "canada", "canadian": "canada",
+    "usa": "usa", "u.s.a.": "usa", "american": "usa",
+    "united states": "usa",
+    "russia": "russia", "russian": "russia",
+    "sweden": "sweden", "swedish": "sweden",
+    "finland": "finland", "finnish": "finland",
+    "czech republic": "czechia", "czech": "czechia", "czechia": "czechia",
+    "slovakia": "slovakia", "slovak": "slovakia",
+    "germany": "germany", "german": "germany",
+    "switzerland": "switzerland", "swiss": "switzerland",
+    "norway": "norway", "norwegian": "norway",
+    "denmark": "denmark", "danish": "denmark",
+    "latvia": "latvia", "latvian": "latvia",
+    "belarus": "belarus", "belarusian": "belarus",
+    "kazakhstan": "kazakhstan", "kazakh": "kazakhstan",
+    "austria": "austria", "austrian": "austria",
+    "france": "france", "french": "france",
+    "italy": "italy", "italian": "italy",
+    "great britain": "britain", "british": "britain", "england": "britain",
+    "japan": "japan", "japanese": "japan",
+    "korea": "korea", "korean": "korea",
+    "china": "china", "chinese": "china",
+    "slovenia": "slovenia", "slovenian": "slovenia",
+    "hungary": "hungary", "hungarian": "hungary",
+    "poland": "poland", "polish": "poland",
+    "ukraine": "ukraine", "ukrainian": "ukraine",
+}
+
+_NAT_DISPLAY = {
+    "canada": "Canadians", "usa": "Americans", "russia": "Russians",
+    "sweden": "Swedes", "finland": "Finns", "czechia": "Czechs",
+    "slovakia": "Slovaks", "germany": "Germans",
+    "switzerland": "Swiss", "britain": "Brits", "norway": "Norwegians",
+    "denmark": "Danes", "latvia": "Latvians", "belarus": "Belarusians",
+    "kazakhstan": "Kazakhs", "austria": "Austrians",
+}
+
+
+def _norm_nationality(player: Any) -> str:
+    try:
+        raw = str(getattr(player, "nationality", "") or "").strip().lower()
+    except Exception:
+        raw = ""
+    return _NAT_NORM.get(raw, raw or "unknown")
+
+
+def _display_nationality(norm: str) -> str:
+    """Plural people-noun for a normalized nationality ('Swedes')."""
+    if norm in _NAT_DISPLAY:
+        return _NAT_DISPLAY[norm]
+    base = norm[:1].upper() + norm[1:] if norm else "Unknown"
+    return base if base == "Unknown" else base + "s"
+
+
+def _hometown_parts(player: Any) -> tuple:
+    """(city, region) from 'City, RG' birthplace; ('','') when unknown."""
+    try:
+        raw = str(getattr(player, "birthplace", "") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw or raw.lower() == "unknown" or "," not in raw:
+        return "", ""
+    city, _, region = raw.partition(",")
+    return city.strip().lower(), region.strip().lower()
+
+
+def _age_of(player: Any) -> Optional[int]:
+    try:
+        a = getattr(player, "age", None)
+        return int(a) if a is not None else None
+    except Exception:
+        return None
+
+
+def _relationship_score(a: Any, b: Any) -> float:
+    """Pre-existing relationship, -1 (rivals) to +1 (close). Reads both
+    directions; the warmest read wins -- if either guy calls the other a
+    friend, there's warmth in the room."""
+    warm, cold = 0.0, 0.0
+    for src, dst in ((a, b), (b, a)):
+        try:
+            rels = getattr(src, "relationships", None) or {}
+            v = rels.get(_pid(dst))
+            if v is None:
+                continue
+            f = float(v) / 100.0
+            warm = max(warm, f)
+            cold = min(cold, f)
+        except Exception:
+            pass
+    return warm if warm > 0 else cold
+
+
+def _draft_year_of(player: Any) -> Optional[int]:
+    for attr in ("drafted_year", "draft_year"):
+        try:
+            v = getattr(player, attr, None)
+            if v:
+                return int(v)
+        except Exception:
+            pass
+    return None
+
+
+def affinity(a: Any, b: Any) -> int:
+    """How much two players relate (0-100). Every component is small and
+    legible; no single trait decides a friendship on its own."""
+    if a is b or _pid(a) == _pid(b):
+        return 100
+    score = 10.0  # baseline: same room, same grind
+    if _norm_nationality(a) != "unknown" and \
+            _norm_nationality(a) == _norm_nationality(b):
+        score += 22
+    ca, ra = _hometown_parts(a)
+    cb, rb = _hometown_parts(b)
+    if ca and ca == cb:
+        score += 16
+    elif ra and ra == rb:
+        score += 8
+    aa, ab = _age_of(a), _age_of(b)
+    if aa is not None and ab is not None:
+        gap = abs(aa - ab)
+        if gap <= 2:
+            score += 12
+        elif gap <= 4:
+            score += 6
+        elif gap <= 6:
+            score += 3
+        if aa <= 23 and ab <= 23:
+            score += 6   # the kids find each other
+        elif aa >= 33 and ab >= 33:
+            score += 4   # old guard
+    rel = _relationship_score(a, b)
+    if rel:
+        score += rel * 18
+    # Circumstances: shared situation is shared language.
+    ta, tb = _tenure_bucket(a), _tenure_bucket(b)
+    if ta == tb:
+        score += 10 if ta == "new" else 4
+    da, db = _draft_year_of(a), _draft_year_of(b)
+    if da is not None and da == db:
+        score += 6
+    la = str(getattr(a, "captaincy", "") or "").upper() in ("C", "A")
+    lb = str(getattr(b, "captaincy", "") or "").upper() in ("C", "A")
+    if la and lb:
+        score += 5
+    return _clamp(int(round(score)), 5, 97)
+
+
+def _mean_affinity_to(player: Any, members: List[Any]) -> float:
+    others = [m for m in members if _pid(m) != _pid(player)]
+    if not others:
+        return 0.0
+    return sum(affinity(player, m) for m in others) / len(others)
+
+
+# --------------------------------------------------------------------------
 # Social groups (cliques)
 # --------------------------------------------------------------------------
 
@@ -751,11 +955,72 @@ def _tenure_bucket(player: Any) -> str:
     return "new"
 
 
+def _group_name(members: List[Any], idx: int) -> tuple:
+    """FM24-style label from the group's dominant shared trait.
+
+    Returns (name, kind, nationality)."""
+    nats: Dict[str, int] = {}
+    cities: Dict[str, int] = {}
+    ages: List[int] = []
+    buckets: Dict[str, int] = {}
+    for m in members:
+        nn = _norm_nationality(m)
+        nats[nn] = nats.get(nn, 0) + 1
+        city, _rg = _hometown_parts(m)
+        if city:
+            cities[city] = cities.get(city, 0) + 1
+        ag = _age_of(m)
+        if ag is not None:
+            ages.append(ag)
+        tb = _tenure_bucket(m)
+        buckets[tb] = buckets.get(tb, 0) + 1
+    n = len(members)
+    top_nat, nat_n = max(nats.items(), key=lambda kv: kv[1])
+    nat_share = nat_n / n
+    top_city, city_n = max(cities.items(), key=lambda kv: kv[1]) \
+        if cities else ("", 0)
+    city_share = city_n / n if n else 0
+    mean_age = sum(ages) / len(ages) if ages else 99
+    top_bucket = max(buckets.items(), key=lambda kv: kv[1])[0]
+    # Noun form for legacy-style names ("The Sweden core"); plural
+    # people-noun for young groups ("The young Swedes").
+    raw_nats: Dict[str, int] = {}
+    for m in members:
+        try:
+            rn = str(getattr(m, "nationality", "") or "").strip()
+        except Exception:
+            rn = ""
+        if rn:
+            raw_nats[rn] = raw_nats.get(rn, 0) + 1
+    noun = max(raw_nats.items(), key=lambda kv: kv[1])[0] \
+        if raw_nats else _display_nationality(top_nat)
+    plural = _display_nationality(top_nat)
+
+    if mean_age <= 23 and nat_share >= 0.5 and top_nat != "unknown":
+        return f"The young {plural}", "young", noun
+    if nat_share >= 0.6 and top_nat != "unknown":
+        if top_bucket == "core":
+            return f"The {noun} core", "nationality", noun
+        return f"The {noun} group", "nationality", noun
+    if city_share >= 0.6:
+        cname = top_city[:1].upper() + top_city[1:]
+        return f"The {cname} boys", "hometown", noun
+    if mean_age <= 23:
+        return "The kids", "young", noun
+    if top_bucket == "core":
+        return "The core", "tenure", noun
+    return f"Group {idx}", "mixed", noun
+
+
 def form_cliques(team: Any, min_size: int = 3,
                  extra: Any = None) -> List[Dict[str, Any]]:
-    """Group the room by tenure + nationality (only where data exists).
+    """Group the room by FM24-style social affinity.
 
-    Returns clique dicts; players in no clique are floaters.
+    Greedy clustering on pairwise affinity: seed the tightest pair, then
+    admit a player only while he's at least as close to the group as its
+    members are to each other (small margin). High spirits loosen the
+    join bar; a sour room closes ranks. Returns clique dicts; players in
+    no clique are floaters.
 
     ``extra``: a player no longer on the roster (e.g. just traded away)
     to include in the grouping anyway. Departure cascades run after the
@@ -769,31 +1034,92 @@ def form_cliques(team: Any, min_size: int = 3,
                 roster = list(roster) + [extra]
         except Exception:
             pass
-    buckets: Dict[tuple, List[Any]] = {}
-    for p in roster:
-        nat = str(getattr(p, "nationality", "") or "").strip() or "Unknown"
-        key = (_tenure_bucket(p), nat)
-        buckets.setdefault(key, []).append(p)
+    if len(roster) < min_size:
+        return []
+
+    # Room dynamic feeds back into grouping: everyone getting along
+    # means looser circles; a bad mood means closed ranks.
+    try:
+        mood = room_mood(team)
+    except Exception:
+        mood = 70
+    join_bar = 34
+    if mood >= 80:
+        join_bar = 30
+    elif mood <= 45:
+        join_bar = 38
+
+    ids = [_pid(p) for p in roster]
+    aff: Dict[tuple, float] = {}
+    for i in range(len(roster)):
+        for j in range(i + 1, len(roster)):
+            v = affinity(roster[i], roster[j])
+            aff[(ids[i], ids[j])] = v
+            aff[(ids[j], ids[i])] = v
+
+    def pair_aff(x: Any, y: Any) -> float:
+        if _pid(x) == _pid(y):
+            return 100.0
+        return aff.get((_pid(x), _pid(y)), 10.0)
+
+    unassigned = list(roster)
+    groups: List[List[Any]] = []
+    while unassigned:
+        if len(unassigned) == 1:
+            break
+        # Seed: the tightest pair left in the room.
+        bi, bj, bv = 0, 1, -1.0
+        for i in range(len(unassigned)):
+            for j in range(i + 1, len(unassigned)):
+                v = pair_aff(unassigned[i], unassigned[j])
+                if v > bv:
+                    bi, bj, bv = i, j, v
+        group = [unassigned[bi], unassigned[bj]]
+        for k in sorted((bi, bj), reverse=True):
+            del unassigned[k]
+        # Grow while the best candidate belongs as much as members do.
+        while unassigned and len(group) < 9:
+            internal = (sum(pair_aff(x, y) for ii, x in enumerate(group)
+                            for y in group[ii + 1:])
+                        / (len(group) * (len(group) - 1) / 2))
+            best_p, best_v = None, -1.0
+            for p in unassigned:
+                v = sum(pair_aff(p, m) for m in group) / len(group)
+                if v > best_v:
+                    best_p, best_v = p, v
+            if best_p is not None and best_v >= max(join_bar, internal - 2):
+                group.append(best_p)
+                unassigned = [p for p in unassigned
+                              if _pid(p) != _pid(best_p)]
+            else:
+                break
+        groups.append(group)
+    # Leftover singles/pairs are floaters.
 
     cliques = []
-    for (tb, nat), members in buckets.items():
+    for gi, members in enumerate(groups, 1):
         if len(members) < min_size:
             continue
         moods = [_clamp(getattr(m, "morale", 70)) for m in members]
-        # Bond: shared tenure + shared nationality is the whole bond here.
-        bond = round(0.45 + 0.10 * min(len(members), 6) / 6 + 0.15, 2)
-        if tb == "core":
-            label = f"The {nat} core"
-        elif tb == "established":
-            label = f"{nat} regulars"
-        else:
-            label = f"{nat} newcomers"
+        pairs = [pair_aff(x, y) for ii, x in enumerate(members)
+                 for y in members[ii + 1:]]
+        bond = min(0.95, round(sum(pairs) / len(pairs) / 100, 2)) \
+            if pairs else 0.5
+        name, kind, nat = _group_name(members, gi)
+        leader, linf = _group_leader_of(members)
+        ages = [_age_of(m) for m in members]
+        ages = [a for a in ages if a is not None]
         cliques.append({
-            "name": label, "kind": tb, "nationality": nat,
+            "name": name, "kind": kind, "nationality": nat,
             "member_ids": {_pid(m) for m in members},
             "members": [_name(m) for m in members],
-            "bond": min(0.95, bond),
+            "bond": bond,
             "mood": int(round(sum(moods) / len(moods))) if moods else 70,
+            "leader": _name(leader) if leader is not None else "-",
+            "leader_id": _pid(leader) if leader is not None else None,
+            "leader_influence": linf,
+            "mean_age": round(sum(ages) / len(ages), 1) if ages else None,
+            "size": len(members),
         })
     cliques.sort(key=lambda c: (-len(c["members"]), c["name"]))
     return cliques
@@ -825,6 +1151,123 @@ def room_mood(team: Any) -> int:
         return 70
     return _clamp(sum(_clamp(getattr(p, "morale", 70)) for p in roster)
                   / len(roster))
+
+
+def _group_leader_of(members: List[Any]) -> tuple:
+    """(most-influential member, influence) -- the group's voice."""
+    best, binf = None, -1
+    for m in members:
+        try:
+            inf = influence_of(m)
+        except Exception:
+            inf = 0
+        if inf > binf:
+            best, binf = m, inf
+    return best, int(binf)
+
+
+def cohesion(team: Any) -> int:
+    """How tight the room is (0-100): share of the roster in groups,
+    weighted by how bonded those groups are."""
+    roster = _roster(team)
+    if not roster:
+        return 50
+    groups = form_cliques(team)
+    if not groups:
+        return 15
+    in_groups = sum(len(g["members"]) for g in groups) / len(roster)
+    mean_bond = sum(g["bond"] for g in groups) / len(groups)
+    return _clamp(100 * (0.55 * in_groups + 0.45 * mean_bond), 1, 99)
+
+
+def room_atmosphere(team: Any) -> Dict[str, Any]:
+    """The room's overall dynamic: spirits (mood) x cohesion.
+
+    High spirits and everyone getting along is what lets strong leaders
+    keep morale in check; a fractured room doesn't listen to anyone.
+    """
+    mood = room_mood(team)
+    coh = cohesion(team)
+    score = _clamp(0.55 * mood + 0.45 * coh)
+    if score >= 85:
+        label = "Electric"
+    elif score >= 70:
+        label = "Tight-knit"
+    elif score >= 55:
+        label = "Steady"
+    elif score >= 40:
+        label = "Strained"
+    else:
+        label = "Fractured"
+    return {"label": label, "score": score, "mood": mood,
+            "cohesion": coh}
+
+
+def _leader_dampen(team: Any, player: Any, delta: float) -> float:
+    """Strong leaders keep morale in check -- for their own guys.
+
+    A negative ambient hit on a group member is halved when the group's
+    voice (influence >= 70) is himself in good spirits (>= 65). But a
+    leader's gloom spreads: if he's below 40 the hit lands 25% harder.
+    Only ambient hits are dampened -- nobody talks you out of missing
+    your linemate (the 'take it hardest' grief is exempt).
+    """
+    if delta >= 0:
+        return delta
+    try:
+        c = clique_of(team, player)
+        if c is None:
+            return delta
+        lid = c.get("leader_id")
+        if lid is None or lid == _pid(player):
+            return delta
+        if int(c.get("leader_influence", 0) or 0) < 70:
+            return delta
+        leader = next((p for p in _roster(team) if _pid(p) == lid), None)
+        if leader is None:
+            return delta
+        lm = _clamp(getattr(leader, "morale", 70))
+        if lm >= 65:
+            return delta * 0.5
+        if lm <= 40:
+            return delta * 1.25
+    except Exception:
+        pass
+    return delta
+
+
+def _leaders_settle(team: Any) -> List[str]:
+    """After a shock, strong leaders in good spirits pull their lowest
+    guys back from the brink (+1 for members under 50). One line per
+    leader who actually steadied someone -- never a spiral, never free."""
+    lines: List[str] = []
+    try:
+        roster = _roster(team)
+        by_id = {_pid(p): p for p in roster}
+        for c in form_cliques(team):
+            lid = c.get("leader_id")
+            if lid is None or int(c.get("leader_influence", 0) or 0) < 70:
+                continue
+            leader = by_id.get(lid)
+            if leader is None:
+                continue
+            if _clamp(getattr(leader, "morale", 70)) < 65:
+                continue
+            steadied = 0
+            for pid in c["member_ids"]:
+                if pid == lid:
+                    continue
+                p = by_id.get(pid)
+                if p is None:
+                    continue
+                if _clamp(getattr(p, "morale", 70)) < 50:
+                    _bump(p, 1)
+                    steadied += 1
+            if steadied:
+                lines.append(f"{_name(leader)} steadied his guys.")
+    except Exception:
+        pass
+    return lines
 
 
 # --------------------------------------------------------------------------
@@ -869,7 +1312,15 @@ def cascade_on_trade(team: Any, traded: Any = None, arriving: Any = None,
             if clique is not None and _pid(p) in clique["member_ids"]:
                 _bump(p, -base_hit * (0.5 + clique["bond"]))
             else:
-                _bump(p, -1)
+                # Ambient hit: a strong leader in good spirits keeps his
+                # own guys' morale in check.
+                _bump(p, _leader_dampen(team, p, -1))
+        # After the shock, strong leaders pull their lowest guys back
+        # from the brink -- the room doesn't spiral on one trade.
+        try:
+            lines.extend(_leaders_settle(team))
+        except Exception:
+            pass
         if letter == "C":
             lines.append(f"{tname_p} (C) is gone -- the room looks for a new voice.")
         elif steady:
@@ -1002,14 +1453,14 @@ def cascade_on_press(team: Any, event: Any,
             lines.append("Confident words in front of the cameras. Room +.")
     elif rc in ("dismissive", "hostile"):
         for p in roster:
-            _bump(p, -2)
+            _bump(p, _leader_dampen(team, p, -2))
         lines.append("The room saw the brush-off. Nobody loves a siege -- yet.")
     elif rc == "controversial":
         if target is not None:
             _bump(target, -4)
             _clique_bump(target, -2)
         for p in roster:
-            _bump(p, -1)
+            _bump(p, _leader_dampen(team, p, -1))
         lines.append("A controversial answer always costs someone in the room.")
     elif rc in ("professional", "thoughtful", "diplomatic"):
         lines.append("A calm, professional answer. The room barely blinked.")
