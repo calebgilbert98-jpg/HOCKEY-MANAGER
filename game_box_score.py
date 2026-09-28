@@ -13,6 +13,7 @@ from the Schedule screen's Recap/Stats buttons. Shows a real box score:
 Degrades gracefully for quick-simmed games that only carry scores.
 """
 
+from player_context_menu import bind_player_context
 import customtkinter as ctk
 from popup_system import InGamePopup
 
@@ -314,7 +315,8 @@ class GameBoxScoreView(ctk.CTkFrame):
                    gs.get('shots_on_goal', 0), gs.get('hits', 0),
                    gs.get('blocked_shots', gs.get('blocked_shots_by', 0)),
                    f"{gs.get('faceoffs_won', 0)}-{gs.get('faceoffs_lost', 0)}"]
-                  for p, gs in skaters])
+                  for p, gs in skaters],
+            players=[p for p, gs in skaters])
 
         if goalies:
             ctk.CTkLabel(body, text="Goaltenders", font=('Segoe UI', 13, 'bold'),
@@ -339,7 +341,8 @@ class GameBoxScoreView(ctk.CTkFrame):
                 body,
                 headers=["Goaltender", "SA", "Saves", "SV%", "GA"],
                 widths=[220, 52, 64, 64, 52],
-                rows=grows)
+                rows=grows,
+                players=[p for p, gs in goalies])
 
     @staticmethod
     def _pos_short(player):
@@ -347,7 +350,7 @@ class GameBoxScoreView(ctk.CTkFrame):
         val = getattr(pos, 'value', None) or getattr(pos, 'name', '') or ''
         return str(val)
 
-    def _grid_table(self, parent, headers, widths, rows):
+    def _grid_table(self, parent, headers, widths, rows, players=None):
         c = self._c
         frame = ctk.CTkFrame(parent, fg_color=c['CARD'], corner_radius=8)
         frame.pack(fill='x', padx=8, pady=2)
@@ -367,6 +370,12 @@ class GameBoxScoreView(ctk.CTkFrame):
                                    fg_color=bg, corner_radius=4)
                 lbl.grid(row=ri, column=ci, padx=4, pady=2,
                          sticky='ew' if ci == 0 else '')
+                # Right-click player name for context menu
+                if ci == 0 and players and ri - 1 < len(players):
+                    try:
+                        bind_player_context(lbl, players[ri - 1], self)
+                    except Exception:
+                        pass
         frame.grid_columnconfigure(0, weight=1)
 
     # ------------------------------------------------------------------

@@ -7,6 +7,7 @@ Event Day Hubs - immersive standalone pages for the league's three tentpole days
 Each hub is a full-screen, broadcast-style page with a live wire feed,
 done-deals tracker, and quick actions into the relevant management windows.
 """
+from player_context_menu import bind_player_context
 import tkinter as tk
 import customtkinter as ctk
 from popup_system import InGamePopup
@@ -381,8 +382,14 @@ class DraftDayCentral(EventDayHubView):
             name = getattr(p, 'full_name', str(p))
             pos = self._pos_code(p)
             age = getattr(p, 'age', '?')
-            tk.Label(top, text=f"#{rank_of.get(id(p), '?')}  {name}", bg=self.CARD,
-                     fg=self.WHITE, font=('Segoe UI', 11, 'bold')).pack(side='left')
+            _name_lbl = tk.Label(top, text=f"#{rank_of.get(id(p), '?')}  {name}", bg=self.CARD,
+                     fg=self.WHITE, font=('Segoe UI', 11, 'bold'))
+            _name_lbl.pack(side='left')
+            try:
+                bind_player_context(_name_lbl, p, self)
+                bind_player_context(card, p, self)
+            except Exception:
+                pass
             tk.Label(top, text=f"{pos}  \u00b7  Age {age}", bg=self.CARD,
                      fg=self.MUTED, font=('Segoe UI', 10)).pack(side='right')
             mid = tk.Frame(card, bg=self.CARD)
@@ -588,8 +595,14 @@ class FreeAgencyFrenzy(EventDayHubView):
             name = getattr(p, 'full_name', str(p))
             pos = self._pos_code(p)
             age = getattr(p, 'age', '?')
-            tk.Label(top, text=f"#{i}  {name}", bg=self.CARD, fg=self.WHITE,
-                     font=('Segoe UI', 11, 'bold')).pack(side='left')
+            _name_lbl = tk.Label(top, text=f"#{i}  {name}", bg=self.CARD, fg=self.WHITE,
+                     font=('Segoe UI', 11, 'bold'))
+            _name_lbl.pack(side='left')
+            try:
+                bind_player_context(_name_lbl, p, self)
+                bind_player_context(card, p, self)
+            except Exception:
+                pass
             tk.Label(top, text=f"{pos}  \u00b7  Age {age}", bg=self.CARD, fg=self.MUTED,
                      font=('Segoe UI', 10)).pack(side='right')
             mid = tk.Frame(card, bg=self.CARD)
