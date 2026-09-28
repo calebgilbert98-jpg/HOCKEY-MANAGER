@@ -88,6 +88,12 @@ class GameSaveManager:
                     self.game_manager.league_history.to_dict()
                     if getattr(self.game_manager, 'league_history', None) else {}
                 ),
+
+                # Shot charts: replayable evidence (last 50 games)
+                'shot_charts': (
+                    self.game_manager.shot_chart_store.to_dict()
+                    if getattr(self.game_manager, 'shot_chart_store', None) else {}
+                ),
             }
 
             # FM-style career state (board, training, reputation, press history)
@@ -587,6 +593,19 @@ class GameSaveManager:
                 except Exception as _lhe:
                     print(f"league history restore failed (non-fatal): {_lhe}")
                     self.game_manager.league_history = None
+
+            # Shot charts: replayable evidence
+            if 'shot_charts' in save_data:
+                try:
+                    from shot_charts import ShotChartStore
+                    sc_data = save_data['shot_charts'] or {}
+                    if sc_data:
+                        self.game_manager.shot_chart_store = ShotChartStore.from_dict(sc_data)
+                    else:
+                        self.game_manager.shot_chart_store = ShotChartStore()
+                except Exception as _sce:
+                    print(f"shot charts restore failed (non-fatal): {_sce}")
+                    self.game_manager.shot_chart_store = None
 
             for key in ['player_stats_history', 'team_stats_history', 'draft_classes', 
                        'scouting_reports', 'waiver_claims', 'trade_history', 

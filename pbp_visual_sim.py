@@ -3251,7 +3251,12 @@ class PBPVisualSim(InGamePopup):
             sx, sy = shooter_dot["x"], shooter_dot["y"]
         else:
             sx, sy = shot_spot(ev.get("location", "high_slot"), att_home)
-        self._last_shot = (sx, sy, side)
+        # Capture shooter for shot chart export (id + name)
+        _shooter = ev.get("shooter")
+        _shooter_id = getattr(_shooter, 'id', None) if _shooter else None
+        _shooter_name = getattr(_shooter, 'full_name',
+                                getattr(_shooter, 'name', None)) if _shooter else None
+        self._last_shot = (sx, sy, side, _shooter_id, _shooter_name)
         nx = AWAY_NET_X if att_home else HOME_NET_X
         self.possession_home = att_home
         self.carrier_id = shooter_dot["id"] if shooter_dot else None
@@ -3643,9 +3648,19 @@ class PBPVisualSim(InGamePopup):
     def _record_shotmap(self, result):
         if self._last_shot is None:
             return
-        x, y, side = self._last_shot
+        # _last_shot is (x, y, side) or (x, y, side, shooter_id, shooter_name)
+        parts = self._last_shot
+        x, y, side = parts[0], parts[1], parts[2]
+        shooter_id = parts[3] if len(parts) > 3 else None
+        shooter_name = parts[4] if len(parts) > 4 else None
         self._last_shot = None
-        self._shotmap.append((x, y, side, result))
+        # Store as dict (x, y, side, result, period, shooter) for export
+        period = getattr(self, 'period', 1)
+        self._shotmap.append({
+            "x": x, "y": y, "side": side, "result": result,
+            "period": period,
+            "shooter_id": shooter_id, "shooter_name": shooter_name,
+        })
         if self._shotmap_on:
             self._redraw_shotmap()
 
@@ -3659,7 +3674,12 @@ class PBPVisualSim(InGamePopup):
         c.delete("shotmap")
         if not self._shotmap_on:
             return
-        for x, y, side, result in self._shotmap:
+        for s in self._shotmap:
+            # Support both dict (new) and tuple (legacy) formats
+            if isinstance(s, dict):
+                x, y, side, result = s["x"], s["y"], s["side"], s["result"]
+            else:
+                x, y, side, result = s
             px, py = self.X(x), self.Y(y)
             if result == "goal":
                 col = "#00ff9d"

@@ -9574,6 +9574,27 @@ class HockeyManagerGUI(tk.Tk):
                 holder['pbp_events'] = list(win_ref['win'].events)
             except Exception:
                 holder['pbp_events'] = []
+            # Export shot chart to the career store (replayable evidence)
+            try:
+                from shot_charts import ShotChartStore
+                viz = win_ref.get('win')
+                shotmap = getattr(viz, '_shotmap', []) if viz else []
+                if shotmap:
+                    if not getattr(self, 'shot_chart_store', None):
+                        self.shot_chart_store = ShotChartStore()
+                    # Build game dict
+                    import datetime as _dt
+                    gid = f"{home_team.team_name}_{away_team.team_name}_{self.current_date.isoformat()}"
+                    game_dict = {
+                        "game_id": gid,
+                        "date": self.current_date.isoformat(),
+                        "home": home_team.team_name,
+                        "away": away_team.team_name,
+                        "shots": shotmap,  # list of dicts from _record_shotmap
+                    }
+                    self.shot_chart_store.add(game_dict)
+            except Exception:
+                pass  # shot chart export is non-fatal
             # Only allow closing once the final whistle has played
             try:
                 win_ref['win'].protocol("WM_DELETE_WINDOW", win_ref['win'].destroy)
@@ -10657,6 +10678,47 @@ class HockeyManagerGUI(tk.Tk):
         try:
             window.focus_set()
             window.lift()
+        except Exception:
+            pass
+
+    def open_shot_chart_viewer(self, game_id=None, team_name=None, player_id=None):
+        """Open the shot chart viewer for a game, team, or player."""
+        from shot_charts import ShotChartStore
+        store = getattr(self, 'shot_chart_store', None)
+        if store is None:
+            store = ShotChartStore()
+            self.shot_chart_store = store
+
+        shots = []
+        title = "Shot Chart"
+        home_name, away_name = "", ""
+
+        if game_id:
+            game = store.get(game_id)
+            if game:
+                shots = game.get("shots", [])
+                home_name = game.get("home", "")
+                away_name = game.get("away", "")
+                title = f"Shot Chart: {away_name} @ {home_name} ({game.get('date', '')})"
+        elif team_name:
+            shots = store.aggregate_team_shots(team_name, last_n=5)
+            title = f"Shot Chart: {team_name} (last 5 games)"
+            home_name = team_name
+        elif player_id:
+            shots = store.for_player(player_id)
+            title = f"Shot Chart: Player"
+
+        if not shots:
+            from tkinter import messagebox
+            messagebox.showinfo("Shot Chart", "No shot data available yet. "
+                              "Watch a game live to capture its shot chart.")
+            return
+
+        win = ShotChartViewerWindow(self, self, shots, title=title,
+                                    home_name=home_name, away_name=away_name)
+        try:
+            win.focus_set()
+            win.lift()
         except Exception:
             pass
     
@@ -16247,6 +16309,87 @@ class LeagueHistoryWindow(InGamePopup):
             if cups:
                 ttk.Label(card, text=f"🏆 {cups}× Stanley Cup",
                           font=('Arial', 9)).pack(anchor='w', padx=10, pady=(0, 8))
+
+
+class ShotChartViewerWindow(InGamePopup):
+    """View a saved shot chart: rink with shot locations by result.
+
+    Can show a single game, a team's last-N aggregate, or a player's shots.
+    """
+
+    def __init__(self, parent, game_manager, shots, title="Shot Chart",
+                 home_name="", away_name=""):
+        self.game_manager = game_manager
+        self.shots = shots or []
+        self.home_name = home_name
+        self.away_name = away_name
+        super().__init__(parent, title=title, width=800, height=600)
+        self._build()
+
+    def _build(self):
+        import tkinter as tk
+        # Legend
+        legend = tk.Frame(self.content, bg='#0a0a0c')
+        legend.pack(fill='x', padx=10, pady=5)
+        items = [
+            ("✕ Goal", "#00ff9d"),
+            ("● Save", "#4a9eff"),
+            ("▲ Block", "#8a8f9c"),
+            ("○ Miss", "#c9ced8"),
+        ]
+        for txt, col in items:
+            lbl = tk.Label(legend, text=txt, fg=col, bg='#0a0a0c',
+                           font=('Arial', 9, 'bold'))
+            lbl.pack(side='left', padx=10)
+        # Count summary
+        counts = {}
+        for s in self.shots:
+            key = (s.get('side', '?'), s.get('result', '?'))
+            counts[key] = counts.get(key, 0) + 1
+        total_home = sum(v for (side, _), v in counts.items() if side == 'home')
+        total_away = sum(v for (side, _), v in counts.items() if side == 'away')
+        summary = f"{self.home_name}: {total_home} shots   {self.away_name}: {total_away} shots"
+        tk.Label(legend, text=summary, fg='white', bg='#0a0a0c',
+                 font=('Arial', 9)).pack(side='right', padx=10)
+        # Rink canvas
+        self.canvas = tk.Canvas(self.content, bg='#0a0a0c',
+                                width=760, height=480,
+                                highlightthickness=0)
+        self.canvas.pack(fill='both', expand=True, padx=10, pady=5)
+        # Draw rink outline (simplified)
+        self._draw_rink()
+        # Draw shots using shared helper
+        try:
+            from shot_charts import draw_shotmap
+            # Simple coordinate transform: rink is 200x85 ft, canvas 760x480
+            # Center the rink
+            def X(x):
+                return 20 + (x + 100) * (720 / 200)
+            def Y(y):
+                return 20 + (y + 42.5) * (440 / 85)
+            draw_shotmap(self.canvas, self.shots, X, Y)
+        except Exception as e:
+            tk.Label(self.content, text=f"Error drawing chart: {e}",
+                     fg='red', bg='#0a0a0c').pack()
+
+    def _draw_rink(self):
+        c = self.canvas
+        # Simplified rink: rounded rect + center line + faceoff circles
+        # Rink bounds in canvas coords (matching X/Y above)
+        x0, y0 = 20, 20
+        x1, y1 = 740, 460
+        c.create_rectangle(x0, y0, x1, y1, outline='#2a2d36', width=2)
+        # Center line
+        cx = (x0 + x1) / 2
+        c.create_line(cx, y0, cx, y1, fill='#2a2d36', width=1)
+        # Center circle
+        c.create_oval(cx - 30, (y0 + y1)/2 - 30, cx + 30, (y0 + y1)/2 + 30,
+                      outline='#2a2d36', width=1)
+        # Goals (simple)
+        c.create_rectangle(x0 - 8, (y0 + y1)/2 - 15, x0, (y0 + y1)/2 + 15,
+                           outline='#ff4444', width=2)
+        c.create_rectangle(x1, (y0 + y1)/2 - 15, x1 + 8, (y0 + y1)/2 + 15,
+                           outline='#ff4444', width=2)
 
 
 # --- Main execution
