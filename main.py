@@ -15,17 +15,31 @@ from ctk_theme import (
 from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from game_classes import debug_print
-from windows import (RosterWindow, FreeAgencyWindow, TradeWindow, ScoutingWindow, 
-                     DraftWindow, ScheduleWindow, FinancesWindow, NewsWindow, 
-                     GMOptionsWindow, ContractNegotiationWindow,
-                     ContractNegotiationView, ContractExtensionsView,
-                     ExtensionNegotiationView, BuyoutCalculatorView,
-                     ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow,
-                     TradeBlockWindow, WaiversWindow, SetCaptainsWindow,
-                     RosterView, FreeAgencyView, ScoutingView,
-                     DraftView, ScheduleView, FinancesView, NewsView,
-                     GMOptionsView, WaiversView, GMDashboardView,
-                     TeamAnalyticsView, SalaryAnalyticsView)
+from windows import (
+    TradeWindow,
+    GMOptionsWindow,
+    ContractNegotiationWindow,
+    ContractNegotiationView,
+    ContractExtensionsView,
+    ExtensionNegotiationView,
+    BuyoutCalculatorView,
+    ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow,
+    TradeBlockWindow,
+    WaiversWindow,
+    SetCaptainsWindow,
+    RosterView,
+    FreeAgencyView,
+    ScoutingView,
+    DraftView,
+    ScheduleView,
+    FinancesView,
+    NewsView,
+    GMOptionsView,
+    WaiversView,
+    GMDashboardView,
+    TeamAnalyticsView,
+    SalaryAnalyticsView,
+)
 from ui_components import PlayerProfileWindow
 from ui_widgets import PillButton
 from inbox_window import InboxWindow
@@ -1576,408 +1590,6 @@ def clamp(val, minv, maxv):
 
 # --- Advanced Simulation Engine ---
 
-class LiveHockeySimulation:
-    """Real-time live hockey simulation engine that generates events as they happen"""
-    
-    def __init__(self, home_team="Thunderbirds", away_team="Eagles"):
-        self.home_team = home_team
-        self.away_team = away_team
-        
-        # Live game state
-        self.game_state = {
-            'period': 1,
-            'time_remaining': 1200,  # 20 minutes in seconds
-            'home_score': 0,
-            'away_score': 0,
-            'possession': home_team,
-            'zone': 'neutral',  # defensive, neutral, offensive
-            'game_situation': 'even_strength',  # even_strength, powerplay, penalty_kill
-            'faceoff_location': 'center_ice'
-        }
-        
-        # Live event tracking
-        self.live_events = []
-        self.current_shift_time = 0
-        self.shift_length = random.randint(30, 90)  # Shift length in seconds
-        
-        # Player energy and fatigue
-        self.player_energy = {self.home_team: {}, self.away_team: {}}
-        self._initialize_players()
-        
-        # Live statistics
-        self.live_stats = {
-            'shots': {self.home_team: 0, self.away_team: 0},
-            'hits': {self.home_team: 0, self.away_team: 0},
-            'faceoffs': {self.home_team: 0, self.away_team: 0},
-            'penalties': {self.home_team: 0, self.away_team: 0}
-        }
-        
-        # Real-time callbacks for the viewer
-        self.event_callbacks = []
-        self.state_callbacks = []
-        
-    def _initialize_players(self):
-        """Initialize player rosters with realistic names and stats"""
-        positions = ['C', 'LW', 'RW', 'LD', 'RD', 'G']
-        
-        # Generate realistic hockey player names
-        first_names = ['Connor', 'Nathan', 'Alexander', 'William', 'David', 'Erik', 'Ryan', 'Tyler', 'Brandon', 'Jake', 
-                      'Mitchell', 'Trevor', 'Jonathan', 'Michael', 'Patrick', 'Kyle', 'Zach', 'Matt', 'Justin', 'Sean']
-        last_names = ['Johnson', 'Anderson', 'Williams', 'Brown', 'Wilson', 'Miller', 'Davis', 'Garcia', 'Rodriguez', 'Martinez',
-                     'Lindstrom', 'Karlsson', 'Johansson', 'Petersen', 'Nielsen', 'Hansen', 'Olsen', 'Larsen', 'Andersen', 'Christensen']
-        
-        for team in [self.home_team, self.away_team]:
-            self.player_energy[team] = {}
-            for i in range(20):  # 20 players per team
-                name = f"{random.choice(first_names)} {random.choice(last_names)}"
-                position = positions[i % len(positions)]
-                jersey = i + 1
-                
-                self.player_energy[team][name] = {
-                    'jersey': jersey,
-                    'position': position,
-                    'energy': 100.0,
-                    'skill': random.randint(65, 95),
-                    'on_ice': i < 6,  # First 6 players start on ice
-                    'goals': 0,
-                    'assists': 0,
-                    'shots': 0,
-                    'hits': 0,
-                    'penalties': 0,
-                    'ice_time': 0
-                }
-    
-    def register_event_callback(self, callback):
-        """Register a callback function to receive live events"""
-        self.event_callbacks.append(callback)
-    
-    def register_state_callback(self, callback):
-        """Register a callback function to receive game state updates"""
-        self.state_callbacks.append(callback)
-    
-    def _fire_event(self, event):
-        """Fire an event to all registered callbacks"""
-        self.live_events.append(event)
-        for callback in self.event_callbacks:
-            try:
-                callback(event)
-            except Exception as e:
-                print(f"Error in event callback: {e}")
-    
-    def _fire_state_update(self):
-        """Fire a state update to all registered callbacks"""
-        for callback in self.state_callbacks:
-            try:
-                callback(self.game_state.copy())
-            except Exception as e:
-                print(f"Error in state callback: {e}")
-    
-    def simulate_live_second(self):
-        """Simulate one second of live hockey action"""
-        if self.game_state['time_remaining'] <= 0:
-            return self._handle_period_end()
-        
-        # Decrease time
-        self.game_state['time_remaining'] -= 1
-        self.current_shift_time += 1
-        
-        # Update player ice time
-        self._update_ice_time()
-        
-        # Check for line changes
-        if self.current_shift_time >= self.shift_length:
-            self._handle_line_change()
-        
-        # Generate random events based on game situation
-        event_chance = self._calculate_event_probability()
-        
-        if random.random() < event_chance:
-            event = self._generate_live_event()
-            if event:
-                self._fire_event(event)
-                self._fire_state_update()
-        
-        return True
-    
-    def _calculate_event_probability(self):
-        """Calculate probability of an event happening this second"""
-        base_probability = 0.15  # 15% chance per second
-        
-        # Adjust based on zone
-        if self.game_state['zone'] == 'offensive':
-            base_probability *= 1.8
-        elif self.game_state['zone'] == 'defensive':
-            base_probability *= 1.2
-        
-        # Adjust based on game situation
-        if self.game_state['game_situation'] == 'powerplay':
-            base_probability *= 1.5
-        
-        return min(base_probability, 0.3)  # Cap at 30%
-    
-    def _generate_live_event(self):
-        """Generate a realistic live hockey event"""
-        event_types = ['shot', 'pass', 'hit', 'faceoff', 'turnover', 'save', 'penalty', 'goal']
-        weights = [0.25, 0.20, 0.15, 0.10, 0.12, 0.08, 0.05, 0.05]
-        
-        # Adjust weights based on zone
-        if self.game_state['zone'] == 'offensive':
-            weights[0] *= 2.5  # More shots in offensive zone
-            weights[6] *= 1.5  # More goals in offensive zone
-        
-        event_type = random.choices(event_types, weights=weights)[0]
-        
-        # Get active players for the possessing team
-        possessing_team = self.game_state['possession']
-        active_players = [name for name, data in self.player_energy[possessing_team].items() if data['on_ice']]
-        
-        if not active_players:
-            return None
-        
-        player = random.choice(active_players)
-        
-        # Generate event based on type
-        event = {
-            'type': event_type,
-            'timestamp': 1200 - self.game_state['time_remaining'],
-            'period': self.game_state['period'],
-            'time': self._format_game_time(),
-            'team': possessing_team,
-            'player': player,
-            'zone': self.game_state['zone'],
-            'location': self._generate_location()
-        }
-        
-        # Handle specific event logic
-        if event_type == 'shot':
-            return self._handle_shot_event(event)
-        elif event_type == 'goal':
-            return self._handle_goal_event(event)
-        elif event_type == 'penalty':
-            return self._handle_penalty_event(event)
-        elif event_type == 'faceoff':
-            return self._handle_faceoff_event(event)
-        else:
-            event['description'] = f"{player} - {event_type.title()}"
-            return event
-    
-    def _handle_shot_event(self, event):
-        """Handle a shot event with realistic outcomes"""
-        player = event['player']
-        team = event['team']
-        
-        # Update player stats
-        self.player_energy[team][player]['shots'] += 1
-        self.live_stats['shots'][team] += 1
-        
-        # Determine if it's a goal (realistic NHL shooting percentage ~10%)
-        goal_chance = 0.10
-        
-        if self.game_state['zone'] == 'offensive':
-            goal_chance *= 1.5
-        
-        if random.random() < goal_chance:
-            # It's a goal!
-            return self._convert_shot_to_goal(event)
-        else:
-            # It's a save or miss
-            event['description'] = f"Shot by {player} - SAVED!"
-            event['outcome'] = 'save'
-            return event
-    
-    def _convert_shot_to_goal(self, event):
-        """Convert a shot into a goal"""
-        player = event['player']
-        team = event['team']
-        
-        # Update score
-        if team == self.home_team:
-            self.game_state['home_score'] += 1
-        else:
-            self.game_state['away_score'] += 1
-        
-        # Update player stats
-        self.player_energy[team][player]['goals'] += 1
-        
-        # Possibly add an assist
-        active_players = [name for name, data in self.player_energy[team].items() 
-                         if data['on_ice'] and name != player]
-        if active_players and random.random() < 0.7:  # 70% chance of assist
-            assist_player = random.choice(active_players)
-            self.player_energy[team][assist_player]['assists'] += 1
-            event['assist'] = assist_player
-        
-        event['type'] = 'goal'
-        event['description'] = f"GOAL! {player} scores!"
-        
-        # Reset faceoff to center ice after goal
-        self.game_state['faceoff_location'] = 'center_ice'
-        self.game_state['zone'] = 'neutral'
-        
-        return event
-    
-    def _handle_penalty_event(self, event):
-        """Handle a penalty event"""
-        player = event['player']
-        team = event['team']
-        
-        penalties = ['Tripping', 'Slashing', 'High-sticking', 'Interference', 'Roughing', 'Cross-checking']
-        penalty_type = random.choice(penalties)
-        
-        self.player_energy[team][player]['penalties'] += 1
-        self.live_stats['penalties'][team] += 1
-        
-        event['penalty_type'] = penalty_type
-        event['description'] = f"PENALTY: {player} - {penalty_type} (2:00)"
-        
-        # Change game situation to powerplay/penalty kill
-        if team == self.game_state['possession']:
-            self.game_state['game_situation'] = 'penalty_kill'
-        else:
-            self.game_state['game_situation'] = 'powerplay'
-        
-        return event
-    
-    def _handle_faceoff_event(self, event):
-        """Handle a faceoff event"""
-        # Determine faceoff winner
-        home_center = random.choice([name for name, data in self.player_energy[self.home_team].items() 
-                                   if data['on_ice'] and data['position'] == 'C'])
-        away_center = random.choice([name for name, data in self.player_energy[self.away_team].items() 
-                                   if data['on_ice'] and data['position'] == 'C'])
-        
-        winner = random.choice([self.home_team, self.away_team])
-        winner_player = home_center if winner == self.home_team else away_center
-        
-        self.game_state['possession'] = winner
-        self.live_stats['faceoffs'][winner] += 1
-        
-        event['team'] = winner
-        event['player'] = winner_player
-        event['description'] = f"Faceoff won by {winner_player}"
-        
-        return event
-    
-    def _update_ice_time(self):
-        """Update ice time for all players currently on ice"""
-        for team in [self.home_team, self.away_team]:
-            for player, data in self.player_energy[team].items():
-                if data['on_ice']:
-                    data['ice_time'] += 1
-                    data['energy'] -= 0.1  # Fatigue over time
-    
-    def _handle_line_change(self):
-        """Handle line changes when shift is over"""
-        for team in [self.home_team, self.away_team]:
-            # Bring tired players off ice
-            on_ice_players = [name for name, data in self.player_energy[team].items() if data['on_ice']]
-            off_ice_players = [name for name, data in self.player_energy[team].items() if not data['on_ice']]
-            
-            # Change some players (realistic line change)
-            players_to_change = random.randint(1, 3)
-            for _ in range(min(players_to_change, len(on_ice_players), len(off_ice_players))):
-                # Player coming off
-                off_player = random.choice(on_ice_players)
-                self.player_energy[team][off_player]['on_ice'] = False
-                on_ice_players.remove(off_player)
-                
-                # Player going on
-                on_player = random.choice(off_ice_players)
-                self.player_energy[team][on_player]['on_ice'] = True
-                self.player_energy[team][on_player]['energy'] = min(100, self.player_energy[team][on_player]['energy'] + 20)
-                off_ice_players.remove(on_player)
-        
-        # Reset shift timer
-        self.current_shift_time = 0
-        self.shift_length = random.randint(30, 90)
-        
-        # Fire line change event
-        event = {
-            'type': 'line_change',
-            'timestamp': 1200 - self.game_state['time_remaining'],
-            'period': self.game_state['period'],
-            'time': self._format_game_time(),
-            'description': 'Line change'
-        }
-        self._fire_event(event)
-    
-    def _handle_period_end(self):
-        """Handle end of period"""
-        if self.game_state['period'] < 3:
-            self.game_state['period'] += 1
-            self.game_state['time_remaining'] = 1200  # Reset to 20 minutes
-            
-            # Fire period end event
-            event = {
-                'type': 'period_end',
-                'timestamp': 1200,
-                'period': self.game_state['period'] - 1,
-                'time': '00:00',
-                'description': f"End of Period {self.game_state['period'] - 1}"
-            }
-            self._fire_event(event)
-            
-            return True
-        else:
-            # Game over
-            event = {
-                'type': 'game_end',
-                'timestamp': 1200,
-                'period': 3,
-                'time': '00:00',
-                'description': 'Game Over',
-                'final_score': f"{self.home_team} {self.game_state['home_score']} - {self.away_team} {self.game_state['away_score']}"
-            }
-            self._fire_event(event)
-            return False
-    
-    def _format_game_time(self):
-        """Format remaining time as MM:SS"""
-        minutes = self.game_state['time_remaining'] // 60
-        seconds = self.game_state['time_remaining'] % 60
-        return f"{minutes:02d}:{seconds:02d}"
-    
-    def _generate_location(self):
-        """Generate a random location on the ice"""
-        return {
-            'x': random.randint(10, 90),
-            'y': random.randint(10, 40)
-        }
-    
-    def get_current_stats(self):
-        """Get current game statistics"""
-        home_players = []
-        away_players = []
-        
-        for team, players in self.player_energy.items():
-            player_list = home_players if team == self.home_team else away_players
-            
-            for name, data in players.items():
-                player_list.append({
-                    'name': name,
-                    'jersey': data['jersey'],
-                    'position': data['position'],
-                    'goals': data['goals'],
-                    'assists': data['assists'],
-                    'points': data['goals'] + data['assists'],
-                    'shots': data['shots'],
-                    'penalties': data['penalties'],
-                    'toi': f"{data['ice_time']//60:02d}:{data['ice_time']%60:02d}",
-                    'on_ice': data['on_ice']
-                })
-        
-        return {
-            'home_team': self.home_team,
-            'away_team': self.away_team,
-            'home_score': self.game_state['home_score'],
-            'away_score': self.game_state['away_score'],
-            'period': self.game_state['period'],
-            'time': self._format_game_time(),
-            'home_players': sorted(home_players, key=lambda x: x['points'], reverse=True),
-            'away_players': sorted(away_players, key=lambda x: x['points'], reverse=True),
-            'team_stats': self.live_stats,
-            'events': self.live_events.copy()
-        }
 
 class AdvancedGameSim:
     """Simulates a hockey game and produces a structured event log for visualization."""
@@ -17054,36 +16666,10 @@ class ShotChartViewerView(ctk.CTkFrame):
 # Legacy popup wrappers for converted views (backward compatibility)
 # ---------------------------------------------------------------------------
 
-class LeagueHistoryWindow(InGamePopup):
-    """Popup wrapper around LeagueHistoryView."""
-    def __init__(self, parent, game_manager):
-        InGamePopup.__init__(self, parent, title="League History", width=900, height=650)
-        self._view = LeagueHistoryView(self, game_manager, app=parent)
-        self._view.pack(fill="both", expand=True)
-        self._view._close_screen = self.destroy
 
 
-class ShotChartViewerWindow(InGamePopup):
-    """Popup wrapper around ShotChartViewerView."""
-    def __init__(self, parent, game_manager, shots, title="Shot Chart",
-                 home_name="", away_name=""):
-        InGamePopup.__init__(self, parent, title=title, width=800, height=600)
-        self._view = ShotChartViewerView(self, game_manager, shots, title=title,
-                                         home_name=home_name, away_name=away_name,
-                                         app=parent)
-        self._view.pack(fill="both", expand=True)
-        self._view._close_screen = self.destroy
 
 
-class CleanEditLinesWindow(InGamePopup):
-    """Popup wrapper around CleanEditLinesView."""
-    def __init__(self, parent):
-        InGamePopup.__init__(self, parent)
-        self.title("Edit Lines")
-        self.geometry("1440x920")
-        self._view = CleanEditLinesView(self, app=parent)
-        self._view.pack(fill="both", expand=True)
-        self._view._close_screen = self.destroy
 
 
 if __name__ == "__main__":

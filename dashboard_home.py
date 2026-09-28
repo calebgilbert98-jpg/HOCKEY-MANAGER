@@ -128,11 +128,6 @@ class CtkAppButton(ctk.CTkButton):
         self.configure(state="normal" if enabled else "disabled")
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
 
 
 class HomeDashboard:

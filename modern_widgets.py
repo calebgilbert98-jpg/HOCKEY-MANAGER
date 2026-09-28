@@ -281,29 +281,6 @@ class Pill(tk.Canvas):
         self.create_text(w / 2, h / 2, text=text, fill=self._fg, font=font)
 
 
-def style_treeview(style, *, row_bg=None, alt_bg=None):
-    """Soften a ttk.Treeview: row height, selection color, no harsh gridlines."""
-    row_bg = row_bg or _DEFAULTS["secondary_bg"]
-    alt_bg = alt_bg or _DEFAULTS["tertiary_bg"]
-    try:
-        style.configure("Treeview",
-                        background=row_bg,
-                        fieldbackground=row_bg,
-                        foreground=_DEFAULTS["secondary_text"],
-                        rowheight=26,
-                        borderwidth=0)
-        style.configure("Treeview.Heading",
-                        background=_DEFAULTS["border_dark"],
-                        foreground=_DEFAULTS["primary_text"],
-                        font=("Segoe UI", 10, "bold"),
-                        borderwidth=0)
-        style.map("Treeview",
-                  background=[("selected", _DEFAULTS["selected_bg"]
-                               if "selected_bg" in _DEFAULTS
-                               else "#0d2b28")],
-                  foreground=[("selected", _DEFAULTS["primary_text"])])
-    except Exception:
-        pass
 
 
 # ----------------------------------------------------------------------
@@ -400,24 +377,6 @@ class DarkEntry(tk.Canvas):
     configure = config
 
 
-class DarkText(tk.Text):
-    """Dark multi-line text box (no white background, no harsh border)."""
-
-    def __init__(self, parent, *, font=None, **kw):
-        kw.setdefault("bg", _INPUT_BG)
-        kw.setdefault("fg", _DEFAULTS["primary_text"])
-        kw.setdefault("insertbackground", _DEFAULTS["primary_text"])
-        kw.setdefault("selectbackground", "#0d2b28")
-        kw.setdefault("selectforeground", _DEFAULTS["primary_text"])
-        kw.setdefault("relief", "flat")
-        kw.setdefault("bd", 0)
-        kw.setdefault("highlightthickness", 1)
-        kw.setdefault("highlightbackground", _INPUT_BORDER)
-        kw.setdefault("highlightcolor", _INPUT_FOCUS)
-        kw.setdefault("font", font or ("Segoe UI", 10))
-        kw.setdefault("padx", 8)
-        kw.setdefault("pady", 8)
-        super().__init__(parent, **kw)
 
 
 def style_combobox(style, style_name="Dark.TCombobox"):
@@ -451,22 +410,6 @@ def style_combobox(style, style_name="Dark.TCombobox"):
     return style_name
 
 
-class DarkListbox(tk.Listbox):
-    """Dark listbox matching the input family."""
-
-    def __init__(self, parent, *, font=None, **kw):
-        kw.setdefault("bg", _INPUT_BG)
-        kw.setdefault("fg", _DEFAULTS["secondary_text"])
-        kw.setdefault("selectbackground", "#0d2b28")
-        kw.setdefault("selectforeground", _DEFAULTS["primary_text"])
-        kw.setdefault("relief", "flat")
-        kw.setdefault("bd", 0)
-        kw.setdefault("highlightthickness", 1)
-        kw.setdefault("highlightbackground", _INPUT_BORDER)
-        kw.setdefault("highlightcolor", _INPUT_FOCUS)
-        kw.setdefault("font", font or ("Segoe UI", 10))
-        kw.setdefault("activestyle", "none")
-        super().__init__(parent, **kw)
 
 
 def apply_dark_form_theme(root):

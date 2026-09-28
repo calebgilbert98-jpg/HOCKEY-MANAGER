@@ -13,7 +13,7 @@ from datetime import datetime, date
 import json
 import random
 import calendar
-from PIL import Image, ImageTk
+from PIL import Image
 
 from modern_ui import AppColors, AppFonts, AppCard, AppButton, PillBadge
 

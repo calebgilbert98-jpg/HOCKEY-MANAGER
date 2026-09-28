@@ -461,63 +461,6 @@ def _best_line(team):
     return line
 
 
-def _build_lines(team):
-    """4 forward lines + 3 D pairs + goalie, sorted by overall (best on L1/P1).
-
-    Used for real on-the-fly line changes in the visualizer: the five
-    skater dots keep their roles (C/LW/RW/D1/D2) but get a new player
-    (and jersey number) every 45s (F) / 60s (D), matching the sim's
-    rotation cadence.
-    """
-    skaters = [p for p in team.roster
-               if getattr(p, "primary_position", None) != PlayerPosition.GOALIE]
-    fw_pos = (PlayerPosition.CENTER, PlayerPosition.LEFT_WING,
-              PlayerPosition.RIGHT_WING)
-    df_pos = (PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE)
-    try:
-        fw = sorted((p for p in skaters if p.primary_position in fw_pos),
-                    key=lambda p: p.overall_rating(), reverse=True)
-        df = sorted((p for p in skaters if p.primary_position in df_pos),
-                    key=lambda p: p.overall_rating(), reverse=True)
-    except Exception:
-        fw, df = list(skaters), []
-
-    def pad(group, n):
-        if not group:
-            return [None] * n
-        return [group[i % len(group)] for i in range(n)]
-    fw = pad(fw, 12)
-    df = pad(df, 6)
-
-    def fit(chunk, roles):
-        """Greedily assign the best position-fit player to each role."""
-        remaining = [p for p in chunk if p is not None]
-        out = {}
-        for role, want in roles:
-            best = next((p for p in remaining
-                         if getattr(p, "primary_position", None) == want), None)
-            if best is None and remaining:
-                best = remaining[0]
-            if best in remaining:
-                remaining.remove(best)
-            out[role] = best
-        return out
-
-    lines = {"F": [], "D": []}
-    for i in range(4):
-        lines["F"].append(fit(fw[i * 3:(i + 1) * 3],
-                              [("C", PlayerPosition.CENTER),
-                               ("LW", PlayerPosition.LEFT_WING),
-                               ("RW", PlayerPosition.RIGHT_WING)]))
-    for i in range(3):
-        lines["D"].append(fit(df[i * 2:(i + 1) * 2],
-                              [("D1", PlayerPosition.LEFT_DEFENSE),
-                               ("D2", PlayerPosition.RIGHT_DEFENSE)]))
-    try:
-        lines["G"] = team.get_starting_goalie()
-    except Exception:
-        lines["G"] = None
-    return lines
 
 
 # ----------------------------------------------------------------------------

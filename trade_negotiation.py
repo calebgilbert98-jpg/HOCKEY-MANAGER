@@ -111,9 +111,6 @@ def get_negotiation(app, neg_id: str) -> Optional[TradeNegotiation]:
     return None
 
 
-def open_negotiations(app) -> List[TradeNegotiation]:
-    return [n for n in _store(app)
-            if isinstance(n, TradeNegotiation) and n.is_open]
 
 
 def find_team(app, team_name: str):

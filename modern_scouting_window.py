@@ -1022,8 +1022,3 @@ class ModernScoutingWindow(InGamePopup):
 
 
 # Integration function for main application  
-def open_modern_scouting_window(parent):
-    """Open the modern scouting management window"""
-    if 'scouting' not in parent.open_windows or not parent.open_windows['scouting'].winfo_exists():
-        parent.open_windows['scouting'] = ModernScoutingWindow(parent)
-    parent.open_windows['scouting'].focus_set()

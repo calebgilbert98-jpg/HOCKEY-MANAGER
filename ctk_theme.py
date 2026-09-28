@@ -57,9 +57,6 @@ def set_team_accent(accent, hover=None, text=None):
     ACCENT_TEXT = text or BG
 
 
-def current_accent():
-    """Return the active (accent, hover, text) triple."""
-    return TEAL, TEAL_HOVER, ACCENT_TEXT
 
 
 def _theme_path():

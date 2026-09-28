@@ -254,20 +254,3 @@ def revert_to_base(ai_team: Any):
             pass
 
 
-def initialize_league_identities(league: Any):
-    """Assign base tactical identities to all AI teams at season start."""
-    user_team_name = None
-    try:
-        # Try to get user team from league or caller
-        user_team_name = getattr(league, 'user_team_name', None)
-    except Exception:
-        pass
-    for team in getattr(league, 'teams', []):
-        try:
-            tname = team.team_name
-            if tname == user_team_name:
-                continue  # user sets their own tactics
-            if not getattr(team, 'base_tactics', None):
-                assign_base_identity(team)
-        except Exception:
-            continue

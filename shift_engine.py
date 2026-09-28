@@ -91,13 +91,6 @@ def _next_in_rotation(current: int, max_n: int) -> int:
     return (current % max_n) + 1
 
 
-def _avg_fatigue(sim: Any, players: List[Any]) -> float:
-    """Average fatigue (0-100) of the given players."""
-    if not players:
-        return 100.0
-    fatigue = getattr(sim, "player_fatigue", {})
-    total = sum(fatigue.get(getattr(p, "id", None), 100) for p in players)
-    return total / max(1, len(players))
 
 
 def should_change_on_fly(sim: Any, team: Any, st: ShiftState) -> Tuple[bool, bool]:

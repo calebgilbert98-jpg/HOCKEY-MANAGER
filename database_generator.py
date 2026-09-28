@@ -1001,31 +1001,6 @@ def generate_database(config_name: str) -> League:
     
     return generator.generate_comprehensive_database()
 
-def get_database_info(config_name: str) -> str:
-    """Get detailed information about a database configuration"""
-    
-    if config_name not in DATABASE_CONFIGURATIONS:
-        return "Unknown configuration"
-    
-    config = DATABASE_CONFIGURATIONS[config_name]
-    
-    info = f"""
-{config.name}
-{config.description}
-
-Database Details:
-• Total Players: {config.total_players:,}
-• Draft Prospects: {config.prospects_per_draft} per year
-• League Depth: {config.leagues_count} leagues with {config.minor_league_depth} levels
-• International Diversity: {config.international_factor:.1f}x
-• Veteran Balance: {config.veteran_distribution:.0%}
-• Staff per Team: {config.staff_count}
-
-Performance Impact: {"Low" if config.total_players < 15000 else "Medium" if config.total_players < 75000 else "High"}
-Recommended for: {"Beginners" if config_name == "Small" else "Most players" if config_name == "Medium" else "Experienced managers" if config_name == "Large" else "Hardcore simulation fans"}
-"""
-    
-    return info.strip()
 
 # Example usage and testing
 if __name__ == "__main__":

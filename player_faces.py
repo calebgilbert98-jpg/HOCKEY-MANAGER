@@ -889,5 +889,3 @@ def get_face_photo(player, size=128):
     return photo
 
 
-def clear_memory_cache():
-    _MEMO.clear()

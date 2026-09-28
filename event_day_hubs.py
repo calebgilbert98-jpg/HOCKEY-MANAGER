@@ -47,22 +47,6 @@ def get_todays_event(d=None):
     return None
 
 
-def days_until_event(d=None):
-    """Days until the next tentpole event (for dashboard banners)."""
-    from datetime import date as _date
-    d = d or _date.today()
-    cands = []
-    for month, day, name in ((6, 23, 'draft'), (7, 1, 'free_agency'), (3, 8, 'deadline')):
-        for yr in (d.year, d.year + 1):
-            try:
-                ev = _date(yr, month, day)
-            except ValueError:
-                continue
-            if ev >= d:
-                cands.append(((ev - d).days, name, ev))
-                break
-    cands.sort()
-    return cands[0] if cands else (None, None, None)
 
 
 # ----------------------------------------------------------------------------

@@ -408,26 +408,6 @@ def calculate_draft_ranking(player: Player) -> float:
     
     return ranking_score
 
-def generate_birthdate(age: int, variation_days: int = 180) -> datetime:
-    """Generate a realistic birthdate for a player of the given age."""
-    today = datetime.now()
-    birth_year = today.year - age
-    
-    # Draft-eligible players are typically born between Jan 1 and Sep 15
-    if age == 18:
-        month = random.randint(1, 9)
-        day = random.randint(1, 28)
-        if month == 9:
-            day = random.randint(1, 15)  # Only first half of September
-    else:
-        # For other ages, generate any date
-        month = random.randint(1, 12)
-        day = random.randint(1, 28)
-    
-    # Add some random variation
-    variation = random.randint(-variation_days, variation_days)
-    base_date = datetime(birth_year, month, day)
-    return base_date + timedelta(days=variation)
 
 def create_prospect(age: int = 18, 
                    position: Optional[PlayerPosition] = None, 
@@ -655,14 +635,3 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal") -> l
     
     return prospects
 
-def get_scouting_info(player: Player) -> dict:
-    """Returns a dictionary of information that would be available from scouting."""
-    return {
-        "name": player.full_name,
-        "position": player.primary_position.name,
-        "age": player.age,
-        "nationality": player.nationality,
-        "birthplace": player.birthplace,
-        "draft_ranking": getattr(player, "draft_ranking", 0),
-        "potential_estimate": player.potential_grade  # This would be hidden until scouted
-    }

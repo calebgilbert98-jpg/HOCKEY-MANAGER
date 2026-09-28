@@ -429,9 +429,6 @@ class MemoryOptimizer:
 # Global memory optimizer instance
 _global_memory_optimizer: Optional[MemoryOptimizer] = None
 
-def get_memory_optimizer() -> Optional[MemoryOptimizer]:
-    """Get the global memory optimizer instance"""
-    return _global_memory_optimizer
 
 def initialize_memory_optimizer() -> MemoryOptimizer:
     """Initialize the global memory optimizer"""

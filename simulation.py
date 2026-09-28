@@ -263,12 +263,6 @@ class PressureLevel(Enum):
     HIGH = "high"                    # 61-80%
     INTENSE = "intense"              # 81-100%
 
-class ChemistryType(Enum):
-    EXCELLENT = "excellent"
-    GOOD = "good"
-    NEUTRAL = "neutral"
-    POOR = "poor"
-    TERRIBLE = "terrible"
 
 class LineRole(Enum):
     PRIMARY_SCORER = "primary_scorer"
@@ -283,22 +277,7 @@ class LineRole(Enum):
     PENALTY_KILLER = "penalty_killer"
     POWER_PLAY_SPECIALIST = "power_play_specialist"
 
-class CoachingStyle(Enum):
-    AGGRESSIVE = "aggressive"
-    DEFENSIVE = "defensive"
-    BALANCED = "balanced"
-    OFFENSIVE = "offensive"
-    PHYSICAL = "physical"
-    SPEED_GAME = "speed_game"
-    POSSESSION = "possession"
 
-class LineChemistry(Enum):
-    DOMINANT = "dominant"        # 95-100% chemistry
-    EXCELLENT = "excellent"     # 85-94% chemistry
-    GOOD = "good"              # 70-84% chemistry
-    AVERAGE = "average"        # 55-69% chemistry
-    POOR = "poor"             # 40-54% chemistry
-    DYSFUNCTIONAL = "dysfunctional"  # Below 40% chemistry
 
 class TacticalSystem(Enum):
     # Offensive Systems
@@ -329,15 +308,6 @@ class AnalyticsModel(Enum):
     MOMENTUM_TRACKING = "momentum_tracking"
     CLUTCH_FACTOR = "clutch_factor"
 
-class PredictionType(Enum):
-    SHOT_OUTCOME = "shot_outcome"
-    SCORING_CHANCE = "scoring_chance"
-    TURNOVER_RISK = "turnover_risk"
-    PENALTY_LIKELIHOOD = "penalty_likelihood"
-    LINE_CHANGE_OPTIMAL = "line_change_optimal"
-    GOALIE_PULL_TIMING = "goalie_pull_timing"
-    FORMATION_COUNTER = "formation_counter"
-    MOMENTUM_SHIFT = "momentum_shift"
 
 class PerformanceMetric(Enum):
     GOALS_ABOVE_EXPECTED = "goals_above_expected"
@@ -359,12 +329,6 @@ class TrendDirection(Enum):
     BREAKOUT_CANDIDATE = "breakout_candidate"
     REGRESSION_CANDIDATE = "regression_candidate"
 
-class AnalyticsLevel(Enum):
-    BASIC = "basic"           # Traditional stats
-    INTERMEDIATE = "intermediate"  # Shot attempts, zone time
-    ADVANCED = "advanced"     # Expected goals, WAR
-    ELITE = "elite"          # Machine learning models
-    PROPRIETARY = "proprietary"  # Custom algorithms
 
 
 # ---------------------------------------------------------------------------

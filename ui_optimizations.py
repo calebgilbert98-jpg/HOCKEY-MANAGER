@@ -414,24 +414,5 @@ class UIOptimizationManager:
 
 
 # Example integration helper functions
-def optimize_existing_treeview(app, tree_widget: ttk.Treeview, data: List[Dict], name: str):
-    """Convert an existing treeview to use virtualization"""
-    if not hasattr(app, 'ui_optimizer'):
-        app.ui_optimizer = UIOptimizationManager(app)
-    
-    virt_tree = app.ui_optimizer.create_virtualized_treeview(
-        app, tree_widget, name, viewport_size=50
-    )
-    virt_tree.set_data_source(data)
-    return virt_tree
 
 
-def add_responsive_button_to_frame(app, parent_frame, text: str, command: Callable, **kwargs):
-    """Add a responsive button to a frame"""
-    if not hasattr(app, 'ui_optimizer'):
-        app.ui_optimizer = UIOptimizationManager(app)
-    
-    button = app.ui_optimizer.create_responsive_button(
-        parent_frame, text=text, command=command, **kwargs
-    )
-    return button

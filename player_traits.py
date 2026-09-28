@@ -262,9 +262,6 @@ def infer_traits(player) -> List[str]:
     return qualified
 
 
-def get_trait(trait_id: str) -> Trait:
-    """Get a trait definition by ID."""
-    return ALL_TRAITS.get(trait_id)
 
 
 def get_player_traits(player) -> List[Trait]:

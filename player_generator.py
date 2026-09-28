@@ -585,22 +585,8 @@ class PlayerGenerator:
         return database
 
 # Convenience functions for easy access
-def generate_rookies(size: int = 224) -> List[Player]:
-    """Generate a rookie class."""
-    generator = PlayerGenerator()
-    return generator.generate_rookie_class(size)
 
-def generate_nhl_database(size: int = 800) -> List[Player]:
-    """Generate NHL players database."""
-    generator = PlayerGenerator()
-    return generator.generate_nhl_players(size)
 
-def generate_single_player(skill_level: str = "NHL_DEPTH", 
-                          age_category: str = "PRIME",
-                          position: Optional[PlayerPosition] = None) -> Player:
-    """Generate a single player with specified parameters."""
-    generator = PlayerGenerator()
-    return generator.create_player(skill_level, age_category, position)
 
 def generate_complete_database() -> Dict[str, List[Player]]:
     """Generate a complete player database."""

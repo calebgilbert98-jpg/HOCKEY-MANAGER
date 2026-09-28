@@ -1838,23 +1838,6 @@ def is_trade_deadline_day():
     return manager.is_trade_deadline_day()
 
 
-def create_trade_deadline_button(parent_frame, parent_app):
-    """Create trade deadline center access button (only visible on deadline day)"""
-    if not is_trade_deadline_day():
-        return None
-        
-    deadline_btn = tk.Button(
-        parent_frame,
-        text="TRADE DEADLINE CENTER",
-        bg='#00ceb8',
-        fg='white',
-        font=('Segoe UI', 14, 'bold'),
-        relief='raised',
-        bd=3,
-        command=lambda: TradeDeadlineCenter(parent_app)
-    )
-    
-    return deadline_btn
 
 
 if __name__ == "__main__":

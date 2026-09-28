@@ -55,13 +55,8 @@ def _effective() -> float:
     return max(0.7, min(1.35, _tier_base * _auto_factor))
 
 
-def get_scale() -> float:
-    """Effective scale factor (tier x auto-fit)."""
-    return _effective()
 
 
-def get_tier_name() -> str:
-    return _tier_name
 
 
 def tier_factor(name: str) -> float:
@@ -203,19 +198,8 @@ def set_tier(name: str) -> float:
     return _effective()
 
 
-def set_scale(factor: float) -> None:
-    """Legacy entry point: treat as a direct tier-base override."""
-    global _tier_base
-    try:
-        _tier_base = max(0.7, min(1.35, float(factor)))
-    except Exception:
-        _tier_base = 1.0
-    _tier_name = "Custom"
-    _apply_to_registry()
 
 
-def scale_from_setting(value: str) -> None:
-    set_tier(value)
 
 
 def set_auto_factor(factor: float) -> float:

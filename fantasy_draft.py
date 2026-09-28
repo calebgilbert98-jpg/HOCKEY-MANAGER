@@ -4815,29 +4815,3 @@ NHL League Office""",
         debug_print("DEBUG: Salary display integration completed - contracts ready for strategic drafting")
 
 
-class FantasyDraftWindow(InGamePopup):
-    """Popup wrapper around FantasyDraftView (backward compatibility).
-
-    New code should embed FantasyDraftView as a full-screen view instead
-    of opening this card.
-    """
-
-    def __init__(self, parent, game_manager):
-        super().__init__(parent)
-        self.title("Fantasy Draft - Hockey Manager")
-        self.geometry("1600x1000")
-        self.minsize(1400, 900)
-        # Closing the card must tear down the popup card (manager-owned),
-        # not just the inner frame.
-        self._view = FantasyDraftView(self, game_manager, app=parent)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)

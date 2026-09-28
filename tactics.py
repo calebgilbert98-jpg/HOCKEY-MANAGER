@@ -1045,7 +1045,3 @@ def describe_team_tactics(team: Any) -> List[str]:
     return lines
 
 
-def all_systems() -> Dict[str, Dict[str, Dict[str, Any]]]:
-    return {"offense": OFFENSIVE_SYSTEMS, "defense": DEFENSIVE_SYSTEMS,
-            "pp": POWERPLAY_SYSTEMS, "pk": PENALTY_KILL_SYSTEMS,
-            "philosophy": PHILOSOPHIES}
