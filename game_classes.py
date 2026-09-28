@@ -6118,12 +6118,21 @@ class League:
                             if pick.round == round_num]
                 
                 for pick in team_picks:
-                    # Find the team that currently owns this pick
-                    current_owner = None
-                    for owner_team in _draft_teams:
-                        if pick in owner_team.get_picks_for_year(year):
-                            current_owner = owner_team
-                            break
+                    # Find the team that currently owns this pick.
+                    # Ownership follows the trade engine: a traded pick's
+                    # current_team names the selecting club (the pick object
+                    # stays in the original club's list). Dict membership
+                    # is stale after trades, so it is only a fallback.
+                    want = str(getattr(pick, "current_team", "") or "")
+                    current_owner = next(
+                        (t for t in _draft_teams
+                         if str(getattr(t, "team_name", "")) == want),
+                        None)
+                    if current_owner is None:
+                        for owner_team in _draft_teams:
+                            if pick in owner_team.get_picks_for_year(year):
+                                current_owner = owner_team
+                                break
                     
                     if current_owner:
                         round_picks.append((current_owner, pick))

@@ -315,6 +315,11 @@ class GameSaveManager:
                 'trade_block': getattr(team, 'trade_block', []),
                 'division': getattr(team, 'division', ''),
                 'conference': getattr(team, 'conference', ''),
+                # League identity (NHL vs AHL). Was never serialized: every
+                # load reset all 62 clubs to the dataclass default
+                # ("National Hockey League"), which broke the draft lottery
+                # and draft order's NHL filters on any loaded career.
+                'league_name': getattr(team, 'league_name', 'National Hockey League'),
                 'standings_position': getattr(team, 'standings_position', 0),
                 'board_expectation': getattr(team, 'board_expectation', None),
                 'buyout_cap_hits': dict(getattr(team, 'buyout_cap_hits', {}) or {}),
@@ -1316,6 +1321,11 @@ class GameSaveManager:
             # Restore basic team info
             team.division = team_data.get('division', '')
             team.conference = team_data.get('conference', '')
+            # League identity (NHL vs AHL). Old saves lack the key ->
+            # keep the dataclass default (NHL), same as before.
+            team.league_name = team_data.get(
+                'league_name', getattr(team, 'league_name',
+                                       'National Hockey League'))
             team.standings_position = team_data.get('standings_position', 0)
             team.coaching_staff = team_data.get('coaching_staff', [])
             # Team staff (coaches/scouts). Old saves lack the key -> empty.

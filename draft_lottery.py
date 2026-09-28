@@ -67,7 +67,11 @@ def _current_owner_name(league: Any, original_name: str, year: int) -> str:
             for p in (t.get_picks_for_year(year) or []):
                 if getattr(p, "round", 0) == 1 and \
                    getattr(p, "original_team", "") == original_name:
-                    return _team_name(t)
+                    # The trade engine tracks ownership on the pick itself
+                    # (current_team); the pick object stays in the original
+                    # club's list, so the dict holder is NOT the owner.
+                    return (getattr(p, "current_team", "") or
+                            _team_name(t))
     except Exception:
         pass
     return original_name
