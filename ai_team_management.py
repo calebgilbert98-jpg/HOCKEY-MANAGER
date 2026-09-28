@@ -958,6 +958,189 @@ class AITeamManager:
         except Exception:
             return False
 
+    def _execute_contract_extension(self, team: Team, decision: "AIDecision",
+                                      league) -> bool:
+        """Execute one AI contract extension end-to-end.
+
+        The same rulebook as the user's extension path: league-minimum
+        salary, 20%-of-cap max, 7-year re-sign max (new CBA), and the cap
+        check where the extension REPLACES the player's existing hit
+        rather than stacking on top of it. The player decides through
+        the same contract_appeal machinery that governs offer sheets and
+        UFA talks -- loyalty, happiness, cup contention, role, and money
+        all weigh in, so a disgruntled star can still walk to free
+        agency. Star market-setters move the market via register_signing,
+        and the human fallout (overpay verdict, fan reaction) lands on
+        the AI GM exactly like the user. Returns True when the player
+        signs.
+        """
+        p = getattr(decision, "target_player", None)
+        details = getattr(decision, "offer_details", None) or {}
+        if p is None:
+            return False
+        try:
+            # Still here, still on an expiring deal?
+            roster = getattr(team, "roster", None) or []
+            if p not in roster:
+                return False
+            _contract = getattr(p, "contract", None)
+            if _contract is None:
+                return False
+            if int(getattr(_contract, "years_remaining", 0) or 0) != 1:
+                return False
+            try:
+                from player_decision import wants_out as _wo
+                if _wo(p):
+                    return False
+            except Exception:
+                pass
+            # Terms: clamp to the user's rulebook (7-year re-sign max,
+            # league minimum, 20% of cap). The evaluation may propose 8
+            # for young stars (old-CBA habit); the new CBA caps it at 7.
+            try:
+                from salary_cap_system import league_minimum_salary as _min_fn
+                _floor = int(_min_fn(getattr(league, "season_year", None)))
+            except Exception:
+                _floor = 850_000
+            try:
+                _cap_sys = getattr(league, "salary_cap_system", None)
+                _live_cap = int(_cap_sys.current_cap) if _cap_sys else 104_000_000
+            except Exception:
+                _live_cap = 104_000_000
+            _max_sal = int(0.20 * _live_cap)
+            offered = int(details.get("salary", 0) or 0)
+            years = max(1, min(7, int(details.get("term", 1) or 1)))
+            if offered < _floor or offered > _max_sal:
+                return False
+            # Cap check, mirroring the user's extension validation: the
+            # new money replaces the player's existing hit.
+            try:
+                from salary_cap_system import total_cap_charge as _tcc
+                _charge = int(_tcc(team))
+                _cur = int(getattr(_contract, "salary", 0) or 0)
+                if _charge - _cur + offered > _live_cap:
+                    return False
+            except Exception:
+                pass
+            # The handshake: the SAME appeal machinery as offer sheets /
+            # UFA talks, with the stay-home bonus (current_team is team).
+            # A soft yes isn't enough -- mirrors the offer-sheet bar.
+            # Insult guard (same zones as the FA handshake): below 70% of
+            # his ask the player walks outright -- no loyalty discount
+            # covers an 8%-of-market offer.
+            try:
+                _ask0 = self._player_ask(p, league=league)
+            except Exception:
+                _ask0 = 0
+            if _ask0 and offered < 0.7 * _ask0:
+                try:
+                    _pend = getattr(self, "_pending_news", None)
+                    if not isinstance(_pend, list):
+                        _pend = self._pending_news = []
+                    _pend.append(
+                        f"{getattr(p, 'full_name', 'A player')} turned down "
+                        f"the {team.team_name}' extension offer "
+                        f"(${offered:,} x {years}) -- he'll test the market.")
+                except Exception:
+                    pass
+                return False
+            try:
+                from player_decision import contract_appeal as _appeal
+                _score, _reasons = _appeal(
+                    p, team, offered, years,
+                    current_team=team, league=league)
+            except Exception:
+                return False
+            # Deterministic bar (the offer-sheet 0.52, minus the jitter):
+            # weekly processing re-proposes identical terms (the ask and
+            # the boldness are both deterministic), so a jittered roll
+            # would re-litigate the same rejected offer every week. A
+            # rejection stands until the terms change.
+            if _score < 0.52:
+                try:
+                    _pend = getattr(self, "_pending_news", None)
+                    if not isinstance(_pend, list):
+                        _pend = self._pending_news = []
+                    _pend.append(
+                        f"{getattr(p, 'full_name', 'A player')} turned down "
+                        f"the {team.team_name}' extension offer "
+                        f"(${offered:,} x {years}) -- he'll test the market.")
+                except Exception:
+                    pass
+                return False
+            # Signed. Mutate in place like the user's extension path.
+            _contract.salary = offered
+            _contract.years_remaining = years
+            # An ELC extension is a second contract, not an ELC: the
+            # slide machinery must not touch it again.
+            try:
+                _contract.entry_level = False
+                p.elc_slides_used = 0
+                p.elc_seasons_completed = 0
+            except Exception:
+                pass
+            # Trade protection for established veterans on long deals --
+            # the user can offer clauses in extensions; the AI does too.
+            try:
+                import trade_engine as _te
+                if years >= 4 and _te.clause_eligible(p):
+                    _te.apply_clause_to_contract(
+                        _contract, "ntc", 10, player=p)
+            except Exception:
+                pass
+            # Market feedback + human fallout, same as every signing path.
+            _ask = None
+            try:
+                _ask = self._player_ask(p, league=league)
+            except Exception:
+                pass
+            _set_market = False
+            try:
+                _cap_sys2 = getattr(league, "salary_cap_system", None)
+                if _cap_sys2 is not None:
+                    _p2 = getattr(p, "primary_position", "")
+                    _pn2 = _p2.value if hasattr(_p2, "value") else str(_p2)
+                    try:
+                        from game_classes import to_100_scale as _t100c
+                        _ovr100c = int(_t100c(p.overall_rating()))
+                    except Exception:
+                        _ovr100c = 75
+                    _set_market = bool(_cap_sys2.register_signing(
+                        getattr(p, "full_name", "Unknown"), offered,
+                        _ovr100c, _pn2,
+                        int(getattr(p, "age", 27) or 27),
+                        int(getattr(league, "season_year", 0) or 0)))
+            except Exception:
+                pass
+            try:
+                from reputation_system import evaluate_contract_decision \
+                    as _ecd
+                _cd = _ecd(p, offered, _ask if _ask else offered,
+                           team=team, league=league,
+                           market_setter=bool(_set_market))
+            except Exception:
+                _cd = {}
+            try:
+                _pname = getattr(p, "full_name", "Unknown")
+                _stories = [
+                    f"The {team.team_name} have signed {_pname} to a "
+                    f"{years}-year, ${offered:,}/yr extension."]
+                if _set_market:
+                    _stories.append(
+                        f"{_pname}'s ${offered:,}/yr extension sets the "
+                        f"market -- comparable stars will demand more.")
+                if isinstance(_cd, dict) and _cd.get("story"):
+                    _stories.append(_cd["story"])
+                _pend = getattr(self, "_pending_news", None)
+                if not isinstance(_pend, list):
+                    _pend = self._pending_news = []
+                _pend.extend(_stories)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     def _execute_decisions(self, team: Team, decisions: List[AIDecision]):
         """Execute the decisions this manager owns end-to-end.
 
@@ -981,6 +1164,11 @@ class AITeamManager:
                     if not _fa_signed and self._execute_free_agent_signing(
                             team, d, league):
                         _fa_signed = True
+                    continue
+                if d.decision_type == "contract_extension":
+                    # Real executor, not a proposal: same rulebook as the
+                    # user's extension path (cap, term, player handshake).
+                    self._execute_contract_extension(team, d, league)
                     continue
                 if d.decision_type == "sign_prospect":
                     if getattr(p, "contract", None) is not None:
@@ -1010,20 +1198,47 @@ class AITeamManager:
 
     def _evaluate_contract_extensions(self, team: Team, strategy: TeamStrategy,
                                     current_date: date) -> List[AIDecision]:
-        """Evaluate contract extension opportunities"""
+        """Evaluate contract extension opportunities.
+
+        Candidates are players whose contracts genuinely expire after this
+        season (years_remaining == 1) -- not a random sample. Players who
+        want out skip extensions entirely; they use the holdout path.
+        """
         decisions = []
-        
+
         # Find players with expiring contracts
+        try:
+            from player_decision import wants_out as _wants_out
+        except Exception:
+            _wants_out = None
         expiring_players = []
         for player in team.roster:
-            if hasattr(player, 'contract') and player.contract:
-                # Assume contract expires next year for testing
-                if random.random() < 0.1:  # 10% chance of expiring contract
-                    expiring_players.append(player)
+            try:
+                _c = getattr(player, 'contract', None)
+                if _c is None:
+                    continue
+                if int(getattr(_c, 'years_remaining', 0) or 0) != 1:
+                    continue
+                if _wants_out is not None and _wants_out(player):
+                    continue
+                expiring_players.append(player)
+            except Exception:
+                continue
         
         for player in expiring_players:
-            # Decide whether to extend based on strategy
-            should_extend = self._should_extend_player(player, strategy)
+            # Decide whether to extend based on strategy. A player coming
+            # off his ELC is always an extension candidate -- he's your
+            # own drafted kid, not a roster-shape decision; the strategy
+            # question is the terms, not whether to make an offer.
+            # (Non-tendering him means losing the asset for nothing.)
+            try:
+                _on_elc = bool(getattr(
+                    getattr(player, "contract", None), "entry_level",
+                    False))
+            except Exception:
+                _on_elc = False
+            should_extend = (_on_elc
+                             or self._should_extend_player(player, strategy))
             
             if should_extend:
                 # Young stars get top extension priority: sign them a year
@@ -1046,12 +1261,42 @@ class AITeamManager:
                     _ident2 = self.gm_identities.get(team.team_name)
                     _pr2 = _ident2.pressure_response if _ident2 is not None else 0.5
                     _urgency = min(1.0, _urgency + 0.1 * _pr2)
+                # The offer anchors to the player's ASK (the same number
+                # the user negotiates against), scaled by this GM's
+                # boldness -- exactly like the FA path. Anchoring to the
+                # internal estimate instead would systematically lowball:
+                # the handshake zones are measured against the ask.
+                try:
+                    _ask_e = self._player_ask(player, league=getattr(
+                        self, "_league_ref", None))
+                except Exception:
+                    _ask_e = self._estimate_player_salary(player)
+                try:
+                    from salary_cap_system import total_cap_charge as _tcc_e
+                    _cap_sys_e = getattr(self, "_cap_system", None)
+                    _cap_e = int(_cap_sys_e.current_cap) \
+                        if _cap_sys_e else 104_000_000
+                    _room_e = _cap_e - (int(_tcc_e(team)) - int(
+                        getattr(getattr(player, "contract", None),
+                                "salary", 0) or 0))
+                except Exception:
+                    _room_e = 0
+                try:
+                    _bold_e = self._offer_boldness(
+                        team, strategy, player, player.overall_rating(),
+                        _ask_e, max(0, _room_e))
+                except Exception:
+                    _bold_e = 0.95
+                _offer_e = int(_ask_e * _bold_e)
+                if _offer_e > max(0, _room_e):
+                    # Can't afford the ask: skip rather than insult him.
+                    continue
                 decision = AIDecision(
                     team_name=team.team_name,
                     decision_type="contract_extension",
                     target_player=player,
                     offer_details={
-                        "salary": self._estimate_player_salary(player),
+                        "salary": _offer_e,
                         "term": self._determine_contract_length(player, strategy)
                     },
                     priority_score=_urgency,
@@ -1093,11 +1338,19 @@ class AITeamManager:
         # Category mirrors PlayerGenerator.determine_contract_info, except
         # stars are priced as stars at any age -- a 21-year-old franchise
         # player coming off his ELC asks for $16M+, not another ELC.
+        # A player can only sign one ELC: if his current deal is
+        # entry-level, the ELC band below does not apply -- the extension
+        # is a second contract priced on the regular youth curve.
+        try:
+            _on_elc = bool(getattr(getattr(player, "contract", None),
+                                   "entry_level", False))
+        except Exception:
+            _on_elc = False
         if ovr100 >= 95:
             lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
         elif ovr100 >= 90:
             lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
-        elif age <= 22:
+        elif age <= 22 and not _on_elc:
             # New-CBA ELC band: floor = signing-season league minimum,
             # ceiling = max flat-salary equivalent (AAV) for the deal
             # length (3 years at <=21, 2 years at 22).
