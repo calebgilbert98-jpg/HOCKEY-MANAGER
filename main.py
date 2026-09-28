@@ -2079,10 +2079,101 @@ class HockeyManagerGUI(tk.Tk):
         # Update front page news panel
         self.update_news_panel()
             
+    def _execute_waiver_claim(self, player, claiming_team):
+        """Complete a waiver claim transfer (shared by AI and user wins).
+
+        Removes the player from his original club, adds him to the
+        claiming club, fires the rivalry/dressing-room hooks, resets
+        waiver state, and drops the claimant to the bottom of the waiver
+        priority order (waiver_logic.note_waiver_claim).
+        """
+        original_team = next(
+            (t for t in self.league.teams
+             if t.team_name == player.team_name), None)
+        if original_team:
+            if player in original_team.roster:
+                original_team.remove_player(player)
+            elif hasattr(original_team, 'ahl_roster') and \
+                    player in original_team.ahl_roster:
+                original_team.ahl_roster.remove(player)
+
+        # Add to claiming team
+        claiming_team.add_player(player)
+        player.team_name = claiming_team.team_name
+
+        # A pending user claim beaten by a higher-priority club, or
+        # fulfilled -- either way the pending flag is spent.
+        try:
+            _user_pending = bool(getattr(player, "user_claim_pending", False))
+        except Exception:
+            _user_pending = False
+        try:
+            player.user_claim_pending = False
+        except Exception:
+            pass
+        try:
+            import game_classes as _gc
+            _user_won = bool(_gc.is_human_managed(claiming_team))
+        except Exception:
+            _user_won = bool(getattr(claiming_team, 'is_user_team', False))
+        if _user_pending and not _user_won:
+            try:
+                import waiver_logic as _wl
+                _rank = _wl.waiver_priority_rank(
+                    self.league, claiming_team, self.current_date)
+                self.add_news(
+                    f"Your waiver claim for {player.full_name} was beaten "
+                    f"by {claiming_team.team_name} "
+                    f"(waiver priority #{_rank}).")
+            except Exception:
+                pass
+
+        # Successful claim: the club drops to the bottom of the waiver
+        # priority order (NHL rule -- priority spent).
+        try:
+            import waiver_logic as _wl
+            _wl.note_waiver_claim(self.league, claiming_team)
+        except Exception:
+            pass
+
+        # Rivalry lifecycle: a waiver claim is a transfer -- his
+        # personal beefs follow him; ambient noise stays behind.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None),
+                            "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=original_team,
+                     to_team=claiming_team)
+        except Exception:
+            pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                claiming_team, player, how="waiver claim",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
+
+        # Reset waiver status
+        player.on_waivers = False
+        player.waiver_days = 0
+
+        # Add to news log
+        self.add_news(f"{player.full_name} claimed off waivers by {claiming_team.team_name}.")
+
     def process_waivers(self):
         """Process waiver claims and update waiver days for all players on waivers."""
-        # Process claims by CPU teams (from worst team to best)
-        teams_by_ranking = sorted(self.league.teams, key=lambda t: sum(p.overall_rating() for p in t.roster), reverse=False)
+        # NHL claim order (CBA Art. 13): lowest points percentage first --
+        # previous season's final standings until Nov 1, current standings
+        # after that. A club that claims drops to the bottom of the order.
+        try:
+            import waiver_logic as _wl
+            teams_by_ranking = _wl.waiver_priority_order(
+                self.league, self.current_date)
+        except Exception:
+            teams_by_ranking = list(getattr(self.league, "teams", []) or [])
         
         claimed_players = []
         for player in self.waiver_list:
@@ -2102,14 +2193,22 @@ class HockeyManagerGUI(tk.Tk):
                 # Skip player's current team
                 if team.team_name == player.team_name:
                     continue
-                    
-                # Skip user team (user must claim manually)
+
+                # The user's club claims only through a submitted pending
+                # claim (WaiversView "Claim" button). Real NHL: claims are
+                # due by noon and processed in priority order, so a
+                # higher-priority rival beats your claim.
                 try:
                     import game_classes as _gc
-                    _skip = bool(_gc.is_human_managed(team))
+                    _is_user = bool(_gc.is_human_managed(team))
                 except Exception:
-                    _skip = bool(getattr(team, 'is_user_team', False))
-                if _skip:
+                    _is_user = bool(getattr(team, 'is_user_team', False))
+                if _is_user:
+                    if (getattr(player, "user_claim_pending", False)
+                            and len(team.roster) < 23
+                            and team.cap_space > player.contract.salary):
+                        claiming_team = team
+                        break
                     continue
                     
                 # Check if team is interested (based on player quality and team needs)
@@ -2141,51 +2240,24 @@ class HockeyManagerGUI(tk.Tk):
             
             # Process claim if a team is interested
             if claiming_team:
-                # Remove from original team
-                original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
-                if original_team:
-                    if player in original_team.roster:
-                        original_team.remove_player(player)
-                    elif hasattr(original_team, 'ahl_roster') and player in original_team.ahl_roster:
-                        original_team.ahl_roster.remove(player)
-                
-                # Add to claiming team
-                claiming_team.add_player(player)
-                player.team_name = claiming_team.team_name
+                self._execute_waiver_claim(player, claiming_team)
 
-                # Rivalry lifecycle: a waiver claim is a transfer -- his
-                # personal beefs follow him; ambient noise stays behind.
-                try:
-                    from reputation_system import on_player_transfer as _opt
-                    _rivs = getattr(getattr(self, "league", None),
-                                    "rivalries", None)
-                    if isinstance(_rivs, list):
-                        _opt(_rivs, player, from_team=original_team,
-                             to_team=claiming_team)
-                except Exception:
-                    pass
-                # Dressing room: the room reacts to WHO arrives, bounded.
-                try:
-                    import dressing_room as _dr_arr
-                    _dr_arr.cascade_on_arrival(
-                        claiming_team, player, how="waiver claim",
-                        date_str=str(getattr(self, "current_date", "")))
-                except Exception:
-                    pass
-                
-                # Reset waiver status
-                player.on_waivers = False
-                player.waiver_days = 0
-                
-                # Add to news log
-                self.add_news(f"{player.full_name} claimed off waivers by {claiming_team.team_name}.")
-                
                 # Mark as claimed
                 claimed_players.append(player)
             else:
                 # Player cleared waivers
                 player.waiver_days = 0
                 player.on_waivers = False
+                # A pending user claim that never fired (roster filled or
+                # cap evaporated before processing) lapses quietly.
+                if getattr(player, "user_claim_pending", False):
+                    try:
+                        player.user_claim_pending = False
+                        self.add_news(
+                            f"Your waiver claim for {player.full_name} "
+                            f"lapsed (roster or cap space changed).")
+                    except Exception:
+                        pass
                 
                 # Add to original team's AHL roster on clearance: waiving is
                 # always a demotion move (cap burial or AHL shuttle), for
@@ -2771,6 +2843,7 @@ class HockeyManagerGUI(tk.Tk):
             "Scouting": self.open_scouting_management_window,
             "Performance": self.open_performance_monitor,
             "Practice Center": self.open_practice_center,
+            "Training Camp": self.open_training_camp_window,
             "Manager Hub": self.open_manager_hub
         })
         
@@ -8743,6 +8816,19 @@ class HockeyManagerGUI(tk.Tk):
                 pass
         if self.current_date.weekday() in [0, 3]:  # Monday and Thursday only
             self.process_waivers()
+
+        # Training camp (EHM-style): Sep 12-30, scrimmages every 3rd day
+        # from the 15th, camp report + development bumps at close. Runs
+        # ahead of the early-October camp cuts so the AI cuts by camp
+        # ratings (waiver_logic reads player.camp_avg).
+        try:
+            import training_camp as _tc
+            _tc.run_camp_day(self.league, self.current_date, app=self,
+                             rng=getattr(self, "_rng", None))
+        except Exception:
+            debug_print("Training camp failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
 
         # AI waiver management (BUG-019): cap casualties, AHL shuttle,
         # and early-October camp cuts. Runs Mondays after claim
@@ -14870,6 +14956,12 @@ class HockeyManagerGUI(tk.Tk):
     def open_waivers_window(self):
         """Open the Waivers management window."""
         return self.show_screen('waivers', 'Waivers', WaiversView)
+
+    def open_training_camp_window(self):
+        """Open the Training Camp report (camp ratings + scrimmages)."""
+        from training_camp_ui import TrainingCampWindow
+        return self.show_screen('training_camp', 'Training Camp',
+                               TrainingCampWindow)
 
     def open_set_captains_window(self):
         """Open the Set Captains window."""

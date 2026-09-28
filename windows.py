@@ -11178,11 +11178,21 @@ class WaiversView(ctk.CTkFrame):
                   command=self.place_on_waivers).pack(side='left', padx=5)
         
         # Waiver wire tab
-        wire_columns = {'name': ('Player', 200), 'age': ('Age', 40), 'pos': ('Pos', 50), 
-                       'ovr': ('OVR', 50), 'games': ('NHL Games', 80), 
+        # NHL claim-priority strip: the order claims resolve in, lowest
+        # points percentage first (last season's final table until Nov 1,
+        # current standings after). A club that claims drops to the bottom.
+        self._priority_frame = ttk.Frame(waiver_wire_frame, style='Panel.TFrame')
+        self._priority_frame.pack(fill='x', padx=5, pady=(5, 0))
+        self._priority_label = ttk.Label(
+            self._priority_frame, text="", style='Muted.TLabel', wraplength=1000,
+            font=_sfont(self.app.FONT_FAMILY, 9))
+        self._priority_label.pack(anchor='w', padx=5, pady=4)
+        wire_columns = {'name': ('Player', 200), 'age': ('Age', 40), 'pos': ('Pos', 50),
+                       'ovr': ('OVR', 50), 'games': ('NHL Games', 80),
                        'salary': ('Salary', 100), 'team': ('Current Team', 150),
+                       'days': ('Days Left', 70),
                        'actions': ('Actions', 150)}
-        
+
         self.waiver_tree = self.app._create_treeview(waiver_wire_frame, wire_columns, 20)
         self.waiver_tree.pack(fill='both', expand=True, padx=5, pady=5)
         add_player_context_menu(self.waiver_tree, self)
@@ -11239,8 +11249,9 @@ class WaiversView(ctk.CTkFrame):
     def populate_waiver_wire(self):
         """Populate the tree with players currently on the waiver wire."""
         self.waiver_tree.delete(*self.waiver_tree.get_children())
-        
+
         for player in self.app.waiver_list:
+            _pending = bool(getattr(player, "user_claim_pending", False))
             player_values = (
                 player.full_name,
                 player.age,
@@ -11249,16 +11260,45 @@ class WaiversView(ctk.CTkFrame):
                 getattr(player, 'nhl_games_played', 0),
                 f"${player.contract.salary:,}",
                 player.team_name,
-                "Claim"
+                max(0, int(getattr(player, 'waiver_days', 0) or 0)),
+                "Claim Submitted" if _pending else "Claim"
             )
             item = self.waiver_tree.insert('', 'end', values=player_values)
             self.waiver_tree.item(item, tags=(str(player.id),))
-            
+
         # Configure row click event
         self.waiver_tree.bind('<ButtonRelease-1>', self.on_waiver_click)
 
         set_tree_empty_state(self.waiver_tree, "The waiver wire is empty")
-        
+        self._refresh_priority_strip()
+
+    def _refresh_priority_strip(self):
+        """Show the NHL claim order and where the user's club sits in it."""
+        try:
+            import waiver_logic as _wl
+            _lg = getattr(getattr(self.app, 'game_manager', None),
+                          'league', None) or getattr(self.app, 'league', None)
+            _order = _wl.waiver_priority_order(
+                _lg, getattr(self.app, "current_date", None))
+            _basis = _wl.waiver_priority_basis_label(
+                _lg, getattr(self.app, "current_date", None))
+            _mine = str(getattr(getattr(self.app, 'user_team', None),
+                                'team_name', '') or '')
+            _names = [str(getattr(t, 'team_name', '')) for t in _order]
+            try:
+                _my_rank = _names.index(_mine) + 1
+            except ValueError:
+                _my_rank = None
+            _top = ", ".join(f"{i+1}. {n}" for i, n in enumerate(_names[:8]))
+            if len(_names) > 8:
+                _top += f", ... ({len(_names)} clubs)"
+            _txt = (f"Claim priority ({_basis}): {_top}"
+                    + (f" -- your club is #{_my_rank}." if _my_rank
+                       else "."))
+            self._priority_label.configure(text=_txt)
+        except Exception:
+            pass
+
     def on_eligible_click(self, event):
         """Handle click on eligible players tree."""
         region = self.eligible_tree.identify_region(event.x, event.y)
@@ -11277,8 +11317,8 @@ class WaiversView(ctk.CTkFrame):
             item = self.waiver_tree.identify_row(event.y)
             column = self.waiver_tree.identify_column(event.x)
             
-            # If clicking on the Actions column (column #8)
-            if column == '#8':
+            # If clicking on the Actions column (column #9)
+            if column == '#9':
                 self.claim_from_waivers(item)
     
     def place_on_waivers(self, item=None):
@@ -11385,35 +11425,42 @@ class WaiversView(ctk.CTkFrame):
                                     f"You don't have enough cap space to add this player's ${player.contract.salary:,} salary.")
                 return
                 
-            confirm = qol_confirm(self, "Confirm Claim",
-                                  f"Claim {player.full_name} from waivers? "
-                                  "They will be added to your NHL roster.",
-                                  confirm_text="Claim Player")
+            if getattr(player, "user_claim_pending", False):
+                messagebox.showinfo("Claim Pending",
+                                    f"You already have a pending claim on {player.full_name}. "
+                                    "It will be processed at noon in waiver priority order.")
+                return
+            # Your waiver priority right now (the wire tab shows the full order).
+            _rank = None
+            try:
+                import waiver_logic as _wl
+                _lg = getattr(getattr(self.app, 'game_manager', None),
+                              'league', None) or getattr(self.app, 'league', None)
+                _rank = _wl.waiver_priority_rank(
+                    _lg, self.app.user_team,
+                    getattr(self.app, "current_date", None))
+            except Exception:
+                pass
+            _rank_txt = f" (your waiver priority: #{_rank})" if _rank else ""
+            confirm = qol_confirm(self, "Submit Claim",
+                                  f"Submit a waiver claim for {player.full_name}? "
+                                  f"Claims are processed at noon in waiver priority order{_rank_txt} -- "
+                                  "a higher-priority club that also claims him gets him first.",
+                                  confirm_text="Submit Claim")
             if confirm:
-                # Remove from previous team
-                old_team = next((t for t in self.app.league.teams if t.team_name == player.team_name), None)
-                if old_team:
-                    old_team.remove_player(player)
-                
-                # Remove from waiver list
-                self.app.waiver_list.remove(player)
-                player.on_waivers = False
-                player.waiver_days = 0
-                
-                # Add to user team
-                self.app.user_team.add_player(player)
-                
+                # Real NHL: the claim is queued and processed at noon in
+                # priority order (main.process_waivers), not granted
+                # instantly. The flag is spent when the claim resolves.
+                player.user_claim_pending = True
+
                 # Add to news log
-                self.app.add_news(f"{player.full_name} claimed off waivers by {self.app.user_team.team_name}.")
-                
+                self.app.add_news(f"{self.app.user_team.team_name} submitted a waiver claim for {player.full_name}.")
+
                 # Update views
                 self.populate_waiver_wire()
-                messagebox.showinfo("Player Claimed", 
-                                   f"{player.full_name} has been claimed from waivers and added to your NHL roster.")
-                
-                # Refresh the main roster view if it's open
-                if 'roster' in self.app.open_windows and self.app.open_windows['roster'].winfo_exists():
-                    self.app.open_windows['roster'].populate_trees()
+                messagebox.showinfo("Claim Submitted",
+                                   f"Waiver claim submitted for {player.full_name}. "
+                                   f"It will be processed at the next waiver run in priority order{_rank_txt}.")
 
 
 

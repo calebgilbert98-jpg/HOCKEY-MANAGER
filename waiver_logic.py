@@ -290,8 +290,19 @@ def process_ai_waivers(league, app=None, rng=None, camp_cuts=False):
             if over > 0 and done < MAX_WAIVERS_PER_CALL:
                 reason = ("camp cut" if camp_cuts else "AHL assignment")
                 # Bottom of the roster first; never strand the crease.
-                cands = sorted(_candidate_rows(team),
-                               key=lambda c: c[1])
+                # Camp cuts read the just-finished training camp: a bad
+                # camp (low camp_avg) jumps the queue, a great camp saves
+                # a bubble player -- EHM managers cut on camp form.
+                def _cut_key(c):
+                    p = c[0]
+                    try:
+                        camp = float(getattr(p, "camp_avg", 0.0) or 0.0)
+                    except Exception:
+                        camp = 0.0
+                    if camp_cuts and camp > 0:
+                        return (camp, c[1])
+                    return (99.0, c[1])
+                cands = sorted(_candidate_rows(team), key=_cut_key)
                 goalies = [pl for pl in roster
                            if _position_group(pl) == "G"]
                 for (p, ovr, hit) in cands:
@@ -309,11 +320,21 @@ def process_ai_waivers(league, app=None, rng=None, camp_cuts=False):
                     if p in goalies:
                         goalies.remove(p)
 
-                # Camp cuts: waiver-exempt kids go straight down.
+                # Camp cuts: waiver-exempt kids go straight down, worst
+                # camp first.
                 if camp_cuts:
                     ahl = getattr(team, "ahl_roster", None)
                     if ahl is not None:
-                        for p in list(getattr(team, "roster", []) or []):
+                        def _kid_key(pl):
+                            try:
+                                return float(getattr(pl, "camp_avg", 0.0)
+                                             or 0.0)
+                            except Exception:
+                                return 0.0
+                        _kids = sorted(
+                            list(getattr(team, "roster", []) or []),
+                            key=_kid_key)
+                        for p in _kids:
                             if len([pl for pl in
                                      list(getattr(team, "roster", []) or [])
                                      if not bool(getattr(
@@ -350,3 +371,172 @@ def process_ai_waivers(league, app=None, rng=None, camp_cuts=False):
             continue
 
     return summary
+
+
+# ---------------------------------------------------------------------------
+# NHL waiver priority (claim order) -- CBA Article 13 style
+# ---------------------------------------------------------------------------
+# The real rule: when several clubs claim the same player, the club with
+# the lowest points percentage gets him. From opening day through
+# November 1 the order is set by the PREVIOUS season's final standings;
+# from November 1 on it is set by CURRENT standings. A club that
+# successfully claims a player drops to the bottom of the order (it has
+# used its priority).
+#
+# process_waivers() in main.py consumes this; the WaiversView wire tab
+# displays the order and the user's rank.
+
+NOVEMBER_CUTOFF_MONTH = 11
+NOVEMBER_CUTOFF_DAY = 1
+
+
+def snapshot_final_standings(league):
+    """Bank the season's final standings before they are reset.
+
+    Call at the top of League.end_of_season() (game_classes.py), before
+    initialize_standings() wipes the table. Old-save safe: plain attrs.
+    """
+    try:
+        table = getattr(league, "standings", None) or {}
+        snap = {}
+        for name, row in table.items():
+            try:
+                pts = int((row or {}).get("Points", 0) or 0)
+                gp = (int((row or {}).get("W", 0) or 0)
+                      + int((row or {}).get("L", 0) or 0)
+                      + int((row or {}).get("OTL", 0) or 0))
+            except Exception:
+                pts, gp = 0, 0
+            snap[str(name)] = {"points": pts, "games": gp}
+        league.previous_season_standings = snap
+        league.previous_season_label = str(
+            getattr(league, "season_year", "") or "")
+    except Exception:
+        pass
+
+
+def _priority_basis(league, on_date):
+    """('final'|'current', basis_key). Pre-Nov 1 -> previous final table."""
+    try:
+        y = int(getattr(on_date, "year", 0) or 0)
+        m = int(getattr(on_date, "month", 0) or 0)
+    except Exception:
+        return "current", "current"
+    season_start_year = y if m >= 7 else y - 1
+    try:
+        from datetime import date as _date
+        cutoff = _date(season_start_year, NOVEMBER_CUTOFF_MONTH,
+                       NOVEMBER_CUTOFF_DAY)
+        if on_date < cutoff:
+            label = str(getattr(league, "previous_season_label", "") or "")
+            return "final", "final:%s" % (label or season_start_year - 1)
+    except Exception:
+        pass
+    return "current", "current:%d" % season_start_year
+
+
+def _team_points_pct(league, team, basis):
+    name = str(getattr(team, "team_name", "") or "")
+    row = None
+    if basis == "final":
+        snap = getattr(league, "previous_season_standings", None) or {}
+        row = snap.get(name)
+    if row is None:
+        table = getattr(league, "standings", None) or {}
+        d = table.get(name) or {}
+        try:
+            row = {"points": int(d.get("Points", 0) or 0),
+                   "games": (int(d.get("W", 0) or 0)
+                             + int(d.get("L", 0) or 0)
+                             + int(d.get("OTL", 0) or 0))}
+        except Exception:
+            row = {"points": 0, "games": 0}
+    pts = row.get("points", 0)
+    gp = row.get("games", 0)
+    pct = (pts / (2.0 * gp)) if gp else 0.0
+    return pct, pts, name
+
+
+def waiver_priority_order(league, on_date):
+    """Teams in waiver-claim priority: lowest points percentage first.
+
+    Successful claimants since the last basis change sit at the bottom
+    (they have used their priority), in the order they claimed.
+    """
+    try:
+        teams = [t for t in (getattr(league, "teams", None) or [])
+                 if _is_nhl_team(t)]
+    except Exception:
+        return []
+    basis, basis_key = _priority_basis(league, on_date)
+    # Basis flip (season rollover / Nov 1) resets the used-priority list.
+    try:
+        if getattr(league, "_waiver_priority_basis_key", None) != basis_key:
+            league._waiver_priority_basis_key = basis_key
+            league._waiver_claim_demotion = []
+    except Exception:
+        pass
+    ranked = sorted(teams,
+                    key=lambda t: (_team_points_pct(league, t, basis)[0],
+                                   _team_points_pct(league, t, basis)[1],
+                                   str(getattr(t, "team_name", ""))))
+    try:
+        demoted = [n for n in
+                   (getattr(league, "_waiver_claim_demotion", None) or [])
+                   if isinstance(n, str)]
+    except Exception:
+        demoted = []
+    if demoted:
+        demote_set = set(demoted)
+        head = [t for t in ranked
+                if str(getattr(t, "team_name", "")) not in demote_set]
+        # Claim order preserved at the tail.
+        tail = []
+        for n in demoted:
+            hit = next((t for t in ranked
+                        if str(getattr(t, "team_name", "")) == n), None)
+            if hit is not None and hit not in tail:
+                tail.append(hit)
+        ranked = head + tail
+    return ranked
+
+
+def waiver_priority_rank(league, team, on_date):
+    """1-based waiver priority rank of a team (None if not ranked)."""
+    try:
+        order = waiver_priority_order(league, on_date)
+        name = str(getattr(team, "team_name", "") or "")
+        for i, t in enumerate(order):
+            if str(getattr(t, "team_name", "")) == name:
+                return i + 1
+    except Exception:
+        pass
+    return None
+
+
+def waiver_priority_basis_label(league, on_date):
+    """Human string for the wire screen, e.g. '2027-28 final standings'."""
+    basis, _key = _priority_basis(league, on_date)
+    if basis == "final":
+        label = str(getattr(league, "previous_season_label", "") or "").strip()
+        if label:
+            return "%s final standings" % label
+        return "last season's final standings"
+    return "current standings"
+
+
+def note_waiver_claim(league, team):
+    """Record a successful claim: the club drops to the bottom of the order."""
+    try:
+        name = str(getattr(team, "team_name", "") or "")
+        if not name:
+            return
+        cur = getattr(league, "_waiver_claim_demotion", None)
+        if not isinstance(cur, list):
+            cur = []
+            league._waiver_claim_demotion = cur
+        if name in cur:
+            cur.remove(name)
+        cur.append(name)
+    except Exception:
+        pass

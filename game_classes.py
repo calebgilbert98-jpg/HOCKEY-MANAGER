@@ -6216,7 +6216,15 @@ class League:
 
         # Initialize draft picks for upcoming years
         self.initialize_all_draft_picks()
-        
+
+        # Bank the final table before the reset: waiver priority runs on
+        # last season's final standings until November 1 (waiver_logic).
+        try:
+            import waiver_logic as _wl
+            _wl.snapshot_final_standings(self)
+        except Exception:
+            pass
+
         self.initialize_standings()
         # Team-level records must reset too (initialize_standings only
         # zeroes the standings dict; without this team.wins/losses
