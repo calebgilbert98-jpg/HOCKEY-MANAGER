@@ -1377,22 +1377,34 @@ def ai_scout_staff_review(league: Any, date_str: str, rng=None) -> Dict[str, int
                     except Exception:
                         pass
                     out["fired"] += 1
-                    # Renew: best available scout eye, else a fresh face.
+                    # Renew: best available scout eye the club can afford under
+                    # its league-wide staff budget, else a fresh face.
                     hired = None
                     try:
+                        from game_classes import team_can_afford_staff as _afford
                         cands = [c for c in pool
                                  if getattr(c, "role", None) in roles]
                         if cands:
                             cands.sort(key=lambda c: int(
                                 getattr(c, "judging_player_ability",
                                         0) or 0), reverse=True)
-                            hired = cands[0]
-                            pool.remove(hired)
+                            for cand in cands:
+                                if _afford(team, getattr(cand, "salary", 0) or 0):
+                                    hired = cand
+                                    break
+                            if hired is not None:
+                                pool.remove(hired)
                     except Exception:
                         hired = None
                     if hired is None:
                         hired = _make_scout(rng, getattr(
                             s, "role", next(iter(roles))))
+                        try:
+                            from game_classes import team_can_afford_staff as _afford2
+                            if not _afford2(team, getattr(hired, "salary", 0) or 0):
+                                hired = None
+                        except Exception:
+                            pass
                     if hired is not None:
                         try:
                             team.staff.append(hired)
@@ -1423,9 +1435,15 @@ def ai_scout_staff_review(league: Any, date_str: str, rng=None) -> Dict[str, int
                 continue
             dest = rng.choice(seekers)
             try:
+                # League-wide staff budget: the destination must afford the
+                # raise. Otherwise the poach dies quietly.
+                from game_classes import team_can_afford_staff as _afford3
+                bumped = int((getattr(scout, "salary", 150000)
+                              or 150000) * 1.35)
+                if not _afford3(dest, bumped):
+                    continue
                 home.staff.remove(scout)
-                scout.salary = int((getattr(scout, "salary", 150000)
-                                    or 150000) * 1.35)
+                scout.salary = bumped
                 scout.contract_years = 3
                 dest.staff.append(scout)
                 out["poached"] += 1
@@ -1467,14 +1485,28 @@ def ai_scout_staff_review(league: Any, date_str: str, rng=None) -> Dict[str, int
                 if cands:
                     cands.sort(key=lambda c: analytics_director_quality(c),
                                reverse=True)
-                    hired = cands[0]
                     try:
-                        pool.remove(hired)
-                        league.free_agent_staff.remove(hired)
+                        from game_classes import team_can_afford_staff as _afford4
+                        hired = next(
+                            (c for c in cands
+                             if _afford4(team, getattr(c, "salary", 0) or 0)),
+                            None)
+                    except Exception:
+                        hired = cands[0]
+                    try:
+                        if hired is not None:
+                            pool.remove(hired)
+                            league.free_agent_staff.remove(hired)
                     except Exception:
                         pass
                 else:
                     hired = _make_director(rng)
+                    try:
+                        from game_classes import team_can_afford_staff as _afford5
+                        if not _afford5(team, getattr(hired, "salary", 0) or 0):
+                            hired = None
+                    except Exception:
+                        pass
                 if hired is not None:
                     team.staff.append(hired)
                     refresh_analytics_quality(team)

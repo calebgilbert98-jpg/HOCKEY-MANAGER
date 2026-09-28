@@ -392,7 +392,12 @@ class DatabaseGenerator:
         free_agent_staff_count = max(100, int(len(main_league.teams) * 2))  # ~2 staff per team as free agents
         free_agent_staff = self._generate_free_agent_staff(free_agent_staff_count)
         main_league.free_agent_staff.extend(free_agent_staff)
-        
+
+        # Generate overseas coaching talent (European clubs). Scouted and
+        # approached like free agents -- no NHL contract to wait out.
+        overseas_staff = self._generate_overseas_staff(40)
+        main_league.overseas_staff.extend(overseas_staff)
+
         update_progress(80, "Generating prospect pools...", f"{len(free_agents)} free agents, {len(free_agent_staff)} staff created")
         
         # Generate prospects pool for upcoming drafts
@@ -708,24 +713,24 @@ class DatabaseGenerator:
 
     def _generate_team_staff(self, teams):
         """Generate coaching staff and management for all teams."""
-        from game_classes import Staff, StaffRole
-        
+        from game_classes import Staff, StaffRole, default_staff_budget
+
         # Staff positions and their frequency
         staff_positions = [
             (StaffRole.HEAD_COACH, 1),  # Each team needs 1 head coach
-            (StaffRole.ASSISTANT_COACH, 2),  # 2 assistant coaches  
+            (StaffRole.ASSISTANT_COACH, 2),  # 2 assistant coaches
             (StaffRole.GOALIE_COACH, 1),  # 1 goalie coach
             (StaffRole.GENERAL_MANAGER, 1),  # 1 GM
             (StaffRole.PROFESSIONAL_SCOUT, 3),  # 3 scouts
         ]
-        
+
         first_names = [
             "Adam", "Alex", "Andrew", "Anthony", "Brian", "Bruce", "Carl", "Chris", "Craig", "Dan",
             "Dave", "David", "Doug", "Eric", "Frank", "Gary", "Glen", "Greg", "Jack", "James",
             "Jeff", "Jim", "Joe", "John", "Ken", "Kevin", "Larry", "Mark", "Matt", "Mike",
             "Paul", "Peter", "Rick", "Rob", "Ron", "Scott", "Steve", "Tim", "Todd", "Tom"
         ]
-        
+
         last_names = [
             "Anderson", "Brown", "Clark", "Davis", "Evans", "Garcia", "Harris", "Johnson", "Jones",
             "Lee", "Lewis", "Martin", "Miller", "Moore", "Robinson", "Rodriguez", "Smith", "Taylor",
@@ -733,25 +738,50 @@ class DatabaseGenerator:
             "Carter", "Collins", "Cooper", "Edwards", "Green", "Hall", "Hill", "Jackson", "King",
             "Lopez", "Mitchell", "Nelson", "Parker", "Perez", "Phillips", "Roberts", "Turner", "Walker"
         ]
-        
+
+        # Minor-league staff: every club's AHL affiliate gets a head coach and
+        # two assistants. They count against the staff budget and can only be
+        # approached by other clubs in the offseason (real-world rule).
+        ahl_positions = [
+            (StaffRole.HEAD_COACH, 1),
+            (StaffRole.ASSISTANT_COACH, 2),
+        ]
+
         for team in teams:
             debug_print(f"Generating staff for {team.team_name}...")
-            
+            # League-wide staff budget, tiered by market size.
+            team.staff_budget = default_staff_budget(team.team_name)
+
             for role, count in staff_positions:
                 for _ in range(count):
                     first_name = random.choice(first_names)
                     last_name = random.choice(last_names)
-                    
+
                     # Create staff member using the dataclass constructor
                     staff_member = Staff(
                         first_name=first_name,
                         last_name=last_name,
                         role=role,
                         age=random.randint(35, 65),
-                        experience=random.randint(1, 20)
+                        experience=random.randint(1, 20),
+                        assignment="nhl",
                     )
-                    
+
                     # Add to team staff
+                    team.staff.append(staff_member)
+
+            for role, count in ahl_positions:
+                for _ in range(count):
+                    staff_member = Staff(
+                        first_name=random.choice(first_names),
+                        last_name=random.choice(last_names),
+                        role=role,
+                        age=random.randint(30, 60),
+                        experience=random.randint(1, 15),
+                        assignment="ahl",
+                        # AHL salaries run lower than NHL equivalents.
+                        salary=random.randint(150000, 400000),
+                    )
                     team.staff.append(staff_member)
     
     def _generate_free_agent_staff(self, count):
@@ -808,8 +838,65 @@ class DatabaseGenerator:
             )
             
             free_agent_staff.append(staff_member)
-        
+
         return free_agent_staff
+
+    def _generate_overseas_staff(self, count):
+        """Generate coaches employed by European clubs (SHL, Liiga, NL, DEL,
+        Czech Extraliga). They can be scouted and approached at any time --
+        there is no NHL contract to wait out."""
+        from game_classes import Staff, StaffRole
+
+        roles = [
+            StaffRole.HEAD_COACH,
+            StaffRole.ASSISTANT_COACH,
+            StaffRole.GOALIE_COACH,
+            StaffRole.SKILLS_COACH,
+            StaffRole.POWER_PLAY_COACH,
+            StaffRole.PENALTY_KILL_COACH,
+        ]
+        first_names = [
+            # Swedish / Finnish
+            "Mats", "Lars", "Johan", "Anders", "Henrik", "Niklas", "Petter",
+            "Mikko", "Jussi", "Antti", "Juho", "Ville", "Tomi", "Kari",
+            # Czech / Slovak / German / Swiss
+            "Pavel", "Tomas", "Marek", "Lukas", "Jan", "Martin", "Josef",
+            "Marco", "Luca", "Nico", "Stefan", "Ralph", "Uwe", "Dmitri",
+            # Russian
+            "Alexei", "Sergei", "Igor", "Viktor", "Oleg", "Andrei",
+        ]
+        last_names = [
+            "Lindqvist", "Karlsson", "Johansson", "Nilsson", "Bergström",
+            "Virtanen", "Korhonen", "Mäkinen", "Nieminen", "Laine",
+            "Novak", "Svoboda", "Dvorak", "Horvat", "Weber", "Müller",
+            "Fischer", "Sturm", "Kovalenko", "Fedorov", "Sokolov",
+        ]
+        clubs = [
+            "Frölunda HC (SHL)", "Djurgårdens IF (SHL)", "Färjestad BK (SHL)",
+            "Tappara (Liiga)", "Kärpät (Liiga)", "HIFK (Liiga)",
+            "ZSC Lions (NL)", "SC Bern (NL)", "EHC Biel (NL)",
+            "Eisbären Berlin (DEL)", "Adler Mannheim (DEL)",
+            "Sparta Praha (Extraliga)", "HC Kometa Brno (Extraliga)",
+            "SKA St. Petersburg (KHL)", "CSKA Moscow (KHL)",
+        ]
+        nationalities = ["Sweden", "Finland", "Czech Republic", "Russia",
+                         "Germany", "Switzerland", "Slovakia"]
+
+        overseas = []
+        for _ in range(count):
+            club = random.choice(clubs)
+            staff_member = Staff(
+                first_name=random.choice(first_names),
+                last_name=random.choice(last_names),
+                role=random.choice(roles),
+                age=random.randint(32, 62),
+                nationality=random.choice(nationalities),
+                experience=random.randint(4, 22),
+                assignment="overseas",
+                current_club=club,
+            )
+            overseas.append(staff_member)
+        return overseas
     
     def _generate_league_teams(self, league_info: dict) -> List[Team]:
         """Generate teams for a specific league"""

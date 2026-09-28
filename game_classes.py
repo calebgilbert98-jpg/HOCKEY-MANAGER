@@ -1195,6 +1195,133 @@ def _staff_attr_100() -> int:
     return max(30, min(99, int(random.gauss(65, 12))))
 
 
+# ---------------------------------------------------------------------------
+# Staff market: budgets, asks, and approach rules (Sept 2026)
+#
+# Every club operates under an annual staff payroll budget (hockey-ops
+# spending, separate from the player salary cap). Top coaches cost real
+# money, so clubs must budget for them. Approach rules mirror real hockey:
+# unemployed staff and overseas coaches can be talked to any time; another
+# club's AHL staff can only be approached in the offseason; another club's
+# NHL staff are not approachable.
+# ---------------------------------------------------------------------------
+
+# Base annual ask by role for a mid-reputation staffer. The actual ask
+# scales with reputation; the user types an exact dollar offer against it.
+_STAFF_ASK_BASE = {
+    StaffRole.HEAD_COACH: 2_200_000,
+    StaffRole.ASSOCIATE_COACH: 800_000,
+    StaffRole.ASSISTANT_COACH: 600_000,
+    StaffRole.GOALIE_COACH: 500_000,
+    StaffRole.POWER_PLAY_COACH: 450_000,
+    StaffRole.PENALTY_KILL_COACH: 450_000,
+    StaffRole.GENERAL_MANAGER: 1_500_000,
+    StaffRole.ASSISTANT_GENERAL_MANAGER: 700_000,
+    StaffRole.HEAD_SCOUT: 350_000,
+    StaffRole.ANALYTICS_DIRECTOR: 400_000,
+    StaffRole.PROFESSIONAL_SCOUT: 175_000,
+    StaffRole.AMATEUR_SCOUT: 175_000,
+    StaffRole.EUROPEAN_SCOUT: 175_000,
+    StaffRole.ADVANCE_SCOUT: 175_000,
+    StaffRole.SKILLS_COACH: 300_000,
+    StaffRole.SKATING_COACH: 300_000,
+    StaffRole.CONDITIONING_COACH: 300_000,
+}
+_STAFF_ASK_DEFAULT = 250_000
+
+
+def staff_market_ask(staff) -> int:
+    """What a staffer asks per year on the open market.
+
+    Role base scaled by reputation: a 95-rep head coach asks ~$4M, a
+    50-rep scout ~$220k. Rounded to the nearest $25k.
+    """
+    base = _STAFF_ASK_BASE.get(getattr(staff, "role", None), _STAFF_ASK_DEFAULT)
+    try:
+        rep = max(0, min(100, int(getattr(staff, "reputation", 50) or 50)))
+    except Exception:
+        rep = 50
+    ask = base * (0.6 + (rep / 100.0) * 1.3)
+    return int(round(ask / 25_000.0) * 25_000)
+
+
+# Annual staff payroll budgets by market tier. Big-market clubs outspend
+# small-market clubs on hockey ops, as in real life. Tunable in one place.
+_STAFF_BUDGET_BIG = 13_000_000
+_STAFF_BUDGET_MID = 10_000_000
+_STAFF_BUDGET_SMALL = 7_000_000
+
+_STAFF_BUDGET_BIG_MARKETS = {
+    "Toronto Maple Leafs", "Montreal Canadiens", "NY Rangers",
+    "Chicago Blackhawks", "Boston Bruins", "Detroit Red Wings",
+    "Philadelphia Flyers", "Los Angeles Kings",
+}
+_STAFF_BUDGET_SMALL_MARKETS = {
+    "Buffalo Sabres", "Ottawa Senators", "Winnipeg Jets",
+    "Carolina Hurricanes", "Columbus Blue Jackets", "Florida Panthers",
+    "Utah Hockey Club", "Anaheim Ducks", "San Jose Sharks",
+    "Nashville Predators",
+}
+
+
+def default_staff_budget(team_name: str) -> int:
+    """Annual staff payroll budget for a club, by market tier."""
+    name = str(team_name or "")
+    if name in _STAFF_BUDGET_BIG_MARKETS:
+        return _STAFF_BUDGET_BIG
+    if name in _STAFF_BUDGET_SMALL_MARKETS:
+        return _STAFF_BUDGET_SMALL
+    return _STAFF_BUDGET_MID
+
+
+def team_can_afford_staff(team, salary: int) -> bool:
+    """True if the club can take on this annual salary within its budget."""
+    try:
+        budget = int(getattr(team, "staff_budget", _STAFF_BUDGET_MID) or 0)
+        payroll = sum(int(getattr(s, "salary", 0) or 0)
+                      for s in (getattr(team, "staff", None) or []))
+        return payroll + int(salary or 0) <= budget
+    except Exception:
+        return True
+
+
+def is_offseason(current_date) -> bool:
+    """Coaching silly season: May through September (the codebase's own
+    phase logic treats May/early-June plus Aug-Sep as off-season)."""
+    try:
+        return int(getattr(current_date, "month", 0)) in (5, 6, 7, 8, 9)
+    except Exception:
+        return False
+
+
+def can_approach_staff(staff, employer_team=None, user_team=None,
+                       current_date=None):
+    """Approach rules for the staff market.
+
+    employer_team is None for pool staff (free agents, overseas).
+    Returns (allowed: bool, reason: str).
+    """
+    try:
+        if (employer_team is not None and user_team is not None
+                and employer_team is user_team):
+            return False, "Already on your staff."
+        if employer_team is None:
+            # Unemployed free agents and overseas coaches: fair game.
+            return True, ""
+        club = getattr(employer_team, "team_name", "that club")
+        assignment = getattr(staff, "assignment", "nhl") or "nhl"
+        if assignment == "ahl":
+            if is_offseason(current_date):
+                return True, ""
+            return (False,
+                    f"Under contract with {club}'s AHL club \u2014 "
+                    "minor-league staff can only be approached in the offseason.")
+        return (False,
+                f"Under contract with {club}'s NHL staff \u2014 not available.")
+    except Exception:
+        return True, ""
+
+
 @dataclass
 class Staff:
     """Represents a non-player staff member with detailed EHM-style attributes."""
@@ -1258,6 +1385,11 @@ class Staff:
     icon_team: str = ""  # Franchise where he is a legend as a PLAYER (""/team).
     # The Coffey effect: hiring YOUR icon behind the bench moves the room.
     icon_level: str = ""  # "" | "star" | "icon" (stamped at retirement)
+    # Where he coaches: "nhl" (club's NHL staff), "ahl" (club's AHL staff),
+    # "overseas" (European club). Free agents live in league pools; the flag
+    # is only meaningful for staff employed by a team.
+    assignment: str = "nhl"
+    current_club: str = ""  # e.g. "Frölunda HC (SHL)" for overseas coaches
     assistant_effect: Optional[float] = None  # current effectiveness 0-100;
     # None seeds from prowess on first tick, then drifts with results/mesh
     control_need: int = 50  # 0-100: Babcock 95 (authoritarian) ... Cooper 25 (collaborative)
@@ -2305,6 +2437,24 @@ class Team:
     # only via getattr(..., False) / is_human_managed().
     is_human_managed: bool = False
     salary_cap: int = 104000000  # 2026-27 NHL cap (modern day)
+    # Annual hockey-ops staff payroll budget (league-wide rule, market-tiered;
+    # see default_staff_budget). Hiring is blocked when it would exceed this.
+    staff_budget: int = 10_000_000
+
+    def staff_payroll(self) -> int:
+        """Current annual staff payroll (all employed staff)."""
+        try:
+            return sum(int(getattr(s, "salary", 0) or 0)
+                       for s in (self.staff or []))
+        except Exception:
+            return 0
+
+    def staff_budget_remaining(self) -> int:
+        """Uncommitted staff budget dollars."""
+        try:
+            return int(self.staff_budget or 0) - self.staff_payroll()
+        except Exception:
+            return 0
     scouting_reports: Dict[int, ScoutingReport] = field(default_factory=dict)
     inbox: EmailInbox = field(default_factory=EmailInbox)  # Email inbox system
     # Retained-salary ledger (real NHL: max 3 active retentions per club).
@@ -2732,6 +2882,9 @@ class League:
     teams: List[Team] = field(default_factory=list)
     free_agents: List[Player] = field(default_factory=list)  # Kept for compatibility, but may be overridden
     free_agent_staff: List[Staff] = field(default_factory=list)
+    # Coaches employed by European clubs (SHL, Liiga, NL, DEL, KHL ...).
+    # Scouted and approached like free agents -- no NHL contract to wait out.
+    overseas_staff: List[Staff] = field(default_factory=list)
     draft_prospects: List[Player] = field(default_factory=list)
     # CHL prospects who re-enter the draft after their rights expire
     # (Part 5 rights lifecycle). The UI/draft layer reads this after the

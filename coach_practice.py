@@ -136,27 +136,36 @@ def _role_of(staff: Any) -> str:
 
 
 def head_coach_of(team: Any) -> Optional[Any]:
-    """The team's head coach, or None."""
-    for stf in _staff_list(team):
-        if "Head Coach" in _role_of(stf):
+    """The team's head coach, or None.
+
+    Prefers NHL-assignment staff: team.staff now also carries the club's
+    AHL coaches, who must never be picked as the NHL bench boss.
+    """
+    cands = [stf for stf in _staff_list(team)
+             if "Head Coach" in _role_of(stf)]
+    for stf in cands:
+        if (getattr(stf, "assignment", "nhl") or "nhl") == "nhl":
             return stf
-    return None
+    return cands[0] if cands else None
 
 
 def assistants_of(team: Any) -> List[Any]:
     out = []
     for stf in _staff_list(team):
         r = _role_of(stf)
-        if "Assistant Coach" in r or "Associate Coach" in r:
+        if ("Assistant Coach" in r or "Associate Coach" in r) and (
+                getattr(stf, "assignment", "nhl") or "nhl") == "nhl":
             out.append(stf)
     return out
 
 
 def goalie_coach_of(team: Any) -> Optional[Any]:
-    for stf in _staff_list(team):
-        if "Goalie Coach" in _role_of(stf):
+    cands = [stf for stf in _staff_list(team)
+             if "Goalie Coach" in _role_of(stf)]
+    for stf in cands:
+        if (getattr(stf, "assignment", "nhl") or "nhl") == "nhl":
             return stf
-    return None
+    return cands[0] if cands else None
 
 
 def _staff_name(staff: Any) -> str:

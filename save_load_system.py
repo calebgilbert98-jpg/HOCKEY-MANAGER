@@ -243,6 +243,9 @@ class GameSaveManager:
                                 for p in (getattr(league, 'draft_prospects', None) or [])],
             'free_agent_staff': [self._serialize_staff(s)
                                  for s in (getattr(league, 'free_agent_staff', None) or [])],
+            # Overseas coaching talent. Absent in old saves -> [].
+            'overseas_staff': [self._serialize_staff(s)
+                               for s in (getattr(league, 'overseas_staff', None) or [])],
             'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
             # Dynamic salary cap system (growth history + market comps).
             # Missing key = old save -> defaults to the modern $104M cap.
@@ -309,6 +312,9 @@ class GameSaveManager:
                 # serialized: every load wiped every club's staff.
                 'staff': [self._serialize_staff(s)
                           for s in (getattr(team, 'staff', None) or [])],
+                # Annual staff payroll budget (league-wide rule, market-tiered).
+                # Absent in old saves -> tier default by club name.
+                'staff_budget': int(getattr(team, 'staff_budget', 0) or 0),
                 'stats': self._serialize_team_stats(getattr(team, 'stats', None)),
                 'salary_cap_info': getattr(team, 'salary_cap_info', {}),
                 'draft_picks': getattr(team, 'draft_picks', {}),
@@ -1184,6 +1190,13 @@ class GameSaveManager:
                     if s is not None]
             except Exception:
                 league.free_agent_staff = []
+            try:
+                league.overseas_staff = [
+                    s for s in (self._restore_staff(d)
+                                for d in (league_data.get('overseas_staff', None) or []))
+                    if s is not None]
+            except Exception:
+                league.overseas_staff = []
             league.event_day_prompted = [
                 list(p) for p in (league_data.get('event_day_prompted', []) or [])
             ]
@@ -1340,6 +1353,14 @@ class GameSaveManager:
             team.draft_picks = team_data.get('draft_picks', {})
             team.trade_block = team_data.get('trade_block', [])
             team.board_expectation = team_data.get('board_expectation')
+            # Annual staff payroll budget. Absent in old saves -> market-tier
+            # default so existing leagues get the rule without a wipe.
+            try:
+                from game_classes import default_staff_budget as _dsb
+                team.staff_budget = int(team_data.get('staff_budget') or _dsb(
+                    team_data.get('team_name', '')))
+            except Exception:
+                team.staff_budget = 10_000_000
             team.buyout_cap_hits = dict(team_data.get('buyout_cap_hits', {}) or {})
             # Retained-salary ledger. Absent in old saves -> empty.
             team.retained_salary = [dict(e) for e in

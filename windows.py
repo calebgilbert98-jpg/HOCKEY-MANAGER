@@ -2447,6 +2447,12 @@ class FreeAgencyView(ctk.CTkFrame):
         self.staff_experience_filter = tk.StringVar(master=self, value='All')
         self.staff_salary_filter = tk.StringVar(master=self, value='All')
         self.staff_sort_filter = tk.StringVar(master=self, value='Overall')
+        self.staff_source_filter = tk.StringVar(master=self, value='All')
+
+        self._pill_row(pills, "Source:", [(v, v) for v in
+                       ('All', 'Free Agents', 'Overseas', 'Rival AHL')],
+                       self.staff_source_filter, self._staff_set_filter,
+                       self._staff_pill_groups)
 
         self._pill_row(pills, "Department:", [(v, v) for v in
                        ('All', 'Management', 'Coaching', 'Development',
@@ -2468,6 +2474,11 @@ class FreeAgencyView(ctk.CTkFrame):
                        self.staff_sort_filter, self._staff_set_filter,
                        self._staff_pill_groups)
 
+        # Club staff-budget line (league-wide rule, market-tiered).
+        self.staff_budget_label = self._body(staff_tab, text="",
+                                             dim=True, size=11)
+        self.staff_budget_label.pack(anchor="w", padx=14, pady=(0, 2))
+
         # Results and selection info
         info_frame = ctk.CTkFrame(staff_tab, fg_color="transparent")
         info_frame.pack(fill="x", padx=14, pady=(0, 2))
@@ -2485,10 +2496,11 @@ class FreeAgencyView(ctk.CTkFrame):
             'dept': ('Department', 120),
             'ovr': ('Rating', 60),
             'experience': ('Experience', 100),
-            'salary': ('Salary', 100),
+            'salary': ('Ask', 100),
             'years': ('Contract', 80),
             'age': ('Age', 50),
-            'nationality': ('Country', 80)
+            'nationality': ('Country', 80),
+            'club': ('Club', 170),
         }
         self.fa_staff_tree = self._create_fa_treeview(
             staff_tab, staff_columns, height=22,
@@ -2601,17 +2613,21 @@ class FreeAgencyView(ctk.CTkFrame):
 
     def populate_staff_market_stats(self, parent_frame):
         """Populate staff market statistics."""
-        available_staff = self.app.game_manager.league.free_agent_staff
-        if not available_staff:
+        from game_classes import staff_market_ask
+        league = self.app.game_manager.league
+        available_staff = list(getattr(league, 'free_agent_staff', None) or [])
+        overseas = list(getattr(league, 'overseas_staff', None) or [])
+        if not available_staff and not overseas:
             self._body(parent_frame, text="No staff available",
                        dim=True).pack(anchor="w", padx=12, pady=5)
             return
 
-        total_staff = len(available_staff)
-        avg_age = sum(s.age for s in available_staff) / total_staff
+        total_staff = len(available_staff) + len(overseas)
+        pool = available_staff + overseas
+        avg_age = sum(s.age for s in pool) / total_staff
 
         staff_ratings = []
-        for s in available_staff:
+        for s in pool:
             try:
                 if hasattr(s, 'overall_rating') and callable(getattr(s, 'overall_rating')):
                     staff_ratings.append(s.overall_rating())
@@ -2626,16 +2642,16 @@ class FreeAgencyView(ctk.CTkFrame):
         avg_rating = sum(staff_ratings) / len(staff_ratings) if staff_ratings else 10
 
         role_counts = {}
-        for staff in available_staff:
+        for staff in pool:
             role = staff.role.value
             role_counts[role] = role_counts.get(role, 0) + 1
 
-        avg_salary = sum(getattr(s, 'salary', 100000) for s in available_staff) / total_staff
+        avg_ask = sum(staff_market_ask(s) for s in pool) / total_staff
 
         for stat in (f"Total Available: {total_staff}",
                      f"Average Age: {avg_age:.1f}",
                      f"Average Rating: {avg_rating:.1f}",
-                     f"Avg. Salary: ${avg_salary:,.0f}"):
+                     f"Avg. Ask: ${avg_ask:,.0f}"):
             self._body(parent_frame, text=stat, dim=True, size=11).pack(
                 anchor="w", padx=12, pady=1)
 
@@ -2854,7 +2870,15 @@ class FreeAgencyView(ctk.CTkFrame):
         set_tree_empty_state(self.fa_player_tree, "No players match your filters")
 
     def populate_filtered_staff(self):
-        """Populate the staff tree with filtered results."""
+        """Populate the staff tree with filtered results.
+
+        Three sources: unemployed free agents, overseas coaches, and rival
+        clubs' AHL staff (approachable only in the offseason -- real rule).
+        The Salary filter/sort and the Ask column use the market ask, not
+        the staffer's old salary.
+        """
+        from game_classes import (Staff as StaffClass, staff_market_ask,
+                                  can_approach_staff)
         for item in self.fa_staff_tree.get_children():
             self.fa_staff_tree.delete(item)
 
@@ -2864,16 +2888,50 @@ class FreeAgencyView(ctk.CTkFrame):
         experience_filter = self.staff_experience_filter.get()
         salary_filter = self.staff_salary_filter.get()
         sort_by = self.staff_sort_filter.get()
+        source_filter = (self.staff_source_filter.get()
+                         if hasattr(self, 'staff_source_filter') else 'All')
 
-        filtered_staff = []
-        for staff in self.app.league.free_agent_staff:
-            if name_filter and name_filter not in staff.full_name.lower():
+        league = getattr(self.app, 'league', None)
+        try:
+            user_team = self.app.game_manager.user_team
+        except Exception:
+            user_team = None
+        try:
+            current_date = self.app.game_manager.current_date
+        except Exception:
+            current_date = None
+
+        # ---- Build the combined market ----
+        entries = []  # (staff, source, employer_team)
+        if league is not None:
+            for s in (getattr(league, 'free_agent_staff', None) or []):
+                entries.append((s, 'free_agent', None))
+            for s in (getattr(league, 'overseas_staff', None) or []):
+                entries.append((s, 'overseas', None))
+            for t in (getattr(league, 'teams', None) or []):
+                if t is user_team:
+                    continue
+                for s in (getattr(t, 'staff', None) or []):
+                    if (getattr(s, 'assignment', 'nhl') or 'nhl') == 'ahl':
+                        entries.append((s, 'ahl_poach', t))
+
+        _source_labels = {'free_agent': 'Free Agents', 'overseas': 'Overseas',
+                          'ahl_poach': 'Rival AHL'}
+
+        filtered = []
+        for staff, source, employer in entries:
+            if (source_filter != 'All'
+                    and _source_labels.get(source) != source_filter):
+                continue
+            try:
+                if name_filter and name_filter not in staff.full_name.lower():
+                    continue
+            except Exception:
                 continue
             if role_filter != 'All' and staff.role.value != role_filter:
                 continue
 
             if department_filter != 'All':
-                from game_classes import Staff as StaffClass
                 staff_dept = StaffClass.get_role_department(staff.role)
                 if staff_dept != department_filter:
                     continue
@@ -2891,39 +2949,48 @@ class FreeAgencyView(ctk.CTkFrame):
                 elif experience_filter == '16+ Years' and exp < 16:
                     continue
 
+            ask = staff_market_ask(staff)
             if salary_filter != 'All':
-                sal = staff.salary
-                if salary_filter == 'Under $100k' and sal >= 100_000:
+                if salary_filter == 'Under $100k' and ask >= 100_000:
                     continue
-                elif salary_filter == '$100k-$250k' and not (100_000 <= sal <= 250_000):
+                elif salary_filter == '$100k-$250k' and not (100_000 <= ask <= 250_000):
                     continue
-                elif salary_filter == '$250k-$500k' and not (250_000 < sal <= 500_000):
+                elif salary_filter == '$250k-$500k' and not (250_000 < ask <= 500_000):
                     continue
-                elif salary_filter == '$500k-$1M' and not (500_000 < sal <= 1_000_000):
+                elif salary_filter == '$500k-$1M' and not (500_000 < ask <= 1_000_000):
                     continue
-                elif salary_filter == 'Over $1M' and sal <= 1_000_000:
+                elif salary_filter == 'Over $1M' and ask <= 1_000_000:
                     continue
 
-            filtered_staff.append(staff)
+            filtered.append((staff, source, employer, ask))
 
         if sort_by == 'Overall':
-            filtered_staff.sort(key=lambda s: s.overall_rating, reverse=True)
+            filtered.sort(key=lambda e: e[0].overall_rating, reverse=True)
         elif sort_by == 'Name':
-            filtered_staff.sort(key=lambda s: s.full_name)
+            filtered.sort(key=lambda e: e[0].full_name)
         elif sort_by == 'Role':
-            filtered_staff.sort(key=lambda s: s.role.value)
+            filtered.sort(key=lambda e: e[0].role.value)
         elif sort_by == 'Experience':
-            filtered_staff.sort(key=lambda s: max(0, s.age - 25), reverse=True)
+            filtered.sort(key=lambda e: max(0, e[0].age - 25), reverse=True)
         elif sort_by == 'Salary':
-            filtered_staff.sort(key=lambda s: s.salary, reverse=True)
+            filtered.sort(key=lambda e: e[3], reverse=True)
         elif sort_by == 'Age':
-            filtered_staff.sort(key=lambda s: s.age)
+            filtered.sort(key=lambda e: e[0].age)
 
-        for staff in filtered_staff:
-            from game_classes import Staff as StaffClass
+        for staff, source, employer, ask in filtered:
             department = StaffClass.get_role_department(staff.role)
             experience = max(0, staff.age - 25)
             rating = to_100_scale(staff.overall_rating)
+
+            allowed, reason = can_approach_staff(
+                staff, employer, user_team, current_date)
+            if source == 'free_agent':
+                club = "Free agent"
+            elif source == 'overseas':
+                club = getattr(staff, 'current_club', '') or "Overseas"
+            else:
+                club = (f"{getattr(employer, 'team_name', '')} (AHL)"
+                        + ("" if allowed else " \u2014 offseason only"))
 
             values = [
                 staff.full_name,
@@ -2931,10 +2998,11 @@ class FreeAgencyView(ctk.CTkFrame):
                 department,
                 rating,
                 f"{experience}y",
-                f"${staff.salary:,}",
+                f"${ask:,}",
                 f"{staff.contract_years}y",
                 staff.age,
-                staff.nationality
+                staff.nationality,
+                club,
             ]
 
             tag = self._ovr_tag(rating)
@@ -2943,9 +3011,21 @@ class FreeAgencyView(ctk.CTkFrame):
 
             if 'fa_staff' not in self.app.tree_maps:
                 self.app.tree_maps['fa_staff'] = {}
-            self.app.tree_maps['fa_staff'][item_id] = staff
+            self.app.tree_maps['fa_staff'][item_id] = (staff, source, employer)
 
-        self.staff_results_label.configure(text=f"Showing {len(filtered_staff)} staff")
+        # Club staff-budget line.
+        try:
+            _t = user_team
+            _b = int(getattr(_t, 'staff_budget', 0) or 0)
+            _c = _t.staff_payroll() if hasattr(_t, 'staff_payroll') else 0
+            self.staff_budget_label.configure(
+                text=f"Club staff budget: ${_b:,}   \u2022   "
+                     f"Committed: ${_c:,}   \u2022   "
+                     f"Available: ${_b - _c:,}")
+        except Exception:
+            pass
+
+        self.staff_results_label.configure(text=f"Showing {len(filtered)} staff")
         set_tree_empty_state(self.fa_staff_tree, "No staff match your filters")
 
     def clear_player_filters(self):
@@ -2968,6 +3048,8 @@ class FreeAgencyView(ctk.CTkFrame):
         self.staff_experience_filter.set('All')
         self.staff_salary_filter.set('All')
         self.staff_sort_filter.set('Overall')
+        if hasattr(self, 'staff_source_filter'):
+            self.staff_source_filter.set('All')
         self._staff_paint_pills()
         self.populate_filtered_staff()
 
@@ -3006,6 +3088,19 @@ class FreeAgencyView(ctk.CTkFrame):
         if player:
             self.app.open_contract_negotiation_window(player)
 
+    def _fa_staff_entry(self, item_id):
+        """Unwrap a staff tree-map entry -> (staff, source, employer).
+
+        Backward-compatible with bare-Staff entries (treated as free agents).
+        """
+        entry = self.app.tree_maps.get('fa_staff', {}).get(item_id)
+        if isinstance(entry, tuple):
+            staff = entry[0] if len(entry) > 0 else None
+            source = entry[1] if len(entry) > 1 else 'free_agent'
+            employer = entry[2] if len(entry) > 2 else None
+            return staff, source, employer
+        return entry, 'free_agent', None
+
     def hire_selected_staff(self):
         """Hire the selected staff member via a real contract offer."""
         selection = self.fa_staff_tree.selection()
@@ -3013,9 +3108,10 @@ class FreeAgencyView(ctk.CTkFrame):
             messagebox.showwarning("No Selection", "Please select a staff member to hire.")
             return
 
-        staff = self.app.tree_maps.get('fa_staff', {}).get(selection[0])
+        staff, source, employer = self._fa_staff_entry(selection[0])
         if staff:
-            self._open_staff_contract_dialog(staff)
+            self._open_staff_contract_dialog(staff, hire_source=source,
+                                             from_team=employer)
 
     def negotiate_with_player(self, event=None):
         """Negotiate with a player (double-click handler)."""
@@ -3032,7 +3128,7 @@ class FreeAgencyView(ctk.CTkFrame):
             return
 
         self.fa_staff_tree.selection_set(item_id)
-        staff = self.app.tree_maps.get('fa_staff', {}).get(item_id)
+        staff, _src, _emp = self._fa_staff_entry(item_id)
         if not staff:
             return
 
@@ -3060,25 +3156,45 @@ class FreeAgencyView(ctk.CTkFrame):
             messagebox.showwarning("No Selection", "Please select a staff member to view.")
             return
 
-        staff = self.app.tree_maps.get('fa_staff', {}).get(selection[0])
+        staff, source, employer = self._fa_staff_entry(selection[0])
         if staff:
-            self._open_staff_profile_dialog(staff)
+            self._open_staff_profile_dialog(staff, hire_source=source,
+                                            from_team=employer)
 
     # ------------------------------------------------------------------
     # Staff contract negotiation (full-screen jump)
     # ------------------------------------------------------------------
-    def _open_staff_contract_dialog(self, staff):
-        """Negotiate a real contract offer with a free-agent staff member.
+    def _open_staff_contract_dialog(self, staff, hire_source="free_agent",
+                                      from_team=None):
+        """Negotiate a real contract offer with a staff member.
 
-        Full-screen jump via show_screen() (was: 480x420 InGamePopup).
-        fresh=True: each negotiation builds for its own staffer.
+        Full-screen jump via show_screen(). fresh=True: each negotiation
+        builds for its own staffer. Approach rules are enforced BEFORE the
+        jump: rival AHL staff can only be approached in the offseason, and
+        other clubs' NHL staff are not approachable at all.
         """
+        from game_classes import can_approach_staff
+        try:
+            user_team = self.app.game_manager.user_team
+            current_date = self.app.game_manager.current_date
+        except Exception:
+            user_team = None
+            current_date = None
+        allowed, reason = can_approach_staff(staff, from_team, user_team,
+                                             current_date)
+        if not allowed:
+            messagebox.showwarning("Cannot Approach", reason)
+            return
+        # Overseas coaches can be approached any time, but the approach
+        # itself is the negotiation -- jump straight in.
         self.app.show_screen("staff_contract",
                              f"Contract Offer - {staff.full_name}",
-                             StaffContractView, staff, fresh=True)
+                             StaffContractView, staff, fresh=True,
+                             hire_source=hire_source, from_team=from_team)
 
 
-    def _open_staff_profile_dialog(self, staff):
+    def _open_staff_profile_dialog(self, staff, hire_source="free_agent",
+                                     from_team=None):
         """View a free-agent staff member's profile (CTk)."""
         ct = self._ct
         dlg = InGamePopup(self)
@@ -3111,16 +3227,19 @@ class FreeAgencyView(ctk.CTkFrame):
         ctk.CTkFrame(scroll, fg_color=ct['BORDER'], height=1).pack(fill="x", pady=10)
 
         exp = max(0, staff.age - 25)
+        from game_classes import staff_market_ask as _sma
         for text in (f"Age: {staff.age}",
                      f"Nationality: {staff.nationality}",
                      f"Experience: {exp} years",
-                     f"Asking: ${staff.salary:,} / year",
+                     f"Asking: ${_sma(staff):,} / year",
                      f"Contract: {staff.contract_years} years"):
             self._body(scroll, text=text, dim=True, size=11).pack(anchor="w", pady=1)
 
         self._primary_button(scroll, text=f"Hire {staff.full_name}",
                              command=lambda: (dlg.destroy(),
-                                              self._open_staff_contract_dialog(staff))
+                                              self._open_staff_contract_dialog(
+                                                  staff, hire_source=hire_source,
+                                                  from_team=from_team))
                              ).pack(anchor="w", pady=(14, 0))
 
     def _staff_track_record_section(self, scroll, staff):
@@ -3361,7 +3480,7 @@ class FreeAgencyView(ctk.CTkFrame):
 
         staff_list = []
         for item_id in selection:
-            staff = self.app.tree_maps.get('fa_staff', {}).get(item_id)
+            staff, _src, _emp = self._fa_staff_entry(item_id)
             if staff:
                 staff_list.append(staff)
 
@@ -11595,12 +11714,17 @@ class StaffContractView(ctk.CTkFrame):
 
     Jumped to via HockeyManagerGUI.show_screen() (was: a 480x420
     InGamePopup from FreeAgencyView._open_staff_contract_dialog). The
-    negotiation itself is unchanged: segmented length/salary offer,
-    live acceptance-chance readout, roll-first resolution through
-    game_manager.sign_free_agent_staff().
+    negotiation is roll-first through game_manager.sign_free_agent_staff().
+
+    Sept 2026: the salary offer is a free dollar entry (tailored offers,
+    not 80/100/120% steps). The club's league-wide staff budget is shown
+    and enforced -- offers cannot exceed the remaining budget. hire_source
+    tracks where the staffer came from ("free_agent" | "overseas" |
+    "ahl_poach") so a successful hire leaves the right pool/club.
     """
 
-    def __init__(self, parent, staff=None, app=None):
+    def __init__(self, parent, staff=None, app=None, hire_source="free_agent",
+                 from_team=None):
         super().__init__(parent, fg_color="transparent")
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
@@ -11620,6 +11744,8 @@ class StaffContractView(ctk.CTkFrame):
         self._body = body
         self.app = app
         self.staff = staff
+        self.hire_source = hire_source or "free_agent"
+        self.from_team = from_team
         self._close_screen = None  # set by show_screen()
         self._build()
 
@@ -11631,7 +11757,18 @@ class StaffContractView(ctk.CTkFrame):
         else:
             self.destroy()
 
+    def _parse_offer(self):
+        """Parse the dollar entry into an int, or None when invalid."""
+        try:
+            raw = self._salary_entry.get().strip()
+            raw = raw.replace("$", "").replace(",", "").replace(" ", "")
+            value = int(float(raw))
+            return value if value > 0 else None
+        except Exception:
+            return None
+
     def _build(self):
+        from game_classes import staff_market_ask
         ct = self._ct
         staff = self.staff
         scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -11659,17 +11796,47 @@ class StaffContractView(ctk.CTkFrame):
         self._body(body,
                    text=f"{_role} \u2022 {getattr(staff, 'nationality', '')} "
                         f"\u2022 Age {getattr(staff, 'age', '?')}",
-                   dim=True, size=11).pack(anchor="w", pady=(2, 10))
+                   dim=True, size=11).pack(anchor="w", pady=(2, 6))
+
+        # Where he comes from (poach context).
+        _src_line = ""
+        if self.hire_source == "overseas":
+            _src_line = (f"Currently coaching: "
+                         f"{getattr(staff, 'current_club', '') or 'overseas'}")
+        elif self.hire_source == "ahl_poach" and self.from_team is not None:
+            _src_line = (f"Under contract: "
+                         f"{getattr(self.from_team, 'team_name', '')} (AHL)")
+        if _src_line:
+            self._body(body, text=_src_line, dim=True,
+                       size=11).pack(anchor="w", pady=(0, 4))
+
+        ask = staff_market_ask(staff)
 
         # Asking terms banner
         asking = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
         asking.pack(fill="x", pady=(0, 12))
         self._body(asking,
-                   text=f"Asking: ${getattr(staff, 'salary', 0):,} / year  "
-                        f"\u2022  {getattr(staff, 'contract_years', '?')} years",
+                   text=f"Asking: ${ask:,} / year",
                    size=12).pack(anchor="w", padx=12, pady=10)
 
-        offer_info = {'years': 2, 'salary_mult': 1.0}
+        # Club staff budget banner (league-wide rule, market-tiered).
+        try:
+            _team = self.app.game_manager.user_team
+            _budget = int(getattr(_team, 'staff_budget', 0) or 0)
+            _committed = _team.staff_payroll() if hasattr(_team, 'staff_payroll') else 0
+            _remaining = _budget - _committed
+        except Exception:
+            _budget = _committed = _remaining = 0
+        budget_card = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        budget_card.pack(fill="x", pady=(0, 12))
+        self._body(budget_card,
+                   text=f"Club staff budget: ${_budget:,}  \u2022  "
+                        f"Committed: ${_committed:,}  \u2022  "
+                        f"Available: ${_remaining:,}",
+                   size=11, dim=True).pack(anchor="w", padx=12, pady=10)
+        self._budget_remaining = _remaining
+
+        offer_info = {'years': 2}
 
         self._body(body, text="Contract length:", dim=True,
                    size=11).pack(anchor="w", pady=(0, 4))
@@ -11681,33 +11848,31 @@ class StaffContractView(ctk.CTkFrame):
         years_seg.set("2")
         years_seg.pack(anchor="w", pady=(0, 10))
 
-        self._body(body, text="Salary offer:", dim=True,
+        # Free dollar entry -- tailored offers, not fixed steps.
+        self._body(body, text="Salary offer ($ / year):", dim=True,
                    size=11).pack(anchor="w", pady=(0, 4))
-        sal_seg = ctk.CTkSegmentedButton(
-            body, values=["80%", "Asking", "120%"],
-            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
-            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        sal_seg.set("Asking")
-        sal_seg.pack(anchor="w", pady=(0, 12))
+        self._salary_entry = ctk.CTkEntry(
+            body, width=220, fg_color=ct['BG'], border_color=ct['BORDER'])
+        self._salary_entry.insert(0, f"{ask:,}")
+        self._salary_entry.pack(anchor="w", pady=(0, 12))
+        self._salary_entry.bind('<KeyRelease>', lambda _e: _paint())
 
         offer_label = self._body(body, text="", size=12)
         offer_label.pack(anchor="w", pady=(0, 2))
         chance_label = self._body(body, text="", size=11)
         chance_label.pack(anchor="w", pady=(0, 12))
 
-        mult_map = {"80%": 0.8, "Asking": 1.0, "120%": 1.2}
-
         def _paint():
             offer_info['years'] = int(years_seg.get())
-            offer_info['salary_mult'] = mult_map[sal_seg.get()]
-            salary = int((getattr(staff, 'salary', 0) or 0)
-                         * offer_info['salary_mult'])
+            salary = self._parse_offer()
+            if salary is None:
+                offer_label.configure(text="Enter an offer amount.")
+                chance_label.configure(text="")
+                return
             offer_label.configure(
                 text=f"Your offer: ${salary:,} / year  x  {offer_info['years']} "
                      f"year{'s' if offer_info['years'] > 1 else ''}")
-            chance = self._staff_offer_accept_chance(staff,
-                                                    offer_info['salary_mult'])
+            chance = self._staff_offer_accept_chance(staff, salary)
             if chance >= 0.75:
                 color = ct['GREEN']
             elif chance >= 0.45:
@@ -11716,6 +11881,13 @@ class StaffContractView(ctk.CTkFrame):
                 color = ct['RED']
             chance_label.configure(text=f"Estimated acceptance chance: {chance:.0%}",
                                    text_color=color)
+            # Over-budget flag, live.
+            if salary > (self._budget_remaining or 0):
+                chance_label.configure(
+                    text=f"Estimated acceptance chance: {chance:.0%}  \u2014  "
+                         f"exceeds your available staff budget "
+                         f"(${self._budget_remaining:,})",
+                    text_color=ct['RED'])
 
         _paint()
 
@@ -11726,12 +11898,13 @@ class StaffContractView(ctk.CTkFrame):
                                                             padx=(10, 0))
         self._primary_button(btns, text="Make Offer",
                              command=lambda: self._resolve_staff_offer(
-                                 staff, offer_info['years'],
-                                 int((getattr(staff, 'salary', 0) or 0)
-                                     * offer_info['salary_mult']))).pack(side="right")
+                                 staff, offer_info['years'])).pack(side="right")
 
-    def _staff_offer_accept_chance(self, staff, salary_mult):
+    def _staff_offer_accept_chance(self, staff, offer_salary):
         """Rough acceptance chance for a staff offer (display only)."""
+        from game_classes import staff_market_ask
+        ask = staff_market_ask(staff)
+        salary_mult = offer_salary / max(1, ask)
         rating = to_100_scale(staff.overall_rating)
         try:
             prestige = getattr(self.app.game_manager.user_team, 'prestige', 50)
@@ -11748,7 +11921,7 @@ class StaffContractView(ctk.CTkFrame):
             pass
         return max(0.05, min(0.98, base))
 
-    def _resolve_staff_offer(self, staff, years, salary):
+    def _resolve_staff_offer(self, staff, years):
         """Resolve a staff contract offer (original acceptance logic).
 
         The acceptance roll happens FIRST; the roster is only mutated
@@ -11756,11 +11929,41 @@ class StaffContractView(ctk.CTkFrame):
         just declined the offer.)
         """
         import random
-        base_salary = getattr(staff, 'salary', 0) or 0
-        chance = self._staff_offer_accept_chance(staff,
-                                                salary / max(1, base_salary))
+        salary = self._parse_offer()
+        if salary is None:
+            messagebox.showerror("Invalid Offer",
+                                 "Enter a valid salary amount in dollars.")
+            return
+        # League-wide staff budget: hard block.
+        try:
+            team = self.app.game_manager.user_team
+            remaining = (team.staff_budget_remaining()
+                         if hasattr(team, 'staff_budget_remaining') else 0)
+        except Exception:
+            remaining = 0
+        if salary > remaining:
+            messagebox.showerror(
+                "Over Budget",
+                f"That offer (${salary:,}/yr) exceeds your available staff "
+                f"budget (${remaining:,}). Every club in the league works "
+                f"under a staff payroll budget -- trim the offer or move "
+                f"money by letting staff go.")
+            return
+        chance = self._staff_offer_accept_chance(staff, salary)
         if random.random() < chance:
+            # Only leave the source pool/club AFTER a successful signing --
+            # if sign_free_agent_staff fails (e.g. a budget race), the
+            # staffer must not be lost from their old club/pool.
             if self.app.game_manager.sign_free_agent_staff(staff, salary, years):
+                league = getattr(self.app, 'league', None)
+                if self.hire_source == "overseas" and league is not None:
+                    pool = getattr(league, "overseas_staff", None)
+                    if pool is not None and staff in pool:
+                        pool.remove(staff)
+                elif (self.hire_source == "ahl_poach"
+                      and self.from_team is not None
+                      and staff in self.from_team.staff):
+                    self.from_team.staff.remove(staff)
                 messagebox.showinfo("Offer Accepted",
                                     f"{staff.full_name} has accepted your offer!")
                 try:

@@ -1300,6 +1300,14 @@ NHL League Office""",
             league = getattr(self, "league", None)
             if team is None or staff is None:
                 return False
+            # League-wide staff budget: the offer must fit the club's
+            # remaining budget. Applies to every hiring path through here.
+            try:
+                from game_classes import team_can_afford_staff as _afford
+                if not _afford(team, salary):
+                    return False
+            except Exception:
+                pass
             pool = getattr(league, "free_agent_staff", None)
             if pool is not None and staff in pool:
                 pool.remove(staff)
@@ -1310,6 +1318,11 @@ NHL League Office""",
                 pass
             if staff not in list(getattr(team, "staff", []) or []):
                 team.staff.append(staff)
+                # Hired onto the NHL club.
+                try:
+                    staff.assignment = "nhl"
+                except Exception:
+                    pass
             try:
                 import analytics_scouting as _as
                 _as.refresh_analytics_quality(team)
@@ -7235,20 +7248,53 @@ class HockeyManagerGUI(tk.Tk):
     # -- staff / scouting / practice actions (host side) ------------------
 
     def _mp_hire_staff(self, params, team, manager):
-        """Hire from the staff free-agent pool: mirrors
-        sign_free_agent_staff() but against the client's club."""
+        """Hire staff: mirrors sign_free_agent_staff() but against the
+        client's club. Resolves all three market sources (free agents,
+        overseas coaches, rival AHL staff) and enforces the same approach
+        rules and staff-budget gate as single-player."""
         sid = str(params.get("staff_id", "") or "")
         staffer = None
+        source = None       # 'free_agent' | 'overseas' | 'ahl_poach'
+        employer = None
         try:
-            for s in getattr(getattr(self, "league", None),
-                             "free_agent_staff", None) or []:
+            league = getattr(self, "league", None)
+            for s in getattr(league, "free_agent_staff", None) or []:
                 if str(getattr(s, "id", "")) == sid:
-                    staffer = s
+                    staffer, source = s, "free_agent"
                     break
+            if staffer is None:
+                for s in getattr(league, "overseas_staff", None) or []:
+                    if str(getattr(s, "id", "")) == sid:
+                        staffer, source = s, "overseas"
+                        break
+            if staffer is None:
+                for t in getattr(league, "teams", None) or []:
+                    if t is team:
+                        continue
+                    for s in getattr(t, "staff", None) or []:
+                        if (str(getattr(s, "id", "")) == sid
+                                and (getattr(s, "assignment", "nhl")
+                                     or "nhl") == "ahl"):
+                            staffer, source, employer = s, "ahl_poach", t
+                            break
+                    if staffer is not None:
+                        break
         except Exception:
             pass
         if staffer is None:
             return False, "That staffer isn't available."
+        # Approach rules (real rules): rival AHL coaches are only
+        # approachable in the offseason; rival NHL staff never.
+        if source != "free_agent":
+            try:
+                from game_classes import can_approach_staff as _approach
+                ok, reason = _approach(
+                    staffer, employer, team,
+                    getattr(self, "current_date", None))
+                if not ok:
+                    return False, reason or "That staffer can't be approached."
+            except Exception:
+                pass
         try:
             salary = int(params.get("salary", 0))
             years = int(params.get("years", 0))
@@ -7257,19 +7303,45 @@ class HockeyManagerGUI(tk.Tk):
         if salary <= 0 or not 1 <= years <= 5:
             return False, "Invalid contract terms."
         try:
-            pool = getattr(self.league, "free_agent_staff", None)
-            if pool is not None and staffer in pool:
-                pool.remove(staffer)
+            from game_classes import team_can_afford_staff as _mp_afford
+            if not _mp_afford(team, salary):
+                return False, ("That offer exceeds your club's available "
+                                "staff budget.")
         except Exception:
             pass
         try:
             staffer.salary = salary
             staffer.contract_years = years
+            staffer.assignment = "nhl"
         except Exception:
             pass
+        # Join the new club first; only leave the old source after the
+        # hire has landed, so a failure can't strand the staffer.
+        hired = False
         try:
-            if staffer not in list(getattr(team, "staff", []) or []):
-                team.staff.append(staffer)
+            roster = getattr(team, "staff", None)
+            if roster is not None and staffer not in roster:
+                roster.append(staffer)
+                hired = True
+            elif roster is not None:
+                hired = True
+        except Exception:
+            pass
+        if not hired:
+            return False, "Couldn't complete the hire."
+        try:
+            league = getattr(self, "league", None)
+            if source == "free_agent":
+                pool = getattr(league, "free_agent_staff", None)
+                if pool is not None and staffer in pool:
+                    pool.remove(staffer)
+            elif source == "overseas":
+                pool = getattr(league, "overseas_staff", None)
+                if pool is not None and staffer in pool:
+                    pool.remove(staffer)
+            elif source == "ahl_poach" and employer is not None:
+                if staffer in (getattr(employer, "staff", None) or []):
+                    employer.staff.remove(staffer)
         except Exception:
             pass
         try:
