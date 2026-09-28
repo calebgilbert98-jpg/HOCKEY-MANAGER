@@ -27,7 +27,7 @@ def default_settings():
         },
         'ui_preferences': {
             'theme': 'Dark (Current)',
-            'font_size': 'Medium (Current)',
+            'font_size': 'Default',
             'auto_close_settings': False,
             'remember_window_positions': True
         },
@@ -446,9 +446,9 @@ class SettingsWindow(InGamePopup):
                    'High Contrast (Coming Soon)'], width=24)
         self.font_size_var = tk.StringVar()
         self._row(theme, "Font size:", self.font_size_var,
-                  ['Small', 'Medium (Current)', 'Large'], width=18)
-        ttk.Label(theme, text="Applies to windows opened after saving.",
-                  font=AppFonts.CAPTION).pack(anchor="w", pady=(0, 6))
+                  ['Compact', 'Small', 'Default', 'Large', 'Extra Large'],
+                  width=18)
+        self._caption(theme, "Applies instantly to most windows.")
 
         window = self._section(content, "Window Behavior")
         self.auto_close_var = tk.BooleanVar()
@@ -457,6 +457,12 @@ class SettingsWindow(InGamePopup):
         self.remember_windows_var = tk.BooleanVar()
         self._check(window, "Remember window positions and sizes",
                     self.remember_windows_var)
+        self.auto_fit_var = tk.BooleanVar()
+        self._check(window, "Auto-fit text size to window size",
+                    self.auto_fit_var)
+        self._caption(window,
+                      "Shrinks text instead of clipping it when the window "
+                      "is small; grows it on large monitors.")
 
     def _create_simulation_tab(self, content):
         """Game simulation preferences."""
@@ -583,7 +589,15 @@ class SettingsWindow(InGamePopup):
 
         self.theme_var.set(ui_prefs.get('theme', 'Dark (Current)'))
         self.font_size_var.set(ui_prefs.get('font_size',
-                                            'Medium (Current)'))
+                                            'Default'))
+        # Migrate legacy tier names (Small / Medium (Current) / Large).
+        try:
+            import ui_scale
+            self.font_size_var.set(
+                ui_scale.normalize_tier_name(self.font_size_var.get()))
+        except Exception:
+            pass
+        self.auto_fit_var.set(ui_prefs.get('auto_fit_ui', False))
         self.auto_close_var.set(ui_prefs.get('auto_close_settings', False))
         self.remember_windows_var.set(
             ui_prefs.get('remember_window_positions', True))
@@ -641,6 +655,7 @@ class SettingsWindow(InGamePopup):
         self.settings.setdefault('ui_preferences', {}).update({
             'theme': self.theme_var.get(),
             'font_size': self.font_size_var.get(),
+            'auto_fit_ui': self.auto_fit_var.get(),
             'auto_close_settings': self.auto_close_var.get(),
             'remember_window_positions': self.remember_windows_var.get()
         })
@@ -718,11 +733,11 @@ class SettingsWindow(InGamePopup):
 
             self._notify_parent_of_changes()
 
-            # Apply the font-size choice immediately: every window opened
-            # from now on picks up the new scale (no restart needed).
+            # Apply the font-size + auto-fit choices immediately: the
+            # live font registry resizes open windows in place.
             try:
                 import ui_scale
-                ui_scale.scale_from_setting(self.font_size_var.get())
+                ui_scale.apply_from_prefs()
             except Exception:
                 pass
 

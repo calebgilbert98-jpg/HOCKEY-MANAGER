@@ -3260,10 +3260,12 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
-        # UI scale: honor Settings -> Font size for all modern surfaces.
+        # UI scale: honor Settings -> Font size for all modern surfaces,
+        # and auto-fit text to the window size when enabled.
         try:
             import ui_scale
             ui_scale.apply_from_prefs()
+            ui_scale.bind_auto_fit(self)
         except Exception:
             pass
 
@@ -12214,9 +12216,9 @@ class CleanEditLinesWindow(InGamePopup):
             cell = tk.Frame(inner, bg=self.C_CARD)
             cell.pack(side=tk.LEFT, padx=(0, 36))
             tk.Label(cell, text=label, bg=self.C_CARD, fg=self.C_TER,
-                     font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+                     font=self._font(10, 'bold')).pack(anchor='w')
             tk.Label(cell, text=val, bg=self.C_CARD, fg=self.C_TEXT,
-                     font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(anchor='w')
+                     font=self._font(18, 'bold')).pack(anchor='w')
 
     def _make_scrollable(self, parent):
         """Canvas+scrollbar boilerplate. Returns the inner content frame."""
@@ -12252,36 +12254,84 @@ class CleanEditLinesWindow(InGamePopup):
         hdr = tk.Frame(panel, bg=self.C_BG)
         hdr.pack(fill='x', pady=(0, 6))
         tk.Label(hdr, text="Roster", bg=self.C_BG, fg=self.C_TEXT,
-                 font=(self.parent.FONT_FAMILY, 15, 'bold')).pack(side='left')
+                 font=self._font(15, 'bold')).pack(side='left')
         self._sel_hint = tk.Label(hdr, text="", bg=self.C_BG, fg=self.C_ACCENT,
-                                  font=(self.parent.FONT_FAMILY, 9))
+                                  font=self._font(9))
         self._sel_hint.pack(side='left', padx=(10, 0))
 
         self._search_var = tk.StringVar()
         search = tk.Entry(panel, textvariable=self._search_var, bg=self.C_CARD2,
                           fg=self.C_TEXT, insertbackground=self.C_TEXT, relief='flat',
-                          font=(self.parent.FONT_FAMILY, 10))
+                          font=self._font(10))
         search.pack(fill='x', pady=(0, 8), ipady=7)
         self._search_var.trace_add('write', lambda *a: self._debounced_search())
         self._search_after = None
 
         chips = tk.Frame(panel, bg=self.C_BG)
         chips.pack(fill='x', pady=(0, 8))
+        self._chips_frame = chips
         self._chip_btns = {}
         for key, label in (("ALL", "All"), ("F", "Forwards"),
                            ("D", "Defense"), ("G", "Goalies")):
             b = tk.Label(chips, text=label, bg=self.C_CARD2, fg=self.C_SEC,
-                         font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                         font=self._font(10, 'bold'),
                          padx=12, pady=6, cursor='hand2')
-            b.pack(side='left', padx=(0, 6))
             b.bind('<Button-1>', lambda e, k=key: self._set_roster_filter(k))
             self._chip_btns[key] = b
         self._set_roster_filter("ALL", rebuild=False)
+        self._layout_chips()
+        # Reflow the chip row when the window resizes or the text scale
+        # changes: 4-across when they fit, 2x2 when they don't, so text
+        # never clips at large font tiers or narrow windows.
+        chips.bind("<Configure>",
+                   lambda e: self._layout_chips(_from_resize=True), add="+")
+        try:
+            from ui_scale import on_scale_change
+            on_scale_change(self._layout_chips)
+        except Exception:
+            pass
 
         list_wrap = tk.Frame(panel, bg=self.C_BG)
         list_wrap.pack(fill='both', expand=True)
         self._roster_inner = self._make_scrollable(list_wrap)
         self._rebuild_roster_list()
+
+    def _layout_chips(self, _from_resize=False):
+        """Reflow roster filter chips: 4-across when they fit, else 2x2.
+
+        Called on window resizes and text-scale changes so chip labels
+        never clip at large font tiers or narrow widths.
+        """
+        try:
+            frame = self._chips_frame
+            avail = frame.winfo_width()
+            if _from_resize:
+                # Height-only changes (from our own repacking) must not loop.
+                last = getattr(self, "_chips_w", None)
+                if last is not None and abs(avail - last) < 2:
+                    return
+                self._chips_w = avail
+            btns = list(self._chip_btns.values())
+            if avail < 50:
+                per_row = 4  # not laid out yet; default single row
+            else:
+                need = sum(b.winfo_reqwidth() for b in btns) + 6 * 3
+                per_row = 4 if need <= avail else 2
+            for rf in getattr(self, "_chip_rows", []):
+                try:
+                    rf.pack_forget()
+                    rf.destroy()
+                except Exception:
+                    pass
+            self._chip_rows = []
+            for i in range(0, len(btns), per_row):
+                rf = tk.Frame(frame, bg=self.C_BG)
+                rf.pack(fill='x', pady=(6, 0) if i else 0)
+                self._chip_rows.append(rf)
+                for b in btns[i:i + per_row]:
+                    b.pack(in_=rf, side='left', padx=(0, 6))
+        except Exception:
+            pass
 
     def _debounced_search(self):
         """Rebuild the roster list 180ms after the last keystroke."""
@@ -12364,12 +12414,12 @@ class CleanEditLinesWindow(InGamePopup):
         info = tk.Frame(card, bg=self.C_CARD)
         info.pack(side='left', fill='y', expand=True, pady=8)
         name_l = tk.Label(info, text=player.full_name, bg=self.C_CARD, fg=self.C_TEXT,
-                          font=(self.parent.FONT_FAMILY, 10, 'bold'), anchor='w')
+                          font=self._font(10, 'bold'), anchor='w')
         name_l.pack(anchor='w')
         sub = tk.Frame(info, bg=self.C_CARD)
         sub.pack(anchor='w', pady=(3, 0))
         pos_l = tk.Label(sub, text=self._pos_short(player), bg=self.C_CARD2,
-                         fg=self.C_SEC, font=(self.parent.FONT_FAMILY, 8, 'bold'),
+                         fg=self.C_SEC, font=self._font(8, 'bold'),
                          padx=6, pady=2)
         pos_l.pack(side='left')
         try:
@@ -12377,21 +12427,21 @@ class CleanEditLinesWindow(InGamePopup):
         except Exception:
             arch = ""
         arch_l = tk.Label(sub, text=arch, bg=self.C_CARD, fg=self.C_TER,
-                          font=(self.parent.FONT_FAMILY, 8))
+                          font=self._font(8))
         arch_l.pack(side='left', padx=(6, 0))
 
         right = tk.Frame(card, bg=self.C_CARD)
         right.pack(side='right', padx=(4, 10))
         ovr_l = tk.Label(right, text=str(player.overall_rating()), bg=self.C_CARD,
-                         fg=self.C_TEXT, font=(self.parent.FONT_FAMILY, 18, 'bold'))
+                         fg=self.C_TEXT, font=self._font(18, 'bold'))
         ovr_l.pack(anchor='e')
         cond = getattr(player, 'condition', 100)
         cond_l = tk.Label(right, text=f"{cond}%", bg=self.C_CARD, fg=self.C_TER,
-                          font=(self.parent.FONT_FAMILY, 8))
+                          font=self._font(8))
         cond_l.pack(anchor='e')
 
         dot = tk.Label(card, text="\u25cf", bg=self.C_CARD, fg=self.C_CARD,
-                       font=(self.parent.FONT_FAMILY, 8))
+                       font=self._font(8))
         dot.pack(side='right', padx=(0, 2))
 
         bound = [outer, card, face, info, name_l, sub, pos_l, arch_l,
@@ -12440,6 +12490,19 @@ class CleanEditLinesWindow(InGamePopup):
     # ------------------------------------------------------------------
     # Main layout: slim header, roster panel, unit-switched line area
     # ------------------------------------------------------------------
+    def _font(self, size, weight=""):
+        """Scale-aware font for this editor (honors Settings -> Font size).
+
+        Returns a live tkinter Font registered with ui_scale: changing
+        the tier resizes open-editor text in place.
+        """
+        try:
+            from ui_scale import font as _mkfont
+            return _mkfont(self.parent.FONT_FAMILY, size, weight)
+        except Exception:
+            return (self.parent.FONT_FAMILY, size, weight) if weight else (
+                self.parent.FONT_FAMILY, size)
+
     def create_clean_interface(self):
         """Sleeper/FM24-style line editor: everything visible, point-click."""
         # ---- header ----
@@ -12447,7 +12510,7 @@ class CleanEditLinesWindow(InGamePopup):
         header.pack(fill=tk.X)
         tk.Frame(header, bg=self.C_BORDER, height=1).pack(side='bottom', fill='x')
         tk.Label(header, text="Lines", bg=self.C_BG, fg=self.C_TEXT,
-                 font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(
+                 font=self._font(18, 'bold')).pack(
                      side='left', padx=20, pady=14)
 
         # Unit segmented control (replaces the 4-tab notebook)
@@ -12457,8 +12520,8 @@ class CleanEditLinesWindow(InGamePopup):
         for key, label in (("ES", "Even Strength"), ("PP", "Power Play"),
                            ("PK", "Penalty Kill")):
             b = tk.Label(seg, text=label, bg=self.C_CARD2, fg=self.C_SEC,
-                         font=(self.parent.FONT_FAMILY, 11, 'bold'),
-                         padx=18, pady=8, cursor='hand2')
+                         font=self._font(11, 'bold'),
+                         padx=14, pady=8, cursor='hand2')
             b.pack(side='left', padx=2, pady=2)
             b.bind('<Button-1>', lambda e, k=key: self.switch_unit(k))
             self._unit_btns[key] = b
@@ -12497,12 +12560,26 @@ class CleanEditLinesWindow(InGamePopup):
             text=("Click a player, then a slot to assign  \u00b7  "
                   "Click a slotted player to move him  \u00b7  "
                   "Double-click a slot (or \u00d7) to clear  \u00b7  Esc cancels"),
-            bg=self.C_BG, fg=self.C_TER, font=(self.parent.FONT_FAMILY, 9))
+            bg=self.C_BG, fg=self.C_TER, font=self._font(9), justify='left')
         self._footer_hint.pack(side='left')
         self._footer_warn = tk.Label(footer, text="", bg=self.C_BG,
                                      fg=self.C_AMBER,
-                                     font=(self.parent.FONT_FAMILY, 9, 'bold'))
+                                     font=self._font(9, 'bold'))
         self._footer_warn.pack(side='right')
+        # Wrap the hint instead of letting it force the window's minimum
+        # width at large font tiers: base it on the *window* width (not the
+        # footer's own width, which is already inflated when overflowing),
+        # reserving room for the warning label.
+        def _wrap_hint(_e=None):
+            try:
+                win_w = self.winfo_toplevel().winfo_width()
+                if win_w < 50:
+                    return
+                self._footer_hint.config(wraplength=max(200, win_w - 260))
+            except Exception:
+                pass
+        footer.bind("<Configure>", _wrap_hint, add="+")
+        self.after_idle(_wrap_hint)
 
         self.bind('<Escape>', lambda e: self._clear_selection())
 
@@ -12516,7 +12593,7 @@ class CleanEditLinesWindow(InGamePopup):
         st = styles.get(kind, styles['primary'])
         button = tk.Button(parent, text=text, command=command,
                            bg=st['bg'], fg=st['fg'], border=0, relief='flat',
-                           font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                           font=self._font(10, 'bold'),
                            padx=16, pady=8, cursor='hand2')
         button.pack(side=tk.LEFT, padx=(0, 8))
         button.bind('<Enter>', lambda e: button.config(bg=st['hover']))
@@ -12580,21 +12657,21 @@ class CleanEditLinesWindow(InGamePopup):
         top = tk.Frame(card, bg=self.C_CARD)
         top.pack(fill='x', padx=16, pady=(12, 0))
         kicker_l = tk.Label(top, text=kicker, bg=self.C_CARD, fg=self.C_TER,
-                            font=(self.parent.FONT_FAMILY, 11, 'bold'))
+                            font=self._font(11, 'bold'))
         kicker_l.pack(side='left')
         card._kicker = kicker_l
         big = tk.Label(top, text="--", bg=self.C_CARD, fg=self.C_TEXT,
-                       font=(self.parent.FONT_FAMILY, 26, 'bold'))
+                       font=self._font(26, 'bold'))
         big.pack(side='right')
         big._pk = {'side': 'right'}
         self._rating_bigs.append(big)
         detail = tk.Label(card, text="", bg=self.C_CARD, fg=self.C_SEC,
-                          font=(self.parent.FONT_FAMILY, 9))
+                          font=self._font(9))
         detail.pack(anchor='w', padx=16)
         detail._pk = {'anchor': 'w', 'padx': 16}
         self._chem_labels.append(detail)
         ice = tk.Label(card, text="", bg=self.C_CARD, fg=self.C_TER,
-                       font=(self.parent.FONT_FAMILY, 9, 'italic'))
+                       font=self._font(9, 'italic'))
         ice.pack(anchor='w', padx=16, pady=(0, 4))
         ice._pk = {'anchor': 'w', 'padx': 16, 'pady': (0, 4)}
         self._icetime_labels.append(ice)
@@ -12695,7 +12772,7 @@ class CleanEditLinesWindow(InGamePopup):
         row = tk.Frame(bar, bg=self.C_CARD2)
         row.pack(fill='x', padx=12, pady=8)
         tk.Label(row, text=title, bg=self.C_CARD2, fg=self.C_TER,
-                 font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(side='left')
+                 font=self._font(10, 'bold')).pack(side='left')
         mb = None
         if kind:
             wrap = tk.Frame(row, bg='#3a3a42')
@@ -12703,14 +12780,14 @@ class CleanEditLinesWindow(InGamePopup):
             mb = tk.Menubutton(
                 wrap, text="", bg=self.C_BG, fg=self.C_TEXT,
                 activebackground='#2b2b31', activeforeground=self.C_ACCENT,
-                font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                font=self._font(10, 'bold'),
                 relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
                 indicatoron=0)
             mb.pack(padx=1, pady=1)
             menu = tk.Menu(mb, tearoff=0, bg=self.C_CARD2, fg=self.C_TEXT,
                            activebackground=self.C_ACCENT,
                            activeforeground='#06231f',
-                           font=(self.parent.FONT_FAMILY, 10))
+                           font=self._font(10))
             menu.config(postcommand=lambda m=menu,
                         k=kind: self._refresh_unit_menu(m, k))
             mb.config(menu=menu)
@@ -12722,14 +12799,14 @@ class CleanEditLinesWindow(InGamePopup):
             mmb = tk.Menubutton(
                 mwrap, text="vs Auto \u25be", bg=self.C_BG, fg=self.C_SEC,
                 activebackground='#2b2b31', activeforeground=self.C_ACCENT,
-                font=(self.parent.FONT_FAMILY, 9),
+                font=self._font(9),
                 relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
                 indicatoron=0)
             mmb.pack(padx=1, pady=1)
             mmenu = tk.Menu(mmb, tearoff=0, bg=self.C_CARD2, fg=self.C_TEXT,
                             activebackground=self.C_ACCENT,
                             activeforeground='#06231f',
-                            font=(self.parent.FONT_FAMILY, 10))
+                            font=self._font(10))
             mmenu.config(postcommand=lambda m=mmenu,
                          k=kind: self._refresh_match_menu(m, k))
             mmb.config(menu=mmenu)
@@ -13005,14 +13082,14 @@ class CleanEditLinesWindow(InGamePopup):
         
         tk.Label(header_content, text=f"{color_scheme['icon']} {title}", 
                 bg=color_scheme["border"], fg='white',
-                font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side=tk.LEFT)
+                font=self._font(12, 'bold')).pack(side=tk.LEFT)
         
         # Content
         content_frame = tk.Frame(notification, bg=color_scheme["bg"])
         content_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         tk.Label(content_frame, text=message, bg=color_scheme["bg"], fg='#ffffff',
-                font=(self.parent.FONT_FAMILY, 10), wraplength=300).pack()
+                font=self._font(10), wraplength=300).pack()
         
         # OK button
         button_frame = tk.Frame(content_frame, bg=color_scheme["bg"])
@@ -13020,7 +13097,7 @@ class CleanEditLinesWindow(InGamePopup):
         
         ok_button = tk.Button(button_frame, text="OK", command=notification.destroy,
                              bg=color_scheme["border"], fg='white', border=0, relief='flat',
-                             font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                             font=self._font(10, 'bold'),
                              padx=20, pady=5, cursor='hand2')
         ok_button.pack()
         
@@ -13132,10 +13209,10 @@ class CleanEditLinesWindow(InGamePopup):
         ph = tk.Frame(inner, bg=self.C_CARD)
         ph.pack(fill='both', expand=True)
         pos_l = tk.Label(ph, text=slot._pos_label, bg=self.C_CARD, fg=self.C_TER,
-                         font=(self.parent.FONT_FAMILY, 12, 'bold'))
+                         font=self._font(12, 'bold'))
         pos_l.pack(expand=True, pady=(14, 0))
         emp_l = tk.Label(ph, text="Empty", bg=self.C_CARD, fg=self.C_TER,
-                         font=(self.parent.FONT_FAMILY, 8))
+                         font=self._font(8))
         emp_l.pack(expand=True, pady=(0, 14))
         for w in (ph, pos_l, emp_l):
             w.bind('<Button-1>', lambda e, s=slot: self._on_slot_click(s))
@@ -13303,7 +13380,7 @@ class CleanEditLinesWindow(InGamePopup):
         mid = tk.Frame(card, bg=self.C_CARD2)
         mid.pack(side='left', fill='y', expand=True, pady=6)
         name_l = tk.Label(mid, text=player.full_name, bg=self.C_CARD2,
-                          fg=self.C_TEXT, font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                          fg=self.C_TEXT, font=self._font(10, 'bold'),
                           anchor='w')
         name_l.pack(anchor='w')
         sub = tk.Frame(mid, bg=self.C_CARD2)
@@ -13313,21 +13390,21 @@ class CleanEditLinesWindow(InGamePopup):
         except Exception:
             arch = ""
         arch_l = tk.Label(sub, text=arch, bg=self.C_CARD2, fg=self.C_TER,
-                          font=(self.parent.FONT_FAMILY, 8))
+                          font=self._font(8))
         arch_l.pack(side='left')
         if self._is_off_position(player, drop_zone.zone_id):
             off_l = tk.Label(sub, text="OFF POS", bg='#3a2c14', fg=self.C_AMBER,
-                             font=(self.parent.FONT_FAMILY, 7, 'bold'),
+                             font=self._font(7, 'bold'),
                              padx=5, pady=1)
             off_l.pack(side='left', padx=(6, 0))
 
         ovr_l = tk.Label(card, text=str(to_100_scale(player.overall_rating())),
                          bg=self.C_CARD2, fg=self.C_TEXT,
-                         font=(self.parent.FONT_FAMILY, 16, 'bold'))
+                         font=self._font(16, 'bold'))
         ovr_l.pack(side='right', padx=(4, 8))
 
         clear_l = tk.Label(card, text="\u00d7", bg=self.C_CARD2, fg=self.C_TER,
-                           font=(self.parent.FONT_FAMILY, 12, 'bold'),
+                           font=self._font(12, 'bold'),
                            cursor='hand2', padx=4)
         clear_l.pack(side='right', anchor='n')
         clear_l.bind('<Button-1>',
@@ -13458,15 +13535,15 @@ class CleanEditLinesWindow(InGamePopup):
         header = tk.Frame(popup, bg="#16161a")
         header.pack(fill="x", padx=16, pady=(16, 8))
         tk.Label(header, text=title, bg="#16161a", fg="white",
-                 font=(self.parent.FONT_FAMILY, 13, "bold")).pack(anchor="w")
+                 font=self._font(13, 'bold')).pack(anchor="w")
         sign = "+" if total >= 0 else ""
         color = "#3fb950" if total >= 0 else "#00ceb8"
         tk.Label(header, text=f"Total chemistry: {sign}{total:g}", bg="#16161a",
-                 fg=color, font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w", pady=(4, 0))
+                 fg=color, font=self._font(11, 'bold')).pack(anchor="w", pady=(4, 0))
         tk.Label(header, text="Archetype pairings drive chemistry. "
                  "Complementary styles boost it; duplicate roles clash.",
                  bg="#16161a", fg="#adb5bd",
-                 font=(self.parent.FONT_FAMILY, 9), wraplength=420,
+                 font=self._font(9), wraplength=420,
                  justify="left").pack(anchor="w", pady=(4, 0))
 
         body = tk.Frame(popup, bg="#16161a")
@@ -13475,7 +13552,7 @@ class CleanEditLinesWindow(InGamePopup):
             tk.Label(body, text="No strong archetype relationships on this unit.\n"
                      "Chemistry is neutral.",
                      bg="#16161a", fg="#adb5bd",
-                     font=(self.parent.FONT_FAMILY, 10)).pack(anchor="w")
+                     font=self._font(10)).pack(anchor="w")
         for text, value in drivers:
             row = tk.Frame(body, bg="#16161a")
             row.pack(fill="x", pady=3)
@@ -13485,20 +13562,20 @@ class CleanEditLinesWindow(InGamePopup):
             dot.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
             dot.pack(side="left", padx=(0, 8))
             tk.Label(row, text=text, bg="#16161a", fg="white",
-                     font=(self.parent.FONT_FAMILY, 9), wraplength=400,
+                     font=self._font(9), wraplength=400,
                      justify="left", anchor="w").pack(side="left", fill="x", expand=True)
 
         # Archetype legend for the unit's players
         legend = tk.Frame(popup, bg="#16161a")
         legend.pack(fill="x", padx=16, pady=(8, 16))
         tk.Label(legend, text="Archetypes on this unit:", bg="#16161a",
-                 fg="#adb5bd", font=(self.parent.FONT_FAMILY, 9, "bold")).pack(anchor="w")
+                 fg="#adb5bd", font=self._font(9, 'bold')).pack(anchor="w")
         for p in players:
             arch = get_archetype(p)
             strength = ARCHETYPE_STRENGTHS.get(arch, "")
             tk.Label(legend, text=f"• {p.full_name}: {arch}" + (f" — {strength}" if strength else ""),
                      bg="#16161a", fg="white",
-                     font=(self.parent.FONT_FAMILY, 9), wraplength=420,
+                     font=self._font(9), wraplength=420,
                      justify="left", anchor="w").pack(anchor="w")
 
     def _refresh_ratings_for_zone(self, zone_id):
@@ -13686,7 +13763,7 @@ class CleanEditLinesWindow(InGamePopup):
         except Exception:
             pass
         tk.Label(pop, text="Show in this editor", bg=self.C_CARD, fg=self.C_TEXT,
-                 font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(
+                 font=self._font(11, 'bold')).pack(
                      anchor='w', padx=16, pady=(14, 6))
         for key, label in (('show_ratings', 'Line ratings'),
                            ('show_icetime', 'Ice-time hints'),
@@ -13696,7 +13773,7 @@ class CleanEditLinesWindow(InGamePopup):
                                 fg=self.C_TEXT, selectcolor=self.C_CARD2,
                                 activebackground=self.C_CARD,
                                 activeforeground=self.C_TEXT,
-                                font=(self.parent.FONT_FAMILY, 10), anchor='w',
+                                font=self._font(10), anchor='w',
                                 command=lambda k=key, v=var: self._toggle_pref(k, v))
             cb.pack(anchor='w', padx=16, pady=4, fill='x')
         tk.Frame(pop, bg=self.C_CARD, height=10).pack()
@@ -13936,7 +14013,7 @@ class CleanEditLinesWindow(InGamePopup):
         
         # Title
         ttk.Label(main_frame, text="Line Performance Analytics", 
-                 style='Title.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold')).pack(pady=(0, 15))
+                 style='Title.TLabel', font=self._font(16, 'bold')).pack(pady=(0, 15))
         
         # Create notebook for different analytics
         analytics_notebook = ttk.Notebook(main_frame, style='TNotebook')
@@ -13979,7 +14056,7 @@ class CleanEditLinesWindow(InGamePopup):
                 
                 text_widget = tk.Text(line_analysis_frame, height=6, width=70, 
                                     bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                    font=(self.parent.FONT_FAMILY, 9))
+                                    font=self._font(9))
                 text_widget.pack(fill='x')
                 text_widget.insert('1.0', analytics_text)
                 text_widget.config(state='disabled')
@@ -14017,7 +14094,7 @@ class CleanEditLinesWindow(InGamePopup):
             
             team_text_widget = tk.Text(overview_frame, height=10, width=70,
                                      bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                     font=(self.parent.FONT_FAMILY, 10))
+                                     font=self._font(10))
             team_text_widget.pack(fill='both', expand=True)
             team_text_widget.insert('1.0', team_stats)
             team_text_widget.config(state='disabled')

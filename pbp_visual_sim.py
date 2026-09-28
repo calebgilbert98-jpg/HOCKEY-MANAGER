@@ -64,6 +64,18 @@ RINK_SURROUND = "#0e0e11"
 INK = "#16161a"             # dark text on ice
 FONT = "Segoe UI"
 
+def _vfont(size, weight="normal"):
+    """Scale-aware canvas/widget font (honors Settings -> Font size).
+
+    Registered with ui_scale: tier changes resize live visualizer text
+    in place. Falls back to a plain tuple pre-root or headless.
+    """
+    try:
+        from ui_scale import font as _mkfont
+        return _mkfont(FONT, size, weight)
+    except Exception:
+        return (FONT, size, weight)
+
 # Event types the "Next Big Moment" button jumps to
 BIG_MOMENTS = ("goal", "penalty", "fight", "penalty_shot")
 
@@ -804,11 +816,11 @@ class PBPVisualSim(InGamePopup):
         if RoundedButton is not None:
             b = RoundedButton(parent, text=text, command=command, width=w,
                               height=34, bg="#232E44", fg=TEXT,
-                              font=(FONT, 11, "bold"))
+                              font=_vfont(11, "bold"))
             b.pack(side="left", padx=padx)
             return b
         b = tk.Button(parent, text=text, command=command, bg="#1B2637",
-                      fg=TEXT, font=(FONT, 11, "bold"), relief="flat",
+                      fg=TEXT, font=_vfont(11, "bold"), relief="flat",
                       padx=10, pady=6)
         b.pack(side="left", padx=padx)
         return b
@@ -851,7 +863,7 @@ class PBPVisualSim(InGamePopup):
                                 fill=primary, outline=trim, width=2)
             cv.create_text(W // 2, cy0 + ch // 2 + 1,
                            text=_abbr(team_name),
-                           fill=fg, font=(FONT, 15, "bold"))
+                           fill=fg, font=_vfont(15, "bold"))
         except Exception:
             pass
         return cv
@@ -866,18 +878,18 @@ class PBPVisualSim(InGamePopup):
                           self._home_tc).pack(side="left")
         self.score_var = tk.StringVar(value="0 – 0")
         tk.Label(bug, textvariable=self.score_var, bg="#16161a", fg="white",
-                 font=(FONT, 18, "bold"), padx=10).pack(side="left")
+                 font=_vfont(18, "bold"), padx=10).pack(side="left")
         self._jersey_icon(bug, self.away_team.team_name,
                           self._away_tc).pack(side="left")
         self.clock_var = tk.StringVar(value="P1 20:00")
         tk.Label(bug, textvariable=self.clock_var, bg="#23262e", fg=_user_accent(),
-                 font=(FONT, 14, "bold"), padx=10, pady=6).pack(side="left")
+                 font=_vfont(14, "bold"), padx=10, pady=6).pack(side="left")
 
         # Win probability (home perspective), next to the bug
         probf = tk.Frame(top, bg=BG)
         probf.pack(side="left", padx=(18, 0))
         tk.Label(probf, text="WIN PROB", bg=BG, fg="#AEB6C8",
-                 font=(FONT, 10, "bold")).pack(anchor="w")
+                 font=_vfont(10, "bold")).pack(anchor="w")
         prow = tk.Frame(probf, bg=BG)
         prow.pack()
         self.prob_canvas = tk.Canvas(prow, width=150, height=16, bg="#23262e",
@@ -885,14 +897,14 @@ class PBPVisualSim(InGamePopup):
         self.prob_canvas.pack(side="left")
         self.prob_var = tk.StringVar(value="50%")
         tk.Label(prow, textvariable=self.prob_var, bg=BG, fg=TEXT,
-                 font=(FONT, 12, "bold"), width=5).pack(side="left", padx=(6, 0))
+                 font=_vfont(12, "bold"), width=5).pack(side="left", padx=(6, 0))
 
         # Game intensity (tension) meter, next to win probability.
         # Click it to expand the list of factors driving the rating.
         tensf = tk.Frame(top, bg=BG)
         tensf.pack(side="left", padx=(18, 0))
         tk.Label(tensf, text="INTENSITY", bg=BG, fg="#AEB6C8",
-                 font=(FONT, 10, "bold")).pack(anchor="w")
+                 font=_vfont(10, "bold")).pack(anchor="w")
         trow = tk.Frame(tensf, bg=BG)
         trow.pack()
         self.tension_canvas = tk.Canvas(trow, width=150, height=16, bg="#23262e",
@@ -900,14 +912,14 @@ class PBPVisualSim(InGamePopup):
         self.tension_canvas.pack(side="left")
         self.tension_var = tk.StringVar(value="–")
         self.tension_num = tk.Label(trow, textvariable=self.tension_var, bg=BG,
-                                    fg=TEXT, font=(FONT, 12, "bold"), width=5,
+                                    fg=TEXT, font=_vfont(12, "bold"), width=5,
                                     cursor="hand2")
         self.tension_num.pack(side="left", padx=(6, 0))
         for _w in (tensf, trow, self.tension_canvas, self.tension_num):
             _w.bind("<Button-1>", lambda e: self._toggle_tension_panel())
 
         tk.Label(top, text="LIVE SIM", bg=self._ui_accent, fg="white",
-                 font=(FONT, 11, "bold"), padx=8, pady=2).pack(side="right", padx=12)
+                 font=_vfont(11, "bold"), padx=8, pady=2).pack(side="right", padx=12)
 
         # Slim bar under the scoreboard: on-ice units, momentum, next moment
         sub = tk.Frame(self, bg=CONTENT_BG)
@@ -916,15 +928,15 @@ class PBPVisualSim(InGamePopup):
         units = tk.Frame(sub, bg=CONTENT_BG)
         units.pack(side="left")
         tk.Label(units, text="ON ICE", bg=CONTENT_BG, fg="#AEB6C8",
-                 font=(FONT, 10, "bold")).pack(anchor="w", padx=4)
+                 font=_vfont(10, "bold")).pack(anchor="w", padx=4)
         urow = tk.Frame(sub, bg=CONTENT_BG)
         urow.pack(side="left", padx=(4, 0))
         self.units_home_var = tk.StringVar(value="–")
         self.units_away_var = tk.StringVar(value="–")
         tk.Label(urow, textvariable=self.units_home_var, bg=CONTENT_BG,
-                 fg=self._home_fg, font=(FONT, 12, "bold")).pack(side="left", padx=(0, 14))
+                 fg=self._home_fg, font=_vfont(12, "bold")).pack(side="left", padx=(0, 14))
         tk.Label(urow, textvariable=self.units_away_var, bg=CONTENT_BG,
-                 fg=self._away_fg, font=(FONT, 12, "bold")).pack(side="left")
+                 fg=self._away_fg, font=_vfont(12, "bold")).pack(side="left")
 
         btnf = tk.Frame(sub, bg=CONTENT_BG)
         btnf.pack(side="right", padx=4)
@@ -933,7 +945,7 @@ class PBPVisualSim(InGamePopup):
         momf = tk.Frame(sub, bg=CONTENT_BG)
         momf.pack(side="left", fill="x", expand=True, padx=14)
         tk.Label(momf, text="MOMENTUM", bg=CONTENT_BG, fg="#AEB6C8",
-                 font=(FONT, 10, "bold")).pack(anchor="w")
+                 font=_vfont(10, "bold")).pack(anchor="w")
         self.mom_canvas = tk.Canvas(momf, height=22, bg=CONTENT_BG,
                                     highlightthickness=0, bd=0)
         self.mom_canvas.pack(fill="x")
@@ -945,9 +957,9 @@ class PBPVisualSim(InGamePopup):
         tph = tk.Frame(self.tension_panel, bg=CONTENT_BG)
         tph.pack(fill="x", padx=14, pady=(4, 0))
         tk.Label(tph, text="WHAT'S DRIVING THE INTENSITY", bg=CONTENT_BG,
-                 fg="#AEB6C8", font=(FONT, 10, "bold")).pack(side="left")
+                 fg="#AEB6C8", font=_vfont(10, "bold")).pack(side="left")
         tk.Label(tph, text="click the meter to hide", bg=CONTENT_BG, fg="#AEB6C8",
-                 font=(FONT, 10)).pack(side="right")
+                 font=_vfont(10)).pack(side="right")
         self.tension_list = tk.Frame(self.tension_panel, bg=CONTENT_BG)
         self.tension_list.pack(fill="x", padx=14, pady=(0, 4))
 
@@ -982,11 +994,11 @@ class PBPVisualSim(InGamePopup):
             hv = tk.StringVar(value="0")
             av = tk.StringVar(value="0")
             self._stat_vars[key] = (hv, av)
-            tk.Label(cell, textvariable=hv, font=(FONT, 13, "bold"),
+            tk.Label(cell, textvariable=hv, font=_vfont(13, "bold"),
                      bg=CONTENT_BG, fg=self._home_fg).pack(side="left", padx=(10, 0))
-            tk.Label(cell, text=label, font=(FONT, 9),
+            tk.Label(cell, text=label, font=_vfont(9),
                      bg=CONTENT_BG, fg=MUTED).pack(side="left", padx=6)
-            tk.Label(cell, textvariable=av, font=(FONT, 13, "bold"),
+            tk.Label(cell, textvariable=av, font=_vfont(13, "bold"),
                      bg=CONTENT_BG, fg=self._away_fg).pack(side="right", padx=(0, 10))
 
         # Live goalie stats cell: "<last> saves/shots" per side
@@ -995,11 +1007,11 @@ class PBPVisualSim(InGamePopup):
         strip.grid_columnconfigure(4, weight=1)
         self._goalie_home_var = tk.StringVar(value="–")
         self._goalie_away_var = tk.StringVar(value="–")
-        tk.Label(gcell, textvariable=self._goalie_home_var, font=(FONT, 10, "bold"),
+        tk.Label(gcell, textvariable=self._goalie_home_var, font=_vfont(10, "bold"),
                  bg=CONTENT_BG, fg=self._home_fg).pack(side="left", padx=(10, 0))
-        tk.Label(gcell, text="Goalies", font=(FONT, 9),
+        tk.Label(gcell, text="Goalies", font=_vfont(9),
                  bg=CONTENT_BG, fg=MUTED).pack(side="left", padx=6)
-        tk.Label(gcell, textvariable=self._goalie_away_var, font=(FONT, 10, "bold"),
+        tk.Label(gcell, textvariable=self._goalie_away_var, font=_vfont(10, "bold"),
                  bg=CONTENT_BG, fg=self._away_fg).pack(side="right", padx=(0, 10))
 
         # Advanced team-stats row, live from the sim: PP / PK / FO% / Blocks.
@@ -1017,11 +1029,11 @@ class PBPVisualSim(InGamePopup):
             hv = tk.StringVar(value="–")
             av = tk.StringVar(value="–")
             self._adv_vars[key] = (hv, av)
-            tk.Label(acell, textvariable=hv, font=(FONT, 11, "bold"),
+            tk.Label(acell, textvariable=hv, font=_vfont(11, "bold"),
                      bg=CONTENT_BG, fg=self._home_fg).pack(side="left", padx=(10, 0))
-            tk.Label(acell, text=label, font=(FONT, 9),
+            tk.Label(acell, text=label, font=_vfont(9),
                      bg=CONTENT_BG, fg=MUTED).pack(side="left", padx=6)
-            tk.Label(acell, textvariable=av, font=(FONT, 11, "bold"),
+            tk.Label(acell, textvariable=av, font=_vfont(11, "bold"),
                      bg=CONTENT_BG, fg=self._away_fg).pack(side="right", padx=(0, 10))
 
         # Players to watch: hottest / coldest skaters by live game rating
@@ -1029,7 +1041,7 @@ class PBPVisualSim(InGamePopup):
         watch = tk.Frame(rink_frame, bg=BG)
         watch.pack(fill="x", padx=4, pady=(4, 6))
         tk.Label(watch, text="PLAYERS TO WATCH", bg=BG, fg=MUTED,
-                 font=(FONT, 9, "bold")).pack(anchor="w", padx=6)
+                 font=_vfont(9, "bold")).pack(anchor="w", padx=6)
         wcols = tk.Frame(watch, bg=BG)
         wcols.pack(fill="x", pady=(2, 0))
         hotf = tk.Frame(wcols, bg=CONTENT_BG)
@@ -1037,9 +1049,9 @@ class PBPVisualSim(InGamePopup):
         coldf = tk.Frame(wcols, bg=CONTENT_BG)
         coldf.pack(side="left", fill="both", expand=True, padx=(3, 0))
         tk.Label(hotf, text="▲ ON FIRE", bg=CONTENT_BG, fg="#7CFC98",
-                 font=(FONT, 9, "bold")).pack(anchor="w", padx=8, pady=(4, 0))
+                 font=_vfont(9, "bold")).pack(anchor="w", padx=8, pady=(4, 0))
         tk.Label(coldf, text="▼ STRUGGLING", bg=CONTENT_BG, fg="#FF8A7A",
-                 font=(FONT, 9, "bold")).pack(anchor="w", padx=8, pady=(4, 0))
+                 font=_vfont(9, "bold")).pack(anchor="w", padx=8, pady=(4, 0))
         self._watch_hot_rows = []
         self._watch_cold_rows = []
         for _ in range(3):
@@ -1049,9 +1061,9 @@ class PBPVisualSim(InGamePopup):
                 nv, rv = tk.StringVar(value="–"), tk.StringVar(value="")
                 _row = tk.Frame(_parent, bg=CONTENT_BG)
                 _row.pack(fill="x", padx=8)
-                tk.Label(_row, textvariable=nv, font=(FONT, 10),
+                tk.Label(_row, textvariable=nv, font=_vfont(10),
                          bg=CONTENT_BG, fg=TEXT).pack(side="left")
-                tk.Label(_row, textvariable=rv, font=(FONT, 10, "bold"),
+                tk.Label(_row, textvariable=rv, font=_vfont(10, "bold"),
                          bg=CONTENT_BG, fg=_fg).pack(side="right")
                 _rows.append((nv, rv))
 
@@ -1079,7 +1091,7 @@ class PBPVisualSim(InGamePopup):
         drow = tk.Frame(ctl, bg=CONTENT_BG)
         drow.pack(fill="x", pady=(0, 8))
         tk.Label(drow, text="DETAIL", bg=CONTENT_BG, fg="#AEB6C8",
-                 font=(FONT, 10, "bold")).pack(side="left", padx=(2, 4))
+                 font=_vfont(10, "bold")).pack(side="left", padx=(2, 4))
         for mode in DETAIL_MODES:
             b = self._pill(drow, DETAIL_SHORT[mode],
                            lambda m=mode: self._set_detail_mode(m), w=84)
@@ -1112,20 +1124,20 @@ class PBPVisualSim(InGamePopup):
         # PBP tab frame: the classic feed, untouched.
         self._pbp_frame = tk.Frame(right, bg=CONTENT_BG)
         self._pbp_frame.pack(fill="both", expand=True)
-        self.feed = tk.Text(self._pbp_frame, bg="#0D1420", fg=TEXT, font=(FONT, 12),
+        self.feed = tk.Text(self._pbp_frame, bg="#0D1420", fg=TEXT, font=_vfont(12),
                             wrap="word", relief="flat", highlightthickness=0,
                             padx=10, pady=8, height=22, spacing1=2, spacing3=3)
         self.feed.pack(fill="both", expand=True, padx=8, pady=4)
         # Tactics tab frame: EHM-style in-game whiteboard (built on first open).
         self._tactics_frame = tk.Frame(right, bg=CONTENT_BG)
         self._tactics_built = False
-        self.feed.tag_config("goal", foreground="#7CFC98", font=(FONT, 13, "bold"))
-        self.feed.tag_config("period", foreground=self._ui_accent, font=(FONT, 12, "bold"))
-        self.feed.tag_config("penalty", foreground="#FFD166", font=(FONT, 12, "bold"))
+        self.feed.tag_config("goal", foreground="#7CFC98", font=_vfont(13, "bold"))
+        self.feed.tag_config("period", foreground=self._ui_accent, font=_vfont(12, "bold"))
+        self.feed.tag_config("penalty", foreground="#FFD166", font=_vfont(12, "bold"))
         self.feed.tag_config("shot", foreground="#9FD8FF")
-        self.feed.tag_config("fight", foreground="#FF8A5C", font=(FONT, 12, "bold"))
-        self.feed.tag_config("summary", foreground=self._ui_accent, font=(FONT, 13, "bold"))
-        self.feed.tag_config("big", foreground="#FFFFFF", font=(FONT, 12, "bold"))
+        self.feed.tag_config("fight", foreground="#FF8A5C", font=_vfont(12, "bold"))
+        self.feed.tag_config("summary", foreground=self._ui_accent, font=_vfont(13, "bold"))
+        self.feed.tag_config("big", foreground="#FFFFFF", font=_vfont(12, "bold"))
         self.feed.tag_config("info", foreground="#AEB6C8")
         self.feed.config(state="disabled")
 
@@ -1208,7 +1220,7 @@ class PBPVisualSim(InGamePopup):
             import reputation_system as _rs
         except Exception:
             tk.Label(f, text="Tactics unavailable.", bg=CONTENT_BG, fg=TEXT,
-                     font=(FONT, 11)).pack(padx=10, pady=10)
+                     font=_vfont(11)).pack(padx=10, pady=10)
             return
         my, opp = self._my_team(), self._opp_team()
         try:
@@ -1230,14 +1242,14 @@ class PBPVisualSim(InGamePopup):
         hdr = tk.Frame(f, bg=CONTENT_BG)
         hdr.pack(fill="x", padx=10, pady=(8, 2))
         tk.Label(hdr, text="TACTICS", bg=CONTENT_BG, fg=self._ui_accent,
-                 font=(FONT, 12, "bold")).pack(side="left")
+                 font=_vfont(12, "bold")).pack(side="left")
         badge = "YOU CALL IT" if control == "gm" else "COACH IN CONTROL"
         tk.Label(hdr, text=badge, bg=CONTENT_BG,
                  fg="#FFD166" if control == "gm" else "#AEB6C8",
-                 font=(FONT, 10, "bold")).pack(side="right")
+                 font=_vfont(10, "bold")).pack(side="right")
 
         tk.Label(f, text=f"{my_abbr} -- YOUR WHITEBOARD", bg=CONTENT_BG,
-                 fg=TEXT, font=(FONT, 11, "bold")).pack(anchor="w", padx=10)
+                 fg=TEXT, font=_vfont(11, "bold")).pack(anchor="w", padx=10)
         cats = [("offense", "Offense", "OFFENSIVE_SYSTEMS"),
                 ("defense", "Defense", "DEFENSIVE_SYSTEMS"),
                 ("pp", "Power Play", "POWERPLAY_SYSTEMS"),
@@ -1249,7 +1261,7 @@ class PBPVisualSim(InGamePopup):
             row = tk.Frame(f, bg=CONTENT_BG)
             row.pack(fill="x", padx=10, pady=1)
             tk.Label(row, text=short, bg=CONTENT_BG, fg="#AEB6C8",
-                     font=(FONT, 10, "bold"), width=9, anchor="w").pack(side="left")
+                     font=_vfont(10, "bold"), width=9, anchor="w").pack(side="left")
             names = [v.get("name", k) for k, v in catalog.items()]
             key_of = {v.get("name", k): k for k, v in catalog.items()}
             shown_key = self._tac_pending.get(cat, cur.get(cat))
@@ -1257,10 +1269,10 @@ class PBPVisualSim(InGamePopup):
             om = tk.OptionMenu(row, var, *names)
             om.configure(bg="#232E44", fg=TEXT, activebackground="#2E3B55",
                          activeforeground=TEXT, highlightthickness=0, relief="flat",
-                         font=(FONT, 10), width=20, anchor="w")
+                         font=_vfont(10), width=20, anchor="w")
             try:
                 om["menu"].configure(bg="#232E44", fg=TEXT,
-                                     activebackground="#2E3B55", font=(FONT, 10))
+                                     activebackground="#2E3B55", font=_vfont(10))
             except Exception:
                 pass
             om.pack(side="left", fill="x", expand=True)
@@ -1270,18 +1282,18 @@ class PBPVisualSim(InGamePopup):
         fam = float(getattr(my, "tactics_familiarity", 85) or 85)
         tk.Label(f, text=f"Familiarity {fam:.0f}% -- changes take effect "
                          f"live (new reads are messy mid-game).",
-                 bg=CONTENT_BG, fg="#AEB6C8", font=(FONT, 10),
+                 bg=CONTENT_BG, fg="#AEB6C8", font=_vfont(10),
                  wraplength=290, justify="left").pack(anchor="w", padx=10, pady=(4, 0))
         try:
             ident = " / ".join(_tx.describe_team_tactics(my))
         except Exception:
             ident = ""
-        tk.Label(f, text=ident, bg=CONTENT_BG, fg=TEXT, font=(FONT, 10),
+        tk.Label(f, text=ident, bg=CONTENT_BG, fg=TEXT, font=_vfont(10),
                  wraplength=290, justify="left").pack(anchor="w", padx=10)
 
         if self._tac_response_text:
             tk.Label(f, text=self._tac_response_text, bg=CONTENT_BG, fg="#FFD166",
-                     font=(FONT, 10, "italic"), wraplength=290,
+                     font=_vfont(10, "italic"), wraplength=290,
                      justify="left").pack(anchor="w", padx=10, pady=(4, 0))
 
         brow = tk.Frame(f, bg=CONTENT_BG)
@@ -1296,7 +1308,7 @@ class PBPVisualSim(InGamePopup):
         sep = tk.Frame(f, bg="#2A3648", height=1)
         sep.pack(fill="x", padx=10, pady=(8, 6))
         tk.Label(f, text=f"{opp_abbr} -- OPPONENT (AI)", bg=CONTENT_BG,
-                 fg=self._ui_accent, font=(FONT, 11, "bold")).pack(anchor="w", padx=10)
+                 fg=self._ui_accent, font=_vfont(11, "bold")).pack(anchor="w", padx=10)
         ocur = _tx.team_tactics(opp)
         onames = {
             "offense": getattr(_tx, "OFFENSIVE_SYSTEMS").get(ocur.get("offense"), {}).get("name", "--"),
@@ -1311,9 +1323,9 @@ class PBPVisualSim(InGamePopup):
             r = tk.Frame(f, bg=CONTENT_BG)
             r.pack(fill="x", padx=10)
             tk.Label(r, text=lbl, bg=CONTENT_BG, fg="#AEB6C8",
-                     font=(FONT, 10, "bold"), width=5, anchor="w").pack(side="left")
+                     font=_vfont(10, "bold"), width=5, anchor="w").pack(side="left")
             tk.Label(r, text=val, bg=CONTENT_BG, fg=TEXT,
-                     font=(FONT, 10), anchor="w").pack(side="left")
+                     font=_vfont(10), anchor="w").pack(side="left")
         ofam = float(getattr(opp, "tactics_familiarity", 85) or 85)
         cname = ""
         try:
@@ -1325,7 +1337,7 @@ class PBPVisualSim(InGamePopup):
             pass
         tk.Label(f, text=f"Familiarity {ofam:.0f}%"
                          + (f" -- coached by {cname}" if cname else ""),
-                 bg=CONTENT_BG, fg="#AEB6C8", font=(FONT, 10),
+                 bg=CONTENT_BG, fg="#AEB6C8", font=_vfont(10),
                  wraplength=290, justify="left").pack(anchor="w", padx=10, pady=(2, 8))
 
     def _on_tac_suggest(self):
@@ -1664,7 +1676,7 @@ class PBPVisualSim(InGamePopup):
             bx0, bx1 = W * fx - 46, W * fx + 46
             c.create_rectangle(bx0, 2, bx1, 26, outline="#3A4152", width=1)
             c.create_text((bx0 + bx1) / 2, 14, text="PENALTY",
-                          fill="#5A6274", font=(FONT, 7, "bold"))
+                          fill="#5A6274", font=_vfont(7, "bold"))
             self._penalty_boxes[side] = (bx0, bx1)
 
         # --- benches (center ice, top/bottom boards) ---
@@ -1673,13 +1685,13 @@ class PBPVisualSim(InGamePopup):
             c.create_rectangle(cxm - 70, y0, cxm + 70, y0 + 22,
                                outline="#3A4152", width=1)
             c.create_text(cxm, y0 + 11, text="BENCH",
-                          fill="#5A6274", font=(FONT, 7, "bold"))
+                          fill="#5A6274", font=_vfont(7, "bold"))
 
         # --- broadcast REPLAY bug (hidden unless replaying) ---
         self._replay_dot = c.create_oval(14, 14, 26, 26, fill="#FF2E3E",
                                          outline="", state="hidden")
         self._replay_text = c.create_text(34, 20, text="REPLAY", anchor="w",
-                                          fill="white", font=(FONT, 11, "bold"),
+                                          fill="white", font=_vfont(11, "bold"),
                                           state="hidden")
 
         # --- tactic phase indicators: subtle, top corners. Shows what each
@@ -1688,10 +1700,10 @@ class PBPVisualSim(InGamePopup):
         # sim's phase stream; hidden when unknown.
         # Positioned just below the rink top edge to avoid the score bug.
         self._phase_home_text = c.create_text(10, 36, anchor="w",
-                                              fill="#8a93a3", font=(FONT, 9),
+                                              fill="#8a93a3", font=_vfont(9),
                                               state="hidden")
         self._phase_away_text = c.create_text(self.rink_w - 10, 36, anchor="e",
-                                              fill="#8a93a3", font=(FONT, 9),
+                                              fill="#8a93a3", font=_vfont(9),
                                               state="hidden")
         self._last_phase_home = None
         self._last_phase_away = None
@@ -1924,7 +1936,7 @@ class PBPVisualSim(InGamePopup):
                 fg = None
             fg = fg or "#101014"
         txt = c.create_text(self.X(x), self.Y(y), text=str(num),
-                            fill=fg, font=(FONT, 9, "bold"), tags=("dot",))
+                            fill=fg, font=_vfont(9, "bold"), tags=("dot",))
         # facing tick: short line showing skate direction (updated per tick)
         tick = c.create_line(self.X(x), self.Y(y), self.X(x), self.Y(y),
                              fill=fg, width=2, tags=("dot",))
@@ -3701,7 +3713,7 @@ class PBPVisualSim(InGamePopup):
                                    fill="#8a8f9c", outline="", tags=("shotmap", "fx"))
             else:  # miss
                 c.create_text(px, py, text="x", fill="#c9ced8",
-                              font=(FONT, 10, "bold"), tags=("shotmap", "fx"))
+                              font=_vfont(10, "bold"), tags=("shotmap", "fx"))
         # keep markers under the player dots
         try:
             first = next(iter(self.dots.values()))
@@ -3726,9 +3738,9 @@ class PBPVisualSim(InGamePopup):
             c.create_rectangle(x0, y_hide, x0 + 6, y_hide + bh,
                                fill=color, outline=""),
             c.create_text(x0 + 24, y_hide + 24, text=title, anchor="w",
-                          fill="white", font=(FONT, 17, "bold")),
+                          fill="white", font=_vfont(17, "bold")),
             c.create_text(x0 + 24, y_hide + 48, text=sub, anchor="w",
-                          fill=MUTED, font=(FONT, 11)),
+                          fill=MUTED, font=_vfont(11)),
         ]
         for it in items:
             c.tag_raise(it)
@@ -3828,11 +3840,11 @@ class PBPVisualSim(InGamePopup):
         items = [
             c.create_rectangle(0, 0, W, H, fill="#0b0b0e", stipple="gray50"),
             c.create_text(W / 2, H / 2 - 26, text=title, fill="white",
-                          font=(FONT, 46, "bold")),
+                          font=_vfont(46, "bold")),
         ]
         if sub:
             items.append(c.create_text(W / 2, H / 2 + 32, text=sub,
-                                       fill=self._ui_accent, font=(FONT, 18, "bold")))
+                                       fill=self._ui_accent, font=_vfont(18, "bold")))
         for it in items:
             c.tag_raise(it)
         self._card_items = items
@@ -3934,7 +3946,7 @@ class PBPVisualSim(InGamePopup):
         team = (self.home_team.team_name if d["is_home"]
                 else self.away_team.team_name)
         tk.Label(win, text=self._fullname(p), bg="#16161a", fg="white",
-                 font=(FONT, 13, "bold"), wraplength=240).pack(pady=(10, 0))
+                 font=_vfont(13, "bold"), wraplength=240).pack(pady=(10, 0))
         pos = getattr(getattr(p, "primary_position", None), "name",
                       "?").replace("_", " ")
         try:
@@ -3942,7 +3954,7 @@ class PBPVisualSim(InGamePopup):
         except Exception:
             ovr = "?"
         tk.Label(win, text=f"{team} · {pos} · {ovr} OVR", bg="#16161a",
-                 fg=col, font=(FONT, 10, "bold")).pack(pady=(0, 8))
+                 fg=col, font=_vfont(10, "bold")).pack(pady=(0, 8))
         body = tk.Frame(win, bg="#16161a")
         body.pack(fill="both", expand=True, padx=14)
         if d["role"] == "G":
@@ -3965,9 +3977,9 @@ class PBPVisualSim(InGamePopup):
             r = tk.Frame(body, bg="#16161a")
             r.pack(fill="x", pady=2)
             tk.Label(r, text=label, bg="#16161a", fg="#a1a1aa",
-                     font=(FONT, 10)).pack(side="left")
+                     font=_vfont(10)).pack(side="left")
             tk.Label(r, text=val, bg="#16161a", fg="white",
-                     font=(FONT, 10, "bold")).pack(side="right")
+                     font=_vfont(10, "bold")).pack(side="right")
         tk.Button(win, text="Close", command=win.destroy, bg="#23262e",
                   fg="white", relief="flat", padx=12, pady=4).pack(pady=10)
 
@@ -4009,23 +4021,23 @@ class PBPVisualSim(InGamePopup):
         win.geometry("340x430")
         self._stars_win = win
         tk.Label(win, text="THREE STARS", bg="#16161a", fg=self._ui_accent,
-                 font=(FONT, 13, "bold")).pack(pady=(12, 4))
+                 font=_vfont(13, "bold")).pack(pady=(12, 4))
         medals = ("1st", "2nd", "3rd")
         for i, s in enumerate(stars):
             card = tk.Frame(win, bg="#0e0e11")
             card.pack(fill="x", padx=12, pady=6)
             tk.Label(card, text=f"{medals[i]} STAR", bg="#0e0e11",
-                     fg="#FFD166", font=(FONT, 9, "bold")).pack(anchor="w",
+                     fg="#FFD166", font=_vfont(9, "bold")).pack(anchor="w",
                      padx=10, pady=(8, 0))
             tk.Label(card, text=s["name"], bg="#0e0e11", fg="white",
-                     font=(FONT, 12, "bold")).pack(anchor="w", padx=10)
+                     font=_vfont(12, "bold")).pack(anchor="w", padx=10)
             tk.Label(card, text=s["line"], bg="#0e0e11", fg="#a1a1aa",
-                     font=(FONT, 10)).pack(anchor="w", padx=10)
+                     font=_vfont(10)).pack(anchor="w", padx=10)
             for h in s["moments"]:
                 b = tk.Button(card, text=f"Watch: {h['label'][:44]}",
                               command=lambda h=h: self._play_highlight(h),
                               bg="#23262e", fg="white", relief="flat",
-                              font=(FONT, 9), anchor="w", padx=8, pady=3)
+                              font=_vfont(9), anchor="w", padx=8, pady=3)
                 b.pack(fill="x", padx=10, pady=2)
             tk.Frame(card, bg="#0e0e11", height=8).pack()
         tk.Button(win, text="Close", command=win.destroy, bg="#23262e",
@@ -4355,10 +4367,10 @@ class PBPVisualSim(InGamePopup):
         aab = _abbr(self.away_team.team_name)
         c.create_text(4, H / 2, text=hab, anchor="w",
                       fill=self._home_tc[1] or "#0e0e11",
-                      font=(FONT, 8, "bold"))
+                      font=_vfont(8, "bold"))
         c.create_text(W - 4, H / 2, text=aab, anchor="e",
                       fill=self._away_tc[1] or "#0e0e11",
-                      font=(FONT, 8, "bold"))
+                      font=_vfont(8, "bold"))
 
     def _flash_light(self, side):
         self.canvas.itemconfig(self.lights[side], state="normal")
@@ -4405,9 +4417,9 @@ class PBPVisualSim(InGamePopup):
         hab = _abbr(self.home_team.team_name)
         aab = _abbr(self.away_team.team_name)
         c.create_text(4, H / 2, text=hab, anchor="w",
-                      fill=self._home_fg, font=(FONT, 8, "bold"))
+                      fill=self._home_fg, font=_vfont(8, "bold"))
         c.create_text(W - 4, H / 2, text=aab, anchor="e",
-                      fill=self._away_fg, font=(FONT, 8, "bold"))
+                      fill=self._away_fg, font=_vfont(8, "bold"))
 
     # ------------------------------------------------------------------
     # Game intensity (tension) meter
@@ -4468,7 +4480,7 @@ class PBPVisualSim(InGamePopup):
         c.create_rectangle(0, 0, W * v / 100.0, H,
                            fill=self._tension_color(v), outline="")
         c.create_text(W / 2, H / 2, text=self._tension_mood(v),
-                      fill="#0e0e11", font=(FONT, 8, "bold"))
+                      fill="#0e0e11", font=_vfont(8, "bold"))
         try:
             self.tension_var.set(f"{int(round(v))}")
         except Exception:
@@ -4498,7 +4510,7 @@ class PBPVisualSim(InGamePopup):
         if not drivers:
             tk.Label(lst, text="No intensity data for this game.",
                      bg=CONTENT_BG, fg=MUTED,
-                     font=(FONT, 9)).pack(anchor="w", padx=4)
+                     font=_vfont(9)).pack(anchor="w", padx=4)
             return
         for d in drivers[:14]:
             pts = d.get("points", 0)
@@ -4507,10 +4519,10 @@ class PBPVisualSim(InGamePopup):
             fg = "#ff9f5c" if pts > 0 else "#7bc96f"
             sign = "+" if pts > 0 else ""
             tk.Label(row, text=f"{sign}{pts:g}", bg=CONTENT_BG, fg=fg,
-                     font=(FONT, 9, "bold"), width=7,
+                     font=_vfont(9, "bold"), width=7,
                      anchor="e").pack(side="left")
             tk.Label(row, text=d.get("label", ""), bg=CONTENT_BG, fg=TEXT,
-                     font=(FONT, 9), anchor="w").pack(side="left", padx=(8, 0))
+                     font=_vfont(9), anchor="w").pack(side="left", padx=(8, 0))
 
         # Situations channel: each side's pre-game edge and what's driving it.
         try:
@@ -4523,7 +4535,7 @@ class PBPVisualSim(InGamePopup):
                 if not shown:
                     tk.Label(lst, text="SITUATIONS -- finishing edge",
                              bg=CONTENT_BG, fg=MUTED,
-                             font=(FONT, 8, "bold")).pack(anchor="w",
+                             font=_vfont(8, "bold")).pack(anchor="w",
                                                           padx=4, pady=(6, 0))
                     shown = True
                 sc = bd.get("score", 0)
@@ -4531,14 +4543,14 @@ class PBPVisualSim(InGamePopup):
                 sign = "+" if sc > 0 else ""
                 tk.Label(lst, text=f"{bd.get('team', key)}: {sign}{sc:g}",
                          bg=CONTENT_BG, fg=fg,
-                         font=(FONT, 9, "bold")).pack(anchor="w", padx=4)
+                         font=_vfont(9, "bold")).pack(anchor="w", padx=4)
                 for drv in (bd.get("drivers") or [])[:4]:
                     v = drv.get("value", 0)
                     fg2 = "#ff9f5c" if v > 0 else "#7bc96f"
                     s2 = "+" if v > 0 else ""
                     tk.Label(lst, text=f"    {s2}{v:g}  {drv.get('label', '')}",
                              bg=CONTENT_BG, fg=fg2,
-                             font=(FONT, 8)).pack(anchor="w", padx=4)
+                             font=_vfont(8)).pack(anchor="w", padx=4)
         except Exception:
             pass
 

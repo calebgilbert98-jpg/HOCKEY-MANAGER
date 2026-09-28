@@ -458,6 +458,13 @@ class PopupManager:
         host = InGamePopup(self.root, modal=modal,
                              dismiss_on_backdrop=dismiss_on_backdrop)
         host.title(title)
+        # Scale fixed card geometry with the UI text scale so Large/XL
+        # tiers don't clip the card's own content.
+        try:
+            from ui_scale import card_size as _card_size
+            width, height = _card_size(width, height)
+        except Exception:
+            pass
         host.geometry(f"{width}x{height}")
         if on_close is not None:
             host.protocol("WM_DELETE_WINDOW", on_close)
