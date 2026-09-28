@@ -1786,8 +1786,16 @@ def offseason_copycat(league: Any, rng=None) -> list:
                     break
                 if team is champ:
                     continue
-                if getattr(team, "is_user_team", False):
-                    continue
+                # Never overwrite a human's tactics (local user or a
+                # multiplayer client's club) -- the copycat drift is for
+                # AI-run teams only.
+                try:
+                    import game_classes as _gc
+                    if _gc.is_human_managed(team):
+                        continue
+                except Exception:
+                    if getattr(team, "is_user_team", False):
+                        continue
                 mine = team_tactics(team)
                 coach = _coach_for(team)
                 adapt = float(getattr(coach, "adaptability", 65) or 65)

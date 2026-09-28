@@ -93,6 +93,13 @@ class MultiplayerHost:
         self._listener: Optional[socket.socket] = None
         self._threads: List[threading.Thread] = []
         self._last_game_date = "unknown"
+        # EHM-style advance sync: session_ids of client managers who have
+        # readied for the day's advance. Reset every day. Only peers with
+        # a claimed team count as active (spectators never block).
+        # The host's own readiness lives in the game layer and is passed
+        # into the all_ready() / broadcast calls below.
+        self._ready: Dict[str, str] = {}
+        self._ready_lock = threading.Lock()
         # Async snapshot state: only one serialization worker runs at a
         # time; extra requests coalesce into _snapshot_pending (latest wins).
         self._snapshot_lock = threading.Lock()
@@ -258,7 +265,75 @@ class MultiplayerHost:
     def announce_day(self, game_date: str) -> None:
         """Call right after the host advances a day, then broadcast_state()."""
         self._last_game_date = game_date
+        # New day, new cycle: nobody is ready for the NEXT advance yet.
+        self.reset_advance_cycle()
         self._broadcast(P.CONTINUE_DAY, P.continue_day(game_date))
+
+    # ------------------------------------------------------------------
+    # EHM-style advance sync: every active human manager readies up, the
+    # day advances only when all have. The host's own readiness is owned
+    # by the game layer (it manages its team locally) and passed in.
+    # ------------------------------------------------------------------
+
+    def active_managers(self) -> List[Dict[str, str]]:
+        """Connected peers with a claimed team: the managers whose
+        readiness gates the day's advance. Spectators never block."""
+        with self._peers_lock:
+            return [{"session_id": p.session_id, "name": p.name,
+                     "team_id": p.team_id}
+                    for p in self._peers.values()
+                    if p.handshake_done and p.team_id]
+
+    def mark_ready(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Record a client's readiness. Returns the status payload, or
+        None if the peer isn't an active manager."""
+        peer = self._find_peer(session_id)
+        if peer is None or not peer.team_id:
+            return None
+        with self._ready_lock:
+            self._ready[session_id] = peer.name
+        return self._advance_status_payload(False)
+
+    def mark_unready(self, session_id: str) -> Optional[Dict[str, Any]]:
+        peer = self._find_peer(session_id)
+        if peer is None:
+            return None
+        with self._ready_lock:
+            self._ready.pop(session_id, None)
+        return self._advance_status_payload(False)
+
+    def reset_advance_cycle(self) -> None:
+        """Clear all readiness for a new day (called on day advance)."""
+        with self._ready_lock:
+            self._ready.clear()
+
+    def _advance_status_payload(self, host_ready: bool) -> Dict[str, Any]:
+        managers = self.active_managers()
+        with self._ready_lock:
+            ready_ids = set(self._ready)
+        ready_names = [m["name"] for m in managers
+                       if m["session_id"] in ready_ids]
+        waiting_names = [m["name"] for m in managers
+                         if m["session_id"] not in ready_ids]
+        return {"ready": ready_names, "waiting": waiting_names,
+                "ready_count": len(ready_names) + (1 if host_ready else 0),
+                "needed_count": len(managers) + 1,
+                "host_ready": host_ready,
+                "all_ready": (host_ready
+                              and all(m["session_id"] in ready_ids
+                                      for m in managers))}
+
+    def broadcast_advance_status(self, host_ready: bool) -> Dict[str, Any]:
+        """Push ADVANCE_STATUS to every client. Returns the payload (with
+        ``all_ready``) so the game layer can trigger the day's advance."""
+        payload = self._advance_status_payload(host_ready)
+        self._broadcast(P.ADVANCE_STATUS, P.advance_status(
+            payload["ready"], payload["waiting"], host_ready,
+            payload["all_ready"]))
+        return payload
+
+    def all_ready(self, host_ready: bool) -> bool:
+        return bool(self._advance_status_payload(host_ready)["all_ready"])
 
     def notify_checkpoint(self, label: str, game_date: str) -> None:
         self._broadcast(P.CHECKPOINT_NOTICE,
@@ -266,6 +341,47 @@ class MultiplayerHost:
 
     def broadcast_chat(self, text: str) -> None:
         self._broadcast(P.CHAT, P.chat_msg(self.host_name, text))
+
+    def find_peer_by_team(self, team_id: str) -> Optional["_Peer"]:
+        """The connected client managing ``team_id``, if any."""
+        with self._peers_lock:
+            for p in self._peers.values():
+                if p.handshake_done and p.team_id == team_id:
+                    return p
+        return None
+
+    def send_trade_offer(self, session_id: str, offer_id: str,
+                         from_team: str, from_manager: str,
+                         offer: Dict) -> bool:
+        """Deliver a human-to-human trade offer to one client."""
+        peer = self._find_peer(session_id)
+        if peer is None:
+            return False
+        return self._send(peer, P.TRADE_OFFER, P.trade_offer_msg(
+            offer_id, from_team, from_manager, offer))
+
+    def send_ntc_waiver_request(self, session_id: str, waiver_id: str,
+                                player_id: str, player_name: str,
+                                clause: str, dest_team: str,
+                                context: str) -> bool:
+        """Ask a client's player to waive his movement clause."""
+        peer = self._find_peer(session_id)
+        if peer is None:
+            return False
+        return self._send(peer, P.NTC_WAIVER_REQUEST,
+                          P.ntc_waiver_request_msg(
+                              waiver_id, player_id, player_name, clause,
+                              dest_team, context))
+
+    def send_draft_clock(self, session_id: str, clock_id: str, team_id: str,
+                         overall: int, round_num: int,
+                         prospects: list) -> bool:
+        """Put a client's team on the draft clock for one pick."""
+        peer = self._find_peer(session_id)
+        if peer is None:
+            return False
+        return self._send(peer, P.DRAFT_CLOCK, P.draft_clock_msg(
+            clock_id, team_id, overall, round_num, prospects))
 
     def resolve_action(self, client_id: str, msg_seq: int, ok: bool,
                        detail: str = "", broadcast: bool = True) -> None:
@@ -356,6 +472,33 @@ class MultiplayerHost:
                        P.error_msg("handshake required: send HELLO first"))
         elif mtype == P.CLAIM_TEAM:
             self._on_claim_team(peer, msg)
+        elif mtype == P.READY:
+            self._on_ready_changed(peer, True)
+        elif mtype == P.UNREADY:
+            self._on_ready_changed(peer, False)
+        elif mtype == P.TRADE_RESPONSE:
+            # Human-to-human trade answer; the game layer matches offer_id
+            # against its pending-offers table.
+            self.events.put(("trade_response", {
+                "client_id": peer.session_id,
+                "manager": peer.name,
+                "team_id": peer.team_id,
+                "offer_id": str(msg.get("offer_id", "")),
+                "decision": str(msg.get("decision", "")),
+            }))
+        elif mtype == P.NTC_WAIVER_ANSWER:
+            _choice = str(msg.get("choice", "") or "")
+            if _choice not in ("ask", "remove", "cancel"):
+                # Back-compat with the old approved:bool shape.
+                _choice = "ask" if msg.get("approved") else "cancel"
+            self.events.put(("ntc_waiver_answer", {
+                "client_id": peer.session_id,
+                "manager": peer.name,
+                "team_id": peer.team_id,
+                "waiver_id": str(msg.get("waiver_id", "")),
+                "player_id": str(msg.get("player_id", "")),
+                "choice": _choice,
+            }))
         elif mtype == P.ACTION:
             self._on_action(peer, msg)
         elif mtype == P.REQUEST_STATE:
@@ -401,6 +544,23 @@ class MultiplayerHost:
         self.events.put(("manager_joined",
                          {"session_id": peer.session_id, "name": name}))
 
+    def _on_ready_changed(self, peer: _Peer, is_ready: bool) -> None:
+        """A client readied/unreadied for the day's advance.
+
+        Only the ready-set changes here; the game layer owns host
+        readiness and the actual broadcast, so the ("advance_changed",)
+        event just tells it to re-evaluate and push ADVANCE_STATUS.
+        """
+        if is_ready:
+            ok = self.mark_ready(peer.session_id) is not None
+        else:
+            ok = self.mark_unready(peer.session_id) is not None
+        if not ok:
+            self._send(peer, P.ERROR, P.error_msg(
+                "claim a team before readying up for the advance"))
+            return
+        self.events.put(("advance_changed", {}))
+
     def _on_claim_team(self, peer: _Peer, msg: Dict) -> None:
         team_id = str(msg.get("team_id", ""))
         if not team_id:
@@ -417,6 +577,8 @@ class MultiplayerHost:
         self.events.put(("team_claimed",
                          {"session_id": peer.session_id,
                           "name": peer.name, "team_id": team_id}))
+        # A newly active manager joins the advance gate for this cycle.
+        self.events.put(("advance_changed", {}))
 
     def _on_action(self, peer: _Peer, msg: Dict) -> None:
         action = msg.get("action")
@@ -518,5 +680,10 @@ class MultiplayerHost:
             pass
         self.events.put(("manager_left",
                          {"session_id": peer.session_id,
-                          "name": peer.name, "reason": reason}))
+                          "name": peer.name, "reason": reason,
+                          "team_id": peer.team_id or ""}))
+        # A departed manager no longer blocks the advance gate.
+        with self._ready_lock:
+            self._ready.pop(peer.session_id, None)
+        self.events.put(("advance_changed", {}))
         self._broadcast(P.LOBBY_STATE, P.lobby_state(self.get_lobby()))

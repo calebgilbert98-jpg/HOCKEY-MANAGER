@@ -201,6 +201,13 @@ class Contract:
     # One-transaction waiver: destination team name the player already
     # approved. Cleared when the trade completes or the deal dies.
     ntc_waiver_for: str = ""
+    # Two-way contract: the deal carries a separate minor-league salary.
+    # When the player is assigned to the minors he is paid ahl_salary, and
+    # per the NHL burial rule the two-way minor-league salary does not
+    # count against the NHL salary cap (a one-way deal in the minors
+    # counts salary minus the burial exemption instead).
+    two_way: bool = False
+    ahl_salary: int = 0
     # When modified_ntc_teams is an approved-teams list (not a no-trade
     # list), set alongside it.
     modified_ntc_approved: bool = False
@@ -1275,6 +1282,60 @@ class Staff:
                 self.discipline * 0.20
             ))
     
+    def get_attributes_for_role(self) -> dict:
+        """Role-relevant attributes for profile cards and comparisons.
+
+        The coaching set mirrors what the practice engine prices
+        (coach_practice): drill teaching quality, positional coaching,
+        development touch, management, and tactical/system knowledge --
+        so the card shows the numbers that actually move development.
+        """
+        coaching = {
+            'attacking_coaching': self.attacking_coaching,
+            'defensive_coaching': self.defensive_coaching,
+            'technical_coaching': self.technical_coaching,
+            'mental_coaching': self.mental_coaching,
+            'coaching_forwards': self.coaching_forwards,
+            'coaching_defensemen': self.coaching_defensemen,
+            'coaching_goalies': self.coaching_goalies,
+            'player_development': self.player_development,
+            'working_with_youngsters': self.working_with_youngsters,
+            'tactical_knowledge': self.tactical_knowledge,
+            'man_management': self.man_management,
+            'motivating': self.motivating,
+            'discipline': self.discipline,
+            'leadership': self.leadership,
+            'adaptability': self.adaptability,
+        }
+        if self.role == StaffRole.GOALIE_COACH:
+            order = ['coaching_goalies', 'technical_coaching',
+                     'working_with_youngsters', 'man_management',
+                     'motivating', 'mental_coaching', 'adaptability',
+                     'discipline']
+            return {k: coaching[k] for k in order}
+        if self.role in (StaffRole.HEAD_COACH, StaffRole.ASSISTANT_COACH,
+                         StaffRole.ASSOCIATE_COACH, StaffRole.POWER_PLAY_COACH,
+                         StaffRole.PENALTY_KILL_COACH, StaffRole.SKILLS_COACH,
+                         StaffRole.CONDITIONING_COACH,
+                         StaffRole.SKATING_COACH):
+            return coaching
+        if 'SCOUT' in self.role.value.upper():
+            return {
+                'judging_player_ability': self.judging_player_ability,
+                'judging_player_potential': self.judging_player_potential,
+                'determination': self.determination,
+                'adaptability': self.adaptability,
+            }
+        return {
+            'leadership': self.leadership,
+            'man_management': self.man_management,
+            'tactical_knowledge': self.tactical_knowledge,
+            'judging_player_ability': self.judging_player_ability,
+            'determination': self.determination,
+            'adaptability': self.adaptability,
+            'media_handling': self.media_handling,
+        }
+
     def get_role_description(self) -> str:
         """Get a description of what this staff member does"""
         descriptions = {
@@ -2114,6 +2175,21 @@ class GMProfile:
         elif self.age > 70:
             self.age = 70
 
+def is_human_managed(team: object) -> bool:
+    """True when a real person runs this club: the local user's team OR a
+    team claimed by a multiplayer client (stamped on the host's canonical
+    Team by the MP bridge). AI systems must skip these clubs -- same rule
+    for the couch GM and the remote one."""
+    try:
+        if bool(getattr(team, "is_user_team", False)):
+            return True
+        if bool(getattr(team, "is_human_managed", False)):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 @dataclass
 class Team:
     """Represents a single hockey team with a deep organizational structure."""
@@ -2132,6 +2208,12 @@ class Team:
     lineup: Dict[str, Player] = field(default_factory=dict)
     
     is_user_team: bool = False
+    # Multiplayer: stamped True on the host's canonical Team when a remote
+    # client claims this club (and cleared when they leave). Lets every
+    # "skip the human" check cover client-managed clubs too -- the AI must
+    # never manage a team a real person is running. Old-save safe: read
+    # only via getattr(..., False) / is_human_managed().
+    is_human_managed: bool = False
     salary_cap: int = 104000000  # 2026-27 NHL cap (modern day)
     scouting_reports: Dict[int, ScoutingReport] = field(default_factory=dict)
     inbox: EmailInbox = field(default_factory=EmailInbox)  # Email inbox system
@@ -5154,8 +5236,14 @@ class League:
         except Exception:
             pass
         
-        # Sort teams by points (worst to best for each round)
-        sorted_teams = sorted(self.teams, 
+        # Sort teams by points (worst to best for each round).
+        # NHL Entry Draft only: AHL clubs hold pick objects in the data
+        # model but do not draft. Iterating all 62 teams once produced a
+        # 434-pick order that exhausted the 224-prospect class mid-draft.
+        _nhl_teams = [t for t in self.teams
+                      if getattr(t, 'league_name', '') == 'National Hockey League']
+        _draft_teams = _nhl_teams or list(self.teams)
+        sorted_teams = sorted(_draft_teams,
                             key=lambda t: self.standings.get(t.team_name, {}).get('Points', 0))
 
         # Draft lottery: round 1 follows the televised lottery order.
@@ -5191,7 +5279,7 @@ class League:
                 for pick in team_picks:
                     # Find the team that currently owns this pick
                     current_owner = None
-                    for owner_team in self.teams:
+                    for owner_team in _draft_teams:
                         if pick in owner_team.get_picks_for_year(year):
                             current_owner = owner_team
                             break

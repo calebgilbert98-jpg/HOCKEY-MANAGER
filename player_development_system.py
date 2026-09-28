@@ -256,8 +256,12 @@ class PlayerDevelopmentEngine:
         return base_rate
     
     def calculate_attribute_development(self, player: Player, attribute: str,
-                                            coach=None) -> int:
-        """Calculate how much an attribute should change"""
+                                            coach=None, team=None) -> int:
+        """Calculate how much an attribute should change.
+
+        ``team`` (optional) enables the archetype/system coaching
+        dimensions; without it the legacy formula runs unchanged.
+        """
         if not hasattr(player, 'potential'):
             return 0
         
@@ -296,6 +300,22 @@ class PlayerDevelopmentEngine:
             try:
                 import reputation_system as _rs
                 development_points *= _rs.coach_development_factor(player, coach)
+            except Exception:
+                pass
+        # Archetype + system (additive): which attributes this player
+        # type absorbs and which the club's identity emphasizes. These
+        # are new dimensions -- the legacy coach factor above prices
+        # influence, youth touch, coachability and the relationship, so
+        # nothing here is double-counted. Sign-preserving (decline
+        # stays decline).
+        if team is not None:
+            try:
+                import coach_practice as _cp
+                _drill = _cp.attribute_drill(attribute)
+                if _drill:
+                    _bd = _cp.practice_breakdown(team, player, _drill)
+                    development_points *= (_bd.get("affinity", 1.0)
+                                           * _bd.get("system", 1.0))
             except Exception:
                 pass
         
@@ -354,8 +374,13 @@ class PlayerDevelopmentEngine:
         
         return attribute_changes
     
-    def process_monthly_development(self, player: Player, coach=None) -> Dict[str, int]:
-        """Process natural monthly development for a player"""
+    def process_monthly_development(self, player: Player, coach=None,
+                                        team=None) -> Dict[str, int]:
+        """Process natural monthly development for a player.
+
+        ``team`` (optional) enables the archetype/system coaching
+        dimensions; without it the legacy formula runs unchanged.
+        """
         if not hasattr(player, 'potential'):
             # Initialize potential if missing
             player.potential = PlayerPotential()
@@ -376,7 +401,8 @@ class PlayerDevelopmentEngine:
         # Process each attribute
         for attribute in developable_attributes:
             if hasattr(player, attribute):
-                change = self.calculate_attribute_development(player, attribute, coach=coach)
+                change = self.calculate_attribute_development(
+                    player, attribute, coach=coach, team=team)
                 if change != 0:
                     current_value = getattr(player, attribute)
                     new_value = max(1, min(100, current_value + change))

@@ -162,6 +162,41 @@ class MultiplayerClient:
     def request_state(self) -> None:
         self._send(P.REQUEST_STATE, {"type": P.REQUEST_STATE})
 
+    def send_ready(self) -> None:
+        """Mark this manager ready for the day's advance (EHM-style)."""
+        self._send(P.READY, {"type": P.READY})
+
+    def send_unready(self) -> None:
+        """Rescind readiness for the day's advance."""
+        self._send(P.UNREADY, {"type": P.UNREADY})
+
+    def send_trade_response(self, offer_id: str, decision: str) -> None:
+        """Answer a human-to-human trade offer: accept | reject."""
+        if decision not in ("accept", "reject"):
+            raise ValueError(f"bad trade decision: {decision!r}")
+        self._send(P.TRADE_RESPONSE,
+                   {"type": P.TRADE_RESPONSE, "offer_id": offer_id,
+                    "decision": decision})
+
+    def send_ntc_waiver_answer(self, player_id: str,
+                               choice: str = "ask",
+                               waiver_id: str = "") -> None:
+        """Answer a no-trade/no-movement waiver prompt.
+
+        choice: "ask" (ask the player to waive), "remove" (pull him from
+        the offer), or "cancel" (kill the deal). A bare bool is still
+        accepted for back-compat (True -> "ask", False -> "cancel").
+        """
+        if isinstance(choice, bool):
+            choice = "ask" if choice else "cancel"
+        if choice not in ("ask", "remove", "cancel"):
+            raise ValueError(f"bad waiver choice: {choice!r}")
+        self._send(P.NTC_WAIVER_ANSWER,
+                   {"type": P.NTC_WAIVER_ANSWER,
+                    "waiver_id": str(waiver_id),
+                    "player_id": str(player_id), "choice": choice,
+                    "approved": choice == "ask"})
+
     def send_chat(self, text: str) -> None:
         self._send(P.CHAT, P.chat_msg(self.name, text[:500]))
 
@@ -268,6 +303,39 @@ class MultiplayerClient:
         elif mtype == P.CONTINUE_DAY:
             self.game_date = msg.get("game_date", self.game_date)
             self.events.put(("day_advanced", {"game_date": self.game_date}))
+        elif mtype == P.ADVANCE_STATUS:
+            self.events.put(("advance_status", {
+                "ready": msg.get("ready", []),
+                "waiting": msg.get("waiting", []),
+                "ready_count": msg.get("ready_count", 0),
+                "needed_count": msg.get("needed_count", 0),
+                "host_ready": msg.get("host_ready", False),
+                "all_ready": msg.get("all_ready", False),
+            }))
+        elif mtype == P.TRADE_OFFER:
+            self.events.put(("trade_offer", {
+                "offer_id": msg.get("offer_id", ""),
+                "from_team": msg.get("from_team", ""),
+                "from_manager": msg.get("from_manager", ""),
+                "offer": msg.get("offer", {}),
+            }))
+        elif mtype == P.NTC_WAIVER_REQUEST:
+            self.events.put(("ntc_waiver_request", {
+                "waiver_id": msg.get("waiver_id", ""),
+                "player_id": msg.get("player_id", ""),
+                "player_name": msg.get("player_name", ""),
+                "clause": msg.get("clause", ""),
+                "dest_team": msg.get("dest_team", ""),
+                "context": msg.get("context", ""),
+            }))
+        elif mtype == P.DRAFT_CLOCK:
+            self.events.put(("draft_clock", {
+                "clock_id": msg.get("clock_id", ""),
+                "team_id": msg.get("team_id", ""),
+                "overall": msg.get("overall", 0),
+                "round_num": msg.get("round_num", 0),
+                "prospects": msg.get("prospects", []) or [],
+            }))
         elif mtype == P.ACTION_ACK:
             seq = msg.get("action_seq")
             self.events.put(("action_ack", {

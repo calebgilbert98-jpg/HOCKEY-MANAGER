@@ -531,6 +531,163 @@ def main():
     dr_holder.destroy()
     root.update()
 
+    # ---------------- practice center + development overview ----------------
+    # Changed surfaces: both views gained a live "Coaching Read" panel
+    # (coach_practice breakdown: who teaches, affinity, attitude, fit,
+    # system). Fixture app replicates the small helpers the views use
+    # (_create_panel, _create_treeview); tree_maps is a plain dict.
+    import random as _r
+    _r.seed(20260928)
+    from enhanced_practice_system import (PracticeCenterView,
+                                          DevelopmentOverviewView)
+    import game_classes as _g2
+
+    class _FakeApp(SimpleNamespace):
+        def _create_panel(self, parent, title, row=0, col=0,
+                          rowspan=1, colspan=1):
+            outer = ttk.Frame(parent, style="Panel.TFrame", padding=1)
+            outer.grid(row=row, column=col, rowspan=rowspan,
+                       columnspan=colspan, sticky="nsew", padx=0, pady=8)
+            frame = ttk.Frame(outer, style="Panel.TFrame")
+            frame.grid(row=0, column=0, sticky="nsew")
+            bar = ttk.Frame(frame, style="TitleBar.TFrame")
+            bar.grid(row=0, column=0, sticky="ew")
+            ttk.Label(bar, text=title, style="Title.TLabel",
+                      padding=(10, 5)).grid(row=0, column=0, sticky="ew")
+            return frame
+
+        def _create_treeview(self, parent, columns, height=15,
+                             is_staff=False, context_type="default"):
+            tree = ttk.Treeview(parent, columns=list(columns.keys()),
+                                show="headings", height=height)
+            for col, spec in columns.items():
+                text, width = spec[0], spec[1]
+                tree.heading(col, text=text)
+                tree.column(col, width=width, anchor="center")
+            return tree
+
+    def _mk_staff(first, role, **kw):
+        c = _g2.Staff(first, "Coach", role)
+        for k, v in kw.items():
+            setattr(c, k, v)
+        return c
+
+    _PRAC_ATTRS = dict(
+        attacking_coaching=85, defensive_coaching=60,
+        technical_coaching=75, coaching_forwards=88,
+        coaching_defensemen=70, coaching_goalies=60,
+        player_development=80, working_with_youngsters=75,
+        man_management=70, motivating=75, discipline=60, leadership=70,
+        tactical_knowledge=75, mental_coaching=60, adaptability=70)
+    prac_roster = []
+    for i, (fn, ln, pos, arch) in enumerate([
+            ("Alex", "Sniper", _g2.PlayerPosition.LEFT_WING, "Sniper"),
+            ("Ben", "Wall", _g2.PlayerPosition.LEFT_DEFENSE,
+             "Defensive Defenseman"),
+            ("Cam", "Play", _g2.PlayerPosition.CENTER, "Playmaker"),
+            ("Dan", "Net", _g2.PlayerPosition.GOALIE, "Butterfly Goalie")]):
+        pl = _g2.Player(first_name=fn, last_name=ln, age=21,
+                        primary_position=pos, jersey_number=9 + i)
+        pl.archetype = arch
+        rs.ensure_reputation_fields(pl)
+        pl.coachability = 80; pl.work_ethic = 82; pl.morale = 78
+        pl.determination = 80; pl.base_controversy = 20
+        for a in ("skating", "shooting", "passing", "checking",
+                  "positioning", "hockey_iq"):
+            try:
+                setattr(pl, a, 60)
+            except Exception:
+                pass
+        prac_roster.append(pl)
+    prac_team = SimpleNamespace(
+        team_name="Practice Club", roster=prac_roster,
+        ahl_roster=[], prospects=[],
+        staff=[_mk_staff("Head", _g2.StaffRole.HEAD_COACH, **_PRAC_ATTRS),
+               _mk_staff("Off", _g2.StaffRole.ASSISTANT_COACH,
+                         **_PRAC_ATTRS),
+               _mk_staff("Goal", _g2.StaffRole.GOALIE_COACH,
+                         **_PRAC_ATTRS)],
+        tactic_even_strength="Offensive",
+        tactic_power_play="Offensive",
+        tactic_penalty_kill="Balanced",
+        tactics_familiarity=85, inbox=[])
+    from enhanced_practice_system import PracticeEngine as _PE
+    prac_app = _FakeApp(
+        league=SimpleNamespace(teams=[prac_team], free_agents=[]),
+        user_team=prac_team, open_windows={}, tree_maps={},
+        BG_COLOR="#1a1a2e", CONTENT_BG="#0e0e11", TEXT_COLOR="#ffffff",
+        FONT_FAMILY="Helvetica")
+    # PracticeCenterView reaches the team through app.game_manager.
+    prac_app.game_manager = SimpleNamespace(
+        user_team=prac_team, practice_engine=_PE())
+
+    for _vname, _vcls, _shotname in (
+            ("practice center", PracticeCenterView,
+             f"{args.shots}/practice_center_{args.res}.png"),
+            ("development overview", DevelopmentOverviewView,
+             f"{args.shots}/development_overview_{args.res}.png")):
+        _holder = tk.Frame(root, width=1600, height=900)
+        _holder.pack(fill="both", expand=True)
+        try:
+            _view = _vcls(_holder, app=prac_app)
+            _view.pack(fill="both", expand=True)
+            root.update(); root.update()
+            # Drive the new surface: pick a player and a drill so the
+            # Coaching Read panel populates, then screenshot it live.
+            try:
+                _view.selected_player = prac_roster[0]
+                if _vname == "practice center":
+                    # Controls (incl. the Coaching Read) build on
+                    # player selection; the drill var defaults to
+                    # skating and fires the read on change.
+                    _view._update_practice_controls()
+                    root.update()
+                    _view.practice_type_var.set("shooting")
+                else:
+                    # Development overview: the Coaching Read renders
+                    # inside the details panel for the top
+                    # recommended drill (mirror _on_player_select,
+                    # which clears the panel first).
+                    for _w in _view.details_frame.winfo_children():
+                        _w.destroy()
+                    _view._display_comprehensive_player_details()
+                root.update()
+            except Exception as e:
+                check("fail", f"{_vname} coaching read populates",
+                      False, str(e))
+            else:
+                _bullets = []
+                for _w in walk(_view):
+                    try:
+                        if _w.winfo_class() in ("Label", "TLabel"):
+                            _t = _w.cget("text")
+                            if "•" in _t:
+                                _bullets.append(_t)
+                    except Exception:
+                        pass
+                check("fail", f"{_vname} coaching read populates",
+                      bool(_bullets),
+                      _bullets[0][:80] if _bullets else "no bullets")
+            shot(_view, _shotname)
+            try:
+                _ww, _wh = _view.winfo_width(), _view.winfo_height()
+                _rw, _rh = root.winfo_width(), root.winfo_height()
+                check("fail", f"{_vname} fills app window "
+                      f"({_ww}x{_wh} in {_rw}x{_rh})",
+                      abs(_ww - _rw) <= 4 and abs(_wh - _rh) <= 4)
+            except Exception as e:
+                check("fail", f"{_vname} fill measurable", False, str(e))
+            check_fonts(_vname, _view)
+            check_contrast(_vname, _view)
+            check_clipping(_vname, _view)
+            check_nested_scroll(_vname, _view)
+            check("fail", f"{_vname} exposes close_view contract",
+                  callable(getattr(_view, "close_view", None)))
+        except Exception as e:
+            check("fail", f"{_vname} view constructs", False, str(e))
+        _holder.destroy()
+        root.update()
+
     print(f"\n{PASS and len(PASS)} passed, {len(FAIL)} failed, {len(WARN)} warnings")
     return 1 if FAIL else 0
 

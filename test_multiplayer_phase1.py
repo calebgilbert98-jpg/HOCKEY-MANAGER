@@ -260,5 +260,110 @@ host2.stop()
 c3.disconnect()
 print("12. async snapshot (non-blocking, coalesced) OK")
 
+# --- 13. ready gate: all active managers must ready up -------------------
+PORT2 = 27200
+host3 = MultiplayerHost(fake_state_provider, host_name="Commish3", port=PORT2)
+host3.start()
+ra = MultiplayerClient("ReadyA")
+rb = MultiplayerClient("ReadyB")
+rspec = MultiplayerClient("Spec")
+ra.connect("127.0.0.1", PORT2)
+rb.connect("127.0.0.1", PORT2)
+rspec.connect("127.0.0.1", PORT2)
+ra.claim_team("TOR")
+drain(ra, "team_claimed")
+rb.claim_team("EDM")
+# both clients hear both claims; wait for EDM's own broadcast
+_deadline = time.time() + 5.0
+while True:
+    k, p = drain(rb, "team_claimed", timeout=max(0.1, _deadline - time.time()))
+    if p["team_id"] == "EDM":
+        break
+    if time.time() >= _deadline:
+        raise AssertionError("timeout waiting for EDM claim")
+# flush claim-time advance_changed events so the drains below only see
+# readiness changes
+host3.poll_events()
+# spectator claims nothing
+assert host3.active_managers() and len(host3.active_managers()) == 2
+# spectator READY without a team -> error, not counted
+rspec.send_ready()
+kind, payload = drain(rspec, "error")
+assert "claim a team" in payload["message"], payload
+# A readies; host not ready -> not all_ready
+ra.send_ready()
+kind, payload = drain_host(host3, "advance_changed")
+st = host3.broadcast_advance_status(host_ready=False)
+assert st["ready"] == ["ReadyA"] and st["waiting"] == ["ReadyB"], st
+assert not st["all_ready"], st
+assert st["ready_count"] == 1 and st["needed_count"] == 3, st
+# B readies; host readies -> all_ready
+rb.send_ready()
+drain_host(host3, "advance_changed")
+st = host3.broadcast_advance_status(host_ready=True)
+assert st["all_ready"] and st["ready_count"] == 3, st
+_deadline = time.time() + 5.0
+while True:
+    kind, payload = drain(ra, "advance_status",
+                          timeout=max(0.1, _deadline - time.time()))
+    if payload.get("all_ready"):
+        break
+    if time.time() >= _deadline:
+        raise AssertionError("timeout waiting for all_ready status")
+print("13. ready gate (all active managers, spectator excluded) OK")
+
+# --- 14. unready + cycle reset ------------------------------------------
+ra.send_unready()
+drain_host(host3, "advance_changed")
+st = host3.broadcast_advance_status(host_ready=True)
+assert not st["all_ready"] and st["waiting"] == ["ReadyA"], st
+host3.reset_advance_cycle()  # new day: nobody ready
+st = host3.broadcast_advance_status(host_ready=True)
+assert st["ready"] == [] and st["waiting"] == ["ReadyA", "ReadyB"], st
+print("14. unready + advance-cycle reset OK")
+
+# --- 15. draft clock + NTC waiver request plumbing -----------------------
+sid_b = rb.session_id
+ok = host3.send_draft_clock(sid_b, "clk1", "EDM", 5, 1,
+                            [{"id": "p1", "name": "Kid A", "pos": "C",
+                              "ranking": 1}])
+assert ok
+kind, payload = drain(rb, "draft_clock")
+assert payload["clock_id"] == "clk1" and payload["overall"] == 5, payload
+assert payload["prospects"][0]["name"] == "Kid A", payload
+ok = host3.send_ntc_waiver_request(sid_b, "wv1", "pl9", "Star Winger",
+                                   "NMC", "TOR", "trade")
+assert ok
+kind, payload = drain(rb, "ntc_waiver_request")
+assert payload["waiver_id"] == "wv1", payload
+assert payload["player_name"] == "Star Winger" and payload["clause"] == "NMC"
+rb.send_ntc_waiver_answer("pl9", "ask", waiver_id="wv1")
+kind, payload = drain_host(host3, "ntc_waiver_answer")
+assert payload["waiver_id"] == "wv1" and payload["choice"] == "ask", payload
+print("15. draft clock + NTC waiver plumbing OK")
+
+# --- 16. human-to-human trade offer round trip ---------------------------
+offer = {"players_out": [{"id": "x1", "name": "Gritty Fourth-Liner",
+                          "pos": "LW", "ovr": 78, "salary": 1500000,
+                          "clause": ""}],
+         "players_in": [], "picks_out": [], "picks_in": [],
+         "retention": {}, "pick_protection": {}}
+ok = host3.send_trade_offer(sid_b, "off7", "TOR", "ReadyA", offer)
+assert ok
+kind, payload = drain(rb, "trade_offer")
+assert payload["offer_id"] == "off7", payload
+assert payload["from_team"] == "TOR" and payload["from_manager"] == "ReadyA"
+assert payload["offer"]["players_out"][0]["name"] == "Gritty Fourth-Liner"
+rb.send_trade_response("off7", "reject")
+kind, payload = drain_host(host3, "trade_response")
+assert payload["offer_id"] == "off7" and payload["decision"] == "reject", \
+    payload
+print("16. trade offer round trip OK")
+
+ra.disconnect()
+rb.disconnect()
+rspec.disconnect()
+host3.stop()
+
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\nALL PHASE-1 INTEGRATION TESTS PASSED (state_provider calls: {state_calls['n']})")

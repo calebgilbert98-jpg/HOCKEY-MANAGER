@@ -4261,12 +4261,54 @@ class TradeWindow(InGamePopup):
         if not user_assets or not partner_assets:
             messagebox.showwarning("Incomplete", "Put assets on both sides first.")
             return
-        # No-trade / no-movement clauses: the user's own clause players must
-        # waive for this specific destination before the offer goes out.
-        # Yes = ask him, No = pull him from the offer, Cancel = stop.
         _league = (getattr(getattr(self.parent, 'game_manager', None),
                            'league', None)
                    or getattr(self.parent, 'league', None))
+        # Two-way preflight: the partner's clause players get the same
+        # destination-aware check the AI applies on its side -- up front,
+        # not 1-3 days later when the answer comes back. Non-blocking: the
+        # user can still send, but not blind.
+        _their_vetoes = self.te.trade_vetoes(
+            partner, self.parent.user_team,
+            [p for p in partner_assets if not self.te._is_pick(p)], _league)
+        if _their_vetoes:
+            _bits = []
+            for _tv in _their_vetoes:
+                _vp = _tv["player"]
+                _vn = getattr(_vp, "full_name", str(_vp))
+                try:
+                    _wok, _wwhy = self.te.will_waive_ntc(
+                        _vp, partner, self.parent.user_team, _league)
+                except Exception:
+                    _wok = False
+                _bits.append(f"\u2022 {_vn} ({_tv['detail']}) -- "
+                             f"{'likely to waive' if _wok else 'may refuse'}")
+            if not messagebox.askyesno(
+                    "Trade protection",
+                    "Heads-up -- the other side has clause players:\n\n"
+                    + "\n".join(_bits)
+                    + "\n\nThey'll be asked to waive for a move to the "
+                    f"{self.parent.user_team.team_name}, and a refusal kills "
+                    "the deal. Send the offer anyway?"):
+                return
+        # No-trade / no-movement clauses: the user's own clause players must
+        # waive for this specific destination before the offer goes out.
+        # Yes = ask him, No = pull him from the offer, Cancel = stop.
+        # Cap check FIRST: no point asking a player to waive his clause for
+        # a deal that can't clear the cap -- and stamping the waiver before
+        # this check used to leak a live single-use waiver on cap failure.
+        _pre_retention = {k: v for k, v in self._retention.items() if v}
+        if not self.te._cap_ok_after(self.parent.user_team, user_assets,
+                                     partner_assets,
+                                     retention=_pre_retention):
+            messagebox.showerror("Cap problem",
+                                 "This trade puts YOU over the salary cap. "
+                                 "Shed salary first.")
+            return
+        # Waivers stamped in this pass belong to the proposal being built:
+        # if the user cancels, they are cleared -- a dead proposal spends
+        # nothing (the same rule the MP host applies to dead deals).
+        _stamped = []
         for _v in self.te.trade_vetoes(
                 self.parent.user_team, partner,
                 [p for p in user_assets if not self.te._is_pick(p)], _league):
@@ -4279,6 +4321,11 @@ class TradeWindow(InGamePopup):
                 f"Yes = ask him  |  No = remove him from the offer  |  "
                 f"Cancel = stop")
             if _ans is None:
+                for _sp in _stamped:
+                    try:
+                        _sp.contract.ntc_waiver_for = ""
+                    except Exception:
+                        pass
                 return
             if _ans is False:
                 self.trade_offers['user'] = [
@@ -4293,6 +4340,7 @@ class TradeWindow(InGamePopup):
             if _ok:
                 try:
                     _p.contract.ntc_waiver_for = partner.team_name
+                    _stamped.append(_p)
                 except Exception:
                     pass
                 messagebox.showinfo("Waiver granted", _why)
@@ -4302,15 +4350,11 @@ class TradeWindow(InGamePopup):
                     f"{_why}\n\nHe's staying put -- remove him from the "
                     f"offer or cancel.")
                 return
-        # Deal terms the user set on this screen (retention %, pick protection)
+        # Deal terms the user set on this screen (retention %, pick protection).
+        # Rebuilt here because the waiver loop above may have pulled a player
+        # (and his retention row) out of the offer on a refused waiver.
         retention = {k: v for k, v in self._retention.items() if v}
         pick_protection = dict(self._pick_protection)
-        # Cap check for the user before bothering the AI (retention-aware)
-        if not self.te._cap_ok_after(self.parent.user_team, user_assets,
-                                     partner_assets, retention=retention):
-            messagebox.showerror("Cap problem",
-                                 "This trade puts YOU over the salary cap. Shed salary first.")
-            return
         if self._negotiation_id and self._preset.get("mode") == "counter":
             neg = tn.get_negotiation(self.parent, self._negotiation_id)
             if neg is not None and neg.is_open:
@@ -5050,6 +5094,17 @@ class DraftView(ctk.CTkFrame):
 
     def close_view(self):
         """Close this screen (dashboard in screen mode, card in popup mode)."""
+        # MULTIPLAYER: stop a pending draft-clock wait and release the clock.
+        try:
+            if getattr(self, '_mp_wait_id', None):
+                self.after_cancel(self._mp_wait_id)
+        except Exception:
+            pass
+        self._mp_wait_id = None
+        try:
+            self.app._mp_clear_draft_clock()
+        except Exception:
+            pass
         fn = getattr(self, '_close_screen', None)
         if callable(fn):
             fn()
@@ -5143,8 +5198,10 @@ class DraftView(ctk.CTkFrame):
             self.draft_order.append([draft_pick.round, team, draft_pick])
         if not self.draft_order:
             standings = getattr(self.app.league, 'standings', None) or {}
+            _nhl = [t for t in self.app.league.teams
+                    if getattr(t, 'league_name', '') == 'National Hockey League']
             sorted_teams = sorted(
-                self.app.league.teams,
+                _nhl or list(self.app.league.teams),
                 key=lambda t: standings.get(t.team_name, {}).get('Points', 0))
             for round_num in range(1, self.total_rounds + 1):
                 for team in sorted_teams:
@@ -5272,6 +5329,39 @@ class DraftView(ctk.CTkFrame):
         else:
             self.next_pick_label.configure(text="No picks remaining")
 
+        # MULTIPLAYER: a team claimed by a remote human doesn't get an AI
+        # auto-pick -- its manager picks live on the draft clock (60s,
+        # then the AI makes the pick for them).
+        if not is_user:
+            try:
+                _mp_wait = bool(
+                    getattr(self.app, 'mp_host', None) is not None
+                    and not bool(getattr(team_on_clock, 'is_user_team',
+                                         False))
+                    and __import__('game_classes').is_human_managed(
+                        team_on_clock))
+            except Exception:
+                _mp_wait = False
+            if _mp_wait:
+                self.draft_button.configure(state='disabled')
+                self.auto_button.configure(state='disabled')
+                self.trade_pick_button.configure(state='disabled')
+                self.clock_label.configure(
+                    text=f"{team_on_clock.team_name} (GM deciding...)")
+                try:
+                    self.app._mp_open_draft_clock(
+                        team_on_clock, round_num, overall)
+                except Exception as e:
+                    print(f"draft clock failed (non-fatal): {e}")
+                try:
+                    if getattr(self, '_mp_wait_id', None):
+                        self.after_cancel(self._mp_wait_id)
+                except Exception:
+                    pass
+                self._mp_wait_id = self.after(
+                    1000, self._mp_check_client_pick)
+                return
+
         if not is_user:
             if self._ai_after_id:
                 try:
@@ -5279,6 +5369,59 @@ class DraftView(ctk.CTkFrame):
                 except Exception:
                     pass
             self._ai_after_id = self.after(650, self.ai_make_pick)
+
+    def _mp_check_client_pick(self):
+        """Draft-clock wait loop: execute the client's pick, auto-pick on
+        timeout, or keep waiting."""
+        self._mp_wait_id = None
+        try:
+            st = getattr(self.app, '_mp_draft_clock', None)
+        except Exception:
+            st = None
+        if not st or st.get("done"):
+            return
+        if self.current_pick >= len(self.draft_order):
+            return
+        _r, team_on_clock, _dp = self.draft_order[self.current_pick]
+        if st.get("team_id") != team_on_clock.team_name or \
+                st.get("overall") != self.current_pick + 1:
+            return  # stale clock (draft moved on without us)
+        pid = st.get("pick_id")
+        if pid:
+            prospect = None
+            try:
+                for p in getattr(self.app.league,
+                                 "draft_prospects", None) or []:
+                    if str(getattr(p, "id", "")) == str(pid):
+                        prospect = p
+                        break
+            except Exception:
+                pass
+            if prospect is not None:
+                st["done"] = True
+                try:
+                    self.app._mp_clear_draft_clock()
+                except Exception:
+                    pass
+                self.execute_pick(team_on_clock, prospect)
+                return
+            # Unknown id (race): keep waiting for a valid one.
+        import time as _time
+        if _time.time() > float(st.get("deadline", 0)):
+            st["done"] = True
+            try:
+                self.app._mp_clear_draft_clock()
+            except Exception:
+                pass
+            try:
+                self.app.mp_host.broadcast_chat(
+                    f"{team_on_clock.team_name} ran out the draft clock -- "
+                    f"auto-pick.")
+            except Exception:
+                pass
+            self.ai_make_pick()
+            return
+        self._mp_wait_id = self.after(1000, self._mp_check_client_pick)
 
     def ai_make_pick(self):
         self._ai_after_id = None
@@ -5336,6 +5479,9 @@ class DraftView(ctk.CTkFrame):
             return
         available = self._board_sorted_available()
         if not available:
+            # Prospect pool exhausted: terminate the draft so no pick
+            # driver can spin on an un-advanced current_pick.
+            self.end_draft()
             return
         if self.strategy_var.get() == "Need":
             needs = self.te.team_needs(self.app.user_team)
@@ -5605,12 +5751,29 @@ class DraftView(ctk.CTkFrame):
             ug.pack(pady=10)
 
     def end_draft(self):
+        # Terminate the pick order: a draft that ends early (e.g. the
+        # prospect pool runs out) must not leave current_pick mid-order,
+        # or any direct pick driver spins forever re-calling pick methods.
+        try:
+            self.current_pick = len(self.draft_order)
+        except Exception:
+            pass
         if self._ai_after_id:
             try:
                 self.after_cancel(self._ai_after_id)
             except Exception:
                 pass
         self._ai_after_id = None
+        try:
+            if getattr(self, '_mp_wait_id', None):
+                self.after_cancel(self._mp_wait_id)
+        except Exception:
+            pass
+        self._mp_wait_id = None
+        try:
+            self.app._mp_clear_draft_clock()
+        except Exception:
+            pass
         self.draft_status_label.configure(text="Draft Complete")
         self.clock_label.configure(text="—")
         self.pick_info_label.configure(text="All 7 rounds complete")
@@ -6964,14 +7127,35 @@ class FinancesView(ctk.CTkFrame):
 
     # Calculation methods
     def calculate_current_payroll(self):
-        """Calculate the current NHL payroll."""
+        """Calculate the current cap charge (the number that matters).
+
+        Uses the canonical cap_breakdown(): active-roster hits + buried
+        one-way money in the minors + all dead cap (buyouts, seeded
+        penalties, retained), minus any cap dollars temporarily shed by
+        players sitting on the waiver wire. This is the same charge the
+        Next Day compliance check and trade validation enforce, so the
+        finance screens can never disagree with them.
+        """
+        try:
+            from salary_cap_system import cap_breakdown
+            return max(0, int(cap_breakdown(self.app.user_team)["total"]))
+        except Exception:
+            pass
         total = 0
         for player in self.app.user_team.roster:
             if hasattr(player, 'contract') and hasattr(player.contract, 'salary'):
                 total += player.contract.salary
             elif hasattr(player, 'salary'):
                 total += player.salary
-        return total
+        # Waiver shed: players on the wire temporarily don't count, so an
+        # over-cap club sees its real cap space here (matches the Next Day
+        # compliance check and trade validation).
+        try:
+            from salary_cap_system import waiver_shed_charge
+            total -= waiver_shed_charge(self.app.user_team)
+        except Exception:
+            pass
+        return max(0, total)
 
     def calculate_ahl_payroll(self):
         """Calculate the AHL payroll."""
@@ -9313,9 +9497,11 @@ class WaiversView(ctk.CTkFrame):
                 # Update the views
                 self.populate_eligible_players()
                 self.populate_waiver_wire()
-                messagebox.showinfo("Player on Waivers", 
+                messagebox.showinfo("Player on Waivers",
                                    f"{player.full_name} has been placed on waivers. "
-                                   "They will remain on waivers for 2 days, during which time other teams may claim them.")
+                                   "They will remain on waivers for 2 days, during which time other teams may claim them. "
+                                   f"Their cap hit is temporarily shed until waivers clear -- "
+                                   f"this can bring an over-cap roster back into compliance.")
     
     def claim_from_waivers(self, item=None):
         """Claim a player from the waiver wire."""
@@ -9628,6 +9814,13 @@ class ContractExtensionsView(ctk.CTkFrame):
                 # Update player contract
                 player.contract.salary = salary_offer
                 player.contract.years_remaining = years
+                # New SPC: the old deal's retention state dies with it (the
+                # retaining club's ledger entry survives independently).
+                try:
+                    from trade_engine import clear_retention_state as _clr1
+                    _clr1(player)
+                except Exception:
+                    pass
                 result_messages.append(f"{player.full_name}: Accepted {years} years at ${salary_offer:,}")
             else:
                 result_messages.append(f"{player.full_name}: Rejected {years} years at ${salary_offer:,}")
@@ -9943,6 +10136,13 @@ class ExtensionNegotiationView(ctk.CTkFrame):
                 self.player.contract.salary = salary
                 self.player.contract.years_remaining = years
                 self.player.contract.signing_bonus = bonus
+                # New SPC: the old deal's retention state dies with it (the
+                # retaining club's ledger entry survives independently).
+                try:
+                    from trade_engine import clear_retention_state as _clr2
+                    _clr2(self.player)
+                except Exception:
+                    pass
                 self.player.contract.no_trade_clause = self.ntc_var.get()
 
                 self._say(f"{self.player.full_name} has accepted: {years} years "
@@ -11016,6 +11216,14 @@ class BuyoutCalculatorView(ctk.CTkFrame):
         if p in team.roster:
             team.roster.remove(p)
         p.team_name = "Free Agent"
+        # His SPC is dead: the player-side retention fields clear (no more
+        # discount for anyone). The retaining club's ledger entry stays live
+        # -- that dead cap survives the buyout, per CBA.
+        try:
+            from trade_engine import clear_retention_state as _clr_ret
+            _clr_ret(p)
+        except Exception:
+            pass
         self._selected = None
         for child in self.detail.winfo_children():
             child.destroy()

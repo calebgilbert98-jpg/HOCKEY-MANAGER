@@ -1332,8 +1332,9 @@ def ai_scout_staff_review(league: Any, date_str: str, rng=None) -> Dict[str, int
     rng = rng or _r
     out = {"fired": 0, "hired": 0, "poached": 0}
     try:
+        import game_classes as _gc
         teams = [t for t in list(getattr(league, "teams", []) or [])
-                 if not getattr(t, "is_user_team", False)]
+                 if not _gc.is_human_managed(t)]
     except Exception:
         return out
     roles = _pro_roles()

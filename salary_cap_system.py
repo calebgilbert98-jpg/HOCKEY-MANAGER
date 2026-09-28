@@ -313,8 +313,73 @@ class SalaryCapSystem:
 #                  + seeded real-life bonus overages (2026-27)
 
 
+# Burial exemption (NHL rule): a one-way contract assigned to the minors
+# still counts against the cap, minus $1.15M + the league minimum.
+# Two-way deals are fully buried -- the minor-league salary never touches
+# the NHL cap. Prospects never count.
+LEAGUE_MINIMUM_SALARY = 775000
+BURY_EXEMPTION = 1150000 + LEAGUE_MINIMUM_SALARY  # $1,925,000
+
+
+def _on_waiver_wire(p) -> bool:
+    """True while a player sits on the waiver wire awaiting clearing."""
+    try:
+        return bool(getattr(p, "on_waivers", False)) and int(getattr(p, "waiver_days", 0) or 0) > 0
+    except Exception:
+        return False
+
+
+def _active_roster_hit(p) -> int:
+    """Cap hit of a player on the NHL active roster: full salary.
+
+    Waiver shed: a player on the wire temporarily doesn't count. This
+    is the escape valve that lets an over-cap club get compliant via
+    waivers (or a shedding trade) and start games. (Real NHL keeps
+    counting until assignment; the game sheds on placement by design.)
+    When waivers clear, the claim or the burial rule resolves the hit.
+    """
+    try:
+        if _on_waiver_wire(p):
+            return 0
+        contract = getattr(p, "contract", None)
+        if contract is not None:
+            hit = int(getattr(contract, "salary", 0) or 0)
+            hit -= int(getattr(p, "retained_amount", 0) or 0)
+            return max(0, hit)
+    except Exception:
+        pass
+    return 0
+
+
+def minor_league_cap_charge(p) -> int:
+    """Cap hit of a player under NHL contract assigned to the minors.
+
+    True NHL rule: two-way deals count $0 (minor-league salary is cap
+    exempt); one-way deals count salary minus the burial exemption.
+    A player on the waiver wire is fully shed until waivers clear.
+    """
+    try:
+        if _on_waiver_wire(p):
+            return 0
+        contract = getattr(p, "contract", None)
+        if contract is None:
+            return 0
+        if bool(getattr(contract, "two_way", False)):
+            return 0
+        hit = int(getattr(contract, "salary", 0) or 0)
+        hit -= int(getattr(p, "retained_amount", 0) or 0)
+        return max(0, hit - BURY_EXEMPTION)
+    except Exception:
+        return 0
+
+
 def roster_cap_charge(team) -> int:
-    """Sum of active NHL roster contract salaries (mirrors Team.payroll).
+    """Active-roster cap charge under the true NHL rule (Eastside logic).
+
+    Only the NHL active roster counts at full salary. Prospects never
+    count. Players under NHL contract in the minors follow the burial
+    rule: two-way deals are fully exempt, one-way deals count salary
+    minus the $1.925M burial exemption.
 
     Retained salary lowers the charge: a player carrying retained_amount
     (kept by his former club) counts salary - retained here, while the
@@ -323,10 +388,9 @@ def roster_cap_charge(team) -> int:
     try:
         total = 0
         for p in (getattr(team, "roster", None) or []):
-            contract = getattr(p, "contract", None)
-            if contract is not None:
-                total += int(getattr(contract, "salary", 0) or 0)
-                total -= int(getattr(p, "retained_amount", 0) or 0)
+            total += _active_roster_hit(p)
+        for p in (getattr(team, "ahl_roster", None) or []):
+            total += minor_league_cap_charge(p)
         return max(0, total)
     except Exception:
         return 0
@@ -421,9 +485,35 @@ def is_over_cap(team, season_year=None) -> bool:
     return cap_space(team, season_year) < 0
 
 
+def waiver_shed_charge(team) -> int:
+    """Cap dollars temporarily shed by players on the waiver wire.
+
+    A waived player doesn't count until waivers clear -- the escape
+    valve that lets an over-cap club get compliant and start games.
+    """
+    try:
+        return sum(
+            max(0, int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
+                - int(getattr(p, "retained_amount", 0) or 0))
+            for p in (getattr(team, "roster", None) or [])
+            if _on_waiver_wire(p))
+    except Exception:
+        return 0
+
+
 def cap_breakdown(team, season_year=None) -> Dict:
     """Full component breakdown for cap UI screens."""
     roster = roster_cap_charge(team)
+    # Buried one-way money in the minors, shown separately for transparency
+    # (it is already included in the roster charge above).
+    try:
+        buried = sum(minor_league_cap_charge(p)
+                     for p in (getattr(team, "ahl_roster", None) or []))
+    except Exception:
+        buried = 0
+    # Cap dollars temporarily shed by players sitting on the waiver wire.
+    # Informational only -- already excluded from the roster charge above.
+    waivers_shed = waiver_shed_charge(team)
     buyouts = in_game_buyout_charge(team, season_year)
     s_buyout = seeded_buyout_charge(team)
     s_retained = seeded_retained_charge(team)
@@ -437,6 +527,8 @@ def cap_breakdown(team, season_year=None) -> Dict:
     return {
         "cap": cap,
         "roster": roster,
+        "buried": buried,
+        "waivers_shed": waivers_shed,
         "buyouts": buyouts,
         "seeded_buyout": s_buyout,
         "seeded_retained": s_retained,

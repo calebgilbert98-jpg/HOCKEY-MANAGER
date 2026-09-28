@@ -86,10 +86,13 @@ class PracticeSession:
     practice_type: PracticeType
     intensity: PracticeIntensity
     duration_minutes: int
-    trainer_quality: int  # 1-20 scale
+    trainer_quality: int  # 1-20 scale (legacy fallback when no team given)
     date_completed: date
     skill_gain: float  # Actual skill points gained
     fatigue_cost: int  # Fatigue added to player
+    # Coaching-aware stamp (new): who ran it and why it worked.
+    coach_name: str = ""
+    breakdown: Optional[dict] = None  # coach_practice.practice_breakdown()
 
 @dataclass
 class PracticeResult:
@@ -205,37 +208,86 @@ class PracticeEngine:
         
         return True, "Ready to practice"
     
-    def execute_practice(self, player, practice_type: PracticeType, 
+    def execute_practice(self, player, practice_type: PracticeType,
                         intensity: PracticeIntensity, duration_minutes: int = 60,
-                        trainer_quality: int = 10) -> PracticeSession:
-        """Execute a practice session and apply improvements"""
-        
+                        trainer_quality: int = 10,
+                        team=None) -> PracticeSession:
+        """Execute a practice session and apply improvements.
+
+        When ``team`` is given, the flat ``trainer_quality`` is replaced by
+        the real coaching staff: who runs the drill, how well they teach
+        it, the player's archetype affinity and attitude, the coach/player
+        fit, and whether the drill fits the club's system
+        (coach_practice.practice_breakdown). Without a team the legacy
+        trainer_quality path runs unchanged.
+        """
+
+        # Coaching-aware effectiveness (additive: legacy path untouched).
+        breakdown = None
+        coaching_mult = None
+        fatigue_mult = 1.0
+        if team is not None:
+            try:
+                import coach_practice as _cp
+                breakdown = _cp.practice_breakdown(
+                    team, player, practice_type.value)
+                coaching_mult = float(breakdown.get("total_mult", 1.0))
+                fatigue_mult = float(breakdown.get("fatigue_mult", 1.0))
+            except Exception:
+                breakdown, coaching_mult = None, None
+
         # Calculate base effectiveness
         base_effectiveness = self._calculate_base_effectiveness(
-            player, practice_type, intensity, duration_minutes, trainer_quality
+            player, practice_type, intensity, duration_minutes,
+            trainer_quality, coaching_mult=coaching_mult
         )
-        
+
         # Apply improvements to relevant attributes
         skill_gains = {}
         practice_map = self.practice_effectiveness[practice_type]
-        
+
         for attribute, multiplier in practice_map.items():
             if hasattr(player, attribute):
                 current_value = getattr(player, attribute)
-                
+
                 # Calculate improvement with diminishing returns
                 improvement = self._calculate_skill_improvement(
                     current_value, base_effectiveness * multiplier, player.age
                 )
-                
+
                 if improvement > 0:
                     new_value = min(100, current_value + improvement)  # native 100-scale cap
                     setattr(player, attribute, new_value)
                     skill_gains[attribute] = improvement
-        
-        # Calculate fatigue cost
+
+        # Calculate fatigue cost (a motivating coach manages load better)
         fatigue_cost = self._calculate_fatigue_cost(intensity, duration_minutes)
-        
+        try:
+            fatigue_cost = max(1, int(round(fatigue_cost * fatigue_mult)))
+        except Exception:
+            pass
+
+        # Friction has a price: a bad coach fit on a hard skate costs a
+        # little morale (the room notices).
+        if breakdown and intensity in (PracticeIntensity.INTENSE,
+                                       PracticeIntensity.EXTREME):
+            try:
+                _mc = float(breakdown.get("morale_cost", 0) or 0)
+                if _mc > 0 and hasattr(player, "morale"):
+                    player.morale = max(1.0, min(100.0,
+                                                 float(player.morale) - _mc))
+            except Exception:
+                pass
+
+        # Training the system trains the system: aligned practice nudges
+        # tactical familiarity (the identity gets rehearsed).
+        if breakdown and breakdown.get("trains_system") and team is not None:
+            try:
+                _fam = float(getattr(team, "tactics_familiarity", 85) or 85)
+                team.tactics_familiarity = min(100.0, _fam + 0.5)
+            except Exception:
+                pass
+
         # Create session record
         session = PracticeSession(
             practice_type=practice_type,
@@ -244,20 +296,23 @@ class PracticeEngine:
             trainer_quality=trainer_quality,
             date_completed=date.today(),
             skill_gain=sum(skill_gains.values()),
-            fatigue_cost=fatigue_cost
+            fatigue_cost=fatigue_cost,
+            coach_name=(breakdown.get("coach_name", "") if breakdown else ""),
+            breakdown=breakdown,
         )
-        
+
         # Update player history
         history = self.get_player_history(player.id)
         history.add_session(session)
-        
+
         return session
     
     def _calculate_base_effectiveness(self, player, practice_type: PracticeType,
-                                   intensity: PracticeIntensity, duration: int, 
-                                   trainer_quality: int) -> float:
+                                   intensity: PracticeIntensity, duration: int,
+                                   trainer_quality: int,
+                                   coaching_mult: Optional[float] = None) -> float:
         """Calculate base practice effectiveness"""
-        
+
         # Intensity multipliers
         intensity_mult = {
             PracticeIntensity.LIGHT: 0.5,
@@ -265,29 +320,37 @@ class PracticeEngine:
             PracticeIntensity.INTENSE: 1.5,
             PracticeIntensity.EXTREME: 2.0
         }
-        
+
         # Duration effect (diminishing returns after 60 minutes)
         duration_mult = min(1.5, duration / 60)
         if duration > 60:
             duration_mult = 1.0 + (duration - 60) / 120  # Slower gains past 60 min
-        
-        # Trainer quality (1-20 scale)
-        trainer_mult = 0.5 + (trainer_quality / 20) * 0.8  # 0.5 to 1.3 range
-        
+
+        # The teacher: the real coaching staff when a team is given
+        # (coach_practice breakdown: who runs the drill, archetype affinity,
+        # attitude, coach fit, system fit), else the legacy flat number.
+        if coaching_mult is not None:
+            teacher_mult = max(0.4, min(1.75, coaching_mult))
+        else:
+            # Trainer quality (1-20 scale)
+            teacher_mult = 0.5 + (trainer_quality / 20) * 0.8  # 0.5 to 1.3 range
+
         # Player age factor (younger players learn faster)
         age_mult = self._get_age_multiplier(player.age)
-        
+
         # Player work ethic (if available); work_rate is native 1-100.
+        # (Kept for the legacy path; the coaching-aware path folds attitude
+        # into coaching_mult via practice_attitude.)
         work_ethic_mult = 1.0
-        if hasattr(player, 'work_rate'):
+        if coaching_mult is None and hasattr(player, 'work_rate'):
             work_ethic_mult = 0.7 + (player.work_rate / 100) * 0.6
-        
+
         # Random factor for realism
         random_mult = random.uniform(0.8, 1.2)
-        
-        base_effectiveness = (intensity_mult[intensity] * duration_mult * 
-                            trainer_mult * age_mult * work_ethic_mult * random_mult)
-        
+
+        base_effectiveness = (intensity_mult[intensity] * duration_mult *
+                            teacher_mult * age_mult * work_ethic_mult * random_mult)
+
         return base_effectiveness * 0.1  # Scale to reasonable improvement levels
     
     def _calculate_skill_improvement(self, current_value: int, effectiveness: float, age: int) -> float:
@@ -343,44 +406,80 @@ class PracticeEngine:
         recovery = self.fatigue_recovery_rate * days
         history.current_fatigue = max(0, history.current_fatigue - recovery)
     
-    def get_practice_recommendations(self, player) -> List[Tuple[PracticeType, str]]:
-        """Get recommended practice types for a player"""
+    def get_practice_recommendations(self, player, team=None) -> List[Tuple[PracticeType, str]]:
+        """Get recommended practice types for a player.
+
+        Ranks by need (weakest attributes) crossed with how well the drill
+        lands for THIS player: archetype affinity, the coach who'd run it,
+        and system fit. Each recommendation explains itself.
+        """
+        # Weakness per practice type: average the mapped attributes.
+        scored = []
+        for ptype in PracticeType:
+            attr_map = self.practice_effectiveness.get(ptype, {})
+            vals = [getattr(player, a, 50) for a in attr_map
+                    if hasattr(player, a)]
+            if not vals:
+                continue
+            weakness = 100.0 - sum(vals) / len(vals)  # 0..~75
+            scored.append((ptype, weakness))
+
+        # Coaching-aware landing factor per drill (1.0 when no team given).
+        landing = {}
+        if team is not None:
+            try:
+                import coach_practice as _cp
+                for ptype, _w in scored:
+                    try:
+                        bd = _cp.practice_breakdown(team, player, ptype.value)
+                        # Affinity x coach x system x attitude -- how well the
+                        # drill sticks, independent of raw need.
+                        landing[ptype] = (float(bd.get("affinity", 1.0))
+                                          * float(bd.get("coach_mult", 1.0))
+                                          * float(bd.get("system", 1.0))
+                                          * float(bd.get("attitude", 1.0)))
+                    except Exception:
+                        landing[ptype] = 1.0
+            except Exception:
+                pass
+
+        def _rank_key(item):
+            ptype, weakness = item
+            return weakness * landing.get(ptype, 1.0)
+
+        ranked = sorted(scored, key=_rank_key, reverse=True)
         recommendations = []
-        
-        # Analyze player's weak areas
-        attributes = {
-            'skating': getattr(player, 'skating', 10),
-            'shooting': getattr(player, 'shooting', 10),
-            'passing': getattr(player, 'passing', 10),
-            'checking': getattr(player, 'checking', 10),
-            'defense': getattr(player, 'defense', 10),
-            'faceoffs': getattr(player, 'faceoffs', 10),
-        }
-        
-        # Sort by lowest values (areas that need work)
-        sorted_attrs = sorted(attributes.items(), key=lambda x: x[1])
-        
-        practice_mapping = {
-            'skating': (PracticeType.SKATING, "Improve speed and agility"),
-            'shooting': (PracticeType.SHOOTING, "Develop scoring ability"),
-            'passing': (PracticeType.PASSING, "Enhance playmaking skills"),
-            'checking': (PracticeType.CHECKING, "Build physical presence"),
-            'defense': (PracticeType.DEFENSE, "Strengthen defensive play"),
-            'faceoffs': (PracticeType.FACEOFFS, "Improve faceoff percentage")
-        }
-        
-        # Recommend top 3 weakest areas
-        for attr_name, value in sorted_attrs[:3]:
-            if attr_name in practice_mapping and value < 15:
-                practice_type, reason = practice_mapping[attr_name]
-                recommendations.append((practice_type, f"{reason} (Current: {value})"))
-        
-        # Add leadership/teamwork for older players
+        for ptype, weakness in ranked[:3]:
+            if weakness < 8:  # nothing meaningfully weak
+                continue
+            reason_bits = []
+            if team is not None:
+                try:
+                    import coach_practice as _cp2
+                    bd = _cp2.practice_breakdown(team, player, ptype.value)
+                    aw = bd.get("affinity_why", "")
+                    if aw:
+                        reason_bits.append(aw)
+                    cn = bd.get("coach_name", "")
+                    if cn:
+                        reason_bits.append(
+                            f"{cn} runs it "
+                            f"({bd.get('coach_rating', 50):.0f})")
+                    sl = bd.get("system_label", "")
+                    if sl and "Outside" not in sl:
+                        reason_bits.append(sl.lower())
+                except Exception:
+                    pass
+            reason = "; ".join(reason_bits) if reason_bits else \
+                "biggest gap in his game"
+            recommendations.append(
+                (ptype, f"{ptype.value.replace('_', ' ').title()} -- {reason}"))
+
+        # Veterans get leadership work when it's a real gap.
         if player.age >= 25:
             leadership_val = getattr(player, 'leadership', 10)
             if leadership_val < 15:
                 recommendations.append((PracticeType.LEADERSHIP, "Develop leadership qualities"))
-        
         return recommendations
     
     def schedule_practice(self, player, practice_type: PracticeType, intensity: PracticeIntensity, total_sessions: int):
@@ -462,6 +561,14 @@ class DevelopmentOverviewView(ctk.CTkFrame):
             fn()
         else:
             self.destroy()
+
+
+    def _practice_team(self):
+        """The team whose coaching staff runs practice (None = legacy)."""
+        try:
+            return getattr(getattr(self, 'app', None), 'user_team', None)
+        except Exception:
+            return None
 
     def _create_interface(self):
         """Create the enhanced development overview interface"""
@@ -804,6 +911,22 @@ class DevelopmentOverviewView(ctk.CTkFrame):
         ttk.Button(type_combo_frame, text="💡 Get Recommendations", 
                   command=self._show_recommendations, style='TButton').pack(side='right', padx=(10, 0))
         
+        # Coaching read: who runs the selected drill and how it lands.
+        # Updates live as the practice type changes (trace below).
+        coach_frame = ttk.LabelFrame(self.controls_frame, text="Coaching Read",
+                                     style='Card.TLabelframe')
+        coach_frame.pack(fill='x', pady=5)
+        self.coaching_read_label = ttk.Label(coach_frame, text="",
+                                            style='Content.TLabel',
+                                            wraplength=360, justify='left')
+        self.coaching_read_label.pack(fill='x', padx=10, pady=8)
+        self._update_coaching_read()
+        try:
+            self.practice_type_var.trace_add(
+                'write', lambda *_a: self._update_coaching_read())
+        except Exception:
+            pass
+
         # Intensity selection
         intensity_frame = ttk.LabelFrame(parent, text="Intensity Level", style='Card.TLabelframe')
         intensity_frame.pack(fill='x', padx=10, pady=5)
@@ -1250,7 +1373,41 @@ class DevelopmentOverviewView(ctk.CTkFrame):
             rec_text = f"{player.full_name} is well-balanced across all areas.\nFocus on maintaining current skill levels."
         
         ttk.Label(rec_content, text=rec_text, style='Content.TLabel').pack(anchor='w')
-        
+
+        # Coaching Read Section: who runs the top recommended drill and
+        # how it lands for this player (session coach, teaching quality,
+        # archetype affinity, attitude, personality fit, system fit).
+        coach_frame = ttk.LabelFrame(self.details_frame, text="🎓 Coaching Read",
+                                     style='Card.TLabelframe')
+        coach_frame.pack(fill='x', pady=(0, 10))
+
+        coach_content = ttk.Frame(coach_frame, style='Content.TFrame')
+        coach_content.pack(fill='x', padx=10, pady=10)
+
+        try:
+            import coach_practice as _cp
+            if recommendations:
+                _read_type = recommendations[0][0]
+            elif history.current_schedule:
+                _read_type = history.current_schedule['type']
+            else:
+                _read_type = None
+            if _read_type is not None:
+                _read_name = _read_type.value.replace('_', ' ').title()
+                _bd = _cp.practice_breakdown(self._practice_team(), player,
+                                             _read_type.value)
+                _lines = _cp.describe_session(_bd)
+                coach_text = (f"Top drill: {_read_name}\n"
+                              + "\n".join("• " + _l for _l in _lines)
+                              if _lines else "No coaching staff on file.")
+            else:
+                coach_text = "No recommended drill yet."
+        except Exception:
+            coach_text = "Coaching read unavailable."
+
+        ttk.Label(coach_content, text=coach_text, style='Content.TLabel',
+                  wraplength=560, justify='left').pack(anchor='w')
+
         # Quick Practice Section
         quick_practice_frame = ttk.LabelFrame(self.details_frame, text="⚡ Quick Practice", 
                                             style='Card.TLabelframe')
@@ -1349,9 +1506,10 @@ class DevelopmentOverviewView(ctk.CTkFrame):
         
         try:
             session = self.practice_engine.execute_practice(
-                self.selected_player, practice_type, intensity, duration, trainer_quality
+                self.selected_player, practice_type, intensity, duration, trainer_quality,
+                team=self._practice_team()
             )
-            
+
             # Show quick results
             practice_name = practice_type.value.replace('_', ' ').title()
             result_text = f"Quick {practice_name} practice completed!\n"
@@ -1464,9 +1622,10 @@ class DevelopmentOverviewView(ctk.CTkFrame):
         # Execute practice
         try:
             session = self.practice_engine.execute_practice(
-                self.selected_player, practice_type, intensity, duration, trainer_quality
+                self.selected_player, practice_type, intensity, duration, trainer_quality,
+                team=self._practice_team()
             )
-            
+
             # Show results
             self._show_practice_results(session)
             
@@ -1484,16 +1643,28 @@ class DevelopmentOverviewView(ctk.CTkFrame):
         results_text += f"Type: {session.practice_type.value.replace('_', ' ').title()}\n"
         results_text += f"Intensity: {session.intensity.value.title()}\n"
         results_text += f"Duration: {session.duration_minutes} minutes\n"
+        if session.coach_name:
+            results_text += f"Run by: {session.coach_name}\n"
         results_text += f"Skill Improvement: +{session.skill_gain:.2f} points\n"
         results_text += f"Fatigue Cost: +{session.fatigue_cost} points\n\n"
-        
+
+        # Why it worked (or didn't): the coaching breakdown, legible.
+        try:
+            if session.breakdown:
+                import coach_practice as _cp
+                for _line in _cp.describe_session(session.breakdown):
+                    results_text += f"• {_line}\n"
+                results_text += "\n"
+        except Exception:
+            pass
+
         if session.skill_gain > 0.5:
             results_text += "Excellent practice session! 🌟"
         elif session.skill_gain > 0.2:
             results_text += "Good practice session! 👍"
         else:
             results_text += "Light practice session. 💪"
-        
+
         messagebox.showinfo("Practice Results", results_text)
     
     def _update_history(self):
@@ -1677,6 +1848,14 @@ class PracticeCenterView(ctk.CTkFrame):
         else:
             self.destroy()
 
+
+    def _practice_team(self):
+        """The team whose coaching staff runs practice (None = legacy)."""
+        try:
+            return getattr(getattr(self, 'app', None), 'user_team', None)
+        except Exception:
+            return None
+
     def _create_interface(self):
         """Create the practice center interface"""
         
@@ -1769,6 +1948,27 @@ class PracticeCenterView(ctk.CTkFrame):
             # Widget-keyed entry so the app-wide right-click menu resolves it.
             self.app.tree_maps.setdefault(self.player_tree, {})[item_id] = player
     
+    def _update_coaching_read(self):
+        """Refresh the Coaching Read box for the selected drill."""
+        try:
+            label = getattr(self, "coaching_read_label", None)
+            if label is None:
+                return
+            player = getattr(self, "selected_player", None)
+            if player is None:
+                label.config(text="Select a player to see the coaching read.")
+                return
+            import coach_practice as _cp
+            ptype_value = str(self.practice_type_var.get()).lower()
+            bd = _cp.practice_breakdown(self._practice_team(), player,
+                                        ptype_value)
+            desc = _cp.describe_session(bd)
+            label.config(text="\n".join("\u2022 " + l for l in desc)
+                         if desc else "No coaching staff on file.")
+        except Exception:
+            pass
+
+
     def _on_player_select(self, event):
         """Handle player selection"""
         selection = self.player_tree.selection()
@@ -1778,14 +1978,44 @@ class PracticeCenterView(ctk.CTkFrame):
             self._update_practice_controls()
     
     def _create_practice_controls(self, parent):
-        """Create practice controls"""
-        self.controls_frame = ttk.Frame(parent, style='Content.TFrame')
-        self.controls_frame.grid(row=0, column=0, sticky='nsew', padx=10, pady=10)
-        
-        # Make the frame expandable
-        parent.grid_rowconfigure(0, weight=1)
+        """Create practice controls.
+
+        Scrollable single column: practice type + coaching read +
+        intensity + schedule + actions exceed small windows, and the
+        action buttons must never be cut off.
+        """
+        # parent is an app _create_panel frame: its title bar lives in
+        # row 0, so the scrollable content goes in row 1.
+        parent.grid_rowconfigure(1, weight=1)
         parent.grid_columnconfigure(0, weight=1)
-        
+        # The panel's outer frame needs weight as well, otherwise the
+        # canvas collapses to its tiny requested height.
+        _outer = parent.master
+        if _outer is not None:
+            try:
+                _outer.grid_rowconfigure(0, weight=1)
+                _outer.grid_columnconfigure(0, weight=1)
+            except Exception:
+                pass
+
+        canvas = tk.Canvas(parent, bg=self.app.CONTENT_BG,
+                           highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical",
+                                  command=canvas.yview)
+        self.controls_frame = ttk.Frame(canvas, style='Content.TFrame')
+        self.controls_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        self._controls_window = canvas.create_window(
+            (0, 0), window=self.controls_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        # Keep the inner frame as wide as the canvas so packed
+        # sections fill the column on resize.
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(
+            self._controls_window, width=e.width))
+        canvas.grid(row=1, column=0, sticky='nsew', padx=(10, 0), pady=10)
+        scrollbar.grid(row=1, column=1, sticky='ns', pady=10)
+
         self._update_practice_controls()
     
     def _update_practice_controls(self):
@@ -1839,6 +2069,21 @@ class PracticeCenterView(ctk.CTkFrame):
                            variable=self.practice_type_var, value=practice_type.value).grid(
                            row=row, column=col, sticky='w', padx=(0, 20), pady=2)
         
+        # Coaching read: who runs the selected drill and how it lands.
+        coach_frame = ttk.LabelFrame(self.controls_frame, text="Coaching Read",
+                                     style='Card.TLabelframe')
+        coach_frame.pack(fill='x', pady=5)
+        self.coaching_read_label = ttk.Label(coach_frame, text="",
+                                            style='Content.TLabel',
+                                            wraplength=360, justify='left')
+        self.coaching_read_label.pack(fill='x', padx=10, pady=8)
+        self._update_coaching_read()
+        try:
+            self.practice_type_var.trace_add(
+                'write', lambda *_a: self._update_coaching_read())
+        except Exception:
+            pass
+
         # Intensity selection
         intensity_frame = ttk.LabelFrame(self.controls_frame, text="Intensity", style='Card.TLabelframe')
         intensity_frame.pack(fill='x', pady=5)
@@ -1980,9 +2225,10 @@ class PracticeCenterView(ctk.CTkFrame):
                 duration = 60
             
             session = self.practice_engine.execute_practice(
-                self.selected_player, practice_type, intensity, duration, trainer_quality
+                self.selected_player, practice_type, intensity, duration, trainer_quality,
+                team=self._practice_team()
             )
-            
+
             if session:
                 messagebox.showinfo("Practice Complete",
                                   f"Practice session completed for {self.selected_player.full_name}!\n"

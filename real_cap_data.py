@@ -66,9 +66,80 @@ DEAD_CAP_2026_27 = {
 
 SEASON = 2026  # the season these figures describe (2026-27)
 
+# Real-world projected 2026-27 cap space per club (cap $104M), in dollars.
+# Research: 2026-09-28. Source: PuckPedia 2026-27 team cap table
+# (https://puckpedia.com/e/teams), "Proj. Space" column.
+#
+# Used at league generation so day-one cap situations mirror real life:
+# capped-out contenders (Vegas, New Jersey, Edmonton...) start tight and
+# cap-flush clubs (Detroit, Seattle, Vancouver...) start with room to
+# weaponize. Negative-space clubs (Toronto, Florida, Columbus, Vegas)
+# are clamped to MIN_TARGET_ROOM at use time -- real clubs operate over
+# the cap via LTIR, but the game needs day-one compliance, so they
+# start in an LTIR-equivalent squeeze instead of over the cap.
+CAP_ROOM_2026_27 = {
+    # Atlantic
+    "Boston Bruins": 6_047_000,
+    "Buffalo Sabres": 1_583_000,
+    "Detroit Red Wings": 18_613_000,
+    "Florida Panthers": -871_000,
+    "Montreal Canadiens": 1_891_000,
+    "Ottawa Senators": 2_458_000,
+    "Tampa Bay Lightning": 1_903_000,
+    "Toronto Maple Leafs": -3_808_000,
+    # Metropolitan
+    "Carolina Hurricanes": 8_427_000,
+    "Columbus Blue Jackets": -35_000,
+    "New Jersey Devils": 52_000,
+    "New York Islanders": 2_749_000,
+    "New York Rangers": 468_000,
+    "Philadelphia Flyers": 13_095_000,
+    "Pittsburgh Penguins": 7_128_000,
+    "Washington Capitals": 125_000,
+    # Central
+    "Chicago Blackhawks": 1_452_000,
+    "Colorado Avalanche": 150_000,
+    "Dallas Stars": 303_000,
+    "Minnesota Wild": 1_153_000,
+    "Nashville Predators": 11_991_000,
+    "St. Louis Blues": 2_832_000,
+    "Utah Mammoth": 4_837_000,
+    "Winnipeg Jets": 12_406_000,
+    # Pacific
+    "Anaheim Ducks": 185_000,
+    "Calgary Flames": 13_908_000,
+    "Edmonton Oilers": 228_000,
+    "Los Angeles Kings": 1_800_000,
+    "San Jose Sharks": 2_706_000,
+    "Seattle Kraken": 16_997_000,
+    "Vancouver Canucks": 15_925_000,
+    "Vegas Golden Knights": -8_824_000,
+}
+
+# Floor for a club's day-one target room. Over-cap real-life clubs are
+# clamped here (LTIR-equivalent squeeze, never a day-one violation).
+MIN_TARGET_ROOM = 500_000
+
+
+def target_cap_room(team_name: str) -> int:
+    """Day-one target cap room for a club, in dollars.
+
+    Real 2026-27 projected space, canonicalized through TEAM_ALIASES,
+    clamped to MIN_TARGET_ROOM so no club starts over the cap.
+    Unknown teams default to a $1M operating cushion.
+    """
+    key = _team_key(team_name)
+    room = CAP_ROOM_2026_27.get(key)
+    if room is None:
+        return 1_000_000
+    return max(MIN_TARGET_ROOM, room)
+
 # Alternate spellings / short names seen across the codebase's generators.
 TEAM_ALIASES = {
     "Buffalo Sabres": ("Buffalo Sabres",),
+    "Montreal Canadiens": ("Montreal Canadiens", "Montréal Canadiens"),
+    "New York Islanders": ("New York Islanders", "NY Islanders"),
+    "New York Rangers": ("New York Rangers", "NY Rangers"),
     "Vancouver Canucks": ("Vancouver Canucks",),
     "San Jose Sharks": ("San Jose Sharks", "San Jose"),
     "Utah Mammoth": ("Utah Mammoth", "Utah Hockey Club", "Utah"),
@@ -76,9 +147,12 @@ TEAM_ALIASES = {
 
 
 def _team_key(team) -> str:
-    """Best-effort canonical name for a Team object."""
-    name = getattr(team, "team_name", "") or ""
-    name = name.strip()
+    """Best-effort canonical name for a Team object (or a team-name string)."""
+    if isinstance(team, str):
+        name = team.strip()
+    else:
+        name = getattr(team, "team_name", "") or ""
+        name = name.strip()
     if name in DEAD_CAP_2026_27:
         return name
     # Try city + team_name combos and aliases
@@ -100,6 +174,22 @@ def get_dead_cap(team_name: str):
 def total_dead_cap(team_name: str) -> int:
     b, r, o = get_dead_cap(team_name)
     return b + r + o
+
+
+def should_seed_dead_cap(season_year: int, settings) -> bool:
+    """Whether a new game should seed real-life dead-cap penalties.
+
+    Cap rules always apply; cap penalties are skipped when the user chose
+    "start without cap penalties" or starts with a fantasy draft (even
+    playing field -- every club begins at $0 dead cap while the $104M
+    ceiling still governs the league).
+    """
+    settings = settings or {}
+    if settings.get('start_without_cap_penalties', False):
+        return False
+    if settings.get('fantasy_draft', False):
+        return False
+    return season_year == SEASON
 
 
 def seed_real_dead_cap(league, overwrite: bool = False) -> int:
