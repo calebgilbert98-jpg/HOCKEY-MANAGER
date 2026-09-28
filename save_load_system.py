@@ -222,6 +222,16 @@ class GameSaveManager:
             # Live playoff bracket (mid-tournament saves keep every game).
             # Missing key = old save -> no bracket, projections shown.
             'playoff_bracket': self._serialize_playoff_bracket(league),
+            # Immortality: retired-player snapshots (HOF ballot arcs live
+            # here). Was never serialized -- every save deleted them from
+            # the universe. Missing key = old save -> empty.
+            'retired_players': [dict(r) for r in
+                                (getattr(league, 'retired_players', None) or [])],
+            # Milestone idempotency: which (player, milestone) pairs already
+            # got their ceremony. Without this, a load re-fires every past
+            # milestone. Missing key = old save -> rebuilt from scratch.
+            '_milestone_celebrated': [list(k) for k in
+                                     (getattr(league, '_milestone_celebrated', None) or set())],
         }
         
         # Serialize all teams
@@ -270,6 +280,16 @@ class GameSaveManager:
                     'F': list((getattr(team, 'line_matchups', None) or {}).get('F') or [None] * 4)[:4],
                     'D': list((getattr(team, 'line_matchups', None) or {}).get('D') or [None] * 3)[:3],
                 },
+                # Retired numbers in the rafters. Was never serialized --
+                # loads re-issued them to rookies. Missing = old save.
+                'retired_numbers': [dict(r) for r in
+                                    (getattr(team, 'retired_numbers', None) or [])],
+                # Queued pregame ceremony (jersey retirement / HOF night).
+                # Dropped on load before; the electric building never
+                # happened. Missing = old save -> none pending.
+                '_pending_ceremony': (dict(getattr(team, '_pending_ceremony'))
+                                      if isinstance(getattr(team, '_pending_ceremony', None), dict)
+                                      else None),
             }
             
             return team_data
@@ -885,6 +905,17 @@ class GameSaveManager:
             league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
             league.rivalries = [dict(r) for r in
                                 (league_data.get('rivalries', None) or [])]
+            # Immortality restores: retired-player snapshots (HOF ballot
+            # arcs) and the milestone idempotency set. Absent in old
+            # saves -> empty, same as a fresh league.
+            league.retired_players = [dict(r) for r in
+                                      (league_data.get('retired_players', None) or [])]
+            try:
+                league._milestone_celebrated = set(
+                    tuple(k) for k in
+                    (league_data.get('_milestone_celebrated', None) or []))
+            except Exception:
+                league._milestone_celebrated = set()
             try:
                 league.lottery_results = {
                     int(k): [dict(r) for r in v]
@@ -1076,6 +1107,12 @@ class GameSaveManager:
                 'F': _lmf + [None] * (4 - len(_lmf)),
                 'D': _lmd + [None] * (3 - len(_lmd)),
             }
+            # Retired numbers in the rafters + any queued pregame ceremony.
+            # Absent in old saves -> empty / none, same as a fresh club.
+            team.retired_numbers = [dict(r) for r in
+                                    (team_data.get('retired_numbers', None) or [])]
+            _pc = team_data.get('_pending_ceremony', None)
+            team._pending_ceremony = dict(_pc) if isinstance(_pc, dict) else None
             
             # Restore team stats
             if 'stats' in team_data:
