@@ -400,13 +400,14 @@ def _ask(ovr):
     return max(int((ovr * 100_000 / 104_000_000) * 104_000_000), 750_000)
 
 
-def _mkstrategy(needs, budget=95_000_000):
+def _mkstrategy(needs, budget=95_000_000, risk=0.0,
+               priority=None):
     return aim.TeamStrategy(
-        priority=aim.ManagementPriority.CONTEND,
+        priority=priority or aim.ManagementPriority.CONTEND,
         trade_preference=aim.TradePreference.MODERATE,
         budget_limit=budget, min_roster_age=20, max_roster_age=36,
         position_needs=list(needs), salary_cap_tolerance=0.9,
-        prefer_youth=False, prefer_experience=False, risk_tolerance=0.5,
+        prefer_youth=False, prefer_experience=False, risk_tolerance=risk,
         will_trade_picks=True, will_trade_prospects=True,
         rebuilding_timeline=3)
 
@@ -497,6 +498,62 @@ check("ai fa: euro import gets a real market offer (never capped)",
       len(_euro_offers) == 1
       and _euro_offers[0].offer_details["salary"] > 1_000_000,
       f"offer={_euro_offers[0].offer_details['salary'] if _euro_offers else None}")
+
+# -- GM offer boldness: competitive by default, bold only when earned ------
+_bteam = _FakeTeam("Bold Club", [])
+_bfa = _mkfa(120, "Missing Piece", PlayerPosition.CENTER, ovr=88)
+_bfa2 = _mkfa(121, "Good Player", PlayerPosition.CENTER, ovr=82)
+_blg = SimpleNamespace(free_agents=[_bfa], rivalries=[], season_year=2026)
+_bm = _mkmgr(_blg, _bteam, _mkstrategy([PlayerPosition.CENTER], risk=1.0))
+_bstrat = _bm.team_strategies["Bold Club"]
+_bold = _bm._offer_boldness(_bteam, _bstrat, _bfa, 88, _ask(88), 50_000_000)
+check("ai fa: gambler GM bidding for the missing piece goes bold",
+      abs(_bold - 1.18) < 1e-9, f"factor={_bold}")
+# Disciplined floor: cautious GM, tight cap, not the missing piece.
+_bstrat2 = _mkstrategy([PlayerPosition.CENTER], risk=0.0)
+_disc = _bm._offer_boldness(_bteam, _bstrat2, _bfa2, 82, _ask(82), 5_000_000)
+check("ai fa: cautious GM against a tight cap stays at the floor",
+      abs(_disc - 0.90) < 1e-9, f"factor={_disc}")
+# Owner warning leashes even the gambler.
+_bm.gm_security["Bold Club"] = SimpleNamespace(
+    hot_seat=False, tenured_winner=False, owner_warning=True)
+_leashed = _bm._offer_boldness(_bteam, _bstrat, _bfa, 88, _ask(88), 50_000_000)
+check("ai fa: owner warning caps the offer at the ask",
+      abs(_leashed - 1.0) < 1e-9, f"factor={_leashed}")
+# Tenured winner stays conservative.
+_bm.gm_security["Bold Club"] = SimpleNamespace(
+    hot_seat=False, tenured_winner=True, owner_warning=False)
+_cons = _bm._offer_boldness(_bteam, _bstrat, _bfa2, 82, _ask(82), 50_000_000)
+check("ai fa: tenured winner doesn't bid against himself",
+      abs(_cons - 1.07) < 1e-9, f"factor={_cons}")
+# Hot-seat GM wired to panic reaches; the patient one doesn't.
+_bm.gm_security["Bold Club"] = SimpleNamespace(
+    hot_seat=True, tenured_winner=False, owner_warning=False)
+_bm.gm_identities["Bold Club"] = SimpleNamespace(pressure_response=0.8)
+_panic = _bm._offer_boldness(_bteam, _bstrat, _bfa2, 82, _ask(82), 50_000_000)
+_bm.gm_identities["Bold Club"] = SimpleNamespace(pressure_response=0.2)
+_patient = _bm._offer_boldness(_bteam, _bstrat, _bfa2, 82, _ask(82), 50_000_000)
+check("ai fa: hot-seat panicker reaches, patient builder doesn't",
+      abs(_panic - 1.15) < 1e-9 and abs(_patient - 1.10) < 1e-9,
+      f"panic={_panic} patient={_patient}")
+# Rebuilder never wins bidding wars.
+_bstrat3 = _mkstrategy([PlayerPosition.CENTER], risk=1.0,
+                       priority=aim.ManagementPriority.REBUILD)
+_reb = _bm._offer_boldness(_bteam, _bstrat3, _bfa, 88, _ask(88), 50_000_000)
+check("ai fa: rebuilder never bids bold on veterans",
+      abs(_reb - 1.0) < 1e-9, f"factor={_reb}")
+# Full path: the bold offer lands in the decision and the reasoning says so.
+_bm2 = _mkmgr(_blg, _bteam, _mkstrategy([PlayerPosition.CENTER], risk=1.0))
+_bstrat_bm2 = _bm2.team_strategies["Bold Club"]
+_expf = _bm2._offer_boldness(_bteam, _bstrat_bm2, _bfa, 88, _ask(88), 95_000_000)
+_bdec = _bm2._evaluate_free_agency(
+    _bteam, _bstrat_bm2, _blg.free_agents, date(2026, 7, 2))
+_bold_offers = [d for d in _bdec if d.target_player is _bfa]
+check("ai fa: bold offer executes end-to-end with the story attached",
+      len(_bold_offers) == 1
+      and _bold_offers[0].offer_details["salary"] == int(_ask(88) * _expf)
+      and "bold bid" in _bold_offers[0].reasoning,
+      f"offer={_bold_offers[0].offer_details['salary'] if _bold_offers else None}")
 
 # -- handshake realism: the player weighs the offer against his ask ---------
 _ask80 = _ask(80)

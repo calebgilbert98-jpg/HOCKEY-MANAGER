@@ -436,6 +436,111 @@ class AITeamManager:
             self.team_strategies[team.team_name] = self._generate_team_strategy(
                 team, identity, sec)
     
+    def _player_ask(self, player: Player, overall: Optional[float] = None,
+                    league=None) -> int:
+        """What the player demands: the same asking machinery the user
+        faces. Base demand as % of cap scaled by the live cap, plus any
+        market-setter premium, floored at $750k. Mirrors
+        handle_contract_offer exactly, so the AI and the user negotiate
+        against the same player."""
+        try:
+            from game_classes import to_100_scale as _t100
+            _ovr100 = int(_t100(overall if overall is not None
+                               else player.overall_rating()))
+        except Exception:
+            try:
+                _ovr100 = int(overall if overall is not None
+                             else player.overall_rating())
+            except Exception:
+                _ovr100 = 75
+        _pos = getattr(player, "primary_position", "")
+        _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
+        _age = int(getattr(player, "age", 27) or 27)
+        _lg = league if league is not None else getattr(self, "_league_ref",
+                                                       None)
+        _season = int(getattr(_lg, "season_year", 0) or 0)
+        _cap_sys = self._cap_system
+        try:
+            _cap = _cap_sys.current_cap if _cap_sys is not None \
+                else DEFAULT_CAP
+        except Exception:
+            _cap = DEFAULT_CAP
+        _base_pct = (_ovr100 * 100_000) / 104_000_000
+        try:
+            if _cap_sys is not None:
+                _ask = _cap_sys.demand_for(_base_pct, _ovr100, _pos_name,
+                                           _age, _season)
+            else:
+                _ask = int(_base_pct * _cap)
+        except Exception:
+            _ask = int(_base_pct * _cap)
+        return max(_ask, 750_000)
+
+    def _offer_boldness(self, team: Team, strategy: TeamStrategy,
+                        player: Player, ovr: float, ask: int,
+                        available_budget: int) -> float:
+        """How far above (or below) the player's ask this GM bids.
+
+        The ask is what the player demands; the factor is the GM's
+        competitive edge, in [0.90, 1.25]. The floor still signs -- the
+        handshake accepts at 90% of ask -- so a disciplined GM banks the
+        small discount and a bold GM pays real money for it. Boldness is
+        never the default; it takes the right circumstances, all
+        GM-side:
+          - risk tolerance: the core dial. A gambler bids over; a
+            cautious GM bids just under.
+          - the missing piece: a contender whose #1 need is an impact
+            player (85+) pays the overpay to complete the roster.
+          - cap comfort: room after the deal invites boldness; a tight
+            cap enforces discipline.
+          - the seat: never bold under owner warning (the board leash);
+            tenured winners stay conservative and trust their read; only
+            a hot-seat GM wired to panic reaches out of desperation.
+          - rebuilders never win bidding wars for veterans.
+        """
+        factor = 0.95 + 0.10 * strategy.risk_tolerance  # 0.95 - 1.05
+        sec = self.gm_security.get(team.team_name)
+
+        if strategy.priority == ManagementPriority.CONTEND:
+            try:
+                _needs = strategy.position_needs or []
+                _missing = (bool(_needs)
+                            and player.primary_position == _needs[0]
+                            and ovr >= 85)
+            except Exception:
+                _missing = False
+            if _missing:
+                factor += 0.08
+
+        try:
+            _comfort = available_budget / max(1, strategy.budget_limit)
+        except Exception:
+            _comfort = 0.0
+        if _comfort > 0.25:
+            factor += 0.05
+        elif _comfort < 0.08:
+            factor -= 0.05
+
+        if sec is not None:
+            if sec.owner_warning:
+                # Board leash: no bold offers on the way out.
+                factor = min(factor, 1.0)
+            elif sec.tenured_winner:
+                # Conservative winner: doesn't bid against himself.
+                factor -= 0.03
+            elif sec.hot_seat:
+                _ident = self.gm_identities.get(team.team_name)
+                _pr = _ident.pressure_response \
+                    if _ident is not None else 0.5
+                if _pr >= 0.5:
+                    # Desperate and wired to panic: reaches.
+                    factor += 0.05
+
+        if strategy.priority == ManagementPriority.REBUILD:
+            factor = min(factor, 1.0)
+
+        return max(0.90, min(1.25, factor))
+
     def _evaluate_free_agency(self, team: Team, strategy: TeamStrategy,
                              free_agents: List[Player], current_date: date) -> List[AIDecision]:
         """Evaluate free agent signings for a team"""
@@ -465,14 +570,19 @@ class AITeamManager:
                     continue
 
                 ovr = fa.overall_rating()
-                # Estimate salary demand. No artificial ceiling on any
-                # UFA -- Euro imports included: the AI may offer anything
-                # from the minimum to its full cap room. Whether the
-                # player ACCEPTS is decided realistically at execution
-                # time, against the same asking machinery the user faces.
-                estimated_salary = self._estimate_player_salary(fa, ovr)
-                if estimated_salary <= available_budget:
-                    suitable_fas.append((fa, estimated_salary, ovr))
+                # The offer: the player's ask, scaled by how bold this
+                # GM is feeling -- his risk tolerance, the seat he's in,
+                # whether this is the missing piece, and how comfortable
+                # the cap is. No artificial ceiling on any UFA, Euro
+                # imports included: the AI may bid anything from just
+                # under the ask to a real overpay. Whether the player
+                # ACCEPTS is decided realistically at execution time.
+                ask = self._player_ask(fa, ovr)
+                boldness = self._offer_boldness(team, strategy, fa, ovr,
+                                               ask, available_budget)
+                offer = int(ask * boldness)
+                if offer <= available_budget:
+                    suitable_fas.append((fa, offer, ovr, boldness))
 
         # Sort by priority (overall rating vs cost)
         suitable_fas.sort(key=lambda x: x[2] / (x[1] / 1_000_000), reverse=True)
@@ -495,7 +605,7 @@ class AITeamManager:
                 interest_threshold = 0.72
 
         # Make offers to top candidates
-        for fa, estimated_salary, ovr in suitable_fas[:3]:  # Top 3 candidates
+        for fa, offer, ovr, boldness in suitable_fas[:3]:  # Top 3 candidates
             priority_score = self._calculate_fa_priority(fa, strategy, team, ovr)
 
             if priority_score > interest_threshold:
@@ -504,12 +614,15 @@ class AITeamManager:
                     decision_type="free_agent_offer",
                     target_player=fa,
                     offer_details={
-                        "salary": estimated_salary,
+                        "salary": offer,
                         "term": self._determine_contract_length(fa, strategy),
                         "no_trade_clause": ovr > 85
                     },
                     priority_score=priority_score,
-                    reasoning=f"Addresses {fa.primary_position.value} need, fits strategy",
+                    reasoning=(f"Addresses {fa.primary_position.value} need, "
+                               f"fits strategy"
+                               + (" -- bold bid for the missing piece"
+                                  if boldness >= 1.10 else "")),
                     timestamp=current_date
                 )
                 decisions.append(decision)
@@ -708,38 +821,9 @@ class AITeamManager:
             offered = int(details.get("salary", 0) or 0)
             years = max(1, min(6, int(details.get("term", 1) or 1)))
             # The handshake: what would he take? The SAME asking
-            # machinery the user faces -- base demand as % of cap scaled
-            # by the live cap plus any market-setter premium, floored at
-            # $750k (mirrors handle_contract_offer exactly, so the AI and
-            # the user negotiate against the same player).
-            try:
-                from game_classes import to_100_scale as _t100
-                _ovr100 = int(_t100(p.overall_rating()))
-            except Exception:
-                try:
-                    _ovr100 = int(p.overall_rating())
-                except Exception:
-                    _ovr100 = 75
-            _pos = getattr(p, "primary_position", "")
-            _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
-            _age = int(getattr(p, "age", 27) or 27)
-            _season = int(getattr(league, "season_year", 0) or 0)
-            _cap_sys = self._cap_system
-            try:
-                _cap = _cap_sys.current_cap if _cap_sys is not None \
-                    else DEFAULT_CAP
-            except Exception:
-                _cap = DEFAULT_CAP
-            _base_pct = (_ovr100 * 100_000) / 104_000_000
-            try:
-                if _cap_sys is not None:
-                    _ask = _cap_sys.demand_for(_base_pct, _ovr100, _pos_name,
-                                               _age, _season)
-                else:
-                    _ask = int(_base_pct * _cap)
-            except Exception:
-                _ask = int(_base_pct * _cap)
-            _ask = max(_ask, 750_000)
+            # machinery the user faces, so the AI and the user negotiate
+            # against the same player.
+            _ask = self._player_ask(p, league=league)
             # The user's rulebook, without a counter loop: 90%+ of ask
             # signs on the spot; 70-90% is the counter zone, where the AI
             # meets the ask when the budget allows and walks otherwise;
