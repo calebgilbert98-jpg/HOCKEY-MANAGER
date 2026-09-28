@@ -400,7 +400,19 @@ class DatabaseGenerator:
         print(f"Teams: {teams_created}")
         print(f"Free agents: {len(free_agents)}")
         print(f"Prospects: {len(prospects)}")
-        
+
+        # F1: give every AI team its archetype's tactical systems at
+        # creation. The player's team keeps manual control.
+        try:
+            from ai_coach import assign_ai_tactics
+            for team in main_league.teams:
+                try:
+                    assign_ai_tactics(team)
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+
         return main_league
     
     def _generate_team_staff(self, teams):
