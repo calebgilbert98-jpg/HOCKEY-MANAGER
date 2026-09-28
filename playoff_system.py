@@ -262,11 +262,27 @@ class PlayoffBracket:
         
         # Create game simulation with playoff intensity. Pass the upcoming series
         # game number so playoff officiating (whistle ramp, desperation bump,
-        # tension stakes) and rivalries engage correctly.
+        # tension stakes) and rivalries engage correctly. The crowd knows the
+        # stakes too: elimination games and Game 7s get a louder building.
+        from arena_atmosphere import pregame_crowd, crowd_hype_for_tension
+        _elim = (series.team1_wins == 3 or series.team2_wins == 3)
+        _game_no = series.games_played + 1
+        try:
+            from narrative_ledger import active_ledger as _al
+            _led = _al()
+        except Exception:
+            _led = None
+        _atm = pregame_crowd(series.team1, series.team2, ledger=_led,
+                             is_playoff=True, series_game=_game_no,
+                             elimination_game=_elim)
         game_sim = GameSim(series.team1, series.team2, is_playoff=True,
-                           series_game=series.games_played + 1,
+                           series_game=_game_no,
                            rivalries=getattr(getattr(self, "league", None),
-                                             "rivalries", None))
+                                             "rivalries", None),
+                           atmosphere=_atm,
+                           crowd_hype=crowd_hype_for_tension(
+                               _atm.get("energy", 50.0),
+                               _atm.get("mood", 30.0)))
         result = game_sim.simulate_game()
 
         # Stash headline specs (brawls, ...) for the lore system; the playoff

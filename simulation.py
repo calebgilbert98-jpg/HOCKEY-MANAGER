@@ -456,7 +456,8 @@ class GameSim:
     Stage 5: Advanced goaltending mechanics, save types, and positioning systems.
     """
     def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False,
-                 rivalries=None, series_game: int = 1):
+                 rivalries=None, series_game: int = 1, crowd_hype: float = 0.0,
+                 atmosphere=None):
         self.home_team = home_team
         self.away_team = away_team
         self.is_playoff = is_playoff
@@ -473,9 +474,22 @@ class GameSim:
         except Exception:
             pass
         self.series_game = series_game
+        # --- Crowd (arena_atmosphere; additive) --------------------------------
+        # The building is a two-sided factor: loud raises everyone's pulse
+        # (via the tension channel below), and the mood moves finishing
+        # through the impact-tier ctx. Live: goals swing it in _handle_goal.
+        self._crowd_energy = 50.0
+        self._crowd_mood = 30.0        # home perspective
+        try:
+            if isinstance(atmosphere, dict):
+                self._crowd_energy = float(atmosphere.get("energy", 50.0))
+                self._crowd_mood = float(atmosphere.get("mood", 30.0))
+        except Exception:
+            pass
         # --- Tension / punishment / brawl state (additive; inert when unused) ---
         # Base tension comes from the same breakdown the visualizer's meter
         # uses, so the engine and the meter agree on how heated this game is.
+        # Crowd hype feeds it: an electric barn raises everyone's pulse.
         self._tension_base = 10.0
         self._live_heat = 0.0          # in-game: fights +6, majors +4, brawls +10
         self._brawl_happened = False   # at most one line brawl per game
@@ -496,7 +510,9 @@ class GameSim:
             from reputation_system import game_tension_breakdown
             bd = game_tension_breakdown(home_team, away_team,
                                         rivalries=self.rivalries,
-                                        is_playoff=is_playoff)
+                                        is_playoff=is_playoff,
+                                        series_game=series_game,
+                                        crowd_hype=crowd_hype)
             self._tension_base = float(bd.get("tension", 10.0))
         except Exception:
             pass
@@ -6272,6 +6288,19 @@ class GameSim:
             self.home_score += 1
         else:
             self.away_score += 1
+
+        # Crowd: the building swings on every goal (live mood/energy feeds
+        # the impact-tier ctx and the tension channel from here on).
+        try:
+            from arena_atmosphere import live_crowd_update
+            _st = {"energy": self._crowd_energy, "mood": self._crowd_mood}
+            live_crowd_update(_st, scoring_team is self.home_team,
+                              self.home_score, self.away_score,
+                              int(getattr(self, "period", 1) or 1))
+            self._crowd_energy = _st["energy"]
+            self._crowd_mood = _st["mood"]
+        except Exception:
+            pass
             
         log_msg = f"GOAL for {scoring_team.team_name}! Scored by {shooter.full_name}"
         

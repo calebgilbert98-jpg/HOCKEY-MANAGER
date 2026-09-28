@@ -54,6 +54,8 @@ class ImpactContext:
     clock_seconds: float = 1200.0   # time remaining in period
     is_playoff: bool = False
     tension: float = 0.0           # 0-100 live game intensity
+    crowd_energy: float = 50.0     # 0-100 building loudness (arena_atmosphere)
+    crowd_mood: float = 0.0        # actor-relative: + = crowd behind them
     coach_instruction: Optional[str] = None   # e.g. "play_harder"
     coach: Any = None
     team: Any = None
@@ -155,6 +157,22 @@ def _roll(pt: float, pn: float, pb: float) -> int:
     return TIRED
 
 
+def _crowd_tier_nudge(ctx: ImpactContext) -> float:
+    """Crowd nudge on big-moment probability (multiplier ~0.85-1.20).
+
+    Loud buildings produce more big moments for everyone -- the energy is
+    contagious. But the mood decides who it helps: being backed by the
+    crowd adds, being booed or skating into a hostile barn takes away --
+    and the mood outweighs the raw noise.
+    """
+    try:
+        e = (float(ctx.crowd_energy) - 50.0) / 50.0      # -1..1
+        m = max(-1.0, min(1.0, float(ctx.crowd_mood) / 100.0))
+    except Exception:
+        return 1.0
+    return max(0.85, min(1.20, 1.0 + 0.08 * e + 0.12 * m))
+
+
 # ---------------------------------------------------------------------------
 # Classifiers
 # ---------------------------------------------------------------------------
@@ -211,6 +229,10 @@ def classify_shot_impact(shooter: Any, ctx: ImpactContext) -> int:
         pt -= swing
 
     # Normalize and roll.
+    # Crowd: loud buildings make big moments likelier; a hostile or
+    # nervous barn takes a touch away from the unsupported side.
+    pb *= _crowd_tier_nudge(ctx)
+
     pt = max(0.01, pt)
     pb = max(0.01, pb)
     pn = max(0.01, 1.0 - pt - pb)
@@ -267,6 +289,10 @@ def classify_hit_impact(hitter: Any, target: Any, ctx: ImpactContext) -> int:
         pb += swing
         pt -= swing
 
+    # Crowd: loud buildings make big moments likelier; a hostile or
+    # nervous barn takes a touch away from the unsupported side.
+    pb *= _crowd_tier_nudge(ctx)
+
     pt = max(0.01, pt)
     pb = max(0.01, pb)
     pn = max(0.01, 1.0 - pt - pb)
@@ -313,6 +339,10 @@ def classify_save_impact(goalie: Any, shooter: Any, shot_quality: float,
         swing = random.uniform(-0.03, 0.03)
         pb += swing
         pt -= swing
+
+    # Crowd: loud buildings make big moments likelier; a hostile or
+    # nervous barn takes a touch away from the unsupported side.
+    pb *= _crowd_tier_nudge(ctx)
 
     pt = max(0.01, pt)
     pb = max(0.01, pb)
@@ -512,6 +542,15 @@ def build_context(sim: Any, actor: Any, team: Any) -> ImpactContext:
     ctx.team = team
     try:
         ctx.scoring_mult = float(getattr(sim, "scoring_multiplier", 1.0) or 1.0)
+    except Exception:
+        pass
+    # Crowd state from the sim (home perspective), flipped to the actor's
+    # team's perspective: + means the building is behind them.
+    try:
+        from arena_atmosphere import actor_crowd_mood as _actor_mood
+        ctx.crowd_energy = float(getattr(sim, "_crowd_energy", 50.0) or 50.0)
+        ctx.crowd_mood = _actor_mood(getattr(sim, "home_team", None), team,
+                                     float(getattr(sim, "_crowd_mood", 0.0) or 0.0))
     except Exception:
         pass
     # Special-night counters from this game's stats (all defensive).

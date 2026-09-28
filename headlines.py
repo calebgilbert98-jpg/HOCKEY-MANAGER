@@ -54,6 +54,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "media_beef": _media_beef_headline,
         "narrative_shutdown": _narrative_shutdown_headline,
         "grudge_callback": _grudge_callback_headline,
+        "milestone_hit": _milestone_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -337,6 +338,33 @@ def _grudge_callback_headline(game_date, home="", away="", short="",
         subject=subject,
         content="\n\n".join(parts),
         category="Rivalry",
+        priority=2,
+        is_important=True,
+    )
+
+
+def _milestone_headline(game_date, player="", milestone="", team="",
+                        room_line="", fans_line="", media_line="",
+                        league_line="", **kw):
+    """A career milestone, one event through four viewpoints."""
+    from game_classes import EmailMessage
+    subject = f"⭐ {player}: {milestone}"
+    parts = [f"{player} ({team}) reaches {milestone}.\n"]
+    if media_line:
+        parts.append(f"MEDIA — {media_line}")
+    if room_line:
+        parts.append(f"ROOM — {room_line}")
+    if fans_line:
+        parts.append(f"FANS — {fans_line}")
+    if league_line:
+        parts.append(f"LEAGUE — {league_line}")
+    parts.append("\nSome nights are bigger than the score.")
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=subject,
+        content="\n\n".join(parts),
+        category="Milestone",
         priority=2,
         is_important=True,
     )

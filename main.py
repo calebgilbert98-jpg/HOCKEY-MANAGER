@@ -1646,14 +1646,46 @@ def clamp(val, minv, maxv):
 # --- Advanced Simulation Engine ---
 
 
+def _pregame_atmosphere(home_team, away_team, is_playoff=False, series_game=1,
+                        elimination_game=False, milestone_home=False,
+                        ceremony=False):
+    """Build the crowd state for tonight (arena_atmosphere).
+
+    One dict lookup + arithmetic per game -- no per-tick cost. Returns a
+    quiet neutral building on any failure.
+    """
+    try:
+        from arena_atmosphere import pregame_crowd
+        from narrative_ledger import active_ledger
+        return pregame_crowd(
+            home_team, away_team, ledger=active_ledger(),
+            is_playoff=is_playoff, series_game=series_game,
+            elimination_game=elimination_game,
+            milestone_home=milestone_home, ceremony=ceremony)
+    except Exception:
+        return {"energy": 50.0, "mood": 30.0, "drivers": [],
+                "big_game": False}
+
+
 class AdvancedGameSim:
     """Simulates a hockey game and produces a structured event log for visualization."""
 
-    def __init__(self, home_team, away_team):
+    def __init__(self, home_team, away_team, atmosphere=None):
         self.home_team = home_team
         self.away_team = away_team
         # FM team-talk boost: team_name -> multiplier (default 1.0)
         self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
+
+        # Crowd (arena_atmosphere): the building is a two-sided factor. A
+        # jacked crowd lifts the home side; a nervous/toxic one drags it; a
+        # loud hostile barn rattles young visitors while veterans shrug.
+        # Feeds the existing finishing channels -- own keys, never shares the
+        # team-talk/dressing-room keys, so nothing can overwrite it.
+        self._crowd_energy = 50.0
+        self._crowd_mood_home = 30.0
+        self._crowd_home_mult = 1.0
+        self._crowd_away_mult = 1.0
+        self._init_crowd(atmosphere)
 
         # Dressing-room talks (module 03): each side's pre-game words move
         # finishing a touch. Own channel -- never shares the legacy
@@ -1731,6 +1763,43 @@ class AdvancedGameSim:
     def set_team_talk_boost(self, team_name: str, multiplier: float):
         """FM-style: apply a team-talk/morale multiplier to a team's scoring."""
         self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
+
+    # -- Crowd (arena_atmosphere) -------------------------------------------
+    def _init_crowd(self, atmosphere):
+        """Seed crowd state from a pregame_crowd() dict (or a quiet default)."""
+        try:
+            from arena_atmosphere import crowd_effects, roster_avg_age
+            if isinstance(atmosphere, dict):
+                self._crowd_energy = float(atmosphere.get("energy", 50.0))
+                self._crowd_mood_home = float(atmosphere.get("mood", 30.0))
+            away_age = roster_avg_age(self.away_team)
+            hm, am = crowd_effects(self._crowd_energy, self._crowd_mood_home,
+                                   away_avg_age=away_age)
+            self._crowd_home_mult = hm
+            self._crowd_away_mult = am
+        except Exception:
+            pass
+
+    def _crowd_on_goal(self, scorer_team_name):
+        """Live crowd swing after a goal; recompute the finishing mults."""
+        try:
+            from arena_atmosphere import (live_crowd_update, crowd_effects,
+                                          roster_avg_age)
+            _st = {"energy": self._crowd_energy, "mood": self._crowd_mood_home}
+            live_crowd_update(
+                _st, scorer_team_name == self.home_team.team_name,
+                self.score.get(self.home_team.team_name, 0),
+                self.score.get(self.away_team.team_name, 0),
+                int(getattr(self, "period", 1) or 1))
+            self._crowd_energy = _st["energy"]
+            self._crowd_mood_home = _st["mood"]
+            away_age = roster_avg_age(self.away_team)
+            hm, am = crowd_effects(self._crowd_energy, self._crowd_mood_home,
+                                   away_avg_age=away_age)
+            self._crowd_home_mult = hm
+            self._crowd_away_mult = am
+        except Exception:
+            pass
 
     def _apply_dressing_room_pregame(self):
         """Module 03: pre-game talks move the opening needle (both rooms).
@@ -2475,6 +2544,10 @@ class AdvancedGameSim:
                 period=int(getattr(self, "period", 1) or 1),
                 clock_seconds=max(0.0, 3600.0 - float(getattr(self, "time", 0) or 0)),
                 is_playoff=bool(getattr(self, "is_playoff", False)),
+                crowd_energy=float(getattr(self, "_crowd_energy", 50.0) or 50.0),
+                crowd_mood=float(getattr(self, "_crowd_mood_home", 0.0) or 0.0)
+                    if puck_team_name == self.home_team.team_name
+                    else -float(getattr(self, "_crowd_mood_home", 0.0) or 0.0),
             )
             _seff = _imp.shot_effects(_imp.classify_shot_impact(shooter, _ictx))
             _sm = _seff["save_prob_mult"]
@@ -2580,10 +2653,16 @@ class AdvancedGameSim:
             elif def_tactic == 'Very Offensive':
                 shot_chance += 0.008  # Pinching D, odd-man rushes both ways
         
-        # Home-ice advantage: small boost for home team (NHL home win ~55%)
-        # +0.5% absolute shooting chance ≈ the observed home edge
+        # Home-ice + crowd (arena_atmosphere): the structural last-change
+        # edge (+0.25% flat) plus the building's mood -- a jacked crowd lifts
+        # the home side, a nervous/toxic one drags it; young visitors get
+        # rattled in loud hostile barns. Circumstantial, averages about the
+        # old flat +0.5%, but it can now go the other way.
         if puck_team_name == self.home_team.team_name:
-            shot_chance += 0.005
+            shot_chance += 0.0025
+            shot_chance *= self._crowd_home_mult
+        else:
+            shot_chance *= self._crowd_away_mult
         
         # Clamp to realistic NHL range (5% - 15%)
         shot_chance = max(0.05, min(0.15, shot_chance))
@@ -2631,6 +2710,8 @@ class AdvancedGameSim:
         elif random.random() < shot_chance:  # Direct shot chance calculation
             shot_result = 'GOAL'
             self.score[puck_team_name] += 1
+            # Crowd: the building swings on every goal (live mood/energy).
+            self._crowd_on_goal(puck_team_name)
             # Update stats
             self.stats[puck_team_name][shooter.id]['goals'] = self.stats[puck_team_name][shooter.id].get('goals', 0) + 1
             # Assists: primary = last successful passer to the shooter
@@ -7170,6 +7251,8 @@ class HockeyManagerGUI(tk.Tk):
                 # drop the cached team-strength values so sims stay current.
                 if hasattr(self, '_strength_cache'):
                     self._strength_cache.clear()
+                # Milestone watches: one scan per day, pre-game presentation.
+                self._milestone_pregame(todays_games)
                 self._process_todays_games(todays_games)
             
             self._set_continue_feedback(True, "Updating injuries...")
@@ -7214,6 +7297,9 @@ class HockeyManagerGUI(tk.Tk):
                 print(f"AI manager error (non-fatal): {e}")
             
             # ALWAYS advance date and update UI (whether games existed or not)
+            # Milestones hit today: ledger + four-viewpoint headlines, once
+            # the day's career totals are final.
+            self._milestone_postgame()
             self.current_date += timedelta(days=1)
 
             # Trade talks: AI GMs answer due offers/counters via the inbox.
@@ -8012,6 +8098,183 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             print(f"Error generating weekly email summary: {e}")
 
+    # -- Milestone watches (milestones.py) -----------------------------------
+    def _milestone_pregame(self, todays_games):
+        """One milestone scan per day + pre-game presentation.
+
+        Caches the watch list for the post-game check and the set of teams
+        with a tonight-watch (feeds arena_atmosphere's milestone_home flag).
+        Pre-game news only when a watch is within 2 -- tonight could be the
+        night. Never spams for distant watches.
+        """
+        self._milestone_watches = []
+        self._milestone_watch_teams = set()
+        try:
+            import milestones as _ms
+            from narrative_ledger import active_ledger as _al
+            watches = _ms.scan_watches(getattr(self, "league", None))
+            self._milestone_watches = watches
+            self._milestone_watch_teams = _ms.watch_teams_tonight(watches)
+            if not watches:
+                return
+            _led = _al()
+            _by_team: dict = {}
+            for _w in watches:
+                if _w["remaining"] <= 2:
+                    _by_team.setdefault(_w["team_name"], []).append(_w)
+            if not _by_team:
+                return
+            for game in todays_games or []:
+                try:
+                    if isinstance(game, dict):
+                        home, away = game.get("home_team"), game.get("away_team")
+                    else:
+                        home, away = game[1], game[2]
+                    hn = getattr(home, "team_name", "")
+                    for _w in _by_team.get(hn, []):
+                        _note = _ms.venue_note(_w, home, away, _led)
+                        _suffix = f" ({_note})" if _note else ""
+                        self.add_news(
+                            f"Milestone watch: {_w['player_name']} is "
+                            f"{_w['remaining']} away from his {_w['label']}"
+                            f"{_suffix}.")
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _milestone_postgame(self):
+        """Milestones hit today: ledger event + four-viewpoint headline."""
+        try:
+            import milestones as _ms
+            watches = getattr(self, "_milestone_watches", None) or []
+            self._milestone_watches = []
+            self._milestone_watch_teams = set()
+            if not watches:
+                return
+            for hit in _ms.check_hits(getattr(self, "league", None), watches):
+                _ms.record_milestone_hit(self, hit)
+        except Exception:
+            pass
+
+    # -- Grudge-week presentation --------------------------------------------
+    def _grudge_week_market(self, game_date, home_team, away_team):
+        """Market a genuine feud as grudge week (sellout talk, loud billing).
+
+        Returns True when marketed; the matchup+date is tracked so the
+        post-game check can call out hollow overhype honestly.
+        """
+        try:
+            from narrative_ledger import get_ledger as _gl
+            _led = _gl(self)
+            _mw = float(_led.memory_weight(home_team.team_name,
+                                           away_team.team_name) or 0.0)
+            if _mw < 60.0:
+                return False
+            _mk = (home_team.team_name, away_team.team_name, str(game_date))
+            _gm = getattr(self, "_grudge_marketed", None)
+            if not isinstance(_gm, set):
+                _gm = set()
+                self._grudge_marketed = _gm
+            _gm.add(_mk)
+            self.add_news(
+                f"Grudge week in "
+                f"{getattr(home_team, 'city', home_team.team_name)}: "
+                f"{away_team.team_name} @ {home_team.team_name} -- "
+                f"the building is sold out and shaking. This one matters.")
+            return True
+        except Exception:
+            return False
+
+    def _grudge_week_grade(self, game_date, home_team, away_team,
+                           home_score, away_score, went_to_ot, fights=0):
+        """Post-game: call out hollow overhype when the game fizzled."""
+        try:
+            _mk = (home_team.team_name, away_team.team_name, str(game_date))
+            _gm = getattr(self, "_grudge_marketed", None)
+            if not (isinstance(_gm, set) and _mk in _gm):
+                return
+            _gm.discard(_mk)
+            _margin = abs(home_score - away_score)
+            if _margin >= 4 and not went_to_ot and fights == 0:
+                self.add_news(
+                    f"All that hype for this? "
+                    f"{away_team.team_name} @ {home_team.team_name} "
+                    f"fizzles {_margin} goals apart -- the fans feel sold "
+                    f"a bill of goods.")
+        except Exception:
+            pass
+
+    # -- Immortality (immortality.py) -----------------------------------------
+    def _offseason_immortality(self):
+        """Retirements, HOF vote, retired numbers, era arguments. One pass."""
+        import immortality as _im
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        year = int(getattr(league, "season_year", 2026) or 2026)
+        hist = getattr(self, "league_history", None)
+
+        # 1. Hang them up.
+        retired = _im.process_retirements(league, year)
+        for snap in retired:
+            try:
+                if _im.career_score(snap) >= 60.0:
+                    self.add_news(
+                        f"{snap['name']} hangs them up: "
+                        f"{snap['games']} games, {snap['points']} points"
+                        f"{', ' + str(snap['wins']) + ' wins' if snap.get('goalie') else ''}. "
+                        f"A career worthy of the Hall conversation.")
+            except Exception:
+                pass
+
+        # 2. Raise the numbers.
+        for snap in retired:
+            try:
+                if not _im.number_worthy(snap):
+                    continue
+                team = next(
+                    (t for t in (getattr(league, "teams", None) or [])
+                     if getattr(t, "team_name", "") == snap.get("team_name")),
+                    None)
+                if team is not None and _im.retire_number(team, snap, year):
+                    self.add_news(
+                        f"{getattr(team, 'team_name', '')} will retire "
+                        f"{snap['name']}'s No. {snap['number']} -- "
+                        f"a pregame ceremony at the next home game.")
+            except Exception:
+                continue
+
+        # 3. The Hall calls (or doesn't).
+        if hist is not None:
+            report = _im.hof_ballot(league, hist, year)
+            for ind in report.get("inducted", []):
+                try:
+                    _years = ind.get("ballot_years", 1)
+                    _arc = (f" -- after {_years} years on the ballot, "
+                            f"the wait is over" if _years > 1 else "")
+                    self.add_news(
+                        f"Hall of Fame: {ind['name']} is in "
+                        f"({ind['votes']}/12 votes){_arc}.")
+                except Exception:
+                    pass
+            for bl in report.get("borderline", []):
+                try:
+                    self.add_news(
+                        f"Hall of Fame debate: {bl['name']} falls short "
+                        f"({bl['votes']}/12) -- the room is split between "
+                        f"the compilers and the peak-value crowd. "
+                        f"Back on the ballot next year.")
+                except Exception:
+                    pass
+
+            # 4. Greatest team ever? Only when there's a real argument.
+            arg = _im.era_argument(hist)
+            if arg is not None:
+                news = _im.era_argument_news(arg)
+                if news:
+                    self.add_news(news)
+
     def _process_todays_games(self, todays_games):
         """Process all games scheduled for today - OPTIMIZED"""
         user_team = getattr(self, 'user_team', None)
@@ -8158,9 +8421,24 @@ class HockeyManagerGUI(tk.Tk):
                                 _led.mark_referenced(_cand["id"])
                 except Exception:
                     pass
-                sim_engine = AdvancedGameSim(home_team, away_team)
+                self._grudge_week_market(game_date, home_team, away_team)
+                sim_engine = AdvancedGameSim(
+                    home_team, away_team,
+                    atmosphere=_pregame_atmosphere(
+                        home_team, away_team,
+                        milestone_home=home_team.team_name in
+                        getattr(self, "_milestone_watch_teams", set()),
+                        ceremony=bool(getattr(home_team, "_pending_ceremony",
+                                              None))))
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
+                # Pregame ceremony (if one is queued): electric building via
+                # the atmosphere flag above, plus the room's one-game bump.
+                try:
+                    import immortality as _im2
+                    _im2.consume_ceremony(self, home_team, sim_engine)
+                except Exception:
+                    pass
                 winner, loser, scores, events, notable_events = sim_engine.run()
                 # Revert AI tactics + file tactical intel on the user's systems
                 if _qs_adapted is not None:
@@ -8225,6 +8503,7 @@ class HockeyManagerGUI(tk.Tk):
         """
         # Update league standings (safely)
         home_score, away_score = scores
+
         
         # Ensure teams exist in standings
         if home_team.team_name not in self.league.standings:
@@ -8235,7 +8514,18 @@ class HockeyManagerGUI(tk.Tk):
         # Detect if game went to overtime/shootout (for OTL point)
         # NHL rule: loser in OT/SO gets 1 point (OTL)
         went_to_ot = len([e for e in notable_events if e.get('period', 0) > 3]) > 0
-        
+
+        # Grudge-week report card: marketed hard and fizzled gets called out.
+        try:
+            _ufights = 0
+            if sim_engine is not None:
+                _ufights = int(getattr(sim_engine, "_fights_total", 0) or 0)
+            self._grudge_week_grade(game_date, home_team, away_team,
+                                    home_score, away_score, went_to_ot,
+                                    fights=_ufights)
+        except Exception:
+            pass
+
         # Winner gets 2 points
         self.league.standings[winner.team_name]['W'] += 1
         self.league.standings[winner.team_name]['Points'] += 2
@@ -8936,6 +9226,16 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
 
+                # Grudge-week presentation for genuine feuds (sellout talk,
+                # loud-building billing); hollow overhype gets graded post-game.
+                self._grudge_week_market(game_date, home_team, away_team)
+                # Pregame ceremony (news only on the lightweight path).
+                try:
+                    import immortality as _im4
+                    _im4.consume_ceremony(self, home_team, None)
+                except Exception:
+                    pass
+
                 # Per-league sim detail (new-game setup): 'full' leagues get the
                 # event-by-event engine with player stats; everything else
                 # uses the ultra-fast lightweight path.
@@ -9015,6 +9315,18 @@ class HockeyManagerGUI(tk.Tk):
             
             # Add to game results (keeps the date/matchup indexes in sync)
             self._record_game_result(game_result)
+
+            # Hollow overhype: marketed as grudge week, delivered a
+            # snoozer -- the marketing wrote checks the game couldn't cash.
+            _gfights = 0
+            if full_sim is not None:
+                try:
+                    _gfights = int(getattr(full_sim, "_fights_total", 0) or 0)
+                except Exception:
+                    _gfights = 0
+            self._grudge_week_grade(game_date, home_team, away_team,
+                                    home_score, away_score, went_to_ot,
+                                    fights=_gfights)
             
             # Only generate news for user team games
             if user_team and user_team in (home_team, away_team):
@@ -9078,7 +9390,15 @@ class HockeyManagerGUI(tk.Tk):
         Returns (winner, loser, scores, went_to_ot, sim).
         """
         from simulation import GameSim
-        sim = GameSim(home_team, away_team)
+        from arena_atmosphere import crowd_hype_for_tension
+        _atm = _pregame_atmosphere(
+            home_team, away_team,
+            milestone_home=home_team.team_name in
+            getattr(self, "_milestone_watch_teams", set()),
+            ceremony=bool(getattr(home_team, "_pending_ceremony", None)))
+        sim = GameSim(home_team, away_team, atmosphere=_atm,
+                      crowd_hype=crowd_hype_for_tension(
+                          _atm.get("energy", 50.0), _atm.get("mood", 30.0)))
         periods = set()
         had_shootout = {'v': False}
 
@@ -9089,6 +9409,12 @@ class HockeyManagerGUI(tk.Tk):
                     had_shootout['v'] = True
 
         sim.pbp_listeners.append(_sniff)
+        # Pregame ceremony (if one is queued).
+        try:
+            import immortality as _im3
+            _im3.consume_ceremony(self, home_team, sim)
+        except Exception:
+            pass
         winner, loser, scores, _game_log, _notable = sim.run()
         went_to_ot = any(p > 3 for p in periods)
         return winner, loser, scores, went_to_ot, sim
@@ -10424,6 +10750,13 @@ class HockeyManagerGUI(tk.Tk):
         # standings) before league.end_of_season() wipes the stats.
         try:
             self._record_season_to_history()
+        except Exception:
+            pass
+        # Immortality (immortality.py): retirements, HOF ballot, retired
+        # numbers, era arguments. Runs on recorded career totals, before
+        # league.end_of_season() wipes the stats. Purely additive.
+        try:
+            self._offseason_immortality()
         except Exception:
             pass
         # Copycat league: AI teams steal the Cup champion's systems.
@@ -12820,6 +13153,18 @@ class HockeyManagerGUI(tk.Tk):
     def assign_jersey_number(self, player):
         new_number = simpledialog.askinteger("Assign Jersey Number", f"Enter a new jersey number for {player.full_name}:", initialvalue=player.jersey_number)
         if new_number:
+            # Retired numbers stay retired -- the rafters are not negotiable.
+            try:
+                import immortality as _im
+                _team = getattr(self, "user_team", None)
+                if _team is not None and _im.is_number_retired(_team, new_number):
+                    messagebox.showwarning(
+                        "Retired Number",
+                        f"No. {new_number} is retired by "
+                        f"{_team.team_name} -- pick another.")
+                    return
+            except Exception:
+                pass
             player.jersey_number = new_number
             self.update_all_views()
 

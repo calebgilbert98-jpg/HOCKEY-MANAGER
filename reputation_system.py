@@ -3661,13 +3661,17 @@ def _roster_chippiness(roster: Any) -> float:
 def game_tension_breakdown(home_team: Any, away_team: Any, rivalries: list,
                            is_playoff: bool = False, series_game: int = 0,
                            recent_fights: int = 0, recent_pim: int = 0,
-                           extra_incidents: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                           extra_incidents: Optional[List[Dict[str, Any]]] = None,
+                           crowd_hype: float = 0.0) -> Dict[str, Any]:
     """0-100 tension plus the signed drivers behind it.
 
     Returns {"tension": float, "drivers": [{"label": str, "points": float}]}.
     + heats the game up, - cools it down. Two strangers still get a little
     heat (pride on the line); rivalries, wounds, fights, and chippy
     personnel pile on, while clean professional matchups cool it off.
+
+    crowd_hype (0-100, from arena_atmosphere.crowd_hype_for_tension): a loud
+    building raises everyone's pulse. 0 = not provided, no adjustment.
     """
     drivers: List[Dict[str, Any]] = []
     try:
@@ -3745,6 +3749,20 @@ def game_tension_breakdown(home_team: Any, away_team: Any, rivalries: list,
         if not incidents and rivalry_pts == 0:
             drivers.append({"label": "No recent bad blood", "points": -1.0})
             t -= 1.0
+        # Crowd hype: a loud building raises everyone's pulse -- even a
+        # nervous barn is intense. 0 = not provided.
+        try:
+            ch = float(crowd_hype or 0.0)
+        except Exception:
+            ch = 0.0
+        if ch > 0.0:
+            pts = round((ch - 55.0) * 0.15, 1)
+            if pts >= 1.0:
+                drivers.append({"label": "Electric crowd", "points": pts})
+                t += pts
+            elif pts <= -1.0:
+                drivers.append({"label": "Flat crowd", "points": pts})
+                t += pts
         tension = round(min(100.0, max(0.0, t)), 1)
         drivers.sort(key=lambda d: -abs(d["points"]))
         return {"tension": tension, "drivers": drivers}
