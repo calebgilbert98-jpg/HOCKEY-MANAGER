@@ -578,6 +578,20 @@ class GameSim:
         self._game_elapsed = 0.0
         self.shift_log = []       # completed-shift records (TOI accounting)
         self.player_toi = {}      # player_id -> seconds on ice this game
+        # EHM Work Rate: shift-to-shift consistency. Rolled once per game:
+        # high-work-rate players are steady, low-work-rate stars drift in
+        # and out. Applied as a small multiplier on decision quality.
+        self._game_effort = {}
+        for _tm in (home_team, away_team):
+            for _p in _tm.roster:
+                _wr = getattr(_p, 'work_rate', 50)
+                if _wr >= 80:
+                    _lo, _hi = 0.95, 1.05   # metronome
+                elif _wr >= 60:
+                    _lo, _hi = 0.85, 1.10   # normal variance
+                else:
+                    _lo, _hi = 0.70, 1.20   # streaky: invisible or dominant
+                self._game_effort[_p.id] = random.uniform(_lo, _hi)
         self.player_shifts = {}   # player_id -> shifts taken this game
         
         # Stage 3: Special situations and faceoffs
@@ -1206,10 +1220,10 @@ class GameSim:
             center = player1 if pos1 == PlayerPosition.CENTER else player2
             winger = player2 if pos1 == PlayerPosition.CENTER else player1
             
-            # Playmaking center with skilled winger
-            if center.passing >= 30 and winger.offensive_awareness >= 30:
+            # Playmaking center with skilled winger (1-100 scale)
+            if center.passing >= 60 and winger.offensive_awareness >= 60:
                 return 8
-            elif center.passing >= 24 and winger.offensive_awareness >= 24:
+            elif center.passing >= 50 and winger.offensive_awareness >= 50:
                 return 4
             return 2
         
@@ -1308,13 +1322,13 @@ class GameSim:
         except Exception:
             pass
 
-        # Add personality modifiers (50-point scale aware)
+        # Personality modifiers (1-100 scale: 50 is average)
         if role == LineRole.ENFORCER:
-            base_effectiveness += (player.aggressiveness - 35) * 0.5
+            base_effectiveness += (player.aggressiveness - 50) * 0.5
         elif role == LineRole.DEFENSIVE_FORWARD:
-            base_effectiveness += (player.work_rate - 35) * 0.3
+            base_effectiveness += (player.work_rate - 50) * 0.3
         elif role == LineRole.PLAYMAKER:
-            base_effectiveness += (player.hockey_iq - 35) * 0.3
+            base_effectiveness += (player.hockey_iq - 50) * 0.3
 
         return max(0, min(100, base_effectiveness))
 
@@ -2808,6 +2822,120 @@ class GameSim:
                                  else 'gassed' if gassed else 'target')
         return True
 
+    def _effective_usage_mode(self, team):
+        """Forward usage mode: user setting, with AI overrides for game state.
+
+        EHM-style: coaches shorten the bench when chasing late, roll four
+        lines when protecting a lead or in a blowout.
+        """
+        base = getattr(team, 'tactic_forward_usage', 'Normal') or 'Normal'
+        # AI override: only when the user left it on Normal (explicit user
+        # choices are respected).
+        if base != 'Normal':
+            return base
+        goal_diff = (self.home_score - self.away_score
+                     if team == self.home_team
+                     else self.away_score - self.home_score)
+        late = self.period >= 3 and self.clock < 600  # last 10 min of 3rd
+        if late and goal_diff <= -2:
+            return 'Just Two'   # chasing: ride the horses
+        if late and goal_diff == -1:
+            return 'Overload'   # one-goal chase: top 9
+        return 'Normal'
+
+    def _choose_next_unit(self, team, group, old_idx):
+        """Phase 2 conditional deployment: pick the next unit, not just rotate.
+
+        Returns (new_idx, choice_reason). Considers usage mode, score state,
+        period/time, and (for home F) last-change matching against the
+        opponent's current line.
+        """
+        slots = {'F': 4, 'D': 3, 'PP': 2, 'PK': 2}[group]
+        key = 'line' if group == 'F' else ('pair' if group == 'D'
+                                           else 'unit')
+        # Special teams: simple rotation (no conditional deployment).
+        if group in ('PP', 'PK'):
+            return old_idx % slots + 1, 'rotation'
+
+        goal_diff = (self.home_score - self.away_score
+                     if team == self.home_team
+                     else self.away_score - self.home_score)
+        late_3rd = self.period == 3 and self.clock < 300  # last 5 min
+        end_of_period = self.clock < 60  # last minute
+
+        if group == 'F':
+            mode = self._effective_usage_mode(team)
+            # Candidate pool by usage mode.
+            if mode == 'Just Two':
+                pool = [1, 2]
+            elif mode in ('Overload', 'Just Three'):
+                pool = [1, 2, 3]
+            else:
+                pool = [1, 2, 3, 4]
+            reason = f'usage:{mode}'
+
+            # Score-state: trailing late -> top lines; leading late -> trust
+            # the checking lines in our own end, but still attack on OZ draws.
+            if late_3rd:
+                if goal_diff <= -1:
+                    pool = [i for i in pool if i <= 2] or pool
+                    reason = 'chase:shorten'
+                elif goal_diff >= 2:
+                    # Protect: prefer 3rd/4th lines for DZ starts.
+                    if self.current_zone == Zone.DEFENSIVE_ZONE \
+                            and self.possession_team != team:
+                        pool = [i for i in pool if i >= 3] or pool
+                        reason = 'protect:checking'
+            # End of period: fresh legs for the last push / safe close.
+            if end_of_period and self.period < 4:
+                if goal_diff <= 0:
+                    pool = [1, 2]
+                    reason = 'endperiod:push'
+                else:
+                    pool = [3, 4] if 'Normal' == mode else pool
+                    reason = 'endperiod:close'
+
+            # Home last-change: see the away unit, then counter it.
+            # (Away changes first in _check_unit_changes, so the away line
+            # recorded in _shift is the fresh choice.)
+            opp = self.away_team if team == self.home_team else self.home_team
+            scheme = getattr(team, 'tactic_matching_scheme', 'Standard')
+            if (team == self.home_team and scheme in ('Shutdown', 'Power')
+                    and self.period < 4):
+                try:
+                    opp_line = self._shift.get(opp.team_name, {}).get(
+                        'F', {}).get('line', 1)
+                    if opp_line == 1:  # opp top line is out
+                        if scheme == 'Shutdown':
+                            # Best defensive line (3rd) vs their 1st.
+                            if 3 in pool:
+                                return 3, 'match:shutdown'
+                        else:  # Power vs Power
+                            if 1 in pool:
+                                return 1, 'match:power'
+                except Exception:
+                    pass
+
+            # Avoid an immediate repeat unless the pool forces it.
+            choices = [i for i in pool if i != old_idx] or pool
+            # Prefer the least-recently-used line (simple LRU).
+            st = self._ensure_shift_state(team)
+            last_used = st.get('_line_last', {})
+            choices.sort(key=lambda i: last_used.get(i, 0.0))
+            pick = choices[0]
+            last_used[pick] = self._game_elapsed
+            st['_line_last'] = last_used
+            return pick, reason
+
+        # Defense pairs: rotate 1-3; shorten to top-4 D when protecting late.
+        pool = [1, 2, 3]
+        reason = 'rotation'
+        if late_3rd and goal_diff >= 2:
+            pool = [1, 2]
+            reason = 'protect:top4'
+        choices = [i for i in pool if i != old_idx] or pool
+        return choices[0], reason
+
     def _change_unit(self, team, group, log_shift=True):
         """Rotate one unit off, log the completed shift, dress the next."""
         tn = team.team_name
@@ -2824,12 +2952,14 @@ class GameSim:
                 'start': st['start'], 'end': self._game_elapsed,
                 'duration': shift_len, 'period': self.period,
                 'reason': st.pop('_pending_reason', 'target'),
+                'choice': st.pop('_last_choice_reason', 'rotation'),
             })
         else:
             st.pop('_pending_reason', None)
-        # Phase 1: simple rotation (conditional deployment = Phase 2).
-        slots = {'F': 4, 'D': 3, 'PP': 2, 'PK': 2}[group]
-        st[key] = old_idx % slots + 1
+        # Phase 2: conditional deployment (score, period, usage, matching).
+        new_idx, choice_reason = self._choose_next_unit(team, group, old_idx)
+        st[key] = new_idx
+        st['_last_choice_reason'] = choice_reason
         st['start'] = self._game_elapsed
         for p in self._shift_unit_players(team, group):
             self.player_shifts[p.id] = self.player_shifts.get(p.id, 0) + 1
@@ -2842,7 +2972,9 @@ class GameSim:
 
     def _check_unit_changes(self):
         """Per-team, per-unit shift decisions each tick."""
-        for team in (self.home_team, self.away_team):
+        # Last-change order: away chooses first, home reacts (EHM's
+        # home-ice edge -- the home coach sees the away unit before picking).
+        for team in (self.away_team, self.home_team):
             # Icing freeze: the offending team's tired skaters stay out.
             if getattr(self, '_no_line_change_team', None) is team:
                 continue
@@ -5659,7 +5791,7 @@ class GameSim:
                                      "infraction": (name, penalty_length, detail),
                                      "ticks": 0}
             opposing = self.away_team if team == self.home_team else self.home_team
-            self._pull_goalie(opposing)  # 6th attacker during the delay
+            self._pull_goalie(opposing, delayed=True)  # 6th attacker during the delay
             self._log_event(
                 f"Delayed penalty coming up on {player.full_name} "
                 f"({team.team_name}, {name}) -- play continues!", "PENALTY")
@@ -6216,6 +6348,10 @@ class GameSim:
         if _shot_carrier is not None and _shot_carrier in attacking_skaters:
             ciq = (_shot_carrier.offensive_awareness
                    + _shot_carrier.decision_making) / 2.0
+            # Work Rate consistency: a drifting star reads the play worse
+            # tonight; a dialed-in grinder reads it better.
+            _effort = self._game_effort.get(_shot_carrier.id, 1.0)
+            ciq = ciq * (0.85 + 0.15 * _effort)
             iq_factor = (ciq - 72.0) / 100.0
             _att_net = 189.0 if attacking_team == self.home_team else 11.0
             _ccx, _ = self._ppos_get(_shot_carrier)
@@ -6228,6 +6364,48 @@ class GameSim:
         
         if event_roll < shot_chance:
             shooter = self._weighted_skater_choice(attacking_skaters, "shoot")
+            # EHM Teamwork: an unselfish carrier with a teammate in a more
+            # dangerous spot dishes instead of forcing it. Teamwork >= 65
+            # makes the read; higher teamwork = more likely to pass it up.
+            _tw_carrier = getattr(self, "possession_player", None)
+            if (_tw_carrier is not None and _tw_carrier in attacking_skaters
+                    and getattr(_tw_carrier, "teamwork", 50) >= 65):
+                try:
+                    _att_net = (189.0 if attacking_team == self.home_team
+                                else 11.0)
+                    _ccx, _ = self._ppos_get(_tw_carrier)
+                    _c_dist = abs(_ccx - _att_net)
+                    _best_mate = None
+                    _best_dist = _c_dist - 15.0  # must be clearly better
+                    for _mate in attacking_skaters:
+                        if _mate is _tw_carrier:
+                            continue
+                        _mx, _ = self._ppos_get(_mate)
+                        _m_dist = abs(_mx - _att_net)
+                        if _m_dist < _best_dist:
+                            _best_dist = _m_dist
+                            _best_mate = _mate
+                    if _best_mate is not None:
+                        _tw = _tw_carrier.teamwork
+                        if random.random() < (_tw - 60) / 100.0:
+                            # Dish to the better-placed teammate: transfer
+                            # possession; the mate now carries in a more
+                            # dangerous spot.
+                            self.possession_player = _best_mate
+                            self.possession_team = attacking_team
+                            self.possession_time = 0.0
+                            try:
+                                _mx, _my = self._ppos_get(_best_mate)
+                                self.puck_pos = (_mx, _my)
+                            except Exception:
+                                pass
+                            self._log_event(
+                                f"{_tw_carrier.full_name} dishes to "
+                                f"{_best_mate.full_name} instead of forcing "
+                                f"it.", "PASS")
+                            return "PASS"
+                except Exception:
+                    pass
             self._resolve_scoring_chance(shooter, attacking_team, defending_team)
         elif event_roll < shot_chance + turnover_chance:
             return self._attempt_zone_clear(defending_team, attacking_team)
@@ -6691,8 +6869,13 @@ class GameSim:
         return ((team == self.home_team and px > 125)
                 or (team == self.away_team and px < 75))
 
-    def _pull_goalie(self, team):
-        """Pull the goalie for the extra attacker (6 skaters, empty net)."""
+    def _pull_goalie(self, team, delayed=False):
+        """Pull the goalie for the extra attacker (6 skaters, empty net).
+
+        delayed=True: 6th attacker during a delayed penalty (routine, not a
+        strategic pull) -- logged distinctly so it never reads as a coach's
+        late-game decision.
+        """
         if team.team_name in self.goalie_pulled:
             return
         self.goalie_pulled.add(team.team_name)
@@ -6701,11 +6884,20 @@ class GameSim:
             self._emit_skate(force=True)
         except Exception:
             pass
-        self._log_event(
-            f"{team.team_name} pull the goalie for the extra attacker!",
-            "GOALIE_PULLED")
-        self._emit_pbp("goalie_pulled", team=team.team_name,
-                       home_score=self.home_score, away_score=self.away_score)
+        if delayed:
+            self._log_event(
+                f"{team.team_name} get the extra attacker on the delayed "
+                f"penalty.", "DELAYED_EXTRA_ATTACKER")
+            self._emit_pbp("delayed_extra_attacker", team=team.team_name,
+                           home_score=self.home_score,
+                           away_score=self.away_score)
+        else:
+            self._log_event(
+                f"{team.team_name} pull the goalie for the extra attacker!",
+                "GOALIE_PULLED")
+            self._emit_pbp("goalie_pulled", team=team.team_name,
+                           home_score=self.home_score,
+                           away_score=self.away_score)
 
     def _return_goalie(self, team):
         """Goalie back in the net (whistles, goals, period ends)."""
@@ -8155,7 +8347,7 @@ class GameSim:
             chemistry_change = -1.0  # Penalty for conflict
         
         # Apply personality modifiers
-        if player1.teamwork >= 30 and player2.teamwork >= 30:
+        if player1.teamwork >= 60 and player2.teamwork >= 60:
             chemistry_change *= 1.2  # High teamwork players build chemistry faster
         
         if abs(player1.leadership - player2.leadership) >= 5:

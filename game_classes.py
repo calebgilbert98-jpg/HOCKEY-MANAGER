@@ -1797,6 +1797,12 @@ class Team:
     tactic_penalty_kill: str = "Defensive"
     # Line matching: 'Aggressive', 'Standard', 'Conservative'
     tactic_line_matching: str = "Standard"
+    # Forward usage mode: 'Normal' (roll 4), 'Overload' (top 9), 'Just Two',
+    # 'Just Three'. EHM-style ice-time concentration when chasing a game.
+    tactic_forward_usage: str = "Normal"
+    # Matching scheme for last-change: 'Standard' (line-on-line), 'Shutdown'
+    # (best defensive line vs opp top line), 'Power' (top line vs opp top line)
+    tactic_matching_scheme: str = "Standard"
     # Forecheck: '2-1-2', '1-2-2', '1-4' (pressure scheme in the other team's end)
     tactic_forecheck: str = "2-1-2"
     # Offensive-zone formation: 'Overload', 'Umbrella', 'Spread', 'Crash the Net'
