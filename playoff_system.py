@@ -785,6 +785,15 @@ class PlayoffView(ctk.CTkFrame):
         bracket_container.grid_rowconfigure(0, weight=1)
         bracket_container.grid_columnconfigure(0, weight=1)
 
+        # Zoom-to-fit: keep the whole tree on screen when the window
+        # resizes (debounced; redraws only if the factor changed).
+        self._bracket_refit_after = None
+        self._bracket_last_scale = None
+        try:
+            canvas.bind("<Configure>", self._on_bracket_canvas_resize)
+        except Exception:
+            pass
+
         # Bottom ticker: 2K-style selected-series readout bar.
         try:
             self.ticker_label = tk.Label(
@@ -1077,6 +1086,68 @@ class PlayoffView(ctk.CTkFrame):
     # card's feeders are already placed when it is centered on them.
     BRACKET_LAYOUT_ORDER = (0, 6, 1, 5, 2, 4, 3)
 
+    # Zoom-to-fit bounds: the tree scales down so all 7 columns fit the
+    # canvas width (no horizontal scroll, like the visualizer ice surface).
+    # Below the floor the window is simply too small and scrolling returns.
+    BRACKET_SCALE_MIN = 0.45
+
+    def _bracket_scale(self):
+        """Zoom factor so the full 7-column tree fits the canvas width.
+
+        1.0 = natural size; <1 shrinks cards, gaps, and fonts
+        proportionally. Clamped to [BRACKET_SCALE_MIN, 1.0].
+        """
+        avail = 0
+        try:
+            canvas = getattr(self, "canvas", None)
+            if canvas is not None:
+                try:
+                    canvas.update_idletasks()
+                except Exception:
+                    pass
+                avail = int(canvas.winfo_width() or 0)
+        except Exception:
+            avail = 0
+        if avail < 200:
+            try:
+                avail = int(self.winfo_width() or 0)
+            except Exception:
+                avail = 0
+        if avail < 200:
+            avail = 1400  # pre-layout / headless fallback
+        natural = (2 * self.BRACKET_PAD + 7 * self.BRACKET_CARD_W
+                   + 6 * self.BRACKET_GAP_X)
+        try:
+            s = avail / float(natural)
+        except Exception:
+            s = 1.0
+        return min(1.0, max(self.BRACKET_SCALE_MIN, s))
+
+    def _on_bracket_canvas_resize(self, _event=None):
+        """Debounced re-fit when the window is resized."""
+        try:
+            pending = getattr(self, "_bracket_refit_after", None)
+            if pending:
+                try:
+                    self.after_cancel(pending)
+                except Exception:
+                    pass
+            self._bracket_refit_after = self.after(250, self._refit_bracket)
+        except Exception:
+            pass
+
+    def _refit_bracket(self):
+        """Redraw only if the zoom factor materially changed."""
+        self._bracket_refit_after = None
+        try:
+            new_s = self._bracket_scale()
+            old_s = getattr(self, "_bracket_last_scale", None)
+            if old_s is not None and abs(new_s - old_s) < 0.02:
+                return
+            self._display_bracket()
+        except Exception:
+            pass
+
     @staticmethod
     def _series_conference(series):
         """Conference of a series (both clubs share one until the Final)."""
@@ -1194,16 +1265,26 @@ class PlayoffView(ctk.CTkFrame):
         if not any(col_series):
             return
 
+        # --- zoom-to-fit: the whole tree scales to the canvas width, so
+        # --- all 7 columns stay on screen with no horizontal scrolling.
+        bs = self._bracket_scale()
+        self._bracket_last_scale = bs
+        card_w = max(120, int(self.BRACKET_CARD_W * bs))
+        gap_x = int(self.BRACKET_GAP_X * bs)
+        pad = int(self.BRACKET_PAD * bs)
+        gap_y = max(10, int(self.BRACKET_GAP_Y * bs))
+
         # --- create the series cards (provisional positions) ---
         cards = {}  # id(series) -> dict(wid, widget, x, y, series, round, ci, conf)
         for ci, ss in enumerate(col_series):
             rkey, conf = self.BRACKET_COLUMNS[ci]
             mirror = (conf == "Eastern")
-            x = self.BRACKET_PAD + ci * (self.BRACKET_CARD_W + self.BRACKET_GAP_X)
+            x = pad + ci * (card_w + gap_x)
             for s in ss:
                 try:
                     card = self._series_card(s, projected=projected,
-                                             mirror=mirror)
+                                            mirror=mirror, width=card_w,
+                                            scale=bs)
                 except Exception:
                     continue
                 try:
@@ -1220,9 +1301,10 @@ class PlayoffView(ctk.CTkFrame):
         except Exception:
             pass
         heights = {}
+        min_h = max(48, int(80 * bs))
         for key, c in cards.items():
             try:
-                heights[key] = max(80, int(c["widget"].winfo_reqheight()))
+                heights[key] = max(min_h, int(c["widget"].winfo_reqheight()))
             except Exception:
                 heights[key] = 150
 
@@ -1239,14 +1321,14 @@ class PlayoffView(ctk.CTkFrame):
         # --- vertical layout: both Round 1 columns stack; every other
         # --- column centers on its feeders (feeders always placed first
         # --- thanks to BRACKET_LAYOUT_ORDER) ---
-        y0 = self.BRACKET_PAD + 10
+        y0 = pad + 10
         for ci in self.BRACKET_LAYOUT_ORDER:
             keys = [id(s) for s in col_series[ci] if id(s) in cards]
             if ci in (0, 6):
                 y = y0
                 for k in keys:
                     cards[k]["y"] = y
-                    y += heights[k] + self.BRACKET_GAP_Y
+                    y += heights[k] + gap_y
                 continue
 
             def _feed_y(k):
@@ -1269,7 +1351,7 @@ class PlayoffView(ctk.CTkFrame):
                 else:
                     yy = y
                 cards[k]["y"] = yy
-                y = yy + heights[k] + self.BRACKET_GAP_Y
+                y = yy + heights[k] + gap_y
 
         # --- place cards ---
         for k, c in cards.items():
@@ -1285,11 +1367,11 @@ class PlayoffView(ctk.CTkFrame):
             c, t = cards[k], cards[tkey]
             try:
                 if c["ci"] < t["ci"]:
-                    x1 = c["x"] + self.BRACKET_CARD_W
+                    x1 = c["x"] + card_w
                     x2 = t["x"]
                 else:
                     x1 = c["x"]
-                    x2 = t["x"] + self.BRACKET_CARD_W
+                    x2 = t["x"] + card_w
                 y1 = c["y"] + heights[k] / 2
                 y2 = t["y"] + heights[tkey] / 2
                 mx = (x1 + x2) / 2
@@ -1304,16 +1386,19 @@ class PlayoffView(ctk.CTkFrame):
             for k, c in cards.items():
                 if c["round"] != "stanley_cup_final":
                     continue
-                ex = c["x"] + self.BRACKET_CARD_W / 2
+                ex = c["x"] + card_w / 2
                 ey = max(c["y"] - 8, 96)
-                canvas.create_text(ex, ey - 44, text="\U0001F3C6",
-                                   font=_cfont(fam, 30, ""), anchor="s")
-                canvas.create_text(ex, ey - 40, text="STANLEY CUP",
+                canvas.create_text(ex, ey - int(44 * bs), text="\U0001F3C6",
+                                   font=_cfont(fam, max(16, int(30 * bs)), ""),
+                                   anchor="s")
+                canvas.create_text(ex, ey - int(40 * bs), text="STANLEY CUP",
                                    fill="#C9A227",
-                                   font=_cfont(fam, 13, "bold"), anchor="n")
-                canvas.create_text(ex, ey - 20, text="PLAYOFFS",
+                                   font=_cfont(fam, max(9, int(13 * bs)),
+                                              "bold"), anchor="n")
+                canvas.create_text(ex, ey - int(20 * bs), text="PLAYOFFS",
                                    fill="#F2F2F2",
-                                   font=_cfont(fam, 11, ""), anchor="n")
+                                   font=_cfont(fam, max(8, int(11 * bs)), ""),
+                                   anchor="n")
                 break
         except Exception:
             pass
@@ -1325,11 +1410,12 @@ class PlayoffView(ctk.CTkFrame):
                 for k, c in cards.items():
                     if c["round"] == "stanley_cup_final":
                         canvas.create_text(
-                            c["x"] + self.BRACKET_CARD_W / 2,
+                            c["x"] + card_w / 2,
                             c["y"] + heights[k] + 16, anchor="n",
                             text=f"\U0001F3C6 {champ.team_name} — Stanley Cup Champions",
                             fill="#C9A227",
-                            font=_cfont(self.app.FONT_FAMILY, 12, "bold"))
+                            font=_cfont(self.app.FONT_FAMILY,
+                                       max(9, int(12 * bs)), "bold"))
                         break
         except Exception:
             pass
@@ -1379,10 +1465,37 @@ class PlayoffView(ctk.CTkFrame):
         except Exception:
             pass
 
-    def _series_card(self, series, projected=False, mirror=False):
+    @staticmethod
+    def _winner_text_color(accent, on_accent, gold="#C9A227"):
+        """Winner's name/wins render in gold -- unless the club's own
+        accent is equally light (BOS/PIT gold, LA silver), in which case
+        gold-on-gold is unreadable and we keep the accent's designed
+        on-color instead."""
+        def _lum(h):
+            try:
+                r, g, b = (int(h.lstrip("#")[i:i + 2], 16) / 255.0
+                           for i in (0, 2, 4))
+                f = lambda c: c / 12.92 if c <= 0.03928 else \
+                    ((c + 0.055) / 1.055) ** 2.4
+                return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+            except Exception:
+                return 0.0
+        try:
+            la, lg = _lum(accent), _lum(gold)
+            ratio = (max(la, lg) + 0.05) / (min(la, lg) + 0.05)
+        except Exception:
+            ratio = 5.0
+        return gold if ratio >= 2.0 else on_accent
+
+    def _series_card(self, series, projected=False, mirror=False,
+                     width=None, scale=1.0):
         """One 2K-style series card: two team-colored rows, the series-wins
         badge at the outer edge (left for West, right for East). Higher
-        seed on top. Click opens the series detail."""
+        seed on top. Click opens the series detail.
+
+        width/scale come from the zoom-to-fit layout so the whole tree
+        stays on screen; fonts and row heights shrink proportionally.
+        """
         try:
             import team_identity_system as _tid
         except Exception:
@@ -1407,13 +1520,13 @@ class PlayoffView(ctk.CTkFrame):
             pass
 
         try:
-            card = ctk.CTkFrame(self.canvas, width=self.BRACKET_CARD_W,
+            card = ctk.CTkFrame(self.canvas, width=width or self.BRACKET_CARD_W,
                                 corner_radius=8,
                                 border_width=2 if decided else 1,
                                 border_color=gold if decided else "#2A3A52",
                                 fg_color="#0E1930")
         except Exception:
-            card = ctk.CTkFrame(self.canvas, width=self.BRACKET_CARD_W)
+            card = ctk.CTkFrame(self.canvas, width=width or self.BRACKET_CARD_W)
         try:
             card.pack_propagate(False)
         except Exception:
@@ -1430,11 +1543,12 @@ class PlayoffView(ctk.CTkFrame):
                 except Exception:
                     pass
             row_bg = hover if is_loser else accent
+            row_h = max(26, int(40 * scale))
             try:
                 row = ctk.CTkFrame(card, fg_color=row_bg, corner_radius=6,
-                                   height=40)
+                                   height=row_h)
             except Exception:
-                row = ctk.CTkFrame(card, height=40)
+                row = ctk.CTkFrame(card, height=row_h)
             pad_bottom = 6 if idx == len(order) - 1 else 0
             try:
                 row.pack(fill="x", padx=6, pady=(6, pad_bottom))
@@ -1447,15 +1561,18 @@ class PlayoffView(ctk.CTkFrame):
             seed = getattr(team, 'standings_position', '')
             seed_txt = f"({seed}) " if seed else ""
             abbr = team_abbr(tname)
+            winner_fg = self._winner_text_color(accent, on_accent, gold)
             try:
                 wins_lbl = ctk.CTkLabel(
                     row, text=str(wins), anchor="center",
-                    font=_cfont(self.app.FONT_FAMILY, 22, "bold"),
-                    text_color=gold if is_winner else on_accent)
+                    font=_cfont(self.app.FONT_FAMILY, max(11, int(22 * scale)),
+                               "bold"),
+                    text_color=winner_fg if is_winner else on_accent)
                 name_lbl = ctk.CTkLabel(
                     row, text=f"{seed_txt}{abbr}", anchor="w",
-                    font=_cfont(self.app.FONT_FAMILY, 15, "bold"),
-                    text_color=gold if is_winner else on_accent)
+                    font=_cfont(self.app.FONT_FAMILY, max(9, int(15 * scale)),
+                               "bold"),
+                    text_color=winner_fg if is_winner else on_accent)
             except Exception:
                 continue
             try:

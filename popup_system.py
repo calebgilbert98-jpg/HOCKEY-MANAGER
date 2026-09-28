@@ -136,7 +136,9 @@ class InGamePopup(tk.Frame):
             return super().__new__(cls)
         entry = mgr._make_entry("", 560, 420, False, False)
         inst = super().__new__(cls)
-        tk.Frame.__init__(inst, entry["body"])
+        # Match the card body: a bare tk.Frame defaults to the platform's
+        # light grey, which shows through transparent CTk children.
+        tk.Frame.__init__(inst, entry["body"], bg=_BG)
         inst._init_popup_metadata(entry)
         object.__setattr__(inst, "_prebuilt_entry", entry)
         return inst

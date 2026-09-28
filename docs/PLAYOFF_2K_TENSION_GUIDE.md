@@ -144,3 +144,38 @@ intensity hype too; asserts `_apply_hit_injury` sets injury attrs (4–10 games 
 rivalry incident, and bridges to the ledger; asserts the 🩸 storyline
 surfaces. One deliberate note: `_is_eastern_team` keys on **division**
 (`Atlantic`/`Metropolitan`) — fake leagues must use real division names.
+
+## 5. Zoom-to-fit bracket (2026-09-28)
+
+Muck: the full bracket must fit on screen with **no left/right scrolling**,
+like the visualizer's ice surface. `_display_bracket` now computes
+`_bracket_scale()` = canvas width / natural tree width (2448px at natural
+size), clamped to [0.45, 1.0], and scales card width, column gaps, pads,
+row heights, fonts, and the Cup emblem proportionally. Vertical scroll
+remains for short windows. A debounced `<Configure>` binding (`_refit_bracket`,
+250ms) redraws only when the factor moves >0.02, so resizing the window
+re-fits live.
+
+**Winner contrast fix** (same screen): `_winner_text_color` — winner rows
+render in gold *unless* the club's accent is equally light (BOS/PIT gold,
+LA silver), where contrast(gold, accent) < 2.0 falls back to the accent's
+designed on-color (black on gold). Fixes gold-on-gold unreadable winners.
+
+## 6. Popup card background fix (2026-09-28)
+
+`InGamePopup.__new__` created its tk.Frame with no `bg`, so it took the
+platform default light grey — showing through any `fg_color="transparent"`
+CTk child (the series-detail popup rendered white/unreadable). The frame
+now gets `bg=_BG` (`#14161b`, the card body color) at construction, fixing
+all current and future popup subclasses in one place.
+
+## QA (continued)
+
+`qa_bracket_fit.py` (13/13): full 15-series tree to a live SCF at 1600x900;
+asserts scale 0.633 (< 1.0), canvas bbox fits canvas width (no h-overflow),
+15 card windows drawn; asserts winner contrast (BOS/PIT/LA gold+silver
+accents -> black text, TOR navy -> gold); asserts the click journey
+(`_open_series_detail` -> real popup card, frame bg `#14161b`, ticker follows
+the series); resizes to 1920x1080, waits out the debounce, asserts the scale
+grows (0.633 -> 0.763) with still no overflow. Screenshots:
+`~/workspace/ahl_shots/bracket_fit_{1600,popup,1920}.png`.
