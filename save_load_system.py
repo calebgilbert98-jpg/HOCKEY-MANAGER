@@ -16,6 +16,29 @@ from dataclasses import asdict
 import sys
 
 
+# Attributes that were 1-50 scale in save version 1.x and are 1-100 in 2.0+.
+# Used by the legacy save migrator to scale old saves up (x2, clamped 1-100).
+MIGRATE_50_TO_100_ATTRS = frozenset([
+    'acceleration', 'adaptability', 'aggressiveness', 'agility', 'anticipation',
+    'backhand', 'balance', 'bodycheck', 'breakaway_skill', 'breakout_passes',
+    'checking', 'coachability', 'composure', 'confidence', 'consistency',
+    'creativity', 'decision_making', 'defensive_awareness', 'deflections',
+    'deking', 'determination', 'discipline', 'durability', 'endurance',
+    'faceoff_wins', 'faceoffs', 'first_pass', 'flair', 'focus', 'forechecking',
+    'glove_hand', 'goaltending', 'hockey_iq', 'important_matches', 'leadership',
+    'line_chemistry', 'loose_puck', 'off_the_puck', 'offensive_awareness',
+    'one_timer', 'passing', 'passing_accuracy', 'passing_creativity',
+    'pokecheck', 'positioning', 'potential', 'pressure_player', 'puck_handling',
+    'puck_protection', 'rebound_control', 'reflexes', 'screen_shots',
+    'shooting', 'shooting_accuracy', 'shooting_power', 'shot_blocking',
+    'skating', 'slapshot', 'speed', 'stamina', 'stick_side', 'stickhandling',
+    'strength', 'team_chemistry', 'teamwork', 'vision', 'work_ethic',
+    'work_rate', 'wristshot',
+])
+
+SAVE_VERSION_100_SCALE = '2.0'
+
+
 class GameSaveManager:
     """Manages saving and loading of complete game states"""
     
@@ -29,12 +52,14 @@ class GameSaveManager:
         # Ensure save directory exists
         if not os.path.exists(self.save_directory):
             os.makedirs(self.save_directory)
+        # Legacy migration flag (set when loading a pre-2.0 save)
+        self._migrate_50_to_100 = False
     
     def create_save_data(self) -> Dict[str, Any]:
         """Create a complete save data structure"""
         try:
             save_data = {
-                'version': '1.0',
+                'version': SAVE_VERSION_100_SCALE,
                 'timestamp': datetime.now().isoformat(),
                 'game_date': self.game_manager.current_date.isoformat() if hasattr(self.game_manager, 'current_date') else None,
                 'season_year': getattr(self.game_manager.league, 'season_year', 2024) if hasattr(self.game_manager, 'league') else 2024,
@@ -516,8 +541,13 @@ class GameSaveManager:
             # Check save version compatibility
             version = save_data.get('version', '1.0')
             if not self._is_compatible_version(version):
-                messagebox.showwarning("Version Warning", 
+                messagebox.showwarning("Version Warning",
                                      f"Save file version {version} may not be fully compatible")
+            # Legacy migration: saves before 2.0 used 1-50 attribute scale;
+            # 2.0+ uses native 1-100. Scale old attributes up on load.
+            self._migrate_50_to_100 = (str(version) < SAVE_VERSION_100_SCALE)
+            if self._migrate_50_to_100:
+                print(f"Migrating save v{version} attributes from 1-50 to 1-100 scale")
             
             # Restore basic game state
             if 'current_date' in save_data and save_data['current_date']:
@@ -718,8 +748,13 @@ class GameSaveManager:
                     except:
                         pass
                 else:
+                    # Legacy 1-50 -> 1-100 migration (save v1.x)
+                    if getattr(self, '_migrate_50_to_100', False) \
+                            and key in MIGRATE_50_TO_100_ATTRS \
+                            and isinstance(value, (int, float)):
+                        value = max(1, min(100, int(round(value * 2))))
                     setattr(player, key, value)
-            
+
             return player
             
         except Exception as e:

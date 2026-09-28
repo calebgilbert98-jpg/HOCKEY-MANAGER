@@ -559,7 +559,8 @@ class GameSim:
         self.possession_team = None
         self.possession_player = None
         self.possession_type = PossessionType.CLEAN_POSSESSION
-        self.zone_time = 0  # Time spent in current zone
+        self.zone_time = 0
+        self._zone_time_credited = 0.0  # Time spent in current zone
         self.possession_time = 0  # Time current player has had possession
         
         # Stage 2: Fatigue tracking
@@ -1995,6 +1996,7 @@ class GameSim:
         self._ppos_ensure()
         self.goalie_pulled = set()  # no carryover between games
         self._game_elapsed = 0.0  # shift clocks run on cumulative game time
+        self._team_poss_time = {}  # team_name -> seconds of possession
         self._shift = {}
         self.shift_log = []
         self.player_toi = {}
@@ -2152,9 +2154,36 @@ class GameSim:
         self._emit_pbp("game_end", winner=winner.team_name,
                        home_score=self.home_score, away_score=self.away_score)
 
+        self._sync_final_team_stats()
         self._emit_telemetry()
 
         return winner, loser, (self.home_score, self.away_score), self.game_log, self.notable_events
+
+    def _sync_final_team_stats(self):
+        """Copy sim-level accumulators into team_stats at the final whistle.
+
+        Fixes: expected_goals_for/against (tracked in self.expected_goals
+        but never copied), faceoff_win_percentage (computed but never
+        stored), possession_time (never tracked per-team).
+        """
+        hn = self.home_team.team_name
+        an = self.away_team.team_name
+        for tn, opp in ((hn, an), (an, hn)):
+            st = self.team_stats.get(tn)
+            if not st:
+                continue
+            # xG: self.expected_goals[team] accumulates per-shot xG
+            xg_for = self.expected_goals.get(tn, 0.0)
+            xg_against = self.expected_goals.get(opp, 0.0)
+            st['expected_goals_for'] = round(xg_for, 2)
+            st['expected_goals_against'] = round(xg_against, 2)
+            # Faceoff %: from won/lost counts
+            won = st.get('faceoffs_won', 0)
+            lost = st.get('faceoffs_lost', 0)
+            total = won + lost
+            st['faceoff_win_percentage'] = round(won / total * 100, 1) if total else 0.0
+            # Possession time: per-team seconds tracked in the tick loop
+            st['possession_time'] = round(self._team_poss_time.get(tn, 0.0), 1)
 
     def _emit_telemetry(self):
         """Append this game's stats to the local beta-telemetry log.
@@ -2194,6 +2223,7 @@ class GameSim:
         self.possession_team = possession_team
         self.current_zone = Zone.NEUTRAL_ZONE
         self.zone_time = 0
+        self._zone_time_credited = 0.0
         self.possession_time = 0
 
         while self.clock > 0:
@@ -2206,6 +2236,10 @@ class GameSim:
             self._game_elapsed += time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
+            _pt = self.possession_team
+            if _pt is not None:
+                _ptn = _pt.team_name
+                self._team_poss_time[_ptn] = self._team_poss_time.get(_ptn, 0.0) + time_elapsed
             # Tick-local log indices: used below to spread this tick's
             # elapsed game time across the events logged during the tick,
             # so sequential plays get distinct chronological timestamps.
@@ -2497,6 +2531,7 @@ class GameSim:
         # Enter offensive zone
         self.current_zone = Zone.OFFENSIVE_ZONE
         self.zone_time = 0
+        self._zone_time_credited = 0.0
         
         # Determine who recovers the puck
         attacking_forecheckers = self._get_forecheckers(attacking_team)
@@ -2840,6 +2875,7 @@ class GameSim:
         """Handle a successful zone entry."""
         self.current_zone = Zone.OFFENSIVE_ZONE
         self.zone_time = 0
+        self._zone_time_credited = 0.0
         self.possession_team = team
         self.possession_player = player
 
@@ -2907,6 +2943,7 @@ class GameSim:
         else:
             self.current_zone = Zone.NEUTRAL_ZONE
         self.zone_time = 0
+        self._zone_time_credited = 0.0
 
     def _maybe_icing(self, clearing_team, clearer):
         """NHL icing: no icing while shorthanded; tired/pressured clears get iced."""
@@ -2975,6 +3012,7 @@ class GameSim:
         """Handle a defensive zone clear."""
         self.current_zone = Zone.NEUTRAL_ZONE
         self.zone_time = 0
+        self._zone_time_credited = 0.0
         self.possession_team = clearing_team
 
         # Find best clearing player
@@ -2999,7 +3037,11 @@ class GameSim:
 
     def _update_zone_time_stats(self, offensive_team, defensive_team):
         """Update zone time statistics."""
-        time_increment = min(5, self.zone_time)  # Cap at 5 seconds per update
+        # Delta since last credit: zone_time accumulates across ticks, so
+        # credit only the new portion (the old min(5, ...) cap undercounted
+        # long possessions).
+        time_increment = max(0.0, self.zone_time - getattr(self, '_zone_time_credited', 0.0))
+        self._zone_time_credited = self.zone_time
         
         # Update team stats
         self.team_stats[offensive_team.team_name]['zone_time_offensive'] += time_increment
@@ -3169,6 +3211,7 @@ class GameSim:
                 return "TURNOVER"
             self.current_zone = Zone.NEUTRAL_ZONE
             self.zone_time = 0
+            self._zone_time_credited = 0.0
             return "BREAKOUT"
         else:
             # Failed breakout
@@ -3209,6 +3252,7 @@ class GameSim:
         # Enter offensive zone
         self.current_zone = Zone.OFFENSIVE_ZONE
         self.zone_time = 0
+        self._zone_time_credited = 0.0
         
         # Higher chance of recovery than dump-in due to placement
         attacking_forwards = [p for p in self._get_on_ice(attacking_team) 
