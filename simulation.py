@@ -6739,6 +6739,17 @@ class GameSim:
         except Exception:
             pass
 
+        # -- Shift fatigue (EHM lesson, additive): a unit kept out past ~40s
+        # degrades -- tired legs lose the battles that make shots. Small,
+        # capped, and on its own channel; conversion untouched elsewhere.
+        try:
+            from shift_engine import shift_fatigue_mult as _sfm
+            _sf = _sfm(self, attacking_team)
+            if _sf != 1.0:
+                shot_chance *= _sf
+        except Exception:
+            pass
+
         # Track formation usage
         if formation:
             if not hasattr(self, 'formation_usage'):

@@ -351,3 +351,40 @@ def emit_line_change_event(sim: Any, team: Any, info: Dict[str, Any]):
                           f_line=st.f_line, d_pair=st.d_pair)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Shift fatigue (the EHM lesson, additive)
+# ---------------------------------------------------------------------------
+# A unit kept out past ~40s degrades: tired legs lose the battles that make
+# shots. Both engines share the curve below; each has a thin adapter because
+# their clocks differ (GameSim counts down, AdvancedGameSim counts up).
+
+FATIGUE_ONSET_S = 40.0   # no degradation at or below this shift age
+FATIGUE_SLOPE = 0.02     # -2% effectiveness per 10s past onset
+FATIGUE_FLOOR = 0.90     # never worse than -10%
+
+
+def fatigue_curve(shift_age_s: float) -> float:
+    """Pure curve: 1.0 at/under onset, linear decay after, floored."""
+    try:
+        age = float(shift_age_s)
+    except Exception:
+        return 1.0
+    if age <= FATIGUE_ONSET_S:
+        return 1.0
+    return max(FATIGUE_FLOOR, 1.0 - FATIGUE_SLOPE * ((age - FATIGUE_ONSET_S) / 10.0))
+
+
+def shift_fatigue_mult(sim: Any, team: Any) -> float:
+    """GameSim adapter: multiplier for the attacking unit right now.
+
+    Never raises; returns 1.0 when shift state is unavailable.
+    """
+    try:
+        st = get_shift_state(sim, team)
+        clock = getattr(sim, "clock", 0)
+        age = max(st.f_age(clock), st.d_age(clock))
+        return fatigue_curve(age)
+    except Exception:
+        return 1.0
