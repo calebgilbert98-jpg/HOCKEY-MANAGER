@@ -547,15 +547,17 @@ class ModernScoutingView(ctk.CTkFrame):
             self.profile_filter.set(current if current in names else "All")
 
     def _open_profile_manager(self):
-        """Open the scouting profile manager dialog."""
+        """Open the scouting profile manager as a screen."""
         try:
-            from scouting_profile_dialog import ScoutingProfileDialog
+            from scouting_profile_dialog import ScoutingProfileView
 
             def _on_apply(name):
                 self._refresh_profile_combo(select=name)
                 self._populate_players()
 
-            ScoutingProfileDialog(self, on_apply=_on_apply)
+            app = self.app if hasattr(self, 'app') else getattr(self, 'parent', None)
+            app.show_screen('scouting_profiles', 'Scouting Profiles',
+                            ScoutingProfileView, on_apply=_on_apply)
             # Refresh list in case customs were added/removed
             self._refresh_profile_combo()
             self._populate_players()

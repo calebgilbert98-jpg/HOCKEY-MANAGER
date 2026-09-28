@@ -17,7 +17,10 @@ from game_classes import League, Player, PlayerPosition, Staff, StaffRole, Scout
 from game_classes import debug_print
 from windows import (RosterWindow, FreeAgencyWindow, TradeWindow, ScoutingWindow, 
                      DraftWindow, ScheduleWindow, FinancesWindow, NewsWindow, 
-                     GMOptionsWindow, ContractNegotiationWindow, 
+                     GMOptionsWindow, ContractNegotiationWindow,
+                     ContractNegotiationView, ContractExtensionsView,
+                     ExtensionNegotiationView, BuyoutCalculatorView,
+                     ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow,
                      TradeBlockWindow, WaiversWindow, SetCaptainsWindow,
                      RosterView, FreeAgencyView, ScoutingView,
                      DraftView, ScheduleView, FinancesView, NewsView,
@@ -6320,10 +6323,9 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_performance_monitor(self):
         """Open the performance monitoring window"""
-        if 'performance_monitor' not in self.open_windows or not self.open_windows['performance_monitor'].winfo_exists():
-            from performance_monitor import PerformanceMonitorWindow
-            self.open_windows['performance_monitor'] = PerformanceMonitorWindow(self)
-        self.open_windows['performance_monitor'].focus_set()
+        from performance_monitor import PerformanceMonitorView
+        return self.show_screen("performance_monitor", "Performance Monitor",
+                                PerformanceMonitorView)
         
     # Enhanced panel update methods
 
@@ -10660,20 +10662,18 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_draft_day_central(self):
         """Open Draft Day Central - the draft-day event hub"""
-        if 'draft_central' not in self.open_windows or not self.open_windows['draft_central'].winfo_exists():
-            self.open_windows['draft_central'] = DraftDayCentral(self, self.game_manager)
-        self.open_windows['draft_central'].focus_set()
+        self.show_screen("draft_central", "Draft Day Central", DraftDayCentral,
+                         self.game_manager)
 
     def open_free_agency_frenzy(self):
         """Open Free Agent Frenzy - the July 1 event hub"""
-        if 'fa_frenzy' not in self.open_windows or not self.open_windows['fa_frenzy'].winfo_exists():
-            self.open_windows['fa_frenzy'] = FreeAgencyFrenzy(self, self.game_manager)
-        self.open_windows['fa_frenzy'].focus_set()
+        self.show_screen("fa_frenzy", "Free Agent Frenzy", FreeAgencyFrenzy,
+                         self.game_manager)
 
     def open_fantasy_draft_window(self):
         """Open the Fantasy Draft window."""
         try:
-            from fantasy_draft import FantasyDraftWindow
+            from fantasy_draft import FantasyDraftView
             
             # Check if fantasy draft is available or needed
             if not hasattr(self.game_manager, 'pending_fantasy_draft') or not self.game_manager.pending_fantasy_draft:
@@ -10681,9 +10681,8 @@ class HockeyManagerGUI(tk.Tk):
                                   "Fantasy draft is only available when starting a new game with the fantasy draft option enabled.")
                 return
                 
-            if 'fantasy_draft' not in self.open_windows or not self.open_windows['fantasy_draft'].winfo_exists():
-                self.open_windows['fantasy_draft'] = FantasyDraftWindow(self, self.game_manager)
-            self.open_windows['fantasy_draft'].focus_set()
+            self.show_screen("fantasy_draft", "Fantasy Draft", FantasyDraftView,
+                             self.game_manager)
         except Exception as e:
             print(f"Error opening fantasy draft window: {e}")
             import traceback
@@ -10737,14 +10736,8 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_league_history_window(self):
         """Open the League History window (champions, awards, leaders, HOF)."""
-        if 'league_history' not in self.open_windows or not self.open_windows['league_history'].winfo_exists():
-            self.open_windows['league_history'] = LeagueHistoryWindow(self, self)
-        window = self.open_windows['league_history']
-        try:
-            window.focus_set()
-            window.lift()
-        except Exception:
-            pass
+        self.show_screen("league_history", "League History", LeagueHistoryView,
+                         self)
 
     def open_shot_chart_viewer(self, game_id=None, team_name=None, player_id=None):
         """Open the shot chart viewer for a game, team, or player."""
@@ -10779,13 +10772,9 @@ class HockeyManagerGUI(tk.Tk):
                               "Watch a game live to capture its shot chart.")
             return
 
-        win = ShotChartViewerWindow(self, self, shots, title=title,
-                                    home_name=home_name, away_name=away_name)
-        try:
-            win.focus_set()
-            win.lift()
-        except Exception:
-            pass
+        self.show_screen("shot_chart", title, ShotChartViewerView,
+                         self, shots, title=title,
+                         home_name=home_name, away_name=away_name)
 
     def open_records_window(self):
         """Open the NHL Records in the Stats window."""
@@ -10830,6 +10819,9 @@ class HockeyManagerGUI(tk.Tk):
                          command=self.show_dashboard,
                          width=130, height=30).pack(side='left', padx=12, pady=7)
         heading(navbar, title, size=16).pack(side='left', padx=8)
+        chips_fn = getattr(self, "_navbar_session_chips", None)
+        if callable(chips_fn):
+            chips_fn(navbar, screen_id)
         view = view_cls(holder, app=self, *args, **kwargs)
         view._close_screen = self.show_dashboard
         view.grid(row=1, column=0, sticky='nsew')
@@ -10840,6 +10832,52 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         return view
+
+    def _navbar_session_chips(self, navbar, current_id):
+        """Resume chips for in-progress negotiations (jump away, jump back)."""
+        try:
+            sessions = getattr(self, "negotiation_sessions", None) or {}
+            if not sessions:
+                return
+            chips = ctk.CTkFrame(navbar, fg_color="transparent")
+            chips._session_chips = True
+            chips.pack(side='right', padx=12)
+            ctk.CTkLabel(chips, text="Resume:",
+                         font=(FONT_FAMILY, 11), text_color=MUTED).pack(
+                             side='left', padx=(0, 6))
+            for key, sess in list(sessions.items()):
+                player = sess.get("player")
+                name = getattr(player, "full_name", "?").split()[-1]
+                label = f"\u25b6 {name}"
+                cur_view = (getattr(self, "_current_screen", None) or {}).get("view")
+                cur_player = getattr(cur_view, "player", None)
+                if cur_player is player:
+                    continue
+                secondary_button(
+                    chips, text=label, width=110, height=28,
+                    command=lambda p=player, e=sess.get("is_extension", False):
+                        self.open_contract_negotiation_window(p, is_extension=e)
+                ).pack(side='left', padx=3)
+        except Exception:
+            pass
+
+    def refresh_screen_navbar(self):
+        """Rebuild the session chips on the current screen's navbar."""
+        cur = getattr(self, "_current_screen", None)
+        if not cur:
+            return
+        holder = cur.get("holder")
+        if holder is None or not holder.winfo_exists():
+            return
+        try:
+            navbar = holder.grid_slaves(row=0, column=0)[0]
+            for child in list(navbar.winfo_children()):
+                # keep the back button and title; rebuild only the chip tray
+                if getattr(child, "_session_chips", False):
+                    child.destroy()
+            self._navbar_session_chips(navbar, cur.get("id"))
+        except Exception:
+            pass
 
     def _teardown_screen(self):
         """Destroy the current full-screen view, if any."""
@@ -11472,15 +11510,13 @@ class HockeyManagerGUI(tk.Tk):
     
     def open_save_window(self):
         """Open the Save Game window."""
-        if 'save_game' not in self.open_windows or not self.open_windows['save_game'].winfo_exists():
-            self.open_windows['save_game'] = SaveLoadWindow(self, mode='save')
-        self.open_windows['save_game'].focus_set()
+        from save_load_system import SaveLoadView
+        self.show_screen("save_game", "Save Game", SaveLoadView, mode='save')
         
     def open_load_window(self):
         """Open the Load Game window."""
-        if 'load_game' not in self.open_windows or not self.open_windows['load_game'].winfo_exists():
-            self.open_windows['load_game'] = SaveLoadWindow(self, mode='load')
-        self.open_windows['load_game'].focus_set()
+        from save_load_system import SaveLoadView
+        self.show_screen("load_game", "Load Game", SaveLoadView, mode='load')
         
     def open_playoffs_window(self):
         """Open the NHL Playoffs window."""
@@ -11530,6 +11566,20 @@ class HockeyManagerGUI(tk.Tk):
         """Set up the window close protocol to prompt for saving"""
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
     
+
+    def _open_save_screen_for_exit(self):
+        """Show the save screen; exit the app if the save completes."""
+        from save_load_system import SaveLoadView
+
+        def _on_save_done(result):
+            if result.get('saved'):
+                # Defer destroy so the view can finish closing first
+                self.after(100, self.destroy)
+            # cancelled: user stays in game; screen already closed itself
+
+        self.show_screen("save_game", "Save Game", SaveLoadView,
+                         mode='save', on_done=_on_save_done)
+
     def on_closing(self):
         """Handle application closing with enhanced save prompt"""
         # Check if this is a new game or if there are unsaved changes
@@ -11544,36 +11594,11 @@ class HockeyManagerGUI(tk.Tk):
                 icon='question'
             )
             
-            if response is True:  # Yes - show enhanced save dialog
+            if response is True:  # Yes - show enhanced save screen
                 try:
-                    # Open the enhanced save window
-                    from save_load_system import SaveLoadWindow
-                    save_window = SaveLoadWindow(self, mode='save')
-                    
-                    # Wait for the save window to close with timeout protection
-                    try:
-                        self.wait_window(save_window)
-                    except tk.TclError:
-                        # Handle case where window was already destroyed
-                        pass
-                    
-                    # Check result and close appropriately
-                    if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                        # Save was successful, safe to exit
-                        self.destroy()
-                    elif hasattr(save_window, 'was_cancelled') and save_window.was_cancelled:
-                        # User cancelled, remain in game
-                        pass
-                    else:
-                        # Unclear state, ask user
-                        if messagebox.askyesno("Exit Confirmation", "Save dialog closed unexpectedly. Exit anyway?"):
-                            self.destroy()
-                    
+                    self._open_save_screen_for_exit()
                 except Exception as e:
-                    messagebox.showerror("Save Error", f"Failed to open save dialog: {str(e)}")
-                    # Ask if they still want to exit
-                    if messagebox.askyesno("Exit Anyway?", "Save dialog failed. Do you still want to exit?"):
-                        self.destroy()
+                    messagebox.showerror("Save Error", f"Failed to open save screen: {str(e)}")
                         
             elif response is False:  # No - exit without saving
                 if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit without saving?"):
@@ -11599,26 +11624,12 @@ class HockeyManagerGUI(tk.Tk):
                             messagebox.showinfo("Game Saved", "Your progress has been saved!")
                             self.destroy()
                         else:
-                            # If quick save fails, offer enhanced save dialog
+                            # If quick save fails, offer enhanced save screen
                             if messagebox.askyesno("Quick Save Failed", "Quick save failed. Open save dialog instead?"):
-                                from save_load_system import SaveLoadWindow
-                                save_window = SaveLoadWindow(self, mode='save')
-                                try:
-                                    self.wait_window(save_window)
-                                except tk.TclError:
-                                    pass
-                                if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                                    self.destroy()
+                                self._open_save_screen_for_exit()
                     else:
-                        # No save manager, show enhanced save dialog
-                        from save_load_system import SaveLoadWindow
-                        save_window = SaveLoadWindow(self, mode='save')
-                        try:
-                            self.wait_window(save_window)
-                        except tk.TclError:
-                            pass
-                        if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                            self.destroy()
+                        # No save manager, show enhanced save screen
+                        self._open_save_screen_for_exit()
                             
                 except Exception as e:
                     messagebox.showerror("Save Error", f"Failed to save: {str(e)}")
@@ -11639,10 +11650,8 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_settings_window(self):
         """Open the comprehensive settings window."""
-        if 'settings' not in self.open_windows or not self.open_windows['settings'].winfo_exists():
-            from settings_window import SettingsWindow
-            self.open_windows['settings'] = SettingsWindow(self)
-        self.open_windows['settings'].focus_set()
+        from settings_window import SettingsView
+        self.show_screen("settings", "Settings", SettingsView)
         
     def apply_settings(self, settings):
         """Apply settings changes from the settings window."""
@@ -11673,10 +11682,7 @@ class HockeyManagerGUI(tk.Tk):
         return self.user_settings
         
     def open_edit_lines_window(self):
-        if 'edit_lines' not in self.open_windows or not self.open_windows['edit_lines'].winfo_exists():
-            # Use the clean, simple EditLinesWindow from main.py instead of the complex one
-            self.open_windows['edit_lines'] = CleanEditLinesWindow(self)
-        self.open_windows['edit_lines'].focus_set()
+        self.show_screen("edit_lines", "Edit Lines", CleanEditLinesView)
 
     def open_development_window(self):
         """Open the Player Development window."""
@@ -11699,10 +11705,9 @@ class HockeyManagerGUI(tk.Tk):
         self.open_windows['trade_block'].focus_set()
         
     def open_contract_extensions_window(self):
-        """Open the Contract Extensions window."""
-        if 'contract_extensions' not in self.open_windows or not self.open_windows['contract_extensions'].winfo_exists():
-            self.open_windows['contract_extensions'] = ContractExtensionsWindow(self)
-        self.open_windows['contract_extensions'].focus_set()
+        """Open the Contract Extensions screen (full-screen jump)."""
+        self.show_screen('contract_extensions', 'Contract Extensions',
+                         ContractExtensionsView)
 
     def open_waivers_window(self):
         """Open the Waivers management window."""
@@ -11909,8 +11914,10 @@ class HockeyManagerGUI(tk.Tk):
         report = self.user_team.scouting_reports.get(player.id)
         is_scouted = report is not None
         
-        # Fallback to the standard player profile window
-        PlayerProfileWindow(self, player, is_scouted, report)
+        # Fallback to the standard player profile view
+        from ui_components import PlayerProfileView
+        return self.show_screen("player_profile", f"Profile: {player.full_name}",
+                                PlayerProfileView, player, is_scouted, report)
         
     def send_to_ahl(self, player):
         self.user_team.roster.remove(player)
@@ -11938,9 +11945,10 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
         
     def open_contract_negotiation_window(self, player, is_extension=False):
-        if 'contract' not in self.open_windows or not self.open_windows['contract'].winfo_exists():
-            self.open_windows['contract'] = ContractNegotiationWindow(self, player, is_extension)
-        self.open_windows['contract'].focus_set()
+        from windows import ContractNegotiationView
+        title = f"Contract: {getattr(player, 'full_name', 'Player')}"
+        self.show_screen('contract_negotiation', title,
+                         ContractNegotiationView, player, is_extension)
 
     def handle_contract_offer(self, person, extension=False, notify="popup"):
         # NHL contract rules (cap-relative: uses the live league cap):
@@ -12239,16 +12247,14 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
         messagebox.showinfo("Lines Updated", "Your team's best lines have been set!")
 
-class CleanEditLinesWindow(InGamePopup):
+class CleanEditLinesView(ctk.CTkFrame):
     """Clean, simple, and intuitive line editor with proper contrast and readability"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Edit Lines")
-        self.geometry("1440x920")
-        self.configure(fg_color=parent.BG_COLOR)
-        self.resizable(True, True)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self.configure(fg_color=self.app.BG_COLOR)
+        self._close_screen = None  # set by show_screen() or wrapper
 
         # Sleeper-inspired palette for the line editor
         self.C_BG = '#0e0e11'
@@ -12262,42 +12268,42 @@ class CleanEditLinesWindow(InGamePopup):
         self.C_AMBER = '#e8b34b'
         self.C_RED = '#e07a7a'
         self.C_GREEN = '#7ed492'
-        
+
         # Make text more readable with better contrast
-        self.LABEL_BG = parent.CONTENT_BG  # Dark background for labels
+        self.LABEL_BG = self.app.CONTENT_BG  # Dark background for labels
         self.ENTRY_BG = '#FFFFFF'  # White background for input fields
         self.ENTRY_FG = '#000000'  # Black text on white background
-        self.LABEL_FG = parent.TEXT_COLOR  # Light text on dark background
-        
+        self.LABEL_FG = self.app.TEXT_COLOR  # Light text on dark background
+
         # Configure custom style for perfect readability
         self.style = ttk.Style()
         self.style.configure('Clean.TCombobox',
                             fieldbackground='white',
-                            background='white', 
+                            background='white',
                             foreground='black',
                             borderwidth=1,
                             relief='solid',
                             selectbackground='#4CAF50',
                             selectforeground='white',
-                            font=(parent.FONT_FAMILY, 10))
-        
+                            font=(self.app.FONT_FAMILY, 10))
+
         # Modern styling
         self.style.configure('Modern.TFrame',
                             background='#f8f9fa',
                             relief='flat',
                             borderwidth=0)
-        
+
         self.style.configure('Card.TFrame',
                             background='white',
                             relief='solid',
                             borderwidth=1)
-        
+
         self.style.configure('Header.TLabel',
                             background='#343a40',
                             foreground='white',
-                            font=(parent.FONT_FAMILY, 12, 'bold'),
+                            font=(self.app.FONT_FAMILY, 12, 'bold'),
                             padding=10)
-        
+
         # Point-click selection state (replaces drag and drop)
         self._selection = None  # {'player': Player, 'from_zone': zone|None}
         self.player_widgets = {}  # player.id -> {'outer','card','dot','assigned_position'}
@@ -12309,32 +12315,40 @@ class CleanEditLinesWindow(InGamePopup):
         # keeps the editor opening instantly.
         self._face_photos = {}
         self._pending_faces = []
-        
+
         # Initialize lineup data
-        self.lineup = getattr(parent.user_team, "lineup", None)
+        self.lineup = getattr(self.app.user_team, "lineup", None)
         if not self.lineup:
-            self.lineup = best_lines(parent.user_team)
-        parent.user_team.lineup = self.lineup
-        
+            self.lineup = best_lines(self.app.user_team)
+        self.app.user_team.lineup = self.lineup
+
         # Get players organized by position
-        self.forwards = [p for p in parent.user_team.roster 
+        self.forwards = [p for p in self.app.user_team.roster
                         if p.primary_position.name in ['LEFT_WING', 'CENTER', 'RIGHT_WING']]
-        self.defensemen = [p for p in parent.user_team.roster 
+        self.defensemen = [p for p in self.app.user_team.roster
                           if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE', 'DEFENSE']]
-        self.goalies = [p for p in parent.user_team.roster 
+        self.goalies = [p for p in self.app.user_team.roster
                        if p.primary_position.name == 'GOALIE']
-        
+
         # Sort by overall rating
         self.forwards.sort(key=lambda p: p.overall_rating(), reverse=True)
         self.defensemen.sort(key=lambda p: p.overall_rating(), reverse=True)
         self.goalies.sort(key=lambda p: p.overall_rating(), reverse=True)
-        
+
         # Create the interface
         self.create_clean_interface()
         self.load_current_lineup()
         self.refresh_all_line_ratings()
         # Fill in face thumbnails lazily so the window opens instantly.
         self.after(60, self._pump_face_queue)
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _face_photo(self, player, size=48):
         """Return a cached circular-masked PhotoImage face thumbnail.
@@ -12422,8 +12436,8 @@ class CleanEditLinesWindow(InGamePopup):
         inner.pack(fill=tk.X, padx=16, pady=10)
         tk.Frame(strip, bg='#08080a', height=2).pack(fill='x', side='bottom')
 
-        total = len(self.parent.user_team.roster)
-        avg = (sum(p.overall_rating() for p in self.parent.user_team.roster)
+        total = len(self.app.user_team.roster)
+        avg = (sum(p.overall_rating() for p in self.app.user_team.roster)
                / max(total, 1))
         top = 0.0
         if self.lineup and self.lineup.get('Forwards') and self.lineup['Forwards'][0]:
@@ -12691,7 +12705,7 @@ class CleanEditLinesWindow(InGamePopup):
     def _on_matchup_change(self, kind, idx, value):
         """Persist a 'match to line' dropdown choice onto the team."""
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             prefs = getattr(team, 'line_matchups', None)
             if not isinstance(prefs, dict):
                 prefs = {"F": [None] * 4, "D": [None] * 3}
@@ -12717,12 +12731,13 @@ class CleanEditLinesWindow(InGamePopup):
         Returns a live tkinter Font registered with ui_scale: changing
         the tier resizes open-editor text in place.
         """
+        fam = getattr(getattr(self, "app", None), "FONT_FAMILY", None) \
+            or getattr(getattr(self, "parent", None), "FONT_FAMILY", "Segoe UI")
         try:
             from ui_scale import font as _mkfont
-            return _mkfont(self.parent.FONT_FAMILY, size, weight)
+            return _mkfont(fam, size, weight)
         except Exception:
-            return (self.parent.FONT_FAMILY, size, weight) if weight else (
-                self.parent.FONT_FAMILY, size)
+            return (fam, size, weight) if weight else (fam, size)
 
     def create_clean_interface(self):
         """Sleeper/FM24-style line editor: everything visible, point-click."""
@@ -12742,7 +12757,7 @@ class CleanEditLinesWindow(InGamePopup):
                            ("PK", "Penalty Kill")):
             b = tk.Label(seg, text=label, bg=self.C_CARD2, fg=self.C_SEC,
                          font=self._font(11, 'bold'),
-                         padx=14, pady=8, cursor='hand2')
+                         padx=18, pady=8, cursor='hand2')
             b.pack(side='left', padx=2, pady=2)
             b.bind('<Button-1>', lambda e, k=key: self.switch_unit(k))
             self._unit_btns[key] = b
@@ -12781,7 +12796,7 @@ class CleanEditLinesWindow(InGamePopup):
             text=("Click a player, then a slot to assign  \u00b7  "
                   "Click a slotted player to move him  \u00b7  "
                   "Double-click a slot (or \u00d7) to clear  \u00b7  Esc cancels"),
-            bg=self.C_BG, fg=self.C_TER, font=self._font(9), justify='left')
+            bg=self.C_BG, fg=self.C_TER, font=self._font(9))
         self._footer_hint.pack(side='left')
         self._footer_warn = tk.Label(footer, text="", bg=self.C_BG,
                                      fg=self.C_AMBER,
@@ -13073,7 +13088,7 @@ class CleanEditLinesWindow(InGamePopup):
     def _match_pref(self, kind, idx):
         """Current matchup pref (1-4) or None for team line idx."""
         try:
-            prefs = getattr(self.parent.user_team, 'line_matchups', None) or {}
+            prefs = getattr(self.app.user_team, 'line_matchups', None) or {}
             cur = (prefs.get(kind) or [])[idx]
             return cur if isinstance(cur, int) and 1 <= cur <= 4 else None
         except Exception:
@@ -13169,7 +13184,7 @@ class CleanEditLinesWindow(InGamePopup):
         self.clear_all_assignments()
         
         # Get best lineup using the existing algorithm
-        best_lineup = best_lines(self.parent.user_team)
+        best_lineup = best_lines(self.app.user_team)
         
         # Populate forward lines
         forward_lines = best_lineup.get('Forwards', [])
@@ -13263,7 +13278,7 @@ class CleanEditLinesWindow(InGamePopup):
         try:
             # Extract and save lineup
             self.save_lineup_from_interface()
-            self.parent.user_team.lineup = flatten_lineup(self.lineup)
+            self.app.user_team.lineup = flatten_lineup(self.lineup)
             
             # Show success notification
             self.show_modern_notification("💾 Lines Saved", "Your lineup has been saved successfully!", "success")
@@ -14156,7 +14171,7 @@ class CleanEditLinesWindow(InGamePopup):
         """Save the current lineup and close the window"""
         # Extract player selections and save to lineup
         self.save_lineup_from_interface()
-        self.parent.user_team.lineup = self.lineup
+        self.app.user_team.lineup = self.lineup
         messagebox.showinfo("Saved", "Your lines have been saved!")
         self.destroy()
     
@@ -14230,7 +14245,7 @@ class CleanEditLinesWindow(InGamePopup):
         analytics_window = InGamePopup(self)
         analytics_window.title("Line Analytics")
         analytics_window.geometry("800x600")
-        analytics_window.configure(bg=self.parent.BG_COLOR)
+        analytics_window.configure(bg=self.app.BG_COLOR)
         
         main_frame = ttk.Frame(analytics_window, style='Panel.TFrame', padding=15)
         main_frame.pack(fill='both', expand=True)
@@ -14279,7 +14294,7 @@ class CleanEditLinesWindow(InGamePopup):
                     analytics_text += f"Combined: {total_goals}G {total_assists}A"
                 
                 text_widget = tk.Text(line_analysis_frame, height=6, width=70, 
-                                    bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                                    bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                                     font=self._font(9))
                 text_widget.pack(fill='x')
                 text_widget.insert('1.0', analytics_text)
@@ -14317,7 +14332,7 @@ class CleanEditLinesWindow(InGamePopup):
                 team_stats += f"Top Unassigned: {', '.join(unassigned_names)}"
             
             team_text_widget = tk.Text(overview_frame, height=10, width=70,
-                                     bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                                     bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                                      font=self._font(10))
             team_text_widget.pack(fill='both', expand=True)
             team_text_widget.insert('1.0', team_stats)
@@ -15010,7 +15025,7 @@ class TradeBlockWindow(InGamePopup):
         return interested
 
     def _update_summary(self):
-        block = self.parent.trade_block
+        block = self.app.trade_block
         n_block = len(block)
         avg_ovr = int(sum(p.overall_rating() for p in block) / n_block) if n_block else 0
         cap_freed = sum(p.contract.salary for p in block if p.contract.years_remaining > 0)
@@ -15018,12 +15033,12 @@ class TradeBlockWindow(InGamePopup):
 
     def simulate_trade_offers(self):
         """Manually trigger trade offers for players on the trade block."""
-        if not self.parent.trade_block:
+        if not self.app.trade_block:
             messagebox.showinfo("No Players on Block", "Add players to the trade block first.")
             return
         
         # Call the parent's method to process trade block offers
-        self.parent.process_trade_block_offers()
+        self.app.process_trade_block_offers()
         
         # Update the view
         self._populate_tree()
@@ -15031,15 +15046,15 @@ class TradeBlockWindow(InGamePopup):
     def update_views(self):
         self._populate_tree()
         
-class ContractExtensionsWindow(InGamePopup):
+class ContractExtensionsView(ctk.CTkFrame):
     """Window for handling contract extensions."""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Contract Extensions")
-        self.configure(background=parent.BG_COLOR)
-        self.minsize(1000, 600)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ContractExtensionsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
         
         # Ensure global constants are accessible
         global SALARY_CAP
@@ -15074,7 +15089,7 @@ class ContractExtensionsWindow(InGamePopup):
         # Use the live league cap (grows each season)
         current_payroll = self.get_current_payroll()
         projected_space = self.get_projected_cap_space()
-        _live = self.parent.get_live_cap() if hasattr(self.parent, 'get_live_cap') else SALARY_CAP
+        _live = self.app.get_live_cap() if hasattr(self.app, 'get_live_cap') else SALARY_CAP
         cap_info_text = f"Salary Cap: ${_live:,}  |  Current Payroll: ${current_payroll:,}  |  Projected Space: ${projected_space:,}"
         cap_info = ttk.Label(team_frame, text=cap_info_text, style='Info.TLabel')
         cap_info.pack()
@@ -15108,7 +15123,7 @@ class ContractExtensionsWindow(InGamePopup):
         
         # Configure columns and headings
         for i, (col, (text, width)) in enumerate(columns.items()):
-            self.tree.heading(col, text=text, command=lambda c=col: self.parent._sort_treeview_generic(self.tree, c, False))
+            self.tree.heading(col, text=text, command=lambda c=col: self.app._sort_treeview_generic(self.tree, c, False))
             self.tree.column(col, width=width, anchor=tk.W if col == 'name' else tk.CENTER)
         
         # Populate the treeview
@@ -15152,7 +15167,7 @@ class ContractExtensionsWindow(InGamePopup):
             button_frame, 
             text="Close", 
             style='TButton',
-            command=self.destroy
+            command=self.close_view
         )
         self.close_button.pack(side=tk.RIGHT, padx=5)
         
@@ -15162,12 +15177,11 @@ class ContractExtensionsWindow(InGamePopup):
         height = self.winfo_height()
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f'{width}x{height}+{x}+{y}')
         
     def get_eligible_players(self):
         """Get all players with one year left on their contract."""
         eligible = []
-        team = self.parent.game_manager.user_team
+        team = self.app.game_manager.user_team
         
         # Find players with 1 year left on contract
         for player in team.roster:
@@ -15184,7 +15198,7 @@ class ContractExtensionsWindow(InGamePopup):
     def get_current_payroll(self):
         """Calculate the current team payroll."""
         payroll = 0
-        for player in self.parent.game_manager.user_team.roster:
+        for player in self.app.game_manager.user_team.roster:
             salary = getattr(player, "salary", getattr(player.contract, "salary", 0))
             payroll += salary
         return payroll
@@ -15201,7 +15215,7 @@ class ContractExtensionsWindow(InGamePopup):
         )
         
         # Use the live league cap
-        _live = self.parent.get_live_cap() if hasattr(self.parent, 'get_live_cap') else SALARY_CAP
+        _live = self.app.get_live_cap() if hasattr(self.app, 'get_live_cap') else SALARY_CAP
         return _live - (current_payroll - expiring_salary)
     
     def calculate_market_value(self, player):
@@ -15212,8 +15226,8 @@ class ContractExtensionsWindow(InGamePopup):
         values rise as the cap grows.
         """
         from salary_cap_system import DEFAULT_CAP
-        _live = self.parent.get_live_cap() if hasattr(
-            self.parent, 'get_live_cap') else DEFAULT_CAP
+        _live = self.app.get_live_cap() if hasattr(
+            self.app, 'get_live_cap') else DEFAULT_CAP
         # Base value determined by overall rating, scaled to live cap
         base_value = player.overall_rating() * 100000 * (_live / DEFAULT_CAP)
         
@@ -15342,11 +15356,11 @@ class ContractExtensionsWindow(InGamePopup):
             return
         
         # Create context menu
-        context_menu = tk.Menu(self, tearoff=0, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        context_menu = tk.Menu(self, tearoff=0, bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR)
         context_menu.add_command(label=f"Negotiate with {player.full_name}", 
                                 command=lambda: self.negotiate_with_player(player))
         context_menu.add_command(label="View Player Profile", 
-                                command=lambda: self.parent.open_player_profile(player))
+                                command=lambda: self.app.open_player_profile(player))
         
         # Display the menu
         try:
@@ -15354,23 +15368,35 @@ class ContractExtensionsWindow(InGamePopup):
         finally:
             context_menu.grab_release()
     
+    def _say(self, text):
+        """Show a status message in-view (no popup)."""
+        if not hasattr(self, "_status_var"):
+            self._status_var = tk.StringVar(master=self, value="")
+            ttk.Label(self, textvariable=self._status_var,
+                      style="Secondary.TLabel",
+                      wraplength=720).pack(anchor="w", padx=10, pady=(0, 6))
+        self._status_var.set(text)
+
     def negotiate_with_player(self, player):
-        """Open negotiation window for a specific player."""
+        """Jump to the extension-negotiation screen for a specific player."""
         # Calculate market value
         market_value = self.calculate_market_value(player)
-        
+
         # Maximum contract length - NHL rules allow 8 years for your own players
         max_years = 8
-        
-        # Create negotiation window
-        negotiation_window = ContractNegotiationWindow(self.parent, player, market_value, max_years)
-        self.parent.open_windows['extension_negotiation'] = negotiation_window
-    
+
+        # Full-screen jump (was: broken ContractNegotiationWindow call with
+        # a market_value/max_years signature it never accepted)
+        self.app.show_screen("extension_negotiation",
+                             f"Extension: {player.full_name}",
+                             ExtensionNegotiationView, player, market_value,
+                             max_years)
+
     def negotiate_selected(self):
         """Negotiate with selected player(s)."""
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showinfo("No Selection", "Please select at least one player to negotiate with.")
+            self._say("Please select at least one player to negotiate with.")
             return
             
         results = []
@@ -15383,12 +15409,12 @@ class ContractExtensionsWindow(InGamePopup):
                 player.contract_years = 2  # Default offer for extension
                 
                 # Negotiate
-                accepted = self.parent.handle_contract_offer(player, extension=True, notify="quiet")
+                accepted = self.app.handle_contract_offer(player, extension=True, notify="quiet")
                 results.append(f"{player.full_name}: {'Accepted' if accepted else 'Rejected'}")
         
         # One inbox digest instead of a popup per player (FM24 style)
         from game_classes import EmailMessage
-        self.parent.send_email_to_user(EmailMessage(
+        self.app.send_email_to_user(EmailMessage(
             sender="System", sender_type="System", date_sent=date.today(),
             category="Contracts", priority=2,
             subject="Extension Results",
@@ -15413,12 +15439,12 @@ class ContractExtensionsWindow(InGamePopup):
             player.contract_years = 2  # Default offer for extension
             
             # Negotiate
-            accepted = self.parent.handle_contract_offer(player, extension=True, notify="quiet")
+            accepted = self.app.handle_contract_offer(player, extension=True, notify="quiet")
             results.append(f"{player.full_name}: {'Accepted' if accepted else 'Rejected'}")
         
         # One inbox digest instead of a popup per player (FM24 style)
         from game_classes import EmailMessage
-        self.parent.send_email_to_user(EmailMessage(
+        self.app.send_email_to_user(EmailMessage(
             sender="System", sender_type="System", date_sent=date.today(),
             category="Contracts", priority=2,
             subject="Extension Results",
@@ -15434,7 +15460,7 @@ class ContractExtensionsWindow(InGamePopup):
         help_window = InGamePopup(self)
         help_window.title("NHL-Style Contract Features")
         help_window.geometry("700x500")
-        help_window.configure(background=self.parent.BG_COLOR)
+        help_window.configure(background=self.app.BG_COLOR)
         
         main_frame = ttk.Frame(help_window, style='Panel.TFrame', padding=15)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
@@ -15442,12 +15468,12 @@ class ContractExtensionsWindow(InGamePopup):
         # Title
         ttk.Label(main_frame, 
                  text="NHL-Style Contract Features", 
-                 font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                 font=(self.app.FONT_FAMILY, 16, 'bold'),
                  style='Header.TLabel').pack(anchor='w', pady=(0, 10))
         
         # Help text
-        help_text = tk.Text(main_frame, wrap='word', bg=self.parent.CONTENT_BG, 
-                           fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10))
+        help_text = tk.Text(main_frame, wrap='word', bg=self.app.CONTENT_BG, 
+                           fg=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 10))
         help_text.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Add scrollbar
@@ -15509,595 +15535,40 @@ estimated likelihood of the player accepting your offer.
             if player:
                 self.negotiate_with_player(player)
 
-class ExtensionNegotiationWindow(InGamePopup):
-    """Window for negotiating contract extensions with a player."""
-    
-    def __init__(self, parent, player, market_value=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.player = player
-        
-        # Calculate market value if not provided
-        self.market_value = market_value or self.calculate_market_value(player)
-        
-        # Configure window
-        self.title(f"Contract Extension - {player.full_name}")
-        self.configure(background=parent.BG_COLOR)
-        self.minsize(800, 600)
-        
-        # Create main container with modern styling
-        main_frame = ttk.Frame(self, style='Dark.TFrame', padding=15)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Header with player name
-        header_frame = ttk.Frame(main_frame, style='TitleBar.TFrame', padding=(10, 8))
-        header_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        ttk.Label(
-            header_frame, 
-            text=f"CONTRACT EXTENSION: {player.full_name.upper()}", 
-            style='Title.TLabel',
-            font=(parent.FONT_FAMILY, 16, 'bold')
-        ).pack(anchor=tk.W)
-                  
-        # Two column layout with a divider
-        content_frame = ttk.Frame(main_frame, style='Dark.TFrame')
-        content_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Left column - Player info
-        left_col = ttk.Frame(content_frame, style='Panel.TFrame', padding=15)
-        left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Vertical separator
-        separator = ttk.Separator(content_frame, orient='vertical')
-        separator.pack(side=tk.LEFT, fill=tk.Y, padx=15)
-        
-        # Right column - Contract offer
-        right_col = ttk.Frame(content_frame, style='Panel.TFrame', padding=15)
-        right_col.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        
-        # --- PLAYER INFO (LEFT COLUMN) ---
-        
-        # Player header with visual styling
-        player_header = ttk.Frame(left_col, style='SubHeader.TFrame', padding=(5, 3))
-        player_header.pack(fill=tk.X, pady=(0, 15))
-        
-        ttk.Label(
-            player_header, 
-            text="PLAYER INFORMATION", 
-            style='SubTitle.TLabel',
-            font=(parent.FONT_FAMILY, 12, 'bold')
-        ).pack(anchor=tk.W)
-        
-        # Player display with jersey number and info
-        player_display = ttk.Frame(left_col, style='Dark.TFrame')
-        player_display.pack(fill=tk.X, pady=(0, 15))
-        
-        # Jersey number as visual element
-        jersey_frame = ttk.Frame(player_display, style='Dark.TFrame', width=80, height=80)
-        jersey_frame.grid(row=0, column=0, rowspan=3, padx=(0, 15), pady=5)
-        jersey_frame.pack_propagate(False)
-        
-        # Background circle for jersey number
-        jersey_circle = ttk.Frame(jersey_frame, style='Dark.TFrame')
-        jersey_circle.pack(expand=True)
-        jersey_circle.configure(width=60, height=60)
-        
-        jersey_label = ttk.Label(
-            jersey_circle, 
-            text=f"{player.jersey_number}", 
-            font=(parent.FONT_FAMILY, 24, 'bold'),
-            foreground=parent.ACCENT_COLOR
-        )
-        jersey_label.place(relx=0.5, rely=0.5, anchor='center')
-        
-        # Player name and info
-        ttk.Label(
-            player_display, 
-            text=player.full_name, 
-            font=(parent.FONT_FAMILY, 14, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).grid(row=0, column=1, sticky=tk.W)
-        
-        position_age = f"{player.primary_position.name} | Age: {player.age}"
-        ttk.Label(
-            player_display, 
-            text=position_age, 
-            font=(parent.FONT_FAMILY, 12),
-            foreground=parent.TEXT_COLOR
-        ).grid(row=1, column=1, sticky=tk.W)
-        
-        # Status based on morale
-        status_text = "Very Happy" if player.morale >= 15 else \
-                     "Satisfied" if player.morale >= 10 else \
-                     "Concerned" if player.morale >= 5 else "Unhappy"
-                     
-        status_color = "#4CAF50" if player.morale >= 15 else \
-                      "#8BC34A" if player.morale >= 10 else \
-                      "#d29922" if player.morale >= 5 else "#f85149"
-        
-        ttk.Label(
-            player_display, 
-            text=f"Status: {status_text}", 
-            font=(parent.FONT_FAMILY, 12),
-            foreground=status_color
-        ).grid(row=2, column=1, sticky=tk.W)
-        
-        # Player attributes
-        attributes_frame = ttk.Frame(left_col, style='Panel.TFrame', padding=10)
-        attributes_frame.pack(fill=tk.X, pady=10)
-        attributes_frame.configure(relief='solid', borderwidth=1)
-        
-        # Title for attributes section
-        ttk.Label(
-            attributes_frame, 
-            text="KEY ATTRIBUTES", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W, pady=(0, 10))
-        
-        # Attributes grid for better alignment
-        attr_grid = ttk.Frame(attributes_frame, style='Dark.TFrame')
-        attr_grid.pack(fill=tk.X)
-        
-        # Rating display with visual styling
-        ttk.Label(attr_grid, text="Overall:", style='Info.TLabel').grid(row=0, column=0, sticky=tk.W, pady=5)
-        
-        rating_value = ttk.Frame(attr_grid, style='Dark.TFrame', width=50, height=26)
-        rating_value.grid(row=0, column=1, sticky=tk.W, pady=5, padx=10)
-        rating_value.pack_propagate(False)
-        
-        ovr_bg_color = "#1A9B00" if player.overall_rating() >= 50 else \
-                      "#4CAF50" if player.overall_rating() >= 47 else \
-                      "#8BC34A" if player.overall_rating() >= 44 else \
-                      "#d29922" if player.overall_rating() >= 40 else "#FF9800"
-        
-        rating_label = ttk.Label(
-            rating_value,
-            text=f"{to_100_scale(player.overall_rating())}", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground="#FFFFFF",
-            background=ovr_bg_color
-        )
-        rating_label.place(relx=0.5, rely=0.5, anchor='center')
-        
-        # Potential with visual styling
-        ttk.Label(attr_grid, text="Potential:", style='Info.TLabel').grid(row=1, column=0, sticky=tk.W, pady=5)
-        
-        pot_value = ttk.Frame(attr_grid, style='Dark.TFrame', width=50, height=26)
-        pot_value.grid(row=1, column=1, sticky=tk.W, pady=5, padx=10)
-        pot_value.pack_propagate(False)
-        
-        pot_bg_color = "#1A9B00" if player.potential_grade in ['A+', 'A'] else \
-                      "#4CAF50" if player.potential_grade in ['A-', 'B+'] else \
-                      "#8BC34A" if player.potential_grade in ['B', 'B-'] else \
-                      "#d29922" if player.potential_grade in ['C+', 'C'] else "#FF9800"
-        
-        pot_label = ttk.Label(
-            pot_value,
-            text=player.potential_grade, 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground="#FFFFFF",
-            background=pot_bg_color
-        )
-        pot_label.place(relx=0.5, rely=0.5, anchor='center')
-        
-        # Current contract details
-        contract_frame = ttk.Frame(left_col, style='Panel.TFrame', padding=10)
-        contract_frame.pack(fill=tk.X, pady=10)
-        contract_frame.configure(relief='solid', borderwidth=1)
-        
-        ttk.Label(
-            contract_frame, 
-            text="CURRENT CONTRACT", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W, pady=(0, 10))
-        
-        # Contract details grid
-        contract_grid = ttk.Frame(contract_frame, style='Dark.TFrame')
-        contract_grid.pack(fill=tk.X)
-        
-        current_salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
-        years_left = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 0))
-        
-        ttk.Label(contract_grid, text="Salary:", style='Info.TLabel').grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Label(
-            contract_grid, 
-            text=f"${current_salary:,}", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.ACCENT_COLOR
-        ).grid(row=0, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        ttk.Label(contract_grid, text="Years Remaining:", style='Info.TLabel').grid(row=1, column=0, sticky=tk.W, pady=5)
-        ttk.Label(
-            contract_grid, 
-            text=str(years_left), 
-            font=(parent.FONT_FAMILY, 12)
-        ).grid(row=1, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        # --- CONTRACT OFFER (RIGHT COLUMN) ---
-        
-        # Offer header
-        offer_header = ttk.Frame(right_col, style='SubHeader.TFrame', padding=(5, 3))
-        offer_header.pack(fill=tk.X, pady=(0, 15))
-        
-        ttk.Label(
-            offer_header, 
-            text="CONTRACT OFFER", 
-            style='SubTitle.TLabel',
-            font=(parent.FONT_FAMILY, 12, 'bold')
-        ).pack(anchor=tk.W)
-        
-        # Market value display with accent styling
-        market_frame = ttk.Frame(right_col, style='TitleBar.TFrame', padding=10)
-        market_frame.pack(fill=tk.X, pady=10)
-        market_frame.configure(relief='solid', borderwidth=1)
-        
-        ttk.Label(
-            market_frame, 
-            text="ESTIMATED MARKET VALUE", 
-            font=(parent.FONT_FAMILY, 11, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W)
-        
-        ttk.Label(
-            market_frame, 
-            text=f"${self.market_value:,}", 
-            font=(parent.FONT_FAMILY, 16, 'bold'),
-            foreground=parent.ACCENT_COLOR
-        ).pack(anchor=tk.W, pady=5)
-        
-        # Player interest display
-        interest_level = "Very Interested" if player.morale >= 15 else \
-                        "Interested" if player.morale >= 10 else \
-                        "Somewhat Interested" if player.morale >= 5 else "Not Interested"
-                        
-        interest_color = "#4CAF50" if player.morale >= 15 else \
-                        "#8BC34A" if player.morale >= 10 else \
-                        "#d29922" if player.morale >= 5 else "#f85149"
-                        
-        interest_text = f"Player Interest: {interest_level}"
-        
-        interest_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
-        interest_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(
-            interest_frame, 
-            text=interest_text, 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=interest_color
-        ).pack(anchor=tk.W)
-        
-        # Rules info
-        rules_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
-        rules_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(
-            rules_frame, 
-            text="NHL Contract Rules", 
-            font=(parent.FONT_FAMILY, 11, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W)
-        
-        ttk.Label(
-            rules_frame, 
-            text="• Maximum 8 years for own players\n• Minimum salary: $750,000\n• All contracts are guaranteed", 
-            style='Info.TLabel',
-            justify=tk.LEFT
-        ).pack(anchor=tk.W, pady=5)
-        
-        # Offer inputs section
-        inputs_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
-        inputs_frame.pack(fill=tk.X, pady=10)
-        inputs_frame.configure(relief='solid', borderwidth=1)
-        
-        ttk.Label(
-            inputs_frame, 
-            text="YOUR OFFER", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W, pady=(0, 10))
-        
-        # Salary input with visual enhancements
-        salary_label_frame = ttk.Frame(inputs_frame, style='Dark.TFrame')
-        salary_label_frame.pack(fill=tk.X)
-        
-        ttk.Label(
-            salary_label_frame, 
-            text="Salary Per Year:", 
-            font=(parent.FONT_FAMILY, 11),
-            foreground=parent.TEXT_COLOR
-        ).pack(anchor=tk.W)
-        
-        # Input with dollar sign
-        salary_input_frame = ttk.Frame(inputs_frame, style='Dark.TFrame')
-        salary_input_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(
-            salary_input_frame, 
-            text="$", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.TEXT_COLOR
-        ).pack(side=tk.LEFT)
-        
-        # Default to market value
-        self.salary_var = tk.StringVar(master=self, value=f"{self.market_value:,}")
-        salary_entry = ttk.Entry(salary_input_frame, textvariable=self.salary_var, width=15, font=(parent.FONT_FAMILY, 12))
-        salary_entry.pack(side=tk.LEFT, padx=5)
-        
-        # Salary guideline
-        min_salary = max(750000, int(self.market_value * 0.8))
-        max_salary = int(self.market_value * 1.2)
-        
-        guideline_frame = ttk.Frame(inputs_frame, style='Dark.TFrame')
-        guideline_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(
-            guideline_frame, 
-            text=f"Recommended Range: ${min_salary:,} to ${max_salary:,}",
-            font=(parent.FONT_FAMILY, 10),
-            foreground="#AAAAAA"
-        ).pack(anchor=tk.W)
-        
-        # Contract term with slider
-        term_label_frame = ttk.Frame(inputs_frame, style='Dark.TFrame', padding=(0, 10, 0, 0))
-        term_label_frame.pack(fill=tk.X)
-        
-        ttk.Label(
-            term_label_frame, 
-            text="Contract Length:", 
-            font=(parent.FONT_FAMILY, 11),
-            foreground=parent.TEXT_COLOR
-        ).pack(anchor=tk.W)
-        
-        # Max 8 years per NHL rules for extending own players
-        max_years = 8
-        
-        self.years_var = tk.IntVar(master=self, value=2)
-        years_scale_frame = ttk.Frame(inputs_frame, style='Dark.TFrame', padding=(0, 5))
-        years_scale_frame.pack(fill=tk.X)
-        
-        years_scale = ttk.Scale(
-            years_scale_frame, 
-            from_=1, 
-            to=max_years, 
-            variable=self.years_var,
-            orient=tk.HORIZONTAL
-        )
-        years_scale.pack(fill=tk.X)
-        
-        # Year labels below slider
-        years_label_frame = ttk.Frame(inputs_frame, style='Dark.TFrame')
-        years_label_frame.pack(fill=tk.X, pady=5)
-        
-        # Create tick marks for each year
-        for year in range(1, max_years + 1):
-            year_percent = (year - 1) / (max_years - 1)
-            year_frame = ttk.Frame(years_label_frame, style='Dark.TFrame')
-            year_frame.place(relx=year_percent, rely=0, anchor=tk.N)
-            
-            ttk.Label(
-                year_frame, 
-                text=str(year), 
-                font=(parent.FONT_FAMILY, 9),
-                foreground="#AAAAAA"
-            ).pack()
-        
-        # Current selected years display
-        selected_years_frame = ttk.Frame(inputs_frame, style='Dark.TFrame', padding=(0, 5))
-        selected_years_frame.pack(fill=tk.X)
-        
-        years_display = ttk.Label(
-            selected_years_frame, 
-            text="2 Years", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.ACCENT_COLOR
-        )
-        years_display.pack(anchor=tk.CENTER)
-        
-        # Update year display when slider changes
-        def update_years_display(*args):
-            years = self.years_var.get()
-            years_display.configure(text=f"{years} {'Year' if years == 1 else 'Years'}")
-            
-        self.years_var.trace_add("write", update_years_display)
-        
-        # Total contract value
-        total_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
-        total_frame.pack(fill=tk.X, pady=10)
-        
-        self.total_value_label = ttk.Label(
-            total_frame, 
-            text="Total Contract: $0", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.HEADER_COLOR
-        )
-        self.total_value_label.pack(anchor=tk.W)
-        
-        # Update total when values change
-        def update_total(*args):
-            try:
-                salary_str = self.salary_var.get().replace(',', '')
-                salary = int(salary_str)
-                years = self.years_var.get()
-                total = salary * years
-                self.total_value_label.configure(text=f"Total Contract: ${total:,}")
-            except ValueError:
-                self.total_value_label.configure(text="Total Contract: $0")
-                
-        self.salary_var.trace_add("write", update_total)
-        self.years_var.trace_add("write", update_total)
-        
-        # Trigger initial update
-        update_total()
-        
-        # Action buttons
-        buttons_frame = ttk.Frame(main_frame, style='Dark.TFrame', padding=(0, 15, 0, 0))
-        buttons_frame.pack(fill=tk.X)
-        
-        submit_btn = ttk.Button(
-            buttons_frame, 
-            text="Submit Offer", 
-            style='Accent.TButton',
-            command=self.submit_offer
-        )
-        submit_btn.pack(side=tk.RIGHT, padx=5)
-        
-        cancel_btn = ttk.Button(
-            buttons_frame, 
-            text="Cancel", 
-            style='Secondary.TButton',
-            command=self.destroy
-        )
-        cancel_btn.pack(side=tk.RIGHT, padx=5)
-        
-        # Center window on screen
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f'{width}x{height}+{x}+{y}')
-        
-    def calculate_market_value(self, player):
-        """Calculate the player's market value based on attributes."""
-        # Base value determined by overall rating
-        base_value = player.overall_rating() * 100000
-        
-        # Age modifier - players in their prime (23-29) get premium
-        age_modifier = 1.0
-        if 23 <= player.age <= 29:
-            age_modifier = 1.2
-        elif player.age >= 30:
-            # Declining value with age
-            age_modifier = max(0.5, 1.0 - ((player.age - 30) * 0.05))
-        
-        # Position modifier - centers and first-line defensemen get premium
-        position_modifier = 1.0
-        if player.primary_position.name == 'C':
-            position_modifier = 1.15
-        elif player.primary_position.name in ['LD', 'RD']:
-            position_modifier = 1.1
-        elif player.primary_position.name == 'G':
-            # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 50 else 0.9
-        
-        # Potential modifier for young players
-        potential_modifier = 1.0
-        if player.age <= 25:
-            potential_map = {'A+': 1.5, 'A': 1.4, 'B+': 1.3, 'B': 1.2, 'C+': 1.1}
-            grade = player.potential_grade
-            potential_modifier = potential_map.get(grade, 1.0)
-        
-        # Calculate final market value
-        market_value = base_value * age_modifier * position_modifier * potential_modifier
-        
-        # Round to nearest $50,000 for clean numbers
-        market_value = round(market_value / 50000) * 50000
-        
-        # Minimum NHL salary
-        min_salary = 750000
-        
-        return max(min_salary, int(market_value))
-                  
-    def submit_offer(self):
-        """Process the contract extension offer."""
-        try:
-            # Parse the salary value, removing commas
-            salary_str = self.salary_var.get().replace(',', '')
-            salary = int(salary_str)
-            years = self.years_var.get()
-            
-            # Input validation
-            if salary < 750000:
-                messagebox.showerror("Invalid Salary", "Salary must be at least $750,000 (league minimum).")
-                return
-                
-            if years < 1 or years > 8:
-                messagebox.showerror("Invalid Term", "Contract term must be between 1 and 8 years.")
-                return
-            
-            # Set the values on the player object first
-            self.player.salary = salary
-            self.player.contract_years = years
-            
-            # Determine if player accepts based on how fair the offer is
-            fair_value = self.market_value
-            offer_percent = salary / fair_value
-            
-            # Base acceptance chance
-            accept_chance = 0.5
-            
-            # Adjust based on offer vs market value
-            if offer_percent >= 1.1:  # Great offer
-                accept_chance = 0.9
-            elif offer_percent >= 1.0:  # Fair offer
-                accept_chance = 0.7
-            elif offer_percent >= 0.9:  # Slightly under market
-                accept_chance = 0.5
-            elif offer_percent >= 0.8:  # Under market
-                accept_chance = 0.3
-            else:  # Way under market
-                accept_chance = 0.1
-                
-            # Adjust based on player morale
-            if self.player.morale >= 15:  # Very happy
-                accept_chance += 0.2
-            elif self.player.morale >= 10:  # Happy
-                accept_chance += 0.1
-            elif self.player.morale < 5:  # Unhappy
-                accept_chance -= 0.2
-                
-            # Cap at 0.95 - always a small chance to reject
-            accept_chance = min(0.95, accept_chance)
-            
-            # Determine if accepted
-            accepted = random.random() < accept_chance
-            
-            # Apply the result
-            if accepted:
-                # Update contract details
-                self.player.contract.salary = salary
-                self.player.contract.years_remaining = years
-                
-                # Set extension flag to avoid free agency
-                self.player.contract.is_extended = True
-                
-                # Adjust morale based on quality of deal
-                if offer_percent >= 1.1:
-                    self.player.morale = min(20, self.player.morale + 2)
-                elif offer_percent >= 1.0:
-                    self.player.morale = min(20, self.player.morale + 1)
-                
-                messagebox.showinfo(
-                    "Contract Accepted", 
-                    f"{self.player.full_name} has accepted your extension offer for ${salary:,} over {years} years."
-                )
-            else:
-                # Determine counter offer if rejected
-                counter_salary = max(int(fair_value * 1.05), salary + 250000)
-                counter_salary = round(counter_salary / 50000) * 50000  # Round to nearest 50k
-                
-                # Adjust morale down slightly for rejection
-                self.player.morale = max(1, self.player.morale - 1)
-                
-                message = f"{self.player.full_name} has rejected your extension offer for ${salary:,} over {years} years.\n\n"
-                message += f"Agent: \"We were hoping for something closer to ${counter_salary:,} per year.\""
-                
-                messagebox.showinfo("Contract Rejected", message)
-            
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
             self.destroy()
-            
-            # Refresh any open contract extension windows
-            for window_name, window in self.parent.open_windows.items():
-                if isinstance(window, ContractExtensionsWindow) and window.winfo_exists():
-                    window.eligible_players = window.get_eligible_players()
-                    window._populate_tree()
-                    
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter a valid number for salary.")
 
+class ContractExtensionsWindow(InGamePopup):
+    """Popup wrapper around ContractExtensionsView (backward compatibility).
+
+    New code should embed ContractExtensionsView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._view = ContractExtensionsView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+# NOTE: main.py's old ExtensionNegotiationWindow was dead code (no callers;
+# the live implementation is windows.ExtensionNegotiationView). It is kept as
+# a re-exported alias so any dynamic reference still resolves.
+ExtensionNegotiationWindow = _WindowsExtensionNegotiationWindow
 class GMOptionsView(ctk.CTkFrame):
     """GM Options - executive management tools, as an embeddable view.
 
@@ -16212,10 +15683,8 @@ class GMOptionsView(ctk.CTkFrame):
 
     def open_shortlist_window(self):
         """Open the player shortlist management window"""
-        from shortlist_system import ShortlistWindow
-        if 'shortlist' not in self.app.open_windows or not self.app.open_windows['shortlist'].winfo_exists():
-            self.app.open_windows['shortlist'] = ShortlistWindow(self.parent)
-        self.app.open_windows['shortlist'].focus_set()
+        from shortlist_system import ShortlistView
+        self.app.show_screen("shortlist", "Shortlist", ShortlistView)
 
     def open_gm_dashboard(self):
         """Open GM dashboard with key team metrics"""
@@ -16611,17 +16080,26 @@ def _launch_with_wizard():
         return False
 
 
-class LeagueHistoryWindow(InGamePopup):
+class LeagueHistoryView(ctk.CTkFrame):
     """League History: Champions, Awards, Career Leaders, Hall of Fame.
 
     Reads from the career's LeagueHistory archive (populated at season end
     via _record_season_to_history). Non-modal card.
     """
 
-    def __init__(self, parent, game_manager):
+    def __init__(self, parent, game_manager, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
         self.game_manager = game_manager
-        super().__init__(parent, title="League History", width=900, height=650)
+        self._close_screen = None  # set by show_screen() or wrapper
         self._build()
+
+    def close_view(self):
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _history(self):
         from league_history import LeagueHistory
@@ -16848,20 +16326,29 @@ class LeagueHistoryWindow(InGamePopup):
                           font=('Arial', 9)).pack(anchor='w', padx=10, pady=(0, 8))
 
 
-class ShotChartViewerWindow(InGamePopup):
+class ShotChartViewerView(ctk.CTkFrame):
     """View a saved shot chart: rink with shot locations by result.
 
     Can show a single game, a team's last-N aggregate, or a player's shots.
     """
 
     def __init__(self, parent, game_manager, shots, title="Shot Chart",
-                 home_name="", away_name=""):
+                 home_name="", away_name="", app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
         self.game_manager = game_manager
         self.shots = shots or []
         self.home_name = home_name
         self.away_name = away_name
-        super().__init__(parent, title=title, width=800, height=600)
+        self._close_screen = None  # set by show_screen() or wrapper
         self._build()
+
+    def close_view(self):
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _build(self):
         import tkinter as tk
@@ -16930,6 +16417,42 @@ class ShotChartViewerWindow(InGamePopup):
 
 
 # --- Main execution
+# ---------------------------------------------------------------------------
+# Legacy popup wrappers for converted views (backward compatibility)
+# ---------------------------------------------------------------------------
+
+class LeagueHistoryWindow(InGamePopup):
+    """Popup wrapper around LeagueHistoryView."""
+    def __init__(self, parent, game_manager):
+        InGamePopup.__init__(self, parent, title="League History", width=900, height=650)
+        self._view = LeagueHistoryView(self, game_manager, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+
+
+class ShotChartViewerWindow(InGamePopup):
+    """Popup wrapper around ShotChartViewerView."""
+    def __init__(self, parent, game_manager, shots, title="Shot Chart",
+                 home_name="", away_name=""):
+        InGamePopup.__init__(self, parent, title=title, width=800, height=600)
+        self._view = ShotChartViewerView(self, game_manager, shots, title=title,
+                                         home_name=home_name, away_name=away_name,
+                                         app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+
+
+class CleanEditLinesWindow(InGamePopup):
+    """Popup wrapper around CleanEditLinesView."""
+    def __init__(self, parent):
+        InGamePopup.__init__(self, parent)
+        self.title("Edit Lines")
+        self.geometry("1440x920")
+        self._view = CleanEditLinesView(self, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+
+
 if __name__ == "__main__":
     import sys
 

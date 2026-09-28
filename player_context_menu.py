@@ -434,8 +434,24 @@ class PlayerContextMenu:
         """Open enhanced player comparison tool"""
         self._create_enhanced_comparison_window(player)
     
+    def _show_comparison_results(self, player1, player2, compare_window):
+        """Legacy entry point: render results into a frame in the given window."""
+        results_frame = compare_window
+        # If the window already has content, add a fresh results area
+        try:
+            import tkinter as tk
+            results_frame = tk.Frame(compare_window)
+            results_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        except Exception:
+            pass
+        self._show_enhanced_comparison_results(player1, player2, results_frame)
+
     def _create_comparison_window(self, player):
-        """Create comparison window"""
+        """Create comparison window (legacy; delegates to enhanced version)."""
+        return self._create_enhanced_comparison_window(player)
+
+    def _create_comparison_window_legacy(self, player):
+        """Original comparison window (kept for reference)."""
         compare_window = InGamePopup(self.parent)
         compare_window.title(f"Compare Players - {player.full_name}")
         compare_window.geometry("600x500")

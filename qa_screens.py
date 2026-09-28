@@ -141,6 +141,10 @@ def build_app():
     # show_screen collaborators used by views that teleport further
     app.show_screen = lambda sid, title, cls, *a, **k: None
     app.show_dashboard = lambda: None
+    app.refresh_screen_navbar = lambda: None
+    app.negotiation_sessions = {}
+    app.get_live_cap = lambda: 95_500_000
+    app._qa_player = player
     return app
 
 
@@ -173,6 +177,10 @@ VIEWS = [
      "PlayerDevelopmentViewProfessional", ()),
     ("tactics_window", "TacticsView", ()),
     ("inbox_window", "InboxView", ()),
+    ("windows", "ContractNegotiationView", ()),
+    ("windows", "ContractExtensionsView", ()),
+    ("windows", "ExtensionNegotiationView", ()),
+    ("windows", "BuyoutCalculatorView", ()),
 ]
 
 RESULTS_DATA = {
@@ -199,6 +207,10 @@ def main():
                 mod = importlib.import_module(mod_name)
                 cls = getattr(mod, cls_name)
                 extra = (RESULTS_DATA,) if cls_name == "GameResultsView" else ()
+                if cls_name == "ContractNegotiationView":
+                    extra = (app._qa_player, False)
+                elif cls_name == "ExtensionNegotiationView":
+                    extra = (app._qa_player, 6_000_000, 8)
                 view = cls(holder, app=app, *extra)
                 root.update()
                 check(f"{cls_name} builds",
@@ -228,9 +240,9 @@ def main():
                     pass
                 root.update()
 
-    # main.py's own two views (imported live, not via module import)
+    # main.py's own views (imported live, not via module import)
     import main as m
-    for cls_name in ("TacticsView", "GMOptionsView"):
+    for cls_name in ("TacticsView", "GMOptionsView", "ContractExtensionsView"):
         holder = tk.Frame(root, width=1600, height=900)
         holder.pack(fill="both", expand=True)
         try:

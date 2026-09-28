@@ -11,6 +11,7 @@ from game_classes import EmailMessage, EmailGenerator
 from typing import List, Optional
 
 import customtkinter as ctk
+from player_context_menu import PlayerContextMenu
 
 def _ifont(size, weight=""):
     """Scale-aware Segoe UI font (honors Settings -> Font size).
@@ -354,6 +355,79 @@ class InboxView(ctk.CTkFrame):
             action_frame, text="", command=None, width=180)
         # Don't pack initially - will be shown/hidden as needed
 
+    def _build_player_name_index(self):
+        """Build full_name -> player map from user team + league (cached per message)."""
+        index = {}
+        def add_players(players):
+            for p in players or []:
+                name = getattr(p, 'full_name', None)
+                if name and name not in index:
+                    index[name] = p
+        app = self.app
+        # User team first (takes precedence on name collisions)
+        ut = getattr(app, 'user_team', None)
+        if ut is not None:
+            add_players(getattr(ut, 'roster', []))
+            add_players(getattr(ut, 'ahl_roster', []))
+            add_players(getattr(ut, 'prospects', []))
+        # League-wide
+        league = getattr(app, 'league', None)
+        for team in getattr(league, 'teams', []) or []:
+            add_players(getattr(team, 'roster', []))
+            add_players(getattr(team, 'ahl_roster', []))
+            add_players(getattr(team, 'prospects', []))
+        return index
+
+    def _tag_player_names(self):
+        """Tag player names in message text; right-click opens the player menu.
+
+        Names render underlined so users know they are interactive.
+        """
+        txt = self.content_text
+        # Clear old player tags
+        for tag in txt.tag_names():
+            if tag.startswith("player-"):
+                txt.tag_delete(tag)
+        index = self._build_player_name_index()
+        if not index:
+            return
+        try:
+            from player_context_menu import bind_player_context  # noqa
+        except Exception:
+            return
+        # Longest names first so "John Smith Jr" wins over "John Smith"
+        for name in sorted(index, key=len, reverse=True):
+            player = index[name]
+            start = "1.0"
+            while True:
+                pos = txt.search(name, start, stopindex=tk.END, nocase=False)
+                if not pos:
+                    break
+                end = f"{pos}+{len(name)}c"
+                tag = f"player-{getattr(player, 'id', id(player))}"
+                # Skip if already tagged (overlap from a longer name)
+                if tag in txt.tag_names(pos):
+                    start = end
+                    continue
+                txt.tag_add(tag, pos, end)
+                txt.tag_config(tag, underline=True,
+                               foreground=getattr(self.app, 'ACCENT_COLOR', '#4FC3F7'))
+                # Bind right-click on this specific tagged range
+                def _show(event, p=player):
+                    try:
+                        PlayerContextMenu(self.app).show_context_menu(event, p)
+                    except Exception:
+                        pass
+                txt.tag_bind(tag, "<Button-3>", _show)
+                # Also bind Shift+F10 for keyboard access
+                txt.tag_bind(tag, "<Shift-F10>", _show)
+                start = end
+        # Ensure the textbox itself doesn't swallow right-clicks elsewhere
+        try:
+            txt.bind("<Button-3>", lambda e: None)
+        except Exception:
+            pass
+
     def _create_toolbar(self, parent):
         """Create the bottom toolbar."""
         ct = self._ct
@@ -597,6 +671,7 @@ class InboxView(ctk.CTkFrame):
             self.content_text.configure(state='normal')
             self.content_text.delete(1.0, tk.END)
             self.content_text.insert(1.0, message.content)
+            self._tag_player_names()
 
             # Add response info if needed
             if message.requires_response:

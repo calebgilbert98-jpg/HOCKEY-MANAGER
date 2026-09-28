@@ -42,22 +42,21 @@ HOW_TO_GET_ECK = (
 )
 
 
-class RosterImportWizard(InGamePopup):
-    """Step-by-step importer.  Calls on_complete(league, team, gm) at the end."""
+class RosterImportView(tk.Frame):
+    """Step-by-step importer as an embedded full-screen view.
+
+    Calls on_complete(league, team, gm) at the end. Pass ``app`` for the
+    application object; when omitted, ``parent`` doubles as the app
+    (standalone / popup-wrapper use).
+    """
 
     def __init__(self, parent,
-                 on_complete: Callable[[Any, str, str], None]):
+                 on_complete: Callable[[Any, str, str], None],
+                 app=None):
         super().__init__(parent)
+        self.app = app if app is not None else parent
         self.on_complete = on_complete
-        self.title("Import Rosters - Puck Dynasty")
-        self.geometry("860x680")
         self.configure(bg=AppColors.BG)
-        self.resizable(True, True)
-        try:
-            self.transient(parent)
-            self.grab_set()
-        except Exception:
-            pass
 
         # state
         self.source_kind = tk.StringVar(value="ehm")  # ehm | csv
@@ -85,6 +84,44 @@ class RosterImportWizard(InGamePopup):
         self._build_steps()
         self._show_step(0)
         self.after(120, self._pump_queue)
+
+
+    def _show_banner(self, text, kind="info"):
+        """Show an in-view message banner (replaces messagebox popups)."""
+        colors = {"info": ("#1a3a5c", "#4a9eff"), "error": ("#5c1a1a", "#ff6b6b"),
+                  "warn": ("#5c4a1a", "#ffcc00"), "ok": ("#1a5c2a", "#51cf66")}
+        bg, fg = colors.get(kind, colors["info"])
+        banner = getattr(self, "_banner", None)
+        if banner is None:
+            try:
+                import customtkinter as ctk
+                banner = ctk.CTkLabel(self, text="", fg_color=bg, text_color=fg,
+                                      corner_radius=6)
+                banner.pack(fill="x", padx=12, pady=(8, 0))
+                try:
+                    banner.lower()
+                except Exception:
+                    pass
+                self._banner = banner
+            except Exception:
+                return
+        banner.configure(text=text, fg_color=bg, text_color=fg)
+        # auto-clear after 6s
+        try:
+            after = getattr(self, "_banner_after", None)
+            if after:
+                self.after_cancel(after)
+            self._banner_after = self.after(6000, lambda: banner.configure(text=""))
+        except Exception:
+            pass
+
+    def close_view(self):
+        """Close this screen via the screen manager, or destroy as fallback."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # -- chrome ------------------------------------------------------
     def _build_chrome(self):
@@ -266,7 +303,7 @@ class RosterImportWizard(InGamePopup):
                 f"Templates written to:\n{t}\n{pl}\n\nFill them in, then "
                 "come back and import.")
         except Exception as exc:
-            messagebox.showerror("Error", f"Could not write templates:\n{exc}")
+            self._show_banner(f"Could not write templates:\n{exc}", "error")
     # -- step 2: detection -------------------------------------------
     def _build_step_detection(self, parent):
         self.det_status = tk.Label(parent, text="", font=AppFonts.BODY,
@@ -438,7 +475,7 @@ class RosterImportWizard(InGamePopup):
         from ehm_roster_importer import retarget_staff_table
         table = self._map_vars["staff_table"].get()
         if not table:
-            messagebox.showwarning("Mapping", "Choose a staff table first.")
+            self._show_banner("Choose a staff table first.", "warn")
             return
         path = self.db_path.get().strip()
         try:
@@ -446,7 +483,7 @@ class RosterImportWizard(InGamePopup):
             retarget_staff_table(self.probe, conn, table)
             conn.close()
         except sqlite3.Error as exc:
-            messagebox.showerror("Mapping", f"Could not re-read table:\n{exc}")
+            self._show_banner(f"Could not re-read table:\n{exc}", "error")
             return
         for logical in ("first_name", "last_name", "club_contracted", "dob"):
             val = self._map_vars[logical].get().strip()
@@ -777,9 +814,43 @@ class RosterImportWizard(InGamePopup):
                 return  # import still running or failed
             team = self.opt_team.get()
             gm = self.opt_gm.get().strip() or "GM"
-            self.grab_release()
-            self.destroy()
-            self.on_complete(self.league, team, gm)
+            league = self.league
+            self.close_view()
+            self.on_complete(league, team, gm)
+
+
+class RosterImportWizard(InGamePopup):
+    """Popup wrapper around RosterImportView (backward compatibility).
+
+    New code should embed RosterImportView as a full-screen view instead
+    of opening this card.
+    """
+
+    def __init__(self, parent,
+                 on_complete: Callable[[Any, str, str], None]):
+        super().__init__(parent)
+        self.title("Import Rosters - Puck Dynasty")
+        self.geometry("860x680")
+        self.resizable(True, True)
+        try:
+            self.transient(parent)
+            self.grab_set()
+        except Exception:
+            pass
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = RosterImportView(self, on_complete, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 
 
 def open_roster_import_wizard(parent,

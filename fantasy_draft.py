@@ -342,19 +342,22 @@ class FantasyDraftManager:
               
         return selected_player
 
-class FantasyDraftWindow(InGamePopup):
-    """Modern Interactive Fantasy Draft Window"""
-    
-    def __init__(self, parent, game_manager):
+class FantasyDraftView(tk.Frame):
+    """Modern interactive fantasy draft as an embedded full-screen view.
+
+    Pass ``app`` for the application object; when omitted, ``parent``
+    doubles as the app (standalone / popup-wrapper use). The draft event
+    flow (picks, auto-draft, sim, completion) is unchanged from the popup
+    version; only the windowing changed.
+    """
+
+    def __init__(self, parent, game_manager, app=None):
         super().__init__(parent)
-        self.parent = parent
+        self.app = app if app is not None else parent
         self.game_manager = game_manager
-        
-        # Set up window with modern styling
-        self.title("Fantasy Draft - Hockey Manager")
-        self.geometry("1600x1000")
-        self.configure(background=parent.BG_COLOR)
-        self.minsize(1400, 900)
+
+        # Full-screen view: window chrome lives on the wrapper now.
+        self.configure(background=self.app.BG_COLOR)
         
         # Initialize draft data - collect ALL NHL players properly
         nhl_teams = [team for team in game_manager.league.teams 
@@ -381,8 +384,8 @@ class FantasyDraftWindow(InGamePopup):
         self.draft_speed = tk.StringVar(value="Normal")
         
         # Initialize tree maps for player references
-        if not hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps = {}
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = {}
         
         self.setup_card_styles()
         self.setup_integrated_ui()
@@ -392,7 +395,15 @@ class FantasyDraftWindow(InGamePopup):
         if hasattr(self, 'players_tree'):
             debug_print("DEBUG: Starting initial player population...")
             self.after(100, self.initial_player_load)  # Slight delay to ensure UI is ready
-            
+
+    def close_view(self):
+        """Close this screen via the screen manager, or destroy as fallback."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def initial_player_load(self):
         """Load players after UI initialization"""
         debug_print("DEBUG: Performing initial player load...")
@@ -422,29 +433,29 @@ class FantasyDraftWindow(InGamePopup):
         
         # Player card label frame style
         style.configure('Card.TLabelframe',
-                       background=self.parent.CONTENT_BG,
+                       background=self.app.CONTENT_BG,
                        borderwidth=2,
                        relief='solid')
         
         style.configure('Card.TLabelframe.Label',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.HEADER_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.HEADER_COLOR,
                        font=('Segoe UI', 12, 'bold'))
         
         # Section label frame for card sections
         style.configure('Section.TLabelframe',
-                       background=self.parent.CONTENT_BG,
+                       background=self.app.CONTENT_BG,
                        borderwidth=1,
                        relief='solid')
         
         style.configure('Section.TLabelframe.Label',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.TEXT_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.TEXT_COLOR,
                        font=('Segoe UI', 10, 'bold'))
         
         # Badge styles
         style.configure('Badge.TLabel',
-                       background=self.parent.ACCENT_COLOR,
+                       background=self.app.ACCENT_COLOR,
                        foreground='white',
                        padding=(8, 4),
                        font=('Segoe UI', 9, 'bold'))
@@ -457,7 +468,7 @@ class FantasyDraftWindow(InGamePopup):
         
         # Value label for stats
         style.configure('Value.TLabel',
-                       foreground=self.parent.ACCENT_COLOR,
+                       foreground=self.app.ACCENT_COLOR,
                        font=('Segoe UI', 9, 'bold'))
         
     def collect_all_nhl_players(self, teams: List[Team]) -> List[Player]:
@@ -848,7 +859,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         tree_frame = ttk.Frame(parent, style='Panel.TFrame')
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.players_tree = self.parent._create_treeview(tree_frame, columns, height=20)
+        self.players_tree = self.app._create_treeview(tree_frame, columns, height=20)
         
         # Double-click to draft
         self.players_tree.bind('<Double-1>', self.on_player_double_click)
@@ -873,7 +884,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'player': ('Selection', 120)
         }
         
-        self.draft_tree = self.parent._create_treeview(order_frame, order_columns, height=12)
+        self.draft_tree = self.app._create_treeview(order_frame, order_columns, height=12)
         
         # Controls section
         controls_frame = ttk.LabelFrame(parent, text="Draft Controls", style='Panel.TLabelframe')
@@ -955,7 +966,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'age': ('Age', 60)
         }
         
-        round_tree = self.parent._create_treeview(round_frame, columns, height=20)
+        round_tree = self.app._create_treeview(round_frame, columns, height=20)
         round_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
         # Store references
@@ -984,7 +995,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         controls_frame.pack(fill=tk.X, padx=15, pady=10)
         
         ttk.Label(controls_frame, text="Select Team:", 
-                 style='TLabel', font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side=tk.LEFT)
+                 style='TLabel', font=(self.app.FONT_FAMILY, 12, 'bold')).pack(side=tk.LEFT)
         
         # Team selector
         self.roster_team_var = tk.StringVar(value="")
@@ -1069,7 +1080,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Create scrollable spotlight content
         self.roster_spotlight_canvas = tk.Canvas(roster_spotlight_frame, 
-                                               bg=self.parent.CONTENT_BG,
+                                               bg=self.app.CONTENT_BG,
                                                highlightthickness=0,
                                                width=280)
         self.roster_spotlight_scrollbar = ttk.Scrollbar(roster_spotlight_frame, orient=tk.VERTICAL, 
@@ -1091,8 +1102,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.show_roster_welcome_card()
         
         # Initialize tree map for this tree
-        if self.roster_display_tree not in self.parent.tree_maps:
-            self.parent.tree_maps[self.roster_display_tree] = {}
+        if self.roster_display_tree not in self.app.tree_maps:
+            self.app.tree_maps[self.roster_display_tree] = {}
         
         # Bottom info
         info_frame = ttk.Frame(rosters_tab, style='Panel.TFrame')
@@ -1248,11 +1259,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
         title_label = ttk.Label(header_frame, text="Available Players", 
-                               style='Header.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
+                               style='Header.TLabel', font=(self.app.FONT_FAMILY, 16, 'bold'))
         title_label.pack(side=tk.LEFT)
         
         self.count_label = ttk.Label(header_frame, text="", 
-                                    style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10))
+                                    style='Info.TLabel', font=(self.app.FONT_FAMILY, 10))
         self.count_label.pack(side=tk.RIGHT)
         
         # Filter frame
@@ -1353,7 +1364,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Draft control label
         controls_label = ttk.Label(right_button_frame, text="Draft Controls:", 
-                                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10, 'bold'))
+                                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 10, 'bold'))
         controls_label.pack(pady=(0, 8))
         
         # Button container
@@ -1524,9 +1535,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 ))
                 
                 # Store player reference directly in tree_maps using item_id
-                if not hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps = {}
-                self.parent.tree_maps[item_id] = player
+                if not hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps = {}
+                self.app.tree_maps[item_id] = player
                 
             except Exception as e:
                 debug_print(f"DEBUG: Error adding player {i}: {e}")
@@ -1553,8 +1564,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             item = selection[0]
             try:
                 # Get player from tree_maps using item ID
-                if hasattr(self.parent, 'tree_maps') and item in self.parent.tree_maps:
-                    self.selected_player = self.parent.tree_maps[item]
+                if hasattr(self.app, 'tree_maps') and item in self.app.tree_maps:
+                    self.selected_player = self.app.tree_maps[item]
                     
                     # Show player card in spotlight area
                     if hasattr(self, 'main_player_card_frame'):
@@ -1749,7 +1760,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
         title_label = ttk.Label(header_frame, text="Fantasy Draft Order", 
-                               style='Header.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
+                               style='Header.TLabel', font=(self.app.FONT_FAMILY, 16, 'bold'))
         title_label.pack(side=tk.LEFT)
         
         # Current pick info
@@ -1760,7 +1771,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             current_text = "Draft Complete"
             
         self.integrated_current_label = ttk.Label(header_frame, text=current_text, 
-                                                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 12))
+                                                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 12))
         self.integrated_current_label.pack(side=tk.RIGHT)
         
         # Draft order frame
@@ -1872,7 +1883,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             title_content,
             text="Fantasy Draft",
             style='Title.TLabel',
-            font=(self.parent.FONT_FAMILY, 24, 'bold')
+            font=(self.app.FONT_FAMILY, 24, 'bold')
         ).pack(anchor='w')
         
         # Current pick info
@@ -1886,7 +1897,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             title_content,
             text=pick_text,
             style='Subtitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 14)
+            font=(self.app.FONT_FAMILY, 14)
         )
         self.current_pick_label.pack(anchor='w', pady=(5, 0))
         
@@ -1903,7 +1914,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             stats_frame,
             text=stats_text,
             style='Subtitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 12)
+            font=(self.app.FONT_FAMILY, 12)
         ).pack(side=tk.RIGHT)
         
         # Subtitle with draft info
@@ -1915,7 +1926,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             subtitle_frame,
             text=draft_info,
             style='Info.TLabel',
-            font=(self.parent.FONT_FAMILY, 11)
+            font=(self.app.FONT_FAMILY, 11)
         ).pack(side=tk.LEFT, padx=(20, 0))
         
         # Draft controls on the right
@@ -2008,7 +2019,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             widget.destroy()
         
         # Create scrollable card
-        canvas = tk.Canvas(self.main_player_card_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(self.main_player_card_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.main_player_card_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
@@ -2121,7 +2132,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 restriction_text = f"Trade Restrictions: {', '.join(restrictions)}"
                 restriction_label = ttk.Label(contract_content, text=restriction_text,
                                              style='Info.TLabel', font=('Segoe UI', 10, 'italic'),
-                                             foreground=self.parent.ACCENT_COLOR)
+                                             foreground=self.app.ACCENT_COLOR)
                 restriction_label.pack(anchor='w', pady=(3, 0))
         else:
             default_label = ttk.Label(contract_content, 
@@ -2259,7 +2270,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             widget.destroy()
         
         # Create scrollable card
-        canvas = tk.Canvas(self.main_player_card_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(self.main_player_card_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.main_player_card_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
@@ -2284,7 +2295,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         draft_status = ttk.Label(draft_header, text="RECENTLY DRAFTED", 
                                 style='Header.TLabel', font=('Segoe UI', 12, 'bold'), 
-                                foreground=self.parent.ACCENT_COLOR)
+                                foreground=self.app.ACCENT_COLOR)
         draft_status.pack()
         
         pick_info = ttk.Label(draft_header, 
@@ -2361,10 +2372,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         header_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
         
         ttk.Label(header_frame, text="Available Players", 
-                 style='Header.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold')).pack(side=tk.LEFT)
+                 style='Header.TLabel', font=(self.app.FONT_FAMILY, 16, 'bold')).pack(side=tk.LEFT)
         
         self.available_count_label = ttk.Label(header_frame, text="", 
-                                             style='Info.TLabel', font=(self.parent.FONT_FAMILY, 11))
+                                             style='Info.TLabel', font=(self.app.FONT_FAMILY, 11))
         self.available_count_label.pack(side=tk.RIGHT)
         
         # Advanced filter section
@@ -2466,7 +2477,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'potential': ('POT', 50)
         }
         
-        self.players_tree = self.parent._create_treeview(tree_frame, columns, height=25)
+        self.players_tree = self.app._create_treeview(tree_frame, columns, height=25)
         self.players_tree.bind('<Double-1>', self.on_player_select)
         self.players_tree.bind('<Button-1>', self.on_player_click)
         self.players_tree.bind('<Return>', self.on_player_select)
@@ -2488,7 +2499,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Default message
         self.no_selection_label = ttk.Label(self.player_info_frame, 
                                           text="Select a player to view details and draft options",
-                                          style='Info.TLabel', font=(self.parent.FONT_FAMILY, 11))
+                                          style='Info.TLabel', font=(self.app.FONT_FAMILY, 11))
         self.no_selection_label.pack(pady=20)
         
         # Draft action panel
@@ -2530,7 +2541,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Draft status
         self.draft_status_label = ttk.Label(action_content, text="", 
-                                          style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10))
+                                          style='Info.TLabel', font=(self.app.FONT_FAMILY, 10))
         self.draft_status_label.pack(pady=5)
         
     def show_more_players(self):
@@ -2595,7 +2606,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'team': ('Former Team', 120)
         }
         
-        self.players_tree = self.parent._create_treeview(tree_frame, columns, height=25)
+        self.players_tree = self.app._create_treeview(tree_frame, columns, height=25)
         self.players_tree.bind('<Double-1>', self.on_player_select)
         self.players_tree.bind('<Button-1>', self.on_player_click)
         
@@ -2640,7 +2651,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'overall': ('OVR', 60)
         }
         
-        self.recent_picks_tree = self.parent._create_treeview(recent_frame, columns, height=20)
+        self.recent_picks_tree = self.app._create_treeview(recent_frame, columns, height=20)
         
     def setup_team_rosters_tab(self):
         """Set up the team rosters display"""
@@ -2668,7 +2679,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'age': ('Age', 50)
         }
         
-        self.team_roster_tree = self.parent._create_treeview(rosters_frame, columns, height=15)
+        self.team_roster_tree = self.app._create_treeview(rosters_frame, columns, height=15)
         
     def setup_draft_order_tab(self):
         """Set up the draft order display"""
@@ -2684,7 +2695,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'status': ('Status', 100)
         }
         
-        self.draft_order_tree = self.parent._create_treeview(order_frame, columns, height=20)
+        self.draft_order_tree = self.app._create_treeview(order_frame, columns, height=20)
         
         # Populate draft order
         self.populate_draft_order()
@@ -2816,8 +2827,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             return
         
         # Initialize tree_maps if it doesn't exist
-        if not hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps = {}
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = {}
         
         # Use dynamic display limit
         display_limit = getattr(self, 'display_limit', 1000)
@@ -2837,7 +2848,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 ))
                 
                 # Store player reference
-                self.parent.tree_maps[item] = player
+                self.app.tree_maps[item] = player
                 
                 # Color coding based on overall rating
                 rating = player.overall_rating()
@@ -2875,8 +2886,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         selection = self.players_tree.selection()
         if selection:
             item = selection[0]
-            if item in self.parent.tree_maps:
-                self.selected_player = self.parent.tree_maps[item]
+            if item in self.app.tree_maps:
+                self.selected_player = self.app.tree_maps[item]
                 self.display_selected_player_details()
                 self.draft_button.configure(state='normal')
             else:
@@ -2900,16 +2911,16 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         name_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(name_frame, text=player.full_name, 
-                 style='Header.TLabel', font=(self.parent.FONT_FAMILY, 14, 'bold')).pack()
+                 style='Header.TLabel', font=(self.app.FONT_FAMILY, 14, 'bold')).pack()
         
         info_text = f"{player.primary_position.value} • {player.age} years old • OVR {player.overall_rating()}"
         ttk.Label(name_frame, text=info_text, 
-                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10)).pack()
+                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 10)).pack()
         
         # Former team
         former_team = getattr(player, 'former_team', 'Free Agent')
         ttk.Label(name_frame, text=f"Former: {former_team}", 
-                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10)).pack()
+                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 10)).pack()
         
         # Key attributes based on position
         attrs_frame = ttk.Frame(self.player_info_frame, style='Panel.TFrame')
@@ -2926,13 +2937,13 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             attrs_text = f"Shooting: {player.shooting} • Passing: {player.passing} • Skating: {player.skating}"
             
         ttk.Label(attrs_frame, text=attrs_text, 
-                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 9)).pack()
+                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 9)).pack()
         
         # Contract info if available
         if hasattr(player, 'contract') and player.contract:
             contract_text = f"Salary: ${getattr(player.contract, 'salary', 0):,}"
             ttk.Label(attrs_frame, text=contract_text, 
-                     style='Info.TLabel', font=(self.parent.FONT_FAMILY, 9)).pack()
+                     style='Info.TLabel', font=(self.app.FONT_FAMILY, 9)).pack()
                      
     def clear_player_details(self):
         """Clear player details display"""
@@ -2941,7 +2952,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
         self.no_selection_label = ttk.Label(self.player_info_frame, 
                                           text="Select a player to view details and draft options",
-                                          style='Info.TLabel', font=(self.parent.FONT_FAMILY, 11))
+                                          style='Info.TLabel', font=(self.app.FONT_FAMILY, 11))
         self.no_selection_label.pack(pady=20)
         
     def advance_one_pick(self):
@@ -3198,7 +3209,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         progress_window = InGamePopup(self)
         progress_window.title("Simulating Draft...")
         progress_window.geometry("400x150")
-        progress_window.configure(background=self.parent.BG_COLOR)
+        progress_window.configure(background=self.app.BG_COLOR)
         progress_window.transient(self)
         progress_window.grab_set()
         
@@ -3439,7 +3450,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
 
         # Blocker cleared: refresh the dashboard's smart Continue/Next Day label.
         try:
-            dashboard = getattr(self.parent, 'dashboard', None)
+            dashboard = getattr(self.app, 'dashboard', None)
             refresher = getattr(dashboard, 'refresh_continue_button', None)
             if callable(refresher):
                 refresher()
@@ -3451,11 +3462,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Update the main game if possible
         try:
-            if hasattr(self.parent, 'update_views'):
-                self.parent.update_views()
+            if hasattr(self.app, 'update_views'):
+                self.app.update_views()
         except:
             pass  # Ignore if update method doesn't exist
-        self.destroy()
+        self.close_view()
         
     def add_draft_completion_message(self):
         """Add a draft completion message to the user's inbox"""
@@ -3918,7 +3929,7 @@ NHL League Office""",
         card_main.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Card content with scrolling
-        canvas = tk.Canvas(card_main, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(card_main, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(card_main, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
@@ -4140,8 +4151,8 @@ NHL League Office""",
             self.roster_display_tree.delete(item)
         
         # Clear tree mapping
-        if self.roster_display_tree in self.parent.tree_maps:
-            self.parent.tree_maps[self.roster_display_tree].clear()
+        if self.roster_display_tree in self.app.tree_maps:
+            self.app.tree_maps[self.roster_display_tree].clear()
         
         if not selected_team_name:
             self.roster_stats_label.config(text="Select a team to view roster")
@@ -4204,9 +4215,9 @@ NHL League Office""",
             ))
             
             # Map item to player for double-click functionality
-            if self.roster_display_tree not in self.parent.tree_maps:
-                self.parent.tree_maps[self.roster_display_tree] = {}
-            self.parent.tree_maps[self.roster_display_tree][item_id] = player
+            if self.roster_display_tree not in self.app.tree_maps:
+                self.app.tree_maps[self.roster_display_tree] = {}
+            self.app.tree_maps[self.roster_display_tree][item_id] = player
         
         # Update stats display
         num_picks = len(team_drafted_players)
@@ -4227,7 +4238,7 @@ NHL League Office""",
         if self.user_team and selected_team_name == self.user_team.team_name:
             self.roster_user_indicator.config(
                 text="Your Team", 
-                foreground=self.parent.ACCENT_COLOR
+                foreground=self.app.ACCENT_COLOR
             )
         else:
             self.roster_user_indicator.config(text="")
@@ -4253,7 +4264,7 @@ NHL League Office""",
         """Show detailed player information when double-clicking roster entry"""
         try:
             item = self.team_roster_tree.selection()[0]
-            player = self.parent.tree_maps[self.team_roster_tree].get(item)
+            player = self.app.tree_maps[self.team_roster_tree].get(item)
             
             if player:
                 # Show player in the main spotlight if we're on the available players tab
@@ -4291,10 +4302,10 @@ NHL League Office""",
             # Update current pick info
             if current_pick.team == self.draft_manager.user_team:
                 pick_text = f"YOUR PICK - Round {current_pick.round_num}, Pick #{current_pick.overall_pick}"
-                self.current_pick_label.configure(foreground=self.parent.ACCENT_COLOR)
+                self.current_pick_label.configure(foreground=self.app.ACCENT_COLOR)
             else:
                 pick_text = f"Round {current_pick.round_num}, Pick #{current_pick.overall_pick} - {current_pick.team.team_name}"
-                self.current_pick_label.configure(foreground=self.parent.TEXT_COLOR)
+                self.current_pick_label.configure(foreground=self.app.TEXT_COLOR)
                 
             self.current_pick_label.configure(text=pick_text)
             
@@ -4311,7 +4322,7 @@ NHL League Office""",
         else:
             # Draft complete
             self.current_pick_label.configure(text="DRAFT COMPLETE", 
-                                            foreground=self.parent.ACCENT_COLOR)
+                                            foreground=self.app.ACCENT_COLOR)
             self.progress_label.configure(text="All picks completed!")
             
     def update_player_list(self):
@@ -4355,11 +4366,11 @@ NHL League Office""",
             ))
             
             # Store player reference
-            if not hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps = {}
-            if 'fantasy_draft_players' not in self.parent.tree_maps:
-                self.parent.tree_maps['fantasy_draft_players'] = {}
-            self.parent.tree_maps['fantasy_draft_players'][player_id] = player
+            if not hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps = {}
+            if 'fantasy_draft_players' not in self.app.tree_maps:
+                self.app.tree_maps['fantasy_draft_players'] = {}
+            self.app.tree_maps['fantasy_draft_players'][player_id] = player
             
     def update_draft_order_integrated(self):
         """Update draft order display for integrated interface"""
@@ -4391,7 +4402,7 @@ NHL League Office""",
             ), tags=tags)
             
         # Configure user team pick highlighting
-        self.draft_tree.tag_configure('user_team', background=self.parent.ACCENT_COLOR, 
+        self.draft_tree.tag_configure('user_team', background=self.app.ACCENT_COLOR, 
                                     foreground='white')
 
     def show_roster_welcome_card(self):
@@ -4429,10 +4440,10 @@ NHL League Office""",
                 return
                 
             item_id = selection[0]
-            if (self.roster_display_tree in self.parent.tree_maps and 
-                item_id in self.parent.tree_maps[self.roster_display_tree]):
+            if (self.roster_display_tree in self.app.tree_maps and 
+                item_id in self.app.tree_maps[self.roster_display_tree]):
                 
-                player = self.parent.tree_maps[self.roster_display_tree][item_id]
+                player = self.app.tree_maps[self.roster_display_tree][item_id]
                 self.show_roster_player_card(player)
                 
         except Exception as e:
@@ -4470,7 +4481,7 @@ NHL League Office""",
         
         overall_label = ttk.Label(pos_overall_frame, text=f"Overall: {to_100_scale(player.overall_rating())}", 
                                  style='Info.TLabel', font=('Segoe UI', 11, 'bold'),
-                                 foreground=self.parent.ACCENT_COLOR)
+                                 foreground=self.app.ACCENT_COLOR)
         overall_label.pack(side=tk.RIGHT)
         
         # Basic info section
@@ -4547,7 +4558,7 @@ NHL League Office""",
                 clause_text = f"{', '.join(clauses)} Clause{'s' if len(clauses) > 1 else ''}"
                 clause_label = ttk.Label(contract_frame, text=clause_text,
                                         style='Info.TLabel', font=('Segoe UI', 9, 'italic'),
-                                        foreground=self.parent.ACCENT_COLOR)
+                                        foreground=self.app.ACCENT_COLOR)
                 clause_label.pack(anchor='w')
         else:
             # Default contract
@@ -4560,7 +4571,7 @@ NHL League Office""",
         if draft_info:
             draft_label = ttk.Label(info_frame, text=draft_info,
                                    style='Info.TLabel', font=('Segoe UI', 9, 'italic'),
-                                   foreground=self.parent.ACCENT_COLOR)
+                                   foreground=self.app.ACCENT_COLOR)
             draft_label.pack(anchor='w', pady=(2, 0))
         
         # Key attributes section
@@ -4802,3 +4813,31 @@ NHL League Office""",
     def update_salary_display_integration(self):
         """Ensure salary information is properly displayed in draft interface"""
         debug_print("DEBUG: Salary display integration completed - contracts ready for strategic drafting")
+
+
+class FantasyDraftWindow(InGamePopup):
+    """Popup wrapper around FantasyDraftView (backward compatibility).
+
+    New code should embed FantasyDraftView as a full-screen view instead
+    of opening this card.
+    """
+
+    def __init__(self, parent, game_manager):
+        super().__init__(parent)
+        self.title("Fantasy Draft - Hockey Manager")
+        self.geometry("1600x1000")
+        self.minsize(1400, 900)
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = FantasyDraftView(self, game_manager, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

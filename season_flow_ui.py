@@ -5,6 +5,8 @@
 import tkinter as tk
 from popup_system import messagebox, InGamePopup
 from tkinter import ttk
+import customtkinter as ctk
+from ctk_theme import BG, CARD
 from datetime import date, timedelta
 from automated_season_flow import AutomatedSeasonFlow, AutoAdvanceMode, SeasonPhase, get_season_phase_color, format_days_until_milestone
 
@@ -177,7 +179,9 @@ class SeasonFlowControlPanel(ttk.Frame):
         
     def _open_settings(self):
         """Open automation settings window"""
-        SettingsWindow(self, self.automation)
+        self.game_manager.show_screen('automation_settings', 'Automation Settings',
+                                      AutomationSettingsView,
+                                      automation=self.automation)
         
     def _advance_to_next_game(self):
         """Advance to the next user team game"""
@@ -250,71 +254,88 @@ class SeasonFlowControlPanel(ttk.Frame):
             print(f"Error advancing days: {e}")
             messagebox.showerror("Error", f"Failed to advance days: {e}")
 
-class SettingsWindow(InGamePopup):
-    """Settings window for automation configuration"""
-    
-    def __init__(self, parent, automation):
-        super().__init__(parent)
-        self.parent = parent
+
+
+def _focus_card(view, width=560):
+    """Focus-card layout: full-screen view with content in a centered card."""
+    outer = ctk.CTkFrame(view, fg_color=BG)
+    outer.pack(fill="both", expand=True)
+    card = ctk.CTkFrame(outer, fg_color=CARD, corner_radius=12, width=width)
+    card.pack(expand=True, padx=24, pady=24)
+    return card
+
+
+class AutomationSettingsView(ctk.CTkFrame):
+    """Settings view for automation configuration (full-screen)."""
+
+    def __init__(self, parent, app=None, automation=None):
+        ctk.CTkFrame.__init__(self, parent)
+        if app is None:
+            # The automation object holds the app (game_manager) reference.
+            app = getattr(automation, 'game_manager', None)
+        if app is None:
+            app = getattr(parent, 'app', None) or parent
+        self.app = app
+        self._close_screen = None  # set by show_screen() or the SettingsWindow wrapper
+        self.configure(fg_color=BG)
         self.automation = automation
-        
-        self.title("Automation Settings")
-        self.geometry("500x600")
-        self.configure(background=parent.master.BG_COLOR)
-        self.resizable(False, False)
-        
-        # Make it modal
-        self.transient(parent)
-        self.grab_set()
-        
+
         self.setup_ui()
-        
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def setup_ui(self):
         """Setup the settings UI"""
         main_frame = ttk.Frame(self, style='Panel.TFrame', padding=20)
         main_frame.pack(fill='both', expand=True)
-        
-        
+
+
         # Game simulation settings
         game_frame = ttk.LabelFrame(main_frame, text="Game Simulation", padding=10)
         game_frame.pack(fill='x', pady=(0, 10))
-        
+
         self.sim_away_var = tk.BooleanVar(value=self.automation.settings.simulate_away_games)
-        ttk.Checkbutton(game_frame, text="Simulate away games automatically", 
+        ttk.Checkbutton(game_frame, text="Simulate away games automatically",
                        variable=self.sim_away_var).pack(anchor='w', pady=2)
-        
+
         self.viewer_home_var = tk.BooleanVar(value=self.automation.settings.show_game_viewer_for_home)
-        ttk.Checkbutton(game_frame, text="Show game viewer for home games", 
+        ttk.Checkbutton(game_frame, text="Show game viewer for home games",
                        variable=self.viewer_home_var).pack(anchor='w', pady=2)
-        
+
         self.viewer_away_var = tk.BooleanVar(value=self.automation.settings.show_game_viewer_for_away)
-        ttk.Checkbutton(game_frame, text="Show game viewer for away games", 
+        ttk.Checkbutton(game_frame, text="Show game viewer for away games",
                        variable=self.viewer_away_var).pack(anchor='w', pady=2)
-        
+
         # Automation behavior
         behavior_frame = ttk.LabelFrame(main_frame, text="Automation Behavior", padding=10)
         behavior_frame.pack(fill='x', pady=(0, 10))
-        
+
         self.pause_milestones_var = tk.BooleanVar(value=self.automation.settings.pause_at_milestones)
-        ttk.Checkbutton(behavior_frame, text="Pause at important milestones", 
+        ttk.Checkbutton(behavior_frame, text="Pause at important milestones",
                        variable=self.pause_milestones_var).pack(anchor='w', pady=2)
-        
+
         self.pause_games_var = tk.BooleanVar(value=self.automation.settings.pause_at_user_games)
-        ttk.Checkbutton(behavior_frame, text="Pause at user team games", 
+        ttk.Checkbutton(behavior_frame, text="Pause at user team games",
                        variable=self.pause_games_var).pack(anchor='w', pady=2)
-        
+
         self.skip_offseason_var = tk.BooleanVar(value=self.automation.settings.auto_skip_offseason)
-        ttk.Checkbutton(behavior_frame, text="Automatically skip off-season", 
+        ttk.Checkbutton(behavior_frame, text="Automatically skip off-season",
                        variable=self.skip_offseason_var).pack(anchor='w', pady=2)
-        
+
         # Milestone preview
         milestone_frame = ttk.LabelFrame(main_frame, text="Upcoming Milestones", padding=10)
         milestone_frame.pack(fill='both', expand=True, pady=(0, 20))
-        
+
         # Create milestone list
         columns = ('Date', 'Milestone', 'Days Until')
         self.milestone_tree = ttk.Treeview(milestone_frame, columns=columns, show='headings', height=10)
-        
+
         for col in columns:
             self.milestone_tree.heading(col, text=col)
             if col == 'Date':
@@ -323,51 +344,51 @@ class SettingsWindow(InGamePopup):
                 self.milestone_tree.column(col, width=80)
             else:
                 self.milestone_tree.column(col, width=200)
-        
+
         # Add scrollbar
         scrollbar = ttk.Scrollbar(milestone_frame, orient='vertical', command=self.milestone_tree.yview)
         self.milestone_tree.configure(yscrollcommand=scrollbar.set)
-        
+
         self.milestone_tree.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
-        
+
         # Populate milestones
         self._populate_milestones()
-        
+
         # Buttons
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill='x')
-        
-        ttk.Button(button_frame, text="Save Settings", 
+
+        ttk.Button(button_frame, text="Save Settings",
                   command=self._save_settings, style='TButton').pack(side='right', padx=(5, 0))
-        ttk.Button(button_frame, text="Cancel", 
-                  command=self.destroy, style='TButton').pack(side='right')
-        
+        ttk.Button(button_frame, text="Cancel",
+                  command=self.close_view, style='TButton').pack(side='right')
+
     def _populate_milestones(self):
         """Populate the milestone tree"""
         try:
             current_date = self.automation.game_manager.current_date
-            
+
             # Clear existing items
             for item in self.milestone_tree.get_children():
                 self.milestone_tree.delete(item)
-                
+
             # Add upcoming milestones (next 10)
             upcoming = [m for m in self.automation.milestones if m.date > current_date][:10]
-            
+
             for milestone in upcoming:
                 days_until = (milestone.date - current_date).days
                 days_text = f"{days_until} day{'s' if days_until != 1 else ''}"
-                
+
                 self.milestone_tree.insert('', 'end', values=(
                     milestone.date.strftime('%b %d'),
                     milestone.name,
                     days_text
                 ))
-                
+
         except Exception as e:
             print(f"Error populating milestones: {e}")
-            
+
     def _save_settings(self):
         """Save the automation settings"""
         try:
@@ -378,83 +399,128 @@ class SettingsWindow(InGamePopup):
             settings.pause_at_milestones = self.pause_milestones_var.get()
             settings.pause_at_user_games = self.pause_games_var.get()
             settings.auto_skip_offseason = self.skip_offseason_var.get()
-            
+
             messagebox.showinfo("Settings Saved", "Automation settings have been updated.")
-            self.destroy()
-            
+            self.close_view()
+
         except Exception as e:
             print(f"Error saving settings: {e}")
             messagebox.showerror("Error", f"Failed to save settings: {e}")
 
-class MilestoneNotificationWindow(InGamePopup):
-    """Window for displaying milestone notifications"""
-    
-    def __init__(self, parent, milestone):
-        super().__init__(parent)
-        self.parent = parent
+
+class SettingsWindow(InGamePopup):
+    """Popup wrapper around AutomationSettingsView (backward compatibility)."""
+
+    def __init__(self, parent, automation):
+        super().__init__(parent, modal=True)
+        self.title("Automation Settings")
+        self._view = AutomationSettingsView(self, automation=automation)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class MilestoneNotificationView(ctk.CTkFrame):
+    """View for displaying milestone notifications (focus-card view)."""
+
+    def __init__(self, parent, app=None, milestone=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the MilestoneNotificationWindow wrapper
+        self.configure(fg_color=BG)
         self.milestone = milestone
-        
-        self.title(f"Milestone: {milestone.name}")
-        self.geometry("400x300")
-        self.configure(background=parent.BG_COLOR)
-        self.resizable(False, False)
-        
-        # Center window
-        self.transient(parent)
-        self.grab_set()
-        
+
         self.setup_ui()
-        
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def setup_ui(self):
         """Setup the notification UI"""
-        main_frame = ttk.Frame(self, style='Panel.TFrame', padding=20)
+        card = _focus_card(self, width=480)
+        main_frame = ttk.Frame(card, style='Panel.TFrame', padding=20)
         main_frame.pack(fill='both', expand=True)
-        
+
         # Icon and title
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(fill='x', pady=(0, 20))
-        
+
         # Use phase-appropriate emoji
         phase_icons = {
             SeasonPhase.TRADE_DEADLINE: "⏰",
-            SeasonPhase.PLAYOFFS: "🏒", 
+            SeasonPhase.PLAYOFFS: "🏒",
             SeasonPhase.ENTRY_DRAFT: "📋",
             SeasonPhase.FREE_AGENCY: "💰",
         }
-        
+
         icon = phase_icons.get(self.milestone.phase, "🎯")
         ttk.Label(title_frame, text=icon, font=('Segoe UI', 32)).pack()
-        ttk.Label(title_frame, text=self.milestone.name, 
+        ttk.Label(title_frame, text=self.milestone.name,
                  style='Title.TLabel', font=('Segoe UI', 16, 'bold')).pack(pady=(10, 0))
-        
+
         # Date
-        ttk.Label(main_frame, text=self.milestone.date.strftime('%B %d, %Y'), 
+        ttk.Label(main_frame, text=self.milestone.date.strftime('%B %d, %Y'),
                  style='Header.TLabel', font=('Segoe UI', 12)).pack(pady=(0, 10))
-        
+
         # Description
-        ttk.Label(main_frame, text=self.milestone.description, 
-                 style='PlayerInfo.TLabel', wraplength=300, justify='center').pack(pady=(0, 20))
-        
+        ttk.Label(main_frame, text=self.milestone.description,
+                 style='PlayerInfo.TLabel', wraplength=380, justify='center').pack(pady=(0, 20))
+
         # Phase indicator
         phase_frame = ttk.Frame(main_frame)
         phase_frame.pack(pady=(0, 20))
-        
+
         ttk.Label(phase_frame, text="Season Phase:", style='PlayerInfo.TLabel').pack(side='left')
         phase_label = ttk.Label(phase_frame, text=self.milestone.phase.value, style='Header.TLabel')
         phase_label.pack(side='left', padx=(10, 0))
-        
+
         # Buttons
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill='x')
-        
-        ttk.Button(button_frame, text="Continue", 
-                  command=self.destroy, style='TButton').pack(side='right')
-        
+
+        ttk.Button(button_frame, text="Continue",
+                  command=self.close_view, style='TButton').pack(side='right')
+
         if self.milestone.is_critical:
-            ttk.Button(button_frame, text="Open Relevant Window", 
+            ttk.Button(button_frame, text="Open Relevant Window",
                       command=self._open_relevant_window, style='TButton').pack(side='right', padx=(0, 10))
-            
+
     def _open_relevant_window(self):
         """Open the relevant window for this milestone"""
         # This would open trade window for trade deadline, draft window for draft, etc.
         pass
+
+
+class MilestoneNotificationWindow(InGamePopup):
+    """Popup wrapper around MilestoneNotificationView (backward compatibility)."""
+
+    def __init__(self, parent, milestone):
+        super().__init__(parent, modal=True)
+        self.title(f"Milestone: {milestone.name}")
+        app = (getattr(parent, 'app', None)
+               or getattr(parent, 'parent', None) or parent)
+        self._view = MilestoneNotificationView(self, app=app, milestone=milestone)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

@@ -3465,6 +3465,7 @@ class TradeWindow(InGamePopup):
         self.geometry("1280x780")
         self.configure(fg_color=BG)
         self.trade_offers = {'user': [], 'partner': []}
+        self._asset_levels = {'user': {}, 'partner': {}}  # id(player) -> NHL/AHL/Prospects
         self._history_visible = False
         self._preset = preset or {}
         self._negotiation_id = self._preset.get("negotiation_id")
@@ -3497,8 +3498,14 @@ class TradeWindow(InGamePopup):
         partner_row = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
         partner_row.pack(fill='x', padx=10, pady=(8, 0))
         body(partner_row, "Trade partner:").pack(side='left', padx=(14, 0), pady=8)
+        # Realistic: trade partners are NHL franchises only --
+        # never standalone AHL clubs.
+        def _is_nhl(t):
+            ln = str(getattr(t, 'league_name', '') or '')
+            return (t != parent.user_team and
+                    ('National Hockey League' in ln or 'NHL' in ln or not ln))
         partner_teams = sorted(t.team_name for t in parent.league.teams
-                               if t != parent.user_team)
+                               if _is_nhl(t))
         self.partner_combo = ctk.CTkComboBox(
             partner_row, values=partner_teams, width=260,
             command=lambda _v: self.update_trade_partner_roster())
@@ -3524,6 +3531,13 @@ class TradeWindow(InGamePopup):
         user_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         heading(user_frame, parent.user_team.team_name, size=13).pack(
             anchor='w', padx=12, pady=(10, 4))
+        # Realistic logic: trade assets by level (NHL/AHL/Prospects).
+        # Trades are between NHL franchises; AHL/prospects are org assets.
+        self._user_level = ctk.StringVar(value="NHL")
+        _ulvl = ctk.CTkSegmentedButton(user_frame, values=["NHL", "AHL", "Prospects"],
+                                       variable=self._user_level,
+                                       command=lambda _v: self._refresh_user_list())
+        _ulvl.pack(fill='x', padx=8, pady=(0, 4))
         self.user_list = CTkPlayerList(user_frame)
         self.user_list.pack(fill='both', expand=True, padx=8, pady=4)
         btn_row = ctk.CTkFrame(user_frame, fg_color="transparent")
@@ -3574,6 +3588,11 @@ class TradeWindow(InGamePopup):
         partner_frame.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
         self.partner_title = heading(partner_frame, "Trade Partner", size=13)
         self.partner_title.pack(anchor='w', padx=12, pady=(10, 4))
+        self._partner_level = ctk.StringVar(value="NHL")
+        _plvl = ctk.CTkSegmentedButton(partner_frame, values=["NHL", "AHL", "Prospects"],
+                                       variable=self._partner_level,
+                                       command=lambda _v: self.update_trade_partner_roster())
+        _plvl.pack(fill='x', padx=8, pady=(0, 4))
         self.partner_list = CTkPlayerList(partner_frame)
         self.partner_list.pack(fill='both', expand=True, padx=8, pady=4)
         pbtn_row = ctk.CTkFrame(partner_frame, fg_color="transparent")
@@ -3635,10 +3654,22 @@ class TradeWindow(InGamePopup):
     # ------------------------------------------------------------------
     # Views
     # ------------------------------------------------------------------
+    def _level_roster(self, team, level):
+        """Get a team's roster at the given level (NHL/AHL/Prospects)."""
+        if level == "AHL":
+            players = getattr(team, 'ahl_roster', [])
+        elif level == "Prospects":
+            players = getattr(team, 'prospects', [])
+        else:
+            players = getattr(team, 'roster', [])
+        return sorted(players, key=lambda p: p.overall_rating(), reverse=True)
+
+    def _refresh_user_list(self):
+        self.user_list.set_players(
+            self._level_roster(self.parent.user_team, self._user_level.get()))
+
     def update_views(self):
-        roster = sorted(self.parent.user_team.roster,
-                        key=lambda p: p.overall_rating(), reverse=True)
-        self.user_list.set_players(roster)
+        self._refresh_user_list()
         self.update_trade_partner_roster()
         self._refresh_offer_lists()
         self._update_meter()
@@ -3648,21 +3679,25 @@ class TradeWindow(InGamePopup):
         team = next((t for t in self.parent.league.teams
                      if t.team_name == name), None)
         if team:
-            self.partner_title.configure(text=team.team_name)
-            roster = sorted(team.roster, key=lambda p: p.overall_rating(), reverse=True)
-            self.partner_list.set_players(roster)
+            lvl = self._partner_level.get() if hasattr(self, '_partner_level') else "NHL"
+            self.partner_title.configure(text=f"{team.team_name} ({lvl})")
+            self.partner_list.set_players(self._level_roster(team, lvl))
             needs = self.te.team_needs(team)[:3]
             self.needs_label.configure(text="  ".join(needs) if needs else "—")
         # Partner changed -> clear their side of the deal
         self.trade_offers['partner'] = []
+        self._asset_levels['partner'] = {}
         self._refresh_offer_lists()
         self._update_meter()
 
     def _refresh_offer_lists(self):
         for side, lst in (('user', self.user_offer_list),
                           ('partner', self.partner_offer_list)):
-            labels = [f"{self.te.asset_label(a)}  [{self.te.asset_value(a)}]"
-                      for a in self.trade_offers[side]]
+            labels = []
+            for a in self.trade_offers[side]:
+                lvl = self._asset_levels[side].get(id(a), "NHL")
+                tag = "" if lvl == "NHL" else f" ({lvl})"
+                labels.append(f"{self.te.asset_label(a)}{tag}  [{self.te.asset_value(a)}]")
             lst.set_items(labels)
 
     # ------------------------------------------------------------------
@@ -3741,6 +3776,9 @@ class TradeWindow(InGamePopup):
         player = lst.get_selected()
         if player and player not in self.trade_offers[side]:
             self.trade_offers[side].append(player)
+            lvl = (self._user_level.get() if side == 'user'
+                   else self._partner_level.get())
+            self._asset_levels[side][id(player)] = lvl
             self._refresh_offer_lists()
             self._update_meter()
 
@@ -7094,10 +7132,8 @@ VALUE ANALYSIS
         selection = self.contracts_tree.selection()
         if selection and selection[0] in self.app.tree_maps.get(self.contracts_tree, {}):
             player = self.app.tree_maps.get(self.contracts_tree, {})[selection[0]]
-            # Open contract negotiation window
-            if 'contract_negotiation' not in self.app.open_windows or not self.app.open_windows['contract_negotiation'].winfo_exists():
-                self.app.open_windows['contract_negotiation'] = ContractNegotiationWindow(self.app, player, is_extension=True)
-            self.app.open_windows['contract_negotiation'].focus_set()
+            # Contract talks are a full-screen jump now (session resumes).
+            self.app.open_contract_negotiation_window(player, is_extension=True)
 
     def trade_player(self):
         """Open trade window for selected player."""
@@ -7109,10 +7145,8 @@ VALUE ANALYSIS
 
     # Action methods
     def open_contract_extensions(self):
-        """Open contract extensions window."""
-        if 'contract_extensions' not in self.app.open_windows or not self.app.open_windows['contract_extensions'].winfo_exists():
-            self.app.open_windows['contract_extensions'] = ContractExtensionsWindow(self.app)
-        self.app.open_windows['contract_extensions'].focus_set()
+        """Open contract extensions (full-screen jump)."""
+        self.app.open_contract_extensions_window()
 
     def open_trade_evaluator(self):
         """Open trade evaluator tool (the Trade Center)."""
@@ -7124,8 +7158,9 @@ VALUE ANALYSIS
                              SalaryAnalyticsView)
 
     def open_buyout_calculator(self):
-        """Open buyout calculator."""
-        BuyoutCalculatorWindow(self.app)
+        """Open buyout calculator (full-screen jump)."""
+        self.app.show_screen('buyout_calculator', 'Buyout Calculator',
+                             BuyoutCalculatorView)
 
     def check_cap_compliance(self):
         """Check salary cap compliance."""
@@ -7663,9 +7698,7 @@ class GMOptionsView(ctk.CTkFrame):
             self.destroy()
 
     def negotiate_extensions(self):
-        if 'contract_extensions' not in self.app.open_windows or not self.app.open_windows['contract_extensions'].winfo_exists():
-            self.app.open_windows['contract_extensions'] = ContractExtensionsWindow(self.app)
-        self.app.open_windows['contract_extensions'].focus_set()
+        self.app.open_contract_extensions_window()
 
 
 
@@ -7685,152 +7718,414 @@ class GMOptionsWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class ContractNegotiationWindow(InGamePopup):
-    def __init__(self, parent, player, is_extension=False):
-        super().__init__(parent)
-        self.parent = parent
+class ContractNegotiationView(ctk.CTkFrame):
+    """Contract talks as a full-screen view (FM/EHM style).
+
+    Offer builder on the left, team/player context on the right: cap space,
+    the agent's ask, comparable contracts, and this negotiation's offer
+    history. Negotiation state lives in ``app.negotiation_sessions`` so the
+    user can jump to another screen mid-talks and resume from the navbar.
+    """
+
+    def __init__(self, parent, player=None, is_extension=False, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the wrapper
         self.player = player
         self.is_extension = is_extension
-        self.title(f"Negotiate with {player.full_name}")
-        self.geometry("520x560")
-        self.configure(background=parent.BG_COLOR)
-        self.transient(parent)
-        self.grab_set()
+        self.configure(fg_color=self.app.BG_COLOR)
+        self._session = self._get_session()
+        self._build()
+        self._refresh_history()
+        self._refresh_context()
 
-        # Scrollable body: sections can never be cut off at the card edge,
-        # no matter how many are shown (extension mode adds a frame).
-        # The Submit/Cancel buttons stay pinned at the bottom, outside
-        # the scroll region.
-        _bg = parent.BG_COLOR
-        canvas = tk.Canvas(self, bg=_bg, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self, orient="vertical",
-                                  command=canvas.yview)
-        scroll_body = ttk.Frame(canvas, style='Panel.TFrame')
-        scroll_body.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_body, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+    # ---------- session ----------
 
-        def _on_wheel(event):
+    def _get_session(self):
+        sessions = getattr(self.app, "negotiation_sessions", None)
+        if sessions is None:
+            sessions = {}
+            self.app.negotiation_sessions = sessions
+        player = self.player
+        key = getattr(player, "id", None) or id(player)
+        sess = sessions.get(key)
+        if sess is None or sess.get("player") is not player:
+            sess = {
+                "player": player,
+                "is_extension": self.is_extension,
+                "offers": [],          # (salary, years, result)
+                "asking_price": None,  # last known agent ask
+                "draft_salary": "",
+                "draft_years": 1,
+            }
+            sessions[key] = sess
+        self._sess_key = key
+        return sess
+
+    def _close_session(self):
+        sessions = getattr(self.app, "negotiation_sessions", None)
+        if sessions is not None:
+            sessions.pop(self._sess_key, None)
+        try:
+            self.app.refresh_screen_navbar()
+        except Exception:
+            pass
+
+    # ---------- market data ----------
+
+    @staticmethod
+    def _estimate_market_value(player):
+        """Standard market-value curve (matches ContractExtensionsView)."""
+        try:
+            ovr = player.overall_rating()
+        except Exception:
+            ovr = 75
+        base_value = max(750000, (ovr - 60) * 250000)
+        age_modifier = 1.0
+        age = getattr(player, "age", 27)
+        if 23 <= age <= 29:
+            age_modifier = 1.2
+        elif age >= 30:
+            age_modifier = max(0.5, 1.0 - ((age - 30) * 0.05))
+        pos = getattr(player, "primary_position", None)
+        pos_name = getattr(pos, "value", str(pos))
+        position_modifier = 1.0
+        if pos_name == "C":
+            position_modifier = 1.15
+        elif pos_name in ("LD", "RD"):
+            position_modifier = 1.1
+        potential_modifier = 1.0
+        if age <= 25:
+            potential_modifier = {"A": 1.5, "B": 1.3, "C": 1.1,
+                                  "D": 1.0, "F": 0.9}.get(
+                                      getattr(player, "potential_grade", "C"), 1.0)
+        try:
+            performance_bonus = (player.stats.goals * 50000
+                                 + player.stats.assists * 30000)
+        except Exception:
+            performance_bonus = 0
+        return max(750000, int(base_value * age_modifier
+                               * position_modifier * potential_modifier)
+                   + performance_bonus)
+
+    def _comparables(self, limit=5):
+        player = self.player
+        try:
+            my_ovr = player.overall_rating()
+        except Exception:
+            my_ovr = 75
+        my_pos = getattr(getattr(player, "primary_position", ""), "value", "")
+        comps = []
+        league = getattr(self.app, "league", None)
+        for team in getattr(league, "teams", []) or []:
+            for p in getattr(team, "roster", []) or []:
+                if p is player:
+                    continue
+                try:
+                    ovr = p.overall_rating()
+                except Exception:
+                    continue
+                if abs(ovr - my_ovr) > 4:
+                    continue
+                ppos = getattr(getattr(p, "primary_position", ""), "value", "")
+                if ppos != my_pos:
+                    continue
+                sal = getattr(getattr(p, "contract", None), "salary",
+                              getattr(p, "salary", 0)) or 0
+                yrs = getattr(getattr(p, "contract", None), "years_remaining",
+                              getattr(p, "contract_years", 0)) or 0
+                comps.append((abs(ovr - my_ovr), p.full_name, sal, yrs, ovr))
+        comps.sort(key=lambda c: (c[0], -c[2]))
+        return comps[:limit]
+
+    # ---------- layout ----------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _build(self):
+        p = self.player
+        app = self.app
+        title_text = "Contract Extension" if self.is_extension else "Contract Offer"
+
+        # Header
+        header = ttk.Frame(self, style="Panel.TFrame", padding=14)
+        header.pack(fill=tk.X, padx=12, pady=(12, 6))
+        try:
+            pos = p.primary_position.value
+        except Exception:
+            pos = ""
+        try:
+            ovr = p.overall_rating()
+        except Exception:
+            ovr = "?"
+        ttk.Label(header, text=f"{title_text}: {p.full_name}",
+                  style="TLabel",
+                  font=(app.FONT_FAMILY, 16, "bold")).pack(anchor="w")
+        ttk.Label(header,
+                  text=f"{pos}  •  Age {getattr(p, 'age', '?')}  •  "
+                       f"OVR {ovr}  •  POT {getattr(p, 'potential_grade', '?')}",
+                  style="Secondary.TLabel",
+                  font=(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
+        if self.is_extension:
             try:
-                if event.num == 4:
-                    canvas.yview_scroll(-1, "units")
-                elif event.num == 5:
-                    canvas.yview_scroll(1, "units")
-                else:
-                    canvas.yview_scroll(int(-event.delta / 120), "units")
+                cur_sal = p.contract.salary
+                cur_yrs = p.contract.years_remaining
+                ttk.Label(header,
+                          text=f"Current deal: ${cur_sal:,} × {cur_yrs} yr(s) remaining",
+                          style="Secondary.TLabel",
+                          font=(app.FONT_FAMILY, 11)).pack(anchor="w")
             except Exception:
                 pass
-        canvas.bind("<MouseWheel>", _on_wheel)
-        canvas.bind("<Button-4>", _on_wheel)
-        canvas.bind("<Button-5>", _on_wheel)
 
-        # Create main container with padding
-        main_frame = ttk.Frame(scroll_body, style='Panel.TFrame')
-        main_frame.pack(fill='both', expand=True, padx=20, pady=20)
+        # Two columns in a scrollable area (fits full-screen and popup wrapper)
+        scroll = ctk.CTkScrollableFrame(self, fg_color=self.app.BG_COLOR)
+        scroll.pack(fill=tk.BOTH, expand=True, padx=12, pady=6)
+        cols = ttk.Frame(scroll, style="Panel.TFrame")
+        cols.pack(fill=tk.BOTH, expand=True)
+        cols.columnconfigure(0, weight=3)
+        cols.columnconfigure(1, weight=2)
 
-        # Title section
-        title_text = "Contract Extension" if is_extension else "Contract Offer"
-        ttk.Label(main_frame, text=title_text, style='Title.TLabel').pack(pady=(0, 10))
-        
-        # Player info section
-        player_frame = ttk.LabelFrame(main_frame, text="Player Information", style='Panel.TLabelframe')
-        player_frame.pack(fill='x', pady=(0, 15))
-        
-        ttk.Label(player_frame, text=f"Name: {player.full_name}", style='TLabel').pack(anchor='w', padx=10, pady=5)
-        ttk.Label(player_frame, text=f"Position: {player.primary_position.value}", style='TLabel').pack(anchor='w', padx=10, pady=2)
-        ttk.Label(player_frame, text=f"Age: {player.age}", style='TLabel').pack(anchor='w', padx=10, pady=2)
-        ttk.Label(player_frame, text=f"Overall Rating: {to_100_scale(player.overall_rating())}", style='TLabel').pack(anchor='w', padx=10, pady=2)
-        ttk.Label(player_frame, text=f"Potential: {player.potential_grade}", style='TLabel').pack(anchor='w', padx=10, pady=(2, 10))
-        
-        # Current contract info (if extension)
-        if is_extension and hasattr(player, 'salary'):
-            current_frame = ttk.LabelFrame(main_frame, text="Current Contract", style='Panel.TLabelframe')
-            current_frame.pack(fill='x', pady=(0, 15))
-            
-            ttk.Label(current_frame, text=f"Current Salary: ${player.salary:,}", style='TLabel').pack(anchor='w', padx=10, pady=5)
-            if hasattr(player, 'contract_years'):
-                ttk.Label(current_frame, text=f"Years Remaining: {player.contract_years}", style='TLabel').pack(anchor='w', padx=10, pady=(2, 10))
-        
-        # Contract offer section
-        offer_frame = ttk.LabelFrame(main_frame, text="Contract Offer", style='Panel.TLabelframe')
-        offer_frame.pack(fill='x', pady=(0, 15))
-        
-        # Salary input
-        salary_frame = ttk.Frame(offer_frame)
-        salary_frame.pack(fill='x', padx=10, pady=10)
-        ttk.Label(salary_frame, text="Annual Salary: $", style='TLabel').pack(side='left')
-        self.salary_var = tk.StringVar(master=self, value="750000")
-        salary_entry = ttk.Entry(salary_frame, textvariable=self.salary_var, width=15)
-        salary_entry.pack(side='left', padx=(5, 0))
-        
-        # Years input
-        years_frame = ttk.Frame(offer_frame)
-        years_frame.pack(fill='x', padx=10, pady=(5, 10))
-        ttk.Label(years_frame, text="Contract Length:", style='TLabel').pack(side='left')
-        self.years_var = tk.StringVar(master=self, value="1")
-        years_entry = ttk.Entry(years_frame, textvariable=self.years_var, width=5)
-        years_entry.pack(side='left', padx=(5, 5))
-        ttk.Label(years_frame, text="years", style='TLabel').pack(side='left')
-        
-        # Total value display
-        self.total_label = ttk.Label(offer_frame, text="Total Contract Value: $0", style='Subtitle.TLabel')
-        self.total_label.pack(anchor='w', padx=10, pady=(10, 15))
-        
-        # Update total when values change
-        self.salary_var.trace('w', self.update_total)
-        self.years_var.trace('w', self.update_total)
-        self.update_total()
-        
-        # Buttons (pinned at the bottom, outside the scroll region)
-        button_frame = ttk.Frame(self, style='Panel.TFrame')
-        button_frame.pack(fill='x', side='bottom', padx=20, pady=(0, 16))
+        left = ttk.Frame(cols, style="Card.TFrame", padding=14)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        right = ttk.Frame(cols, style="Card.TFrame", padding=14)
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        ttk.Button(button_frame, text="Submit Offer", command=self.submit_offer, style='TButton').pack(side='right', padx=(5, 0))
-        ttk.Button(button_frame, text="Cancel", command=self.destroy, style='TButton').pack(side='right')
+        # ---- Left: offer builder ----
+        ttk.Label(left, text="Your Offer", style="TLabel",
+                  font=(app.FONT_FAMILY, 13, "bold")).pack(anchor="w", pady=(0, 8))
 
-        # Grow the card to fit the content (clamped to the app window).
-        self.fit_to_content()
+        salary_row = ttk.Frame(left, style="Card.TFrame")
+        salary_row.pack(fill=tk.X, pady=4)
+        ttk.Label(salary_row, text="Annual salary: $",
+                  style="TLabel").pack(side=tk.LEFT)
+        init_sal = self._session.get("draft_salary") or "750000"
+        self.salary_var = tk.StringVar(master=self, value=str(init_sal))
+        ttk.Entry(salary_row, textvariable=self.salary_var,
+                  width=16).pack(side=tk.LEFT, padx=(6, 0))
 
-    def update_total(self, *args):
-        """Update the total contract value display."""
+        years_row = ttk.Frame(left, style="Card.TFrame")
+        years_row.pack(fill=tk.X, pady=4)
+        ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
+        max_years = 8 if self.is_extension else 7
+        self.years_var = tk.IntVar(master=self,
+                                   value=int(self._session.get("draft_years") or 1))
+        ttk.Scale(years_row, from_=1, to=max_years, variable=self.years_var,
+                  orient="horizontal", length=220).pack(side=tk.LEFT, padx=8)
+        ttk.Label(years_row, textvariable=self.years_var,
+                  style="TLabel", width=3).pack(side=tk.LEFT)
+        ttk.Label(years_row, text=f"year(s)  (max {max_years})",
+                  style="Secondary.TLabel").pack(side=tk.LEFT)
+
+        self.total_label = ttk.Label(left, text="Total: $0", style="TLabel",
+                                     font=(app.FONT_FAMILY, 12, "bold"))
+        self.total_label.pack(anchor="w", pady=(8, 4))
+        self.salary_var.trace_add("write", self._update_total)
+        self.years_var.trace_add("write", self._update_total)
+        self._update_total()
+
+        # Result banner
+        self.banner_var = tk.StringVar(master=self, value="")
+        self.banner = ttk.Label(left, textvariable=self.banner_var,
+                                style="Secondary.TLabel", wraplength=520)
+        self.banner.pack(anchor="w", pady=(4, 8))
+
+        btn_row = ttk.Frame(left, style="Card.TFrame")
+        btn_row.pack(fill=tk.X, pady=(4, 2))
+        ttk.Button(btn_row, text="Submit Offer",
+                   command=self.submit_offer).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text="Walk Away",
+                   command=self.walk_away).pack(side=tk.LEFT)
+
+        # Jump links
+        jump_row = ttk.Frame(left, style="Card.TFrame")
+        jump_row.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(jump_row, text="Jump to:", style="Secondary.TLabel").pack(
+            side=tk.LEFT, padx=(0, 8))
+        ttk.Button(jump_row, text="Roster",
+                   command=lambda: self._jump("roster")).pack(side=tk.LEFT,
+                                                              padx=4)
+        ttk.Button(jump_row, text="Extensions",
+                   command=lambda: self._jump("extensions")).pack(side=tk.LEFT,
+                                                                   padx=4)
+        ttk.Button(jump_row, text="Cap Analytics",
+                   command=lambda: self._jump("cap")).pack(side=tk.LEFT, padx=4)
+        ttk.Button(jump_row, text="Inbox",
+                   command=lambda: self._jump("inbox")).pack(side=tk.LEFT,
+                                                             padx=4)
+
+        # ---- Right: context ----
+        ttk.Label(right, text="Negotiation Context", style="TLabel",
+                  font=(app.FONT_FAMILY, 13, "bold")).pack(anchor="w",
+                                                           pady=(0, 8))
+        self.context_box = tk.Text(right, height=14, wrap="word",
+                                   bg=app.CONTENT_BG, fg=app.TEXT_COLOR,
+                                   relief="flat", padx=8, pady=8,
+                                   font=(app.FONT_FAMILY, 10))
+        self.context_box.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        self.context_box.configure(state="disabled")
+
+        ttk.Label(right, text="Offer History", style="TLabel",
+                  font=(app.FONT_FAMILY, 12, "bold")).pack(anchor="w",
+                                                           pady=(4, 4))
+        self.history_box = tk.Text(right, height=8, wrap="word",
+                                   bg=app.CONTENT_BG, fg=app.TEXT_COLOR,
+                                   relief="flat", padx=8, pady=8,
+                                   font=(app.FONT_FAMILY, 10))
+        self.history_box.pack(fill=tk.BOTH, expand=True)
+        self.history_box.configure(state="disabled")
+
+    def _jump(self, where):
         try:
-            salary = int(self.salary_var.get().replace(',', ''))
+            if where == "roster":
+                self.app.open_roster_window()
+            elif where == "extensions":
+                self.app.open_contract_extensions_window()
+            elif where == "cap":
+                self.app.open_salary_analytics_window()
+            elif where == "inbox":
+                self.app.open_inbox_window()
+        except Exception:
+            pass
+
+    # ---------- live updates ----------
+
+    def _update_total(self, *args):
+        try:
+            salary = int(str(self.salary_var.get()).replace(",", ""))
             years = int(self.years_var.get())
-            total = salary * years
-            self.total_label.config(text=f"Total Contract Value: ${total:,}")
+            self.total_label.config(
+                text=f"Total: ${salary * years:,}  "
+                     f"(${salary:,}/yr × {years} yr)")
+            self._session["draft_salary"] = str(salary)
+            self._session["draft_years"] = years
         except (ValueError, AttributeError):
-            self.total_label.config(text="Total Contract Value: $0")
+            self.total_label.config(text="Total: $0")
+
+    def _refresh_context(self):
+        app = self.app
+        p = self.player
+        lines = []
+        # Cap
+        try:
+            live_cap = app.get_live_cap() if hasattr(app, "get_live_cap") else None
+            payroll = getattr(app.user_team, "payroll", None)
+            if live_cap and payroll is not None:
+                lines.append(f"Salary cap: ${live_cap:,}")
+                lines.append(f"Team payroll: ${payroll:,}")
+                lines.append(f"Cap space: ${live_cap - payroll:,}")
+                lines.append("")
+        except Exception:
+            pass
+        # Agent's ask
+        ask = self._session.get("asking_price")
+        if ask:
+            lines.append(f"Agent's ask: ${ask:,}/yr")
+        else:
+            mv = self._estimate_market_value(p)
+            lines.append(f"Estimated market value: ${mv:,}/yr")
+        lines.append("")
+        # Comparables
+        lines.append("Comparable contracts:")
+        comps = self._comparables()
+        if not comps:
+            lines.append("  (no close comparables found)")
+        for _, name, sal, yrs, ovr in comps:
+            lines.append(f"  {name} ({ovr} OVR): ${sal:,}/yr × {yrs}")
+        self.context_box.configure(state="normal")
+        self.context_box.delete("1.0", "end")
+        self.context_box.insert("end", "\n".join(lines))
+        self.context_box.configure(state="disabled")
+
+    def _refresh_history(self):
+        offers = self._session.get("offers", [])
+        self.history_box.configure(state="normal")
+        self.history_box.delete("1.0", "end")
+        if not offers:
+            self.history_box.insert("end", "No offers yet this session.")
+        else:
+            for i, (sal, yrs, result) in enumerate(offers, 1):
+                self.history_box.insert(
+                    "end", f"Round {i}: ${sal:,}/yr × {yrs} — {result}\n")
+        self.history_box.configure(state="disabled")
+
+    # ---------- actions ----------
+
+    def _record_offer(self, salary, years, result):
+        self._session["offers"].append((salary, years, result))
+        self._refresh_history()
 
     def submit_offer(self):
+        p = self.player
         try:
-            salary_str = self.salary_var.get().replace(',', '')
-            salary = int(salary_str)
+            salary = int(str(self.salary_var.get()).replace(",", ""))
             years = int(self.years_var.get())
-            
-            # Validate inputs
-            if salary <= 0:
-                messagebox.showerror("Invalid Input", "Salary must be greater than $0.")
-                return
-            if years <= 0 or years > 8:
-                messagebox.showerror("Invalid Input", "Contract length must be between 1 and 8 years.")
-                return
-            
-            # Set the values on the player object first
-            self.player.salary = salary
-            self.player.contract_years = years
-            
-            # Then call handle_contract_offer with proper arguments.
-            # Results land in the inbox (FM24/EHM style); the window closes
-            # on a signed deal, stays open for counters/rejections.
-            accepted = self.parent.handle_contract_offer(self.player, extension=self.is_extension, notify="inbox")
-            if accepted:
-                self.destroy()
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numbers for salary and years.")
+            self.banner_var.set("Please enter valid numbers for salary and years.")
+            return
+        if salary <= 0:
+            self.banner_var.set("Salary must be greater than $0.")
+            return
+        max_years = 8 if self.is_extension else 7
+        if years < 1 or years > max_years:
+            self.banner_var.set(
+                f"Contract length must be between 1 and {max_years} years.")
+            return
+        # Same signing path as the original popup: stage the offer on the
+        # player object, then run the central handler (inbox routing).
+        p.salary = salary
+        p.contract_years = years
+        accepted = self.app.handle_contract_offer(
+            p, extension=self.is_extension, notify="inbox")
+        if accepted:
+            self._record_offer(salary, years, "accepted ✓")
+            self._close_session()
+            self.close_view()
+        else:
+            self._record_offer(salary, years, "rejected — agent responded via inbox")
+            self.banner_var.set(
+                "Offer rejected. The agent's response is in your inbox — "
+                "adjust the offer or jump back here from the navbar chip.")
+            try:
+                self.app.refresh_screen_navbar()
+            except Exception:
+                pass
+
+    def walk_away(self):
+        self._record_offer(
+            int(str(self.salary_var.get()).replace(",", "") or 0),
+            int(self.years_var.get() or 0), "walked away")
+        self._close_session()
+        self.close_view()
+
+
+class ContractNegotiationWindow(InGamePopup):
+    """Popup wrapper around ContractNegotiationView (backward compatibility).
+
+    New code should embed ContractNegotiationView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent, player=None, is_extension=False):
+        super().__init__(parent)
+        self._view = ContractNegotiationView(self, app=parent, player=player,
+                                             is_extension=is_extension)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 
 class TradeBlockWindow(InGamePopup):
     def __init__(self, parent):
@@ -8507,13 +8802,13 @@ class WaiversWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class ContractExtensionsWindow(InGamePopup):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Contract Extensions")
-        self.geometry("1000x700")
-        self.configure(background=parent.BG_COLOR)
+class ContractExtensionsView(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ContractExtensionsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
         
         # Main frame
         main_frame = ttk.Frame(self, style='Panel.TFrame')
@@ -8557,7 +8852,7 @@ class ContractExtensionsWindow(InGamePopup):
         
         ttk.Button(footer_frame, text="Negotiate Selected", command=self.negotiate_selected).pack(side='left', padx=5)
         ttk.Button(footer_frame, text="Auto-Negotiate All", command=self.auto_negotiate_all).pack(side='left', padx=5)
-        ttk.Button(footer_frame, text="Close", command=self.destroy).pack(side='right', padx=5)
+        ttk.Button(footer_frame, text="Close", command=self.close_view).pack(side='right', padx=5)
         
         self.populate_tables()
         
@@ -8566,11 +8861,11 @@ class ContractExtensionsWindow(InGamePopup):
         self.expiring_tree.delete(*self.expiring_tree.get_children())
         self.all_contracts_tree.delete(*self.all_contracts_tree.get_children())
         
-        team = self.parent.user_team
+        team = self.app.user_team
         
         # Tree data maps to retrieve player objects
-        self.parent.tree_maps[self.expiring_tree] = {}
-        self.parent.tree_maps[self.all_contracts_tree] = {}
+        self.app.tree_maps[self.expiring_tree] = {}
+        self.app.tree_maps[self.all_contracts_tree] = {}
         
         # Sort players by overall rating
         sorted_players = sorted(team.roster, key=lambda p: p.overall_rating(), reverse=True)
@@ -8592,12 +8887,12 @@ class ContractExtensionsWindow(InGamePopup):
             
             # Add to All Contracts tab
             item_id = self.all_contracts_tree.insert('', 'end', values=values)
-            self.parent.tree_maps[self.all_contracts_tree][item_id] = player
+            self.app.tree_maps[self.all_contracts_tree][item_id] = player
             
             # Add to Expiring Contracts tab if contract expires this season
             if player.contract.years_remaining <= 1:
                 item_id = self.expiring_tree.insert('', 'end', values=values, tags=('expiring',))
-                self.parent.tree_maps[self.expiring_tree][item_id] = player
+                self.app.tree_maps[self.expiring_tree][item_id] = player
                 
         # Add right-click context menu for trees
         self.expiring_tree.bind("<Button-3>", lambda e: self._show_context_menu(e, self.expiring_tree))
@@ -8654,7 +8949,7 @@ class ContractExtensionsWindow(InGamePopup):
             return
             
         tree.selection_set(item_id)
-        player = self.parent.tree_maps.get(tree, {}).get(item_id)
+        player = self.app.tree_maps.get(tree, {}).get(item_id)
         if not player:
             return
             
@@ -8662,7 +8957,7 @@ class ContractExtensionsWindow(InGamePopup):
         menu.add_command(label="Negotiate Extension", 
                         command=lambda: self.open_negotiation_window(player))
         menu.add_command(label="View Player Profile", 
-                        command=lambda: self.parent.open_player_profile(player))
+                        command=lambda: self.app.open_player_profile(player))
         menu.tk_popup(event.x_root, event.y_root)
     
     def negotiate_from_event(self, event, tree):
@@ -8671,42 +8966,51 @@ class ContractExtensionsWindow(InGamePopup):
         if not item_id:
             return
             
-        player = self.parent.tree_maps.get(tree, {}).get(item_id)
+        player = self.app.tree_maps.get(tree, {}).get(item_id)
         if player:
             self.open_negotiation_window(player)
     
     def open_negotiation_window(self, player):
-        """Open the negotiation window for a specific player."""
+        """Jump to the extension-negotiation screen for a specific player."""
         if player.contract.years_remaining > 1:
-            messagebox.showinfo("Not Eligible", 
-                               f"{player.full_name} has {player.contract.years_remaining} years left on their contract. "
-                               f"Per NHL rules, players can only negotiate extensions in the final year of their contract.")
+            self._say(f"{player.full_name} has {player.contract.years_remaining} years "
+                      f"left on their contract. Per NHL rules, extensions can only be "
+                      f"negotiated in the final year.")
             return
-            
+
         # Calculate recommended contract offer
         market_value = self.calculate_market_value(player)
         max_years = 8  # NHL max extension is 8 years for own players
-        
-        # Open Advanced Contract Negotiation Window
-        self.parent.open_windows['extension_negotiation'] = ExtensionNegotiationWindow(
-            self.parent, player, market_value, max_years)
-        self.parent.open_windows['extension_negotiation'].focus_set()
-    
+
+        # Full-screen jump; the extensions list is resumable from the navbar.
+        self.app.show_screen("extension_negotiation",
+                             f"Extension: {player.full_name}",
+                             ExtensionNegotiationView, player, market_value,
+                             max_years)
+
+    def _say(self, text):
+        if not hasattr(self, "_status_var"):
+            self._status_var = tk.StringVar(master=self, value="")
+            ttk.Label(self, textvariable=self._status_var,
+                      style="Secondary.TLabel",
+                      wraplength=720).pack(anchor="w", padx=10, pady=(0, 6))
+        self._status_var.set(text)
+
     def negotiate_selected(self):
         """Negotiate with the selected player."""
         selection = self.expiring_tree.selection()
         if not selection:
-            messagebox.showinfo("No Selection", "Please select a player to negotiate with.")
+            self._say("Please select a player to negotiate with.")
             return
-            
+
         item_id = selection[0]
-        player = self.parent.tree_maps.get(self.expiring_tree, {}).get(item_id)
+        player = self.app.tree_maps.get(self.expiring_tree, {}).get(item_id)
         if player:
             self.open_negotiation_window(player)
     
     def auto_negotiate_all(self):
         """Auto-negotiate with all expiring contracts."""
-        team = self.parent.user_team
+        team = self.app.user_team
         expiring_players = [p for p in team.roster if p.contract.years_remaining <= 1]
         
         if not expiring_players:
@@ -8744,12 +9048,12 @@ class ContractExtensionsWindow(InGamePopup):
         result_window = InGamePopup(self)
         result_window.title("Auto-Negotiation Results")
         result_window.geometry("500x400")
-        result_window.configure(background=self.parent.BG_COLOR)
+        result_window.configure(background=self.app.BG_COLOR)
         
         ttk.Label(result_window, text="Contract Extension Results", 
-                font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(pady=10)
+                font=(self.app.FONT_FAMILY, 14, 'bold')).pack(pady=10)
         
-        result_text = tk.Text(result_window, width=60, height=20, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        result_text = tk.Text(result_window, width=60, height=20, bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR)
         result_text.pack(pady=10, padx=10, fill='both', expand=True)
         
         for msg in result_messages:
@@ -8801,17 +9105,47 @@ class ContractExtensionsWindow(InGamePopup):
         # Final result
         return random.random() < max(0.05, min(0.95, acceptance_chance))
 
-class ExtensionNegotiationWindow(InGamePopup):
-    def __init__(self, parent, player, market_value, max_years):
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class ContractExtensionsWindow(InGamePopup):
+    """Popup wrapper around ContractExtensionsView (backward compatibility).
+
+    New code should embed ContractExtensionsView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent):
         super().__init__(parent)
-        self.parent = parent
+        self._view = ContractExtensionsView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+class ExtensionNegotiationView(ctk.CTkFrame):
+    def __init__(self, parent, player, market_value, max_years, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ExtensionNegotiationWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
         self.player = player
         self.market_value = market_value
         self.max_years = max_years
         
-        self.title(f"Negotiate Extension with {player.full_name}")
-        self.geometry("700x600")
-        self.configure(background=parent.BG_COLOR)
+        self.configure(fg_color=parent.BG_COLOR)
         
         # Main frame
         main_frame = ttk.Frame(self, style='Panel.TFrame')
@@ -8936,7 +9270,13 @@ class ExtensionNegotiationWindow(InGamePopup):
         button_frame.pack(fill='x', padx=5, pady=10)
         
         ttk.Button(button_frame, text="Submit Offer", command=self.submit_offer).pack(side='left', padx=5)
-        ttk.Button(button_frame, text="Cancel", command=self.destroy).pack(side='right', padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self.close_view).pack(side='right', padx=5)
+
+        # In-view message banner + counter-offer host (no popups)
+        self._banner_frame = ttk.Frame(main_frame)
+        self._banner_frame.pack(fill='x', padx=5, pady=(0, 4))
+        self._counter_host = ttk.Frame(main_frame)
+        self._counter_host.pack(fill='x', padx=5, pady=4)
     
     def update_total(self, *args):
         """Update the total contract value display."""
@@ -8962,67 +9302,100 @@ class ExtensionNegotiationWindow(InGamePopup):
             salary_str = self.salary_var.get().replace(',', '')
             salary = int(salary_str)
             years = self.years_var.get()
-            
+
             # Parse bonus
             bonus_str = self.bonus_var.get().replace(',', '')
             bonus = int(bonus_str) if bonus_str else 0
-            
-            # Validate inputs
+
+            # Validate inputs (in-view banner, not a popup)
             if salary < 750000:
-                messagebox.showerror("Invalid Salary", "Salary must be at least $750,000 (NHL minimum).")
+                self._say("Salary must be at least $750,000 (NHL minimum).")
                 return
-                
+
             if years < 1 or years > self.max_years:
-                messagebox.showerror("Invalid Contract Length", 
-                                   f"Contract length must be between 1 and {self.max_years} years.")
+                self._say(f"Contract length must be between 1 and {self.max_years} years.")
                 return
-                
+
             if bonus < 0:
-                messagebox.showerror("Invalid Bonus", "Signing bonus cannot be negative.")
+                self._say("Signing bonus cannot be negative.")
                 return
-            
+
             # Calculate likelihood of acceptance
             acceptance_chance = self.calculate_acceptance_chance(salary, years, bonus)
-            
+
             # Simulate player decision
             accepted = random.random() < acceptance_chance
-            
+
             if accepted:
                 # Update player contract
                 self.player.contract.salary = salary
                 self.player.contract.years_remaining = years
                 self.player.contract.signing_bonus = bonus
                 self.player.contract.no_trade_clause = self.ntc_var.get()
-                
-                messagebox.showinfo("Offer Accepted", 
-                                  f"{self.player.full_name} has accepted your contract extension offer.\n\n"
-                                  f"{years} years at ${salary:,}/year\n"
-                                  f"{'With' if self.ntc_var.get() else 'Without'} No-Trade Clause\n"
-                                  f"Signing Bonus: ${bonus:,}")
-                self.destroy()
+
+                self._say(f"{self.player.full_name} has accepted: {years} years "
+                          f"at ${salary:,}/year "
+                          f"({'with' if self.ntc_var.get() else 'without'} NTC, "
+                          f"bonus ${bonus:,}).")
+                self._hide_counter()
+                self.after(1200, self.close_view)
             else:
                 counter_years = min(years + random.randint(-1, 1), self.max_years)
                 counter_salary = int(salary * random.uniform(1.05, 1.2))
-                
-                response = messagebox.askyesno("Offer Rejected", 
-                                             f"{self.player.full_name} has rejected your contract extension offer.\n\n"
-                                             f"Counter offer: {counter_years} years at ${counter_salary:,}/year\n\n"
-                                             f"Would you like to accept this counter offer?")
-                
-                if response:
-                    # Update player contract with counter offer
-                    self.player.contract.salary = counter_salary
-                    self.player.contract.years_remaining = counter_years
-                    self.player.contract.signing_bonus = bonus
-                    self.player.contract.no_trade_clause = self.ntc_var.get()
-                    
-                    messagebox.showinfo("Counter Offer Accepted", 
-                                      f"You have accepted {self.player.full_name}'s counter offer.\n\n"
-                                      f"{counter_years} years at ${counter_salary:,}/year")
-                    self.destroy()
-        
+                self._show_counter(counter_years, counter_salary, bonus)
+
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numbers for salary, years, and bonus.")
+            self._say("Please enter valid numbers for salary, years, and bonus.")
+
+    def _say(self, text):
+        """Show a status message in the view's banner (no popup)."""
+        if not hasattr(self, "_banner_var"):
+            self._banner_var = tk.StringVar(master=self, value="")
+            banner = ttk.Label(self._banner_frame, textvariable=self._banner_var,
+                               style="Secondary.TLabel", wraplength=640)
+            banner.pack(anchor="w", padx=10, pady=(0, 6))
+        self._banner_var.set(text)
+
+    def _show_counter(self, counter_years, counter_salary, bonus):
+        """In-view counter-offer panel (replaces the askyesno popup)."""
+        self._hide_counter()
+        panel = ttk.LabelFrame(self._counter_host, text="Agent's Counter-Offer",
+                               padding=10)
+        panel.pack(fill=tk.X, padx=5, pady=8)
+        ttk.Label(panel,
+                  text=f"{self.player.full_name}'s camp rejected your offer.\n"
+                       f"Counter: {counter_years} years at ${counter_salary:,}/year",
+                  style="TLabel", wraplength=600).pack(anchor="w", pady=(0, 8))
+        btns = ttk.Frame(panel)
+        btns.pack(anchor="w")
+        ttk.Button(btns, text="Accept Counter",
+                   command=lambda: self._accept_counter(counter_years,
+                                                        counter_salary,
+                                                        bonus)).pack(side=tk.LEFT,
+                                                                     padx=(0, 8))
+        ttk.Button(btns, text="Adjust My Offer",
+                   command=self._hide_counter).pack(side=tk.LEFT)
+        self._counter_panel = panel
+        self._say("Offer rejected — the agent countered. Accept it or adjust your offer above.")
+
+    def _hide_counter(self):
+        panel = getattr(self, "_counter_panel", None)
+        if panel is not None:
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+        self._counter_panel = None
+
+    def _accept_counter(self, counter_years, counter_salary, bonus):
+        self.player.contract.salary = counter_salary
+        self.player.contract.years_remaining = counter_years
+        self.player.contract.signing_bonus = bonus
+        self.player.contract.no_trade_clause = self.ntc_var.get()
+        self._say(f"Counter accepted: {self.player.full_name}, "
+                  f"{counter_years} years at ${counter_salary:,}/year.")
+        self._hide_counter()
+        self.after(1200, self.close_view)
     
     def calculate_acceptance_chance(self, salary, years, bonus):
         """Calculate the likelihood of the player accepting the contract offer."""
@@ -9063,13 +9436,45 @@ class ExtensionNegotiationWindow(InGamePopup):
         # Cap the chance between 5% and 95%
         return max(0.05, min(0.95, chance))
 
-class SetCaptainsWindow(InGamePopup):
-    def __init__(self, parent):
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class ExtensionNegotiationWindow(InGamePopup):
+    """Popup wrapper around ExtensionNegotiationView (backward compatibility).
+
+    New code should embed ExtensionNegotiationView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent, player, market_value, max_years):
         super().__init__(parent)
-        self.parent = parent
-        self.title("Set Captains")
-        self.geometry("400x300")
-        self.configure(background=parent.BG_COLOR)
+        self._view = ExtensionNegotiationView(self, app=parent, player=player,
+                                              market_value=market_value,
+                                              max_years=max_years)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+class SetCaptainsView(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SetCaptainsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
 
         self.captain_var = tk.StringVar(master=self)
         self.alternate1_var = tk.StringVar(master=self)
@@ -9079,10 +9484,16 @@ class SetCaptainsWindow(InGamePopup):
         self.load_captains()
 
     def _create_widgets(self):
-        main_frame = ttk.Frame(self, padding=10)
+        # Focus card: this was a small dialog; on the full-screen view its
+        # content lives in a centered card instead of stretching edge to edge.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ttk.Frame(self, style='Card.TFrame', padding=24, width=560)
+        card.grid(row=0, column=0, pady=24)
+        main_frame = ttk.Frame(card, style='Card.TFrame')
         main_frame.pack(fill='both', expand=True)
 
-        players = [p.full_name for p in self.parent.user_team.roster]
+        players = [p.full_name for p in self.app.user_team.roster]
 
         ttk.Label(main_frame, text="Captain (C):").pack(pady=(0, 5))
         captain_combo = ttk.Combobox(main_frame, textvariable=self.captain_var, values=players, state='readonly')
@@ -9099,7 +9510,7 @@ class SetCaptainsWindow(InGamePopup):
         ttk.Button(main_frame, text="Save Captains", command=self.save_captains).pack(pady=20)
 
     def load_captains(self):
-        for p in self.parent.user_team.roster:
+        for p in self.app.user_team.roster:
             if p.captaincy == 'C':
                 self.captain_var.set(p.full_name)
             elif p.captaincy == 'A':
@@ -9109,22 +9520,54 @@ class SetCaptainsWindow(InGamePopup):
                     self.alternate2_var.set(p.full_name)
 
     def save_captains(self):
-        for p in self.parent.user_team.roster:
+        for p in self.app.user_team.roster:
             p.captaincy = None
 
         captain_name = self.captain_var.get()
         alt1_name = self.alternate1_var.get()
         alt2_name = self.alternate2_var.get()
 
-        for p in self.parent.user_team.roster:
+        for p in self.app.user_team.roster:
             if p.full_name == captain_name:
                 p.captaincy = 'C'
             elif p.full_name == alt1_name or p.full_name == alt2_name:
                 p.captaincy = 'A'
         
         messagebox.showinfo("Captains Updated", "Team captaincy has been updated.")
-        self.parent.update_all_views()
-        self.destroy()
+        self.app.update_all_views()
+        self.close_view()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class SetCaptainsWindow(InGamePopup):
+    """Popup wrapper around SetCaptainsView (backward compatibility).
+
+    New code should embed SetCaptainsView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(args[0] if args else kwargs.get("parent"))
+        parent = args[0] if args else kwargs.get("parent")
+        kwargs.pop("parent", None)
+        self._view = SetCaptainsView(self, app=parent, *args[1:], **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 
 # --- Drag-and-Drop Edit Lines Window ---
 class GMDashboardView(ctk.CTkFrame):
@@ -9311,7 +9754,7 @@ class GMDashboardWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class SeasonGoalsWindow(InGamePopup):
+class SeasonGoalsView(ctk.CTkFrame):
     """Season Goals: board expectation, live progress, milestones, youth watch."""
 
     EXPECTATIONS = [
@@ -9322,12 +9765,12 @@ class SeasonGoalsWindow(InGamePopup):
         ("rebuild", "Rebuild"),
     ]
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Season Goals")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("640x600")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SeasonGoalsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
         self._exp_var = tk.StringVar(
             master=self,
             value=getattr(parent.user_team, 'board_expectation', 'playoffs'))
@@ -9337,18 +9780,18 @@ class SeasonGoalsWindow(InGamePopup):
         card = ttk.Frame(self, style='Card.TFrame', padding=12)
         card.pack(fill=tk.X, padx=12, pady=6)
         ttk.Label(card, text=title, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
         return card
 
     def _line(self, card, text, secondary=False):
         ttk.Label(card, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                  font=(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
     def _set_expectation(self, key):
         self._exp_var.set(key)
-        self.parent.user_team.board_expectation = key
+        self.app.user_team.board_expectation = key
         self._paint_pills()
         self._refresh_progress()
 
@@ -9357,11 +9800,11 @@ class SeasonGoalsWindow(InGamePopup):
             btn.set_selected(self._exp_var.get() == key)
 
     def _build(self):
-        team = self.parent.user_team
+        team = self.app.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
         PillButton(header, text="Refresh", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   font=(self.app.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh_progress).pack(side=tk.RIGHT)
 
         # Board expectation pills
@@ -9373,7 +9816,7 @@ class SeasonGoalsWindow(InGamePopup):
         self._pill_btns = []
         for key, label in self.EXPECTATIONS:
             b = PillButton(row, text=label, bg='#1a2233',
-                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                           font=(self.app.FONT_FAMILY, 9, 'bold'),
                            padx=11, pady=5,
                            command=lambda k=key: self._set_expectation(k))
             b.pack(side=tk.LEFT, padx=3, pady=2)
@@ -9410,10 +9853,11 @@ class SeasonGoalsWindow(InGamePopup):
             child.destroy()
         for child in self.mile_lines.winfo_children():
             child.destroy()
-        team = self.parent.user_team
-        league = self.parent.league
+        team = self.app.user_team
+        league = self.app.league
         st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
-        w, l, otl, pts = st["W"], st["L"], st["OTL"], st["Points"]
+        w, l, otl = st["W"], st["L"], st["OTL"]
+        pts = st.get("Points", 2 * w + otl)
         gp = w + l + otl
 
         # Conference rank and playoff cut
@@ -9430,7 +9874,7 @@ class SeasonGoalsWindow(InGamePopup):
         def _mkline(master, text, secondary=False):
             ttk.Label(master, text=text,
                       style='Secondary.TLabel' if secondary else 'TLabel',
-                      font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                      font=(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
         exp = self._exp_var.get()
         exp_label = dict(self.EXPECTATIONS)[exp]
@@ -9475,6 +9919,37 @@ class SeasonGoalsWindow(InGamePopup):
             mark = "✓" if done else "○"
             _mkline(self.mile_lines, f"{mark}  {label}")
 
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class SeasonGoalsWindow(InGamePopup):
+    """Popup wrapper around SeasonGoalsView (backward compatibility).
+
+    New code should embed SeasonGoalsView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(args[0] if args else kwargs.get("parent"))
+        parent = args[0] if args else kwargs.get("parent")
+        kwargs.pop("parent", None)
+        self._view = SeasonGoalsView(self, app=parent, *args[1:], **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 
 class TeamAnalyticsView(ctk.CTkFrame):
     """Team Analytics: offense, defense, goalies, scoring mix, discipline."""
@@ -9766,15 +10241,15 @@ class SalaryAnalyticsWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class BuyoutCalculatorWindow(InGamePopup):
+class BuyoutCalculatorView(ctk.CTkFrame):
     """Buyout Calculator: real NHL buyout math with execute."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Buyout Calculator")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("680x620")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the BuyoutCalculatorWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
         self._selected = None
         self._build()
 
@@ -9794,16 +10269,16 @@ class BuyoutCalculatorWindow(InGamePopup):
         left = ttk.Frame(cols, style='Card.TFrame', padding=10)
         left.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
         ttk.Label(left, text="Roster", style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         self.lb = tk.Listbox(left, height=22, activestyle='none',
                              bg='#232a3a', fg='#ffffff',
                              selectbackground='#0d2b28', relief='flat',
                              highlightthickness=1,
                              highlightbackground='#2e2e38',
-                             font=(self.parent.FONT_FAMILY, 10))
+                             font=(self.app.FONT_FAMILY, 10))
         self.lb.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.lb.bind('<<ListboxSelect>>', self._on_select)
-        self._players = sorted(self.parent.user_team.roster,
+        self._players = sorted(self.app.user_team.roster,
                                key=lambda p: p.contract.salary, reverse=True)
         for p in self._players:
             self.lb.insert(tk.END,
@@ -9822,7 +10297,7 @@ class BuyoutCalculatorWindow(InGamePopup):
     def _line(self, master, text, secondary=False, bold=False):
         ttk.Label(master, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10,
+                  font=(self.app.FONT_FAMILY, 10,
                         'bold' if bold else 'normal')).pack(anchor='w', pady=1)
 
     def _show_placeholder(self):
@@ -9866,14 +10341,14 @@ class BuyoutCalculatorWindow(InGamePopup):
             self._line(self.detail, txt, secondary=True)
         ttk.Separator(self.detail, orient='horizontal').pack(fill='x', pady=6)
         PillButton(self.detail, text="Execute Buyout", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                   font=(self.app.FONT_FAMILY, 10, 'bold'),
                    padx=16, pady=7,
                    command=self._execute_buyout).pack(anchor='w', pady=(4, 0))
 
     def _render_active_buyouts(self):
         for child in self.active_box.winfo_children():
             child.destroy()
-        team = self.parent.user_team
+        team = self.app.user_team
         hits = getattr(team, 'buyout_cap_hits', {}) or {}
         if hits:
             self._line(self.active_box, "Active buyout cap hits:", bold=True)
@@ -9883,24 +10358,38 @@ class BuyoutCalculatorWindow(InGamePopup):
             self._line(self.active_box, "No active buyouts.", secondary=True)
 
     def _execute_buyout(self):
-        from popup_system import messagebox
+        """Show an in-view confirmation panel for the buyout (no popup)."""
         p = self._selected
         if not p:
             return
         total, annual, byears, rows = buyout_schedule(p)
         if not rows:
             return
-        if not qol_confirm(
-                self,
-                "Confirm Buyout",
-                f"Buy out {p.full_name}?\n\n"
-                f"Cost: ${total:,.0f} spread as ${annual:,.0f}/yr "
-                f"over {byears} years.\n"
-                f"{p.full_name} will become a free agent.",
-                confirm_text="Buy Out"):
-            return
-        team = self.parent.user_team
-        league = self.parent.league
+        for child in self.detail.winfo_children():
+            child.destroy()
+        self._line(self.detail, "Confirm Buyout", bold=True)
+        self._line(self.detail,
+                   f"Buy out {p.full_name}? {p.full_name} will become "
+                   f"a free agent.", secondary=True)
+        self._line(self.detail,
+                   f"Cost: ${total:,.0f} spread as ${annual:,.0f}/yr "
+                   f"over {byears} years.", secondary=True)
+        btns = ttk.Frame(self.detail, style='Card.TFrame')
+        btns.pack(anchor='w', pady=(10, 0))
+        PillButton(btns, text="Confirm Buy Out", bg='#5c1a1a',
+                   font=(self.app.FONT_FAMILY, 10, 'bold'),
+                   padx=16, pady=7,
+                   command=lambda: self._confirm_buyout(
+                       p, total, annual, byears, rows)).pack(side=tk.LEFT,
+                                                             padx=(0, 8))
+        PillButton(btns, text="Cancel", bg='#0e0e11',
+                   font=(self.app.FONT_FAMILY, 10),
+                   padx=16, pady=7,
+                   command=self._render_detail).pack(side=tk.LEFT)
+
+    def _confirm_buyout(self, p, total, annual, byears, rows):
+        team = self.app.user_team
+        league = self.app.league
         season = getattr(league, 'season_year', 2026)
         hits = getattr(team, 'buyout_cap_hits', None)
         if hits is None:
@@ -9912,22 +10401,54 @@ class BuyoutCalculatorWindow(InGamePopup):
         if p in team.roster:
             team.roster.remove(p)
         p.team_name = "Free Agent"
-        messagebox.showinfo("Buyout Complete",
-                            f"{p.full_name} has been bought out and is now "
-                            f"a free agent.\nDead cap: ${annual:,.0f}/yr for "
-                            f"{byears} years.")
         self._selected = None
-        self._show_placeholder()
+        for child in self.detail.winfo_children():
+            child.destroy()
+        self._line(self.detail, "Buyout complete", bold=True)
+        self._line(self.detail,
+                   f"{p.full_name} has been bought out and is now a free "
+                   f"agent. Dead cap: ${annual:,.0f}/yr for "
+                   f"{byears} years.", secondary=True)
         # rebuild listbox + active buyouts
         self.lb.delete(0, tk.END)
         self._players = sorted(team.roster,
                                key=lambda pl: pl.contract.salary, reverse=True)
         for pl in self._players:
             self.lb.insert(tk.END,
-                           f"{pl.full_name} ({pl.primary_position.value}) — "
-                           f"${pl.contract.salary / 1e6:.2f}M × {pl.contract.years_remaining}")
+                           f"{pl.full_name} ({pl.primary_position.value}) -- "
+                           f"${pl.contract.salary / 1e6:.2f}M x "
+                           f"{pl.contract.years_remaining}")
         self._render_active_buyouts()
 
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class BuyoutCalculatorWindow(InGamePopup):
+    """Popup wrapper around BuyoutCalculatorView (backward compatibility).
+
+    New code should embed BuyoutCalculatorView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._view = BuyoutCalculatorView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 
 class GameDetailWindow(InGamePopup):
     """Game Recap / Game Stats: scoring summary, team stats, three stars."""

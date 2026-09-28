@@ -490,38 +490,53 @@ class ManagerHubWindow(InGamePopup):
                 pass
         return InGamePopup.__getattr__(self, name)
 
-# Dialogs
+# Dialogs (embedded focus-card screens + thin popup wrappers)
 # ---------------------------------------------------------------------------
-class TeamTalkDialog(InGamePopup):
-    """Modal team talk picker. Result: (option_dict_or_None, reaction_text, boost)."""
+class TeamTalkView(ctk.CTkFrame):
+    """Team talk picker as an embedded full-screen focus card.
 
-    def __init__(self, parent, team, when: str, context: dict):
-        super().__init__(parent)
-        self.parent_gui = parent
+    Result (option_dict_or_None, reaction_text, boost) is delivered via the
+    on_done callback; the view then closes itself. Replaces the blocking
+    wait_window() flow of the old TeamTalkDialog.
+    """
+
+    def __init__(self, parent, team, when: str, context: dict,
+                 app=None, on_done=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the TeamTalkDialog wrapper
         self.team = team
         self.when = when
         self.context = context
         self.result = None
-        self.title("Team Talk")
-        self.geometry("560x420")
-        self.transient(parent)
-        self.grab_set()
+        self.on_done = on_done
+        try:
+            self.configure(fg_color=self.app.BG_COLOR)
+        except Exception:
+            pass
+
+        # Focus card: full-screen view, content in a centered card.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ctk.CTkFrame(self, fg_color="#1c1c21", corner_radius=12,
+                            width=560)
+        card.grid(row=0, column=0, padx=24, pady=24)
 
         titles = {"prematch": "Pre-Match Team Talk",
                   "intermission": "Intermission Team Talk",
                   "postmatch": "Full-Time Team Talk"}
-        ttk.Label(self, text=titles.get(when, "Team Talk"),
-                  font=("Helvetica", 14, "bold")).pack(pady=10)
+        ttk.Label(card, text=titles.get(when, "Team Talk"),
+                  font=("Helvetica", 14, "bold")).pack(pady=(16, 6))
         ctx_desc = {
             "prematch": f"Next up: {context.get('opponent_name', 'the opposition')}.",
             "intermission": f"Score: {context.get('score_line', '')}.",
             "postmatch": f"Final: {context.get('score_line', '')}.",
         }
-        ttk.Label(self, text=ctx_desc.get(when, ""),
+        ttk.Label(card, text=ctx_desc.get(when, ""),
                   font=("Helvetica", 11)).pack(pady=4)
 
         self.options = mc.get_team_talk_options(when, context)
-        list_frame = ttk.Frame(self)
+        list_frame = ttk.Frame(card)
         list_frame.pack(fill="both", expand=True, padx=15, pady=5)
         for opt in self.options:
             fit_note = {"good": " ✓ looks ideal", "risky": " ⚠ risky"}.get(opt["fit"], "")
@@ -533,47 +548,100 @@ class TeamTalkDialog(InGamePopup):
                       font=("Helvetica", 9, "italic"),
                       wraplength=480).pack(anchor="w", padx=10)
 
-        ttk.Button(self, text="Say nothing",
-                   command=self.destroy).pack(pady=10)
-        self.wait_window(self)
+        ttk.Button(card, text="Say nothing",
+                   command=self._say_nothing).pack(pady=(6, 16))
 
     def _choose(self, option):
         reaction, boost = mc.apply_team_talk(self.team, option, self.context)
         messagebox.showinfo("Dressing Room", reaction, parent=self)
         self.result = (option, reaction, boost)
-        self.destroy()
+        self._finish()
+
+    def _say_nothing(self):
+        self.result = None
+        self._finish()
+
+    def _finish(self):
+        cb = getattr(self, "on_done", None)
+        if callable(cb):
+            try:
+                cb(self.result)
+            except Exception:
+                pass
+        self.close_view()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
 
-class PressConferenceDialog(InGamePopup):
-    """Modal press conference. Result: list of chosen answer dicts."""
-
-    def __init__(self, parent, questions: List[dict], title: str = "Press Conference"):
+class TeamTalkDialog(InGamePopup):
+    """Popup wrapper around TeamTalkView (backward compatibility)."""
+    def __init__(self, parent, team, when: str, context: dict, on_done=None):
         super().__init__(parent)
+        self._view = TeamTalkView(self, team, when, context, app=parent,
+                                 on_done=on_done)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class PressConferenceView(ctk.CTkFrame):
+    """Press conference as an embedded full-screen focus card.
+
+    Result (list of chosen answer dicts) is delivered via the on_done
+    callback; the view then closes itself. Replaces the blocking
+    wait_window() flow of the old PressConferenceDialog.
+    """
+
+    def __init__(self, parent, questions: List[dict],
+                 title: str = "Press Conference", app=None, on_done=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the PressConferenceDialog wrapper
         self.questions = questions
         self.chosen = []
-        self.title(title)
-        self.geometry("620x520")
-        self.transient(parent)
-        self.grab_set()
+        self.on_done = on_done
+        try:
+            self.configure(fg_color=self.app.BG_COLOR)
+        except Exception:
+            pass
 
-        ttk.Label(self, text=title,
-                  font=("Helvetica", 14, "bold")).pack(pady=10)
+        # Focus card: full-screen view, content in a centered card.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ctk.CTkFrame(self, fg_color="#1c1c21", corner_radius=12,
+                            width=600)
+        card.grid(row=0, column=0, padx=24, pady=24)
+
+        ttk.Label(card, text=title,
+                  font=("Helvetica", 14, "bold")).pack(pady=(16, 6))
         self.q_index = 0
-        self.q_label = ttk.Label(self, text="", wraplength=560,
+        self.q_label = ttk.Label(card, text="", wraplength=540,
                                  font=("Helvetica", 11, "bold"))
         self.q_label.pack(pady=8)
-        self.j_label = ttk.Label(self, text="", font=("Helvetica", 10, "italic"))
+        self.j_label = ttk.Label(card, text="", font=("Helvetica", 10, "italic"))
         self.j_label.pack()
-        self.btn_frame = ttk.Frame(self)
-        self.btn_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        self.btn_frame = ttk.Frame(card)
+        self.btn_frame.pack(fill="both", expand=True, padx=20, pady=(10, 16))
         self._show_question()
-        self.wait_window(self)
 
     def _show_question(self):
         for w in self.btn_frame.winfo_children():
             w.destroy()
         if self.q_index >= len(self.questions):
-            self.destroy()
+            self._finish()
             return
         q = self.questions[self.q_index]
         self.j_label.config(text=f"— {q['journalist']}")
@@ -588,18 +656,72 @@ class PressConferenceDialog(InGamePopup):
         self.q_index += 1
         self._show_question()
 
+    def _finish(self):
+        cb = getattr(self, "on_done", None)
+        if callable(cb):
+            try:
+                cb(self.chosen)
+            except Exception:
+                pass
+        self.close_view()
 
-class OppositionReportDialog(InGamePopup):
-    """Read-only pre-match scout report."""
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
-    def __init__(self, parent, report: dict):
+
+class PressConferenceDialog(InGamePopup):
+    """Popup wrapper around PressConferenceView (backward compatibility)."""
+    def __init__(self, parent, questions: List[dict],
+                 title: str = "Press Conference", on_done=None):
         super().__init__(parent)
-        self.title(f"Scout Report: {report.get('team')}")
-        self.geometry("600x520")
-        text = tk.Text(self, wrap="word", font=("Helvetica", 10), padx=12, pady=12)
-        text.pack(fill="both", expand=True)
-        text.insert("end", f"SCOUT REPORT: {report.get('team')}\n", "h")
-        text.insert("end", f"Record: {report.get('record')}   Danger level: {report.get('danger_level')}\n\n")
+        self._view = PressConferenceView(self, questions, title, app=parent,
+                                         on_done=on_done)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class OppositionReportView(ctk.CTkFrame):
+    """Read-only pre-match scout report as an embedded focus card."""
+
+    def __init__(self, parent, report: dict, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the OppositionReportDialog wrapper
+        try:
+            self.configure(fg_color=self.app.BG_COLOR)
+        except Exception:
+            pass
+
+        # Focus card: full-screen view, content in a centered card.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ctk.CTkFrame(self, fg_color="#1c1c21", corner_radius=12,
+                            width=580)
+        card.grid(row=0, column=0, padx=24, pady=24)
+
+        ttk.Label(card, text=f"SCOUT REPORT: {report.get('team')}",
+                  font=("Helvetica", 14, "bold")).pack(pady=(16, 4))
+        ttk.Label(card,
+                  text=f"Record: {report.get('record')}   "
+                       f"Danger level: {report.get('danger_level')}",
+                  font=("Helvetica", 11)).pack(pady=(0, 8))
+
+        text = tk.Text(card, wrap="word", font=("Helvetica", 10),
+                       padx=12, pady=12, height=18, width=64)
+        text.pack(fill="both", expand=True, padx=16)
         text.insert("end", "STRENGTHS\n", "h")
         for s in report.get("strengths", []):
             text.insert("end", f"• {s}\n")
@@ -614,4 +736,30 @@ class OppositionReportDialog(InGamePopup):
             text.insert("end", f"• {a}\n")
         text.tag_configure("h", font=("Helvetica", 11, "bold"))
         text.config(state="disabled")
-        ttk.Button(self, text="Close", command=self.destroy).pack(pady=8)
+        ttk.Button(card, text="Close",
+                   command=self.close_view).pack(pady=14)
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+
+class OppositionReportDialog(InGamePopup):
+    """Popup wrapper around OppositionReportView (backward compatibility)."""
+    def __init__(self, parent, report: dict):
+        super().__init__(parent)
+        self._view = OppositionReportView(self, report, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

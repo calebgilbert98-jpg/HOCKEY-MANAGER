@@ -6,6 +6,7 @@ from popup_system import messagebox, InGamePopup
 from tkinter import ttk
 import json
 import os
+import customtkinter as ctk
 
 from modern_ui import AppColors, AppFonts, AppCard, AppButton
 
@@ -183,42 +184,93 @@ class SettingsDropdown(ttk.Combobox):
             pass
 
 
-class SettingsWindow(InGamePopup):
-    """Settings & preferences window in the modern dark UI."""
+class SettingsView(ctk.CTkFrame):
+    """Settings & preferences view in the modern dark UI (full-screen)."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-
-        self.title("Settings - Hockey Manager")
-        self.geometry("760x620")
-        self.configure(background=AppColors.BG)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SettingsWindow wrapper
+        self.configure(fg_color=AppColors.BG)
 
         # Settings data
         self.settings = self._load_settings()
-
-        # Make window modal
-        self.transient(parent)
-        self.grab_set()
+        # Unsaved-changes tracking (replaces the old "*"-in-title marker)
+        self._dirty = False
 
         self._create_interface()
         self._load_current_values()
 
-        # Center the window
-        self._center_window()
 
-        # Track window
-        if hasattr(parent, 'open_windows'):
-            parent.open_windows['settings'] = self
+    def _show_banner(self, text, kind="info"):
+        """Show an in-view message banner (replaces messagebox popups)."""
+        colors = {"info": ("#1a3a5c", "#4a9eff"), "error": ("#5c1a1a", "#ff6b6b"),
+                  "warn": ("#5c4a1a", "#ffcc00"), "ok": ("#1a5c2a", "#51cf66")}
+        bg, fg = colors.get(kind, colors["info"])
+        banner = getattr(self, "_banner", None)
+        if banner is None:
+            try:
+                import customtkinter as ctk
+                banner = ctk.CTkLabel(self, text="", fg_color=bg, text_color=fg,
+                                      corner_radius=6)
+                banner.pack(fill="x", padx=12, pady=(8, 0))
+                try:
+                    banner.lower()
+                except Exception:
+                    pass
+                self._banner = banner
+            except Exception:
+                return
+        banner.configure(text=text, fg_color=bg, text_color=fg)
+        # auto-clear after 6s
+        try:
+            after = getattr(self, "_banner_after", None)
+            if after:
+                self.after_cancel(after)
+            self._banner_after = self.after(6000, lambda: banner.configure(text=""))
+        except Exception:
+            pass
 
-    def _center_window(self):
-        """Center the window on screen"""
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _ask_confirm(self, text, on_yes, on_no=None):
+        """Show an in-view Yes/No panel (replaces messagebox.askyesno)."""
+        old = getattr(self, "_confirm_panel", None)
+        if old is not None:
+            try: old.destroy()
+            except Exception: pass
+        import customtkinter as ctk
+        panel = ctk.CTkFrame(self, fg_color="#2a2a3a", corner_radius=8)
+        panel.pack(fill="x", padx=12, pady=8)
+        ctk.CTkLabel(panel, text=text, wraplength=520).pack(padx=12, pady=(10, 6))
+        btns = ctk.CTkFrame(panel, fg_color="transparent")
+        btns.pack(pady=(0, 10))
+        def _yes():
+            try: panel.destroy()
+            except Exception: pass
+            self._confirm_panel = None
+            on_yes()
+        def _no():
+            try: panel.destroy()
+            except Exception: pass
+            self._confirm_panel = None
+            if on_no: on_no()
+        ctk.CTkButton(btns, text="Yes", command=_yes, width=90).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="No", command=_no, width=90).pack(side="left", padx=6)
+        self._confirm_panel = panel
+
+    def close_view(self):
+        """Close this screen, cleaning up the open-windows registry."""
+        try:
+            ow = getattr(self.app, 'open_windows', None)
+            if ow is not None and 'settings' in ow:
+                del ow['settings']
+        except Exception:
+            pass
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # Layout
@@ -689,8 +741,8 @@ class SettingsWindow(InGamePopup):
 
     def _notify_parent_of_changes(self):
         """Notify parent of setting changes"""
-        if hasattr(self.parent, 'apply_settings'):
-            self.parent.apply_settings(self.settings)
+        if hasattr(self.app, 'apply_settings'):
+            self.app.apply_settings(self.settings)
 
     # ------------------------------------------------------------------
     # Actions
@@ -698,7 +750,7 @@ class SettingsWindow(InGamePopup):
 
     def _mark_changed(self, event=None):
         """Mark that settings have been changed"""
-        self.title("Settings - Hockey Manager *")
+        self._dirty = True
 
     def _reset_to_defaults(self):
         """Reset all settings to defaults"""
@@ -748,9 +800,9 @@ class SettingsWindow(InGamePopup):
 
             # Auto-close if enabled
             if self.auto_close_var.get():
-                self.destroy()
+                self.close_view()
             else:
-                self.title("Settings - Hockey Manager")  # Remove * indicator
+                self._dirty = False  # Clear the unsaved-changes indicator
 
         except Exception as e:
             messagebox.showerror(
@@ -758,7 +810,7 @@ class SettingsWindow(InGamePopup):
 
     def _cancel(self):
         """Cancel changes and close window"""
-        if self.title().endswith('*'):  # Check if there are unsaved changes
+        if self._dirty:  # Check if there are unsaved changes
             result = messagebox.askyesnocancel(
                 "Unsaved Changes",
                 "You have unsaved changes. Do you want to save before "
@@ -770,15 +822,30 @@ class SettingsWindow(InGamePopup):
             elif result is None:  # Cancel
                 return
 
-        self.destroy()
+        self.close_view()
 
     def get_game_results_settings(self):
         """Get current game results settings for external use"""
         return self.settings.get('game_results', {})
 
-    def destroy(self):
-        """Clean up when window is destroyed"""
-        if hasattr(self.parent, 'open_windows') and \
-                'settings' in self.parent.open_windows:
-            del self.parent.open_windows['settings']
-        super().destroy()
+
+class SettingsWindow(InGamePopup):
+    """Popup wrapper around SettingsView (backward compatibility)."""
+
+    def __init__(self, parent):
+        super().__init__(parent, modal=True)
+        self.title("Settings - Hockey Manager")
+        app = (getattr(parent, 'app', None)
+               or getattr(parent, 'parent', None) or parent)
+        self._view = SettingsView(self, app=app)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

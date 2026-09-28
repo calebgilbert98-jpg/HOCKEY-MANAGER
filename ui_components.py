@@ -4,6 +4,7 @@
 import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
+import customtkinter as ctk
 from game_classes import PlayerPosition, to_100_scale
 
 def _to_20_scale(value, default=10):
@@ -26,34 +27,23 @@ def _to_100_scale(value):
         return 50
 
 
-class PlayerProfileWindow(InGamePopup):
-    """A comprehensive player profile window similar to Eastside Hockey Manager."""
-    def __init__(self, parent, player, is_scouted=False, report=None):
-        super().__init__(parent)
-        self.parent = parent
+class PlayerProfileView(ctk.CTkFrame):
+    """A comprehensive player profile view similar to Eastside Hockey Manager.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy PlayerProfileWindow popup card.
+    """
+    def __init__(self, parent, player, is_scouted=False, report=None, app=None):
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color=self.app.BG_COLOR)
+        # Set by show_screen() (dashboard) or the PlayerProfileWindow wrapper (card).
+        self._close_screen = None
         self.player = player
         self.is_scouted = is_scouted
         self.report = report
-        
-        self.title(f"Profile: {player.full_name}")
-        self.configure(background=parent.BG_COLOR)
-        self.resizable(True, True)
-        # Fill the screen: maximized window for a true FM-style player hub
-        try:
-            self.state('zoomed')  # Windows / Linux maximize
-        except Exception:
-            pass
-        try:
-            # Fallback: size to 95% of screen if zoomed isn't supported (macOS)
-            self.update_idletasks()
-            sw = self.winfo_screenwidth()
-            sh = self.winfo_screenheight()
-            if self.winfo_width() < sw * 0.9:
-                self.geometry(f"{int(sw * 0.95)}x{int(sh * 0.92)}+{int(sw * 0.025)}+{int(sh * 0.04)}")
-        except Exception:
-            self.geometry("1400x1000")
 
-        self.style = parent.style
+        self.style = self.app.style
         self._setup_local_styles()
         
         # Create notebook for tabs with zero padding to maximize space
@@ -67,38 +57,46 @@ class PlayerProfileWindow(InGamePopup):
         self._create_contract_tab()
         self._create_development_tab()
 
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _setup_local_styles(self):
         """Adds styles specific to this window."""
-        self.style.configure('PlayerTab.TFrame', background=self.parent.CONTENT_BG)
-        self.style.configure('PlayerPanel.TFrame', background=self.parent.CONTENT_BG, borderwidth=0)
+        self.style.configure('PlayerTab.TFrame', background=self.app.CONTENT_BG)
+        self.style.configure('PlayerPanel.TFrame', background=self.app.CONTENT_BG, borderwidth=0)
         
         self.style.configure('PlayerHeader.TLabel', 
-                           background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.HEADER_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 24, 'bold'))  # Increased from 16 to 24
+                           background=self.app.CONTENT_BG, 
+                           foreground=self.app.HEADER_COLOR, 
+                           font=(self.app.FONT_FAMILY, 24, 'bold'))  # Increased from 16 to 24
         
         self.style.configure('PlayerSubheader.TLabel', 
-                           background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.HEADER_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 13, 'bold'))
+                           background=self.app.CONTENT_BG, 
+                           foreground=self.app.HEADER_COLOR, 
+                           font=(self.app.FONT_FAMILY, 13, 'bold'))
         
         self.style.configure('PlayerInfo.TLabel', 
-                           background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.TEXT_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 14))  # Increased from 10 to 14
+                           background=self.app.CONTENT_BG, 
+                           foreground=self.app.TEXT_COLOR, 
+                           font=(self.app.FONT_FAMILY, 14))  # Increased from 10 to 14
         
         self.style.configure('PlayerValue.TLabel', 
-                           background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.HEADER_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 14, 'bold'))  # Increased from 10 to 14
+                           background=self.app.CONTENT_BG, 
+                           foreground=self.app.HEADER_COLOR, 
+                           font=(self.app.FONT_FAMILY, 14, 'bold'))  # Increased from 10 to 14
         
         # Attribute rating styles - increased font sizes for better readability
-        self.style.configure('Excellent.TLabel', background="#4CAF50", foreground='white', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('VeryGood.TLabel', background="#8BC34A", foreground='white', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('Good.TLabel', background="#CDDC39", foreground='black', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('Average.TLabel', background="#FFC107", foreground='black', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('BelowAverage.TLabel', background="#FF9800", foreground='black', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('Poor.TLabel', background="#F44336", foreground='white', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('Excellent.TLabel', background="#4CAF50", foreground='white', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('VeryGood.TLabel', background="#8BC34A", foreground='white', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('Good.TLabel', background="#CDDC39", foreground='black', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('Average.TLabel', background="#FFC107", foreground='black', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('BelowAverage.TLabel', background="#FF9800", foreground='black', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('Poor.TLabel', background="#F44336", foreground='white', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
 
     def _get_attribute_style_and_text(self, value):
         """Returns a style name and descriptive text based on the attribute value (native 1-100)."""
@@ -142,7 +140,7 @@ class PlayerProfileWindow(InGamePopup):
         self.notebook.add(tab_frame, text='Overview')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -240,14 +238,14 @@ class PlayerProfileWindow(InGamePopup):
         if face_img is not None:
             self._face_img = face_img  # keep a reference
             photo_label = tk.Label(photo_frame, image=face_img,
-                                   bg=self.parent.CONTENT_BG,
+                                   bg=self.app.CONTENT_BG,
                                    highlightthickness=2,
-                                   highlightbackground=self.parent.ACCENT_COLOR)
+                                   highlightbackground=self.app.ACCENT_COLOR)
             photo_label.pack()
         else:
-            photo_canvas = tk.Canvas(photo_frame, width=120, height=150, bg=self.parent.TITLE_BAR_COLOR, highlightthickness=2, highlightcolor=self.parent.ACCENT_COLOR)
+            photo_canvas = tk.Canvas(photo_frame, width=120, height=150, bg=self.app.TITLE_BAR_COLOR, highlightthickness=2, highlightcolor=self.app.ACCENT_COLOR)
             photo_canvas.pack()
-            photo_canvas.create_text(60, 75, text="PLAYER\nPHOTO", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 14, 'bold'), justify='center')
+            photo_canvas.create_text(60, 75, text="PLAYER\nPHOTO", fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 14, 'bold'), justify='center')
         
         # Main player information
         info_frame = ttk.Frame(header_frame, style='PlayerTab.TFrame')
@@ -275,7 +273,7 @@ class PlayerProfileWindow(InGamePopup):
             arch = get_archetype(self.player)
             if arch and not str(arch).startswith("Depth") and "Backup" not in str(arch):
                 Pill(name_frame, text=str(arch),
-                     bg=self.parent.ACCENT_COLOR).pack(side='right', padx=(10, 0))
+                     bg=self.app.ACCENT_COLOR).pack(side='right', padx=(10, 0))
         except Exception:
             pass
         
@@ -309,11 +307,11 @@ class PlayerProfileWindow(InGamePopup):
         overall = self.player.overall_rating()
         
         # Create visual rating bar
-        rating_canvas = tk.Canvas(rating_frame, width=90, height=130, bg=self.parent.BG_COLOR, highlightthickness=1, highlightbackground=self.parent.TEXT_COLOR)
+        rating_canvas = tk.Canvas(rating_frame, width=90, height=130, bg=self.app.BG_COLOR, highlightthickness=1, highlightbackground=self.app.TEXT_COLOR)
         rating_canvas.pack(pady=(5, 0))
         
         # Draw rating bar background
-        rating_canvas.create_rectangle(25, 15, 65, 115, fill=self.parent.CONTENT_BG, outline=self.parent.TEXT_COLOR, width=2)
+        rating_canvas.create_rectangle(25, 15, 65, 115, fill=self.app.CONTENT_BG, outline=self.app.TEXT_COLOR, width=2)
         
         # Draw rating bar fill (1-100 display scale)
         overall_100 = _to_100_scale(overall)
@@ -323,9 +321,9 @@ class PlayerProfileWindow(InGamePopup):
             rating_canvas.create_rectangle(27, 115-bar_height, 63, 113, fill=bar_color, outline="")
         
         # Draw scale markings and text
-        rating_canvas.create_text(45, 10, text="100", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
-        rating_canvas.create_text(45, 120, text="0", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
-        rating_canvas.create_text(45, 125, text=str(overall_100), fill=self.parent.HEADER_COLOR, font=(self.parent.FONT_FAMILY, 14, 'bold'))
+        rating_canvas.create_text(45, 10, text="100", fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9))
+        rating_canvas.create_text(45, 120, text="0", fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9))
+        rating_canvas.create_text(45, 125, text=str(overall_100), fill=self.app.HEADER_COLOR, font=(self.app.FONT_FAMILY, 14, 'bold'))
         
         # Contract status indicator
         contract_frame = ttk.Frame(header_frame, style='PlayerTab.TFrame')
@@ -356,7 +354,7 @@ class PlayerProfileWindow(InGamePopup):
                 
             status_canvas = tk.Canvas(contract_frame, width=80, height=20, bg=status_color, highlightthickness=1)
             status_canvas.pack(pady=(5, 0))
-            status_canvas.create_text(40, 10, text=status_text, fill='black', font=(self.parent.FONT_FAMILY, 8, 'bold'))
+            status_canvas.create_text(40, 10, text=status_text, fill='black', font=(self.app.FONT_FAMILY, 8, 'bold'))
         else:
             ttk.Label(contract_frame, text="No Contract", style='PlayerInfo.TLabel').pack(pady=(5, 0))
     
@@ -662,7 +660,7 @@ class PlayerProfileWindow(InGamePopup):
         self.notebook.add(tab_frame, text='Attributes')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -748,7 +746,7 @@ class PlayerProfileWindow(InGamePopup):
             pill = tk.Label(
                 pills_frame, text=f" {trait.name} ",
                 bg="#1e3a5f", fg="#8ec2ff",
-                font=(self.parent.FONT_FAMILY, 11, "bold"),
+                font=(self.app.FONT_FAMILY, 11, "bold"),
                 padx=10, pady=3, cursor="hand2",
             )
             pill.pack(side="left", padx=(0, 8), pady=2)
@@ -769,9 +767,9 @@ class PlayerProfileWindow(InGamePopup):
             frame = tk.Frame(tooltip, bg="#1a1d24", padx=10, pady=8)
             frame.pack()
             tk.Label(frame, text=title, bg="#1a1d24", fg="#8ec2ff",
-                     font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w")
+                     font=(self.app.FONT_FAMILY, 11, "bold")).pack(anchor="w")
             tk.Label(frame, text=description, bg="#1a1d24", fg="#c0c5ce",
-                     font=(self.parent.FONT_FAMILY, 10), wraplength=280,
+                     font=(self.app.FONT_FAMILY, 10), wraplength=280,
                      justify="left").pack(anchor="w", pady=(4, 0))
 
         def hide(event):
@@ -823,7 +821,7 @@ class PlayerProfileWindow(InGamePopup):
                 disp = _to_100_scale(raw)
 
             # Bar
-            bar = tk.Canvas(row, height=16, bg=self.parent.CONTENT_BG, highlightthickness=0)
+            bar = tk.Canvas(row, height=16, bg=self.app.CONTENT_BG, highlightthickness=0)
             # Numeric value (pack right first so bar doesn't squeeze it out)
             ttk.Label(row, text=str(disp), style='PlayerValue.TLabel', width=4).pack(side='right', padx=(6, 0))
             bar.pack(side='left', fill='x', expand=True, padx=(6, 0))
@@ -985,7 +983,7 @@ class PlayerProfileWindow(InGamePopup):
         self.notebook.add(tab_frame, text='Statistics')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -1121,7 +1119,7 @@ class PlayerProfileWindow(InGamePopup):
             }
         
         # Create the treeview
-        career_tree = self.parent._create_treeview(table_frame, columns)  # Remove fixed height
+        career_tree = self.app._create_treeview(table_frame, columns)  # Remove fixed height
         career_tree.pack(fill='x', pady=(0, 5))
         
         # Add sample career data (in a real game, this would come from saved statistics)
@@ -1233,9 +1231,9 @@ class PlayerProfileWindow(InGamePopup):
         notes_label.pack(anchor='w', pady=(10, 2))
         
         notes_text = tk.Text(trends_frame, width=80,  # Remove fixed height
-                           bg=self.parent.TITLE_BAR_COLOR, 
-                           fg=self.parent.TEXT_COLOR,
-                           font=(self.parent.FONT_FAMILY, 13),  # Increased from 9 to 13
+                           bg=self.app.TITLE_BAR_COLOR, 
+                           fg=self.app.TEXT_COLOR,
+                           font=(self.app.FONT_FAMILY, 13),  # Increased from 9 to 13
                            wrap='word')
         notes_text.pack(fill='x', pady=(0, 5))
         
@@ -1257,7 +1255,7 @@ class PlayerProfileWindow(InGamePopup):
         self.notebook.add(tab_frame, text='Contract')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -1342,7 +1340,7 @@ class PlayerProfileWindow(InGamePopup):
             'status': ('Status', 60)
         }
         
-        breakdown_tree = self.parent._create_treeview(contract_frame, breakdown_columns)  # Remove fixed height
+        breakdown_tree = self.app._create_treeview(contract_frame, breakdown_columns)  # Remove fixed height
         breakdown_tree.pack(fill='x', pady=(0, 5))
         
         # Populate breakdown data
@@ -1378,7 +1376,7 @@ class PlayerProfileWindow(InGamePopup):
             'type': ('Type', 60)
         }
         
-        history_tree = self.parent._create_treeview(history_frame, history_columns)  # Remove fixed height
+        history_tree = self.app._create_treeview(history_frame, history_columns)  # Remove fixed height
         history_tree.pack(fill='x')
         
         # Sample contract history (in a real game, this would be tracked)
@@ -1535,7 +1533,7 @@ class PlayerProfileWindow(InGamePopup):
         self.notebook.add(tab_frame, text='Development')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -1700,7 +1698,7 @@ class PlayerProfileWindow(InGamePopup):
             'notes': ('Notes', 150)
         }
         
-        history_tree = self.parent._create_treeview(history_frame, history_columns)  # Remove fixed height
+        history_tree = self.app._create_treeview(history_frame, history_columns)  # Remove fixed height
         history_tree.pack(fill='x')
         
         # Sample development history (in a real game, this would be tracked)
@@ -1780,7 +1778,7 @@ class PlayerProfileWindow(InGamePopup):
             'timeline': ('Timeline', 80)
         }
         
-        training_tree = self.parent._create_treeview(training_frame, training_columns)  # Remove fixed height
+        training_tree = self.app._create_treeview(training_frame, training_columns)  # Remove fixed height
         training_tree.pack(fill='x')
         
         # Populate training recommendations
@@ -1794,9 +1792,9 @@ class PlayerProfileWindow(InGamePopup):
         tips_label.pack(anchor='w', pady=(15, 5))
         
         tips_text = tk.Text(training_frame, width=80,  # Remove fixed height
-                          bg=self.parent.TITLE_BAR_COLOR,
-                          fg=self.parent.TEXT_COLOR,
-                          font=(self.parent.FONT_FAMILY, 13),  # Increased from 9 to 13
+                          bg=self.app.TITLE_BAR_COLOR,
+                          fg=self.app.TEXT_COLOR,
+                          font=(self.app.FONT_FAMILY, 13),  # Increased from 9 to 13
                           wrap='word')
         tips_text.pack(fill='x', pady=(0, 5))
         
@@ -1880,14 +1878,14 @@ class PlayerProfileWindow(InGamePopup):
             bar_frame = ttk.Frame(phys_grid, style='PlayerTab.TFrame')
             bar_frame.grid(row=i, column=1, sticky='ew', padx=(0, 10), pady=3)
             
-            bar_canvas = tk.Canvas(bar_frame, width=120, height=16, bg=self.parent.CONTENT_BG, highlightthickness=0)
+            bar_canvas = tk.Canvas(bar_frame, width=120, height=16, bg=self.app.CONTENT_BG, highlightthickness=0)
             bar_canvas.pack(fill='x')
             
             # Draw attribute bar
             bar_width = int((min(value, 100) / 100) * 110)
             bar_color = self._get_rating_color(value)
             bar_canvas.create_rectangle(5, 3, 5+bar_width, 13, fill=bar_color, outline=bar_color)
-            bar_canvas.create_rectangle(3, 1, 117, 15, outline=self.parent.TEXT_COLOR, width=1)
+            bar_canvas.create_rectangle(3, 1, 117, 15, outline=self.app.TEXT_COLOR, width=1)
             
             ttk.Label(phys_grid, text=str(_to_100_scale(value)), style='PlayerInfo.TLabel', anchor='center', width=8).grid(
                 row=i, column=2, padx=(5, 0), pady=3
@@ -2001,14 +1999,14 @@ class PlayerProfileWindow(InGamePopup):
             bar_frame = ttk.Frame(attr_grid, style='PlayerTab.TFrame')
             bar_frame.grid(row=i, column=1, sticky='ew', padx=(0, 10), pady=3)
             
-            bar_canvas = tk.Canvas(bar_frame, width=120, height=20, bg=self.parent.CONTENT_BG, highlightthickness=0)
+            bar_canvas = tk.Canvas(bar_frame, width=120, height=20, bg=self.app.CONTENT_BG, highlightthickness=0)
             bar_canvas.pack(fill='x')
             
             # Draw enhanced attribute bar with gradient effect
             bar_width = int((min(value, 100) / 100) * 110)
             bar_color = self._get_rating_color(value)
             bar_canvas.create_rectangle(5, 4, 5+bar_width, 16, fill=bar_color, outline=bar_color)
-            bar_canvas.create_rectangle(3, 2, 117, 18, outline=self.parent.TEXT_COLOR, width=1)
+            bar_canvas.create_rectangle(3, 2, 117, 18, outline=self.app.TEXT_COLOR, width=1)
             
             # Add value text
             style, text = self._get_attribute_style_and_text(value)
@@ -2195,8 +2193,8 @@ class PlayerProfileWindow(InGamePopup):
         ttk.Label(scout_frame, text="Scouting Report", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
         
         # Scouting report text area
-        report_text = tk.Text(scout_frame, height=8, width=30, bg=self.parent.CONTENT_BG, 
-                             fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 11),
+        report_text = tk.Text(scout_frame, height=8, width=30, bg=self.app.CONTENT_BG, 
+                             fg=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 11),
                              wrap='word', relief='sunken', borderwidth=1)
         report_text.pack(fill='both', expand=True)
         
@@ -2213,8 +2211,8 @@ class PlayerProfileWindow(InGamePopup):
         ttk.Label(notes_frame, text="Coaching Notes", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
         
         # Coaching notes text area
-        notes_text = tk.Text(notes_frame, height=8, width=30, bg=self.parent.CONTENT_BG,
-                            fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 11),
+        notes_text = tk.Text(notes_frame, height=8, width=30, bg=self.app.CONTENT_BG,
+                            fg=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 11),
                             wrap='word', relief='sunken', borderwidth=1)
         notes_text.pack(fill='both', expand=True)
         
@@ -2569,8 +2567,8 @@ class PlayerProfileWindow(InGamePopup):
         ttk.Label(radar_frame, text="Performance Profile:", style='PlayerInfo.TLabel').pack(anchor='w')
         
         # Create a simple text-based radar chart
-        radar_canvas = tk.Canvas(radar_frame, width=250, height=120, bg=self.parent.CONTENT_BG, 
-                                highlightthickness=1, highlightcolor=self.parent.TEXT_COLOR)
+        radar_canvas = tk.Canvas(radar_frame, width=250, height=120, bg=self.app.CONTENT_BG, 
+                                highlightthickness=1, highlightcolor=self.app.TEXT_COLOR)
         radar_canvas.pack(pady=(5, 0))
         
         self._draw_performance_profile(radar_canvas)
@@ -2720,7 +2718,7 @@ class PlayerProfileWindow(InGamePopup):
             
             # Background bar
             canvas.create_rectangle(60, y, 60 + max_width, y + bar_height, 
-                                  fill=self.parent.TITLE_BAR_COLOR, outline=self.parent.TEXT_COLOR)
+                                  fill=self.app.TITLE_BAR_COLOR, outline=self.app.TEXT_COLOR)
             
             # Value bar
             bar_width = int((value / 20.0) * max_width)
@@ -2730,13 +2728,13 @@ class PlayerProfileWindow(InGamePopup):
             
             # Label and value
             canvas.create_text(55, y + bar_height/2, text=name, anchor='e', 
-                             fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
+                             fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9))
             canvas.create_text(65 + max_width, y + bar_height/2, text=str(value), anchor='w',
-                             fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9, 'bold'))
+                             fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9, 'bold'))
                              
     def _create_simple_comparison(self, parent, row=4):
         """Creates a simple player comparison section."""
-        comp_frame = self.parent._create_panel(parent, "League Comparison", row, 0)
+        comp_frame = self.app._create_panel(parent, "League Comparison", row, 0)
         
         # Create a structured layout for the comparison
         comp_grid = ttk.Frame(comp_frame, style='PlayerTab.TFrame')
@@ -2809,7 +2807,7 @@ class PlayerProfileWindow(InGamePopup):
             
     def _create_league_standing(self, parent, row=5):
         """Creates a league standing and team context section."""
-        standing_frame = self.parent._create_panel(parent, "Team & League Context", row, 0)
+        standing_frame = self.app._create_panel(parent, "Team & League Context", row, 0)
         
         # Create a structured layout for the team context
         context_grid = ttk.Frame(standing_frame, style='PlayerTab.TFrame')
@@ -2868,3 +2866,32 @@ class PlayerProfileWindow(InGamePopup):
             potential = "Unknown"
         ttk.Label(context_grid, text="Potential:", style='PlayerInfo.TLabel').grid(row=row_idx, column=0, sticky='w', padx=(0, 10), pady=2)
         ttk.Label(context_grid, text=potential, style='PlayerValue.TLabel').grid(row=row_idx, column=1, sticky='w', pady=2)
+
+
+class PlayerProfileWindow(InGamePopup):
+    """Popup wrapper around PlayerProfileView (backward compatibility).
+
+    New code should embed PlayerProfileView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('player_profile',
+    f"Profile: {player.full_name}", PlayerProfileView, player)``
+    instead of opening this card.
+    """
+
+    def __init__(self, parent, player, is_scouted=False, report=None):
+        super().__init__(parent)
+        self.title(f"Profile: {player.full_name}")
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = PlayerProfileView(self, player, is_scouted, report,
+                                       app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
