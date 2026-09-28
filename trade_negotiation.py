@@ -450,6 +450,25 @@ def send_counter(app, neg: TradeNegotiation,
     neg.patience = max(0.35, neg.patience - 0.15)
     neg.direction = "outgoing"
     neg.status = "awaiting_ai"
+    # A counter can drop a clause player from the deal. His single-use
+    # waiver was stamped for the previous shape of this trade -- clear it
+    # now, or it would linger on his live contract for an unrelated future
+    # deal. (The negotiation stays open, so no dead-deal cleanup runs.)
+    try:
+        _old_user, _ = resolve_assets(app, neg.user_assets)
+        _old_partner, _ = resolve_assets(app, neg.partner_assets)
+        _new_ids = {str(getattr(a, "id", ""))
+                    for a in list(user_assets or [])
+                    + list(partner_assets or [])}
+        for _a in list(_old_user or []) + list(_old_partner or []):
+            try:
+                if (str(getattr(_a, "id", "")) not in _new_ids
+                        and getattr(_a, "contract", None) is not None):
+                    _a.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
+    except Exception:
+        pass
     neg.user_assets = assets_to_dicts(user_assets,
                                       getattr(app.user_team, "team_name", ""))
     neg.partner_assets = assets_to_dicts(partner_assets, neg.partner_team_name)

@@ -545,6 +545,168 @@ check("top-10 protection triggers at #8",
       pkz2.current_team == "Originals" and pk28.current_team == "Holders"
       and any("triggered" in e for e in evz2))
 
+# ---------------------------------------------------------------------------
+# 2026-09-28 bug-hunt fixes: waiver hygiene + clause-through-counter
+# ---------------------------------------------------------------------------
+print("waiver hygiene + clause-through-counter fixes")
+
+import types as _types
+from types import SimpleNamespace as _SN
+from datetime import date as _date
+import trade_negotiation as tn
+
+# --- Fix 2: send_counter clears waivers for players dropped from the deal ---
+_tn_inbox = []
+_tn_team = mkteam("User Team")
+_tn_partner = mkteam("Partner Team")
+_pa = mkplayer(3_000_000, name="Clause Veteran")
+_pb = mkplayer(2_000_000, name="Regular Joe")
+_tn_team.roster = [_pa, _pb]
+_tn_app = _SN(user_team=_tn_team,
+              league=_SN(teams=[_tn_team, _tn_partner], free_agents=[]),
+              current_date=_date(2026, 9, 28), game_manager=None)
+_tn_team.inbox = _SN(add_message=lambda m: _tn_inbox.append(m))
+
+_neg = tn.TradeNegotiation(partner_team_name="Partner Team")
+_neg.user_assets = tn.assets_to_dicts([_pa, _pb], "User Team")
+_neg.partner_assets = []
+# The veteran was asked and granted a waiver for the previous deal shape.
+_pa.contract.ntc_waiver_for = "Partner Team"
+_pb.contract.ntc_waiver_for = "Partner Team"
+tn.send_counter(_tn_app, _neg, [_pb], [])
+check("counter clears waiver for the dropped player",
+      _pa.contract.ntc_waiver_for == "")
+check("counter keeps waiver for the player still in the deal",
+      _pb.contract.ntc_waiver_for == "Partner Team")
+check("counter drops retention terms for removed assets",
+      _neg.retention == {})
+
+# --- Fix 4: clause survives agent-counter -> inbox accept ---
+from main import HockeyManagerGUI, SALARY_CAP as _SALARY_CAP
+
+_c4_team = mkteam("Cap Club")
+_c4_league = _SN(teams=[_c4_team], free_agents=[], salary_cap_system=None,
+                season_year=2026)
+_c4_app = _SN(league=_c4_league, user_team=_c4_team, news_log=[],
+              current_date=_date(2026, 9, 28), media_system=None,
+              update_all_views=lambda: None, inbox=[])
+_c4_app.send_email_to_user = lambda m: _c4_app.inbox.append(m)
+for _meth in ("handle_contract_offer", "_finalize_contract_signing",
+              "_clear_offered_clause", "_notify_contract_result",
+              "_inbox_contract_result", "_find_inbox_player",
+              "accept_contract_counter"):
+    setattr(_c4_app, _meth,
+            _types.MethodType(getattr(HockeyManagerGUI, _meth), _c4_app))
+
+_p5 = mkplayer(3_000_000, ovr=88, age=30, name="Clause Star")
+_p5.contract = _SN(salary=0, years_remaining=0, no_trade_clause=False,
+                   no_movement_clause=False, modified_ntc_teams=0,
+                   ntc_waiver_for="")
+_c4_league.free_agents.append(_p5)
+_ovr5 = _p5.overall_rating()
+_ask5 = int((_ovr5 * 100_000) / 104_000_000 * _SALARY_CAP)
+
+# Calibrate into the 70-90% counter band (clause value nudges effective up).
+_counter_msg = None
+for _frac in (0.70, 0.73, 0.76, 0.79, 0.82):
+    _p5.salary, _p5.contract_years = int(_ask5 * _frac), 4
+    _p5.offered_clause_kind = "mntc"
+    _p5.offered_clause_list_size = 12
+    _c4_app.inbox.clear()
+    _res = _c4_app.handle_contract_offer(_p5, extension=False, notify="inbox")
+    _cms = [m for m in _c4_app.inbox
+            if getattr(m, "action_type", "") == "contract_counter"]
+    if _res is False and _cms:
+        _counter_msg = _cms[0]
+        break
+check("counter reached with clause on the table", _counter_msg is not None)
+if _counter_msg is not None:
+    _ad = _counter_msg.action_data or {}
+    check("clause kind travels with the counter",
+          _ad.get("clause_kind") == "mntc")
+    check("clause list size travels with the counter",
+          _ad.get("clause_list_size") == 12)
+    check("counter message says the clause still stands",
+          "still on the table" in (_counter_msg.content or ""))
+    check("staged terms cleared after transfer (single-use, no leak)",
+          not hasattr(_p5, "offered_clause_kind"))
+    check("counter action_data pickle-safe",
+          all(isinstance(v, (str, int, float, bool)) for v in _ad.values()))
+    # Accept the counter from the inbox: the signed deal must carry the clause.
+    _ok = _c4_app.accept_contract_counter(_counter_msg)
+    check("inbox counter accept signs the player", bool(_ok))
+    check("signed contract carries the no-trade clause",
+          _p5.contract.no_trade_clause is True)
+    check("signed contract carries the 12-team list size",
+          _p5.contract.modified_ntc_teams == 12)
+    check("Signed message names the trade protection",
+          any(m.subject.startswith("Signed")
+              and "modified no-trade" in (m.content or "")
+              for m in _c4_app.inbox))
+    check("staged terms cleared after signing (no leak into later deals)",
+          not hasattr(_p5, "offered_clause_kind"))
+
+# ---------------------------------------------------------------------------
+# 2026-09-28 engine-audit fixes
+# ---------------------------------------------------------------------------
+print("engine-audit fixes")
+
+# --- E1: MP-style STRING retention keys are applied, not just preflighted ---
+_ue = mkteam("UE"); _pe = mkteam("PE")
+_ae = mkplayer(6_000_000); _ue.roster.append(_ae)
+_be = mkplayer(4_000_000); _pe.roster.append(_be)
+_ue.roster.extend(mkplayer(4_000_000) for _ in range(19))
+_pe.roster.extend(mkplayer(4_000_000) for _ in range(19))
+# MP builds retention with str keys (main.py _mp_accept_trade); the old
+# application loop read int ids and silently dropped every MP term.
+_tre = te.execute_trade(_ue, _pe, [_ae], [_be],
+                        retention={str(_ae.id): 50})
+check("string-key retention trade completes",
+      not _tre.summary.startswith("BLOCKED"))
+check("string-key retention writes the ledger",
+      any(e.get("player_id") == _ae.id and e.get("amount") == 3_000_000
+          for e in _ue.retained_salary))
+check("string-key retention discounts the player's hit",
+      _ae.retained_amount == 3_000_000)
+check("string-key retention names the retaining club",
+      _ae.retained_team_name == "UE")
+
+# --- E2/E3: a new SPC clears player-side retention state ---
+_xp = mkplayer(5_000_000)
+_xp.retained_amount = 1_000_000
+_xp.retained_team_name = "Old Club"
+_xp.retained_by = ["Old Club", "Older Club"]
+_xe_team = mkteam("Retainers")
+_xe_team.retained_salary = [{"player_id": _xp.id, "player_name": "X",
+                             "amount": 1_000_000, "seasons_remaining": 2}]
+te.clear_retention_state(_xp)
+check("new SPC zeroes the retained discount", _xp.retained_amount == 0)
+check("new SPC clears the retaining club name",
+      _xp.retained_team_name == "")
+check("new SPC clears the two-club history", _xp.retained_by == [])
+check("clear leaves the club's ledger entry alive (dead cap survives)",
+      len(_xe_team.retained_salary) == 1)
+# ... and the two-club gate no longer false-blocks on the fresh deal
+_ok_fresh, _, _ = te._retention_check(mkteam("Fresh Club"), _xp, 25)
+check("fresh deal may retain again (no stale two-club block)", _ok_fresh)
+
+# --- E5: one retention transaction per club per SPC ---
+_u5 = mkteam("U5"); _p5e = mkteam("P5")
+_g = mkplayer(8_000_000); _u5.roster.append(_g)
+_h = mkplayer(2_000_000); _p5e.roster.append(_h)
+_ok1, _ = te.apply_retention(_u5, _g, 25)
+check("first retention records", _ok1 and _g.retained_amount == 2_000_000)
+_ok2, _why2 = te.apply_retention(_u5, _g, 10)
+check("second retention by the same club is refused", not _ok2)
+check("refusal names the one-per-club rule",
+      "already retaining" in str(_why2))
+check("no duplicate ledger entry",
+      sum(1 for e in _u5.retained_salary
+          if e.get("player_id") == _g.id) == 1)
+check("retained_amount not double-counted", _g.retained_amount == 2_000_000)
+_ok4, _, _ = te._retention_check(mkteam("Second Club"), _g, 25)
+check("a different club may still retain (two-club rule intact)", _ok4)
+
 print()
 print(f"{len(passed)} passed, {len(failed)} failed")
 if failed:

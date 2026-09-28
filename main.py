@@ -5481,14 +5481,33 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             return False
         if resp.decision != 'accept':
+            # Deal died: the stamped single-use waiver must not survive it.
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
             return False
         try:
             trade = te.execute_trade(seller, buyer, [piece], [payment],
                                      date_str=self.current_date.isoformat())
         except Exception:
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
             return False
         if getattr(trade, 'summary', '').startswith("BLOCKED:"):
             # Clause veto at completion -- nothing moved, announce nothing.
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
             print(f"deadline deal blocked: {trade.summary}")
             return False
         # (Fresh start + steal watch now fire authoritatively inside
@@ -6478,6 +6497,14 @@ class HockeyManagerGUI(tk.Tk):
             contract.ntc_waiver_for = ""
         except Exception:
             pass
+        # A new SPC starts with no retained salary: the old deal's discount
+        # and two-club history die with it (the retaining club's ledger
+        # entry survives independently, per CBA).
+        try:
+            import trade_engine as _te_clr
+            _te_clr.clear_retention_state(player)
+        except Exception:
+            pass
         try:
             fa_pool = self.free_agents() or []
             if player in fa_pool:
@@ -6747,6 +6774,14 @@ class HockeyManagerGUI(tk.Tk):
         contract.years_remaining = years
         try:
             contract.ntc_waiver_for = ""
+        except Exception:
+            pass
+        # A new SPC starts with no retained salary: the old deal's discount
+        # and two-club history die with it (the retaining club's ledger
+        # entry survives independently, per CBA).
+        try:
+            import trade_engine as _te_clr2
+            _te_clr2.clear_retention_state(player)
         except Exception:
             pass
         try:
@@ -13504,6 +13539,13 @@ class HockeyManagerGUI(tk.Tk):
             if accepted:
                 person.contract_years = 2
                 person.salary = salary
+                # A new SPC starts with no retained salary: the old deal's
+                # discount and two-club history die with it (the retaining
+                # club's ledger entry survives independently, per CBA).
+                try:
+                    te.clear_retention_state(person)
+                except Exception:
+                    pass
                 if hasattr(person, "contract"):
                     person.contract.salary = salary
                     person.contract.years_remaining = 2
@@ -13546,14 +13588,22 @@ class HockeyManagerGUI(tk.Tk):
                                             asking_price, extension)
             self._notify_contract_result("accepted", person, person.salary,
                                          person.contract_years, asking_price,
-                                         extension, notify)
+                                         extension, notify,
+                                         clause_kind=_clause_kind,
+                                         clause_list_size=_clause_size)
             self._clear_offered_clause(person)
             return True
         elif _effective_salary >= asking_price * 0.7: # Counter-offers if between 70-90%
+            # The clause offer travels WITH the counter: capture the staged
+            # terms into the inbox action and clear them here, so they stay
+            # single-use and can't leak into an unrelated later deal.
+            _ck, _cs = _clause_kind, _clause_size
+            self._clear_offered_clause(person)
             self._notify_contract_result("counter", person, person.salary,
                                          person.contract_years, asking_price,
-                                         extension, notify)
-            self._clear_offered_clause(person)
+                                         extension, notify,
+                                         clause_kind=_ck,
+                                         clause_list_size=_cs)
             return False
         else: # Rejects if below 70%
             self._notify_contract_result("rejected", person, person.salary,
@@ -13578,6 +13628,14 @@ class HockeyManagerGUI(tk.Tk):
         inbox counter-offer accept button."""
         person.salary = salary
         person.contract_years = years
+        # A new SPC starts with no retained salary: the old deal's discount
+        # and two-club history die with it (the retaining club's ledger
+        # entry survives independently, per CBA).
+        try:
+            import trade_engine as _te_clr3
+            _te_clr3.clear_retention_state(person)
+        except Exception:
+            pass
         _contract = getattr(person, "contract", None)
         if _contract is not None:
             _contract.salary = salary
@@ -13645,7 +13703,8 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
 
     def _notify_contract_result(self, kind, person, salary, years,
-                                asking_price, extension, notify="popup"):
+                                asking_price, extension, notify="popup",
+                                clause_kind="none", clause_list_size=10):
         """Route a contract result to a legacy popup, the inbox, or nowhere.
 
         kind: "accepted" | "counter" | "rejected".
@@ -13656,35 +13715,54 @@ class HockeyManagerGUI(tk.Tk):
             return
         if notify == "inbox":
             self._inbox_contract_result(kind, person, name, salary, years,
-                                        asking_price, extension)
+                                        asking_price, extension,
+                                        clause_kind=clause_kind,
+                                        clause_list_size=clause_list_size)
             return
         # legacy popup behaviour
         if kind == "accepted":
             messagebox.showinfo("Contract Accepted",
                                 f"{name} has accepted your contract offer!")
         elif kind == "counter":
+            try:
+                import trade_engine as _te4
+                _ct = _te4.clause_offer_label(clause_kind, clause_list_size) \
+                    if (clause_kind or "none") != "none" else ""
+            except Exception:
+                _ct = ""
+            _still = (f" Your {_ct} offer is still on the table."
+                      if _ct else "")
             messagebox.showinfo("Counter Offer",
                                 f"{name} has rejected your offer, but is willing "
-                                f"to sign for ${asking_price:,} per year.")
+                                f"to sign for ${asking_price:,} per year.{_still}")
         else:
             messagebox.showerror("Contract Rejected",
                                  f"{name} has rejected your contract offer.")
 
     def _inbox_contract_result(self, kind, person, name, salary, years,
-                               asking_price, extension):
+                               asking_price, extension, clause_kind="none",
+                               clause_list_size=10):
         """FM24/EHM-style: contract news lands in the inbox. Counter-offers
-        arrive as interactive messages (accept / new offer / walk away)."""
+        arrive as interactive messages (accept / new offer / walk away).
+
+        clause_kind/size travel with a counter so the trade protection the
+        user offered is still on the table when the inbox accept lands."""
         from game_classes import EmailMessage
+        import trade_engine as _te3
         pid = getattr(person, "id", None)
         base = dict(sender="Agent", sender_type="Agent",
                     date_sent=date.today(), category="Contracts",
                     related_player_id=pid, priority=3, is_important=True)
+        _clause_txt = _te3.clause_offer_label(clause_kind, clause_list_size) \
+            if (clause_kind or "none") != "none" else ""
         if kind == "accepted":
             term = "extension" if extension else "contract"
+            _prot = (f" It carries {_clause_txt}."
+                     if _clause_txt else "")
             msg = EmailMessage(
                 subject=f"Signed: {name}",
                 content=(f"{name} has agreed to terms: "
-                         f"${salary:,} per year over {years} year(s).\n\n"
+                         f"${salary:,} per year over {years} year(s).{_prot}\n\n"
                          f"The {term} is finalized and the paperwork is filed "
                          f"with the league office."),
                 **base)
@@ -13698,19 +13776,23 @@ class HockeyManagerGUI(tk.Tk):
                          f"significantly higher before talks resume."),
                 **base)
         else:  # counter -- interactive
+            _still = (f" Your {_clause_txt} offer is still on the table."
+                      if _clause_txt else "")
             msg = EmailMessage(
                 subject=f"Counter-offer: {name}",
                 content=(f"{name}'s camp has rejected your offer of "
                          f"${salary:,} per year, but they are willing to "
                          f"sign for ${asking_price:,} per year over "
-                         f"{years} year(s).\n\n"
+                         f"{years} year(s).{_still}\n\n"
                          f"Respond below -- the offer waits for you."),
                 requires_response=True,
                 action_type="contract_counter",
                 action_data={"player_id": pid, "player_name": name,
                              "asking_price": int(asking_price),
                              "years": int(years),
-                             "is_extension": bool(extension)},
+                             "is_extension": bool(extension),
+                             "clause_kind": clause_kind or "none",
+                             "clause_list_size": int(clause_list_size or 10)},
                 **base)
         self.send_email_to_user(msg)
 
@@ -13747,11 +13829,23 @@ class HockeyManagerGUI(tk.Tk):
         asking = data.get("asking_price", 0)
         years = data.get("years", 1)
         extension = data.get("is_extension", False)
+        # The clause the user offered travels with the counter: re-stage it
+        # so the signed deal carries the protection, then clear (single-use).
+        person.offered_clause_kind = data.get("clause_kind", "none") or "none"
+        try:
+            person.offered_clause_list_size = int(
+                data.get("clause_list_size", 10) or 10)
+        except Exception:
+            person.offered_clause_list_size = 10
         self._finalize_contract_signing(person, asking, years, asking,
                                         extension)
         self._inbox_contract_result("accepted", person,
                                     getattr(person, "full_name", "The player"),
-                                    asking, years, asking, extension)
+                                    asking, years, asking, extension,
+                                    clause_kind=person.offered_clause_kind,
+                                    clause_list_size=
+                                    person.offered_clause_list_size)
+        self._clear_offered_clause(person)
         message.action_done = True
         return True
 

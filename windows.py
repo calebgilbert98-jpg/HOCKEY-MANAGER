@@ -4261,12 +4261,54 @@ class TradeWindow(InGamePopup):
         if not user_assets or not partner_assets:
             messagebox.showwarning("Incomplete", "Put assets on both sides first.")
             return
-        # No-trade / no-movement clauses: the user's own clause players must
-        # waive for this specific destination before the offer goes out.
-        # Yes = ask him, No = pull him from the offer, Cancel = stop.
         _league = (getattr(getattr(self.parent, 'game_manager', None),
                            'league', None)
                    or getattr(self.parent, 'league', None))
+        # Two-way preflight: the partner's clause players get the same
+        # destination-aware check the AI applies on its side -- up front,
+        # not 1-3 days later when the answer comes back. Non-blocking: the
+        # user can still send, but not blind.
+        _their_vetoes = self.te.trade_vetoes(
+            partner, self.parent.user_team,
+            [p for p in partner_assets if not self.te._is_pick(p)], _league)
+        if _their_vetoes:
+            _bits = []
+            for _tv in _their_vetoes:
+                _vp = _tv["player"]
+                _vn = getattr(_vp, "full_name", str(_vp))
+                try:
+                    _wok, _wwhy = self.te.will_waive_ntc(
+                        _vp, partner, self.parent.user_team, _league)
+                except Exception:
+                    _wok = False
+                _bits.append(f"\u2022 {_vn} ({_tv['detail']}) -- "
+                             f"{'likely to waive' if _wok else 'may refuse'}")
+            if not messagebox.askyesno(
+                    "Trade protection",
+                    "Heads-up -- the other side has clause players:\n\n"
+                    + "\n".join(_bits)
+                    + "\n\nThey'll be asked to waive for a move to the "
+                    f"{self.parent.user_team.team_name}, and a refusal kills "
+                    "the deal. Send the offer anyway?"):
+                return
+        # No-trade / no-movement clauses: the user's own clause players must
+        # waive for this specific destination before the offer goes out.
+        # Yes = ask him, No = pull him from the offer, Cancel = stop.
+        # Cap check FIRST: no point asking a player to waive his clause for
+        # a deal that can't clear the cap -- and stamping the waiver before
+        # this check used to leak a live single-use waiver on cap failure.
+        _pre_retention = {k: v for k, v in self._retention.items() if v}
+        if not self.te._cap_ok_after(self.parent.user_team, user_assets,
+                                     partner_assets,
+                                     retention=_pre_retention):
+            messagebox.showerror("Cap problem",
+                                 "This trade puts YOU over the salary cap. "
+                                 "Shed salary first.")
+            return
+        # Waivers stamped in this pass belong to the proposal being built:
+        # if the user cancels, they are cleared -- a dead proposal spends
+        # nothing (the same rule the MP host applies to dead deals).
+        _stamped = []
         for _v in self.te.trade_vetoes(
                 self.parent.user_team, partner,
                 [p for p in user_assets if not self.te._is_pick(p)], _league):
@@ -4279,6 +4321,11 @@ class TradeWindow(InGamePopup):
                 f"Yes = ask him  |  No = remove him from the offer  |  "
                 f"Cancel = stop")
             if _ans is None:
+                for _sp in _stamped:
+                    try:
+                        _sp.contract.ntc_waiver_for = ""
+                    except Exception:
+                        pass
                 return
             if _ans is False:
                 self.trade_offers['user'] = [
@@ -4293,6 +4340,7 @@ class TradeWindow(InGamePopup):
             if _ok:
                 try:
                     _p.contract.ntc_waiver_for = partner.team_name
+                    _stamped.append(_p)
                 except Exception:
                     pass
                 messagebox.showinfo("Waiver granted", _why)
@@ -4302,15 +4350,11 @@ class TradeWindow(InGamePopup):
                     f"{_why}\n\nHe's staying put -- remove him from the "
                     f"offer or cancel.")
                 return
-        # Deal terms the user set on this screen (retention %, pick protection)
+        # Deal terms the user set on this screen (retention %, pick protection).
+        # Rebuilt here because the waiver loop above may have pulled a player
+        # (and his retention row) out of the offer on a refused waiver.
         retention = {k: v for k, v in self._retention.items() if v}
         pick_protection = dict(self._pick_protection)
-        # Cap check for the user before bothering the AI (retention-aware)
-        if not self.te._cap_ok_after(self.parent.user_team, user_assets,
-                                     partner_assets, retention=retention):
-            messagebox.showerror("Cap problem",
-                                 "This trade puts YOU over the salary cap. Shed salary first.")
-            return
         if self._negotiation_id and self._preset.get("mode") == "counter":
             neg = tn.get_negotiation(self.parent, self._negotiation_id)
             if neg is not None and neg.is_open:
@@ -9735,6 +9779,13 @@ class ContractExtensionsView(ctk.CTkFrame):
                 # Update player contract
                 player.contract.salary = salary_offer
                 player.contract.years_remaining = years
+                # New SPC: the old deal's retention state dies with it (the
+                # retaining club's ledger entry survives independently).
+                try:
+                    from trade_engine import clear_retention_state as _clr1
+                    _clr1(player)
+                except Exception:
+                    pass
                 result_messages.append(f"{player.full_name}: Accepted {years} years at ${salary_offer:,}")
             else:
                 result_messages.append(f"{player.full_name}: Rejected {years} years at ${salary_offer:,}")
@@ -10050,6 +10101,13 @@ class ExtensionNegotiationView(ctk.CTkFrame):
                 self.player.contract.salary = salary
                 self.player.contract.years_remaining = years
                 self.player.contract.signing_bonus = bonus
+                # New SPC: the old deal's retention state dies with it (the
+                # retaining club's ledger entry survives independently).
+                try:
+                    from trade_engine import clear_retention_state as _clr2
+                    _clr2(self.player)
+                except Exception:
+                    pass
                 self.player.contract.no_trade_clause = self.ntc_var.get()
 
                 self._say(f"{self.player.full_name} has accepted: {years} years "
@@ -11123,6 +11181,14 @@ class BuyoutCalculatorView(ctk.CTkFrame):
         if p in team.roster:
             team.roster.remove(p)
         p.team_name = "Free Agent"
+        # His SPC is dead: the player-side retention fields clear (no more
+        # discount for anyone). The retaining club's ledger entry stays live
+        # -- that dead cap survives the buyout, per CBA.
+        try:
+            from trade_engine import clear_retention_state as _clr_ret
+            _clr_ret(p)
+        except Exception:
+            pass
         self._selected = None
         for child in self.detail.winfo_children():
             child.destroy()

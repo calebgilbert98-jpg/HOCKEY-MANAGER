@@ -713,6 +713,24 @@ def _retention_check(retaining_team, player, pct, extra=None):
                 "A contract can have salary retained by at most two clubs.")
     except Exception:
         pass
+    # One retention transaction per club per SPC: a club already carrying
+    # a LIVE retained entry on this player can't open a second one. (The
+    # old code appended a duplicate ledger entry and added to
+    # retained_amount a second time, double-counting the dead cap.)
+    try:
+        _ledger = getattr(retaining_team, "retained_salary", None) or []
+        _pid = getattr(player, "id", None)
+        for _e in _ledger:
+            if not isinstance(_e, dict):
+                continue
+            if int(_e.get("seasons_remaining", 0) or 0) > 0 and \
+                    _e.get("player_id") == _pid:
+                return False, 0, (
+                    f"{_me or 'That club'} is already retaining salary on "
+                    f"{getattr(player, 'full_name', 'this player')}'s "
+                    f"contract -- one retention per club per deal.")
+    except Exception:
+        pass
     # Real CBA: aggregate retained cap hits may not exceed 15% of the cap
     # upper limit in any league year (measured on full-season amounts).
     try:
@@ -734,6 +752,25 @@ def apply_retention_dry_run(retaining_team, player, pct, extra=None):
     """Validate retention terms without recording anything (for UI)."""
     ok, _amount, reason = _retention_check(retaining_team, player, pct, extra)
     return ok, (reason or "OK")
+
+
+def clear_retention_state(player):
+    """Wipe the player-side retention fields when his SPC dies.
+
+    A genuinely new contract -- signing, extension, buyout-to-free-agency --
+    starts with no retained salary: the cap discount, the retaining club's
+    name, and the two-club history all belonged to the OLD deal. The
+    retaining club's ledger entry is untouched: that dead cap survives the
+    player's move, per CBA. Idempotent; safe on players that never had
+    retention.
+    """
+    for _attr, _zero in (("retained_amount", 0),
+                         ("retained_team_name", ""),
+                         ("retained_by", [])):
+        try:
+            setattr(player, _attr, _zero)
+        except Exception:
+            pass
 
 
 def apply_retention(retaining_team, player, pct) -> Tuple[bool, str]:
@@ -1547,17 +1584,22 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
             user_team.add_player(a)
 
     # Retained salary: record each term against the club that traded the
-    # player away. Terms were preflighted above, so failures here are
-    # unexpected -- still guarded, never fatal to the completed move.
+    # player away. Terms come from the PREFLIGHTED set (_all_terms, with
+    # string-normalized ids): callers disagree on key format (the SP
+    # negotiation passes int ids, MP passes str), and reading the raw dict
+    # here silently dropped every MP retention term after the cap check
+    # had already modeled it. Failures are unexpected -- still guarded,
+    # never fatal to the completed move.
     retention_notes = []
-    if retention:
+    if _all_terms:
         for _src_team, _assets in ((user_team, user_assets),
                                    (partner_team, partner_assets)):
             for a in _assets:
                 if isinstance(a, DraftPick):
                     continue
                 try:
-                    pct = float(retention.get(getattr(a, "id", None), 0) or 0)
+                    pct = float(_all_terms.get(str(getattr(a, "id", "")), 0)
+                                or 0)
                 except Exception:
                     pct = 0
                 if pct > 0:
