@@ -216,13 +216,13 @@ ATTRIBUTE_MAP: Dict[str, List[Tuple[str, float]]] = {
 
 # Fields whose contribution is inverted (high EHM value -> lower PD value).
 # Handled via the negative weights above; the base neutral value is 30.
-_INVERT_BASE = 30.0
+_INVERT_BASE = 52.0
 
 
 def ehm_to_pd_scale(ehm_value: Any) -> Optional[float]:
-    """Convert an EHM 1-20 attribute to Puck Dynasty's internal ~50 scale.
+    """Convert an EHM 1-20 attribute to Puck Dynasty's native 1-100 scale.
 
-    Mapping: 1 -> 12, 10 -> 30, 15 -> 40, 20 -> 50.
+    Mapping: 1 -> 5, 10 -> 50, 15 -> 75, 20 -> 100.
     Returns None for missing/invalid values.
     """
     try:
@@ -230,7 +230,7 @@ def ehm_to_pd_scale(ehm_value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     v = max(1.0, min(20.0, v))
-    return 10.0 + v * 2.0
+    return v * 5.0
 
 # ---------------------------------------------------------------------------
 # Schema probing / detection
@@ -536,20 +536,20 @@ def _map_handedness(value: Any) -> Optional[str]:
 
 
 def _map_potential(pa: Any) -> int:
-    """Map EHM potential ability (1-200, or negative -PA) to 1-20."""
+    """Map EHM potential ability (1-200, or negative -PA) to 1-100."""
     try:
         v = float(pa)
     except (TypeError, ValueError):
-        return 12
+        return 60
     if v < 0:
         # Negative PA like -15 means a 150-180 range; use the midpoint.
         v = abs(v) * 10 - 5
-    return max(1, min(20, int(round(v / 10))))
+    return max(1, min(100, int(round(v / 2))))
 
 
 def _blend_attributes(row: sqlite3.Row,
                       attr_cols: Dict[str, str]) -> Dict[str, float]:
-    """Blend EHM 1-20 attributes into PD internal-scale fields.
+    """Blend EHM 1-20 attributes into PD native 1-100 fields.
 
     Returns {pd_field: value}.  Fields fed by several EHM attributes are
     averaged; inverted contributions (e.g. Dirtiness -> discipline) pivot
@@ -954,20 +954,20 @@ def import_league_from_db(path: str,
                 # morale is 1-10 on PD
                 if "morale" in blended:
                     p.morale = max(1, min(10, int(
-                        round(blended["morale"] / 2))))
+                        round(blended["morale"] / 10))))
                 if col_ca and row[col_ca]:
                     try:
                         p.peak_rating = max(
-                            1, min(20, int(round(float(row[col_ca]) / 10))))
+                            1, min(100, int(round(float(row[col_ca]) / 2))))
                     except (TypeError, ValueError):
                         pass
                 if col_pa and row[col_pa] is not None:
                     p.potential = _map_potential(row[col_pa])
                     pg = p.potential
-                    p.potential_grade = ("A" if pg >= 17 else
-                                         "B" if pg >= 14 else
-                                         "C" if pg >= 11 else
-                                         "D" if pg >= 8 else "F")
+                    p.potential_grade = ("A" if pg >= 85 else
+                                         "B" if pg >= 70 else
+                                         "C" if pg >= 55 else
+                                         "D" if pg >= 40 else "F")
                 # bio
                 if col_nat and row[col_nat] is not None:
                     p.nationality = nation_names.get(row[col_nat],
@@ -1142,7 +1142,7 @@ def preview_players(path: str, probe: SchemaProbe,
         from game_classes import to_100_scale
     except Exception:
         def to_100_scale(v):
-            return max(1, min(100, int(round(float(v) * 2))))
+            return max(1, min(100, int(round(float(v)))))
     out: List[Dict[str, Any]] = []
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)

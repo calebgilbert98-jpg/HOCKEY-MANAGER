@@ -210,9 +210,9 @@ class PlayerGenerator:
             if hasattr(player, attr):
                 # The tuple values indicate how strongly this archetype favors the attr.
                 # Higher max = stronger signature. Scale to a modest +2/+7 bonus.
-                strength = (min_bonus + max_bonus) / 2  # 40-scale avg, ~28-40
-                # Normalize: 28 -> +2, 40 -> +7
-                bonus_mid = 2 + (strength - 28) / 12 * 5
+                strength = (min_bonus + max_bonus) / 2  # 1-100 scale avg, ~56-80
+                # Normalize: 56 -> +2, 80 -> +7
+                bonus_mid = 2 + (strength - 56) / 24 * 5
                 bonus = int(random.gauss(bonus_mid, 1.5))
                 bonus = max(0, min(8, bonus))
                 current_value = getattr(player, attr)

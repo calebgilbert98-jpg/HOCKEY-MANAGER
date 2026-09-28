@@ -11,6 +11,19 @@ class PlayerContextMenu:
     
     def __init__(self, parent_window):
         self.parent = parent_window
+
+    def _app(self):
+        """Walk up .parent chain to the app object (has user_team)."""
+        seen = set()
+        obj = self.parent
+        for _ in range(6):
+            if obj is None or id(obj) in seen:
+                break
+            seen.add(id(obj))
+            if hasattr(obj, "user_team") and getattr(obj, "user_team") is not None:
+                return obj
+            obj = getattr(obj, "parent", None)
+        return self.parent
         
     def show_context_menu(self, event, player, additional_options=None):
         """
@@ -35,24 +48,29 @@ class PlayerContextMenu:
         
         # Standard player options
         context_menu.add_command(
-            label=f"👤 View {player.full_name}'s Profile",
+            label=f"View {player.full_name}'s Profile",
             command=lambda: self._view_player_profile(player)
         )
         
         context_menu.add_separator()
         
         context_menu.add_command(
-            label="🔍 Scout Player",
+            label="Scout Player",
             command=lambda: self._scout_player(player)
         )
         
         context_menu.add_command(
-            label="⭐ Add to Shortlist",
+            label="Physio Report",
+            command=lambda: self._physio_report(player)
+        )
+        
+        context_menu.add_command(
+            label="Add to Shortlist",
             command=lambda: self._add_to_shortlist(player)
         )
         
         context_menu.add_command(
-            label="📊 Compare with Another Player",
+            label="Compare with Another Player",
             command=lambda: self._compare_players(player)
         )
         
@@ -60,12 +78,12 @@ class PlayerContextMenu:
         
         # Development and training options
         context_menu.add_command(
-            label="🎯 Assign Training Focus",
+            label="Assign Training Focus",
             command=lambda: self._assign_training_focus(player)
         )
         
         context_menu.add_command(
-            label="📈 View Development History",
+            label="View Development History",
             command=lambda: self._view_development_history(player)
         )
         
@@ -73,23 +91,25 @@ class PlayerContextMenu:
         context_menu.add_separator()
         
         context_menu.add_command(
-            label="💼 Contract Details",
+            label="Contract Details",
             command=lambda: self._view_contract_details(player)
         )
         
         context_menu.add_command(
-            label="🔄 Propose Trade",
+            label="Propose Trade",
             command=lambda: self._propose_trade(player)
         )
         
         # Check if player is on user's team for team-specific options
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            if (player in self.parent.user_team.roster or 
-                player in self.parent.user_team.ahl_roster or 
-                player in self.parent.user_team.prospects):
-                
+        _app = self._app()
+        _uteam = getattr(_app, 'user_team', None)
+        if _uteam:
+            if (player in getattr(_uteam, 'roster', []) or
+                player in getattr(_uteam, 'ahl_roster', []) or
+                player in getattr(_uteam, 'prospects', [])):
+
                 context_menu.add_command(
-                    label="🔄 Move Between Rosters",
+                    label="Move Between Rosters",
                     command=lambda: self._move_between_rosters(player)
                 )
         
@@ -124,17 +144,18 @@ class PlayerContextMenu:
     
     def _scout_player(self, player):
         """Open scouting assignment dialog or show existing report"""
+        app = self._app()
         # Check if player is already being scouted
-        if (hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'user_team') and
-            hasattr(self.parent.parent.user_team, 'scouting_reports')):
-            
-            report = self.parent.parent.user_team.scouting_reports.get(player.id)
+        try:
+            team = getattr(app, "user_team", None)
+            reports = getattr(team, "scouting_reports", {}) if team else {}
+            report = reports.get(getattr(player, "id", None))
             if report:
                 # Show existing scouting report
                 accuracy = getattr(report.scout, 'jpa', 75) if hasattr(report, 'scout') else 75
                 potential = getattr(report, 'scouted_potential', 'Unknown')
                 viewings = getattr(report, 'viewings', 1)
-                
+
                 messagebox.showinfo(
                     "Existing Scouting Report",
                     f"Scout Report: {player.full_name}\\n\\n"
@@ -145,15 +166,14 @@ class PlayerContextMenu:
                     f"Status: {'Complete' if viewings >= 3 else 'In Progress'}"
                 )
                 return
-        
+        except Exception:
+            pass
+
         # Try to open scouting window or create assignment
         try:
             # Try to open or focus existing scouting window
-            if hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'open_scouting_window'):
-                self.parent.parent.open_scouting_window()
-                messagebox.showinfo("Scout Assignment", f"Scouting window opened. Assign a scout to {player.full_name} from the prospects list.")
-            elif hasattr(self.parent, 'open_scouting_window'):
-                self.parent.open_scouting_window()
+            if hasattr(app, 'open_scouting_window'):
+                app.open_scouting_window()
                 messagebox.showinfo("Scout Assignment", f"Scouting window opened. Assign a scout to {player.full_name} from the prospects list.")
             else:
                 # Create quick scout assignment dialog
@@ -179,11 +199,14 @@ class PlayerContextMenu:
         # Get available scouts
         available_scouts = []
         try:
-            if (hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'user_team') and
-                hasattr(self.parent.parent.user_team, 'staff')):
-                from game_classes import StaffRole
-                available_scouts = [s for s in self.parent.parent.user_team.staff 
-                                  if hasattr(s, 'role') and str(s.role) == 'StaffRole.SCOUT']
+            app = self._app()
+            team = getattr(app, "user_team", None)
+            staff = getattr(team, "staff", []) if team else []
+            from game_classes import StaffRole
+            _scout_roles = {str(r) for r in StaffRole
+                            if "SCOUT" in getattr(r, "name", "")}
+            available_scouts = [s for s in staff
+                                if hasattr(s, 'role') and str(s.role) in _scout_roles]
         except Exception:
             available_scouts = []
         
@@ -206,7 +229,14 @@ class PlayerContextMenu:
             def assign_scout():
                 if scout_var.get():
                     selected_scout = available_scouts[scout_combo.current()]
-                    messagebox.showinfo("Scout Assigned", 
+                    try:
+                        app = self._app()
+                        if getattr(app, "scouting_assignments", None) is None:
+                            app.scouting_assignments = {}
+                        app.scouting_assignments[player] = selected_scout
+                    except Exception as e:
+                        print(f"Scout assignment failed: {e}")
+                    messagebox.showinfo("Scout Assigned",
                                       f"{selected_scout.full_name} assigned to scout {player.full_name}!")
                     dialog.destroy()
             
@@ -224,6 +254,80 @@ class PlayerContextMenu:
         close_btn = ttk.Button(dialog, text="Close", command=dialog.destroy)
         close_btn.pack(pady=10)
     
+    def _physio_report(self, player):
+        """Show a physio/fitness report popup for the player."""
+        try:
+            import customtkinter as ctk
+            from ctk_theme import init_ctk_theme, BG
+            init_ctk_theme()
+            app = self.parent
+            # Unwrap: parent may be a window holding .parent -> app
+            for _ in range(3):
+                if hasattr(app, "open_player_profile"):
+                    break
+                app = getattr(app, "parent", app)
+            win = ctk.CTkToplevel(self.parent)
+            win.title(f"Physio Report — {player.full_name}")
+            win.geometry("430x510")
+            win.configure(fg_color=BG)
+            try:
+                win.transient(self.parent)
+                win.grab_set()
+            except Exception:
+                pass
+            from ctk_theme import heading, body, PANEL, GREEN, RED, GOLD
+            heading(win, "Physio Report", size=16).pack(anchor="w", padx=18, pady=(16, 2))
+            body(win, player.full_name, dim=True).pack(anchor="w", padx=18, pady=(0, 12))
+            card = ctk.CTkFrame(win, fg_color=PANEL, corner_radius=12)
+            card.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+
+            injured = bool(getattr(player, "is_injured", False))
+            body(card, "Status", dim=True, size=11).pack(anchor="w", padx=16, pady=(14, 0))
+            ctk.CTkLabel(
+                card, text="INJURED" if injured else "Fit to play",
+                font=("Segoe UI", 15, "bold"),
+                text_color=RED if injured else GREEN).pack(anchor="w", padx=16, pady=(2, 8))
+
+            def _word(v):
+                try:
+                    v = float(v)
+                except Exception:
+                    return "Unknown"
+                if v >= 40: return "Excellent"
+                if v >= 34: return "Good"
+                if v >= 27: return "Average"
+                if v >= 20: return "Below average"
+                return "Poor"
+
+            rows = [
+                ("Injury", str(getattr(player, "injury_type", "None") or "None")),
+                ("Est. games out", str(getattr(player, "games_remaining_injured", 0) or 0) if injured else "—"),
+                ("Last injury", str(getattr(player, "last_injury", "None") or "None")),
+                ("Career games missed", str(getattr(player, "career_games_missed", 0))),
+                ("Days missed (season)", str(getattr(player, "days_missed", 0))),
+                ("Durability", _word(getattr(player, "durability", 30))),
+                ("Injury proneness", _word(100 - (getattr(player, "injury_proneness", 50) or 0))),
+                ("Stamina", _word(getattr(player, "stamina", 30))),
+            ]
+            for label, value in rows:
+                r = ctk.CTkFrame(card, fg_color="transparent")
+                r.pack(fill="x", padx=16, pady=3)
+                body(r, label, dim=True, size=12).pack(side="left")
+                ctk.CTkLabel(r, text=value, font=("Segoe UI", 12, "bold"),
+                             text_color="white").pack(side="right")
+            note = ""
+            if injured:
+                note = "Follow the medical team's timeline — rushing him back risks re-injury."
+            elif (getattr(player, "injury_proneness", 0) or 0) > 60:
+                note = "Injury-prone: consider managing his minutes in back-to-backs."
+            if note:
+                body(card, note, dim=True, size=11).pack(anchor="w", padx=16, pady=(10, 4))
+            ctk.CTkButton(card, text="Close", width=120, fg_color="#00ceb8",
+                          hover_color="#00b3a0", text_color="#0b0e11",
+                          command=win.destroy).pack(pady=(8, 14))
+        except Exception as e:
+            print(f"Physio report failed: {e}")
+
     def _add_to_shortlist(self, player):
         """Add player to shortlist with category selection"""
         # Create shortlist dialog

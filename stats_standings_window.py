@@ -201,6 +201,25 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         frame.pack(fill="both", expand=True, padx=padx, pady=pady)
         return tree
 
+    def _bind_leader_menu(self, tree):
+        """Right-click on a leaders-table row -> full player context menu."""
+        from player_context_menu import PlayerContextMenu
+
+        def _show(event):
+            item = tree.identify_row(event.y)
+            if not item:
+                return
+            tree.selection_set(item)
+            player = None
+            try:
+                player = self.parent.tree_maps.get(tree, {}).get(item)
+            except Exception:
+                player = None
+            if player:
+                PlayerContextMenu(self.parent).show_context_menu(event, player)
+
+        tree.bind("<Button-3>", _show)
+
     def _pack_parent_tree(self, parent, columns, height=15, padx=0, pady=0):
         """Table built via parent._create_treeview (keeps the legacy column
         sorting and the player context menu), dark-styled, with a scrollbar,
@@ -695,6 +714,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         try:
             for item in tree.get_children():
                 tree.delete(item)
+            if hasattr(self.parent, 'tree_maps'):
+                self.parent.tree_maps.setdefault(tree, {}).clear()
 
             league = getattr(self.parent, 'league', None)
             teams = getattr(league, 'teams', []) if league else []
@@ -722,6 +743,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                         if needed <= within:
                             watch.append({
                                 'player': getattr(player, 'full_name', 'Unknown'),
+                                'player_obj': player,
                                 'team': team_abbr,
                                 'pos': self._position_abbr(player),
                                 'milestone': f"{target} {label}",
@@ -737,9 +759,11 @@ class StatsStandingsWindow(ctk.CTkToplevel):
 
             watch.sort(key=lambda w: (w['needed'], -w['current']))
             for w in watch[:40]:
-                tree.insert('', 'end', values=(
+                _mid = tree.insert('', 'end', values=(
                     w['player'], w['team'], w['pos'], w['milestone'],
                     w['current'], w['needed'], w['season']))
+                if hasattr(self.parent, 'tree_maps'):
+                    self.parent.tree_maps[tree][_mid] = w['player_obj']
         except Exception as e:
             print(f"Error populating milestone watch: {e}")
     
@@ -1214,6 +1238,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         
         # Use real data instead of sample data
         self.populate_player_leaders_data(tree, category)
+        self._bind_leader_menu(tree)
         
         # Scrollbar
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
@@ -1523,6 +1548,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
     def populate_player_leaders_data(self, tree, category):
         """Populate player leaders with real game data"""
         # Get all players from all teams
+        if hasattr(self.parent, 'tree_maps'):
+            self.parent.tree_maps.setdefault(tree, {}).clear()
         all_players = []
         
         try:
@@ -1578,7 +1605,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                 if '.' in position_str:
                     position_str = position_str.split('.')[-1]
                 
-                tree.insert('', 'end', values=(
+                _plid = tree.insert('', 'end', values=(
                     i,
                     getattr(player, 'full_name', f"{getattr(player, 'first_name', 'Unknown')} {getattr(player, 'last_name', 'Player')}"),
                     team_abbr,
@@ -1588,6 +1615,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                     assists,
                     points
                 ))
+                if hasattr(self.parent, 'tree_maps'):
+                    self.parent.tree_maps[tree][_plid] = player
                     
         elif category == "goaltending":
             # Filter for goalies and sort by wins
@@ -1611,7 +1640,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                 save_pct = f"{sv:.3f}"[1:] if sa > 0 else ".000"
 
                 # Show all goalies, including those with 0 games at season start
-                tree.insert('', 'end', values=(
+                _plid = tree.insert('', 'end', values=(
                     i,
                     getattr(player, 'full_name', f"{getattr(player, 'first_name', 'Unknown')} {getattr(player, 'last_name', 'Player')}"),
                     team_abbr,
@@ -1621,6 +1650,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                     f"{gaa:.2f}" if games_played > 0 else "0.00",
                     save_pct
                 ))
+                if hasattr(self.parent, 'tree_maps'):
+                    self.parent.tree_maps[tree][_plid] = player
                     
         else:  # rookies
             # Filter for young players (age < 24) and sort by points
@@ -1636,7 +1667,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                 games_played = getattr(player, 'games_played', 0)
                 
                 # Show all rookies, including those with 0 stats at season start
-                tree.insert('', 'end', values=(
+                _plid = tree.insert('', 'end', values=(
                     i,
                     getattr(player, 'full_name', 'Unknown'),
                     team_abbr,
@@ -1646,6 +1677,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                     assists,
                     points
                 ))
+                if hasattr(self.parent, 'tree_maps'):
+                    self.parent.tree_maps[tree][_plid] = player
     
     def _get_team_abbreviation(self, team_name):
         """Get team abbreviation from full name"""
@@ -1749,7 +1782,9 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                                 player.age
                             )
                         
-                        tree.insert('', 'end', values=values)
+                        _plid = tree.insert('', 'end', values=values)
+                        if hasattr(self.parent, 'tree_maps'):
+                            self.parent.tree_maps.setdefault(tree, {})[_plid] = player
                         
                     except Exception as e:
                         print(f"Error adding player {player.full_name}: {e}")
@@ -3554,6 +3589,8 @@ Analysis will be updated as the season progresses.
             # Clear existing items
             for item in self.current_leaders_tree.get_children():
                 self.current_leaders_tree.delete(item)
+            if hasattr(self.parent, 'tree_maps'):
+                self.parent.tree_maps.setdefault(self.current_leaders_tree, {}).clear()
             
             # Get current league data
             league = getattr(self.parent.game_manager, 'league', None)
@@ -3595,7 +3632,7 @@ Analysis will be updated as the season progresses.
                         if hasattr(player, 'primary_position'):
                             position = str(player.primary_position).split('.')[-1] if '.' in str(player.primary_position) else str(player.primary_position)
                         
-                        self.current_leaders_tree.insert("", "end", values=(
+                        _lid = self.current_leaders_tree.insert("", "end", values=(
                             str(i + 1),  # Rank within this stat
                             getattr(player, 'full_name', 'Unknown'),
                             team,
@@ -3603,6 +3640,8 @@ Analysis will be updated as the season progresses.
                             stat_name,
                             str(value)
                         ))
+                        if hasattr(self.parent, 'tree_maps'):
+                            self.parent.tree_maps[self.current_leaders_tree][_lid] = player
                 
         except Exception as e:
             print(f"Error populating current leaders: {e}")
@@ -3613,6 +3652,8 @@ Analysis will be updated as the season progresses.
             # Clear existing items
             for item in self.record_chase_tree.get_children():
                 self.record_chase_tree.delete(item)
+            if hasattr(self.parent, 'tree_maps'):
+                self.parent.tree_maps.setdefault(self.record_chase_tree, {}).clear()
             
             # Get current league data and record manager
             league = getattr(self.parent.game_manager, 'league', None)
@@ -3663,6 +3704,7 @@ Analysis will be updated as the season progresses.
                             if percentage >= 25.0:
                                 chase_data.append({
                                     'player_name': getattr(player, 'full_name', 'Unknown'),
+                                    'player_obj': player,
                                     'team': team,
                                     'record_type': display_name,
                                     'current_value': current_value,
@@ -3681,7 +3723,7 @@ Analysis will be updated as the season progresses.
                 if hasattr(chase_info['position'], 'name'):
                     position = str(chase_info['position']).split('.')[-1]
                 
-                self.record_chase_tree.insert("", "end", values=(
+                _rcid = self.record_chase_tree.insert("", "end", values=(
                     str(i + 1),
                     chase_info['player_name'],
                     chase_info['team'],
@@ -3692,6 +3734,8 @@ Analysis will be updated as the season progresses.
                     str(chase_info['difference']),
                     f"{chase_info['percentage']:.1f}%"
                 ))
+                if hasattr(self.parent, 'tree_maps'):
+                    self.parent.tree_maps[self.record_chase_tree][_rcid] = chase_info['player_obj']
                 
         except Exception as e:
             print(f"Error populating record chase: {e}")

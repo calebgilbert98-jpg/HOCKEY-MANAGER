@@ -10,8 +10,8 @@ plays. It drives three systems:
                 Shutdown Defenseman suppresses Snipers but gets burned by
                 speed (MATCHUPS matrix).
 
-Attribute thresholds use the real 50-point attribute scale (core attributes
-run ~25-50, median ~36; awareness attributes run ~8-26, median ~14).
+Attribute thresholds use the native 1-100 attribute scale (core attributes
+run ~50-90; awareness attributes run ~60-85 for top players).
 
 Pure logic, no GUI.
 """
@@ -31,12 +31,12 @@ ARCHETYPE_FIT: Dict[str, dict] = {
     # -- Forwards ----------------------------------------------------------
     "Sniper": {
         "description": "Elite finishing ability. Lives to put the puck in the net.",
-        "attributes": {"shooting": 84, "shooting_accuracy": 84, "offensive_awareness": 36, "skating": 80},
+        "attributes": {"shooting": 84, "shooting_accuracy": 84, "offensive_awareness": 72, "skating": 80},
         "positions": ["C", "LW", "RW"],
     },
     "Playmaker": {
         "description": "Sees plays before they happen. Makes linemates better.",
-        "attributes": {"passing": 84, "vision": 82, "hockey_iq": 82, "offensive_awareness": 36},
+        "attributes": {"passing": 84, "vision": 82, "hockey_iq": 82, "offensive_awareness": 72},
         "positions": ["C", "LW", "RW"],
     },
     "Power Forward": {
@@ -46,7 +46,7 @@ ARCHETYPE_FIT: Dict[str, dict] = {
     },
     "Two-Way Forward": {
         "description": "Trusted in all situations. Shuts down top lines, chips in offense.",
-        "attributes": {"defensive_awareness": 36, "checking": 76,
+        "attributes": {"defensive_awareness": 72, "checking": 76,
                        "skating": 76, "discipline": 72},
         "positions": ["C", "LW", "RW"],
     },
@@ -63,18 +63,18 @@ ARCHETYPE_FIT: Dict[str, dict] = {
     # -- Defensemen --------------------------------------------------------
     "Offensive Defenseman": {
         "description": "A fourth forward. Runs the power play from the point.",
-        "attributes": {"skating": 80, "passing": 78, "offensive_awareness": 34, "shooting": 78, "vision": 78},
+        "attributes": {"skating": 80, "passing": 78, "offensive_awareness": 68, "shooting": 78, "vision": 78},
         "positions": ["LD", "RD"],
     },
     "Defensive Defenseman": {
         "description": "Stay-at-home rock. Erases the other team's best players.",
-        "attributes": {"checking": 80, "strength": 76, "defensive_awareness": 38,
+        "attributes": {"checking": 80, "strength": 76, "defensive_awareness": 76,
                        "shot_blocking": 80, "discipline": 72},
         "positions": ["LD", "RD"],
     },
     "Two-Way Defenseman": {
         "description": "Steady in his own end, joins the rush at the right time.",
-        "attributes": {"defensive_awareness": 36, "skating": 76, "passing": 76, "checking": 78, "hockey_iq": 80},
+        "attributes": {"defensive_awareness": 72, "skating": 76, "passing": 76, "checking": 78, "hockey_iq": 80},
         "positions": ["LD", "RD"],
     },
     "Physical Defenseman": {
@@ -84,7 +84,7 @@ ARCHETYPE_FIT: Dict[str, dict] = {
     },
     "Puck-Moving Defenseman": {
         "description": "Clean first pass, skates it out. Starts the breakout.",
-        "attributes": {"passing": 80, "vision": 80, "skating": 80, "hockey_iq": 78, "defensive_awareness": 32},
+        "attributes": {"passing": 80, "vision": 80, "skating": 80, "hockey_iq": 78, "defensive_awareness": 64},
         "positions": ["LD", "RD"],
     },
     # -- Goalies -----------------------------------------------------------

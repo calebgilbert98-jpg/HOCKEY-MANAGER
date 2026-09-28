@@ -1206,7 +1206,7 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Form", "Good"),
             ("Consistency", f"{_to_100_scale(self.player.consistency)}"),
             ("Big Game Player", f"{_to_100_scale(self.player.important_matches)}"),
-            ("Injury History", "Clean" if self.player.injury_proneness < 10 else "Concerning"),
+            ("Injury History", "Clean" if self.player.injury_proneness < 50 else "Concerning"),
             ("Morale", f"{self.player.morale}/20"),
             ("Development", "Improving" if self.player.age < 25 else "Stable"),
             ("Work Rate", f"{_to_100_scale(self.player.work_rate)}"),
@@ -1905,11 +1905,11 @@ class PlayerProfileWindow(tk.Toplevel):
         health_grid.grid_columnconfigure(1, weight=1)
         
         # Health information
-        injury_prone = getattr(self.player, 'injury_proneness', 10)
-        durability = 20 - injury_prone
-        
+        injury_prone = getattr(self.player, 'injury_proneness', 50)
+        durability = 100 - injury_prone
+
         health_info = [
-            ("Injury Proneness:", f"{injury_prone}/20 ({'Low' if injury_prone <= 5 else 'Medium' if injury_prone <= 10 else 'High'})"),
+            ("Injury Proneness:", f"{injury_prone}/100 ({'Low' if injury_prone <= 25 else 'Medium' if injury_prone <= 50 else 'High'})"),
             ("Current Health:", "100%" if not getattr(self.player, 'is_injured', False) else "Injured"),
             ("Days Missed (Season):", f"{getattr(self.player, 'days_missed', 0)} days"),
             ("Career Games Missed:", f"{getattr(self.player, 'career_games_missed', 0)} games"),
@@ -1941,9 +1941,9 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Professional Debut:", f"{getattr(self.player, 'pro_debut', 'This Season')}"),
             ("Teams Played For:", f"{getattr(self.player, 'teams_count', 1)} teams"),
             ("Current Team Since:", f"{getattr(self.player, 'team_tenure', 'This season')}"),
-            ("Career Peak Rating:", f"{getattr(self.player, 'peak_rating', 15)}/20"),
+            ("Career Peak Rating:", f"{getattr(self.player, 'peak_rating', 75)}/100"),
             ("Development Status:", self._get_development_status()),
-            ("Potential Rating:", f"{getattr(self.player, 'potential', 'Unknown')}/20"),
+            ("Potential Rating:", f"{getattr(self.player, 'potential', 'Unknown')}/100"),
         ]
         
         for i, (label, value) in enumerate(career_info):
@@ -2599,9 +2599,9 @@ class PlayerProfileWindow(tk.Toplevel):
             examples = ["Offensive Defenseman", "Stay-at-Home D", "Two-Way Defender"]
         
         overall = self.player.overall_rating()
-        if overall >= 16:
+        if overall >= 80:
             return f"Elite {examples[0]}"
-        elif overall >= 13:
+        elif overall >= 65:
             return f"Good {examples[1]}"
         else:
             return f"Developing {examples[2]}"
@@ -2613,13 +2613,13 @@ class PlayerProfileWindow(tk.Toplevel):
         
         # Adjust for age expectations
         if age <= 22:
-            expected = 10  # Young players expected to be developing
+            expected = 50  # Young players expected to be developing
         elif age <= 27:
-            expected = 13  # Prime years
+            expected = 65  # Prime years
         elif age <= 32:
-            expected = 14  # Peak years
+            expected = 70  # Peak years
         else:
-            expected = 11  # Declining years
+            expected = 55  # Declining years
         
         return min(10.0, max(1.0, (overall / expected) * 5.0))
 
@@ -2638,13 +2638,13 @@ class PlayerProfileWindow(tk.Toplevel):
         std_dev = variance ** 0.5
         
         # Convert to 1-10 scale (lower std_dev = higher versatility)
-        return min(10.0, max(1.0, 10.0 - std_dev))
+        return min(10.0, max(1.0, 10.0 - std_dev / 2.0))
 
     def _calculate_consistency_index(self):
         """Calculate consistency based on determination and discipline."""
-        consistency = (self.player.determination + self.player.discipline + 
-                      getattr(self.player, 'composure', 10)) / 3
-        return min(10.0, max(1.0, consistency / 2.0))
+        consistency = (self.player.determination + self.player.discipline +
+                      getattr(self.player, 'composure', 50)) / 3
+        return min(10.0, max(1.0, consistency / 10.0))
 
     def _calculate_development_potential(self):
         """Calculate development potential based on age and potential grade."""
@@ -2666,11 +2666,11 @@ class PlayerProfileWindow(tk.Toplevel):
 
     def _calculate_injury_risk(self):
         """Calculate injury risk factor."""
-        injury_proneness = getattr(self.player, 'injury_proneness', 10)
+        injury_proneness = getattr(self.player, 'injury_proneness', 50)
         age = self.player.age
-        
+
         # Higher injury proneness and age = higher risk
-        base_risk = injury_proneness / 2.0
+        base_risk = injury_proneness / 10.0
         
         if age >= 30:
             age_factor = 1.3
@@ -2683,10 +2683,10 @@ class PlayerProfileWindow(tk.Toplevel):
 
     def _calculate_chemistry_impact(self):
         """Calculate team chemistry impact."""
-        chemistry_attrs = [self.player.teamwork, self.player.leadership, 
-                          getattr(self.player, 'discipline', 10)]
+        chemistry_attrs = [self.player.teamwork, self.player.leadership,
+                          getattr(self.player, 'discipline', 50)]
         avg_chemistry = sum(chemistry_attrs) / len(chemistry_attrs)
-        return min(10.0, max(1.0, avg_chemistry / 2.0))
+        return min(10.0, max(1.0, avg_chemistry / 10.0))
 
     def _draw_performance_profile(self, canvas):
         """Draw a simple performance profile visualization."""

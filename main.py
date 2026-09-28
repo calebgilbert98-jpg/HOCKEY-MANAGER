@@ -637,20 +637,20 @@ NHL League Office""",
                 )
                 # Set the highest attributes for goalies
                 # (The system automatically handles other attributes)
-                setattr(goalie, "reflexes", random.randint(10, 18))
-                setattr(goalie, "positioning", random.randint(10, 18))
-                setattr(goalie, "rebound_control", random.randint(10, 18))
+                setattr(goalie, "reflexes", random.randint(50, 90))
+                setattr(goalie, "positioning", random.randint(50, 90))
+                setattr(goalie, "rebound_control", random.randint(50, 90))
             else:
                 # Position-specific base attributes (legacy system)
                 goalie_attrs = {
-                    "goaltending": random.randint(10, 18),
-                    "reflexes": random.randint(10, 20),
-                    "positioning": random.randint(10, 20),
-                    "rebound_control": random.randint(8, 20),
-                    "puck_handling": random.randint(5, 18),
-                    "glove_hand": random.randint(8, 18),
-                    "stick_side": random.randint(8, 18),
-                    "breakaway_skill": random.randint(8, 18),
+                    "goaltending": random.randint(50, 90),
+                    "reflexes": random.randint(50, 100),
+                    "positioning": random.randint(50, 100),
+                    "rebound_control": random.randint(40, 100),
+                    "puck_handling": random.randint(25, 90),
+                    "glove_hand": random.randint(40, 90),
+                    "stick_side": random.randint(40, 90),
+                    "breakaway_skill": random.randint(40, 90),
                 }
                 
                 # Generate common attributes
@@ -692,20 +692,20 @@ NHL League Office""",
                     primary_position=position
                 )
                 # Set the highest attributes for defensemen
-                setattr(defenseman, "checking", random.randint(10, 18))
-                setattr(defenseman, "defensive_awareness", random.randint(10, 18))
-                setattr(defenseman, "shot_blocking", random.randint(10, 18))
-                setattr(defenseman, "strength", random.randint(10, 18))
+                setattr(defenseman, "checking", random.randint(50, 90))
+                setattr(defenseman, "defensive_awareness", random.randint(50, 90))
+                setattr(defenseman, "shot_blocking", random.randint(50, 90))
+                setattr(defenseman, "strength", random.randint(50, 90))
             else:
                 # Position-specific base attributes (legacy system)
                 defense_attrs = {
-                    "checking": random.randint(10, 18),
-                    "defensive_awareness": random.randint(10, 18),
-                    "shot_blocking": random.randint(10, 18),
-                    "stickhandling": random.randint(8, 18),
-                    "passing": random.randint(8, 18),
-                    "skating": random.randint(10, 18),
-                    "strength": random.randint(10, 18),
+                    "checking": random.randint(50, 90),
+                    "defensive_awareness": random.randint(50, 90),
+                    "shot_blocking": random.randint(50, 90),
+                    "stickhandling": random.randint(40, 90),
+                    "passing": random.randint(40, 90),
+                    "skating": random.randint(50, 90),
+                    "strength": random.randint(50, 90),
                 }
                 
                 # Common attributes
@@ -743,28 +743,28 @@ NHL League Office""",
                     primary_position=position
                 )
                 # Set the highest attributes for forwards
-                setattr(forward, "shooting", random.randint(10, 18))
-                setattr(forward, "passing", random.randint(10, 18))
-                setattr(forward, "offensive_awareness", random.randint(10, 18))
-                setattr(forward, "stickhandling", random.randint(10, 18))
+                setattr(forward, "shooting", random.randint(50, 90))
+                setattr(forward, "passing", random.randint(50, 90))
+                setattr(forward, "offensive_awareness", random.randint(50, 90))
+                setattr(forward, "stickhandling", random.randint(50, 90))
                 
                 # Enhance centers with better faceoff skills
                 if position == PlayerPosition.CENTER:
-                    setattr(forward, "faceoffs", random.randint(10, 18))
+                    setattr(forward, "faceoffs", random.randint(50, 90))
             else:
                 # Position-specific base attributes (legacy system)
                 forward_attrs = {
-                    "shooting": random.randint(8, 18),
-                    "passing": random.randint(8, 18),
-                    "offensive_awareness": random.randint(10, 18),
-                    "deking": random.randint(8, 18),
-                    "stickhandling": random.randint(8, 18),
-                    "skating": random.randint(10, 18),
+                    "shooting": random.randint(40, 90),
+                    "passing": random.randint(40, 90),
+                    "offensive_awareness": random.randint(50, 90),
+                    "deking": random.randint(40, 90),
+                    "stickhandling": random.randint(40, 90),
+                    "skating": random.randint(50, 90),
                 }
                 
                 # Enhance centers with better faceoff skills
                 if position == PlayerPosition.CENTER:
-                    forward_attrs["faceoffs"] = random.randint(10, 18)
+                    forward_attrs["faceoffs"] = random.randint(50, 90)
                 
                 # Common attributes
                 common_attrs = self._generate_common_attributes(age)
@@ -795,42 +795,42 @@ NHL League Office""",
         
         return {
             # Mental attributes
-            "determination": random.randint(5, 20),
-            "teamwork": random.randint(5, 20),
-            "leadership": random.randint(5, 20),
-            "discipline": random.randint(5, 20),
-            "flair": random.randint(5, 20),
-            "consistency": random.randint(5, 20),
-            "important_matches": random.randint(5, 20),
+            "determination": random.randint(25, 100),
+            "teamwork": random.randint(25, 100),
+            "leadership": random.randint(25, 100),
+            "discipline": random.randint(25, 100),
+            "flair": random.randint(25, 100),
+            "consistency": random.randint(25, 100),
+            "important_matches": random.randint(25, 100),
             "morale": 10,
             
             # Physical attributes (affected by age)
-            "strength": min(20, max(5, int(random.randint(8, 18) * (1 + youth_bonus - veteran_penalty)))),
-            "injury_proneness": min(20, max(1, int(random.randint(1, 15) * (1 - youth_bonus + veteran_penalty)))),
-            "endurance": min(20, max(5, int(random.randint(8, 18) * (1 + youth_bonus - veteran_penalty)))),
-            "stamina": min(20, max(5, int(random.randint(8, 18) * (1 + youth_bonus - veteran_penalty)))),
-            "speed": min(20, max(5, int(random.randint(8, 18) * (1 + youth_bonus - veteran_penalty)))),
-            "durability": min(20, max(5, int(random.randint(8, 18) * (1 - youth_bonus + veteran_penalty)))),
+            "strength": min(100, max(25, int(random.randint(40, 90) * (1 + youth_bonus - veteran_penalty)))),
+            "injury_proneness": min(100, max(5, int(random.randint(5, 75) * (1 - youth_bonus + veteran_penalty)))),
+            "endurance": min(100, max(25, int(random.randint(40, 90) * (1 + youth_bonus - veteran_penalty)))),
+            "stamina": min(100, max(25, int(random.randint(40, 90) * (1 + youth_bonus - veteran_penalty)))),
+            "speed": min(100, max(25, int(random.randint(40, 90) * (1 + youth_bonus - veteran_penalty)))),
+            "durability": min(100, max(25, int(random.randint(40, 90) * (1 - youth_bonus + veteran_penalty)))),
             
             # Advanced attributes
-            "vision": random.randint(5, 20),
-            "shooting_accuracy": random.randint(5, 20),
-            "shooting_power": random.randint(5, 20),
-            "passing_accuracy": random.randint(5, 20),
-            "passing_creativity": random.randint(5, 20),
-            "puck_protection": random.randint(5, 20),
-            "deflections": random.randint(5, 20),
-            "hockey_iq": random.randint(5, 20),
-            "composure": random.randint(5, 20),
-            "aggressiveness": random.randint(5, 20),
-            "work_rate": random.randint(5, 20),
-            "anticipation": random.randint(5, 20),
-            "decision_making": random.randint(5, 20),
-            "focus": random.randint(5, 20),
-            "confidence": random.randint(5, 20),
-            "acceleration": random.randint(5, 20),
-            "balance": random.randint(5, 20),
-            "agility": random.randint(5, 20),
+            "vision": random.randint(25, 100),
+            "shooting_accuracy": random.randint(25, 100),
+            "shooting_power": random.randint(25, 100),
+            "passing_accuracy": random.randint(25, 100),
+            "passing_creativity": random.randint(25, 100),
+            "puck_protection": random.randint(25, 100),
+            "deflections": random.randint(25, 100),
+            "hockey_iq": random.randint(25, 100),
+            "composure": random.randint(25, 100),
+            "aggressiveness": random.randint(25, 100),
+            "work_rate": random.randint(25, 100),
+            "anticipation": random.randint(25, 100),
+            "decision_making": random.randint(25, 100),
+            "focus": random.randint(25, 100),
+            "confidence": random.randint(25, 100),
+            "acceleration": random.randint(25, 100),
+            "balance": random.randint(25, 100),
+            "agility": random.randint(25, 100),
             
             # Tendencies
             "shoot_pass_tendency": random.randint(0, 100),
@@ -6877,25 +6877,25 @@ class HockeyManagerGUI(tk.Tk):
                                 for attr in developable_attrs:
                                     if hasattr(player, attr):
                                         current_val = getattr(player, attr)
-                                        # Potential is stored on the legacy 1-20 scale;
-                                        # attributes run on the internal ~50 scale.
+                                        # Potential and attributes are on the native 1-100 scale.
+                                        # (potential_info fields are generated 60-100).
                                         try:
                                             ceiling_raw = player.potential_info.get_potential_for_attribute(attr)
                                         except Exception:
-                                            ceiling_raw = 15
-                                        max_val = ceiling_raw * 2.5
+                                            ceiling_raw = 75
+                                        max_val = ceiling_raw
 
                                         # Check if there's room to grow
-                                        if current_val < max_val and current_val < 50:
+                                        if current_val < max_val and current_val < 100:
                                             # Small chance of improvement each week
                                             improvement_chance = weekly_rate * 0.15
 
                                             if random.random() < improvement_chance:
-                                                new_val = min(current_val + 1, max_val, 50)
+                                                new_val = min(current_val + 1, max_val, 100)
                                                 setattr(player, attr, new_val)
                                                 
                                                 # Track significant improvements
-                                                if team == self.user_team and new_val >= 15:
+                                                if team == self.user_team and new_val >= 75:
                                                     development_events.append({
                                                         'player': player,
                                                         'attribute': attr,
@@ -9506,6 +9506,47 @@ class HockeyManagerGUI(tk.Tk):
                 continue
         return None
 
+    @staticmethod
+    def _team_abbr(team) -> str:
+        name = getattr(team, "team_name", "") or ""
+        words = [w for w in name.replace("-", " ").split() if w]
+        if not words:
+            return "PD"
+        if len(words) == 1:
+            return words[0][:3].upper()
+        return "".join(w[0] for w in words[-2:]).upper()[:3]
+
+    def _press_page_context(self, kind, opponent=None, ticker=None,
+                            continue_text="Continue  \u2192",
+                            score_str="", result_word=""):
+        """Context dict for the full-page press conference."""
+        team = self.user_team
+        opp_name = getattr(opponent, "team_name", "the opposition") if opponent else ""
+        if kind == "pre":
+            banner_title = "PRE-GAME PRESS CONFERENCE"
+            banner_sub = f"{team.team_name} vs {opp_name}" if opp_name else team.team_name
+            podium_sub = f"{team.team_name} \u2014 pre-game media availability"
+        else:
+            banner_title = "POST-GAME PRESS CONFERENCE"
+            banner_sub = (f"{team.team_name} {score_str} {opp_name}"
+                          if opp_name else team.team_name)
+            podium_sub = f"{team.team_name} \u2014 post-game media availability"
+        try:
+            date_str = self.current_date.strftime("%b %d, %Y")
+        except Exception:
+            date_str = ""
+        return {
+            "kind": kind,
+            "banner_title": banner_title,
+            "banner_sub": banner_sub,
+            "date_str": date_str,
+            "team_abbr": self._team_abbr(team),
+            "podium_name": "Head Coach",
+            "podium_sub": podium_sub,
+            "ticker": [t for t in (ticker or []) if t],
+            "continue_text": continue_text,
+        }
+
     def _career_matchday_pre(self):
         """Matchday morning: scout report to inbox + optional pre-match presser."""
         from game_classes import EmailMessage
@@ -9528,16 +9569,27 @@ class HockeyManagerGUI(tk.Tk):
             subject=f"Opposition report: {report['team']}",
             content="\n".join(lines), date_sent=self.current_date,
             category="Scouting"))
-        # Pre-match presser (interactive)
+        # Pre-match presser (interactive full-page press conference)
         if not self._career_prompts_allowed():
             return
-        from manager_hub_window import PressConferenceDialog
+        from press_conference_page import PressConferencePage
         form_word = self._career_form_word()
         ctx = {"form_word": form_word,
                "opp": report["team"], "opp_word": report["danger_level"].lower()}
         questions = manager_career.build_prematch_presser(self.user_team, opponent, ctx)
-        dlg = PressConferenceDialog(self, questions, title="Pre-Match Press Conference")
-        self._career_apply_press_answers(dlg.chosen, "pre-match")
+        page_ctx = self._press_page_context(
+            kind="pre", opponent=opponent,
+            ticker=[
+                f"{self.user_team.team_name} host {report['team']} tonight",
+                f"Scout report: {report['team']} rated {report['danger_level']}",
+                f"{self.user_team.team_name} form: {form_word}",
+            ],
+            continue_text="Head to the rink  \u2192",
+        )
+        page = PressConferencePage(self, questions,
+                                   title="Pre-Game Press Conference",
+                                   context=page_ctx)
+        self._career_apply_press_answers(page.chosen, "pre-match")
 
     def _career_form_word(self) -> str:
         b = self.career.board
@@ -9617,19 +9669,31 @@ class HockeyManagerGUI(tk.Tk):
                 self._career_handle_sack()
                 return
 
-            # Post-match presser (interactive)
+            # Post-match presser (interactive full-page press conference)
             if self._career_prompts_allowed():
-                from manager_hub_window import PressConferenceDialog
+                from press_conference_page import PressConferencePage
                 hs, aws = scores
                 score_str = f"{hs}-{aws}"
                 star = self._career_star_of_game(sim_engine, team)
                 ctx = {"n": "a few"}
                 questions = manager_career.build_postmatch_presser(
                     team, opp, user_won, went_ot, score_str, star, ctx)
-                dlg = PressConferenceDialog(
+                result_word = "win" if user_won else "loss"
+                page_ctx = self._press_page_context(
+                    kind="post", opponent=opp,
+                    ticker=[
+                        f"Final: {team.team_name} {score_str} {opp.team_name}",
+                        f"{star} named star of the game" if star else "",
+                        f"{team.team_name} take the {result_word}",
+                    ],
+                    continue_text="Back to the office  \u2192",
+                    score_str=score_str, result_word=result_word,
+                )
+                page = PressConferencePage(
                     self, questions,
-                    title="Post-Match Press Conference")
-                self._career_apply_press_answers(dlg.chosen, "post-match")
+                    title="Post-Game Press Conference",
+                    context=page_ctx)
+                self._career_apply_press_answers(page.chosen, "post-match")
         except Exception as e:
             print(f"Career post-game error (non-fatal): {e}")
 
@@ -9841,15 +9905,14 @@ class HockeyManagerGUI(tk.Tk):
         # TODO: Apply specific settings to relevant components
         
     def get_settings(self):
-        """Get current user settings or defaults."""
+        """Get current user settings or defaults (never creates a window)."""
         if not hasattr(self, 'user_settings'):
-            # Load default settings if not already loaded
+            # Widget-free defaults: instantiating SettingsWindow here used
+            # to flash a visible window for ~0.08s on first use.
             try:
-                from settings_window import SettingsWindow
-                temp_settings = SettingsWindow(self)
-                self.user_settings = temp_settings.settings
-                temp_settings.destroy()
-            except:
+                from settings_window import default_settings
+                self.user_settings = default_settings()
+            except Exception:
                 # Fallback to basic defaults
                 self.user_settings = {
                     'game_results': {
@@ -10047,22 +10110,30 @@ class HockeyManagerGUI(tk.Tk):
         player = self.tree_maps.get(tree, {}).get(item_id)
         if not player: return
 
-        menu = tk.Menu(self, tearoff=0, bg="#3C3C3C", fg="white")
-        menu.add_command(label="View Player Profile", command=lambda: self.open_player_profile(player))
-        
+        # Universal player menu (scout, physio, trade, training, ...) with
+        # the legacy context-specific actions kept as window extras.
+        extras = []
         if context_type in ['nhl_roster', 'ahl_roster']:
-            menu.add_command(label="Assign Jersey Number...", command=lambda: self.assign_jersey_number(player))
-            if player.contract.years_remaining == 1:
-                menu.add_command(label="Negotiate Extension", command=lambda: self.open_contract_negotiation_window(player, is_extension=True))
-
+            extras.append(("Assign Jersey Number...",
+                           lambda: self.assign_jersey_number(player)))
+            try:
+                if player.contract.years_remaining == 1:
+                    extras.append(("Negotiate Extension",
+                                   lambda: self.open_contract_negotiation_window(
+                                       player, is_extension=True)))
+            except Exception:
+                pass
         if context_type == 'nhl_roster':
-            menu.add_command(label="Send to AHL", command=lambda: self.send_to_ahl(player))
+            extras.append(("Send to AHL", lambda: self.send_to_ahl(player)))
         elif context_type == 'ahl_roster':
-            menu.add_command(label="Call up to NHL", command=lambda: self.call_up_to_nhl(player))
+            extras.append(("Call up to NHL", lambda: self.call_up_to_nhl(player)))
         elif context_type == 'free_agent':
-            menu.add_command(label="Offer Contract", command=lambda: self.open_contract_negotiation_window(player))
-            
-        menu.tk_popup(event.x_root, event.y_root)
+            extras.append(("Offer Contract",
+                           lambda: self.open_contract_negotiation_window(player)))
+
+        from player_context_menu import PlayerContextMenu
+        PlayerContextMenu(self).show_context_menu(
+            event, player, additional_options=extras or None)
         
     def _handle_player_double_click(self, event, tree):
         """Handle double-clicking on a player in any tree view."""
@@ -10179,12 +10250,8 @@ class HockeyManagerGUI(tk.Tk):
 
         # Cap-relative asking price: base demand as % of cap, scaled by
         # the live cap and any market-setter premium (the McDavid effect).
-        _ovr = person.overall_rating()
-        try:
-            from game_classes import to_100_scale
-            _ovr100 = int(to_100_scale(_ovr))
-        except Exception:
-            _ovr100 = int(_ovr * 2)
+        _ovr = person.overall_rating()  # native 1-100 scale
+        _ovr100 = int(_ovr)
         _pos = getattr(person, "primary_position", "")
         _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
         _base_pct = (_ovr * 100_000) / 83_500_000  # ~0.12% per OVR point

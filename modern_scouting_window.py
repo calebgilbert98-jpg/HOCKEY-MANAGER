@@ -11,6 +11,7 @@ import datetime
 import random
 from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
 from scouting_profiles import displayed_overall, displayed_attribute
+from player_context_menu import PlayerContextMenu
 
 
 class ModernScoutingWindow(tk.Toplevel):
@@ -846,23 +847,21 @@ Checking: {to_100_scale(displayed_attribute(player, 'checking', self._user_team(
             messagebox.showinfo("Player Profile", info.strip())
     
     def _show_player_context_menu(self, event):
-        """Show context menu for player"""
+        """Show full player context menu (universal + scouting actions)."""
         # Select item under cursor
         item = self.players_tree.identify_row(event.y)
-        if item:
-            self.players_tree.selection_set(item)
-            
-            # Create context menu
-            context_menu = tk.Menu(self, tearoff=0)
-            context_menu.add_command(label="Scout Player", command=self._scout_player)
-            context_menu.add_command(label="View Profile", command=self._view_player_profile)
-            context_menu.add_separator()
-            context_menu.add_command(label="Add to Watchlist", command=self._add_to_watchlist)
-            
-            try:
-                context_menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                context_menu.grab_release()
+        if not item:
+            return
+        self.players_tree.selection_set(item)
+        player = self.parent.tree_maps.get('players_tree', {}).get(item)
+        if not player:
+            return
+        PlayerContextMenu(self.parent).show_context_menu(
+            event, player,
+            additional_options=[
+                ("Scout Player", self._scout_player),
+                ("Add to Watchlist", self._add_to_watchlist),
+            ])
     
     def _add_to_watchlist(self):
         """Add player to watchlist"""

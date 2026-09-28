@@ -2,9 +2,9 @@
 
 Traits represent exceptional abilities that make players perform better at
 specific skills. A "Big Hitter" throws harder, more frequent checks. A
-"Speedster" creates more breakaways. Traits are earned from attributes
-(typically 36+ on the internal ~50 scale, i.e. ~85+ on the 1-100 display
-scale) and provide concrete simulation bonuses.
+"Speedster" creates more breakaways. Traits are earned from elite
+attributes (typically 80+ on the native 1-100 scale) and provide concrete
+simulation bonuses.
 
 Traits are stored as a list of trait IDs on player.traits.
 """
@@ -38,7 +38,7 @@ SKATER_TRAITS = [
         name="Big Hitter",
         description="Devastating body checks that separate opponents from the puck.",
         category="physical",
-        requirements=[("checking", 43), ("strength", 37), ("aggressiveness", 35)],
+        requirements=[("checking", 86), ("strength", 74), ("aggressiveness", 70)],
         sim_effects={
             "hit_frequency_mult": 1.10,   # throws ~10% more hits
             "hit_force_mult": 1.12,       # hits ~12% more effective
@@ -51,7 +51,7 @@ SKATER_TRAITS = [
         name="Speedster",
         description="Blazing speed that creates breakaways and beats defenders wide.",
         category="skating",
-        requirements=[("speed", 43), ("acceleration", 37)],
+        requirements=[("speed", 86), ("acceleration", 74)],
         sim_effects={
             "breakaway_chance_mult": 1.12,
             "zone_entry_mult": 1.08,
@@ -63,7 +63,7 @@ SKATER_TRAITS = [
         name="Sniper",
         description="Elite release and accuracy; shoots more and scores more.",
         category="offense",
-        requirements=[("shooting", 43), ("shooting_accuracy", 39)],
+        requirements=[("shooting", 86), ("shooting_accuracy", 78)],
         sim_effects={
             "shot_quality_mult": 1.08,
             "shot_frequency_mult": 1.10,
@@ -75,7 +75,7 @@ SKATER_TRAITS = [
         name="Playmaker",
         description="Sees plays before they develop; threads passes through traffic.",
         category="offense",
-        requirements=[("passing", 43), ("passing_creativity", 37)],
+        requirements=[("passing", 86), ("passing_creativity", 74)],
         sim_effects={
             "pass_success_mult": 1.08,
             "assist_chance_mult": 1.10,
@@ -87,7 +87,7 @@ SKATER_TRAITS = [
         name="Dangler",
         description="Sick hands — beats defenders one-on-one with dekes.",
         category="offense",
-        requirements=[("deking", 43), ("agility", 37)],
+        requirements=[("deking", 86), ("agility", 74)],
         sim_effects={
             "deke_success_mult": 1.12,
             "controlled_entry_mult": 1.08,
@@ -98,7 +98,7 @@ SKATER_TRAITS = [
         name="Grinder",
         description="Relentless on the forecheck; wins puck battles along the boards.",
         category="physical",
-        requirements=[("forechecking", 43), ("determination", 37), ("balance", 35)],
+        requirements=[("forechecking", 86), ("determination", 74), ("balance", 70)],
         sim_effects={
             "puck_battle_mult": 1.10,
             "forecheck_pressure_mult": 1.12,
@@ -110,7 +110,7 @@ SKATER_TRAITS = [
         name="Shot Blocker",
         description="Fearlessly gets in shooting lanes.",
         category="defense",
-        requirements=[("shot_blocking", 43)],
+        requirements=[("shot_blocking", 86)],
         sim_effects={
             "block_chance_mult": 1.15,
         },
@@ -120,7 +120,7 @@ SKATER_TRAITS = [
         name="Shutdown Defender",
         description="Erases opponents defensively with positioning and stick work.",
         category="defense",
-        requirements=[("defensive_awareness", 43), ("pokecheck", 37)],
+        requirements=[("defensive_awareness", 86), ("pokecheck", 74)],
         sim_effects={
             "defensive_stops_mult": 1.05,
             "takeaway_mult": 1.12,
@@ -131,7 +131,7 @@ SKATER_TRAITS = [
         name="Two-Way",
         description="Impacts the game at both ends of the ice.",
         category="defense",
-        requirements=[("defensive_awareness", 43), ("offensive_awareness", 37)],
+        requirements=[("defensive_awareness", 86), ("offensive_awareness", 74)],
         sim_effects={
             "transition_mult": 1.06,
             "defensive_stops_mult": 1.05,
@@ -143,7 +143,7 @@ SKATER_TRAITS = [
         name="Enforcer",
         description="Polices the ice; teammates play bigger with him around.",
         category="physical",
-        requirements=[("strength", 43), ("aggressiveness", 39)],
+        requirements=[("strength", 86), ("aggressiveness", 78)],
         sim_effects={
             "fight_win_mult": 1.15,
             "team_toughness_aura": 0.05,   # teammates get +5% hit effectiveness
@@ -155,7 +155,7 @@ SKATER_TRAITS = [
         name="Clutch",
         description="Elevates when the game is on the line.",
         category="mental",
-        requirements=[("pressure_player", 43), ("composure", 37)],
+        requirements=[("pressure_player", 86), ("composure", 74)],
         sim_effects={
             "overtime_mult": 1.08,
             "shootout_mult": 1.10,
@@ -167,7 +167,7 @@ SKATER_TRAITS = [
         name="Iron Man",
         description="Rarely injured; recovers quickly when hurt.",
         category="physical",
-        requirements=[("durability", 43)],
+        requirements=[("durability", 86)],
         sim_effects={
             "injury_chance_mult": 0.75,
             "injury_duration_mult": 0.85,
@@ -178,7 +178,7 @@ SKATER_TRAITS = [
         name="One-Timer Specialist",
         description="Lethal on set-up one-timers, especially on the power play.",
         category="offense",
-        requirements=[("one_timer", 43), ("shooting_power", 37)],
+        requirements=[("one_timer", 86), ("shooting_power", 74)],
         sim_effects={
             "one_timer_mult": 1.12,
             "pp_shot_quality_mult": 1.08,
@@ -196,7 +196,7 @@ GOALIE_TRAITS = [
         name="Wall",
         description="Nearly impossible to beat cleanly; squares to every shot.",
         category="goalie",
-        requirements=[("positioning", 43)],
+        requirements=[("positioning", 86)],
         sim_effects={
             "save_chance_mult": 1.04,
         },
@@ -206,7 +206,7 @@ GOALIE_TRAITS = [
         name="Puck Handler",
         description="Acts as a third defenseman; starts breakouts with crisp passes.",
         category="goalie",
-        requirements=[("puck_handling", 43)],
+        requirements=[("puck_handling", 86)],
         sim_effects={
             "breakout_pass_mult": 1.12,
             "dump_in_negation": 0.10,
@@ -217,7 +217,7 @@ GOALIE_TRAITS = [
         name="Big-Game Goalie",
         description="Stands tallest when the stakes are highest.",
         category="goalie",
-        requirements=[("pressure_player", 43), ("composure", 37)],
+        requirements=[("pressure_player", 86), ("composure", 74)],
         sim_effects={
             "overtime_mult": 1.06,
             "shootout_mult": 1.08,

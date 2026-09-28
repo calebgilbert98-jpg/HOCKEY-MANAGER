@@ -37,29 +37,29 @@ class TrainingFocus(Enum):
 @dataclass
 class PlayerPotential:
     """Tracks a player's potential in various attributes"""
-    # Core potentials (1-20 scale)
-    skating_potential: int = field(default_factory=lambda: random.randint(12, 20))
-    shooting_potential: int = field(default_factory=lambda: random.randint(12, 20))
-    passing_potential: int = field(default_factory=lambda: random.randint(12, 20))
-    checking_potential: int = field(default_factory=lambda: random.randint(12, 20))
-    defense_potential: int = field(default_factory=lambda: random.randint(12, 20))
+    # Core potentials (1-100 scale)
+    skating_potential: int = field(default_factory=lambda: random.randint(60, 100))
+    shooting_potential: int = field(default_factory=lambda: random.randint(60, 100))
+    passing_potential: int = field(default_factory=lambda: random.randint(60, 100))
+    checking_potential: int = field(default_factory=lambda: random.randint(60, 100))
+    defense_potential: int = field(default_factory=lambda: random.randint(60, 100))
     
     # Mental potentials
-    hockey_iq_potential: int = field(default_factory=lambda: random.randint(12, 20))
-    determination_potential: int = field(default_factory=lambda: random.randint(12, 20))
-    leadership_potential: int = field(default_factory=lambda: random.randint(12, 20))
+    hockey_iq_potential: int = field(default_factory=lambda: random.randint(60, 100))
+    determination_potential: int = field(default_factory=lambda: random.randint(60, 100))
+    leadership_potential: int = field(default_factory=lambda: random.randint(60, 100))
     
     # Physical potentials
-    strength_potential: int = field(default_factory=lambda: random.randint(12, 20))
-    conditioning_potential: int = field(default_factory=lambda: random.randint(12, 20))
+    strength_potential: int = field(default_factory=lambda: random.randint(60, 100))
+    conditioning_potential: int = field(default_factory=lambda: random.randint(60, 100))
     
     # Position-specific potentials
-    goaltending_potential: int = field(default_factory=lambda: random.randint(12, 20))
-    faceoffs_potential: int = field(default_factory=lambda: random.randint(12, 20))
+    goaltending_potential: int = field(default_factory=lambda: random.randint(60, 100))
+    faceoffs_potential: int = field(default_factory=lambda: random.randint(60, 100))
     
     # Development modifiers
-    work_ethic: int = field(default_factory=lambda: random.randint(8, 20))  # Affects development speed
-    injury_proneness: int = field(default_factory=lambda: random.randint(5, 15))  # Lower = more prone
+    work_ethic: int = field(default_factory=lambda: random.randint(40, 100))  # Affects development speed (1-100)
+    injury_proneness: int = field(default_factory=lambda: random.randint(5, 60))  # Higher = more prone (1-100)
     
     def get_potential_for_attribute(self, attribute_name: str) -> int:
         """Get the potential for a specific attribute"""
@@ -77,7 +77,7 @@ class PlayerPotential:
             'goaltending': self.goaltending_potential,
             'faceoffs': self.faceoffs_potential,
         }
-        return potential_map.get(attribute_name, 15)
+        return potential_map.get(attribute_name, 75)
 
 
 @dataclass 
@@ -163,8 +163,8 @@ class PlayerDevelopmentEngine:
         
         # Apply potential modifiers based on player's work ethic and determination
         if hasattr(player, 'work_ethic') and hasattr(player, 'determination'):
-            work_ethic_modifier = (player.work_ethic - 10) * 0.02
-            determination_modifier = (player.determination - 10) * 0.03
+            work_ethic_modifier = (player.work_ethic - 50) * 0.004
+            determination_modifier = (player.determination - 50) * 0.006
             base_rate += work_ethic_modifier + determination_modifier
         
         return base_rate
@@ -176,7 +176,7 @@ class PlayerDevelopmentEngine:
         
         current_value = getattr(player, attribute, 10)
         # Use player's overall potential as a base, modified by position and age
-        potential_value = min(player.potential + random.randint(-2, 2), 20)
+        potential_value = min(player.potential + random.randint(-10, 10), 100)
         
         # Don't develop if at or above potential
         if current_value >= potential_value:
@@ -189,7 +189,7 @@ class PlayerDevelopmentEngine:
         
         # Distance from potential affects development speed
         potential_gap = potential_value - current_value
-        gap_modifier = min(1.0, potential_gap / 5.0)  # Closer to potential = slower development
+        gap_modifier = min(1.0, potential_gap / 25.0)  # Closer to potential = slower development
         
         # Random variance
         variance = random.uniform(0.5, 1.5)
@@ -239,7 +239,7 @@ class PlayerDevelopmentEngine:
                 # Apply randomness and potential limits
                 if random.random() < effectiveness:
                     current_value = getattr(player, attribute, 10)
-                    potential_value = player.potential.get_potential_for_attribute(attribute) if hasattr(player, 'potential') else 20
+                    potential_value = player.potential.get_potential_for_attribute(attribute) if hasattr(player, 'potential') else 100
                     
                     if current_value < potential_value:
                         change = random.randint(1, 2)
@@ -364,7 +364,7 @@ class PlayerDevelopmentEngine:
             if hasattr(player, attr):
                 original_values[attr] = getattr(player, attr)
                 # Set to potential (use player's potential as base with some variation)
-                potential_val = min(player.potential + random.randint(-1, 1), 20)
+                potential_val = min(player.potential + random.randint(-5, 5), 100)
                 setattr(player, attr, potential_val)
         
         # Calculate potential rating
@@ -404,9 +404,9 @@ def initialize_player_potential(player: Player) -> PlayerPotential:
     for attr in attributes:
         if hasattr(player, attr):
             current_value = getattr(player, attr)
-            # Potential is current value + 0-5 points, capped at 20
-            growth_room = random.randint(0, 5)
-            potential_value = min(20, current_value + growth_room)
+            # Potential is current value + 0-15 points, capped at 100
+            growth_room = random.randint(0, 15)
+            potential_value = min(100, current_value + growth_room)
             
             # Set the corresponding potential
             potential_attr = f"{attr}_potential"

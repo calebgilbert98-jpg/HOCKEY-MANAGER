@@ -1068,8 +1068,8 @@ class RosterWindow(ctk.CTkToplevel):
             is_selected = player.id in self.selected_players[roster_type]
             checkbox = "☑" if is_selected else "☐"
 
-            # Get player info (ratings on the 1-100 display scale, matching
-            # the Min OVR filter pills; the sim itself runs on ~50-scale)
+            # Get player info (ratings on the native 1-100 scale, matching
+            # the Min OVR filter pills)
             name = player.full_name
             position = player.primary_position.value
             age = player.age
@@ -2256,6 +2256,9 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Populate the player tree with filtered results."""
         for item in self.fa_player_tree.get_children():
             self.fa_player_tree.delete(item)
+        # Drop stale item->player mappings (item ids are recycled by Tk).
+        self.parent.tree_maps.get('fa_players', {}).clear()
+        self.parent.tree_maps.get(self.fa_player_tree, {}).clear()
 
         name_filter = self.player_name_search.get().lower()
         position_filter = self.player_position_filter.get()
@@ -2368,6 +2371,8 @@ class FreeAgencyWindow(ctk.CTkToplevel):
             if 'fa_players' not in self.parent.tree_maps:
                 self.parent.tree_maps['fa_players'] = {}
             self.parent.tree_maps['fa_players'][item_id] = player
+            # Widget-keyed entry so add_player_context_menu() can resolve it.
+            self.parent.tree_maps.setdefault(self.fa_player_tree, {})[item_id] = player
 
         self.player_results_label.configure(text=f"Showing {len(filtered_players)} players")
         set_tree_empty_state(self.fa_player_tree, "No players match your filters")
@@ -3343,6 +3348,292 @@ The Market Overview tab provides analytics and top available talent.
 """
         tk.messagebox.showinfo("Free Agency Help", help_text)
 
+class CTkTradeRosterList(ctk.CTkFrame):
+    """Rich roster browser for the Trade Center.
+
+    Toolbar: live name search, position-group filter, sort dropdown.
+    Rows: name / position / age / OVR (100-scale) / potential / salary /
+    contract years / trade-value badge. Rows stay clickable/selectable.
+
+    Interface mirrors CTkPlayerList: set_players(players), get_selected(),
+    clear_selection().
+    """
+
+    POS_GROUPS = (
+        ("All", None),
+        ("Forwards", {"C", "LW", "RW"}),
+        ("Defense", {"LD", "RD", "D"}),
+        ("Goalies", {"G"}),
+    )
+    SORTS = ("OVR", "Potential", "Age", "Salary")
+
+    def __init__(self, parent, **kw):
+        from ctk_theme import (TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM,
+                               TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+                               ROW_HOVER, ROW_SELECTED)
+        self._c = dict(TEAL=TEAL, BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER,
+                       TEXT=TEXT, TEXT_DIM=TEXT_DIM, TEXT_FAINT=TEXT_FAINT,
+                       GOLD=GOLD, GREEN=GREEN, RED=RED, BLUE=BLUE,
+                       ROW_HOVER=ROW_HOVER, ROW_SELECTED=ROW_SELECTED)
+        # Optional callbacks: on_double_click(player), on_right_click(player)
+        self.on_double_click = kw.pop("on_double_click", None)
+        self.on_right_click = kw.pop("on_right_click", None)
+        kw.setdefault("fg_color", "transparent")
+        super().__init__(parent, **kw)
+        self._roster = []
+        self._rows = []          # (frame, player)
+        self._selected = None
+        self._selected_frame = None
+
+        # ---- Toolbar: search + position filter + sort ----
+        toolbar = ctk.CTkFrame(self, fg_color="transparent")
+        toolbar.pack(fill="x", padx=6, pady=(6, 2))
+        self._search_var = tk.StringVar(master=self)
+        search = ctk.CTkEntry(toolbar, textvariable=self._search_var,
+                              placeholder_text="Search players...",
+                              height=30, fg_color=CARD,
+                              border_color=BORDER, text_color=TEXT,
+                              placeholder_text_color=TEXT_FAINT)
+        search.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        search.bind("<KeyRelease>", lambda _e: self._apply())
+        self._pos_var = tk.StringVar(master=self, value="All")
+        pos_box = ctk.CTkComboBox(
+            toolbar, values=[g[0] for g in self.POS_GROUPS],
+            variable=self._pos_var, width=108, height=30,
+            fg_color=CARD, border_color=BORDER, text_color=TEXT,
+            button_color=TEAL, dropdown_fg_color=CARD,
+            dropdown_text_color=TEXT,
+            command=lambda _v: self._apply())
+        pos_box.pack(side="left", padx=(0, 6))
+        self._sort_var = tk.StringVar(master=self, value="OVR")
+        sort_box = ctk.CTkComboBox(
+            toolbar, values=list(self.SORTS),
+            variable=self._sort_var, width=104, height=30,
+            fg_color=CARD, border_color=BORDER, text_color=TEXT,
+            button_color=TEAL, dropdown_fg_color=CARD,
+            dropdown_text_color=TEXT,
+            command=lambda _v: self._apply())
+        sort_box.pack(side="left")
+
+        self._count_lbl = ctk.CTkLabel(
+            self, text="", font=("Segoe UI", 10), text_color=TEXT_FAINT,
+            anchor="w")
+        self._count_lbl.pack(anchor="w", padx=12, pady=(0, 2))
+
+        self._list = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self._list.pack(fill="both", expand=True, padx=2, pady=(0, 6))
+        self._empty_lbl = None
+
+    # ------------------------------------------------------------------
+    # Data
+    # ------------------------------------------------------------------
+    def set_players(self, players):
+        self._roster = list(players or [])
+        self._selected = None
+        self._selected_frame = None
+        self._apply()
+
+    def get_selected(self):
+        return self._selected
+
+    def clear_selection(self):
+        if self._selected_frame is not None:
+            self._selected_frame.configure(fg_color="transparent")
+        self._selected = None
+        self._selected_frame = None
+
+    # ------------------------------------------------------------------
+    # Filtering / sorting
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _ovr(p):
+        try:
+            return int(to_100_scale(p.overall_rating()))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _pot(p):
+        try:
+            return int(to_100_scale(p._potential_cap()))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _age(p):
+        try:
+            return int(getattr(p, "age", 99) or 99)
+        except Exception:
+            return 99
+
+    @staticmethod
+    def _salary(p):
+        try:
+            return int(getattr(p, "salary", 0) or 0)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _pos_value(p):
+        try:
+            return p.primary_position.value
+        except Exception:
+            return ""
+
+    def _apply(self):
+        query = (self._search_var.get() or "").strip().lower()
+        pos_name = self._pos_var.get()
+        group = dict(self.POS_GROUPS).get(pos_name)
+        players = self._roster
+        if group is not None:
+            players = [p for p in players if self._pos_value(p) in group]
+        if query:
+            players = [p for p in players
+                       if query in str(getattr(p, "full_name", p)).lower()]
+        sort = self._sort_var.get()
+        if sort == "Potential":
+            players = sorted(players, key=self._pot, reverse=True)
+        elif sort == "Age":
+            players = sorted(players, key=self._age)
+        elif sort == "Salary":
+            players = sorted(players, key=self._salary, reverse=True)
+        else:
+            players = sorted(players, key=self._ovr, reverse=True)
+        self._rebuild(players)
+
+    def _rebuild(self, players):
+        for frame, _ in self._rows:
+            frame.destroy()
+        self._rows = []
+        self._selected = None
+        self._selected_frame = None
+        if self._empty_lbl is not None:
+            self._empty_lbl.destroy()
+            self._empty_lbl = None
+        n = len(self._roster)
+        self._count_lbl.configure(
+            text=f"{len(players)} of {n} players" if len(players) != n
+            else f"{n} players")
+        if not players:
+            self._empty_lbl = ctk.CTkLabel(
+                self._list, text="No players match.",
+                font=("Segoe UI", 11, "italic"),
+                text_color=self._c["TEXT_FAINT"])
+            self._empty_lbl.pack(padx=8, pady=12)
+            return
+        for p in players:
+            self._add_row(p)
+
+    # ------------------------------------------------------------------
+    # Rows
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _ovr_color(ovr):
+        from ctk_theme import TEAL, GOLD, GREEN, TEXT_DIM
+        if ovr >= 85:
+            return GREEN
+        if ovr >= 78:
+            return TEAL
+        if ovr >= 70:
+            return GOLD
+        return TEXT_DIM
+
+    def _add_row(self, player):
+        c = self._c
+        row = ctk.CTkFrame(self._list, fg_color="transparent", corner_radius=8)
+        row.pack(fill="x", padx=4, pady=2)
+        row.grid_columnconfigure(0, weight=1)
+
+        name = str(getattr(player, "full_name", player))
+        pos = self._pos_value(player)
+        age = getattr(player, "age", "?")
+        salary = self._salary(player)
+        sal_txt = f"${salary / 1e6:.1f}M" if salary else "Unsigned"
+        try:
+            yrs = getattr(getattr(player, "contract", None),
+                          "years_remaining", None)
+            yrs_txt = f" · {yrs}y" if yrs else ""
+        except Exception:
+            yrs_txt = ""
+        ovr = self._ovr(player)
+        pot = self._pot(player)
+        pot_grade = str(getattr(player, "potential_grade", "") or "").strip()
+        try:
+            import trade_engine as te
+            val = te.asset_value(player)
+        except Exception:
+            val = 0
+
+        left = ctk.CTkFrame(row, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="w", padx=(10, 4), pady=5)
+        nm = ctk.CTkLabel(left, text=name, font=("Segoe UI", 12, "bold"),
+                          text_color=c["TEXT"], anchor="w")
+        nm.pack(anchor="w")
+        sub = ctk.CTkLabel(
+            left, text=f"{pos} · Age {age} · {sal_txt}{yrs_txt}",
+            font=("Segoe UI", 10), text_color=c["TEXT_DIM"], anchor="w")
+        sub.pack(anchor="w")
+
+        badge = ctk.CTkFrame(row, fg_color=c["PANEL"], corner_radius=10,
+                             border_width=1, border_color=c["BORDER"])
+        badge.grid(row=0, column=1, padx=4)
+        bl = ctk.CTkLabel(badge, text=f"VAL {val}",
+                          font=("Segoe UI", 10, "bold"), text_color=c["TEAL"])
+        bl.pack(padx=8, pady=2)
+
+        right = ctk.CTkFrame(row, fg_color="transparent")
+        right.grid(row=0, column=2, sticky="e", padx=(4, 10), pady=5)
+        ovr_lbl = ctk.CTkLabel(right, text=str(ovr),
+                               font=("Segoe UI", 15, "bold"),
+                               text_color=self._ovr_color(ovr), anchor="e")
+        ovr_lbl.pack(anchor="e")
+        pot_txt = f"POT {pot_grade} ({pot})" if pot_grade else f"POT {pot}"
+        pot_lbl = ctk.CTkLabel(right, text=pot_txt, font=("Segoe UI", 9),
+                               text_color=c["TEXT_FAINT"], anchor="e")
+        pot_lbl.pack(anchor="e")
+
+        for w in (row, left, nm, sub, badge, bl, right, ovr_lbl, pot_lbl):
+            w.bind("<Button-1>",
+                   lambda e, f=row, pl=player: self._select(f, pl))
+            w.bind("<Double-Button-1>",
+                   lambda e, pl=player: self._double_click(pl))
+            w.bind("<Button-3>",
+                   lambda e, pl=player: self._right_click(e, pl))
+            w.bind("<Enter>", lambda e, f=row: self._hover(f, True))
+            w.bind("<Leave>", lambda e, f=row: self._hover(f, False))
+        self._rows.append((row, player))
+
+    def _double_click(self, player):
+        self._select_player_only(player)
+        if callable(self.on_double_click):
+            self.on_double_click(player)
+
+    def _right_click(self, event, player):
+        if callable(self.on_right_click):
+            try:
+                self.on_right_click(player, event)
+            except TypeError:
+                self.on_right_click(player)
+
+    def _select_player_only(self, player):
+        for frame, pl in self._rows:
+            if pl is player:
+                self._select(frame, pl)
+                break
+
+    def _hover(self, frame, on):
+        if frame is self._selected_frame:
+            return
+        frame.configure(fg_color=self._c["ROW_HOVER"] if on else "transparent")
+
+    def _select(self, frame, player):
+        if self._selected_frame is not None:
+            self._selected_frame.configure(fg_color="transparent")
+        self._selected = player
+        self._selected_frame = frame
+        frame.configure(fg_color=self._c["ROW_SELECTED"])
+
+
 class TradeWindow(ctk.CTkToplevel):
     """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
 
@@ -3351,7 +3642,7 @@ class TradeWindow(ctk.CTkToplevel):
 
     def __init__(self, parent):
         from ctk_theme import (
-            init_ctk_theme, CTkPlayerList, CTkOfferList,
+            init_ctk_theme, CTkOfferList,
             primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
             TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
@@ -3424,15 +3715,20 @@ class TradeWindow(ctk.CTkToplevel):
         user_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         heading(user_frame, parent.user_team.team_name, size=13).pack(
             anchor='w', padx=12, pady=(10, 4))
-        self.user_list = CTkPlayerList(user_frame)
+        self.user_list = CTkTradeRosterList(
+            user_frame,
+            on_double_click=lambda p: self._add_player_to_trade('user', p),
+            on_right_click=lambda p, e=None: self._player_menu('user', p, e))
         self.user_list.pack(fill='both', expand=True, padx=8, pady=4)
         btn_row = ctk.CTkFrame(user_frame, fg_color="transparent")
-        btn_row.pack(fill='x', padx=8, pady=(4, 10))
+        btn_row.pack(fill='x', padx=8, pady=(4, 2))
         secondary_button(btn_row, text="Add Player  →",
                          command=lambda: self._add_to_trade('user')).pack(
                              side='left', padx=(0, 6))
         secondary_button(btn_row, text="Add Pick",
                          command=lambda: self._add_pick_dialog('user')).pack(side='left')
+        body(user_frame, "Double-click adds · Right-click removes",
+             size=10, dim=True).pack(anchor='w', padx=12, pady=(0, 8))
 
         # Center: deal panel (scrollable so Propose stays reachable at any height)
         center = ctk.CTkScrollableFrame(main, fg_color=PANEL, corner_radius=10)
@@ -3473,7 +3769,10 @@ class TradeWindow(ctk.CTkToplevel):
         partner_frame.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
         self.partner_title = heading(partner_frame, "Trade Partner", size=13)
         self.partner_title.pack(anchor='w', padx=12, pady=(10, 4))
-        self.partner_list = CTkPlayerList(partner_frame)
+        self.partner_list = CTkTradeRosterList(
+            partner_frame,
+            on_double_click=lambda p: self._add_player_to_trade('partner', p),
+            on_right_click=lambda p, e=None: self._player_menu('partner', p, e))
         self.partner_list.pack(fill='both', expand=True, padx=8, pady=4)
         pbtn_row = ctk.CTkFrame(partner_frame, fg_color="transparent")
         pbtn_row.pack(fill='x', padx=8, pady=(4, 10))
@@ -3595,10 +3894,36 @@ class TradeWindow(ctk.CTkToplevel):
     def _add_to_trade(self, side):
         lst = self.user_list if side == 'user' else self.partner_list
         player = lst.get_selected()
+        if player:
+            self._add_player_to_trade(side, player)
+
+    def _add_player_to_trade(self, side, player):
+        """Double-click on a roster row: add that player to the deal."""
         if player and player not in self.trade_offers[side]:
             self.trade_offers[side].append(player)
             self._refresh_offer_lists()
             self._update_meter()
+
+    def _remove_player_from_trade(self, side, player):
+        """Right-click on a roster row: pull that player out of the deal."""
+        if player in self.trade_offers[side]:
+            self.trade_offers[side].remove(player)
+            self._refresh_offer_lists()
+            self._update_meter()
+
+    def _player_menu(self, side, player, event=None):
+        """Right-click on a roster row: full player menu, incl. remove-from-trade."""
+        from player_context_menu import PlayerContextMenu
+        mgr = PlayerContextMenu(self.parent)
+        extra = []
+        if player in self.trade_offers[side]:
+            extra.append(("Remove from trade",
+                          lambda: self._remove_player_from_trade(side, player)))
+        if event is not None:
+            mgr.show_context_menu(event, player, additional_options=extra)
+        elif extra:
+            # Fallback: plain removal when no click position is available.
+            self._remove_player_from_trade(side, player)
 
     def _remove_from_trade(self, side):
         lst = self.user_offer_list if side == 'user' else self.partner_offer_list
@@ -4387,6 +4712,7 @@ class DraftWindow(ctk.CTkToplevel):
                                     highlightbackground=ct['BORDER'])
         self.shortlist.pack(fill='x', padx=12, pady=(0, 4))
         self.shortlist.bind('<<ListboxSelect>>', self._on_shortlist_select)
+        self.shortlist.bind('<Button-3>', self._show_shortlist_menu)
 
         self.selected_label = self._body(center, text="No prospect selected",
                                    dim=True)
@@ -4558,6 +4884,19 @@ class DraftWindow(ctk.CTkToplevel):
             current = var.get()
             for value, btn in btns.items():
                 btn.set_selected(value == current)
+
+    def _show_shortlist_menu(self, event):
+        """Right-click on a draft shortlist prospect -> full player menu."""
+        try:
+            idx = self.shortlist.nearest(event.y)
+        except Exception:
+            return
+        if idx < 0 or idx >= len(getattr(self, '_shortlist_players', [])):
+            return
+        self.shortlist.selection_clear(0, tk.END)
+        self.shortlist.selection_set(idx)
+        player = self._shortlist_players[idx]
+        PlayerContextMenu(self.parent).show_context_menu(event, player)
 
     def _refresh_shortlist(self):
         self.shortlist.delete(0, tk.END)
@@ -4740,10 +5079,11 @@ class DraftWindow(ctk.CTkToplevel):
             pos = "?"
         pot_grade = self._GRADE_BASE.get(
             str(getattr(player, 'potential_grade', 'C')).strip(), 'C')
-        self.draft_results_tree.insert('', 0, values=(
+        _drid = self.draft_results_tree.insert('', 0, values=(
             overall, team.team_name, player.full_name, pos,
             getattr(player, 'potential_grade', '?')),
             tags=(f"pot_{pot_grade}",))
+        self.parent.tree_maps.setdefault(self.draft_results_tree, {})[_drid] = player
         self._ticker(self.dn.ticker_line(overall, team.team_name, player,
                                          round_num, reach=reach, steal=steal))
         self.picks_made.append((team.team_name, overall, player))
@@ -7596,7 +7936,8 @@ class TradeBlockWindow(tk.Toplevel):
             else:
                 self.block_tree.column(col, width=100)
         make_tree_sortable(self.block_tree)
-        
+        add_player_context_menu(self.block_tree, self)
+
         # Scrollbar for trade block
         block_scrollbar = ttk.Scrollbar(block_frame, orient='vertical', command=self.block_tree.yview)
         self.block_tree.configure(yscrollcommand=block_scrollbar.set)
@@ -7645,6 +7986,7 @@ class TradeBlockWindow(tk.Toplevel):
         self.other_tree.configure(yscrollcommand=other_scrollbar.set)
         
         self.other_tree.pack(side='left', fill='both', expand=True)
+        add_player_context_menu(self.other_tree, self)
         other_scrollbar.pack(side='right', fill='y')
     
     def create_trade_interest(self, parent):
@@ -7805,7 +8147,8 @@ class TradeBlockWindow(tk.Toplevel):
         # Clear current items
         for item in self.block_tree.get_children():
             self.block_tree.delete(item)
-        
+        self.parent.tree_maps.setdefault(self.block_tree, {}).clear()
+
         # Add trade block players
         trade_block = getattr(self.parent.user_team, 'trade_block', [])
         for player in trade_block:
@@ -7823,7 +8166,7 @@ class TradeBlockWindow(tk.Toplevel):
             else:
                 interest_level = "High"
             
-            self.block_tree.insert('', 'end', values=(
+            _bid = self.block_tree.insert('', 'end', values=(
                 player.full_name,
                 str(player.primary_position),
                 player.age,
@@ -7832,6 +8175,7 @@ class TradeBlockWindow(tk.Toplevel):
                 years_left,
                 interest_level
             ))
+            self.parent.tree_maps[self.block_tree][_bid] = player
         set_tree_empty_state(
             self.block_tree,
             "Your trade block is empty \u2014 add players to start fielding offers")
@@ -7877,6 +8221,7 @@ class TradeBlockWindow(tk.Toplevel):
         selected_team = self.team_var.get()
         if selected_team:
             # Clear and show message
+            self.parent.tree_maps.setdefault(self.other_tree, {}).clear()
             for item in self.other_tree.get_children():
                 self.other_tree.delete(item)
             
@@ -7887,7 +8232,7 @@ class TradeBlockWindow(tk.Toplevel):
                 available_players = random.sample(team.roster, min(5, len(team.roster)))
                 for player in available_players:
                     salary = getattr(player.contract, 'salary', 750000) if player.contract else 750000
-                    self.other_tree.insert('', 'end', values=(
+                    _oid = self.other_tree.insert('', 'end', values=(
                         team.team_name,
                         player.full_name,
                         str(player.primary_position),
@@ -7896,6 +8241,7 @@ class TradeBlockWindow(tk.Toplevel):
                         f"${salary:,}",
                         random.choice(['Available', 'Limited Interest', 'High Price'])
                     ))
+                    self.parent.tree_maps[self.other_tree][_oid] = player
     
     def refresh_other_blocks(self):
         """Refresh other teams' trade blocks."""
@@ -8017,7 +8363,8 @@ class WaiversWindow(tk.Toplevel):
     def populate_eligible_players(self):
         """Populate the tree with waiver-eligible players from user's team."""
         self.eligible_tree.delete(*self.eligible_tree.get_children())
-        
+        self.parent.tree_maps.setdefault(self.eligible_tree, {}).clear()
+
         # Get all NHL roster players who would be eligible for waivers
         eligible_players = [p for p in self.parent.user_team.roster if self.is_waiver_eligible(p)]
         
@@ -8033,6 +8380,7 @@ class WaiversWindow(tk.Toplevel):
             )
             item = self.eligible_tree.insert('', 'end', values=player_values)
             self.eligible_tree.item(item, tags=(str(player.id),))
+            self.parent.tree_maps[self.eligible_tree][item] = player
             
         # Configure row click event
         self.eligible_tree.bind('<ButtonRelease-1>', self.on_eligible_click)
@@ -8042,7 +8390,8 @@ class WaiversWindow(tk.Toplevel):
     def populate_waiver_wire(self):
         """Populate the tree with players currently on the waiver wire."""
         self.waiver_tree.delete(*self.waiver_tree.get_children())
-        
+        self.parent.tree_maps.setdefault(self.waiver_tree, {}).clear()
+
         for player in self.parent.waiver_list:
             player_values = (
                 player.full_name,
@@ -8056,6 +8405,7 @@ class WaiversWindow(tk.Toplevel):
             )
             item = self.waiver_tree.insert('', 'end', values=player_values)
             self.waiver_tree.item(item, tags=(str(player.id),))
+            self.parent.tree_maps[self.waiver_tree][item] = player
             
         # Configure row click event
         self.waiver_tree.bind('<ButtonRelease-1>', self.on_waiver_click)
@@ -8319,18 +8669,18 @@ class ContractExtensionsWindow(tk.Toplevel):
         item_id = tree.identify_row(event.y)
         if not item_id:
             return
-            
+
         tree.selection_set(item_id)
         player = self.parent.tree_maps.get(tree, {}).get(item_id)
         if not player:
             return
-            
-        menu = tk.Menu(self, tearoff=0, bg="#3C3C3C", fg="white")
-        menu.add_command(label="Negotiate Extension", 
-                        command=lambda: self.open_negotiation_window(player))
-        menu.add_command(label="View Player Profile", 
-                        command=lambda: self.parent.open_player_profile(player))
-        menu.tk_popup(event.x_root, event.y_root)
+
+        PlayerContextMenu(self.parent).show_context_menu(
+            event, player,
+            additional_options=[
+                ("Negotiate Extension",
+                 lambda: self.open_negotiation_window(player)),
+            ])
     
     def negotiate_from_event(self, event, tree):
         """Handle double-click on tree item."""
@@ -9402,6 +9752,7 @@ class BuyoutCalculatorWindow(tk.Toplevel):
                              font=(self.parent.FONT_FAMILY, 10))
         self.lb.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.lb.bind('<<ListboxSelect>>', self._on_select)
+        self.lb.bind('<Button-3>', self._show_roster_menu)
         self._players = sorted(self.parent.user_team.roster,
                                key=lambda p: p.contract.salary, reverse=True)
         for p in self._players:
@@ -9436,6 +9787,20 @@ class BuyoutCalculatorWindow(tk.Toplevel):
             return
         self._selected = self._players[sel[0]]
         self._render_detail()
+
+
+    def _show_roster_menu(self, event):
+        """Right-click on a roster row -> full player context menu."""
+        try:
+            idx = self.lb.nearest(event.y)
+        except Exception:
+            return
+        if idx < 0 or idx >= len(getattr(self, '_players', [])):
+            return
+        self.lb.selection_clear(0, tk.END)
+        self.lb.selection_set(idx)
+        player = self._players[idx]
+        PlayerContextMenu(self.parent).show_context_menu(event, player)
 
     def _render_detail(self):
         for child in self.detail.winfo_children():

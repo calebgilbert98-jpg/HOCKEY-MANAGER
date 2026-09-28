@@ -10,6 +10,7 @@ from datetime import date
 from typing import List, Optional
 
 import manager_career as mc
+from player_context_menu import PlayerContextMenu
 
 
 class ManagerHubWindow(tk.Toplevel):
@@ -195,6 +196,7 @@ class ManagerHubWindow(tk.Toplevel):
             self.squad_tree.heading(c, text=headers[c])
             self.squad_tree.column(c, width=widths[c])
         self.squad_tree.pack(fill="both", expand=True)
+        self.squad_tree.bind("<Button-3>", self._show_squad_context_menu)
 
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill="x", pady=8)
@@ -230,6 +232,27 @@ class ManagerHubWindow(tk.Toplevel):
             if p.id == pid:
                 return p
         return None
+
+    def _player_by_id(self, pid):
+        for p in self.parent.user_team.roster:
+            if p.id == pid:
+                return p
+        return None
+
+    def _show_squad_context_menu(self, event):
+        """Right-click on a squad row -> full player context menu."""
+        item = self.squad_tree.identify_row(event.y)
+        if not item:
+            return
+        self.squad_tree.selection_set(item)
+        try:
+            pid = int(self.squad_tree.item(item, "values")[0].split("|")[0])
+        except Exception:
+            return
+        player = self._player_by_id(pid)
+        if not player:
+            return
+        PlayerContextMenu(self.parent).show_context_menu(event, player)
 
     def _refresh_squad(self):
         for i in self.squad_tree.get_children():

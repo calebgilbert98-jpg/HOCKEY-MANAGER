@@ -23,7 +23,7 @@ everything else falls back to sensible defaults::
 
 * ``team`` matches a ``team_name`` from teams.csv (blank = free agent).
 * ``position`` is one of C, LW, RW, LD, RD, D, G (case-insensitive).
-* Attributes are Puck Dynasty's internal ~50 scale (roughly 1-60).
+* Attributes are Puck Dynasty's native 1-100 scale.
 * ``height`` may be like ``6'1"`` or centimetres; ``weight`` in lbs.
 
 Use :func:`write_templates` to generate starter files with an example row.
@@ -42,7 +42,7 @@ PLAYER_HEADERS = [
     "first_name", "last_name", "team", "position", "age", "nationality",
     "height", "weight", "handedness", "jersey_number", "salary",
     "contract_years", "potential",
-    # core attributes (internal ~50 scale)
+    # core attributes (native 1-100 scale)
     "skating", "shooting", "passing", "deking", "offensive_awareness",
     "defensive_awareness", "checking", "faceoffs", "strength",
     "goaltending",

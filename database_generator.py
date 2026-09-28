@@ -766,16 +766,16 @@ class DatabaseGenerator:
         
         # Potential and peak rating
         if age <= 22:
-            player.potential = random.randint(12, 20)
-            player.peak_rating = min(20, player.potential + random.randint(-2, 2))
+            player.potential = random.randint(60, 100)
+            player.peak_rating = min(100, player.potential + random.randint(-10, 10))
         elif age <= 28:
-            current_overall = random.randint(8, 18)
-            player.potential = current_overall + random.randint(-2, 3)
+            current_overall = random.randint(40, 90)
+            player.potential = current_overall + random.randint(-10, 15)
             player.peak_rating = current_overall
         else:
-            current_overall = random.randint(6, 16)
+            current_overall = random.randint(30, 80)
             player.potential = current_overall
-            player.peak_rating = current_overall + random.randint(0, 4)
+            player.peak_rating = current_overall + random.randint(0, 20)
         
         # Health and injury information
         player.is_injured = random.random() < 0.05  # 5% chance of current injury
@@ -817,14 +817,14 @@ class DatabaseGenerator:
     def _set_enhanced_attributes(self, player: Player, age: int, quality_modifier: float):
         """Set realistic attributes based on age, position, and quality.
 
-        Uses the canonical ~50-point attribute scale (same as player_generator
-        and the sim engine): NHL-quality players land roughly 28-46 before
+        Uses the canonical 1-100 attribute scale (same as player_generator
+        and the sim engine): NHL-quality players land roughly 56-92 before
         age adjustment.
         """
 
-        # Base attribute ranges adjusted by quality (50-point scale)
-        base_min = max(5, int(28 * quality_modifier))
-        base_max = min(50, int(44 * quality_modifier))
+        # Base attribute ranges adjusted by quality (1-100 scale)
+        base_min = max(10, int(56 * quality_modifier))
+        base_max = min(100, int(88 * quality_modifier))
         
         # Age-based adjustments
         if age < 20:
@@ -852,16 +852,16 @@ class DatabaseGenerator:
         for attr in core_attributes:
             base_value = random.randint(base_min, base_max)
             adjusted_value = int(base_value * current_factor)
-            adjusted_value = max(1, min(50, adjusted_value))
+            adjusted_value = max(1, min(100, adjusted_value))
             setattr(player, attr, adjusted_value)
         
         # Position-specific attributes
         if player.primary_position == PlayerPosition.GOALIE:
             goalie_attrs = ['goaltending', 'reflexes', 'positioning', 'rebound_control', 'puck_handling']
             for attr in goalie_attrs:
-                base_value = random.randint(min(50, base_min + 4), min(50, base_max + 6))
+                base_value = random.randint(min(100, base_min + 8), min(100, base_max + 12))
                 adjusted_value = int(base_value * current_factor)
-                adjusted_value = max(1, min(50, adjusted_value))
+                adjusted_value = max(1, min(100, adjusted_value))
                 setattr(player, attr, adjusted_value)
         
         # Advanced attributes
@@ -870,12 +870,12 @@ class DatabaseGenerator:
         
         for attr in advanced_attrs:
             if attr == 'injury_proneness':
-                # Lower is better for injury proneness
-                value = random.randint(1, 10)
+                # Higher = more injury-prone (1-100)
+                value = random.randint(5, 50)
             else:
                 base_value = random.randint(base_min, base_max)
                 value = int(base_value * current_factor)
-                value = max(1, min(50, value))
+                value = max(1, min(100, value))
             setattr(player, attr, value)
         
         # Set playing tendencies
@@ -907,13 +907,13 @@ class DatabaseGenerator:
         # Salary based on overall rating and age
         overall = player.overall_rating()
         
-        if overall >= 47:
+        if overall >= 90:
             salary = random.randint(7000000, 12000000)  # Elite players
-        elif overall >= 44:
+        elif overall >= 84:
             salary = random.randint(4000000, 8000000)   # Top players
-        elif overall >= 40:
+        elif overall >= 78:
             salary = random.randint(2000000, 5000000)   # Good players
-        elif overall >= 37:
+        elif overall >= 70:
             salary = random.randint(900000, 2500000)    # Role players
         else:
             salary = random.randint(750000, 1200000)    # Depth players
@@ -927,7 +927,7 @@ class DatabaseGenerator:
         contract = Contract(
             salary=salary,
             years_remaining=years,
-            no_trade_clause=overall >= 47 and random.random() < 0.3
+            no_trade_clause=overall >= 90 and random.random() < 0.3
         )
         
         return contract

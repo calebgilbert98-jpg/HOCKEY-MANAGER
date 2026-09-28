@@ -30,7 +30,7 @@ class PlayerV2:
     x: int = 0  # X position on ice
     y: int = 0  # Y position on ice
     potential_grade: str = field(default_factory=lambda: random.choice(['A', 'B', 'C', 'D', 'F']))
-    morale: int = 10  # Player morale on a scale of 1-20
+    morale: int = 10  # Player morale on a scale of 1-10
     
     # Mental attributes for all players
     aggression: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
@@ -103,40 +103,40 @@ class PlayerV2:
         # Initialize position-specific attributes
         if self.primary_position == PlayerPosition.GOALIE:
             # Set goalie attributes
-            self.reflexes = random.randint(8, 18)
-            self.positioning = random.randint(8, 18)
-            self.rebound_control = random.randint(8, 18)
-            self.puck_handling = random.randint(8, 18)
-            self.glove_hand = random.randint(8, 18)
-            self.stick_side = random.randint(8, 18)
-            self.breakaway_skill = random.randint(8, 18)
-            self.aggressiveness_goalie = random.randint(8, 18)
+            self.reflexes = random.randint(40, 90)
+            self.positioning = random.randint(40, 90)
+            self.rebound_control = random.randint(40, 90)
+            self.puck_handling = random.randint(40, 90)
+            self.glove_hand = random.randint(40, 90)
+            self.stick_side = random.randint(40, 90)
+            self.breakaway_skill = random.randint(40, 90)
+            self.aggressiveness_goalie = random.randint(40, 90)
         else:
             # Set skater attributes
-            self.checking = random.randint(8, 18)
-            self.deflection = random.randint(8, 18)
-            self.deking = random.randint(8, 18)
-            self.hitting = random.randint(8, 18)
+            self.checking = random.randint(40, 90)
+            self.deflection = random.randint(40, 90)
+            self.deking = random.randint(40, 90)
+            self.hitting = random.randint(40, 90)
             # Enhanced position-specific attributes
-            self.off_the_puck = random.randint(8, 18)
-            self.wristshot = random.randint(10, 18)  # Forwards are better at wrist shots
-            self.slapshot = random.randint(6, 14)
-            self.one_timer = random.randint(8, 16)
-            self.backhand = random.randint(6, 14)
-            self.screen_shots = random.randint(8, 16)
-            self.loose_puck = random.randint(8, 16)
-            self.passing = random.randint(8, 18)
-            self.pokecheck = random.randint(8, 18)
-            self.shooting = random.randint(8, 18)
-            self.slapshot = random.randint(8, 18)
-            self.stickhandling = random.randint(8, 18)
-            self.wristshot = random.randint(8, 18)
+            self.off_the_puck = random.randint(40, 90)
+            self.wristshot = random.randint(50, 90)  # Forwards are better at wrist shots
+            self.slapshot = random.randint(30, 70)
+            self.one_timer = random.randint(40, 80)
+            self.backhand = random.randint(30, 70)
+            self.screen_shots = random.randint(40, 80)
+            self.loose_puck = random.randint(40, 80)
+            self.passing = random.randint(40, 90)
+            self.pokecheck = random.randint(40, 90)
+            self.shooting = random.randint(40, 90)
+            self.slapshot = random.randint(40, 90)
+            self.stickhandling = random.randint(40, 90)
+            self.wristshot = random.randint(40, 90)
             
             # Position-specific adjustments
             if self.primary_position == PlayerPosition.CENTER:
-                self.faceoffs = random.randint(10, 18)
+                self.faceoffs = random.randint(50, 90)
             else:
-                self.faceoffs = random.randint(5, 15)
+                self.faceoffs = random.randint(25, 75)
                 
             # Set legacy attributes to maintain compatibility
             # Map new attributes to existing ones for compatibility
@@ -283,49 +283,49 @@ def convert_to_v2(player):
     v2_player.morale = getattr(player, 'morale', 10)  # Copy morale or default to 10
     
     # Copy legacy mental attributes to new ones where possible
-    v2_player.composure = getattr(player, 'composure', random.randint(8, 18))
-    v2_player.anticipation = getattr(player, 'anticipation', random.randint(8, 18))
+    v2_player.composure = getattr(player, 'composure', random.randint(40, 90))
+    v2_player.anticipation = getattr(player, 'anticipation', random.randint(40, 90))
     v2_player.teamwork = player.teamwork
     v2_player.flair = player.flair
     v2_player.leadership = player.leadership
-    v2_player.aggression = getattr(player, 'aggressiveness', random.randint(8, 18))
-    v2_player.concentration = getattr(player, 'focus', random.randint(8, 18))
+    v2_player.aggression = getattr(player, 'aggressiveness', random.randint(40, 90))
+    v2_player.concentration = getattr(player, 'focus', random.randint(40, 90))
     
     # Copy legacy physical attributes
-    v2_player.acceleration = getattr(player, 'acceleration', random.randint(8, 18))
-    v2_player.agility = getattr(player, 'agility', random.randint(8, 18))
-    v2_player.balance = getattr(player, 'balance', random.randint(8, 18))
-    v2_player.off_the_puck = getattr(player, 'off_the_puck', random.randint(8, 18))
-    v2_player.wristshot = getattr(player, 'wristshot', random.randint(8, 18))
-    v2_player.slapshot = getattr(player, 'slapshot', random.randint(8, 18))
-    v2_player.speed = getattr(player, 'speed', random.randint(8, 18))
-    v2_player.stamina = getattr(player, 'stamina', random.randint(8, 18))
+    v2_player.acceleration = getattr(player, 'acceleration', random.randint(40, 90))
+    v2_player.agility = getattr(player, 'agility', random.randint(40, 90))
+    v2_player.balance = getattr(player, 'balance', random.randint(40, 90))
+    v2_player.off_the_puck = getattr(player, 'off_the_puck', random.randint(40, 90))
+    v2_player.wristshot = getattr(player, 'wristshot', random.randint(40, 90))
+    v2_player.slapshot = getattr(player, 'slapshot', random.randint(40, 90))
+    v2_player.speed = getattr(player, 'speed', random.randint(40, 90))
+    v2_player.stamina = getattr(player, 'stamina', random.randint(40, 90))
     v2_player.strength = player.strength
     
     # Handle position-specific attributes
     if player.primary_position == PlayerPosition.GOALIE:
-        v2_player.reflexes = getattr(player, 'reflexes', random.randint(8, 18))
-        v2_player.positioning = getattr(player, 'positioning', random.randint(8, 18))
-        v2_player.rebound_control = getattr(player, 'rebound_control', random.randint(8, 18))
-        v2_player.puck_handling = getattr(player, 'puck_handling', random.randint(8, 18))
-        v2_player.glove_hand = getattr(player, 'glove_hand', random.randint(8, 18))
-        v2_player.stick_side = getattr(player, 'stick_side', random.randint(8, 18))
-        v2_player.breakaway_skill = getattr(player, 'breakaway_skill', random.randint(8, 18))
-        v2_player.aggressiveness_goalie = getattr(player, 'aggressiveness', random.randint(8, 18))
+        v2_player.reflexes = getattr(player, 'reflexes', random.randint(40, 90))
+        v2_player.positioning = getattr(player, 'positioning', random.randint(40, 90))
+        v2_player.rebound_control = getattr(player, 'rebound_control', random.randint(40, 90))
+        v2_player.puck_handling = getattr(player, 'puck_handling', random.randint(40, 90))
+        v2_player.glove_hand = getattr(player, 'glove_hand', random.randint(40, 90))
+        v2_player.stick_side = getattr(player, 'stick_side', random.randint(40, 90))
+        v2_player.breakaway_skill = getattr(player, 'breakaway_skill', random.randint(40, 90))
+        v2_player.aggressiveness_goalie = getattr(player, 'aggressiveness', random.randint(40, 90))
     else:
         # Skater attributes
         v2_player.checking = player.checking
-        v2_player.deflection = getattr(player, 'deflections', random.randint(8, 18))
+        v2_player.deflection = getattr(player, 'deflections', random.randint(40, 90))
         v2_player.deking = player.deking
         v2_player.faceoffs = player.faceoffs
-        v2_player.hitting = getattr(player, 'strength', random.randint(8, 18))  # Approximate
+        v2_player.hitting = getattr(player, 'strength', random.randint(40, 90))  # Approximate
         v2_player.off_the_puck = player.offensive_awareness
         v2_player.passing = player.passing
-        v2_player.pokecheck = getattr(player, 'defensive_awareness', random.randint(8, 18))  # Approximate
+        v2_player.pokecheck = getattr(player, 'defensive_awareness', random.randint(40, 90))  # Approximate
         v2_player.shooting = player.shooting
-        v2_player.slapshot = getattr(player, 'shooting_power', random.randint(8, 18))  # Approximate
-        v2_player.stickhandling = getattr(player, 'stickhandling', random.randint(8, 18))
-        v2_player.wristshot = getattr(player, 'shooting_accuracy', random.randint(8, 18))  # Approximate
+        v2_player.slapshot = getattr(player, 'shooting_power', random.randint(40, 90))  # Approximate
+        v2_player.stickhandling = getattr(player, 'stickhandling', random.randint(40, 90))
+        v2_player.wristshot = getattr(player, 'shooting_accuracy', random.randint(40, 90))  # Approximate
     
     # Copy tendencies
     v2_player.shoot_pass_tendency = player.shoot_pass_tendency

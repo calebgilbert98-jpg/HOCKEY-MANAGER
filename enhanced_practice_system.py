@@ -213,7 +213,7 @@ class PracticeEngine:
                 )
                 
                 if improvement > 0:
-                    new_value = min(50, current_value + improvement)  # internal ~50 scale (100 display)
+                    new_value = min(100, current_value + improvement)  # native 1-100 scale
                     setattr(player, attribute, new_value)
                     skill_gains[attribute] = improvement
         
@@ -264,7 +264,7 @@ class PracticeEngine:
         # Player work ethic (if available)
         work_ethic_mult = 1.0
         if hasattr(player, 'work_rate'):
-            work_ethic_mult = 0.7 + (player.work_rate / 50) * 0.6
+            work_ethic_mult = 0.7 + (player.work_rate / 100) * 0.6
         
         # Random factor for realism
         random_mult = random.uniform(0.8, 1.2)
@@ -278,11 +278,11 @@ class PracticeEngine:
         """Calculate actual skill point improvement with diminishing returns"""
         
         # Diminishing returns - harder to improve high attributes
-        if current_value >= 45:
+        if current_value >= 90:
             effectiveness *= 0.2
-        elif current_value >= 38:
+        elif current_value >= 76:
             effectiveness *= 0.5
-        elif current_value >= 30:
+        elif current_value >= 60:
             effectiveness *= 0.8
         
         # Age factor for skill retention
@@ -644,9 +644,9 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         total_players = len(all_players)
         avg_overall = sum(p.overall_rating() for p in all_players) / total_players
         
-        elite_players = [p for p in all_players if p.overall_rating() >= 16]
-        good_players = [p for p in all_players if 13 <= p.overall_rating() < 16]
-        developing_players = [p for p in all_players if p.overall_rating() < 13]
+        elite_players = [p for p in all_players if p.overall_rating() >= 80]
+        good_players = [p for p in all_players if 65 <= p.overall_rating() < 80]
+        developing_players = [p for p in all_players if p.overall_rating() < 65]
         
         # Practice analysis
         active_practitioners = []
@@ -954,7 +954,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
                 tag = 'prospect'
             
             # Special tags for notable players
-            if player.age <= 22 and player.overall_rating() >= 14:
+            if player.age <= 22 and player.overall_rating() >= 70:
                 tag = 'young_star'
             elif player.age >= 32:
                 tag = 'veteran'
@@ -962,14 +962,14 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             # Calculate potential (simplified)
             potential = "Low"
             if player.age <= 23:
-                if player.overall_rating() >= 38:
+                if player.overall_rating() >= 76:
                     potential = "Elite"
-                elif player.overall_rating() >= 33:
+                elif player.overall_rating() >= 66:
                     potential = "High"
                 else:
                     potential = "Medium"
             elif player.age <= 27:
-                if player.overall_rating() >= 16:
+                if player.overall_rating() >= 80:
                     potential = "Star"
                 else:
                     potential = "Solid"
@@ -995,6 +995,8 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             if 'development_tree_map' not in self.parent.tree_maps:
                 self.parent.tree_maps['development_tree_map'] = {}
             self.parent.tree_maps['development_tree_map'][item_id] = player
+            # Widget-keyed entry so the app-wide right-click menu resolves it.
+            self.parent.tree_maps.setdefault(self.player_tree, {})[item_id] = player
         
         # Update status bar
         if hasattr(self, 'status_bar'):
@@ -1140,7 +1142,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         ]
         
         for skill_name, skill_value in tech_skills:
-            color = 'green' if skill_value >= 38 else 'orange' if skill_value >= 30 else 'red'
+            color = 'green' if skill_value >= 76 else 'orange' if skill_value >= 60 else 'red'
             skill_text = f"{skill_name}: {skill_value}"
             ttk.Label(tech_frame, text=skill_text, style='Content.TLabel',
                      foreground=color).pack(anchor='w')
@@ -1162,7 +1164,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         ]
         
         for skill_name, skill_value in mental_skills:
-            color = 'green' if skill_value >= 38 else 'orange' if skill_value >= 30 else 'red'
+            color = 'green' if skill_value >= 76 else 'orange' if skill_value >= 60 else 'red'
             skill_text = f"{skill_name}: {skill_value}"
             ttk.Label(mental_frame, text=skill_text, style='Content.TLabel',
                      foreground=color).pack(anchor='w')
@@ -1185,9 +1187,9 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         
         for skill_name, skill_value in physical_skills:
             if skill_name == "Injury Prone":
-                color = 'red' if skill_value >= 38 else 'orange' if skill_value >= 30 else 'green'
+                color = 'red' if skill_value >= 76 else 'orange' if skill_value >= 60 else 'green'
             else:
-                color = 'green' if skill_value >= 38 else 'orange' if skill_value >= 30 else 'red'
+                color = 'green' if skill_value >= 76 else 'orange' if skill_value >= 60 else 'red'
             skill_text = f"{skill_name}: {skill_value}"
             ttk.Label(physical_frame, text=skill_text, style='Content.TLabel',
                      foreground=color).pack(anchor='w')
@@ -1728,6 +1730,8 @@ class PracticeCenterWindow(tk.Toplevel):
             if 'practice_center_tree_map' not in self.parent.tree_maps:
                 self.parent.tree_maps['practice_center_tree_map'] = {}
             self.parent.tree_maps['practice_center_tree_map'][item_id] = player
+            # Widget-keyed entry so the app-wide right-click menu resolves it.
+            self.parent.tree_maps.setdefault(self.player_tree, {})[item_id] = player
     
     def _on_player_select(self, event):
         """Handle player selection"""

@@ -429,13 +429,8 @@ class AITeamManager:
         cap_sys = self._cap_system
         cap = cap_sys.current_cap if cap_sys else DEFAULT_CAP
 
-        ovr = player.overall_rating()  # internal ~50 scale
-        # Convert to 1-100 display scale for market logic
-        try:
-            from game_classes import to_100_scale
-            ovr100 = int(to_100_scale(ovr))
-        except Exception:
-            ovr100 = int(ovr * 2)
+        ovr = player.overall_rating()  # native 1-100 scale
+        ovr100 = int(ovr)
 
         # Base demand as % of cap: ~100k per OVR point at $83.5M cap
         # = ovr * 100_000 / 83_500_000 ≈ ovr * 0.0012 (0.12% per point)

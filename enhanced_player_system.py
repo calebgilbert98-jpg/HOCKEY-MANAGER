@@ -45,69 +45,69 @@ class EnhancedPlayer:
     overall: int = 75  # Overall rating
     
     # Core Attributes (using same names as existing Player class for compatibility)
-    skating: int = field(default_factory=lambda: random.randint(8, 18))
-    shooting: int = field(default_factory=lambda: random.randint(8, 18))
-    passing: int = field(default_factory=lambda: random.randint(8, 18))
-    checking: int = field(default_factory=lambda: random.randint(8, 18))
-    goaltending: int = field(default_factory=lambda: random.randint(8, 18))
+    skating: int = field(default_factory=lambda: random.randint(40, 90))
+    shooting: int = field(default_factory=lambda: random.randint(40, 90))
+    passing: int = field(default_factory=lambda: random.randint(40, 90))
+    checking: int = field(default_factory=lambda: random.randint(40, 90))
+    goaltending: int = field(default_factory=lambda: random.randint(40, 90))
     
     # Enhanced Technical Attributes (1-20 scale)
-    stickhandling: int = field(default_factory=lambda: random.randint(8, 18))
-    shooting_accuracy: int = field(default_factory=lambda: random.randint(8, 18))
-    shooting_power: int = field(default_factory=lambda: random.randint(8, 18))
-    passing_accuracy: int = field(default_factory=lambda: random.randint(8, 18))
-    passing_vision: int = field(default_factory=lambda: random.randint(8, 18))
-    skating_speed: int = field(default_factory=lambda: random.randint(8, 18))
-    skating_agility: int = field(default_factory=lambda: random.randint(8, 18))
-    body_checking: int = field(default_factory=lambda: random.randint(8, 18))
-    shot_blocking: int = field(default_factory=lambda: random.randint(8, 18))
-    faceoffs: int = field(default_factory=lambda: random.randint(8, 18))
+    stickhandling: int = field(default_factory=lambda: random.randint(40, 90))
+    shooting_accuracy: int = field(default_factory=lambda: random.randint(40, 90))
+    shooting_power: int = field(default_factory=lambda: random.randint(40, 90))
+    passing_accuracy: int = field(default_factory=lambda: random.randint(40, 90))
+    passing_vision: int = field(default_factory=lambda: random.randint(40, 90))
+    skating_speed: int = field(default_factory=lambda: random.randint(40, 90))
+    skating_agility: int = field(default_factory=lambda: random.randint(40, 90))
+    body_checking: int = field(default_factory=lambda: random.randint(40, 90))
+    shot_blocking: int = field(default_factory=lambda: random.randint(40, 90))
+    faceoffs: int = field(default_factory=lambda: random.randint(40, 90))
     
     # Goalie-specific attributes
-    reflexes: int = field(default_factory=lambda: random.randint(8, 18))
-    positioning: int = field(default_factory=lambda: random.randint(8, 18))
-    rebound_control: int = field(default_factory=lambda: random.randint(8, 18))
-    glove_hand: int = field(default_factory=lambda: random.randint(8, 18))
-    blocker_hand: int = field(default_factory=lambda: random.randint(8, 18))
-    five_hole: int = field(default_factory=lambda: random.randint(8, 18))
+    reflexes: int = field(default_factory=lambda: random.randint(40, 90))
+    positioning: int = field(default_factory=lambda: random.randint(40, 90))
+    rebound_control: int = field(default_factory=lambda: random.randint(40, 90))
+    glove_hand: int = field(default_factory=lambda: random.randint(40, 90))
+    blocker_hand: int = field(default_factory=lambda: random.randint(40, 90))
+    five_hole: int = field(default_factory=lambda: random.randint(40, 90))
     
     # Physical Attributes
-    strength: int = field(default_factory=lambda: random.randint(8, 18))
-    stamina: int = field(default_factory=lambda: random.randint(8, 18))
-    injury_resistance: int = field(default_factory=lambda: random.randint(8, 18))
-    size: int = field(default_factory=lambda: random.randint(8, 18))  # Height/weight factor
-    reach: int = field(default_factory=lambda: random.randint(8, 18))
+    strength: int = field(default_factory=lambda: random.randint(40, 90))
+    stamina: int = field(default_factory=lambda: random.randint(40, 90))
+    injury_resistance: int = field(default_factory=lambda: random.randint(40, 90))
+    size: int = field(default_factory=lambda: random.randint(40, 90))  # Height/weight factor
+    reach: int = field(default_factory=lambda: random.randint(40, 90))
     
     # HIDDEN ATTRIBUTES - The key to EHM-style depth
     # Mental Attributes
-    consistency: int = field(default_factory=lambda: random.randint(5, 20))
-    pressure_handling: int = field(default_factory=lambda: random.randint(5, 20))
-    big_game_performance: int = field(default_factory=lambda: random.randint(5, 20))
-    clutch_factor: int = field(default_factory=lambda: random.randint(5, 20))
-    focus: int = field(default_factory=lambda: random.randint(5, 20))
-    mental_toughness: int = field(default_factory=lambda: random.randint(5, 20))
+    consistency: int = field(default_factory=lambda: random.randint(25, 100))
+    pressure_handling: int = field(default_factory=lambda: random.randint(25, 100))
+    big_game_performance: int = field(default_factory=lambda: random.randint(25, 100))
+    clutch_factor: int = field(default_factory=lambda: random.randint(25, 100))
+    focus: int = field(default_factory=lambda: random.randint(25, 100))
+    mental_toughness: int = field(default_factory=lambda: random.randint(25, 100))
     
     # Personality Attributes
-    leadership: int = field(default_factory=lambda: random.randint(5, 20))
-    teamwork: int = field(default_factory=lambda: random.randint(5, 20))
-    selfishness: int = field(default_factory=lambda: random.randint(5, 20))
-    aggression: int = field(default_factory=lambda: random.randint(5, 20))
-    discipline: int = field(default_factory=lambda: random.randint(5, 20))
-    work_ethic: int = field(default_factory=lambda: random.randint(5, 20))
-    coachability: int = field(default_factory=lambda: random.randint(5, 20))
+    leadership: int = field(default_factory=lambda: random.randint(25, 100))
+    teamwork: int = field(default_factory=lambda: random.randint(25, 100))
+    selfishness: int = field(default_factory=lambda: random.randint(25, 100))
+    aggression: int = field(default_factory=lambda: random.randint(25, 100))
+    discipline: int = field(default_factory=lambda: random.randint(25, 100))
+    work_ethic: int = field(default_factory=lambda: random.randint(25, 100))
+    coachability: int = field(default_factory=lambda: random.randint(25, 100))
     
     # Situational Attributes
-    home_ice_comfort: int = field(default_factory=lambda: random.randint(5, 20))
-    travel_fatigue_resistance: int = field(default_factory=lambda: random.randint(5, 20))
-    rivalry_motivation: int = field(default_factory=lambda: random.randint(5, 20))
-    playoff_experience: int = field(default_factory=lambda: random.randint(5, 20))
+    home_ice_comfort: int = field(default_factory=lambda: random.randint(25, 100))
+    travel_fatigue_resistance: int = field(default_factory=lambda: random.randint(25, 100))
+    rivalry_motivation: int = field(default_factory=lambda: random.randint(25, 100))
+    playoff_experience: int = field(default_factory=lambda: random.randint(25, 100))
     
     # Tactical IQ Attributes
-    offensive_read: int = field(default_factory=lambda: random.randint(5, 20))
-    defensive_read: int = field(default_factory=lambda: random.randint(5, 20))
-    anticipation: int = field(default_factory=lambda: random.randint(5, 20))
-    positioning_iq: int = field(default_factory=lambda: random.randint(5, 20))
-    system_adaptability: int = field(default_factory=lambda: random.randint(5, 20))
+    offensive_read: int = field(default_factory=lambda: random.randint(25, 100))
+    defensive_read: int = field(default_factory=lambda: random.randint(25, 100))
+    anticipation: int = field(default_factory=lambda: random.randint(25, 100))
+    positioning_iq: int = field(default_factory=lambda: random.randint(25, 100))
+    system_adaptability: int = field(default_factory=lambda: random.randint(25, 100))
     
     # Dynamic State Variables
     current_morale: MoraleLevel = field(default=MoraleLevel.NEUTRAL)
@@ -142,19 +142,19 @@ class EnhancedPlayer:
     def _assign_personality_type(self):
         """Assign personality type based on attributes"""
         # Analyze attributes to determine personality
-        if self.clutch_factor >= 16 and self.pressure_handling >= 15:
+        if self.clutch_factor >= 80 and self.pressure_handling >= 75:
             self.personality_type = PersonalityType.CLUTCH_PERFORMER
-        elif self.consistency >= 16 and self.work_ethic >= 15:
+        elif self.consistency >= 80 and self.work_ethic >= 75:
             self.personality_type = PersonalityType.CONSISTENT_GRINDER
-        elif self.selfishness >= 16 and self.shooting_accuracy >= 15:
+        elif self.selfishness >= 80 and self.shooting_accuracy >= 75:
             self.personality_type = PersonalityType.SELFISH_SCORER
-        elif self.teamwork >= 16 and self.leadership >= 15:
+        elif self.teamwork >= 80 and self.leadership >= 75:
             self.personality_type = PersonalityType.TEAM_PLAYER
-        elif max(self.shooting_accuracy, self.passing_vision) >= 17 and self.consistency <= 12:
+        elif max(self.shooting_accuracy, self.passing_vision) >= 85 and self.consistency <= 60:
             self.personality_type = PersonalityType.VOLATILE_STAR
-        elif self.defensive_read >= 16 and self.shot_blocking >= 15:
+        elif self.defensive_read >= 80 and self.shot_blocking >= 75:
             self.personality_type = PersonalityType.DEFENSIVE_SPECIALIST
-        elif self.aggression >= 17 and self.body_checking >= 16:
+        elif self.aggression >= 85 and self.body_checking >= 80:
             self.personality_type = PersonalityType.ENFORCER
         else:
             self.personality_type = PersonalityType.PLAYMAKER
