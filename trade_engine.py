@@ -1565,7 +1565,11 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
             picks_by_year = getattr(user_team, 'draft_picks', {})
             for yr, picks in picks_by_year.items():
                 for pk in picks:
-                    if getattr(pk, 'current_team', '') == getattr(user_team, 'team_name', ''):
+                    # BUG-017: never ask for dead paper -- expired picks
+                    # can't be traded (can_be_traded False), so proposing
+                    # one builds a counter the execute gate will kill.
+                    if (getattr(pk, 'current_team', '') == getattr(user_team, 'team_name', '')
+                            and pk.can_be_traded()):
                         user_picks.append(pk)
         except Exception:
             pass

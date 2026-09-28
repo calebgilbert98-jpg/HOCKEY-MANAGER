@@ -1073,6 +1073,16 @@ class GameSaveManager:
             league = self.game_manager.league
             league.league_name = league_data.get('league_name', 'NHL')
             league.season_year = league_data.get('season_year', 2024)
+            # BUG-018: re-anchor the draft-pick value/expiry clock to the
+            # save's season. The anchor is process-global, set only at
+            # league creation and end_of_season -- without this, every
+            # loaded career values picks against the real-world year and
+            # BUG-016's expired-pick guards silently don't apply.
+            try:
+                from game_classes import set_pick_value_anchor_year
+                set_pick_value_anchor_year(league.season_year)
+            except Exception:
+                pass
             league.standings = league_data.get('standings', {})
             league.schedule_generated = league_data.get('schedule_generated', False)
             league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
