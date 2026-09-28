@@ -2184,10 +2184,12 @@ class DraftPick:
     @property
     def description(self) -> str:
         """Get a description of this draft pick."""
+        r = self.round
+        suffix = "th" if 11 <= (r % 100) <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(r % 10, "th")
         if self.original_team == self.current_team:
-            return f"{self.year} {self.round}st Round Pick"
+            return f"{self.year} {r}{suffix} Round Pick"
         else:
-            return f"{self.year} {self.round}st Round Pick (from {self.original_team})"
+            return f"{self.year} {r}{suffix} Round Pick (from {self.original_team})"
     
     @property
     def value(self) -> int:
