@@ -488,4 +488,40 @@ random.seed(11)
 _chg = _pde.process_monthly_development(_pl, coach=_mteam.staff[0], team=_mteam)
 check("process_monthly_development accepts team", isinstance(_chg, dict))
 
+# Staff profile card shows the attributes the practice model prices.
+from game_classes import Staff as _Staff, StaffRole as _StaffRole
+def _mkstaff(role, **kw):
+    _s = _Staff("Card", "Check", role)
+    for _k, _v in kw.items():
+        setattr(_s, _k, _v)
+    return _s
+_hc = _mkstaff(_StaffRole.HEAD_COACH, attacking_coaching=91, coaching_goalies=40,
+               judging_player_ability=30)
+_hd = _hc.get_attributes_for_role()
+check("head coach card: 15 attributes", len(_hd) == 15, f"n={len(_hd)}")
+check("card values match the staff object",
+      _hd['attacking_coaching'] == 91 and _hd['coaching_goalies'] == 40)
+check("card omits scout-only attributes", 'judging_player_ability' not in _hd)
+_gc = _mkstaff(_StaffRole.GOALIE_COACH, coaching_goalies=93)
+_gd = _gc.get_attributes_for_role()
+check("goalie coach card leads with coaching_goalies",
+      list(_gd)[0] == 'coaching_goalies' and _gd['coaching_goalies'] == 93)
+_sd = _mkstaff(_StaffRole.HEAD_SCOUT, judging_player_ability=88).get_attributes_for_role()
+check("scout card: scouting attributes only",
+      set(_sd) == {'judging_player_ability', 'judging_player_potential',
+                   'determination', 'adaptability'})
+check("card covers every drill-teaching attribute",
+      all(a in _hd for a in ('attacking_coaching', 'defensive_coaching',
+                             'technical_coaching', 'mental_coaching')),
+      "teaching quality visible")
+check("card covers archetype-affinity inputs",
+      all(a in _hd for a in ('coaching_forwards', 'coaching_defensemen',
+                             'coaching_goalies', 'player_development',
+                             'working_with_youngsters')),
+      "affinity visible")
+check("card covers attitude/system inputs",
+      all(a in _hd for a in ('man_management', 'motivating', 'discipline',
+                             'tactical_knowledge', 'adaptability')),
+      "attitude/system visible")
+
 print(f"\nALL {len(passed)} COACH-PRACTICE QA CHECKS PASSED")

@@ -1275,6 +1275,60 @@ class Staff:
                 self.discipline * 0.20
             ))
     
+    def get_attributes_for_role(self) -> dict:
+        """Role-relevant attributes for profile cards and comparisons.
+
+        The coaching set mirrors what the practice engine prices
+        (coach_practice): drill teaching quality, positional coaching,
+        development touch, management, and tactical/system knowledge --
+        so the card shows the numbers that actually move development.
+        """
+        coaching = {
+            'attacking_coaching': self.attacking_coaching,
+            'defensive_coaching': self.defensive_coaching,
+            'technical_coaching': self.technical_coaching,
+            'mental_coaching': self.mental_coaching,
+            'coaching_forwards': self.coaching_forwards,
+            'coaching_defensemen': self.coaching_defensemen,
+            'coaching_goalies': self.coaching_goalies,
+            'player_development': self.player_development,
+            'working_with_youngsters': self.working_with_youngsters,
+            'tactical_knowledge': self.tactical_knowledge,
+            'man_management': self.man_management,
+            'motivating': self.motivating,
+            'discipline': self.discipline,
+            'leadership': self.leadership,
+            'adaptability': self.adaptability,
+        }
+        if self.role == StaffRole.GOALIE_COACH:
+            order = ['coaching_goalies', 'technical_coaching',
+                     'working_with_youngsters', 'man_management',
+                     'motivating', 'mental_coaching', 'adaptability',
+                     'discipline']
+            return {k: coaching[k] for k in order}
+        if self.role in (StaffRole.HEAD_COACH, StaffRole.ASSISTANT_COACH,
+                         StaffRole.ASSOCIATE_COACH, StaffRole.POWER_PLAY_COACH,
+                         StaffRole.PENALTY_KILL_COACH, StaffRole.SKILLS_COACH,
+                         StaffRole.CONDITIONING_COACH,
+                         StaffRole.SKATING_COACH):
+            return coaching
+        if 'SCOUT' in self.role.value.upper():
+            return {
+                'judging_player_ability': self.judging_player_ability,
+                'judging_player_potential': self.judging_player_potential,
+                'determination': self.determination,
+                'adaptability': self.adaptability,
+            }
+        return {
+            'leadership': self.leadership,
+            'man_management': self.man_management,
+            'tactical_knowledge': self.tactical_knowledge,
+            'judging_player_ability': self.judging_player_ability,
+            'determination': self.determination,
+            'adaptability': self.adaptability,
+            'media_handling': self.media_handling,
+        }
+
     def get_role_description(self) -> str:
         """Get a description of what this staff member does"""
         descriptions = {
