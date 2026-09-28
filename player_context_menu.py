@@ -136,18 +136,12 @@ class PlayerContextMenu:
             context_menu.grab_release()
     
     def _view_player_profile(self, player):
-        """Open player profile window.
+        """Open the player profile as a full screen in the main instance.
 
-        Primary: the card popup. Any failure (not just ImportError) falls
-        back to the app's canonical open_player_profile so a right-click
-        never silently dies inside a menu callback.
+        Delegates to the app's canonical open_player_profile (screen-first,
+        popup only as a last resort). A messagebox summary is the final
+        fallback so a right-click never silently dies inside a menu callback.
         """
-        try:
-            from ui_components import PlayerProfileWindow
-            PlayerProfileWindow(self.parent, player)
-            return
-        except Exception:
-            pass
         try:
             app = self._app()
             if hasattr(app, "open_player_profile"):
@@ -724,13 +718,17 @@ class PlayerContextMenu:
         )
     
     def _view_contract_details(self, player):
-        """Open player profile with contract tab selected"""
+        """Open the player profile screen with the contract tab selected."""
         try:
-            from ui_components import PlayerProfileWindow
-            # Create the profile window
-            profile_window = PlayerProfileWindow(self.parent, player)
+            app = self._app()
+            view = None
+            if hasattr(app, "open_player_profile"):
+                view = app.open_player_profile(player)
             # Focus on the contract tab (tab index 3 based on order: Overview, Attributes, Stats, Contract, Development)
-            profile_window.notebook.select(3)
+            if view is not None and hasattr(view, "notebook"):
+                view.notebook.select(3)
+                return
+            raise RuntimeError("profile screen did not return a view")
         except (ImportError, Exception) as e:
             # Fallback to message box if profile window unavailable
             if hasattr(player, 'contract') and player.contract:

@@ -1315,8 +1315,11 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
             ])
     
     def _view_player_profile(self, player):
-        """Open player profile window"""
+        """Open the player profile as a full screen in the main instance."""
         try:
+            if hasattr(self.app, "open_player_profile"):
+                self.app.open_player_profile(player)
+                return
             from ui_components import PlayerProfileWindow
             PlayerProfileWindow(self.app, player)
         except ImportError:

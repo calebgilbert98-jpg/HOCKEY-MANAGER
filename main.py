@@ -13058,50 +13058,50 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_player_profile(self, player):
         """
-        Opens the player profile window with detailed player information.
-        
+        Opens the player profile as a full screen in the main instance.
+
+        The card lives in the main window (via show_screen) instead of a
+        popup. If the screen path fails, falls back to the modern popup
+        card. Never raises to the caller: a click that produces nothing
+        is worse than a click that explains itself.
+
         Args:
             player: The player object to display
         """
-        # Use modern profile by default (clean, card-based)
-        # Set use_modern_profile=False to revert to the classic detailed view
-        use_modern_profile = True
-
-        last_error = None
-        if use_modern_profile:
-            try:
-                from modern_profile import PlayerProfile
-                PlayerProfile(self, player)
-                return
-            except Exception as e:
-                last_error = e
-                print(f"Modern profile failed, falling back: {e}")
-
+        screen_error = None
         try:
             team = getattr(self, "user_team", None)
             reports = getattr(team, "scouting_reports", None) or {}
             report = reports.get(getattr(player, "id", None))
             is_scouted = report is not None
 
-            # Fallback to the standard player profile view
             from ui_components import PlayerProfileView
+            # fresh=True: a different player must rebuild, never reuse the
+            # cached view of whoever was showing before.
             return self.show_screen("player_profile", f"Profile: {player.full_name}",
-                                    PlayerProfileView, player, is_scouted, report)
+                                    PlayerProfileView, player, is_scouted, report,
+                                    fresh=True)
         except Exception as e:
-            # Never fail silently: the user clicked and deserves to know why
-            # no card appeared.
-            print(f"Player profile fallback failed: {e}")
-            try:
-                from popup_system import messagebox
-                detail = f"{last_error}" if last_error else f"{e}"
-                messagebox.showerror(
-                    "Player Profile",
-                    f"Could not open the profile for "
-                    f"{getattr(player, 'full_name', 'this player')}.\n\n"
-                    f"Details: {detail}")
-            except Exception:
-                pass
-            return None
+            screen_error = e
+            print(f"Player profile screen failed, falling back to popup: {e}")
+
+        try:
+            from modern_profile import PlayerProfile
+            PlayerProfile(self, player)
+            return
+        except Exception as e:
+            print(f"Player profile popup fallback failed: {e}")
+
+        try:
+            from popup_system import messagebox
+            messagebox.showerror(
+                "Player Profile",
+                f"Could not open the profile for "
+                f"{getattr(player, 'full_name', 'this player')}.\n\n"
+                f"Details: {screen_error}")
+        except Exception:
+            pass
+        return None
         
     def send_to_ahl(self, player):
         self.user_team.roster.remove(player)

@@ -460,8 +460,11 @@ class ShortlistView(ctk.CTkFrame):
             # Find the actual player object
             player = self.find_player_by_id(entry.player_id)
             if player:
-                from ui_components import PlayerProfileWindow
-                profile_window = PlayerProfileWindow(self.app, player)
+                if hasattr(self.app, "open_player_profile"):
+                    self.app.open_player_profile(player)
+                else:
+                    from ui_components import PlayerProfileWindow
+                    profile_window = PlayerProfileWindow(self.app, player)
             else:
                 messagebox.showwarning("Player Not Found",
                                      f"Could not find player {entry.player_name} in current rosters.")

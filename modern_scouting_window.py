@@ -831,10 +831,13 @@ class ModernScoutingView(ctk.CTkFrame):
             messagebox.showerror("Error", "Could not find selected player.")
             return
         
-        # Show player profile dialog
+        # Open the player profile as a full screen in the main instance
         try:
-            from ui_components import PlayerProfileWindow
-            PlayerProfileWindow(self.app, player)
+            if hasattr(self.app, "open_player_profile"):
+                self.app.open_player_profile(player)
+            else:
+                from ui_components import PlayerProfileWindow
+                PlayerProfileWindow(self.app, player)
         except ImportError:
             # Fallback - show basic info
             info = f"""

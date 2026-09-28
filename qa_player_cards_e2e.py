@@ -52,6 +52,13 @@ def close_cards():
         pass
     app.update_idletasks(); app.update()
 
+def profile_screen_open():
+    """The card is a screen in the main instance, not a popup."""
+    cur = getattr(app, "_current_screen", None) or {}
+    view = cur.get("view")
+    return (cur.get("id") == "player_profile" and view is not None
+            and view.winfo_exists() and bool(view.winfo_ismapped()))
+
 # -- 1. modern card sweep -------------------------------------------------
 from modern_profile import PlayerProfile
 fails = 0
@@ -75,13 +82,33 @@ for p in sample(40):
         menu._view_player_profile(p)
         for _ in range(3):
             app.update_idletasks(); app.update()
-        top = mgr._stack[-1]["popup"] if getattr(mgr, "_stack", []) else None
-        assert top is not None and top.winfo_ismapped()
+        assert profile_screen_open(), "profile screen did not open"
+        app.show_dashboard()
+        for _ in range(2):
+            app.update_idletasks(); app.update()
         close_cards()
     except Exception:
         fails += 1
         traceback.print_exc()
-check("right-click card opens for 40 real players", fails == 0)
+check("right-click opens profile as a main-instance screen (40 players)", fails == 0)
+
+# -- 2b. opening a second player's profile replaces the first --------------
+p1, p2 = team.roster[0], team.roster[1]
+app.open_player_profile(p1)
+for _ in range(3):
+    app.update_idletasks(); app.update()
+app.open_player_profile(p2)
+for _ in range(3):
+    app.update_idletasks(); app.update()
+cur = getattr(app, "_current_screen", None) or {}
+check("second profile replaces the first (no stale player)",
+      profile_screen_open() and getattr(cur.get("view"), "player", None) is p2)
+try:
+    app.show_dashboard()
+except Exception:
+    pass
+for _ in range(2):
+    app.update_idletasks(); app.update()
 
 # -- 3. fallback screen path ----------------------------------------------
 from ui_components import PlayerProfileView
@@ -123,10 +150,13 @@ if trees:
                     break
             for _ in range(5):
                 app.update_idletasks(); app.update()
-            top = mgr._stack[-1]["popup"] if getattr(mgr, "_stack", []) else None
-            found = top is not None and top.winfo_ismapped()
+            found = profile_screen_open()
+            try:
+                app.show_dashboard()
+            except Exception:
+                pass
             close_cards()
-check("roster double-click opens card", found)
+check("roster double-click opens card as a screen", found)
 
 # -- 5. all tabs switch clean ----------------------------------------------
 p = next(x for x in team.roster
@@ -144,27 +174,26 @@ for name in list(getattr(card, "_tab_buttons", {}).keys()):
 close_cards()
 check("all 5 card tabs switch without error", tab_fails == 0)
 
-# -- 6. hardening: right-click survives a card-popup failure ---------------
-import ui_components
-_real = ui_components.PlayerProfileWindow
-def _boom(parent, player, *a, **k):
-    raise RuntimeError("simulated popup failure")
-ui_components.PlayerProfileWindow = _boom
-# player_context_menu imports inside the method, so patch the attr there too
-import player_context_menu  # noqa - uses `from ui_components import` at call time
+# -- 6. hardening: right-click survives a screen failure ---------------------
+# Screen-first now: if show_screen raises, the modern popup card is the
+# fallback and the click still produces a visible card.
+_real_show_screen = app.show_screen
+def _boom_screen(*a, **k):
+    raise RuntimeError("simulated screen failure")
+app.show_screen = _boom_screen
 try:
     menu._view_player_profile(team.roster[0])
     for _ in range(4):
         app.update_idletasks(); app.update()
     top = mgr._stack[-1]["popup"] if getattr(mgr, "_stack", []) else None
-    check("right-click falls back to app card when popup raises",
+    check("right-click falls back to popup card when screen raises",
           top is not None and top.winfo_ismapped())
     close_cards()
 except Exception:
     traceback.print_exc()
-    check("right-click falls back to app card when popup raises", False)
+    check("right-click falls back to popup card when screen raises", False)
 finally:
-    ui_components.PlayerProfileWindow = _real
+    app.show_screen = _real_show_screen
 
 # -- 7. open_player_profile never dies silently -----------------------------
 class NoTeam:

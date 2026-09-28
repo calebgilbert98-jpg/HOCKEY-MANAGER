@@ -342,14 +342,8 @@ class HomeDashboard:
         return lbl
 
     def _open_player_profile(self, player):
-        """Open the full player profile window for a player object."""
-        try:
-            from ui_components import PlayerProfileWindow
-            PlayerProfileWindow(self.parent, player)
-            return
-        except Exception:
-            pass
-        # Never silently swallow: route through the app's canonical path.
+        """Open the player profile as a full screen in the main instance."""
+        # Canonical path first: the card is a screen, not a popup.
         try:
             app = self.parent
             for _ in range(4):
@@ -361,6 +355,12 @@ class HomeDashboard:
                 return
         except Exception as e:
             print(f"Could not open player profile: {e}")
+        # Last resort: the legacy popup card.
+        try:
+            from ui_components import PlayerProfileWindow
+            PlayerProfileWindow(self.parent, player)
+        except Exception:
+            pass
 
     def _open_team_info(self, team):
         """Open team info: roster window for the user's team, standings for others."""
