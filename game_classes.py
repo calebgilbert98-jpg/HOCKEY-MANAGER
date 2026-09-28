@@ -300,6 +300,10 @@ class Player:
     # next man up or a trade chip. Old-save safe: read via
     # getattr(player, 'career_moments', []).
     career_moments: list = field(default_factory=list)
+    # Trophy case: permanent, de-duplicated award/Cup wins.
+    # Plain dicts {"award": key, "year": label} -- save/load safe.
+    # Old-save safe: read via getattr(player, 'career_accolades', []).
+    career_accolades: list = field(default_factory=list)
     family_ids: list = field(default_factory=list)
     reputation_history: list = field(default_factory=list)
     controversy_history: list = field(default_factory=list)

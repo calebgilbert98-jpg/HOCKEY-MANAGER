@@ -11055,6 +11055,17 @@ class HockeyManagerGUI(tk.Tk):
                     league_avg_ppg=league_avg_ppg,
                     awards=name_to_awards.get(p.full_name, []),
                 )
+                # Trophy case: bank each season award onto the winner,
+                # labeled by ceremony year (e.g. "2027" for the 2026-27
+                # season). Idempotent -- re-runs never duplicate.
+                for _akey in name_to_awards.get(p.full_name, []):
+                    try:
+                        import accolades as _acc
+                        _acc.bank_accolade(
+                            p, _akey,
+                            str(getattr(self.league, "season_year", 0) + 1))
+                    except Exception:
+                        pass
         self._reputation_updated_for_season = self.league.season_year
 
     def _update_offseason_reputations(self):
@@ -11096,6 +11107,17 @@ class HockeyManagerGUI(tk.Tk):
                                      win_pct=win_pct)
                 if is_champ:
                     rs.award_championship(p)  # +8, ratchet-safe
+                    # Trophy case: bank the Cup on every champion-roster
+                    # player, labeled by season (e.g. "2026-27").
+                    # Idempotent -- re-runs never duplicate.
+                    try:
+                        import accolades as _acc
+                        _syr = getattr(self.league, "season_year", 0)
+                        _acc.bank_accolade(
+                            p, "stanley_cup",
+                            f"{_syr}-{str(_syr + 1)[-2:]}")
+                    except Exception:
+                        pass
             for s in getattr(team, 'staff', []) or []:
                 # +12 for a Cup on the 0-100 career scale; win% moves the rest
                 rs.update_staff_reputation(s, team_win_pct=win_pct,

@@ -182,7 +182,7 @@ class PlayerProfileView(ctk.CTkFrame):
         left_column = ttk.Frame(main_container, style='PlayerTab.TFrame')
         left_column.grid(row=1, column=0, sticky='nsew', padx=(0, 1))
         left_column.grid_columnconfigure(0, weight=1)
-        for i in range(4):
+        for i in range(5):
             left_column.grid_rowconfigure(i, weight=1)
         
         center_column = ttk.Frame(main_container, style='PlayerTab.TFrame') 
@@ -201,8 +201,9 @@ class PlayerProfileView(ctk.CTkFrame):
         # (Personal details moved to the Personality tab.)
         self._create_injury_history(left_column, 0)
         self._create_career_progression(left_column, 1)
-        self._create_career_moments(left_column, 3)
-        self._create_team_chemistry(left_column, 2)
+        self._create_accolades(left_column, 2)
+        self._create_career_moments(left_column, 4)
+        self._create_team_chemistry(left_column, 3)
         
         # Center column content - Player Attributes (all attributes bucketed together)
         self._create_enhanced_key_attributes(center_column, 0)
@@ -2458,6 +2459,32 @@ class PlayerProfileView(ctk.CTkFrame):
             ttk.Label(career_grid, text=str(value), style='PlayerInfo.TLabel').grid(
                 row=i, column=1, sticky='w', pady=3
             )
+
+    def _create_accolades(self, parent, row=2):
+        """Permanent trophy case: grouped, de-duplicated award wins.
+
+        Format (Muck's spec):
+            Hart Trophy Winner: 2021, 2025
+            Stanley Cup Winner: 2021-22, 2022-23
+        """
+        acc_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        acc_frame.grid(row=row, column=0, sticky='nsew', pady=(0, 5))
+
+        ttk.Label(acc_frame, text="🏆 Accolades",
+                  style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        try:
+            import accolades as _acc
+            grouped = _acc.group_accolades(self.player)
+        except Exception:
+            grouped = []
+        if not grouped:
+            ttk.Label(acc_frame, text="No awards yet.",
+                      style='PlayerInfo.TLabel').pack(anchor='w')
+            return
+        for label, years in grouped:
+            ttk.Label(acc_frame, text=f"{label} Winner: {', '.join(years)}",
+                      style='PlayerValue.TLabel').pack(anchor='w')
 
     def _create_career_moments(self, parent, row=4):
         """Signature single-game performances (hat tricks, shutouts,
