@@ -813,12 +813,9 @@ class PlayerProfileView(ctk.CTkFrame):
             # Attribute name
             ttk.Label(row, text=attr_name, style='PlayerInfo.TLabel', width=18).pack(side='left')
 
-            # Value on 1-100 display scale
+            # Value on the native 1-100 display scale
             raw = getattr(self.player, attr_key, 10)
-            if attr_key == 'morale':
-                disp = max(1, min(100, int(round(float(raw) * 10))))
-            else:
-                disp = _to_100_scale(raw)
+            disp = _to_100_scale(raw)
 
             # Bar
             bar = tk.Canvas(row, height=16, bg=self.app.CONTENT_BG, highlightthickness=0)
@@ -828,6 +825,101 @@ class PlayerProfileView(ctk.CTkFrame):
             bar.bind('<Configure>', lambda e, c=bar, v=disp: self._draw_attr_bar(c, v))
             # Draw immediately too (in case Configure already fired)
             bar.after(10, lambda c=bar, v=disp: self._draw_attr_bar(c, v))
+
+    def _create_text_attribute_section(self, parent, title, items):
+        """A section of label/value rows for non-numeric attributes
+        (development arc, squad status, form readouts). Same two-column
+        rhythm as the bar sections."""
+        section_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        section_frame.pack(fill='x', padx=8, pady=4)
+
+        ttk.Label(section_frame, text=title, style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        cols_frame = ttk.Frame(section_frame, style='PlayerTab.TFrame')
+        cols_frame.pack(fill='x')
+        cols_frame.grid_columnconfigure(0, weight=1)
+        cols_frame.grid_columnconfigure(1, weight=1)
+
+        left_col = ttk.Frame(cols_frame, style='PlayerTab.TFrame')
+        left_col.grid(row=0, column=0, sticky='nsew', padx=(0, 12))
+        right_col = ttk.Frame(cols_frame, style='PlayerTab.TFrame')
+        right_col.grid(row=0, column=1, sticky='nsew', padx=(12, 0))
+
+        for i, (label, value) in enumerate(items):
+            col = left_col if i % 2 == 0 else right_col
+            row = ttk.Frame(col, style='PlayerTab.TFrame')
+            row.pack(fill='x', pady=3)
+            ttk.Label(row, text=label, style='PlayerInfo.TLabel', width=18).pack(side='left')
+            ttk.Label(row, text=str(value), style='PlayerValue.TLabel').pack(side='left', padx=(6, 0))
+
+    def _ecosystem_development_rows(self):
+        """Text rows for the Development section (ecosystem-exclusive)."""
+        arc = getattr(self.player, "development_arc", "standard") or "standard"
+        arc_disp = arc.replace("_", " ").title()
+        grade = getattr(self.player, "potential_grade", "?") or "?"
+        return [("Development Arc", arc_disp), ("Potential Grade", grade)]
+
+    def _ecosystem_reputation_rows(self, is_goalie=False):
+        """Text rows for the Reputation & Personality section."""
+        rows = [("Squad Status", getattr(self.player, "squad_status", "Rotation") or "Rotation")]
+        if is_goalie:
+            temp = getattr(self.player, "goalie_temperament", "") or ""
+            if temp:
+                rows.append(("Temperament", temp.title()))
+        return rows
+
+    def _ecosystem_form_rows(self):
+        """Text rows for the Form & Chemistry section (ecosystem-exclusive)."""
+        try:
+            mf = float(getattr(self.player, "mesh_form", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            mf = 0.0
+        if mf >= 0.33:
+            form_disp = f"Hot (+{mf:.2f})"
+        elif mf >= 0.10:
+            form_disp = f"Warming (+{mf:.2f})"
+        elif mf <= -0.33:
+            form_disp = f"Cold ({mf:.2f})"
+        elif mf <= -0.10:
+            form_disp = f"Cooling ({mf:.2f})"
+        else:
+            form_disp = f"Neutral ({mf:+.2f})"
+        streak = getattr(self.player, "mesh_streak", 0) or 0
+        line_chem = getattr(self.player, "line_chemistry", 10) or 10
+        team_chem = getattr(self.player, "team_chemistry", 10) or 10
+        return [
+            ("Mesh Form", form_disp),
+            ("Mesh Streak", f"{streak} games"),
+            ("Line Chemistry", f"{line_chem}/20"),
+            ("Team Chemistry", f"{team_chem}/20"),
+        ]
+
+    def _create_ecosystem_attribute_sections(self, parent, is_goalie=False):
+        """Puck Dynasty-exclusive attribute sections, appended after the
+        EHM-style groups on the Attributes tab."""
+        # Development: coachability drives the assistant-coach dev bumps,
+        # the arc shapes each career's trajectory, the grade is the scout's read.
+        self._create_attribute_section(parent, "Development", [
+            ("Coachability", "coachability"),
+            ("Work Ethic", "work_ethic"),
+            ("Adaptability", "adaptability"),
+        ])
+        self._create_text_attribute_section(
+            parent, "Development Path", self._ecosystem_development_rows())
+
+        # Reputation & Personality: the reputation ratchet, visible
+        # controversy (hotheads cost less in trades), happiness at the club.
+        self._create_attribute_section(parent, "Reputation & Personality", [
+            ("Reputation", "reputation"),
+            ("Controversy", "controversy"),
+            ("Happiness", "happiness"),
+        ])
+        self._create_text_attribute_section(
+            parent, "Standing", self._ecosystem_reputation_rows(is_goalie))
+
+        # Form & Chemistry: the perfect-mesh form tracker and chemistry reads.
+        self._create_text_attribute_section(
+            parent, "Form & Chemistry", self._ecosystem_form_rows())
 
     def _create_skater_attributes(self, parent):
         """Creates attribute sections for skaters (non-goalies)."""
@@ -867,17 +959,26 @@ class PlayerProfileView(ctk.CTkFrame):
             ("Balance", "balance"),
             ("Endurance", "endurance"),
             ("Stamina", "stamina"),
-            ("Deking", "deking")
         ]
-        self._create_attribute_section(parent, "Skating & Puck Skills", skating_attrs)
-        
-        # Add stickhandling and puck protection to skating section
+        self._create_attribute_section(parent, "Skating", skating_attrs)
+
+        # Puck Skills (previously defined but never displayed)
         puck_skills = [
             ("Stickhandling", "stickhandling"),
+            ("Deking", "deking"),
             ("Puck Protection", "puck_protection"),
             ("Off the Puck", "off_the_puck"),
-            ("Loose Puck", "loose_puck")
+            ("Loose Puck", "loose_puck"),
         ]
+        self._create_attribute_section(parent, "Puck Skills", puck_skills)
+
+        # Transition & Forecheck
+        transition_attrs = [
+            ("First Pass", "first_pass"),
+            ("Breakout Passes", "breakout_passes"),
+            ("Forechecking", "forechecking"),
+        ]
+        self._create_attribute_section(parent, "Transition & Forecheck", transition_attrs)
         
         # Defensive Attributes
         defensive_attrs = [
@@ -905,6 +1006,13 @@ class PlayerProfileView(ctk.CTkFrame):
         ]
         self._create_attribute_section(parent, "Physical & Mental", physical_mental_attrs)
         
+        # Tendencies: 0-100, higher shoots/hits more
+        tendency_attrs = [
+            ("Shoot Tendency", "shoot_pass_tendency"),
+            ("Hitting Tendency", "hitting_tendency"),
+        ]
+        self._create_attribute_section(parent, "Tendencies", tendency_attrs)
+
         # Character & Consistency
         character_attrs = [
             ("Confidence", "confidence"),
@@ -918,13 +1026,14 @@ class PlayerProfileView(ctk.CTkFrame):
         ]
         self._create_attribute_section(parent, "Character & Mentality", character_attrs)
         
-        # Specialized Skills for centers
+        # Faceoffs: every skater takes draws; centers get the full read
+        faceoff_attrs = [("Faceoffs", "faceoffs")]
         if self.player.primary_position == PlayerPosition.CENTER:
-            specialized_attrs = [
-                ("Faceoffs", "faceoffs"),
-                ("Faceoff Wins", "faceoff_wins")
-            ]
-            self._create_attribute_section(parent, "Specialized Skills", specialized_attrs)
+            faceoff_attrs.append(("Faceoff Wins", "faceoff_wins"))
+        self._create_attribute_section(parent, "Faceoffs", faceoff_attrs)
+
+        # Puck Dynasty ecosystem exclusives
+        self._create_ecosystem_attribute_sections(parent, is_goalie=False)
 
     def _create_goalie_attributes(self, parent):
         """Creates attribute sections for goalies."""
@@ -976,6 +1085,9 @@ class PlayerProfileView(ctk.CTkFrame):
             ("Leadership", "leadership")
         ]
         self._create_attribute_section(parent, "Mental & Leadership", mental_attrs)
+
+        # Puck Dynasty ecosystem exclusives (incl. goalie temperament)
+        self._create_ecosystem_attribute_sections(parent, is_goalie=True)
 
     def _create_stats_tab(self):
         """Creates detailed statistics tab with career history and projections."""
