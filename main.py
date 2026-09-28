@@ -11015,6 +11015,21 @@ class HockeyManagerGUI(tk.Tk):
         
     # ---------------- full-screen view system (FM/EHM-style teleport) ----------------
 
+    # Screen cache: bounded LRU of recently visited full-screen views.
+    # Menu jumps re-show the cached widget tree (with data refreshed) instead
+    # of rebuilding hundreds of CTk widgets from scratch. Only screens with
+    # a verified re-entrant refresh method are cached; everything else
+    # rebuilds exactly as before. Keyed by screen_id; the view class is
+    # checked on hit (some ids, e.g. 'scouting', map to multiple classes).
+    _SCREEN_CACHE_SIZE = 3
+    _SCREEN_CACHE_REFRESH = {
+        'roster': 'update_views',
+        'free_agency': 'update_views',
+        'inbox': '_populate_inbox',
+        'schedule': 'update_views',
+        'news': 'populate_news',
+    }
+
     def show_screen(self, screen_id, title, view_cls, *args, **kwargs):
         """Teleport to a full-screen view instead of opening a popup card.
 
@@ -11024,8 +11039,11 @@ class HockeyManagerGUI(tk.Tk):
         registered in open_windows under screen_id so existing refresh code
         (update_all_views etc.) keeps working unchanged.
 
-        Pass fresh=True to rebuild the view even when it is already showing
-        (for screens constructed with new data each time, like game results).
+        Recently visited screens are cached (see _SCREEN_CACHE_REFRESH):
+        jumping back re-shows the live widget tree with data refreshed
+        instead of rebuilding it. Pass fresh=True to rebuild the view even
+        when it is already showing (for screens constructed with new data
+        each time, like game results).
         """
         import customtkinter as ctk
         fresh = kwargs.pop('fresh', False)
@@ -11037,6 +11055,35 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
             return cur['view']
+        # Cache hit: re-show the live view instead of rebuilding it.
+        # Refresh re-populates data into the existing widgets; if the
+        # refresh fails for any reason we fall through and rebuild fresh.
+        if not fresh and not args and not kwargs:
+            hit = self._get_cached_screen(screen_id, view_cls)
+            if hit is not None:
+                holder, view = hit
+                self._teardown_screen()
+                holder.grid(row=1, column=0, sticky='nsew')
+                if self._refresh_cached_view(screen_id, view):
+                    try:
+                        self.refresh_screen_navbar()
+                    except Exception:
+                        pass
+                    self._current_screen = {'id': screen_id, 'holder': holder,
+                                           'view': view}
+                    self.open_windows[screen_id] = view
+                    if not getattr(self, '_suppress_history', False):
+                        self._push_screen_history(screen_id)
+                    try:
+                        view.focus_set()
+                    except Exception:
+                        pass
+                    return view
+                # Refresh failed: drop the stale copy and build fresh below.
+                try:
+                    holder.destroy()
+                except Exception:
+                    pass
         self._teardown_screen()
         if (hasattr(self, '_dashboard_frame')
                 and self._dashboard_frame.winfo_exists()):
@@ -11113,8 +11160,54 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+    def _get_cached_screen(self, screen_id, view_cls):
+        """Pop a cached (screen_id -> (holder, view)) entry, or None.
+
+        Validates the holder still exists and the view is the requested
+        class; anything stale is destroyed and treated as a miss.
+        """
+        cache = getattr(self, '_screen_cache', None)
+        if not cache or screen_id not in cache:
+            return None
+        holder, view = cache.pop(screen_id)
+        try:
+            ok = (holder.winfo_exists()
+                  and isinstance(view, view_cls)
+                  and screen_id in self._SCREEN_CACHE_REFRESH)
+        except Exception:
+            ok = False
+        if not ok:
+            try:
+                holder.destroy()
+            except Exception:
+                pass
+            return None
+        return holder, view
+
+    def _refresh_cached_view(self, screen_id, view):
+        """Re-populate a cached view's data. Returns True on success.
+
+        Every cached screen has a verified re-entrant refresh method
+        (clear-then-fill). Any failure returns False so the caller rebuilds
+        fresh -- a stale screen is never shown.
+        """
+        meth_name = self._SCREEN_CACHE_REFRESH.get(screen_id)
+        try:
+            meth = getattr(view, meth_name, None)
+            if not callable(meth):
+                return False
+            meth()
+            return True
+        except Exception:
+            return False
+
     def _teardown_screen(self):
-        """Destroy the current full-screen view, if any."""
+        """Park the current full-screen view, if any.
+
+        Cacheable screens are stashed (hidden, not destroyed) in the bounded
+        LRU so jumping back is instant; anything else is destroyed as before.
+        Evicted entries are destroyed to cap memory.
+        """
         cur = getattr(self, '_current_screen', None)
         self._current_screen = None
         if cur is None:
@@ -11125,6 +11218,28 @@ class HockeyManagerGUI(tk.Tk):
                 del self.open_windows[cur['id']]
         except Exception:
             pass
+        cacheable = (cur['id'] in self._SCREEN_CACHE_REFRESH
+                     and not getattr(cur['view'], '_never_cache', False))
+        if cacheable:
+            try:
+                if cur['holder'].winfo_exists():
+                    cur['holder'].grid_forget()
+                    cache = getattr(self, '_screen_cache', None)
+                    if cache is None:
+                        self._screen_cache = cache = {}
+                    # Refresh insertion order for LRU semantics.
+                    cache.pop(cur['id'], None)
+                    cache[cur['id']] = (cur['holder'], cur['view'])
+                    while len(cache) > self._SCREEN_CACHE_SIZE:
+                        _old_id = next(iter(cache))
+                        _holder, _view = cache.pop(_old_id)
+                        try:
+                            _holder.destroy()
+                        except Exception:
+                            pass
+                    return
+            except Exception:
+                pass
         try:
             if cur['holder'].winfo_exists():
                 cur['holder'].destroy()

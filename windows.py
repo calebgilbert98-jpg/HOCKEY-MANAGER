@@ -317,15 +317,57 @@ class RosterView(ctk.CTkFrame):
         for key in self._TAB_ORDER:
             self.tabview.add(self._tab_names[key])
 
-        # Build each tab's content
-        self.create_enhanced_nhl_tab()
-        self.create_enhanced_ahl_tab()
-        self.create_enhanced_prospects_tab()
-        self.create_depth_chart_tab()
-        self.create_salary_cap_tab()
+        # Build tabs lazily: only the initially visible tab's widgets are
+        # created up front; the rest build on first selection. CTk widget
+        # construction dominates screen-open cost, so this cuts per-open
+        # widget count by ~80%. Data population always goes through the
+        # normal refresh path, so lazily built tabs are current on arrival.
+        self._tab_builders = {
+            'nhl': self.create_enhanced_nhl_tab,
+            'ahl': self.create_enhanced_ahl_tab,
+            'prospects': self.create_enhanced_prospects_tab,
+            'depth': self.create_depth_chart_tab,
+            'cap': self.create_salary_cap_tab,
+        }
+        self._tabs_built = set()
+        self._build_roster_tab(self._TAB_ORDER[0])
+        try:
+            self.tabview.configure(command=self._on_roster_tab_selected)
+        except Exception:
+            pass
 
         # Action buttons footer
         self.create_action_footer(main_container)
+
+    def _build_roster_tab(self, key):
+        """Build one tab's widgets on first use, then populate it."""
+        if key in getattr(self, '_tabs_built', set()):
+            return
+        builder = getattr(self, '_tab_builders', {}).get(key)
+        if builder is None:
+            return
+        self._tabs_built.add(key)
+        builder()
+        try:
+            if key in ('nhl', 'ahl', 'prospects'):
+                self.update_roster_tab(key)
+            elif key == 'depth':
+                self.refresh_depth_chart()
+            elif key == 'cap':
+                self.refresh_salary_cap()
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _on_roster_tab_selected(self):
+        """CTkTabview change callback: build the newly shown tab on demand."""
+        try:
+            current_name = self.tabview.get()
+        except Exception:
+            return
+        for key, tab_name in self._tab_names.items():
+            if tab_name == current_name:
+                self._build_roster_tab(key)
+                break
 
     def _cap_numbers(self):
         """Shared payroll figures for the header and the Salary Cap tab.
@@ -1572,10 +1614,16 @@ class RosterView(ctk.CTkFrame):
             messagebox.showerror("Export Error", f"Failed to export roster:\n{str(e)}")
 
     def update_views(self):
-        """Update all roster views."""
-        self.update_roster_tab('nhl')
-        self.update_roster_tab('ahl')
-        self.update_roster_tab('prospects')
+        """Update all roster views.
+
+        Only already-built tabs are refreshed; unbuilt tabs populate from
+        current data when first selected (_build_roster_tab), so nothing
+        can go stale.
+        """
+        built = getattr(self, '_tabs_built', {'nhl', 'ahl', 'prospects', 'depth', 'cap'})
+        for rt in ('nhl', 'ahl', 'prospects'):
+            if rt in built:
+                self.update_roster_tab(rt)
 
         # Update header stats
         nhl_count = len(self.app.user_team.roster)
@@ -1600,10 +1648,13 @@ class RosterView(ctk.CTkFrame):
                 self._tab_names[key] = new_name
 
         # Keep the Depth Chart and Salary Cap tabs in sync too, even when
-        # they are not the currently visible tab
+        # they are not the currently visible tab (only if already built;
+        # unbuilt tabs populate on first selection).
         try:
-            self.refresh_depth_chart()
-            self.refresh_salary_cap()
+            if 'depth' in built:
+                self.refresh_depth_chart()
+            if 'cap' in built:
+                self.refresh_salary_cap()
         except (tk.TclError, AttributeError):
             pass
 
@@ -1720,12 +1771,53 @@ class FreeAgencyView(ctk.CTkFrame):
         for name in ("Free Agent Players", "Free Agent Staff", "Market Overview"):
             self.tabview.add(name)
 
-        self.create_enhanced_player_tab()
-        self.create_enhanced_staff_tab()
-        self.create_market_overview_tab()
+        # Build tabs lazily: only the visible tab's widgets are created up
+        # front; the rest build on first selection (same rationale as
+        # RosterView -- CTk widget construction dominates screen-open cost).
+        self._fa_tab_builders = {
+            'players': self.create_enhanced_player_tab,
+            'staff': self.create_enhanced_staff_tab,
+            'market': self.create_market_overview_tab,
+        }
+        self._fa_tab_keys = {"Free Agent Players": 'players',
+                             "Free Agent Staff": 'staff',
+                             "Market Overview": 'market'}
+        self._fa_tabs_built = set()
+        self._build_fa_tab('players')
+        try:
+            self.tabview.configure(command=self._on_fa_tab_selected)
+        except Exception:
+            pass
 
         # Action buttons footer
         self.create_action_footer(main_container)
+
+    def _build_fa_tab(self, key):
+        """Build one FA tab's widgets on first use, then populate it."""
+        if key in getattr(self, '_fa_tabs_built', set()):
+            return
+        builder = getattr(self, '_fa_tab_builders', {}).get(key)
+        if builder is None:
+            return
+        self._fa_tabs_built.add(key)
+        builder()
+        try:
+            if key == 'players':
+                self.populate_filtered_players()
+            elif key == 'staff':
+                self.populate_filtered_staff()
+            # 'market' renders current data as part of its build.
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _on_fa_tab_selected(self):
+        """CTkTabview change callback: build the newly shown tab on demand."""
+        try:
+            key = self._fa_tab_keys.get(self.tabview.get())
+        except Exception:
+            key = None
+        if key:
+            self._build_fa_tab(key)
 
     def create_header_section(self, parent):
         """Create the header with market overview and quick stats."""
@@ -3337,16 +3429,31 @@ class FreeAgencyView(ctk.CTkFrame):
                                "Free agency market data has been refreshed.")
 
     def update_views(self):
-        """Update all views with current data."""
+        """Update all views with current data.
+
+        Only already-built tabs are refreshed; unbuilt tabs populate from
+        current data when first selected (_build_fa_tab).
+        """
+        built = getattr(self, '_fa_tabs_built',
+                        {'players', 'staff', 'market'})
         current = self.tabview.get()
-        self.populate_filtered_players()
-        self.populate_filtered_staff()
+        if 'players' in built:
+            self.populate_filtered_players()
+        if 'staff' in built:
+            self.populate_filtered_staff()
         # Re-select the previously active tab (population doesn't change it,
         # but keep this deterministic for callers during __init__).
         self.tabview.set(current)
 
     def refresh_market_overview_data(self):
-        """Refresh just the market overview numbers after a signing."""
+        """Refresh just the market overview numbers after a signing.
+
+        Skipped when the tab was never built -- it renders current data on
+        first selection anyway.
+        """
+        if 'market' not in getattr(self, '_fa_tabs_built',
+                                   {'players', 'staff', 'market'}):
+            return
         try:
             tab = self.tabview.tab("Market Overview")
             for child in tab.winfo_children():
