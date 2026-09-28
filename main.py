@@ -6321,10 +6321,9 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_performance_monitor(self):
         """Open the performance monitoring window"""
-        if 'performance_monitor' not in self.open_windows or not self.open_windows['performance_monitor'].winfo_exists():
-            from performance_monitor import PerformanceMonitorWindow
-            self.open_windows['performance_monitor'] = PerformanceMonitorWindow(self)
-        self.open_windows['performance_monitor'].focus_set()
+        from performance_monitor import PerformanceMonitorView
+        return self.show_screen("performance_monitor", "Performance Monitor",
+                                PerformanceMonitorView)
         
     # Enhanced panel update methods
 
@@ -11913,8 +11912,10 @@ class HockeyManagerGUI(tk.Tk):
         report = self.user_team.scouting_reports.get(player.id)
         is_scouted = report is not None
         
-        # Fallback to the standard player profile window
-        PlayerProfileWindow(self, player, is_scouted, report)
+        # Fallback to the standard player profile view
+        from ui_components import PlayerProfileView
+        return self.show_screen("player_profile", f"Profile: {player.full_name}",
+                                PlayerProfileView, player, is_scouted, report)
         
     def send_to_ahl(self, player):
         self.user_team.roster.remove(player)

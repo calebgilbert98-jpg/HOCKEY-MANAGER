@@ -131,8 +131,9 @@ class GameResultsView(ctk.CTkFrame):
         if idx < 0 or idx >= len(self._games):
             return
         try:
-            from game_box_score import GameBoxScoreWindow
-            GameBoxScoreWindow(self, self._games[idx])
+            from game_box_score import GameBoxScoreView
+            self.app.show_screen("box_score", "Box Score", GameBoxScoreView,
+                                 self._games[idx])
         except Exception as e:
             tk.messagebox.showerror("Box Score Unavailable",
                                     f"Could not open the box score:\n{e}")
