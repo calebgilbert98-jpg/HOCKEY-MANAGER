@@ -343,5 +343,42 @@ check("sweep demotes until compliant", not bd["over_cap"] and moves >= 1,
 check("sweep demotes two-way first",
       any(getattr(p, 'full_name', '') == "TwoWay" for p in sweep_team.ahl_roster))
 
+# cap consciousness: reserve + roster math, core may dip into reserve
+tm = FakeTeam(name="CapTeam")
+tm.salary_cap = 104_000_000
+# payroll 102M -> 2M room; 21-man roster
+tm.roster = [FakePlayer(name=f"P{i}", age=28, seasons_played=6, ovr=76,
+                        salary=4_800_000) for i in range(21)]
+tm.roster[0].contract.salary = 6_200_000  # 21*4.8=100.8 +1.4 = 102.2M
+room = R._cap_room(tm)
+reserve = R._reserve_amount(tm)
+check("reserve is ~1.5% of cap", 1_500_000 <= reserve <= 1_650_000,
+      f"{reserve:,.0f}")
+b_disc = R._spending_budget(tm)  # 1.8M room - 1.56M reserve < 775k
+b_core = R._spending_budget(tm, core=True)
+check("discretionary budget keeps reserve", b_disc < 775_000,
+      f"{b_disc:,.0f}")
+check("core budget may dip into reserve", b_core >= 775_000,
+      f"{b_core:,.0f}")
+fringe = FakePlayer(name="Fringe", age=26, seasons_played=4, ovr=73,
+                    salary=900_000)
+check("AI won't qualify fringe into the reserve",
+      R._ai_qualify_decision(tm, fringe, 990_000) is False)
+star_young = FakePlayer(name="StarY", age=22, seasons_played=3, ovr=86,
+                        salary=900_000)
+check("AI qualifies the young star anyway",
+      R._ai_qualify_decision(tm, star_young, 990_000) is True)
+# roster math: 18 skaters + 3M room can't add a 2M discretionary deal
+tm2 = FakeTeam(name="Thin")
+tm2.salary_cap = 104_000_000
+tm2.roster = [FakePlayer(name=f"Q{i}", age=28, seasons_played=6, ovr=76,
+                         salary=5_611_111) for i in range(18)]  # ~101M
+b2 = R._spending_budget(tm2)  # 3M - 2*775k - 1.56M < 0
+check("roster math blocks thin-roster splurge", b2 < 2_000_000,
+      f"{b2:,.0f}")
+# aggressor can't poach outside its plan
+check("aggressor score zero outside plan",
+      R.ai_offer_sheet_target_score(tm, star_young, 8_000_000) == 0.0)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

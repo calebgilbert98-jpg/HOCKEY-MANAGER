@@ -442,12 +442,13 @@ def _ai_qualify_decision(team, player, qo_amount: int) -> bool:
     except Exception:
         ovr = 70.0
     age = _age(player)
-    merit = (age <= 24 and ovr >= 74) or ovr >= 77 or (
-        ovr >= 72 and _cap_room(team) > qo_amount * 3)
-    if not merit:
-        return False
-    # Hard gate: never qualify into over-cap, however good the player.
-    return qo_amount <= _cap_room(team)
+    core = _is_core_keep(player)
+    contributor = core or (age <= 24 and ovr >= 74) or ovr >= 77 or ovr >= 72
+    if not contributor:
+        return False  # fringe: non-tender, he walks
+    # Cap-conscious: stars are worth dipping into the reserve for;
+    # everyone else must fit inside the plan (reserve + roster math).
+    return qo_amount <= _spending_budget(team, core=core)
 
 
 def _ai_rfa_deal(player, qo_amount: int, rng) -> Tuple[int, int]:
@@ -528,14 +529,14 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
         if r.random() < 0.60:
             still_unsigned.append((team, player, qo))
             continue
-        room = _cap_room(team)
-        if room < 775_000:
-            # No room: he holds out (stays unsigned) rather than the club
-            # signing a deal it cannot fit.
+        budget = _spending_budget(team, core=_is_core_keep(player))
+        if budget < LEAGUE_MIN_SALARY:
+            # Doesn't fit the plan: he holds out (stays unsigned) rather
+            # than the club wrecking its cap structure.
             still_unsigned.append((team, player, qo))
             continue
         aav, years = _ai_rfa_deal(player, qo, r)
-        _sign_player(team, player, min(aav, int(room)), years)
+        _sign_player(team, player, min(aav, int(budget)), years)
 
     # --- 4. AI clubs: UFAs — re-sign the core, release the rest -------------
     for team in ai_teams:
@@ -549,14 +550,15 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             tenure = _service_years(player)
             if ovr >= 82 or (ovr >= 78 and tenure >= 5):
                 market = _market_value(player)
-                room = _cap_room(team)
-                if market <= room:
+                budget = _spending_budget(team, core=True)
+                if market <= budget:
                     _sign_player(team, player, market,
                                  r.choice([2, 3, 4] if ovr >= 84 else [1, 2]))
-                elif room >= 775_000:
-                    # Cap-strapped: 1-year prove-it deal at what fits.
-                    _sign_player(team, player, int(room), 1)
-                # else: no room at all -- falls through to the pool below
+                elif budget >= LEAGUE_MIN_SALARY:
+                    # Cap-strapped: 1-year prove-it deal at what the plan
+                    # allows -- never at the cost of icing a roster.
+                    _sign_player(team, player, int(budget), 1)
+                # else: doesn't fit the plan -- falls through to the pool
             else:
                 _move_to_free_agents(league, player)
 
@@ -645,11 +647,12 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             continue
         if bool(getattr(player, "arbitration_filed", False)):
             continue
-        room = _cap_room(original_team)
-        if room < 775_000:
-            continue  # still no room: the holdout continues
+        budget = _spending_budget(original_team,
+                                    core=_is_core_keep(player))
+        if budget < LEAGUE_MIN_SALARY:
+            continue  # still doesn't fit the plan: the holdout continues
         aav, years = _ai_rfa_deal(player, qo, r)
-        _sign_player(original_team, player, min(aav, int(room)), years)
+        _sign_player(original_team, player, min(aav, int(budget)), years)
         summary["qualified"] += 0  # counted at qualify time
 
     # --- 6c. Cap-compliance sweep: the guarantee -------------------------
@@ -937,8 +940,9 @@ def ai_offer_sheet_target_score(offering_team, player, aav: int) -> float:
     premium = aav / max(1, market)
     if premium > 1.35:
         return 0.0
-    # The aggressor must actually be able to fit the AAV.
-    if aav > _cap_room(offering_team):
+    # The aggressor must fit the AAV inside its cap plan (reserve +
+    # roster math intact) -- poaching is discretionary, never desperate.
+    if aav > _spending_budget(offering_team, incoming=True):
         return 0.0
     score = (ovr - 78) / 12.0  # 0..1 across 78..90
     if age <= 24:
@@ -952,8 +956,10 @@ def ai_match_decision(original_team, player, aav: int,
                       compensation_label: str) -> bool:
     """Would the AI club match? Real clubs match unless the AAV is far
     above the player's worth to them or the cap makes it impossible."""
-    room = _cap_room(original_team)
-    if room < aav:
+    if aav > _spending_budget(original_team,
+                                core=_is_core_keep(player)):
+        # Can't match inside the plan: take the picks. (The rational
+        # version of the Carolina/Aho outcome.)
         return False
     market = _market_value(player)
     if aav > market * 1.45:
@@ -1310,6 +1316,53 @@ def _cap_room(team) -> float:
             return 0.0
 
 
+# --- Cap consciousness: how real GMs think about the cap -----------------
+# A hard "never over" gate stops insolvency, but real GMs do more: they
+# keep an operating reserve (~1.5% of the cap) for callups, injuries and
+# deadline accrual, and they never spend a dollar they need to fill out
+# the roster at league minimum. Core keeps may dip into the reserve;
+# everything discretionary must preserve it.
+CAP_RESERVE_PCT = 0.015
+LEAGUE_MIN_SALARY = 775_000
+MIN_ROSTER_SIZE = 20
+
+
+def _reserve_amount(team) -> float:
+    try:
+        cap = float(getattr(team, "salary_cap", 0) or 0)
+    except Exception:
+        cap = 0
+    if cap <= 0:
+        cap = 104_000_000
+    return cap * CAP_RESERVE_PCT
+
+
+def _is_core_keep(player) -> bool:
+    """Players a real GM spends into the reserve to keep."""
+    try:
+        ovr = float(player.overall_rating())
+    except Exception:
+        ovr = 70.0
+    return ovr >= 82 or (_age(player) <= 24 and ovr >= 78)
+
+
+def _spending_budget(team, core: bool = False,
+                     incoming: bool = False) -> float:
+    """Max a rational GM spends here. After the spend the club can still
+    fill a viable roster at league minimum; non-core spending must also
+    preserve the operating reserve. `incoming` for players not yet on
+    the roster (offer-sheet poaches, pool signings)."""
+    try:
+        size = len(getattr(team, "roster", []) or []) + (1 if incoming else 0)
+    except Exception:
+        size = MIN_ROSTER_SIZE
+    open_spots = max(0, MIN_ROSTER_SIZE - size)
+    need = open_spots * LEAGUE_MIN_SALARY
+    if not core:
+        need += _reserve_amount(team)
+    return _cap_room(team) - need
+
+
 def _find_player(league, team, player_id):
     if player_id is None:
         return None
@@ -1367,6 +1420,10 @@ def _ai_backfill_roster(team, league, r, target: int = 21) -> None:
     for p in prospects:
         if len(roster) >= target:
             break
+        # ELC promotions are how real cap-strapped teams fill holes --
+        # allowed to dip into the reserve, but never below roster math.
+        if _spending_budget(team, core=True, incoming=True) < 825_000:
+            break
         c = getattr(p, "contract", None)
         if c is None or int(getattr(c, "years_remaining", 0) or 0) <= 0:
             _sign_player(team, p, 825_000, 2)
@@ -1380,11 +1437,11 @@ def _ai_backfill_roster(team, league, r, target: int = 21) -> None:
     guard = 0
     while len(roster) < target and pool and guard < 40:
         guard += 1
-        room = _cap_room(team)
+        budget = _spending_budget(team, incoming=True)
         best = None
         for p in sorted(pool, key=_market_value):
             ask = min(_market_value(p), 1_500_000)
-            if ask <= room and room >= 775_000:
+            if ask <= budget and budget >= LEAGUE_MIN_SALARY:
                 best = (p, ask)
                 break
         if best is None:
