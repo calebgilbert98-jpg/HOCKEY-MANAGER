@@ -327,6 +327,16 @@ class GameManager:
                         print(f"Seeded real-life trade clauses for {n} players.")
                 except Exception as e:
                     print(f"Trade-clause seeding skipped: {e}")
+                # Day-1 cap guarantee, re-run after dead-cap seeding: real
+                # buyouts/retained salary land after generation and can tip a
+                # borderline roster over the cap (which would fire the
+                # cap-compliance Continue blocker before day one).
+                try:
+                    from database_generator import DatabaseGenerator
+                    DatabaseGenerator._enforce_nhl_cap_compliance(
+                        getattr(self.league, 'teams', []) or [])
+                except Exception as e:
+                    print(f"Cap-compliance pass skipped: {e}")
             
             # Apply comprehensive game settings
             debug_print("DEBUG: Applying game settings...")
@@ -1612,6 +1622,13 @@ class HockeyManagerGUI(tk.Tk):
         self._initialize_phase3_systems()
         
         self.game_manager = game_manager
+        # Back-reference so save/load can re-sync GUI mirrors (user_team,
+        # league, current_date) after a restore rebuilds league objects.
+        try:
+            if game_manager is not None:
+                game_manager.app = self
+        except Exception:
+            pass
         self.league = game_manager.league
         self.user_team = None
         self.is_new_game = True  # Track if this is a new game (no autosave until first manual save)
@@ -10988,6 +11005,21 @@ class HockeyManagerGUI(tk.Tk):
     def on_game_loaded(self):
         """Called when a game is loaded from save file."""
         self.is_new_game = False
+        # Belt-and-braces: _restore_game_state rebuilds league teams as new
+        # objects, so re-point the GUI mirrors seeded at boot. (load_game
+        # already syncs these; this covers any path that restores state
+        # without going through it.)
+        try:
+            _gm = self.game_manager
+            for _attr in ('league', 'user_team', 'current_date'):
+                _v = getattr(_gm, _attr, None)
+                if _v is not None:
+                    try:
+                        setattr(self, _attr, _v)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         self._rebuild_news_log_from_stories()
         print("Game loaded from save - autosave enabled")
         

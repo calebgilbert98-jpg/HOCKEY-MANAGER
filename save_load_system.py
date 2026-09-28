@@ -39,6 +39,11 @@ class GameSaveManager:
             save_data = {
                 'version': '1.0',
                 'timestamp': datetime.now().isoformat(),
+                # Attribute scale stamp: saves written by the current
+                # 1-100 attribute engine carry this. The legacy-scale
+                # migration must never touch a stamped save (its mean
+                # heuristic misfires on modern prospect pools).
+                'attribute_scale': 100,
                 'game_date': self.game_manager.current_date.isoformat() if hasattr(self.game_manager, 'current_date') else None,
                 'season_year': getattr(self.game_manager.league, 'season_year', 2024) if hasattr(self.game_manager, 'league') else 2024,
                 'user_team': self.game_manager.user_team.team_name if hasattr(self.game_manager, 'user_team') and self.game_manager.user_team else None,
@@ -579,11 +584,46 @@ class GameSaveManager:
                     messagebox.showinfo("Load Complete", "Game loaded successfully!")
                 except Exception:
                     pass  # headless / no display: the print above suffices
-                
+
+                # Re-sync mirrors. _restore_game_state rebuilds league teams
+                # as NEW objects on the wrapped manager, so any other holder
+                # of the old objects goes stale:
+                #  - wrapper is the GUI app (SaveLoadView path): the inner
+                #    GameManager keeps the pre-load user_team/current_date.
+                #  - wrapper is the GameManager (direct path): a GUI app
+                #    built on it keeps the pre-load mirrors. Without this,
+                #    identity checks (game-day bundle lookup, schedule scans)
+                #    compare against ghosts and the date desyncs.
+                try:
+                    _mgr = self.game_manager
+                    _inner = getattr(_mgr, 'game_manager', None)
+                    _true_gm = (_inner if (_inner is not None
+                                           and _inner is not _mgr)
+                                else _mgr)
+                    if _true_gm is not _mgr:
+                        for _attr in ('user_team', 'league', 'current_date'):
+                            _v = getattr(_mgr, _attr, None)
+                            if _v is not None:
+                                try:
+                                    setattr(_true_gm, _attr, _v)
+                                except Exception:
+                                    pass
+                    _app = getattr(_true_gm, 'app', None)
+                    if _app is not None and _app is not _mgr:
+                        for _attr in ('league', 'user_team', 'current_date'):
+                            _v = getattr(_true_gm, _attr, None)
+                            if _v is not None:
+                                try:
+                                    setattr(_app, _attr, _v)
+                                except Exception:
+                                    pass
+                except Exception as _se:
+                    print(f"Mirror re-sync skipped (non-fatal): {_se}")
+
                 # Update UI if available
                 if hasattr(self.game_manager, 'update_all_views'):
                     self.game_manager.update_all_views()
-                
+
                 return True
             else:
                 try:
@@ -712,9 +752,14 @@ class GameSaveManager:
                 try:
                     from manager_career import CareerState
                     target = self.game_manager
-                    # Career lives on the GameManager; SaveLoadWindow may wrap the GUI
-                    if not hasattr(target, 'user_team') and hasattr(target, 'game_manager'):
-                        target = target.game_manager
+                    # Career state lives on the GameManager, but the save
+                    # manager may wrap the GUI app (SaveLoadView path) whose
+                    # `career` is a read-only property — assigning to it
+                    # raises AttributeError and silently drops the career.
+                    # Unwrap to the inner GameManager first.
+                    inner = getattr(target, 'game_manager', None)
+                    if inner is not None and inner is not target:
+                        target = inner
                     target.career = CareerState.from_dict(save_data['career_data'])
                 except Exception as e:
                     print(f"Could not restore career data: {e}")
@@ -726,9 +771,12 @@ class GameSaveManager:
             # One-time migration: saves written before the 1-100 scale audit
             # store player attributes on the legacy ~50 scale. Detect by
             # league-wide attribute mean (legacy ~35, current ~72) and double
-            # the 100-scale fields. New-scale saves are never touched.
+            # the 100-scale fields. Saves stamped attribute_scale >= 100
+            # (i.e. written by the current engine) are never touched — the
+            # mean heuristic misfires on modern prospect pools.
             try:
-                self._migrate_legacy_attribute_scale()
+                self._migrate_legacy_attribute_scale(
+                    save_data.get('attribute_scale'))
             except Exception as e:
                 print(f"Legacy scale migration skipped: {e}")
 
@@ -1100,14 +1148,21 @@ class GameSaveManager:
         'strength', 'teamwork', 'vision', 'work_ethic', 'wristshot',
     )
 
-    def _migrate_legacy_attribute_scale(self):
+    def _migrate_legacy_attribute_scale(self, stamped_scale=None):
         """Double legacy ~50-scale attributes to the native 1-100 scale.
 
         Saves written before the scale audit store attributes around 25-50.
         Detection uses the league-wide mean of core attributes (legacy ~= 35,
         current ~= 72), so a single weak prospect can never trigger it.
         Runs once per load; already-migrated saves are detected as current.
+
+        Saves stamped with attribute_scale >= 100 are NEVER migrated: the
+        mean heuristic misfires on modern databases (large prospect pools
+        drag the sampled mean under the 58 threshold), silently inflating
+        attributes toward 100 on every first load.
         """
+        if stamped_scale is not None and stamped_scale >= 100:
+            return  # modern save; nothing to do
         gm = self.game_manager
         league = getattr(gm, 'league', None)
         if not league or not getattr(league, 'teams', None):
