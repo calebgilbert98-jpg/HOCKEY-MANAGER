@@ -53,6 +53,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "media_fine": _media_fine_headline,
         "media_beef": _media_beef_headline,
         "narrative_shutdown": _narrative_shutdown_headline,
+        "grudge_callback": _grudge_callback_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -303,6 +304,39 @@ def _narrative_shutdown_headline(game_date, player="", team="",
             f"The clip is everywhere tonight. That narrative is dead."
         ),
         category="League",
+        priority=2,
+        is_important=True,
+    )
+
+
+def _grudge_callback_headline(game_date, home="", away="", short="",
+                              room_line="", fans_line="", media_line="",
+                              league_line="", first_meeting=True, **kw):
+    """'First meeting since the hit' — the incident callback card.
+
+    One event, four viewpoints: the disagreement is the story. The league
+    only speaks when the event was large enough (league_line empty otherwise).
+    """
+    from game_classes import EmailMessage
+    hook = ("First meeting since" if first_meeting
+            else "Another chapter in")
+    subject = f"🥊 {hook} {short}: {away} @ {home}"
+    parts = [f"{hook} {short}, {away} visit {home} tonight.\n"]
+    if media_line:
+        parts.append(f"MEDIA — {media_line}")
+    if room_line:
+        parts.append(f"ROOM — {room_line}")
+    if fans_line:
+        parts.append(f"FANS — {fans_line}")
+    if league_line:
+        parts.append(f"LEAGUE — {league_line}")
+    parts.append("\nThe disagreement is the story.")
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=subject,
+        content="\n\n".join(parts),
+        category="Rivalry",
         priority=2,
         is_important=True,
     )

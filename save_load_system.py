@@ -91,6 +91,12 @@ class GameSaveManager:
                     if getattr(self.game_manager, 'league_history', None) else {}
                 ),
 
+                # Narrative ledger: rivalry + series memory (normalized events)
+                'narrative_ledger': (
+                    self.game_manager.narrative_ledger.to_dict()
+                    if getattr(self.game_manager, 'narrative_ledger', None) else {}
+                ),
+
                 # Shot charts: replayable evidence (last 50 games)
                 'shot_charts': (
                     self.game_manager.shot_chart_store.to_dict()
@@ -600,6 +606,21 @@ class GameSaveManager:
                 except Exception as _lhe:
                     print(f"league history restore failed (non-fatal): {_lhe}")
                     self.game_manager.league_history = None
+
+            # Narrative ledger: rivalry + series memory (old saves backfill
+            # empty — history is never invented, per the integrity rules)
+            if 'narrative_ledger' in save_data:
+                try:
+                    from narrative_ledger import NarrativeLedger
+                    nl_data = save_data['narrative_ledger'] or {}
+                    if nl_data:
+                        self.game_manager.narrative_ledger = \
+                            NarrativeLedger.from_dict(nl_data)
+                    else:
+                        self.game_manager.narrative_ledger = NarrativeLedger()
+                except Exception as _nle:
+                    print(f"narrative ledger restore failed (non-fatal): {_nle}")
+                    self.game_manager.narrative_ledger = NarrativeLedger()
 
             # Shot charts: replayable evidence
             if 'shot_charts' in save_data:

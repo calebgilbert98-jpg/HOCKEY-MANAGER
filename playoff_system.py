@@ -10,7 +10,7 @@ from popup_system import messagebox, InGamePopup
 from datetime import date, timedelta
 import random
 from typing import List, Dict, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from game_classes import Team, PlayerPosition
 
 
@@ -40,14 +40,22 @@ class PlayoffSeries:
     is_complete: bool = False
     winner: Optional[Team] = None
     series_format: int = 7  # Best of 7
+    # Narrative ledger: per-game facts for series memory (beats are derived
+    # from this, not from the win counters). Additive — nothing else reads it.
+    game_results: List[Dict] = field(default_factory=list)
     
-    def add_game_result(self, team1_won: bool):
+    def add_game_result(self, team1_won: bool, game_info: Optional[Dict] = None):
         """Add a game result to the series"""
         if team1_won:
             self.team1_wins += 1
         else:
             self.team2_wins += 1
         self.games_played += 1
+        if game_info:
+            try:
+                self.game_results.append(dict(game_info))
+            except Exception:
+                pass
         
         # Check if series is complete
         wins_needed = (self.series_format // 2) + 1
@@ -160,6 +168,21 @@ class PlayoffBracket:
     def advance_to_next_round(self, round_name: str):
         """Advance winners to the next playoff round"""
         current_series = self.playoff_series[round_name]
+        # Narrative ledger: a completed series acquires a memory — its
+        # defining beats, weighted by what actually happened. Recorded once
+        # per series, here, before winners move on.
+        try:
+            from narrative_ledger import (active_ledger,
+                                          record_playoff_series_memory)
+            _led = active_ledger()
+            if _led is not None:
+                for _s in current_series:
+                    if getattr(_s, "is_complete", False) and \
+                            not getattr(_s, "_ledger_recorded", False):
+                        record_playoff_series_memory(_led, _s)
+                        _s._ledger_recorded = True
+        except Exception:
+            pass
         winners = [series.winner for series in current_series if series.is_complete and series.winner]
 
         if round_name == 'wild_card':
@@ -261,11 +284,32 @@ class PlayoffBracket:
 
         home_score = result.get('home_score', 0)
         away_score = result.get('away_score', 0)
-        
+
         # Determine winner and update series
         team1_won = home_score > away_score
-        series.add_game_result(team1_won)
-        
+
+        # Narrative ledger: per-game facts for series memory. Cheap reads
+        # off the finished sim — no extra simulation work.
+        game_info = {"game": series.games_played + 1,
+                     "t1_score": home_score, "t2_score": away_score,
+                     "team1_won": team1_won, "ot": False,
+                     "goalie_steal": None}
+        try:
+            game_info["ot"] = bool(getattr(game_sim, "period", 1) > 3)
+            _wteam = series.team1 if team1_won else series.team2
+            _wg = game_sim._selected_goalie(_wteam)
+            _gs = (getattr(game_sim, "game_stats", {}) or {}).get(
+                getattr(_wg, "id", None), {}) or {}
+            _saves = int(_gs.get("saves", 0) or 0)
+            _svp = float(_gs.get("save_percentage", 0) or 0)
+            if _saves >= 32 and _svp >= 0.935:
+                _gname = (getattr(_wg, "full_name", None)
+                          or getattr(_wg, "name", "the goalie"))
+                game_info["goalie_steal"] = f"{_gname} ({_saves} saves)"
+        except Exception:
+            pass
+        series.add_game_result(team1_won, game_info)
+
         return home_score, away_score
     
     def get_playoff_status(self) -> Dict:

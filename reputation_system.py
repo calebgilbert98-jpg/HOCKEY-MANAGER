@@ -3595,6 +3595,24 @@ def record_game_incident(rivalries: list, team_a: Any, team_b: Any,
             r["incidents"] = log = []
         log.append({"kind": kind, "detail": detail,
                     "date": date.today().isoformat()})
+        # Narrative-ledger bridge: the normalized record keeps the same
+        # facts so rivalry, media, fans, history and inbox all read one
+        # source. The rivalry store above stays the system of record.
+        try:
+            from narrative_ledger import active_ledger as _active_ledger
+            _led = _active_ledger()
+            if _led is not None:
+                _led.record(
+                    "incident",
+                    teams=[getattr(team_a, "team_name", ""),
+                           getattr(team_b, "team_name", "")],
+                    facts={"incident_kind": kind, "detail": detail,
+                           "date": date.today().isoformat()},
+                    weight=int(INCIDENT_WEIGHTS.get(kind, 30) or 30),
+                    text=detail or kind,
+                )
+        except Exception:
+            pass
         return {"recorded": True, "kind": kind, "detail": detail}
     except Exception:
         return {"recorded": False, "reason": "error"}

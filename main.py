@@ -7676,6 +7676,27 @@ class HockeyManagerGUI(tk.Tk):
         """Process daily maintenance tasks with performance optimizations"""
         # Only run heavy tasks on specific days to reduce CPU load
 
+        # Narrative ledger clock: one cheap setup per day. Drives callback
+        # cooldowns; season rollover prunes old low-weight events once.
+        try:
+            from narrative_ledger import get_ledger
+            _led = get_ledger(self)
+            _sy = getattr(getattr(self, "league", None), "season_year", None)
+            _day = 0
+            try:
+                _season_start = date(_sy, 10, 1) if _sy else None
+                if _season_start is not None and \
+                        self.current_date >= _season_start:
+                    _day = (self.current_date - _season_start).days
+            except Exception:
+                pass
+            if _sy is not None and _led.season != _sy:
+                _led.advance_season(_sy)
+            else:
+                _led.set_clock(_sy, _day)
+        except Exception:
+            pass
+
         # Event-day hubs: prompt once per year when a tentpole day arrives.
         # (Entry draft is handled daily inside _check_for_event_day; it must
         # NOT be Monday-gated since June 23-25 often contains no Monday.)
@@ -8098,6 +8119,45 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
                 # Standard full simulation for user games
+                # Narrative ledger: grudge-week presentation. One dict lookup
+                # per game; the inbox card only fires for the user's games or
+                # genuine league-wide feuds (weight >= 60) so it never spams.
+                try:
+                    from narrative_ledger import (get_ledger, interpret,
+                                                  incident_short)
+                    from headlines import deliver_spec as _deliver_spec
+                    _led = get_ledger(self)
+                    _cand = _led.callback_candidate(home_team.team_name,
+                                                    away_team.team_name)
+                    if _cand is not None:
+                        _uname = getattr(getattr(self, "user_team", None),
+                                         "team_name", "")
+                        _uinvolved = _uname in (home_team.team_name,
+                                                away_team.team_name)
+                        if _uinvolved or _cand.get("weight", 0) >= 60:
+                            _facts = _cand.get("facts") or {}
+                            _home = home_team.team_name
+                            _spec = {
+                                "kind": "grudge_callback",
+                                "home": _home,
+                                "away": away_team.team_name,
+                                "short": incident_short(_facts),
+                                "first_meeting": not _cand.get("ref_count"),
+                                "room_line":
+                                    interpret(_cand, "room", _home) or "",
+                                "fans_line":
+                                    interpret(_cand, "fans", _home) or "",
+                                "media_line":
+                                    interpret(_cand, "media", _home) or "",
+                                "league_line":
+                                    interpret(_cand, "league", _home) or "",
+                                "involved": (home_team.team_name,
+                                             away_team.team_name),
+                            }
+                            if _deliver_spec(self, _spec):
+                                _led.mark_referenced(_cand["id"])
+                except Exception:
+                    pass
                 sim_engine = AdvancedGameSim(home_team, away_team)
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
@@ -8841,6 +8901,41 @@ class HockeyManagerGUI(tk.Tk):
                 else:
                     continue
                 
+                # Narrative ledger: grudge-week presentation for non-user games.
+                # One dict lookup per game; only genuine league-wide feuds
+                # (weight >= 60) earn the inbox card. Never blocks the sim.
+                try:
+                    from narrative_ledger import (get_ledger, interpret,
+                                                  incident_short)
+                    from headlines import deliver_spec as _deliver_spec
+                    _led = get_ledger(self)
+                    _cand = _led.callback_candidate(home_team.team_name,
+                                                    away_team.team_name)
+                    if _cand is not None and _cand.get("weight", 0) >= 60:
+                        _facts = _cand.get("facts") or {}
+                        _home = home_team.team_name
+                        _spec = {
+                            "kind": "grudge_callback",
+                            "home": _home,
+                            "away": away_team.team_name,
+                            "short": incident_short(_facts),
+                            "first_meeting": not _cand.get("ref_count"),
+                            "room_line":
+                                interpret(_cand, "room", _home) or "",
+                            "fans_line":
+                                interpret(_cand, "fans", _home) or "",
+                            "media_line":
+                                interpret(_cand, "media", _home) or "",
+                            "league_line":
+                                interpret(_cand, "league", _home) or "",
+                            "involved": (home_team.team_name,
+                                         away_team.team_name),
+                        }
+                        if _deliver_spec(self, _spec):
+                            _led.mark_referenced(_cand["id"])
+                except Exception:
+                    pass
+
                 # Per-league sim detail (new-game setup): 'full' leagues get the
                 # event-by-event engine with player stats; everything else
                 # uses the ultra-fast lightweight path.
