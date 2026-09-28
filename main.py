@@ -8832,7 +8832,9 @@ class HockeyManagerGUI(tk.Tk):
                 went_ot=bool(went_ot), shootout=bool(shootout),
                 rivalries=rivalries, ledger=active_ledger(),
                 roll_incidents=bool(roll_incidents),
-                game_date=game_date)
+                game_date=game_date,
+                season_year=getattr(getattr(self, "league", None),
+                                    "season_year", None))
             if roll_incidents and sim_engine is not None:
                 try:
                     if not getattr(sim_engine, "_fights_total", 0):

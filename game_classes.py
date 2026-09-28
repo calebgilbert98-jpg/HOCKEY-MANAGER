@@ -5230,6 +5230,15 @@ class League:
             pass
 
         self.season_year += 1
+        # Iconic games: only starred entries stay past the season that
+        # produced them. Unstarred memories fade as the new season
+        # begins; the user's curation is the franchise's permanent
+        # memory. Guarded so it can never break the season rollover.
+        try:
+            from iconic_games import prune_iconic_games
+            prune_iconic_games(self)
+        except Exception:
+            pass
         # Keep the draft-pick future discount anchored to the live season.
         try:
             set_pick_value_anchor_year(self.season_year)

@@ -245,6 +245,7 @@ class HomeDashboard:
             ("Morale", "morale"),
             ("Prospects", "prospects"),
             ("Milestones", "milestones"),
+            ("Iconic Games", "iconic"),
             ("Inbox", "inbox"),
         ]
         for label, key in sections:
@@ -790,6 +791,7 @@ class HomeDashboard:
         self._create_morale_card(right)
         self._create_prospects_card(right)
         self._create_milestones_card(right)
+        self._create_iconic_games_card(right)
         self._create_inbox_card(right)
         self._create_quick_actions_card(right)
 
@@ -1129,6 +1131,78 @@ class HomeDashboard:
                                       command=lambda p=pl: self._open_player_profile(p)).pack(side="left")
             tk.Label(row, text=text, font=AppFonts.SMALL,
                      fg=AppColors.TEXT_SECONDARY, bg=bg).pack(side="right")
+
+    # ---------------- Iconic games ----------------
+    def _create_iconic_games_card(self, parent):
+        """The franchise's remembered nights. Starred entries persist
+        across seasons; unstarred ones fade at the next rollover."""
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        self._section_anchors["iconic"] = card
+        content = card.get_content_frame()
+        bg = content.cget("bg")
+        self._card_title_row(content, "Iconic Games")
+
+        entries = [e for e in
+                   (getattr(self.user_team, "iconic_games", None) or [])
+                   if isinstance(e, dict)]
+        # Starred memories first, then newest.
+        entries.sort(key=lambda e: (not bool(e.get("starred")),
+                                    e.get("date", "")),
+                     reverse=False)
+        if not entries:
+            tk.Label(content,
+                     text="No unforgettable nights yet. Give the fans "
+                          "something to remember.",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg, wraplength=320, justify="left").pack(anchor="w")
+            return
+
+        def _toggle(entry_id, btn):
+            try:
+                from iconic_games import toggle_star
+                state = toggle_star(self.user_team, entry_id)
+                if state is not None:
+                    btn.config(text="★" if state else "☆",
+                               fg=AppColors.ACCENT if state
+                               else AppColors.TEXT_TERTIARY)
+            except Exception:
+                pass
+
+        def _star_button(parent_row, entry_id, starred):
+            btn = tk.Button(
+                parent_row, text="★" if starred else "☆",
+                font=AppFonts.SMALL_BOLD,
+                fg=AppColors.ACCENT if starred else AppColors.TEXT_TERTIARY,
+                bg=bg, activebackground=bg, relief="flat", bd=0,
+                cursor="hand2")
+            # Default-arg binding: the button references itself without
+            # a forward reference.
+            btn.config(command=lambda eid=entry_id,
+                       b=btn: _toggle(eid, b))
+            return btn
+
+        for e in entries[:6]:
+            row = tk.Frame(content, bg=bg)
+            row.pack(fill="x", pady=3)
+            _star_button(row, e.get("id"), bool(e.get("starred"))).pack(
+                side="left", padx=(0, 6))
+            text_col = tk.Frame(row, bg=bg)
+            text_col.pack(side="left", fill="x", expand=True)
+            tk.Label(text_col, text=e.get("headline", "Unforgettable night"),
+                     font=AppFonts.SMALL_BOLD, fg=AppColors.TEXT_PRIMARY,
+                     bg=bg, wraplength=300, justify="left",
+                     anchor="w").pack(anchor="w", fill="x")
+            meta = f"{e.get('date', '')} · {e.get('score', '')}"
+            if e.get("playoff"):
+                meta += " · playoffs"
+            tk.Label(text_col, text=meta.strip(" ·"),
+                     font=AppFonts.CAPTION, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg, anchor="w").pack(anchor="w", fill="x")
+        if len(entries) > 6:
+            tk.Label(content, text=f"+ {len(entries) - 6} more in the rafters",
+                     font=AppFonts.CAPTION, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg).pack(anchor="w", pady=(4, 0))
 
     # ---------------- Inbox ----------------
     def _create_inbox_card(self, parent):

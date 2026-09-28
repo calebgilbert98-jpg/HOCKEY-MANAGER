@@ -328,6 +328,13 @@ class GameSaveManager:
                 '_pending_ceremony': (dict(getattr(team, '_pending_ceremony'))
                                       if isinstance(getattr(team, '_pending_ceremony', None), dict)
                                       else None),
+                # Iconic games: the franchise's remembered nights. Plain
+                # dicts, capped at 30 by the writer. The per-team
+                # "starred" flag is what survives seasons -- unstarred
+                # entries are pruned at rollover. Missing = old save.
+                'iconic_games': [dict(e) for e in
+                                 (getattr(team, 'iconic_games', None) or [])
+                                 if isinstance(e, dict)][:30],
                 # Team dynamics feed (the Morale screen story). Capped at
                 # 100 by the writer; the code promises it survives saves.
                 # Missing = old save -> empty feed.
@@ -1254,6 +1261,11 @@ class GameSaveManager:
                                     (team_data.get('retired_numbers', None) or [])]
             _pc = team_data.get('_pending_ceremony', None)
             team._pending_ceremony = dict(_pc) if isinstance(_pc, dict) else None
+            # Iconic games: the franchise's remembered nights, with the
+            # per-team starred flags. Absent in old saves -> empty.
+            team.iconic_games = [dict(e) for e in
+                                 (team_data.get('iconic_games', None) or [])
+                                 if isinstance(e, dict)][:30]
             # Team dynamics feed + dressing-room story state. Absent in
             # old saves -> empty, same as a fresh club.
             team.dynamics_log = [dict(e) for e in
