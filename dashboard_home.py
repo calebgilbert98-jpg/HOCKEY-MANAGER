@@ -38,6 +38,32 @@ except Exception:
         return "Abysmal"
 
 
+def _ctk_font(font):
+    """Coerce *font* into something customtkinter accepts.
+
+    AppFonts.* are live ``tkinter.font.Font`` objects (ui_scale) which
+    customtkinter rejects with "Wrong font type" -- and worse, the
+    half-constructed widget left behind breaks root teardown at exit.
+    Tuples and CTkFont pass through untouched.
+    """
+    try:
+        import tkinter.font as _tkfont
+        if isinstance(font, _tkfont.Font):
+            family = font.cget("family")
+            size = int(font.cget("size"))
+            weight = font.cget("weight")
+            slant = font.cget("slant")
+            spec = [family, size]
+            if weight and weight != "normal":
+                spec.append(weight)
+            if slant and slant not in ("roman", ""):
+                spec.append(slant)
+            return tuple(spec)
+    except Exception:
+        pass
+    return font
+
+
 class AppDropdown(ctk.CTkComboBox):
     """Themed dropdown (combobox) matching the dark UI.
 
@@ -114,7 +140,7 @@ class CtkAppButton(ctk.CTkButton):
             hover_color=hover_color,
             text_color=text_color,
             corner_radius=8,
-            font=font or ("Segoe UI", 12, "bold"),
+            font=_ctk_font(font) or ("Segoe UI", 12, "bold"),
             cursor="hand2",
             **kwargs
         )
@@ -232,7 +258,7 @@ class HomeDashboard:
                 height=28,
                 border_width=1,
                 border_color=BORDER,
-                font=AppFonts.SMALL_BOLD,
+                font=_ctk_font(AppFonts.SMALL_BOLD),
                 cursor="hand2",
             )
             pill.pack(side="left", padx=4)

@@ -635,9 +635,13 @@ class PlayerProfile(InGamePopup):
         tk.Label(content,
                  text="Estimates, not tracking data: modeled metrics are shown "
                       "with your department's confidence interval (±); observed "
-                      "box-score facts are exact. No shot locations are tracked. "
-                      "Useful for comparing players and spotting trends -- not measured truth. "
-                      "Hover ⓘ on any metric for what it is (and isn't).",
+                      "box-score facts are exact. Shot locations ARE tracked for "
+                      "simulated games (each club keeps its last 10), so the shot "
+                      "map below is real tracking data -- the modeled metrics "
+                      "around it are not. Useful for diagnosing where a player's "
+                      "chances come from and whether his role fits -- not for "
+                      "decorating a box score. Hover ⓘ on any metric for what it "
+                      "is (and isn't).",
                  font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                  bg=card.card_bg, wraplength=640, justify="left").pack(anchor="w", pady=(0, 12))
 
@@ -692,10 +696,124 @@ class PlayerProfile(InGamePopup):
                     ("Hits", str(int(_val("hits", m.hits))), None),
                     ("Blocked shots", str(int(_val("blocks", m.blocks))), None),
                 ])
+                # Tactical context: where his chances actually come from.
+                self._create_shot_map(parent)
         except Exception as e:
             tk.Label(content, text=f"Analytics unavailable ({e})",
                      font=AppFonts.BODY, fg=AppColors.TEXT_SECONDARY,
                      bg=card.card_bg).pack(anchor="w")
+
+    def _create_shot_map(self, parent):
+        """Per-player shot map from tracked shot locations (module 04).
+
+        Diagnostic, not decorative: dot position is real tracking data
+        (each club keeps its last 10 simulated games), dot size is the
+        engine's own per-shot xG. Read it like a scout -- a cluster at
+        the net-front is a role; a spray from the perimeter is a
+        question about his usage, not a verdict on his talent.
+        """
+        p = self.player
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        content = card.get_content_frame()
+        tk.Label(content, text="Shot Map — Where His Chances Come From",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=card.card_bg).pack(anchor="w", pady=(0, 4))
+
+        def _note(text):
+            tk.Label(content, text=text, font=AppFonts.SMALL,
+                     fg=AppColors.TEXT_SECONDARY, bg=card.card_bg,
+                     wraplength=640, justify="left").pack(anchor="w", pady=(0, 4))
+
+        try:
+            pid = getattr(p, "id", None)
+            try:
+                pname = p.full_name
+            except Exception:
+                pname = getattr(p, "name", "") or ""
+            team = self._find_team()
+            games = list(getattr(team, "analytics_games", None) or []) \
+                if team is not None else []
+            shots = []
+            for rec in games:
+                for s in (rec.get("shots") or []):
+                    if pid is not None and s.get("shooter_id") == pid:
+                        shots.append(s)
+                    elif pname and s.get("shooter") == pname:
+                        shots.append(s)
+        except Exception:
+            shots, games = [], []
+
+        if not shots:
+            _note("No tracked shots yet — simulate games and his map builds "
+                  "itself from real shot locations (last 10 games kept per "
+                  "club).")
+            return
+
+        xg = sum(float(s.get("xg", 0) or 0) for s in shots)
+        goals = sum(1 for s in shots if s.get("outcome") == "goal")
+        _note(f"{len(shots)} shots · {xg:.2f} engine xG · {goals} goals "
+              f"(last {len(games)} tracked games)")
+
+        W, H, pad = 620, 300, 16
+        ice = "#1d2b33"
+        cv = tk.Canvas(content, width=W, height=H, bg=ice,
+                       highlightthickness=0)
+        cv.pack(anchor="w", pady=(0, 6))
+
+        def f(x, y):
+            cx = pad + (x - 100.0) / 100.0 * (W - 2 * pad)
+            cy = pad + y / 85.0 * (H - 2 * pad)
+            return cx, cy
+
+        cv.create_rectangle(4, 4, W - 4, H - 4, fill=ice,
+                            outline="#3a3f44", width=2)
+        for x, color in ((100.0, "#c0392b"), (125.0, "#2980b9"),
+                         (189.0, "#c0392b")):
+            ax, ay = f(x, 0)
+            _, by = f(x, 85)
+            cv.create_line(ax, ay, ax, by, fill=color, width=3)
+        for cy0 in (20.5, 64.5):
+            ax, ay = f(169, cy0)
+            r = 15 / 100.0 * (W - 2 * pad)
+            cv.create_oval(ax - r, ay - r, ax + r, ay + r,
+                           outline="#7f8c8d", width=1)
+        ax, ay = f(189, 42.5)
+        r = 6 / 100.0 * (W - 2 * pad)
+        cv.create_arc(ax - r, ay - r, ax + r, ay + r, start=270,
+                      extent=180, fill="#3d6b8c", outline="")
+        nx, _ = f(190.5, 42.5)
+        cv.create_rectangle(nx - 3, ay - 8, nx + 3, ay + 8,
+                            fill="#c0392b", outline="")
+
+        colors = {"goal": "#2ecc71", "save": "#3498db",
+                  "blocked": "#7f8c8d", "disallowed": "#f1c40f",
+                  "pending": "#ecf0f1"}
+        for s in shots:
+            cx, cy = f(s.get("x", 160), s.get("y", 42.5))
+            r = 3 + float(s.get("xg", 0) or 0) * 14
+            col = colors.get(s.get("outcome"), "#ecf0f1")
+            if s.get("outcome") == "disallowed":
+                cv.create_oval(cx - r, cy - r, cx + r, cy + r,
+                               outline=col, width=2)
+            else:
+                cv.create_oval(cx - r, cy - r, cx + r, cy + r,
+                               fill=col, outline="")
+            if s.get("outcome") == "goal":
+                cv.create_oval(cx - r - 2, cy - r - 2, cx + r + 2,
+                               cy + r + 2, outline="#d4af37", width=2)
+
+        legend = tk.Frame(content, bg=card.card_bg)
+        legend.pack(anchor="w", pady=(0, 4))
+        for label, col in (("Goal", "#2ecc71"), ("Save", "#3498db"),
+                           ("Blocked", "#7f8c8d"),
+                           ("Disallowed", "#f1c40f")):
+            tk.Label(legend, text=f"● {label}", font=AppFonts.SMALL,
+                     fg=col, bg=card.card_bg).pack(side="left", padx=(0, 12))
+        _note("Dot size = chance quality (engine xG). Attacking right. "
+              "A cluster at the net-front describes his role; a spray from "
+              "the perimeter asks whether his deployment fits -- the map "
+              "poses the question, it doesn't answer it.")
 
 
     def _page_scout_insights(self, parent):
