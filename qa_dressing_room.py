@@ -340,5 +340,66 @@ for _ in range(10):
 check("dressing boost capped at 1.04",
       sim24.dressing_boost[h24.team_name] <= 1.04)
 
+
+def _last_auto_choice(team):
+    log = dr.ensure_dressing_room_fields(team)["mood_log"]
+    for ln in reversed(log):
+        if ln.startswith("(Automated press answer:"):
+            return ln.split(": ", 1)[1].rstrip(".)")
+    return None
+
+
+# 28-30: AI press parity -- auto_press_response ---------------------------
+random.seed(7)
+t28 = make_team([make_player(f"P{i}", morale=70) for i in range(6)])
+ev28 = {"players_involved": ["P0"], "trade": True}
+dr.auto_press_response(t28, ev28)
+choice28 = _last_auto_choice(t28)
+check("auto press logs a valid answer",
+      choice28 in ("critical", "supportive", "confident", "dismissive",
+                   "hostile", "controversial", "professional",
+                   "thoughtful", "diplomatic"))
+# Same mechanic as the user's answer: replay the logged choice through
+# cascade_on_press on a fresh room and compare morale vectors exactly.
+t28b = make_team([make_player(f"P{i}", morale=70) for i in range(6)])
+dr.cascade_on_press(t28b, ev28, choice28)
+check("AI press == user press mechanic",
+      [p.morale for p in t28b.roster] == [p.morale for p in t28.roster])
+
+# 31: mood shapes the automated answer
+random.seed(1234)
+happy = make_team([make_player(f"H{i}", morale=95) for i in range(6)])
+sad = make_team([make_player(f"S{i}", morale=15) for i in range(6)])
+happy_choices, sad_choices = set(), set()
+for _ in range(30):
+    for p in happy.roster:
+        p.morale = 95
+    dr.auto_press_response(happy, {"players_involved": []})
+    happy_choices.add(_last_auto_choice(happy))
+    for p in sad.roster:
+        p.morale = 15
+    dr.auto_press_response(sad, {"players_involved": []})
+    sad_choices.add(_last_auto_choice(sad))
+check("happy room answers confident/supportive/professional",
+      happy_choices <= {"confident", "supportive", "professional"}
+      and len(happy_choices) > 1)
+check("unhappy room answers diplomatic/supportive/dismissive/controversial",
+      sad_choices <= {"diplomatic", "supportive", "dismissive", "controversial"}
+      and len(sad_choices) > 1)
+
+# 32-33: trade hook fires for AI sides only --------------------------------
+import trade_engine as te
+u32 = make_team([make_player("UT1", morale=70), make_player("UT2", morale=70)],
+                name="User Club")
+u32.is_user_team = True
+a32 = make_team([make_player("AI1", morale=70), make_player("AI2", morale=70)],
+                name="AI Club")
+pA, pB = u32.roster[0], a32.roster[0]
+te._post_trade_effects(u32, a32, [pA], [pB], "2026-10-01", None)
+check("AI side gets automated press after trade",
+      _last_auto_choice(a32) is not None)
+check("user side gets no automated press (user answers)",
+      _last_auto_choice(u32) is None)
+
 print(f"\n{len(passed)} passed, {len(failed)} failed")
 sys.exit(1 if failed else 0)
