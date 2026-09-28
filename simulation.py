@@ -483,6 +483,8 @@ class GameSim:
         # Readable momentum (momentum.py): rolling event log; read-only for
         # the visualizer, risk-only for AI decisions. Never touches conversion.
         self._momentum_events = []
+        # Matchup chance attribution: (home_line, away_line) -> chances/goals.
+        self._matchup_chances = {}
         try:
             if isinstance(atmosphere, dict):
                 self._crowd_energy = float(atmosphere.get("energy", 50.0))
@@ -6326,6 +6328,11 @@ class GameSim:
             _mom_observe(self, "goal", scoring_team)
         except Exception:
             pass
+        try:
+            from matchups import record_goal as _mu_goal
+            _mu_goal(self, scoring_team)
+        except Exception:
+            pass
             
         log_msg = f"GOAL for {scoring_team.team_name}! Scored by {shooter.full_name}"
         
@@ -6435,6 +6442,11 @@ class GameSim:
                 _mom_observe2(self, "high_danger", attacking_team)
             elif quality == "medium":
                 _mom_observe2(self, "medium_danger", attacking_team)
+        except Exception:
+            pass
+        try:
+            from matchups import record_chance as _mu_chance
+            _mu_chance(self, attacking_team, quality)
         except Exception:
             pass
         

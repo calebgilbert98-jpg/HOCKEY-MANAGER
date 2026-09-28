@@ -882,9 +882,28 @@ class PBPVisualSim(InGamePopup):
         tk.Label(urow, textvariable=self.units_away_var, bg=CONTENT_BG,
                  fg=self._away_fg, font=_vfont(12, "bold")).pack(side="left")
 
+        # Live matchup readout: who's on against whom, and who's winning it.
+        muf = tk.Frame(sub, bg=CONTENT_BG)
+        muf.pack(side="left", padx=(18, 0))
+        tk.Label(muf, text="MATCHUP", bg=CONTENT_BG, fg="#AEB6C8",
+                 font=_vfont(10, "bold")).pack(anchor="w", padx=4)
+        self.matchup_var = tk.StringVar(value="\u2013")
+        self.matchup_lbl = tk.Label(muf, textvariable=self.matchup_var,
+                                    bg=CONTENT_BG, fg=TEXT,
+                                    font=_vfont(11, "bold"))
+        self.matchup_lbl.pack(anchor="w", padx=4)
+
         btnf = tk.Frame(sub, bg=CONTENT_BG)
         btnf.pack(side="right", padx=4)
         self._pill(btnf, "Next Big Moment", self._jump_to_next_moment, w=150)
+        # The last-change lever lives here, not on a pregame screen: only
+        # the home coach gets it.
+        try:
+            if getattr(self, "user_team", None) is getattr(self, "home_team", None) \
+                    and self.user_team is not None:
+                self._pill(btnf, "Matchups", self._toggle_matchup_panel, w=110)
+        except Exception:
+            pass
 
         momf = tk.Frame(sub, bg=CONTENT_BG)
         momf.pack(side="left", fill="x", expand=True, padx=14)
@@ -920,6 +939,22 @@ class PBPVisualSim(InGamePopup):
                  font=_vfont(10)).pack(side="right")
         self.momentum_list = tk.Frame(self.momentum_panel, bg=CONTENT_BG)
         self.momentum_list.pack(fill="x", padx=14, pady=(0, 4))
+
+        # Matchup control panel (hidden until the Matchups button is pressed).
+        # Live shadow assignments + where the chances came from.
+        self._matchup_open = False
+        self._shadow_vars = {}
+        self.matchup_panel = tk.Frame(self, bg=CONTENT_BG)
+        muph = tk.Frame(self.matchup_panel, bg=CONTENT_BG)
+        muph.pack(fill="x", padx=14, pady=(4, 0))
+        tk.Label(muph, text="LINE MATCHING -- LAST CHANGE IS YOURS",
+                 bg=CONTENT_BG, fg="#AEB6C8",
+                 font=_vfont(10, "bold")).pack(side="left")
+        tk.Label(muph, text="takes effect at the next stoppage",
+                 bg=CONTENT_BG, fg="#AEB6C8",
+                 font=_vfont(10)).pack(side="right")
+        self.matchup_body = tk.Frame(self.matchup_panel, bg=CONTENT_BG)
+        self.matchup_body.pack(fill="x", padx=14, pady=(0, 4))
 
         # Main split
         main = tk.Frame(self, bg=BG)
@@ -4455,6 +4490,162 @@ class PBPVisualSim(InGamePopup):
             pass
 
     # ------------------------------------------------------------------
+    # Last-change line matching: the live lever
+    # ------------------------------------------------------------------
+
+    def _toggle_matchup_panel(self):
+        try:
+            self._matchup_open = not getattr(self, "_matchup_open", False)
+            if self._matchup_open:
+                self._render_matchup_panel()
+                self.matchup_panel.pack(fill="x", padx=10, pady=(0, 4),
+                                        before=self._main_frame)
+            else:
+                self.matchup_panel.pack_forget()
+        except Exception:
+            pass
+
+    def _render_matchup_panel(self):
+        body = getattr(self, "matchup_body", None)
+        if body is None:
+            return
+        for w in body.winfo_children():
+            w.destroy()
+        try:
+            from matchups import (set_shadow, preset_shutdown,
+                                  preset_shelter_scorers, preset_auto,
+                                  describe_prefs, report)
+        except Exception:
+            return
+        home = self.home_team
+
+        top = tk.Frame(body, bg=CONTENT_BG)
+        top.pack(fill="x", pady=(0, 4))
+        # Shadow assignments: my line -> their line.
+        for unit, n, ulab in (("F", 4, "line"), ("D", 3, "pair")):
+            for away_line in range(1, 5):
+                row = tk.Frame(top, bg=CONTENT_BG)
+                row.pack(side="left", padx=(0, 18))
+                tk.Label(row, text=f"Their {away_line}{ulab[0]}",
+                         bg=CONTENT_BG, fg=MUTED,
+                         font=_vfont(9, "bold")).pack(anchor="w")
+                key = (unit, away_line)
+                var = tk.StringVar(value="Auto")
+                # reflect current prefs
+                try:
+                    prefs = list((getattr(home, "line_matchups", None) or {})
+                                 .get(unit) or [])
+                    for i, want in enumerate(prefs[:n]):
+                        if want == away_line:
+                            var.set(f"My {i + 1}")
+                except Exception:
+                    pass
+                opts = ["Auto"] + [f"My {i}" for i in range(1, n + 1)]
+                om = tk.OptionMenu(row, var, *opts,
+                                   command=lambda v, u=unit, a=away_line:
+                                   self._on_shadow_pick(u, a, v))
+                om.configure(bg="#232E44", fg=TEXT, relief="flat",
+                             font=_vfont(9), highlightthickness=0)
+                om.pack(anchor="w")
+                self._shadow_vars[key] = var
+
+        prow = tk.Frame(body, bg=CONTENT_BG)
+        prow.pack(fill="x", pady=(6, 2))
+        tk.Label(prow, text="Presets:", bg=CONTENT_BG, fg=MUTED,
+                 font=_vfont(9, "bold")).pack(side="left", padx=(0, 8))
+        for label, fn in (("Shutdown their stars", preset_shutdown),
+                          ("Shelter my scorers", preset_shelter_scorers),
+                          ("Auto (coach)", preset_auto)):
+            self._pill(prow, label,
+                       lambda f=fn: self._on_matchup_preset(f), w=170)
+
+        # Where the chances came from, live.
+        # Where the chances came from, live (refreshed on a throttle).
+        tk.Label(body, text="WHERE THE CHANCES CAME FROM",
+                 bg=CONTENT_BG, fg="#AEB6C8",
+                 font=_vfont(9, "bold")).pack(anchor="w", pady=(6, 0))
+        self.matchup_table = tk.Frame(body, bg=CONTENT_BG)
+        self.matchup_table.pack(fill="x")
+        self._matchup_tick = 0
+        self._refresh_matchup_table()
+
+    def _refresh_matchup_table(self):
+        tbl = getattr(self, "matchup_table", None)
+        if tbl is None:
+            return
+        for w in tbl.winfo_children():
+            w.destroy()
+        try:
+            from matchups import report
+        except Exception:
+            return
+        rep = report(getattr(self, "sim", None))
+        if rep:
+            for r in rep[:6]:
+                hd = "HD %s-%s" % (r["hd_for"], r["hd_against"])
+                g = "G %s-%s" % (r["goals_for"], r["goals_against"])
+                line = ("Your %s vs their %s: %s \u00b7 %s"
+                        % (r["home_line"], r["away_line"], hd, g))
+                if r["verdict"]:
+                    line += " -- %s" % r["verdict"]
+                tk.Label(tbl, text="\u2022 " + line, bg=CONTENT_BG, fg=TEXT,
+                         font=_vfont(9), anchor="w",
+                         wraplength=1000, justify="left").pack(anchor="w")
+        else:
+            tk.Label(tbl, text="No dangerous chances logged yet.",
+                     bg=CONTENT_BG, fg=MUTED,
+                     font=_vfont(9)).pack(anchor="w")
+    def _on_shadow_pick(self, unit, away_line, value):
+        try:
+            from matchups import set_shadow
+            home_line = None
+            if value.startswith("My "):
+                home_line = int(value.split()[-1])
+            set_shadow(self.home_team, away_line, home_line, unit)
+            who = "my %s" % home_line if home_line else "coach's auto"
+            what = "line" if unit == "F" else "pair"
+            self._feed("Matchup set: %s %s vs their %s -- takes effect "
+                        "at the next stoppage." % (who, what, away_line),
+                       tag="info")
+        except Exception:
+            pass
+
+    def _on_matchup_preset(self, fn):
+        try:
+            fn(self.home_team)
+            self._render_matchup_panel()
+            self._feed("Matchup preset applied -- takes effect at the next "
+                       "stoppage.", tag="info")
+        except Exception:
+            pass
+
+    def _update_matchup_readout(self):
+        try:
+            from matchups import current_matchup
+            cm = current_matchup(getattr(self, "sim", None))
+            if cm:
+                txt = (f"L{cm['home_line']} vs L{cm['away_line']} "
+                       f"· {cm['edge']}")
+            else:
+                txt = "–"
+            cache = self._units_cache
+            if txt != cache.get("matchup"):
+                self.matchup_var.set(txt)
+                cache["matchup"] = txt
+                edge = (cm or {}).get("edge", "")
+                if edge in ("strong edge", "edge"):
+                    self.matchup_lbl.configure(fg="#7bc96f")
+                elif edge in ("outmatched", "strongly outmatched"):
+                    self.matchup_lbl.configure(fg="#ff9f5c")
+                else:
+                    self.matchup_lbl.configure(fg=TEXT)
+            # keep the open panel's attribution table fresh
+            if getattr(self, "_matchup_open", False):
+                self._render_matchup_panel()
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # Game intensity (tension) meter
     # ------------------------------------------------------------------
 
@@ -4629,6 +4820,7 @@ class PBPVisualSim(InGamePopup):
         if atxt != self._units_cache["away"]:
             self.units_away_var.set(atxt)
             self._units_cache["away"] = atxt
+        self._update_matchup_readout()
 
     # ------------------------------------------------------------------
     # Next big moment jump
@@ -4688,6 +4880,16 @@ class PBPVisualSim(InGamePopup):
                    f"Goals: {hab} {gh} · {aab} {ga}", tag="info", ev=ev)
         for tag, msg, nev in self._period_stats["notes"][-8:]:
             self._feed(f"• {msg}", tag=tag, ev=nev)
+        if p >= 3:
+            # The matchup story of the night: where the chances came from.
+            try:
+                from matchups import report as _mu_report
+                _vers = [r["verdict"] for r in _mu_report(getattr(self, "sim", None))
+                         if r["verdict"]][:2]
+                for _v in _vers:
+                    self._feed(f"• Matchups: {_v}.", tag="summary", ev=ev)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Live goalie stats
