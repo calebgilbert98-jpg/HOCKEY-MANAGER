@@ -40,12 +40,15 @@ AGE_DISTRIBUTIONS = {
 
 # Contract value ranges based on skill tier and age
 CONTRACT_VALUES = {
-    "ENTRY_LEVEL": {"min": 750000, "max": 925000, "years": [3]},
-    "BRIDGE": {"min": 1000000, "max": 4000000, "years": [2, 3]},
-    "STANDARD": {"min": 2000000, "max": 8000000, "years": [3, 4, 5, 6]},
-    "PREMIUM": {"min": 6000000, "max": 12000000, "years": [5, 6, 7, 8]},
-    "SUPERSTAR": {"min": 9000000, "max": 15000000, "years": [6, 7, 8]},
-    "VETERAN": {"min": 750000, "max": 3000000, "years": [1, 2]},
+    # 2026-27 scale: league minimum $775k; a 23-man NHL roster must fit
+    # under the $104M cap, so depth deals cluster near the minimum and
+    # only true stars break $9M. (Overall is the native 1-100 scale.)
+    "ENTRY_LEVEL": {"min": 775000, "max": 925000, "years": [3]},
+    "BRIDGE": {"min": 1000000, "max": 3500000, "years": [2, 3]},
+    "STANDARD": {"min": 900000, "max": 5000000, "years": [3, 4, 5, 6]},
+    "PREMIUM": {"min": 6000000, "max": 10500000, "years": [5, 6, 7, 8]},
+    "SUPERSTAR": {"min": 9500000, "max": 14000000, "years": [6, 7, 8]},
+    "VETERAN": {"min": 775000, "max": 2500000, "years": [1, 2]},
     "AHL": {"min": 70000, "max": 150000, "years": [1, 2]}
 }
 
@@ -251,16 +254,18 @@ class PlayerGenerator:
         overall = player.overall_rating()
         age = player.age
         
-        # Determine contract category (overall on the native 100-point scale)
-        if age <= 22 and overall < 68:
+        # Determine contract category (overall on the native 100-point scale).
+        # Young players sign entry-level deals regardless of rating --
+        # a 21-year-old 78-ovr stud is still on his ELC in real life.
+        if age <= 23:
             contract_type = "ENTRY_LEVEL"
-        elif age <= 25 and overall < 72:
+        elif age <= 25 and overall < 74:
             contract_type = "BRIDGE"
-        elif overall >= 85:
+        elif overall >= 88:
             contract_type = "SUPERSTAR"
-        elif overall >= 80:
+        elif overall >= 83:
             contract_type = "PREMIUM"
-        elif age >= 33:
+        elif age >= 34 and overall < 80:
             contract_type = "VETERAN"
         elif "AHL" in skill_tier:
             contract_type = "AHL"

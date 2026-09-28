@@ -162,38 +162,35 @@ class DatabaseManager:
                 player.contract.salary = salary
                 player.contract.years_remaining = years
 
-        # Cap compliance: no team starts over the salary cap. Trim the
-        # richest deals just enough to fit (mimics real cap management).
+        # Cap compliance: no team starts over the salary cap. Scale deals
+        # proportionally so payroll + that club's seeded 2026-27 dead cap
+        # fits under the cap with a $1M operating cushion (mimics real
+        # cap management). Relative pay structure is preserved: stars
+        # still earn the most, depth still earns the least.
+        # (The old 20%-per-player trim could only ever cut 20% of payroll,
+        # so teams generating at 2x the cap stayed over it -- Next Day was
+        # hard-blocked league-wide on day one.)
+        try:
+            import real_cap_data as _rcd
+            _dead_cap = dict(_rcd.DEAD_CAP_2026_27)
+        except Exception:
+            _dead_cap = {}
         salary_cap = 104_000_000  # 2026-27 NHL cap (modern day)
         for team in teams:
+            dead = sum(_dead_cap.get(team.team_name, (0, 0, 0)))
+            target = salary_cap - dead - 1_000_000
             roster = list(team.roster)
-            payroll = sum(p.contract.salary for p in roster)
-            if payroll > salary_cap:
-                # Spread the cut proportionally so no single deal is gutted;
-                # no player loses more than 20% of their salary.
-                over = payroll - salary_cap
-                roster.sort(key=lambda p: p.contract.salary, reverse=True)
-                while over > 0:
-                    progressed = False
-                    for player in roster:
-                        if over <= 0:
-                            break
-                        max_cut = int(player.contract.salary * 0.20)
-                        already_cut = getattr(player, '_cap_trim', 0)
-                        room = max_cut - already_cut
-                        if room <= 0:
-                            continue
-                        cut = int(min(over, room, player.contract.salary - 750_000))
-                        if cut > 0:
-                            player.contract.salary -= cut
-                            player._cap_trim = already_cut + cut
-                            over -= cut
-                            progressed = True
-                    if not progressed:
-                        break
+            # Iterate: the $775k league-minimum floor can nudge payroll back
+            # over target, so rescale the non-floored deals until it fits.
+            for _ in range(10):
+                payroll = sum(p.contract.salary for p in roster)
+                if payroll <= target or target <= 0:
+                    break
+                scale = target / payroll
                 for player in roster:
-                    if hasattr(player, '_cap_trim'):
-                        delattr(player, '_cap_trim')
+                    player.contract.salary = max(
+                        775_000,
+                        int(player.contract.salary * scale // 25000 * 25000))
 
         print("NHL teams populated successfully")
         self._print_roster_summary(teams)
