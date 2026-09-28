@@ -3944,6 +3944,37 @@ class FreeAgencyWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
+def gm_trade_value_badges(ai_manager, team):
+    """badge_fn for CTkPlayerList: how THIS team's GM values each player.
+
+    EHM-style trade screen: at a glance you see who the other GM considers
+    UNTOUCHABLE / CORE / VALUED / GETTABLE. Built on the same
+    franchise_score the extension forward book uses, so the tag and the
+    money the GM reserves always agree. Falls back to a neutral read when
+    the AI manager or the GM identity isn't available.
+    """
+    try:
+        identity = ai_manager.gm_identities.get(team.team_name)
+    except Exception:
+        identity = None
+    try:
+        strategy = ai_manager.team_strategies.get(team.team_name)
+    except Exception:
+        strategy = None
+    try:
+        import ai_extension_planning as _aep
+    except Exception:
+        return None
+
+    def _badge(player):
+        try:
+            label, color, _s = _aep.trade_value_tier(player, identity, strategy)
+            return (label, color)
+        except Exception:
+            return None
+    return _badge
+
+
 class TradeWindow(InGamePopup):
     """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
 
@@ -4114,6 +4145,10 @@ class TradeWindow(InGamePopup):
                                        variable=self._partner_level,
                                        command=lambda _v: self.update_trade_partner_roster())
         _plvl.pack(fill='x', padx=8, pady=(0, 4))
+        # EHM-style: whose value is whose -- their GM's read on each player.
+        body(partner_frame, "Their GM values each player:  "
+             "UNTOUCHABLE (not moving)  ·  CORE  ·  VALUED  ·  GETTABLE",
+             size=10, dim=True).pack(anchor='w', padx=12, pady=(0, 2))
         self.partner_list = CTkPlayerList(partner_frame)
         self.partner_list.pack(fill='both', expand=True, padx=8, pady=4)
         pbtn_row = ctk.CTkFrame(partner_frame, fg_color="transparent")
@@ -4221,7 +4256,12 @@ class TradeWindow(InGamePopup):
         if team:
             lvl = self._partner_level.get() if hasattr(self, '_partner_level') else "NHL"
             self.partner_title.configure(text=f"{team.team_name} ({lvl})")
-            self.partner_list.set_players(self._level_roster(team, lvl))
+            try:
+                _badge_fn = gm_trade_value_badges(self.parent.ai_manager, team)
+            except Exception:
+                _badge_fn = None
+            self.partner_list.set_players(self._level_roster(team, lvl),
+                                          badge_fn=_badge_fn)
             needs = self.te.team_needs(team)[:3]
             self.needs_label.configure(text="  ".join(needs) if needs else "—")
         # Partner changed -> clear their side of the deal

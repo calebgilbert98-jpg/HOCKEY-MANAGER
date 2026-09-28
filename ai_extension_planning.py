@@ -36,6 +36,64 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _POTENTIAL_PTS = {"A": 40.0, "B": 30.0, "C": 15.0, "D": 5.0, "F": 0.0}
 
+# Mirrors Player.POTENTIAL_LADDER (game_classes); kept local so this module
+# stays import-light. 12 rungs, F -> A+.
+_GRADE_LADDER = ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-",
+                 "A", "A+"]
+
+
+def _clamp01(x) -> float:
+    try:
+        return max(0.0, min(1.0, float(x)))
+    except Exception:
+        return 0.5
+
+
+def scout_trust(identity=None) -> float:
+    """0..1: how much the GM leans on his scouts' perception of a player
+    versus his own eyes.
+
+    Adaptability-led (open vs stubborn), patience secondary. A stubborn
+    old-school GM trusts his gut and barely reads the reports; an
+    adaptable modern GM leans on them fully. This only weights the
+    INFORMATION -- the GM's vision (loyalty, patience, aggression) still
+    has the ultimate say in what that information is worth.
+    """
+    if identity is None:
+        return 0.5
+    try:
+        a = _clamp01(getattr(identity, "adaptability", 0.5))
+        p = _clamp01(getattr(identity, "patience", 0.5))
+    except Exception:
+        return 0.5
+    return _clamp01(0.15 + 0.60 * a + 0.25 * p)
+
+
+def _grade_index(grade: str) -> int:
+    """Ladder rung 0..11 for a grade string; unknown -> 0 (F)."""
+    g = (grade or "").strip().upper()
+    if g in _GRADE_LADDER:
+        return _GRADE_LADDER.index(g)
+    if g and g[0] in "ABCDF":
+        # Fall back to the letter's base rung (B -> "B").
+        for i, rung in enumerate(_GRADE_LADDER):
+            if rung == g[0]:
+                return i
+    return 0
+
+
+def _gut_grade_index(player) -> int:
+    """The GM's own eyes: current overall mapped onto the grade ladder.
+
+    What an old-school GM trusts -- the player in front of him, not the
+    report. 66 -> F, ~74 -> C, ~80 -> B-, ~85 -> A-, 90+ -> A+.
+    """
+    try:
+        ovr = float(player.overall_rating())
+    except Exception:
+        return 0
+    return max(0, min(11, int(round((ovr - 66.0) / 2.2))))
+
 _PIECE_SCORE_THRESHOLD = 50.0
 _STAR_OVERRIDE_OVR = 86  # 86+ overall is a star by any measure
 
@@ -106,7 +164,10 @@ def franchise_score(player, identity=None, strategy=None) -> float:
 
     Star power counts, but so does the future the GM sees in a young
     player -- potential grade, draft pedigree, homegrown status -- even
-    when the current overall doesn't show it yet.
+    when the current overall doesn't show it yet. The "future" read blends
+    the franchise scouts' perception with the GM's own eyes, weighted by
+    scout_trust (adaptability-led); the GM's vision always has the final
+    say through the personality weights.
     """
     ovr = _ovr100(player)
     age = _age(player)
@@ -124,7 +185,19 @@ def franchise_score(player, identity=None, strategy=None) -> float:
 
     # Future value: what the GM believes he's becoming, regardless of
     # today's overall. Youth-gated: a 30-year-old "B prospect" isn't one.
+    #
+    # The belief itself is a blend. The franchise scouts' perception
+    # (potential_grade -- the org belief their reports built) is one read;
+    # the GM's own eyes (current overall, mapped to the ladder) is the
+    # other. scout_trust -- adaptability-led -- decides how much of each.
+    # A stubborn old-school GM overrules his scouts with his gut; a modern
+    # one leans on the reports. Either way the GM's personality keeps the
+    # ultimate say through the vision weights below.
     grade = _potential_grade(player)
+    trust = scout_trust(identity)
+    blended_idx = int(round(trust * _grade_index(grade)
+                            + (1.0 - trust) * _gut_grade_index(player)))
+    blended_letter = _GRADE_LADDER[max(0, min(11, blended_idx))][0]
     if age <= 21:
         youth_mult = 1.0
     elif age <= 23:
@@ -133,7 +206,7 @@ def franchise_score(player, identity=None, strategy=None) -> float:
         youth_mult = 0.5
     else:
         youth_mult = 0.12
-    future_part = _POTENTIAL_PTS.get(grade, 0.0) * youth_mult
+    future_part = _POTENTIAL_PTS.get(blended_letter, 0.0) * youth_mult
     # A patient GM bets on development; an impatient one discounts it.
     future_part *= 0.7 + 0.6 * patience
 
@@ -211,6 +284,33 @@ def project_extension_cost(player, ask_fn: Callable, identity=None,
     except Exception:
         floor = 775_000
     return max(floor, int(ask * factor))
+
+
+# Trade-screen value tiers (EHM-style): how this GM values the player, at a
+# glance on the trade screen. Colors are the ctk_theme palette
+# (RED/GOLD/TEAL/TEXT_DIM) as hex so this module stays UI-import-free.
+_TRADE_TIERS = (
+    (80.0, "UNTOUCHABLE", "#e74c3c"),
+    (50.0, "CORE", "#e8b93c"),
+    (35.0, "VALUED", "#00ceb8"),
+    (0.0, "GETTABLE", "#a1a1aa"),
+)
+
+
+def trade_value_tier(player, identity=None, strategy=None):
+    """(label, color_hex, score): the EHM-style value tag for the trade screen.
+
+    The same franchise_score the forward book uses -- so the tag on the
+    trade screen and the money the GM reserves always agree about who is
+    core. A rebuilding GM's 33-year-old 84 reads GETTABLE here for the
+    same reason his plan won't reserve a raise for him.
+    """
+    s = franchise_score(player, identity, strategy)
+    for floor, label, color in _TRADE_TIERS:
+        if s >= floor:
+            return label, color, round(s, 1)
+    label, color = _TRADE_TIERS[-1][1], _TRADE_TIERS[-1][2]
+    return label, color, round(s, 1)
 
 
 @dataclass

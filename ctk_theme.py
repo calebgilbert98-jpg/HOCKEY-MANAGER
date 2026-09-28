@@ -146,16 +146,18 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
         self._rows = []          # (frame, player)
         self._selected = None
         self._selected_frame = None
+        self._badge_fn = None    # optional: badge_fn(player) -> (text, color)
         # Optional: on_right_click(event, player) -- EHM/FM24 player menu.
         self.on_right_click = None
 
-    def set_players(self, players):
+    def set_players(self, players, badge_fn=None):
         for frame, _ in self._rows:
             frame.destroy()
         self._rows = []
         self._players = list(players)
         self._selected = None
         self._selected_frame = None
+        self._badge_fn = badge_fn
         for p in self._players:
             self._add_row(p)
 
@@ -187,7 +189,26 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
                                text_color=ovr_color, width=36, anchor="e")
         ovr_lbl.pack(side="right", padx=8)
 
-        for w in (row, name_lbl, ovr_lbl):
+        # Optional value badge (trade screen: the other GM's valuation).
+        badge_lbl = None
+        if self._badge_fn is not None:
+            try:
+                _badge = self._badge_fn(player)
+            except Exception:
+                _badge = None
+            if _badge:
+                try:
+                    _btext, _bcolor = _badge[0], _badge[1]
+                except Exception:
+                    _btext, _bcolor = None, None
+                if _btext:
+                    badge_lbl = ctk.CTkLabel(
+                        row, text=str(_btext), font=("Segoe UI", 9, "bold"),
+                        text_color=_bcolor or TEXT_DIM, anchor="e", width=92)
+                    badge_lbl.pack(side="right", padx=(4, 2))
+
+        _bind = [w for w in (row, name_lbl, ovr_lbl, badge_lbl) if w is not None]
+        for w in _bind:
             w.bind("<Button-1>", lambda e, f=row, pl=player: self._select(f, pl))
             w.bind("<Enter>", lambda e, f=row: self._hover(f, True))
             w.bind("<Leave>", lambda e, f=row: self._hover(f, False))

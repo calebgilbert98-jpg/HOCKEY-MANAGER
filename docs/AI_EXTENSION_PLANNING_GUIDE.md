@@ -49,6 +49,36 @@ so the AI also gets the June exclusive re-sign window (yr 0 post-decrement).
 - `_evaluate_free_agency`: `available_budget` subtracts `plan.reserved`; in a
   crunch the team doesn't shop UFAs at all.
 
+## Scout perception vs the GM's eyes (scout_trust)
+
+The "future" half of `franchise_score` blends two reads of a young player:
+
+- **The franchise scouts' perception** — `potential_grade`, the org belief
+  the scouting staff's reports built (shaped over time by
+  `scout_reveal_step` with the head scout's JPP).
+- **The GM's own eyes** — current overall mapped onto the grade ladder
+  (`_gut_grade_index`: 66→F … 74→C … 85→A- … 90+→A+).
+
+`scout_trust(identity)` (0..1, adaptability-led, patience secondary)
+weights them: a stubborn old-school GM (trust ≈ 0.15) overrules his scouts
+with his gut — he'll buy a kid the scouts are down on and stay cold on a
+"B" the scouts love. An adaptable modern GM (trust → 1.0) leans fully on
+the reports. Either way the GM's **vision** (loyalty/patience/aggression)
+keeps the ultimate say — trust only weights the information, never the
+call. Established stars are unaffected (face value dominates their score).
+
+## Trade-screen value tags (EHM-style)
+
+`trade_value_tier(player, identity, strategy)` → `(label, color, score)` —
+the same `franchise_score`, so the tag and the money the GM reserves always
+agree. `UNTOUCHABLE` (80+, red — true cornerstones only), `CORE` (50+,
+gold), `VALUED` (35+, teal), `GETTABLE` (dim). Wired in `windows.py`:
+`gm_trade_value_badges(ai_manager, team)` builds the `badge_fn` that
+`CTkPlayerList.set_players(..., badge_fn=...)` renders on the partner's
+roster — with a legend under the level selector. The user's own list shows
+no tags (he knows his own values). Falls back to a neutral read when the
+AI manager/identity is unavailable.
+
 ## What NOT to touch
 - The offer math in `_evaluate_contract_extensions` (ask × boldness, room
   check) and `_execute_contract_extension` terms are caleb's — the planner
@@ -60,3 +90,7 @@ so the AI also gets the June exclusive re-sign window (yr 0 post-decrement).
 `qa_ai_extension_planning.py` — 32 checks: piece ID (incl. the low-overall
 future piece), GM subjectivity, ability-graded projection, reservation math,
 the $15M-man scenario, crunch, personality pricing, rulebook parity, wiring.
+`qa_trade_values.py` — 33 checks: tier bands, tag/book agreement, GM
+subjectivity (incl. scout_trust boundaries, the scout-overrule case, star
+stability, determinism), badge_fn wiring from the real `AITeamManager`,
+headless `CTkPlayerList` badge rendering + backward compatibility.
