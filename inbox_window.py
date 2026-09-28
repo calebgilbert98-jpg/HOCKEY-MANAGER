@@ -13,8 +13,13 @@ from typing import List, Optional
 import customtkinter as ctk
 
 
-class InboxWindow(InGamePopup):
-    """EHM-style Email Inbox window with comprehensive email management."""
+class InboxView(ctk.CTkFrame):
+    """EHM-style Email Inbox view.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.open_inbox_window) or
+    inside the legacy InboxWindow popup card.
+    """
 
     _FILTERS = [
         ("All", "all"),
@@ -29,7 +34,7 @@ class InboxWindow(InGamePopup):
         ("League", "League"),
     ]
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None, show_back=False, on_close=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -46,15 +51,13 @@ class InboxWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Inbox")
-        self.configure(fg_color=BG)
-        self.geometry("1050x800")
-        self.minsize(900, 600)
+        ctk.CTkFrame.__init__(self, parent, fg_color=BG)
+        self.app = app if app is not None else parent
+        self._show_back = show_back
+        self._on_close = on_close
 
         # Initialize inbox reference
-        self.inbox = parent.user_team.inbox
+        self.inbox = self.app.user_team.inbox
         self.selected_message = None
         self._current_filter = "all"
 
@@ -62,8 +65,7 @@ class InboxWindow(InGamePopup):
         self._create_interface()
         self._populate_inbox()
 
-        # Update parent's inbox notification
-        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
 
     # ------------------------------------------------------------------
     # CTk styling helpers
@@ -121,6 +123,11 @@ class InboxWindow(InGamePopup):
         header = ctk.CTkFrame(main_container, fg_color=ct['CARD'],
                               corner_radius=12)
         header.pack(fill='x', pady=(0, 12))
+        if self._show_back:
+            self._secondary_button(header, text="\u2039 Dashboard",
+                                   command=self.request_close,
+                                   width=130, height=32).pack(
+                side='left', padx=(12, 0), pady=12)
         self._heading(header, "Inbox", size=20).pack(
             side='left', padx=16, pady=12)
         self.stats_label = self._body(header, "", size=12, dim=True)
@@ -396,8 +403,8 @@ class InboxWindow(InGamePopup):
             self.email_tree.delete(item)
 
         # Clear tree maps
-        if hasattr(self.parent, 'tree_maps') and 'inbox_messages' in self.parent.tree_maps:
-            self.parent.tree_maps['inbox_messages'].clear()
+        if hasattr(self.app, 'tree_maps') and 'inbox_messages' in self.app.tree_maps:
+            self.app.tree_maps['inbox_messages'].clear()
 
         # Add messages
         for message in self.inbox.messages:
@@ -460,11 +467,11 @@ class InboxWindow(InGamePopup):
         ))
 
         # Store message reference in tree_maps
-        if not hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps = {}
-        if 'inbox_messages' not in self.parent.tree_maps:
-            self.parent.tree_maps['inbox_messages'] = {}
-        self.parent.tree_maps['inbox_messages'][item_id] = message
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = {}
+        if 'inbox_messages' not in self.app.tree_maps:
+            self.app.tree_maps['inbox_messages'] = {}
+        self.app.tree_maps['inbox_messages'][item_id] = message
 
         # Apply styling based on read/urgent/overdue status
         self.email_tree.item(item_id, tags=self._row_tags(message))
@@ -478,8 +485,8 @@ class InboxWindow(InGamePopup):
             self.email_tree.delete(item)
 
         # Clear tree maps (messages are re-registered below)
-        if hasattr(self.parent, 'tree_maps') and 'inbox_messages' in self.parent.tree_maps:
-            self.parent.tree_maps['inbox_messages'].clear()
+        if hasattr(self.app, 'tree_maps') and 'inbox_messages' in self.app.tree_maps:
+            self.app.tree_maps['inbox_messages'].clear()
 
         # Filter messages
         filtered_messages = []
@@ -536,10 +543,10 @@ class InboxWindow(InGamePopup):
         if selection:
             item = selection[0]
             # Get message object from tree_maps
-            if (hasattr(self.parent, 'tree_maps') and
-                'inbox_messages' in self.parent.tree_maps and
-                item in self.parent.tree_maps['inbox_messages']):
-                message = self.parent.tree_maps['inbox_messages'][item]
+            if (hasattr(self.app, 'tree_maps') and
+                'inbox_messages' in self.app.tree_maps and
+                item in self.app.tree_maps['inbox_messages']):
+                message = self.app.tree_maps['inbox_messages'][item]
                 self.selected_message = message
                 self._display_message_preview(message)
 
@@ -654,8 +661,8 @@ class InboxWindow(InGamePopup):
         # Check if this is a fantasy draft message
         if ("FANTASY DRAFT" in message.subject.upper() and
             message.sender_type == "League" and
-            hasattr(self.parent.game_manager, 'pending_fantasy_draft') and
-            self.parent.game_manager.pending_fantasy_draft):
+            hasattr(self.app.game_manager, 'pending_fantasy_draft') and
+            self.app.game_manager.pending_fantasy_draft):
 
             # Show fantasy draft button
             self.special_action_btn.configure(
@@ -679,7 +686,7 @@ class InboxWindow(InGamePopup):
             self._on_closing()
 
             # Launch the fantasy draft window
-            self.parent.open_fantasy_draft_window()
+            self.app.open_fantasy_draft_window()
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not start fantasy draft: {e}")
@@ -694,8 +701,8 @@ class InboxWindow(InGamePopup):
         """Select and display the message with the given id."""
         try:
             mapping = {}
-            if hasattr(self.parent, 'tree_maps'):
-                mapping = self.parent.tree_maps.get('inbox_messages', {})
+            if hasattr(self.app, 'tree_maps'):
+                mapping = self.app.tree_maps.get('inbox_messages', {})
             for item_id, message in mapping.items():
                 if getattr(message, 'id', None) == message_id:
                     self.email_tree.selection_set(item_id)
@@ -758,7 +765,7 @@ class InboxWindow(InGamePopup):
     def _render_game_day_bundle(self, message):
         """Pre-match presser + team talk + Watch/Quick, all in the inbox."""
         data = message.action_data or {}
-        app = self.parent
+        app = self.app
         try:
             today = app.current_date.isoformat()
         except Exception:
@@ -875,7 +882,7 @@ class InboxWindow(InGamePopup):
 
     def _render_trade_negotiation(self, message):
         import trade_negotiation as tn
-        app = self.parent
+        app = self.app
         neg_id = (message.action_data or {}).get("negotiation_id")
         neg = tn.get_negotiation(app, neg_id) if neg_id else None
 
@@ -934,14 +941,14 @@ class InboxWindow(InGamePopup):
     def _trade_neg_from_message(self, message):
         import trade_negotiation as tn
         neg_id = (message.action_data or {}).get("negotiation_id")
-        return tn.get_negotiation(self.parent, neg_id) if neg_id else None
+        return tn.get_negotiation(self.app, neg_id) if neg_id else None
 
     def _on_trade_negotiate(self, message):
         import trade_negotiation as tn
         neg = self._trade_neg_from_message(message)
         if neg is None or not neg.is_open:
             return
-        app = self.parent
+        app = self.app
         try:
             user_objs, _ = tn.resolve_assets(app, neg.user_assets)
             partner_objs, _ = tn.resolve_assets(app, neg.partner_assets)
@@ -962,7 +969,7 @@ class InboxWindow(InGamePopup):
         if neg is None:
             return
         try:
-            tn.accept_negotiation(self.parent, neg.id)
+            tn.accept_negotiation(self.app, neg.id)
         except Exception as e:
             print(f"trade accept failed: {e}")
         message.action_done = True
@@ -975,7 +982,7 @@ class InboxWindow(InGamePopup):
         if neg is None:
             return
         try:
-            tn.decline_negotiation(self.parent, neg.id)
+            tn.decline_negotiation(self.app, neg.id)
         except Exception as e:
             print(f"trade decline failed: {e}")
         message.action_done = True
@@ -1020,7 +1027,7 @@ class InboxWindow(InGamePopup):
 
     def _on_contract_counter_accept(self, message):
         try:
-            self.parent.accept_contract_counter(message)
+            self.app.accept_contract_counter(message)
         except Exception as e:
             print(f"contract counter accept failed: {e}")
         self._refresh_inbox()
@@ -1028,7 +1035,7 @@ class InboxWindow(InGamePopup):
 
     def _on_contract_counter_new_offer(self, message):
         try:
-            self.parent.reopen_contract_negotiation(message)
+            self.app.reopen_contract_negotiation(message)
         except Exception as e:
             print(f"contract counter new offer failed: {e}")
         self._refresh_inbox()
@@ -1042,21 +1049,21 @@ class InboxWindow(InGamePopup):
 
     def _on_bundle_presser_answer(self, message, qi, ai):
         try:
-            self.parent._answer_bundle_presser(message, qi, ai)
+            self.app._answer_bundle_presser(message, qi, ai)
         except Exception:
             pass
         self._show_interactive_action(message)
 
     def _on_bundle_team_talk(self, message, oi):
         try:
-            self.parent._answer_bundle_team_talk(message, oi)
+            self.app._answer_bundle_team_talk(message, oi)
         except Exception:
             pass
         self._show_interactive_action(message)
 
     def _on_postmatch_answer(self, message, qi, ai):
         try:
-            self.parent._answer_postmatch_presser(message, qi, ai)
+            self.app._answer_postmatch_presser(message, qi, ai)
         except Exception:
             pass
         self._show_interactive_action(message)
@@ -1110,8 +1117,8 @@ class InboxWindow(InGamePopup):
     def _refresh_inbox(self):
         """Refresh the inbox display, preserving the active filter."""
         self._apply_filter(getattr(self, '_current_filter', 'all'))
-        if hasattr(self.parent, 'update_inbox_notification'):
-            self.parent.update_inbox_notification()
+        if hasattr(self.app, 'update_inbox_notification'):
+            self.app.update_inbox_notification()
 
     def _clear_preview(self):
         """Clear the message preview pane."""
@@ -1145,12 +1152,47 @@ class InboxWindow(InGamePopup):
         # Refresh per-filter unread badges
         self._update_filter_badges()
 
-    def _on_closing(self):
-        """Handle window closing."""
-        # Update parent inbox notification
-        if hasattr(self.parent, 'update_inbox_notification'):
-            self.parent.update_inbox_notification()
-        self.destroy()
+    def request_close(self):
+        """Close the view: refresh the nav badge, then hand off."""
+        if hasattr(self.app, 'update_inbox_notification'):
+            self.app.update_inbox_notification()
+        if self._on_close is not None:
+            self._on_close()
+        else:
+            self.destroy()
+
+    # Popup-mode alias kept for the InboxWindow wrapper.
+    _on_closing = request_close
 
 
 # Sample email generation removed - emails are now generated dynamically from actual game events
+class InboxWindow(InGamePopup):
+    """Popup wrapper around InboxView (backward compatibility).
+
+    New code should embed InboxView as a full-screen view via
+    HockeyManagerGUI.open_inbox_window() instead of opening this card.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Inbox")
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = InboxView(self, app=parent, on_close=self.destroy)
+        self._view.pack(fill="both", expand=True)
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._view.request_close)
+        except Exception:
+            pass
+
+    def focus_message(self, message_id):
+        return self._view.focus_message(message_id)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

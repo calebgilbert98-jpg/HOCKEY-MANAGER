@@ -425,24 +425,52 @@ def main():
     ]
     for m in reversed(msgs):
         team.inbox.add_message(m)
-    from inbox_window import InboxWindow
-    iw = InboxWindow(app)
+    # Full-screen inbox: what the user actually sees (embedded view, not
+    # the legacy popup wrapper).
+    from inbox_window import InboxView, InboxWindow
+    iview = InboxView(root, app=app, show_back=True)
+    iview.pack(fill="both", expand=True)
     root.update(); root.update()
-    ish = shell_of(iw)
-    shot(ish, f"{args.shots}/inbox_contracts_{args.res}.png")
+    shot(iview, f"{args.shots}/inbox_fullscreen_{args.res}.png")
     # render the counter message's interactive actions (as on selection)
     try:
-        iw._show_interactive_action(msgs[1])
+        iview._show_interactive_action(msgs[1])
         root.update(); time.sleep(0.3)
-        shot(ish, f"{args.shots}/inbox_counter_actions_{args.res}.png")
+        shot(iview, f"{args.shots}/inbox_counter_actions_{args.res}.png")
     except Exception as e:
         check("fail", "inbox counter actions render", False, str(e))
-    check_fit("inbox", ish, root)
-    check_fonts("inbox", ish)
-    check_contrast("inbox", ish)
-    check_clipping("inbox", ish)
-    check_nested_scroll("inbox", ish)
-    check_inbox_layout(iw)
+    try:
+        ww, wh = iview.winfo_width(), iview.winfo_height()
+        rw, rh = root.winfo_width(), root.winfo_height()
+        check("fail", f"inbox fills app window ({ww}x{wh} in {rw}x{rh})",
+              abs(ww - rw) <= 4 and abs(wh - rh) <= 4)
+    except Exception as e:
+        check("fail", "inbox fill measurable", False, str(e))
+    check_fonts("inbox", iview)
+    check_contrast("inbox", iview)
+    check_clipping("inbox", iview)
+    check_nested_scroll("inbox", iview)
+    check_inbox_layout(iview)
+    # back button present in full-screen mode
+    def _has_back_text(w):
+        try:
+            return "Dashboard" in str(w.cget("text") or "")
+        except Exception:
+            return False
+    back = [c for c in walk(iview) if _has_back_text(c)]
+    check("fail", "inbox back button present", len(back) > 0)
+    iview.destroy()
+    root.update()
+    # Legacy popup wrapper: still constructs and focuses a message.
+    try:
+        iw = InboxWindow(app)
+        root.update(); root.update()
+        check("fail", "legacy inbox popup focuses message",
+              iw.focus_message(msgs[1].id) is True)
+        iw._view.request_close()
+        root.update()
+    except Exception as e:
+        check("fail", "legacy inbox popup wrapper", False, str(e))
 
     print(f"\n{PASS and len(PASS)} passed, {len(FAIL)} failed, {len(WARN)} warnings")
     return 1 if FAIL else 0

@@ -3987,6 +3987,7 @@ class HockeyManagerGUI(tk.Tk):
         # Create main container with proper layout
         main_container = ttk.Frame(self, style='Panel.TFrame')
         main_container.pack(fill="both", expand=True)
+        self.main_container = main_container
         
         # Configure grid weights for proper expansion
         main_container.grid_rowconfigure(0, weight=0)  # Menu bar - fixed height
@@ -4020,6 +4021,9 @@ class HockeyManagerGUI(tk.Tk):
                 dashboard_frame = tk.Frame(main_container, bg=AppColors.BG)
                 dashboard_frame.grid(row=1, column=0, sticky="nsew")
                 self.dashboard.create_dashboard(dashboard_frame)
+                # Full-screen views (e.g. inbox) hide/restore this frame.
+                self._dashboard_frame = dashboard_frame
+                self._dashboard_grid = dict(row=1, column=0, sticky="nsew")
                 
             except Exception as e:
                 print(f"Modern dashboard failed, falling back: {e}")
@@ -4039,6 +4043,10 @@ class HockeyManagerGUI(tk.Tk):
             dashboard_frame = ttk.Frame(main_container, style='Panel.TFrame')
             dashboard_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
             self.dashboard.create_immersive_dashboard(dashboard_frame)
+            # Full-screen views (e.g. inbox) hide/restore this frame.
+            self._dashboard_frame = dashboard_frame
+            self._dashboard_grid = dict(row=1, column=0, sticky="nsew",
+                                        padx=10, pady=10)
         
         # Update dashboard with current data
         self.update_dashboard_data()
@@ -10795,14 +10803,50 @@ class HockeyManagerGUI(tk.Tk):
         self.open_stats_standings_window(focus_tab='records')
         
     def open_inbox_window(self, focus_message_id=None):
-        """Open the Email Inbox window, optionally focused on one message."""
-        if 'inbox' not in self.open_windows or not self.open_windows['inbox'].winfo_exists():
-            self.open_windows['inbox'] = InboxWindow(self)
-        window = self.open_windows['inbox']
-        window.focus_set()
+        """Show the inbox as a full-screen view (EHM-style), not a popup.
+
+        The dashboard frame is hidden while the inbox owns the content area;
+        the menu bar stays put so navigation never strands the user.
+        """
+        from inbox_window import InboxView
+        view = getattr(self, '_inbox_screen', None)
+        if view is None or not view.winfo_exists():
+            if (hasattr(self, '_dashboard_frame')
+                    and self._dashboard_frame.winfo_exists()):
+                self._dashboard_frame.grid_forget()
+            view = InboxView(self.main_container, app=self,
+                             show_back=True, on_close=self.close_inbox_screen)
+            view.grid(row=1, column=0, sticky='nsew')
+            self._inbox_screen = view
+            self.open_windows['inbox'] = view
+        try:
+            view.focus_set()
+        except Exception:
+            pass
         if focus_message_id:
             try:
-                window.focus_message(focus_message_id)
+                view.focus_message(focus_message_id)
+            except Exception:
+                pass
+
+    def close_inbox_screen(self):
+        """Leave the full-screen inbox and restore the dashboard."""
+        view = getattr(self, '_inbox_screen', None)
+        self._inbox_screen = None
+        self.open_windows.pop('inbox', None)
+        if view is not None:
+            try:
+                if view.winfo_exists():
+                    view.destroy()
+            except Exception:
+                pass
+        if hasattr(self, '_dashboard_frame'):
+            try:
+                self._dashboard_frame.grid(**self._dashboard_grid)
+            except Exception:
+                pass
+            try:
+                self.update_dashboard_data()
             except Exception:
                 pass
         
