@@ -9,7 +9,7 @@ import customtkinter as ctk
 from popup_system import messagebox, InGamePopup
 from datetime import date, timedelta
 import random
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from game_classes import Team, PlayerPosition
 
@@ -195,6 +195,14 @@ class PlayoffBracket:
         elif round_name == 'stanley_cup_final':
             if winners:
                 self.stanley_cup_champion = winners[0]
+                # The Cup is lifted: decide the playoff MVP now, while the
+                # full playoff ledger is still in memory. Real-life criteria:
+                # almost always the champion's best player -- the playoff
+                # scoring leader, or a goalie on an all-time run.
+                try:
+                    self._decide_conn_smythe()
+                except Exception:
+                    pass
 
         # Move the current-round pointer forward
         try:
@@ -326,7 +334,149 @@ class PlayoffBracket:
             pass
         series.add_game_result(team1_won, game_info)
 
+        # Playoff stat ledger: fold this game's per-player numbers into each
+        # player's season playoff_stats (feeds the Conn Smythe race). Cheap:
+        # one pass over the finished game's stat table, no extra simulation.
+        try:
+            self._fold_playoff_stats(game_sim, series.team1, series.team2,
+                                     team1_won)
+        except Exception:
+            pass
+
         return home_score, away_score
+
+    def _fold_playoff_stats(self, game_sim: Any, team1: Any, team2: Any,
+                            team1_won: bool) -> None:
+        """Accumulate GameSim.game_stats into Player.playoff_stats.
+
+        Skaters: GP/g/a. Goalies: GP/saves/shots_against/goals_against/
+        shutouts, plus a win/loss for the two starters (the winning team's
+        selected goalie takes the win -- the real-life criterion the
+        playoff MVP voters actually watch).
+        """
+        stats = getattr(game_sim, "game_stats", None) or {}
+        wteam = team1 if team1_won else team2
+        lteam = team2 if team1_won else team1
+        wgoalie = lgoalie = None
+        try:
+            wgoalie = game_sim._selected_goalie(wteam)
+            lgoalie = game_sim._selected_goalie(lteam)
+        except Exception:
+            pass
+        wid = getattr(wgoalie, "id", None)
+        lid = getattr(lgoalie, "id", None)
+        for pid, gs in stats.items():
+            if not isinstance(gs, dict):
+                continue
+            p = gs.get("player")
+            if p is None:
+                continue
+            ps = getattr(p, "playoff_stats", None)
+            if ps is None:
+                continue
+            try:
+                ps.games_played = int(getattr(ps, "games_played", 0) or 0) + 1
+                ps.goals = int(getattr(ps, "goals", 0) or 0) + int(
+                    gs.get("g", 0) or 0)
+                ps.assists = int(getattr(ps, "assists", 0) or 0) + int(
+                    gs.get("a", 0) or 0)
+                ps.saves = int(getattr(ps, "saves", 0) or 0) + int(
+                    gs.get("saves", 0) or 0)
+                ps.shots_against = int(
+                    getattr(ps, "shots_against", 0) or 0) + int(
+                    gs.get("shots_against", 0) or 0)
+                ps.goals_against = int(
+                    getattr(ps, "goals_against", 0) or 0) + int(
+                    gs.get("goals_against", 0) or 0)
+                ps.shutouts = int(getattr(ps, "shutouts", 0) or 0) + int(
+                    gs.get("shutouts", 0) or 0)
+                if pid == wid:
+                    ps.wins = int(getattr(ps, "wins", 0) or 0) + 1
+                elif pid == lid:
+                    ps.losses = int(getattr(ps, "losses", 0) or 0) + 1
+            except Exception:
+                continue
+
+    # Conn Smythe bar for goalies: an all-time run (Giguere .945 in '03,
+    # Hextall '87, Vasilevskiy .937 in '21). Below it, the skaters decide.
+    _SMYTHE_GOALIE_SV = 0.935
+    _SMYTHE_GOALIE_WINS = 12
+
+    @staticmethod
+    def _smythe_is_goalie(p: Any) -> bool:
+        try:
+            pos = getattr(p, "primary_position", None)
+            pv = str(getattr(pos, "value", pos) or "").upper()
+            return pv in ("G", "GOALIE", "GOALTENDER") or bool(
+                getattr(p, "is_goalie", False))
+        except Exception:
+            return False
+
+    def _decide_conn_smythe(self) -> Optional[Any]:
+        """Pick the playoff MVP by real-life criteria and bank it.
+
+        The Conn Smythe goes to the most valuable player of the playoffs --
+        in practice, the Stanley Cup champion's playoff scoring leader,
+        unless a goalie authored an all-time run (SV% >= .935 with 12+
+        wins). The winner is banked into his trophy case immediately and
+        stashed on the bracket (``conn_smythe_winner`` / ``conn_smythe_name``)
+        for the offseason rollover (season history + reputation).
+        """
+        champ = getattr(self, "stanley_cup_champion", None)
+        if champ is None:
+            return None
+        roster = list(getattr(champ, "roster", None) or [])
+        best_skater = None
+        best_skater_key = None
+        best_goalie = None
+        best_goalie_key = None
+        for p in roster:
+            ps = getattr(p, "playoff_stats", None)
+            if ps is None:
+                continue
+            gp = int(getattr(ps, "games_played", 0) or 0)
+            if gp <= 0:
+                continue
+            g = int(getattr(ps, "goals", 0) or 0)
+            a = int(getattr(ps, "assists", 0) or 0)
+            if self._smythe_is_goalie(p):
+                w = int(getattr(ps, "wins", 0) or 0)
+                sa = int(getattr(ps, "shots_against", 0) or 0)
+                sv = (int(getattr(ps, "saves", 0) or 0) / sa) if sa else 0.0
+                key = (w, round(sv, 4))
+                if best_goalie_key is None or key > best_goalie_key:
+                    best_goalie, best_goalie_key = p, key
+            else:
+                key = (g + a, g)
+                if best_skater_key is None or key > best_skater_key:
+                    best_skater, best_skater_key = p, key
+        winner = None
+        if best_goalie is not None:
+            gw, gsv = best_goalie_key
+            if gw >= self._SMYTHE_GOALIE_WINS and gsv >= self._SMYTHE_GOALIE_SV:
+                winner = best_goalie
+        if winner is None:
+            winner = best_skater if best_skater is not None else best_goalie
+        if winner is None:
+            return None
+        self.conn_smythe_winner = winner
+        try:
+            self.conn_smythe_name = (
+                getattr(winner, "full_name", None)
+                or getattr(winner, "name", None) or "?")
+        except Exception:
+            self.conn_smythe_name = "?"
+        # Bank the trophy immediately so the player's case shows it even if
+        # the user quits before the offseason rollover.
+        try:
+            from accolades import bank_accolade
+            from coach_records import season_label
+            league = getattr(self, "league", None)
+            year = int(getattr(league, "season_year", 2025) or 2025)
+            bank_accolade(winner, "conn_smythe", season_label(year))
+        except Exception:
+            pass
+        return winner
     
     def get_playoff_status(self) -> Dict:
         """Get current playoff status for display"""

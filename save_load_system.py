@@ -284,6 +284,9 @@ class GameSaveManager:
                     elif key == 'stats' and value:
                         # Special handling for stats objects
                         player_data[key] = self._serialize_player_stats(value)
+                    elif key == 'playoff_stats' and value:
+                        # Playoff ledger: same shape as stats
+                        player_data[key] = self._serialize_player_stats(value)
                     elif isinstance(value, (date, datetime)):
                         # Handle date/datetime objects
                         player_data[key] = value.isoformat()
@@ -1035,6 +1038,8 @@ class GameSaveManager:
                     player.contract = self._restore_contract(value)
                 elif key == 'stats' and value:
                     player.stats = self._restore_player_stats(value)
+                elif key == 'playoff_stats' and value:
+                    player.playoff_stats = self._restore_player_stats(value)
                 elif key.endswith('_date') and value:
                     # Handle date fields
                     try:

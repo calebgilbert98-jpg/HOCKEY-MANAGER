@@ -444,6 +444,11 @@ class Player:
     
     contract: Contract = field(default_factory=Contract)
     stats: PlayerStats = field(default_factory=PlayerStats)
+    # Playoff-only ledger: folded from GameSim.game_stats after each playoff
+    # game by playoff_system. Feeds the Conn Smythe race and any future
+    # playoff leaderboards. Reset alongside stats in league.end_of_season().
+    # Old-save safe: always read via getattr(player, 'playoff_stats', None).
+    playoff_stats: PlayerStats = field(default_factory=PlayerStats)
 
     # Salary retention (real NHL retained-salary transactions): when this
     # player is traded, his former club may keep up to 50% of the cap hit.
@@ -1230,6 +1235,16 @@ class Staff:
     reputation_history: list = field(default_factory=list)
     controversy_history: list = field(default_factory=list)
     connections: list = field(default_factory=list)  # allies who vouch for him: team names where his guys are
+    # Year-by-year coaching record (head coaches AND assistants): list of
+    # plain dicts {"season", "team", "role", "w", "l", "otl", "playoff",
+    # "jack_adams"}. Recorded at season rollover by coach_records.
+    # Shown on the staff card "Record" tab; informs hiring/firing.
+    # Old-save safe: read via getattr(staff, 'career_record', []).
+    career_record: list = field(default_factory=list)
+    # Trophy case for coaches: plain dicts {"award": key, "year": label} --
+    # "stanley_cup" and "jack_adams". Same bank_accolade/idempotent rules as
+    # players (accolades.py). Old-save safe: getattr(staff, 'career_accolades', []).
+    career_accolades: list = field(default_factory=list)
     # Pro-scout track record (analytics wave 1: trust from evidence, not
     # hidden JPA). tip_record: {"calls": n, "hits": n}; tip_history: last
     # 12 graded calls [{"player", "kind" ("buy"/"sell"), "result"
@@ -5033,6 +5048,12 @@ class League:
             except Exception:
                 pass
             player.stats = PlayerStats()
+            # Fresh playoff ledger for the new season (the Conn Smythe race
+            # reads it during the playoffs; wiped here with everything else).
+            try:
+                player.playoff_stats = PlayerStats()
+            except Exception:
+                pass
         
         self.season_year += 1
 

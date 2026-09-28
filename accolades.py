@@ -30,12 +30,14 @@ ACCOLADE_LABELS: Dict[str, str] = {
     "calder": "Calder Trophy",
     "conn_smythe": "Conn Smythe Trophy",
     "jennings": "Jennings Trophy",
+    "jack_adams": "Jack Adams Award",
 }
 
 # Display order: the Cup first, then individual awards by prestige.
 ACCOLADE_ORDER: List[str] = [
     "stanley_cup", "conn_smythe", "hart", "art_ross", "rocket",
     "norris", "vezina", "selke", "byng", "calder", "jennings",
+    "jack_adams",
 ]
 
 _KEY_ALIASES = {"lady_byng": "byng"}

@@ -11080,12 +11080,47 @@ class HockeyManagerGUI(tk.Tk):
             return
         # Resolve the Cup champion from the playoff window, if one was played.
         champion_name = None
+        bracket = None
+        champ = None
         try:
             pw = self.open_windows.get('playoffs')
             if pw is not None and pw.winfo_exists():
                 bracket = getattr(pw, 'playoff_bracket', None)
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None),
+                                  'playoff_bracket', None)
+            if bracket is not None:
                 champ = getattr(bracket, 'stanley_cup_champion', None)
                 champion_name = getattr(champ, 'team_name', None)
+        except Exception:
+            pass
+        # League-average scoring pace for the reputation recompute below.
+        league_avg_ppg = 0.8
+        try:
+            _tp = _tg = 0
+            for _t in self.league.teams:
+                for _p in getattr(_t, 'roster', []) or []:
+                    _s = getattr(_p, 'stats', None)
+                    _g = int(getattr(_s, 'games_played', 0) or 0)
+                    if _g > 0:
+                        _tg += _g
+                        _tp += int(getattr(_s, 'goals', 0) or 0) + int(
+                            getattr(_s, 'assists', 0) or 0)
+            if _tg > 0:
+                league_avg_ppg = _tp / _tg
+        except Exception:
+            pass
+        # Jack Adams: most overachieving coach -- the same race the awards
+        # ceremony uses. Matched to a Staff object once, up front.
+        adams_staff = None
+        try:
+            import coach_records as _cr0
+            from awards_race import adams_race as _ar0
+            _race = _ar0(self.league.teams)
+            if _race:
+                adams_staff = _cr0.find_coach(
+                    self.league.teams, _race[0].get("coach"),
+                    _race[0].get("team"))
         except Exception:
             pass
         season_start = f"{self.league.season_year}-09-01"
@@ -11096,6 +11131,32 @@ class HockeyManagerGUI(tk.Tk):
             otl = st.get('OTL', 0)
             win_pct = w / max(1, w + l + otl)
             is_champ = champion_name is not None and team.team_name == champion_name
+            # Playoff result for the record book + playoff-success reputation.
+            # 4 = Cup, 3 = lost Final, 2 = lost Division Finals, 1 = lost
+            # earlier, 0 = missed.
+            playoff_rounds_won = 0
+            playoff_result = "Missed playoffs"
+            try:
+                import coach_records as _crp
+                playoff_result = _crp.playoff_result_for_team(
+                    team, bracket, champ)
+                playoff_rounds_won = {
+                    "Won Stanley Cup": 4, "Lost Stanley Cup Final": 3,
+                    "Lost Division Finals": 2, "Lost Division Semifinals": 1,
+                }.get(playoff_result, 0)
+            except Exception:
+                pass
+            try:
+                import accolades as _acc
+                import coach_records as _crr
+                _syr = getattr(self.league, "season_year", 0)
+                _slabel = _crr.season_label(_syr)
+                # Trophy-case year labels banked this season: ceremony year
+                # ("2027") for the awards show, season label ("2026-27")
+                # for the Cup/Smythe. Both count as "this season".
+                _season_labels = {str(_syr + 1), _slabel}
+            except Exception:
+                _season_labels = set()
             for p in team.roster:
                 incidents = sum(
                     1 for e in getattr(p, 'controversy_history', []) or []
@@ -11118,10 +11179,56 @@ class HockeyManagerGUI(tk.Tk):
                             f"{_syr}-{str(_syr + 1)[-2:]}")
                     except Exception:
                         pass
+                # Playoff success builds reputation for every playoff team,
+                # scaled by round. Recomputed from the trophy case (single
+                # source of truth) so the Conn Smythe stacks with
+                # regular-season awards instead of overwriting them.
+                # Ratchet-safe: reputation never decreases.
+                if playoff_rounds_won > 0:
+                    try:
+                        _awards = [
+                            e.get("award")
+                            for e in getattr(p, 'career_accolades', []) or []
+                            if isinstance(e, dict)
+                            and str(e.get("year")) in _season_labels]
+                        _ps = getattr(p, 'stats', None)
+                        rs.update_player_reputation(
+                            p,
+                            season_points=int(
+                                getattr(_ps, 'goals', 0) or 0) + int(
+                                getattr(_ps, 'assists', 0) or 0),
+                            games_played=int(
+                                getattr(_ps, 'games_played', 0) or 0),
+                            league_avg_ppg=league_avg_ppg,
+                            awards=_awards,
+                            playoff_rounds_won=playoff_rounds_won)
+                    except Exception:
+                        pass
             for s in getattr(team, 'staff', []) or []:
-                # +12 for a Cup on the 0-100 career scale; win% moves the rest
+                is_adams = adams_staff is not None and s is adams_staff
+                # +12 for a Cup on the 0-100 career scale; +8 for a Jack
+                # Adams; win% moves the rest.
                 rs.update_staff_reputation(s, team_win_pct=win_pct,
-                                           championships=1 if is_champ else 0)
+                                           championships=1 if is_champ else 0,
+                                           jack_adams=is_adams)
+                # Year-by-year coaching record (head coaches AND assistants):
+                # the hiring/firing evidence on the staff card Record tab.
+                # Idempotent per (season, team).
+                try:
+                    import coach_records as _cr2
+                    import accolades as _acc2
+                    if _cr2.is_coaching_role(s):
+                        _syr2 = getattr(self.league, "season_year", 0)
+                        _slabel2 = _cr2.season_label(_syr2)
+                        _cr2.record_staff_season(
+                            s, _slabel2, team.team_name, w, l, otl,
+                            playoff_result, jack_adams=is_adams)
+                        if is_adams:
+                            _acc2.bank_accolade(s, "jack_adams", _slabel2)
+                        if is_champ:
+                            _acc2.bank_accolade(s, "stanley_cup", _slabel2)
+                except Exception:
+                    pass
                 # Another year with the club: the shelf-life clock ticks.
                 try:
                     s.years_with_team = (getattr(s, 'years_with_team', 0) or 0) + 1
@@ -11790,6 +11897,16 @@ class HockeyManagerGUI(tk.Tk):
                     else:
                         awards[str(award_name)] = getattr(
                             winner, 'full_name', getattr(winner, 'name', str(winner)))
+        except Exception:
+            pass
+
+        # Conn Smythe: decided at Cup-win time and stashed on the bracket
+        # (playoff_system._decide_conn_smythe) -- the awards calculator only
+        # covers the regular season, so inject it here for the history book.
+        try:
+            smythe_name = getattr(bracket, "conn_smythe_name", None)
+            if smythe_name:
+                awards["Conn Smythe"] = smythe_name
         except Exception:
             pass
 

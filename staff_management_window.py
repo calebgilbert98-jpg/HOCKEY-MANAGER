@@ -1134,6 +1134,9 @@ class StaffManagementView(ctk.CTkFrame):
         tab_pages["Personality"] = personality_page
 
         # -- Track Record page (scouts): the ledger, not the resume -----
+        # -- Record page (coaches): year-by-year W/L, playoff results, and
+        #    honours -- the hiring/firing evidence, for head coaches AND
+        #    assistants.
         # -- Analytics page (directors): what the department behind the
         #    numbers actually does for the club.
         try:
@@ -1142,8 +1145,17 @@ class StaffManagementView(ctk.CTkFrame):
                             _SR.AMATEUR_SCOUT, _SR.EUROPEAN_SCOUT}
             _is_scout = staff.role in _scout_roles
             _is_director = staff.role == _SR.ANALYTICS_DIRECTOR
+            try:
+                import coach_records as _crw
+                _is_coach = _crw.is_coaching_role(staff)
+            except Exception:
+                _is_coach = False
         except Exception:
-            _is_scout = _is_director = False
+            _is_scout = _is_director = _is_coach = False
+        if _is_coach:
+            record_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
+            self._staff_coaching_record_tab(record_page, staff, ct)
+            tab_pages["Record"] = record_page
         if _is_scout:
             track_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
             self._staff_track_record_tab(track_page, staff, ct)
@@ -1157,7 +1169,7 @@ class StaffManagementView(ctk.CTkFrame):
 
         _tab_widths = {"Overview": 89, "Attributes": 97, "Standing": 85,
                        "Personality": 104, "Track Record": 115,
-                       "Analytics": 88}
+                       "Analytics": 88, "Record": 78}
         for tname in tab_pages:
             btn = ctk.CTkButton(
                 tabbar, text=tname, fg_color="transparent",
@@ -1188,6 +1200,77 @@ class StaffManagementView(ctk.CTkFrame):
         self._secondary_button(button_frame, text="Close",
                                command=details_window.destroy,
                                width=110, height=36).pack(side="right", padx=5)
+
+    def _staff_coaching_record_tab(self, parent, staff, ct):
+        """Record page (head coaches AND assistants): year-by-year W-L-OTL,
+        playoff result, and honours -- the hiring/firing evidence. Recorded
+        at every season rollover by coach_records; empty for coaches hired
+        mid-save before their first rollover.
+        """
+        try:
+            import coach_records as _cr
+            import accolades as _acc
+        except Exception:
+            _cr = _acc = None
+        record = list(getattr(staff, "career_record", None) or [])
+
+        totals_inner = self._dialog_card(parent, "Career Totals")
+        if _cr is not None:
+            t = _cr.career_totals(record)
+            self._info_label(
+                totals_inner,
+                f"Record: {t['w']}-{t['l']}-{t['otl']}  "
+                f"({t['win_pct']:.3f}) over {t['seasons']} seasons")
+            self._info_label(
+                totals_inner,
+                f"Stanley Cups: {t['cups']}   Jack Adams Awards: {t['adams']}")
+
+        honours_inner = self._dialog_card(parent, "Honours")
+        honours = _acc.group_accolades(staff) if _acc is not None else []
+        if honours:
+            for label, years in honours:
+                self._info_label(
+                    honours_inner,
+                    f"{label} Winner: {', '.join(years)}")
+        else:
+            self._info_label(honours_inner, "No honours banked yet.")
+
+        hist_inner = self._dialog_card(parent, "Season by Season")
+        if not record:
+            self._info_label(
+                hist_inner,
+                "No completed seasons on record yet -- the first entry "
+                "lands at season rollover.")
+            return
+        cols = ("Season", "Team", "Role", "W-L-OTL", "Playoffs", "Award")
+        widths = (10, 22, 16, 10, 24, 12)
+        header = ctk.CTkFrame(hist_inner, fg_color="transparent")
+        header.pack(fill="x", padx=4, pady=(2, 4))
+        for i, c in enumerate(cols):
+            ctk.CTkLabel(header, text=c, font=self._sfont(9, "bold"),
+                         text_color=ct["TEXT_DIM"], anchor="w",
+                         width=widths[i] * 7).grid(row=0, column=i,
+                                                   sticky="w", padx=2)
+        for e in reversed(record):
+            if not isinstance(e, dict):
+                continue
+            row = ctk.CTkFrame(hist_inner, fg_color="transparent")
+            row.pack(fill="x", padx=4, pady=1)
+            vals = (
+                str(e.get("season", "?")),
+                str(e.get("team", "?"))[:26],
+                str(e.get("role", "?"))[:18],
+                f"{e.get('w', 0)}-{e.get('l', 0)}-{e.get('otl', 0)}",
+                str(e.get("playoff", "?"))[:28],
+                "\U0001f3c6" if e.get("jack_adams") else "",
+            )
+            cup = e.get("playoff") == "Won Stanley Cup"
+            fg = ct["GOLD"] if (cup or e.get("jack_adams")) else ct["TEXT"]
+            for i, v in enumerate(vals):
+                ctk.CTkLabel(row, text=v, font=self._sfont(9),
+                             text_color=fg, anchor="w",
+                             width=widths[i] * 7).grid(
+                                 row=0, column=i, sticky="w", padx=2)
 
     def _staff_track_record_tab(self, parent, staff, ct):
         """Track Record page: graded calls, hit rate, recent history, and

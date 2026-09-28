@@ -274,19 +274,22 @@ def update_player_reputation(
 
 
 def update_staff_reputation(staff: Any, team_win_pct: float = 0.5,
-                            championships: int = 0) -> int:
+                            championships: int = 0,
+                            jack_adams: bool = False) -> int:
     """Move a staff member's 0-100 career_reputation for the season.
 
     A .500 season holds steady; winning builds slowly, losing erodes
     (coaches, unlike players, CAN lose standing -- that's the hot seat).
-    Championships bank +12. Clamped to 0-100.
+    Championships bank +12; a Jack Adams banks +8 (coach of the year is
+    the strongest single-season signal after a Cup). Clamped to 0-100.
     """
     ensure_reputation_fields(staff)
     try:
         current = getattr(staff, "career_reputation", 0) or 0
         # Win% swing capped at +/-5 per season; Cups are the big movers.
         swing = max(-5, min(5, int((team_win_pct - 0.5) * 10)))
-        target = max(0, min(100, current + swing + championships * 12))
+        target = max(0, min(100, current + swing + championships * 12
+                            + (8 if jack_adams else 0)))
         if target != current:
             staff.career_reputation = target
             staff.reputation_history.append({
@@ -910,6 +913,19 @@ def team_perception(entity: Any, team_context: Optional[Dict[str, Any]] = None,
                      + _staff_100(entity, "leadership") * 0.25
                      + (100 - (entity.controversy or 0)) * 0.20)
             score += (win_pct - 0.5) * 40    # winning covers, losing exposes
+            # Track record buys rope: banked Cups and Jack Adams awards in
+            # the career record cushion a bad year -- the room gives a
+            # proven winner the benefit of the doubt. Capped so the
+            # hot-seat mechanic still bites.
+            try:
+                _accs = getattr(entity, "career_accolades", None) or []
+                _titles = sum(
+                    1 for _a in _accs
+                    if isinstance(_a, dict)
+                    and _a.get("award") in ("stanley_cup", "jack_adams"))
+                score += min(8, _titles * 2)
+            except Exception:
+                pass
             return round(max(0, min(100, score)), 1)
         # -- player --
         leadership = getattr(entity, "leadership", 50) or 50
