@@ -4380,6 +4380,12 @@ def record_offer_sheet(rivalries: list, offering_team: Any, target_team: Any,
                     grudge=55)
     if r:
         out["rivalries"].append(r)
+    # Professional regard craters too -- you don't respect a GM who
+    # offer-sheets you, and he knows it.
+    try:
+        _bump_gm_respect(rivalries, offering_team, target_team, -10)
+    except Exception:
+        pass
     # The jilted fanbase never forgets -- even if the player stays.
     try:
         player.fan_backlash = max(int(getattr(player, "fan_backlash", 0) or 0),
@@ -4474,14 +4480,26 @@ def evaluate_contract_decision(player: Any, aav: float, expected_aav: float,
     rivalries = _rivalry_store(league) if league is not None else []
     if market_setter and league is not None and team is not None:
         # Caleb's engine just moved the market: comparable stars league-wide
-        # will demand 10-15% more. Their GMs know exactly who to blame.
+        # will demand 10-15% more. Every other GM knows exactly who to
+        # blame -- the beef is pairwise and personal, not a vague grumble.
         story = (f"{_ename(gm_persona(team))} reset the market with {pname}'s "
                  f"${aav:,.0f} AAV deal -- every agent with a comparable "
                  f"client just raised their ask.")
-        r = add_rivalry(rivalries, gm_persona(team), "rival GMs", "gm_gm",
-                        45, "contract_dispute", story, grudge=60)
-        if r:
-            effects.append("gm_gm heat 45 (market reset)")
+        heated = 0
+        for other in _league_teams(league):
+            if other is team:
+                continue
+            try:
+                r = add_rivalry(rivalries, gm_persona(team),
+                                gm_persona(other), "gm_gm", 25,
+                                "market_reset", story, grudge=55)
+                if r:
+                    heated += 1
+                _bump_gm_respect(rivalries, team, other, -3)
+            except Exception:
+                pass
+        if heated:
+            effects.append(f"gm_gm heat 25 x{heated} (market reset)")
         texts.append("Around the league, rival GMs are furious -- this deal "
                      "just made all of their extensions more expensive.")
         _nudge_gm_rep(team, -1, "reset_market_against_peers")
@@ -4500,6 +4518,18 @@ def evaluate_contract_decision(player: Any, aav: float, expected_aav: float,
 
 # ===========================================================================
 # GM STATURE EFFECTS — the league judges YOU
+#
+# Three axes, all whispers:
+#   stature  — league-wide: dealings (shrewd <-> reckless) + accolades
+#              (Cups banked) + tenure (a point a year, cap 5). Moves trade
+#              greed, FA/staff appeal, and the board's leash.
+#   heat     — personal grudge per GM pair: offer sheets, market resets,
+#              trade fleecings. A GM you burned taxes you or won't deal.
+#   respect  — personal regard per GM pair (seeds 50): fair dealing builds
+#              it, fleeces and offer sheets erode it. High mutual respect
+#              deals easy; none at all drives harder bargains.
+# Trades never move stature — other GMs don't grade your deals. The fallout
+# lands on the fans/room (dynamics feed) and the owners (board events).
 # ---------------------------------------------------------------------------
 # career_reputation (0-100, tracked on the GM staff entity) was half-built:
 # nudged by signings/offer sheets but read by nothing. This section gives it
@@ -4523,6 +4553,13 @@ def gm_stature(team: Any) -> int:
 
     A brand-new GM (no history, rep still 0) seeds to neutral 50 through the
     existing seed_staff_reputation -- unknown, not a mark.
+
+    The resume behind the number:
+    - history of dealings: the career_reputation base (shrewd signings up,
+      overpays/albatrosses/market resets down),
+    - accolades: Cups bank +8 each through the existing banking,
+    - tenure: +1 per season in the chair, capped at +5. Time served earns
+      the benefit of the doubt.
     """
     try:
         gm = _team_gm_staff(team)
@@ -4535,9 +4572,25 @@ def gm_stature(team: Any) -> int:
                 rep = int(seed_staff_reputation(gm))
             except Exception:
                 rep = GM_STATURE_NEUTRAL
+        rep += min(gm_tenure_years(team), 5)
         return max(0, min(100, rep))
     except Exception:
         return GM_STATURE_NEUTRAL
+
+
+def gm_tenure_years(team: Any) -> int:
+    """Distinct calendar years with any reputation history: seasons in the
+    GM's chair. Never raises."""
+    try:
+        gm = _team_gm_staff(team)
+        years = set()
+        for e in (getattr(gm, "reputation_history", None) or []):
+            d = (e or {}).get("date", "") or ""
+            if len(d) >= 4 and d[:4].isdigit():
+                years.add(d[:4])
+        return len(years)
+    except Exception:
+        return 0
 
 
 def gm_gm_heat(league: Any, team_a: Any, team_b: Any) -> int:
@@ -4555,13 +4608,90 @@ def gm_gm_heat(league: Any, team_a: Any, team_b: Any) -> int:
         return 0
 
 
+GM_RESPECT_NEUTRAL = 50
+
+
+def _respect_store(league_or_list: Any) -> list:
+    """Accept a league or a raw rivalry list; return the list. Never raises."""
+    try:
+        if isinstance(league_or_list, list):
+            return league_or_list
+        if league_or_list is None:
+            return []
+        return _rivalry_store(league_or_list)
+    except Exception:
+        return []
+
+
+def gm_gm_respect(league: Any, team_a: Any, team_b: Any) -> int:
+    """Mutual professional respect (0-100) between two GMs. Never raises.
+
+    The third axis next to league-wide stature and personal heat: every pair
+    of GMs carries its own level of regard. Seeds neutral 50 -- unknown, not
+    disrespected. Fair dealing builds it; fleeces and offer sheets erode it.
+    """
+    try:
+        store = _respect_store(league)
+        r = rivalry_between(store, gm_persona(team_a), gm_persona(team_b),
+                            kind="gm_respect")
+        return int(r.get("intensity", GM_RESPECT_NEUTRAL)) if r else GM_RESPECT_NEUTRAL
+    except Exception:
+        return GM_RESPECT_NEUTRAL
+
+
+def _league_teams(league: Any) -> list:
+    """All team objects in a league (list or dict). Never raises."""
+    try:
+        teams = getattr(league, "teams", None) or []
+        return list(teams.values()) if isinstance(teams, dict) else list(teams)
+    except Exception:
+        return []
+
+
+def _bump_gm_respect(league: Any, team_a: Any, team_b: Any, delta: int) -> int:
+    """Nudge mutual respect between two GMs, clamped 0-100. Creates the
+    record at neutral 50 on first touch. Returns the new value. Never
+    raises. (add_rivalry max-merges, which is wrong for respect -- this
+    accumulates instead.)"""
+    try:
+        store = _respect_store(league)
+        if league is None:
+            return GM_RESPECT_NEUTRAL
+        pa, pb = gm_persona(team_a), gm_persona(team_b)
+        r = rivalry_between(store, pa, pb, kind="gm_respect")
+        if r is None:
+            ka, kb = _ekey(pa), _ekey(pb)
+            if ka == kb:
+                return GM_RESPECT_NEUTRAL
+            if ka > kb:
+                ka, kb = kb, ka
+                pa, pb = pb, pa
+            r = {"a": ka, "b": kb, "a_name": _ename(pa), "b_name": _ename(pb),
+                 "kind": "gm_respect",
+                 "intensity": max(0, min(100, GM_RESPECT_NEUTRAL + int(delta))),
+                 "origin": "dealings",
+                 "story": "Professional regard between two GMs.",
+                 "date": date.today().isoformat(), "grudge": 0, "career_cost": 0}
+            store.append(r)
+            return int(r["intensity"])
+        r["intensity"] = max(0, min(100, int(r.get("intensity", GM_RESPECT_NEUTRAL)) + int(delta)))
+        return int(r["intensity"])
+    except Exception:
+        return GM_RESPECT_NEUTRAL
+
+
 def gm_trade_greed_mult(league: Any, user_team: Any,
                         partner_team: Any) -> Tuple[float, List[str]]:
     """Greed multiplier for an AI GM facing YOUR offer. Never raises.
 
-    Stature moves the needle softly (respect gets a small discount, a clown
-    reputation gets you squeezed). Personal gm_gm heat bites harder than any
-    team rivalry -- a GM you burned will tax you or refuse outright.
+    Three axes, all whispers:
+    - league-wide stature (dealings + Cups + tenure): respect earns a token
+      discount, a clown reputation gets you quietly squeezed;
+    - personal heat: a GM you burned taxes you harder than any team rivalry;
+    - mutual respect: GMs who've done fair business deal easy; GMs with no
+      regard for each other drive harder bargains.
+    Team-vs-team rivalry is priced separately in trade_storylines (bitter
+    rivals demand a premium there) -- this is the GM-relationship layer.
     """
     mult, notes = 1.0, []
     try:
@@ -4582,6 +4712,13 @@ def gm_trade_greed_mult(league: Any, user_team: Any,
         elif heat >= 40:
             mult *= 1.06
             notes.append("bad blood with this GM")
+        resp = gm_gm_respect(league, user_team, partner_team)
+        if resp >= 70:
+            mult *= 0.98
+            notes.append("mutual respect -- easy dealing")
+        elif resp <= 30:
+            mult *= 1.06
+            notes.append("no respect between these GMs")
         mult = max(0.90, min(1.20, mult))
     except Exception:
         pass
@@ -4682,6 +4819,10 @@ def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
             except Exception:
                 pass
             out["notes"].append("fans cheer the fleece")
+            try:
+                _bump_gm_respect(league, team_a, team_b, -8)
+            except Exception:
+                pass
             if board_a is not None:
                 try:
                     board_a.record_big_event("good_trade")
@@ -4705,8 +4846,13 @@ def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
                 except Exception:
                     pass
         elif 0.90 <= ratio <= 1.10:
-            # Fair dealing, quiet approval -- no stature swing either way.
-            out["notes"].append("a fair deal, no drama")
+            # Fair dealing builds the personal ledger: mutual respect up,
+            # no stature swing either way.
+            try:
+                _bump_gm_respect(league, team_a, team_b, 4)
+            except Exception:
+                pass
+            out["notes"].append("a fair deal -- respect grows")
     except Exception:
         pass
     return out
