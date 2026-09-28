@@ -136,7 +136,7 @@ class GameSaveManager:
             'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
             'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
             # Dynamic salary cap system (growth history + market comps).
-            # Missing key = old save -> defaults to $83.5M.
+            # Missing key = old save -> defaults to the modern $104M cap.
             'salary_cap_system': getattr(league, 'salary_cap_system', None).to_dict()
                 if getattr(league, 'salary_cap_system', None) else {},
         }
@@ -168,6 +168,12 @@ class GameSaveManager:
                 'standings_position': getattr(team, 'standings_position', 0),
                 'board_expectation': getattr(team, 'board_expectation', None),
                 'buyout_cap_hits': dict(getattr(team, 'buyout_cap_hits', {}) or {}),
+                # Seeded real-life 2026-27 dead-cap penalties (0/absent on
+                # old saves and when "start without cap penalties").
+                'real_buyout_cap': int(getattr(team, 'real_buyout_cap', 0) or 0),
+                'real_retained_salary': int(getattr(team, 'real_retained_salary', 0) or 0),
+                'real_bonus_overage': int(getattr(team, 'real_bonus_overage', 0) or 0),
+                'real_dead_cap_seeded': bool(getattr(team, 'real_dead_cap_seeded', False)),
                 # Inbox (headlines, saved emails): must cross save/load and
                 # multiplayer snapshots so every manager keeps their mail.
                 'inbox': [m.to_dict() for m in
@@ -711,7 +717,7 @@ class GameSaveManager:
                 list(p) for p in (league_data.get('event_day_prompted', []) or [])
             ]
             # Restore salary cap system. Old saves lack the key -> defaults
-            # to $83.5M with empty history (no crash, no data loss).
+            # to the modern $104M cap with empty history (no crash, no data loss).
             try:
                 from salary_cap_system import SalaryCapSystem
                 league.salary_cap_system = SalaryCapSystem.from_dict(
@@ -759,6 +765,11 @@ class GameSaveManager:
             team.trade_block = team_data.get('trade_block', [])
             team.board_expectation = team_data.get('board_expectation')
             team.buyout_cap_hits = dict(team_data.get('buyout_cap_hits', {}) or {})
+            # Seeded real-life dead-cap penalties. Absent in old saves -> 0.
+            team.real_buyout_cap = int(team_data.get('real_buyout_cap', 0) or 0)
+            team.real_retained_salary = int(team_data.get('real_retained_salary', 0) or 0)
+            team.real_bonus_overage = int(team_data.get('real_bonus_overage', 0) or 0)
+            team.real_dead_cap_seeded = bool(team_data.get('real_dead_cap_seeded', False))
             # Line matchup preferences. Absent in old saves -> all Auto.
             _lm = team_data.get('line_matchups') or {}
             _lmf = list(_lm.get('F') or [None] * 4)[:4]

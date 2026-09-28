@@ -164,7 +164,7 @@ class DatabaseManager:
 
         # Cap compliance: no team starts over the salary cap. Trim the
         # richest deals just enough to fit (mimics real cap management).
-        salary_cap = 83_500_000
+        salary_cap = 104_000_000  # 2026-27 NHL cap (modern day)
         for team in teams:
             roster = list(team.roster)
             payroll = sum(p.contract.salary for p in roster)

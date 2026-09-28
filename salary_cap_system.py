@@ -1,7 +1,9 @@
 """
 salary_cap_system.py -- Dynamic NHL salary cap and contract market system.
 
-The cap grows ~2-4% per year (like the real NHL: $83.5M -> $87.7M -> $92M).
+The cap tracks the real NHL's announced path: $95.5M (2025-26) -> $104M
+(2026-27) -> $113.5M (2027-28). Beyond the announced window it grows
+~2-4% per year.
 Player salary demands are expressed as a percentage of the cap, so when the
 cap rises, new contract demands rise with it. Existing contracts are NOT
 retroactively changed (like the real NHL).
@@ -23,11 +25,17 @@ from typing import Callable, Dict, List, Optional
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_CAP = 83_500_000          # 2024-25 NHL cap
+DEFAULT_CAP = 104_000_000          # 2026-27 NHL cap (modern day)
 MIN_CAP = 70_000_000              # Floor sanity bound
 MAX_CAP = 200_000_000             # Ceiling sanity bound
 MIN_GROWTH = 0.02                 # 2% minimum annual growth
 MAX_GROWTH = 0.04                 # 4% maximum annual growth
+
+# Announced future caps (league + NHLPA, Jan 2025): season_year -> cap.
+# advance_cap_year() honors these before falling back to 2-4% growth.
+ANNOUNCED_CAPS = {
+    2027: 113_500_000,            # 2027-28 season
+}
 
 # Market-setter thresholds (OVR on the 1-100 display scale)
 MARKET_SETTER_MIN_OVR = 85        # Must be a star to set the market
@@ -111,11 +119,11 @@ class SalaryCapSystem:
     League-wide salary cap tracker with growth and market dynamics.
 
     Usage:
-        cap_sys = SalaryCapSystem()                    # $83.5M default
+        cap_sys = SalaryCapSystem()                    # $104M default
         cap_sys = SalaryCapSystem(initial_cap=90_000_000)  # user override
-        new_cap = cap_sys.advance_cap_year(2025)       # grow for 2025-26
+        new_cap = cap_sys.advance_cap_year(2027)       # $113.5M announced
         cap_sys.register_signing("A. Matthews", 13_250_000, ovr=94,
-                                 position="C", age=27, season=2025)
+                                 position="C", age=27, season=2026)
         premium = cap_sys.market_premium(ovr=92, position="LW", age=26,
                                          season=2026)  # e.g. 1.12
     """
@@ -133,30 +141,40 @@ class SalaryCapSystem:
     def advance_cap_year(self, season_year: int) -> int:
         """
         Grow the cap for a new season. Called on season rollover.
-        Returns the new cap. Growth is 2-4% with randomness, mirroring
-        real NHL cap escalation ($83.5M -> $87.7M -> $92M pattern).
-        Occasionally (10%) the league has a flat year (0-1% growth)
-        like the COVID flat-cap era.
+        Returns the new cap. Honors the league's announced cap path
+        ($113.5M for 2027-28); beyond that, growth is 2-4% with
+        randomness. Occasionally (10%) the league has a flat year
+        (0-1% growth) like the COVID flat-cap era.
         """
-        roll = self._rng.random()
-        if roll < 0.10:
-            # Flat-cap year (COVID era precedent)
-            growth = self._rng.uniform(0.0, 0.01)
+        if season_year in ANNOUNCED_CAPS:
+            new_cap = ANNOUNCED_CAPS[season_year]
+            actual_growth = (new_cap - self.current_cap) / self.current_cap
+            self.current_cap = new_cap
+            self.cap_history.append({
+                "season": season_year,
+                "cap": new_cap,
+                "growth_pct": round(actual_growth * 100, 2),
+            })
         else:
-            growth = self._rng.uniform(MIN_GROWTH, MAX_GROWTH)
+            roll = self._rng.random()
+            if roll < 0.10:
+                # Flat-cap year (COVID era precedent)
+                growth = self._rng.uniform(0.0, 0.01)
+            else:
+                growth = self._rng.uniform(MIN_GROWTH, MAX_GROWTH)
 
-        new_cap = int(self.current_cap * (1 + growth))
-        new_cap = max(MIN_CAP, min(MAX_CAP, new_cap))
-        # Round to nearest $100K for clean numbers
-        new_cap = round(new_cap / 100_000) * 100_000
+            new_cap = int(self.current_cap * (1 + growth))
+            new_cap = max(MIN_CAP, min(MAX_CAP, new_cap))
+            # Round to nearest $100K for clean numbers
+            new_cap = round(new_cap / 100_000) * 100_000
 
-        actual_growth = (new_cap - self.current_cap) / self.current_cap
-        self.current_cap = new_cap
-        self.cap_history.append({
-            "season": season_year,
-            "cap": new_cap,
-            "growth_pct": round(actual_growth * 100, 2),
-        })
+            actual_growth = (new_cap - self.current_cap) / self.current_cap
+            self.current_cap = new_cap
+            self.cap_history.append({
+                "season": season_year,
+                "cap": new_cap,
+                "growth_pct": round(actual_growth * 100, 2),
+            })
 
         # Expire old market comps (older than MARKET_COMP_SEASONS)
         self.market_comps = [
@@ -276,3 +294,120 @@ class SalaryCapSystem:
         obj.market_comps = [MarketComp.from_dict(c)
                             for c in d.get("market_comps", [])]
         return obj
+
+
+# ---------------------------------------------------------------------------
+# Central cap accounting (single source of truth)
+# ---------------------------------------------------------------------------
+# Every cap decision -- trade validation, the Next Day over-cap blocker,
+# roster/cap UI, AI cap logic -- must flow through these helpers so the AI
+# and the user always see identical numbers. All team attributes are read
+# via getattr with zero defaults, so old saves without the newer fields
+# simply report 0 (additive, never a redesign of Team.payroll).
+#
+# Total cap charge = NHL roster salaries
+#                  + in-game buyout hits (current season)
+#                  + seeded real-life buyout hits (2026-27)
+#                  + seeded real-life retained salary (2026-27)
+#                  + seeded real-life bonus overages (2026-27)
+
+
+def roster_cap_charge(team) -> int:
+    """Sum of active NHL roster contract salaries (mirrors Team.payroll)."""
+    try:
+        total = 0
+        for p in (getattr(team, "roster", None) or []):
+            contract = getattr(p, "contract", None)
+            if contract is not None:
+                total += int(getattr(contract, "salary", 0) or 0)
+        return total
+    except Exception:
+        return 0
+
+
+def in_game_buyout_charge(team, season_year=None) -> int:
+    """Current-season buyout cap hits created by in-game buyouts."""
+    try:
+        hits = getattr(team, "buyout_cap_hits", None) or {}
+        if season_year is None:
+            return int(sum(hits.values()))
+        return int(hits.get(season_year, 0) or 0)
+    except Exception:
+        return 0
+
+
+def seeded_buyout_charge(team) -> int:
+    """Seeded real-life 2026-27 buyout penalties (0 if cleared/expired)."""
+    try:
+        return int(getattr(team, "real_buyout_cap", 0) or 0)
+    except Exception:
+        return 0
+
+
+def seeded_retained_charge(team) -> int:
+    """Seeded real-life 2026-27 retained-salary penalties."""
+    try:
+        return int(getattr(team, "real_retained_salary", 0) or 0)
+    except Exception:
+        return 0
+
+
+def seeded_overage_charge(team) -> int:
+    """Seeded real-life 2026-27 bonus-overage penalties."""
+    try:
+        return int(getattr(team, "real_bonus_overage", 0) or 0)
+    except Exception:
+        return 0
+
+
+def dead_cap_charge(team, season_year=None) -> int:
+    """All dead-cap penalties: in-game buyouts + seeded real-life penalties."""
+    return (in_game_buyout_charge(team, season_year)
+            + seeded_buyout_charge(team)
+            + seeded_retained_charge(team)
+            + seeded_overage_charge(team))
+
+
+def total_cap_charge(team, season_year=None) -> int:
+    """Total cap burden: roster salaries + dead cap."""
+    return roster_cap_charge(team) + dead_cap_charge(team, season_year)
+
+
+def cap_space(team, season_year=None) -> int:
+    """Cap room remaining (negative when over the cap)."""
+    try:
+        cap = int(getattr(team, "salary_cap", DEFAULT_CAP) or DEFAULT_CAP)
+    except Exception:
+        cap = DEFAULT_CAP
+    return cap - total_cap_charge(team, season_year)
+
+
+def is_over_cap(team, season_year=None) -> bool:
+    """True when the club's total cap charge exceeds its cap."""
+    return cap_space(team, season_year) < 0
+
+
+def cap_breakdown(team, season_year=None) -> Dict:
+    """Full component breakdown for cap UI screens."""
+    roster = roster_cap_charge(team)
+    buyouts = in_game_buyout_charge(team, season_year)
+    s_buyout = seeded_buyout_charge(team)
+    s_retained = seeded_retained_charge(team)
+    s_overage = seeded_overage_charge(team)
+    try:
+        cap = int(getattr(team, "salary_cap", DEFAULT_CAP) or DEFAULT_CAP)
+    except Exception:
+        cap = DEFAULT_CAP
+    total = roster + buyouts + s_buyout + s_retained + s_overage
+    return {
+        "cap": cap,
+        "roster": roster,
+        "buyouts": buyouts,
+        "seeded_buyout": s_buyout,
+        "seeded_retained": s_retained,
+        "seeded_overage": s_overage,
+        "dead_cap": buyouts + s_buyout + s_retained + s_overage,
+        "total": total,
+        "space": cap - total,
+        "over_cap": (cap - total) < 0,
+    }

@@ -201,17 +201,55 @@ def evaluate_trade(user_assets, partner_assets,
     return TradeEvaluation(user_value, partner_value, diff, ratio, label)
 
 
-def _cap_ok_after(team, outgoing, incoming) -> bool:
+def _player_cap_hit(p) -> int:
+    """Cap hit of a trade asset: the salary on its contract.
+
+    Player carries no bare ``.salary`` attribute -- it lives on
+    ``p.contract.salary``. The old code read ``getattr(p, 'salary', 0)``,
+    which was always 0, so outgoing/incoming money never registered:
+    an over-cap club failed the check on every deal, even pure
+    salary dumps. This restores cap-shedding trades for both sides.
+    """
     try:
-        cap = team.salary_cap
-        payroll = team.payroll
+        contract = getattr(p, "contract", None)
+        if contract is not None:
+            return int(getattr(contract, "salary", 0) or 0)
+    except Exception:
+        pass
+    try:
+        return int(getattr(p, "salary", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _cap_ok_after(team, outgoing, incoming) -> bool:
+    """Cap legality of a trade -- identical rule for AI and user.
+
+    Dead-cap penalties count in the pre/post totals but never move as part
+    of a player trade.
+
+    - Club currently cap-compliant: the resulting total cap charge must
+      stay at or under the cap.
+    - Club currently OVER the cap: the trade is legal iff it STRICTLY
+      reduces the total cap burden (a genuine salary shed), even if the
+      club remains over afterward. Neutral or worsening deals are
+      rejected -- you can't tread water or dig deeper while over.
+    """
+    try:
+        from salary_cap_system import total_cap_charge
+        cap = int(team.salary_cap)
+        current = int(total_cap_charge(team))
     except Exception:
         return True
-    out_sal = sum(getattr(p, 'salary', 0) or 0 for p in outgoing
+    out_sal = sum(_player_cap_hit(p) for p in outgoing
                   if not _is_pick(p))
-    in_sal = sum(getattr(p, 'salary', 0) or 0 for p in incoming
+    in_sal = sum(_player_cap_hit(p) for p in incoming
                  if not _is_pick(p))
-    return (payroll - out_sal + in_sal) <= cap
+    resulting = current - out_sal + in_sal
+    if current <= cap:
+        return resulting <= cap
+    # Over the cap: only a strict reduction of the burden is legal.
+    return resulting < current
 
 
 def _is_pick(asset) -> bool:

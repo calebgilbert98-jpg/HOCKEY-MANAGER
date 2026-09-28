@@ -444,8 +444,8 @@ class AITeamManager:
         except Exception:
             ovr100 = int(ovr * 2)
 
-        # Base demand as % of cap: ~100k per OVR point at $83.5M cap
-        # = ovr * 100_000 / 83_500_000 ≈ ovr * 0.0012 (0.12% per point)
+        # Base demand as % of cap: ~100k per OVR point at the modern cap
+        # = ovr * 100_000 / DEFAULT_CAP (scales with the modern cap)
         base_cap_pct = (ovr * 100_000) / DEFAULT_CAP
 
         # Age adjustments (multiplicative on the cap %)

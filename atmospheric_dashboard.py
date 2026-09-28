@@ -1400,7 +1400,7 @@ class AtmosphericDashboard:
         """Get salary cap space info"""
         try:
             # Calculate actual salary cap information
-            salary_cap = 83500000  # NHL salary cap
+            salary_cap = 104000000  # NHL salary cap (2026-27)
             current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) 
                                for p in self.parent.user_team.roster)
             cap_space = salary_cap - current_salary

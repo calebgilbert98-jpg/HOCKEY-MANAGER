@@ -298,16 +298,18 @@ class GameManager:
                 print("Draft picks initialized!")
 
                 # Real-life cap finances: seed each club's actual 2026-27
-                # dead-cap penalties (buyouts + retained salary), unless
-                # the user chose "start without cap penalties".
+                # dead-cap penalties (buyouts + retained salary + bonus
+                # overages), unless the user chose "start without cap
+                # penalties". Only for 2026-27 starts -- the research is
+                # season-specific.
                 try:
                     import real_cap_data
                     season_yr = getattr(self.league, 'season_year', 2026)
                     if settings.get('start_without_cap_penalties', False):
                         real_cap_data.clear_dead_cap(self.league)
                         print("Cap penalties cleared (start without cap penalties).")
-                    else:
-                        n = real_cap_data.seed_real_dead_cap(self.league, season_yr)
+                    elif season_yr == real_cap_data.SEASON:
+                        n = real_cap_data.seed_real_dead_cap(self.league)
                         print(f"Seeded real-life dead-cap penalties for {n} teams.")
                 except Exception as e:
                     print(f"Dead-cap seeding skipped: {e}")
@@ -6709,32 +6711,38 @@ class HockeyManagerGUI(tk.Tk):
             print(f"Game viewer error: {e}")
     
     def _cap_compliance_blocker(self):
-        """Return a blocker dict if the NHL roster exceeds the salary cap."""
+        """Return a blocker dict if the NHL roster exceeds the salary cap.
+
+        Uses the central cap accounting (roster salaries + all dead-cap
+        penalties), so the blocker agrees with trade validation and the
+        cap UI -- AI and user see identical numbers.
+        """
         team = getattr(self, 'user_team', None)
         if team is None:
             return None
-        cap = getattr(team, 'salary_cap', None)
-        if not cap:
-            # Fall back to league cap
-            league = getattr(self, 'league', None)
-            cap = getattr(league, 'salary_cap', 104000000)  # modern-day default
-        payroll = sum(getattr(p.contract, 'salary', 0) or 0
-                      for p in getattr(team, 'roster', [])
-                      if getattr(p, 'contract', None))
-        if payroll <= cap:
+        try:
+            from salary_cap_system import cap_breakdown
+            bd = cap_breakdown(team)
+        except Exception:
             return None
-        over = payroll - cap
+        if not bd["over_cap"]:
+            return None
+        over = -bd["space"]
+        detail = (f"Cap charge ${bd['total']/1e6:.2f}M is ${over/1e6:.2f}M over "
+                  f"the ${bd['cap']/1e6:.2f}M cap "
+                  f"(roster ${bd['roster']/1e6:.2f}M")
+        if bd["dead_cap"]:
+            detail += f" + dead cap ${bd['dead_cap']/1e6:.2f}M"
+        detail += "). Shed salary via trade, waivers, or demotion before advancing."
         return {
             'id': 'salary_cap',
             'title': 'Roster exceeds salary cap',
-            'detail': (f"Payroll ${payroll/1e6:.2f}M is ${over/1e6:.2f}M over "
-                       f"the ${cap/1e6:.2f}M cap. Shed salary via trade, "
-                       f"waivers, or demotion before advancing."),
+            'detail': detail,
             'action': ('Open Trade Center', self.open_trade_window),
         }
 
     def is_over_cap(self):
-        """True when the user's NHL roster payroll exceeds the cap."""
+        """True when the user's total cap charge exceeds the cap."""
         return self._cap_compliance_blocker() is not None
 
     def get_continue_state(self):

@@ -2102,7 +2102,7 @@ class Team:
     lineup: Dict[str, Player] = field(default_factory=dict)
     
     is_user_team: bool = False
-    salary_cap: int = 83500000
+    salary_cap: int = 104000000  # 2026-27 NHL cap (modern day)
     scouting_reports: Dict[int, ScoutingReport] = field(default_factory=dict)
     inbox: EmailInbox = field(default_factory=EmailInbox)  # Email inbox system
     
@@ -4883,6 +4883,17 @@ class League:
             if hits:
                 for yr in [y for y in hits if y < self.season_year]:
                     del hits[yr]
+
+        # Expire seeded real-life 2026-27 dead-cap penalties once the league
+        # moves past that season; from here the game's own buyout/retention/
+        # bonus systems own dead cap.
+        try:
+            import real_cap_data
+            n_exp = real_cap_data.expire_seeded_dead_cap(self, self.season_year)
+            if n_exp:
+                print(f"Expired seeded real-life dead-cap penalties for {n_exp} teams.")
+        except Exception:
+            pass
         
         # Initialize draft picks for upcoming years
         self.initialize_all_draft_picks()

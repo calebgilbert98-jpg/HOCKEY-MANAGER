@@ -372,17 +372,21 @@ class RosterView(ctk.CTkFrame):
     def _cap_numbers(self):
         """Shared payroll figures for the header and the Salary Cap tab.
 
-        Includes buyout dead cap so the header always agrees with the
-        Salary Cap tab. Display only -- cap rules themselves live in the sim.
+        Uses the central cap accounting (roster + in-game buyouts + seeded
+        real-life dead cap) so the header, the Salary Cap tab, trade
+        validation, and the Next Day blocker always agree. Display only --
+        cap rules themselves live in the sim.
         Returns (salary_cap, current_payroll, cap_space, dead_cap).
         """
-        salary_cap = 83500000
-        current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000))
-                             for p in self.app.user_team.roster)
-        season = getattr(getattr(self.app, 'league', None), 'season_year', 2026)
-        dead_cap = (getattr(self.app.user_team, 'buyout_cap_hits', {}) or {}).get(season, 0)
-        current_salary += dead_cap
-        return salary_cap, current_salary, salary_cap - current_salary, dead_cap
+        try:
+            from salary_cap_system import cap_breakdown
+            bd = cap_breakdown(self.app.user_team)
+            return bd["cap"], bd["total"], bd["space"], bd["dead_cap"]
+        except Exception:
+            salary_cap = getattr(self.app.user_team, 'salary_cap', 104000000)
+            current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000))
+                                 for p in self.app.user_team.roster)
+            return salary_cap, current_salary, salary_cap - current_salary, 0
 
     def create_header_section(self, parent):
         """Create header with team overview and quick stats."""
@@ -713,7 +717,7 @@ class RosterView(ctk.CTkFrame):
 
         # Calculate salary cap info (shared with the header via _cap_numbers)
         salary_cap, current_salary, cap_space, dead_cap = self._cap_numbers()
-        cap_percentage = (current_salary / salary_cap) * 100
+        cap_percentage = (current_salary / salary_cap) * 100 if salary_cap else 0
 
         # Cap usage bar (pill-shaped progress bar)
         bar_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -738,7 +742,21 @@ class RosterView(ctk.CTkFrame):
             ("Cap Usage:", f"{cap_percentage:.1f}%"),
         ]
         if dead_cap:
-            cap_labels.append(("Buyout Dead Cap:", f"${dead_cap:,}"))
+            cap_labels.append(("Total Dead Cap:", f"${dead_cap:,}"))
+            try:
+                from salary_cap_system import cap_breakdown as _cbd
+                _bd = _cbd(self.app.user_team)
+                if _bd["seeded_retained"]:
+                    cap_labels.append(("Retained Salary (real):",
+                                       f"${_bd['seeded_retained']:,}"))
+                if _bd["seeded_overage"]:
+                    cap_labels.append(("Bonus Overage (real):",
+                                       f"${_bd['seeded_overage']:,}"))
+                if _bd["seeded_buyout"]:
+                    cap_labels.append(("Buyouts (real 2026-27):",
+                                       f"${_bd['seeded_buyout']:,}"))
+            except Exception:
+                pass
         for i, (label, value) in enumerate(cap_labels):
             row, col = i // 2, (i % 2) * 2
             ctk.CTkLabel(info, text=label, font=("Segoe UI", 10),
@@ -1265,6 +1283,13 @@ class RosterView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # Table interaction
     # ------------------------------------------------------------------
+    def _name_column_id(self, tree):
+        """Return the treeview column id (e.g. '#3') of the 'name' column."""
+        try:
+            return f"#{list(tree['columns']).index('name') + 1}"
+        except (ValueError, tk.TclError):
+            return None
+
     def handle_tree_click(self, event, tree, roster_type):
         """Handle tree click events."""
         region = tree.identify_region(event.x, event.y)
@@ -1274,9 +1299,21 @@ class RosterView(ctk.CTkFrame):
                 item_id = tree.identify_row(event.y)
                 if item_id:
                     self.toggle_player_selection(item_id, tree, roster_type)
+                return
+            # Single left-click on the player's name opens the profile card.
+            if col == self._name_column_id(tree):
+                item_id = tree.identify_row(event.y)
+                if item_id and item_id in self.player_maps[roster_type]:
+                    player = self.player_maps[roster_type][item_id]
+                    self.app.open_player_profile(player)
 
     def handle_double_click(self, event, tree, roster_type):
         """Handle double-click to open player profile."""
+        # The name column already opens the profile on single click, so a
+        # double-click there must not open a second card.
+        if tree.identify_region(event.x, event.y) == 'cell':
+            if tree.identify_column(event.x) == self._name_column_id(tree):
+                return
         item_id = tree.identify_row(event.y)
         if item_id and item_id in self.player_maps[roster_type]:
             player = self.player_maps[roster_type][item_id]
@@ -1845,7 +1882,7 @@ class FreeAgencyView(ctk.CTkFrame):
         # Team cap space on the right
         user_team = self.app.game_manager.user_team
         current_salary = sum(getattr(p, "salary", getattr(p.contract, "salary", 750000)) for p in user_team.roster)
-        cap_space = 83500000 - current_salary  # NHL salary cap
+        cap_space = getattr(user_team, 'salary_cap', 104000000) - current_salary  # NHL salary cap
         if cap_space > 10000000:
             cap_color = ct['TEAL']
         elif cap_space > 0:
@@ -3933,14 +3970,16 @@ class TradeWindow(InGamePopup):
             self.meter_label.configure(
                 text=f"{ev.label}  (you {ev.user_value} vs them {ev.partner_value})",
                 text_color=color)
-        # Cap impact for the user
+        # Cap impact for the user (central cap accounting: roster + dead cap,
+        # so this label always agrees with the actual trade validation).
         gm_team = self.parent.user_team
-        in_sal = sum(getattr(p, 'salary', 0) or 0 for p in self.trade_offers['partner']
+        in_sal = sum(self.te._player_cap_hit(p) for p in self.trade_offers['partner']
                      if not self.te._is_pick(p))
-        out_sal = sum(getattr(p, 'salary', 0) or 0 for p in self.trade_offers['user']
+        out_sal = sum(self.te._player_cap_hit(p) for p in self.trade_offers['user']
                       if not self.te._is_pick(p))
         try:
-            new_pay = gm_team.payroll - out_sal + in_sal
+            from salary_cap_system import total_cap_charge
+            new_pay = total_cap_charge(gm_team) - out_sal + in_sal
             room = gm_team.salary_cap - new_pay
             ok = room >= 0
             self.cap_label.configure(
@@ -6715,7 +6754,7 @@ class FinancesView(ctk.CTkFrame):
 
     def _salary_cap(self):
         """The team's salary cap (falls back to the default NHL cap)."""
-        return getattr(self.app.user_team, 'salary_cap', 83_500_000)
+        return getattr(self.app.user_team, 'salary_cap', 104_000_000)
 
     # Update methods
     def update_views(self):

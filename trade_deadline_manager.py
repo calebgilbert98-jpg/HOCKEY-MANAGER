@@ -684,7 +684,7 @@ class TradeDeadlineManager:
         
         for team in teams:
             cap_analysis[team] = {
-                'current_cap_hit': random.randint(78000000, 83500000),
+                'current_cap_hit': random.randint(96000000, 104000000),
                 'cap_space': random.randint(500000, 15000000),
                 'deadline_space': random.randint(2000000, 25000000),  # With LTIR/retention
                 'flexibility': random.choice(['High', 'Medium', 'Low', 'None']),

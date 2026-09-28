@@ -2880,6 +2880,13 @@ class PlayerProfileWindow(InGamePopup):
     def __init__(self, parent, player, is_scouted=False, report=None):
         super().__init__(parent)
         self.title(f"Profile: {player.full_name}")
+        # The profile view needs room: without an explicit size the card
+        # opens at the default 560x420 popup size and the content renders
+        # cramped/clipped. Match the modern card's footprint.
+        try:
+            self.geometry("980x760")
+        except Exception:
+            pass
         # Closing the card must tear down the popup card (manager-owned),
         # not just the inner frame.
         self._view = PlayerProfileView(self, player, is_scouted, report,

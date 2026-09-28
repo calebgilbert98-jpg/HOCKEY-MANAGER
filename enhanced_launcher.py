@@ -187,6 +187,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
             'difficulty': tk.StringVar(master=self, value="Realistic"),
             'fantasy_draft': tk.BooleanVar(master=self, value=False),
             'salary_cap': tk.BooleanVar(master=self, value=True),
+            'start_without_cap_penalties': tk.BooleanVar(master=self, value=False),
             'injuries': tk.BooleanVar(master=self, value=True),
             'morale_system': tk.BooleanVar(master=self, value=True),
             'realistic_progression': tk.BooleanVar(master=self, value=True),
@@ -1390,7 +1391,11 @@ This profile will influence player relationships, media interactions, and trade 
         
         self._create_advanced_checkbox_option(gameplay_grid, 0, 1, "Salary Cap", 
                                             self.setup_options['salary_cap'],
-                                            "Enable realistic salary cap management ($83.5M limit)")
+                                            "Enable realistic salary cap management ($104M limit)")
+
+        self._create_advanced_checkbox_option(gameplay_grid, 0, 2, "Start without cap penalties",
+                                            self.setup_options['start_without_cap_penalties'],
+                                            "Clear pre-existing real-life dead-cap penalties (buyouts, retained salary) for all teams")
         
         # Row 1
         self._create_advanced_checkbox_option(gameplay_grid, 1, 0, "Injuries & Fatigue", 
@@ -1899,7 +1904,7 @@ This profile will influence player relationships, media interactions, and trade 
         
         self._create_checkbox_option(checkbox_frame, 0, 1, "Salary Cap", 
                                     self.setup_options['salary_cap'],
-                                    "Enable realistic salary cap management ($83.5M)")
+                                    "Enable realistic salary cap management ($104M)")
         
         self._create_checkbox_option(checkbox_frame, 1, 0, "Injuries", 
                                     self.setup_options['injuries'],
@@ -2214,6 +2219,7 @@ This profile will influence player relationships, media interactions, and trade 
                 'difficulty': self.setup_options['difficulty'].get(),
                 'fantasy_draft': self.setup_options['fantasy_draft'].get(),
                 'salary_cap': self.setup_options['salary_cap'].get(),
+                'start_without_cap_penalties': self.setup_options['start_without_cap_penalties'].get(),
                 'injuries': self.setup_options['injuries'].get(),
                 'morale_system': self.setup_options['morale_system'].get(),
                 'realistic_progression': self.setup_options['realistic_progression'].get(),

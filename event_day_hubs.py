@@ -637,7 +637,7 @@ class FreeAgencyFrenzy(EventDayHubView):
             return [("Team", "—")]
         try:
             payroll = self._team_payroll(ut)
-            cap = getattr(self.gm.league, 'salary_cap', 83500000) if hasattr(self.gm, 'league') else 83500000
+            cap = getattr(self.gm.league, 'salary_cap', 104000000) if hasattr(self.gm, 'league') else 104000000
             space = cap - payroll
             def fmt(v):
                 return f"${v/1e6:.1f}M"
