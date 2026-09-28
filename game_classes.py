@@ -52,24 +52,20 @@ ARC_SPEED_MULT = {"standard": 1.0, "late_bloomer": 0.85, "early_peak": 1.15}
 ARC_ENV_SENSITIVITY = {"standard": 1.0, "late_bloomer": 1.3, "early_peak": 0.7}
 
 
-def roll_development_arc(potential_grade=None):
-    """Roll a development arc, nudged by prospect-generation factors.
+def roll_development_arc():
+    """Roll a development arc: pure individual variance, 70/15/15.
 
-    Base odds: standard 70 / late_bloomer 15 / early_peak 15. The nudge
-    mirrors the grade curve the draft generator already encodes (lower
-    grades peak later -- the Zetterberg/Datsyuk shape): C/D/F prospects
-    lean late_bloomer, A prospects lean early_peak. Randomness stays
-    dominant so individuals still surprise.
+    Deliberately INDEPENDENT of potential grade and draft position. The
+    grade curve already encodes population-level shapes (lower grades peak
+    later); the arc is the orthogonal surprise axis. A 7th-rounder is just
+    as likely to be an early peak as a 1st-rounder is to be a late bloomer
+    -- nobody is locked into a pathway. That is where the
+    Zetterberg/Datsyuk/Kucherov stories come from: the gem engine moves the
+    ceiling, the arc moves the shape of the road there, and neither knows
+    about the other's roll.
     """
-    late_w, early_w = 15, 15
-    g = (potential_grade or "").strip().upper()
-    if g[:1] in ("C", "D", "F"):
-        late_w, early_w = 25, 8
-    elif g[:1] == "A":
-        late_w, early_w = 8, 23
-    std_w = 100 - late_w - early_w
     return random.choices(["standard", "late_bloomer", "early_peak"],
-                          weights=[std_w, late_w, early_w])[0]
+                          weights=[70, 15, 15])[0]
 
 
 def arc_peak_shift(player):
@@ -263,9 +259,9 @@ class Player:
     happiness: int = 70  # 0-100, how happy the player is at the club
 
     # Development arc: career trajectory variance (late bloomers / early peaks).
-    # Rolled at creation; create_prospect re-rolls with a nudge from the
-    # prospect's potential grade so arcs stay inclusive of generation factors.
-    # The arc is one multiplicative factor among many -- never an override.
+    # Pure individual variance, independent of grade and draft position --
+    # nobody is locked into a pathway. The arc is one multiplicative factor
+    # among many -- never an override.
     development_arc: str = field(default_factory=roll_development_arc)
 
     # Reputation system (ratchet 0-100; visible attitude/volatility 0-100)
