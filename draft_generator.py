@@ -613,6 +613,24 @@ def is_draft_eligible(birthdate, nationality, draft_year) -> bool:
     return True
 
 
+def age_on_sept15(birthdate, draft_year) -> Optional[int]:
+    """Age (whole years) on Sept 15 of draft_year. None if malformed."""
+    try:
+        if not isinstance(birthdate, str):
+            return None
+        parts = birthdate.strip().split("-")
+        if len(parts) != 3:
+            return None
+        born = date(int(parts[0]), int(parts[1]), int(parts[2]))
+        draft_year = int(draft_year)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    age = draft_year - born.year
+    if (born.month, born.day) > (9, 15):
+        age -= 1
+    return age
+
+
 def _default_draft_year() -> int:
     """Next June draft derived from today's date: if month >= 7 the upcoming
     draft is next year's, otherwise it's this year's."""

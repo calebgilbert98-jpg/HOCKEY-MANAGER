@@ -5451,6 +5451,9 @@ class League:
                 _eligible = age <= 20
             if _eligible:
                 player.draft_reentry = True
+                # Real NHL rule: the club that held (and lost) his rights may
+                # not re-select him in the immediate re-entry draft.
+                player.draft_reentry_from = team_name
                 if player in getattr(team, "prospects", []):
                     team.prospects.remove(player)
                 if player not in reentries:

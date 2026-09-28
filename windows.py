@@ -5697,7 +5697,9 @@ class DraftView(ctk.CTkFrame):
             except Exception:
                 pos = "?"
             idx = self.shortlist.size()
-            self.shortlist.insert(tk.END, f"{p.full_name}  ({pos})  {pot}")
+            _ban = "  [INELIGIBLE — rights held/lost]" if \
+                self._redraft_banned(self.app.user_team, p) else ""
+            self.shortlist.insert(tk.END, f"{p.full_name}  ({pos})  {pot}{_ban}")
             self.shortlist.itemconfig(
                 idx, foreground=self._pot_color(
                     getattr(p, 'potential_grade', 'C')))
@@ -5962,6 +5964,20 @@ class DraftView(ctk.CTkFrame):
             except Exception:
                 pass
             if prospect is not None:
+                if self._redraft_banned(team_on_clock, prospect):
+                    # Real NHL rule: ignore the illegal selection; clear it
+                    # so the client can submit a legal pick before the clock.
+                    try:
+                        st["pick_id"] = None
+                        self.app.mp_host.broadcast_chat(
+                            f"{team_on_clock.team_name} tried to re-draft a "
+                            f"prospect whose rights they lost -- not allowed "
+                            f"under NHL rules.")
+                    except Exception:
+                        pass
+                    self._mp_wait_id = self.after(
+                        1000, self._mp_check_client_pick)
+                    return
                 st["done"] = True
                 try:
                     self.app._mp_clear_draft_clock()
@@ -5993,6 +6009,13 @@ class DraftView(ctk.CTkFrame):
             return (False, False)
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
         available = self._available_prospects()
+        if not available:
+            self.end_draft()
+            return (False, False)
+        # Real NHL rule: the club that lost a re-entry's rights can't
+        # re-select him in this draft -- filter him from this team's pool.
+        available = [p for p in available
+                     if not self._redraft_banned(team_on_clock, p)]
         if not available:
             self.end_draft()
             return (False, False)
@@ -6070,6 +6093,12 @@ class DraftView(ctk.CTkFrame):
             messagebox.showwarning("Unavailable", "That prospect was already drafted.")
             self._refresh_shortlist()
             return
+        if self._redraft_banned(team_on_clock, p):
+            messagebox.showwarning(
+                "Not Eligible",
+                "NHL rules: you held this prospect's draft rights and lost "
+                "them unsigned -- your club can't re-select him in this draft.")
+            return
         # M4: two-step inline confirm -- first click arms, second commits.
         # No per-pick modal; mis-clicks die on the armed button instead.
         if self._armed_prospect is not p:
@@ -6106,6 +6135,12 @@ class DraftView(ctk.CTkFrame):
             # driver can spin on an un-advanced current_pick.
             self.end_draft()
             return
+        # Real NHL rule: skip prospects this club can't re-select.
+        available = [p for p in available
+                     if not self._redraft_banned(team_on_clock, p)]
+        if not available:
+            self.end_draft()
+            return
         if self.strategy_var.get() == "Need":
             needs = self.te.team_needs(self.app.user_team)
             pick = None
@@ -6122,9 +6157,22 @@ class DraftView(ctk.CTkFrame):
             selected = available[0]
         self.execute_pick(team_on_clock, selected)
 
+    def _redraft_banned(self, team, player) -> bool:
+        """Real NHL rule: a club that held a prospect's draft rights and lost
+        them unsigned may not re-select him in the immediate re-entry draft."""
+        try:
+            banned_from = str(getattr(player, 'draft_reentry_from', '') or '')
+            return bool(banned_from) and \
+                banned_from == getattr(team, 'team_name', None)
+        except Exception:
+            return False
+
     def execute_pick(self, team, player, reach=False, steal=False):
         round_num, _t, _dp = self.draft_order[self.current_pick]
         overall = self.current_pick + 1
+        if self._redraft_banned(team, player):
+            # Defensive: pick paths filter this upstream; never advance.
+            return False
         team.add_player(player, "prospects")
         # Draft rights: stamp immediately at pick time (CHL 2yr / NCAA 4yr /
         # Europe 4yr from the player's junior league). The season rollover
@@ -6134,6 +6182,11 @@ class DraftView(ctk.CTkFrame):
             _dy = getattr(self.app.league, "draft_prospects_year", None) \
                 or getattr(getattr(self.app, "current_date", None), "year", 2027)
             self.app.league.stamp_draft_rights(player, team.team_name, _dy)
+        except Exception:
+            pass
+        # The immediate re-draft ban is spent once he's selected.
+        try:
+            player.draft_reentry_from = ""
         except Exception:
             pass
         try:
@@ -6430,6 +6483,21 @@ class DraftView(ctk.CTkFrame):
         self.trade_pick_button.configure(state='disabled')
         self.grades_button.configure(state='normal')
         self._ticker("That's a wrap on draft night.")
+        # Real NHL re-entry: undrafted prospects are automatically eligible
+        # again next year while age-eligible -- stash them for the next draft
+        # class (processed in _hold_entry_draft). The immediate re-draft ban
+        # (draft_reentry_from) only lasts one draft, so clear it now.
+        try:
+            _lg = self.app.league
+            _left = list(getattr(_lg, "draft_prospects", None) or [])
+            for _p in _left:
+                try:
+                    _p.draft_reentry_from = ""
+                except Exception:
+                    pass
+            _lg.undrafted_pool = _left
+        except Exception:
+            pass
         self.show_grades()
 
 

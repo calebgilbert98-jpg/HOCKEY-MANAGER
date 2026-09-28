@@ -9669,6 +9669,48 @@ class HockeyManagerGUI(tk.Tk):
             print("Generating draft prospects...")
             from draft_generator import generate_draft_class
             draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
+            # Undrafted re-entry (real NHL rule): undrafted prospects are
+            # automatically eligible again while 20 or younger on Sept 15 of
+            # the new draft year (NA and European alike). Older undrafted
+            # players -- including 21+ Europeans -- become free agents rather
+            # than re-entering the draft pool.
+            _undrafted = list(getattr(self.league, "undrafted_pool", None) or [])
+            self.league.undrafted_pool = []
+            if _undrafted:
+                try:
+                    from draft_generator import (is_draft_eligible as _elig,
+                                                 age_on_sept15 as _age15)
+                    _fa = getattr(self.league, "free_agents", None)
+                    for _up in _undrafted:
+                        try:
+                            _a = _age15(getattr(_up, "birth_date", ""),
+                                        year)
+                            if (_a is not None and _a <= 20 and _elig(
+                                    getattr(_up, "birth_date", ""),
+                                    getattr(_up, "nationality", ""), year)):
+                                _re = getattr(self.league, "draft_reentries",
+                                              None)
+                                if not isinstance(_re, list):
+                                    _re = []
+                                    self.league.draft_reentries = _re
+                                if _up not in _re:
+                                    _re.append(_up)
+                                try:
+                                    _up.draft_reentry = True
+                                except Exception:
+                                    pass
+                            else:
+                                try:
+                                    _up.team_name = "Free Agent"
+                                except Exception:
+                                    pass
+                                if isinstance(_fa, list) and \
+                                        _up not in _fa:
+                                    _fa.append(_up)
+                        except Exception:
+                            continue
+                except Exception as _ure:
+                    print(f"Undrafted re-entry processing failed: {_ure}")
             # draft_year / reentries params land with the draft_worker pass;
             # only pass what the installed signature accepts so un-patched
             # generators (and old saves) keep working.
