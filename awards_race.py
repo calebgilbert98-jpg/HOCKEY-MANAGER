@@ -306,7 +306,13 @@ def adams_race(teams: List[Any]) -> List[Dict[str, Any]]:
         skaters = [p for p in roster if not _is_goalie(p)]
         if not skaters:
             continue
-        avg_ovr = sum(getattr(p, "overall", 75) or 75 for p in skaters) / len(skaters)
+        def _ovr(p):
+            fn = getattr(p, "overall_rating", None)
+            try:
+                return float(fn()) if callable(fn) else float(fn or 75)
+            except (TypeError, ValueError):
+                return 75.0
+        avg_ovr = sum(_ovr(p) for p in skaters) / len(skaters)
         # Expected points%: ~.300 at 70 OVR -> ~.650 at 90 OVR
         expected = 0.300 + (avg_ovr - 70) * 0.0175
         actual = _team_points_pct(t)
