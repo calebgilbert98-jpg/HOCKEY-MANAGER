@@ -102,11 +102,31 @@ def _memory_weight(home: str, away: str) -> float:
     return 0.0
 
 
-def _recent_hosts(league: Any, years: int = 3) -> set:
+def _recent_hosts(league: Any, years: int = 3,
+                 season_year: Optional[int] = None) -> set:
+    """Hosts from the last `years` completed seasons -- the rotation
+    window. A club that hosted four seasons ago is eligible again, the
+    way real outdoor rotation works (Chicago 2009/2015/2019/2025)."""
     hosts = set()
     try:
         for rec in getattr(league, "outdoor_history", []) or []:
-            hosts.add(rec.get("host"))
+            name = rec.get("host")
+            if not name:
+                continue
+            if season_year is None:
+                hosts.add(name)
+                continue
+            try:
+                start = int(str(rec.get("season") or "").split("-")[0])
+            except (ValueError, IndexError):
+                # Unparseable season label: stay conservative, exclude.
+                hosts.add(name)
+                continue
+            # Completed seasons inside the window: [season_year - years,
+            # season_year). The current season's games are stamped at
+            # setup, before any record for it exists.
+            if season_year - years <= start < season_year:
+                hosts.add(name)
     except Exception:
         pass
     return {h for h in hosts if h}
@@ -210,7 +230,7 @@ def schedule_outdoor_games(league: Any, season_year: Optional[int] = None,
     if not teams or not schedule:
         return []
 
-    recent = _recent_hosts(league)
+    recent = _recent_hosts(league, years=3, season_year=season_year)
     stamped: List[Dict[str, Any]] = []
     used_hosts: set = set()
 

@@ -6053,6 +6053,45 @@ class HockeyManagerGUI(tk.Tk):
             self._milestone_postgame()
             self.current_date += timedelta(days=1)
 
+            # All-Star weekend: rosters announced 5 days before the game
+            # (fan vote captains + hockey-ops selection, every club
+            # represented); the exhibition itself is presentation-only.
+            # Idempotent per season via league.all_star_rosters.
+            try:
+                import all_star as _as
+                _asg = _as.all_star_game_date(self.league)
+                if _asg is not None and hasattr(_asg, "toordinal"):
+                    _sy = int(getattr(self.league, "season_year", 2026))
+                    _label = f"{_sy}-{str(_sy + 1)[-2:]}"
+                    if self.current_date == _asg - timedelta(days=5):
+                        _rosters = _as.select_all_star_rosters(self.league)
+                        if _rosters:
+                            self.news_log.append({
+                                'date': self.current_date,
+                                'story': _as.announcement_copy(_rosters, _label)})
+                    elif self.current_date == _asg:
+                        _rosters = _as.resolve_rosters(self.league, _label)
+                        if _rosters:
+                            _rng = random.Random(f"allstar-{_label}")
+                            for _title, _who, _div in \
+                                    _as.skills_winners(_rosters, _rng):
+                                self.news_log.append({
+                                    'date': self.current_date,
+                                    'story': f"⚡ Skills Competition -- {_title}: "
+                                             f"{_who} ({_div})."})
+                            _res = _as.play_all_star_game(_rosters, _rng)
+                            if _res:
+                                self.news_log.append({
+                                    'date': self.current_date,
+                                    'story': f"🌟 All-Star Game: "
+                                             f"{_res['champion']} take the "
+                                             f"3v3 tournament "
+                                             f"{_res['score']} over "
+                                             f"{_res['finalists'][1]} in the "
+                                             f"final."})
+            except Exception as _ase:
+                print(f"All-Star weekend skipped (non-fatal): {_ase}")
+
             # Future 1st-round pick slots track the standings (regressed
             # toward mid-round -- a projection, not a promise).
             try:

@@ -3400,6 +3400,10 @@ class League:
     # Draft grades by year ({str(year): [(team, grade, ratio)]}), persisted
     # so the war room's review modal and future seasons can look back.
     draft_grades_history: Dict[str, list] = field(default_factory=dict)
+    # All-Star rosters by season label ("2026-27" -> {division:
+    # {captain_id, skater_ids, goalie_ids}}). Plain IDs, save/load safe.
+    # Old-save safe: read via getattr(league, 'all_star_rosters', {}).
+    all_star_rosters: Dict[str, dict] = field(default_factory=dict)
     event_day_prompted: List[List] = field(default_factory=list)
     # Draft lottery state (persisted in saves): televised reveal rows per
     # year ({pick, team, original_team, odds_pct, movement}) and the years

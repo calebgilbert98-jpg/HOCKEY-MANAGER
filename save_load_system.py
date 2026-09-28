@@ -214,6 +214,10 @@ class GameSaveManager:
             'schedule_generated': getattr(league, 'schedule_generated', False),
             # Legacy events: permanent outdoor-game memory (plain dicts).
             'outdoor_history': list(getattr(league, 'outdoor_history', []) or []),
+            # All-Star rosters by season label (plain ID dicts). Missing
+            # key = old save -> empty, selection runs fresh that season.
+            'all_star_rosters': {str(k): dict(v) for k, v in
+                                 (getattr(league, 'all_star_rosters', None) or {}).items()},
             # Rivalries & bad blood (plain dicts): brawl heat, playoff feuds,
             # declared rivalries -- "so bad blood follows people". Was never
             # serialized; every save wiped it. Missing key = old save.
@@ -1102,6 +1106,8 @@ class GameSaveManager:
             league.standings = league_data.get('standings', {})
             league.schedule_generated = league_data.get('schedule_generated', False)
             league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
+            league.all_star_rosters = {str(k): dict(v) for k, v in
+                                       (league_data.get('all_star_rosters', None) or {}).items()}
             league.rivalries = [dict(r) for r in
                                 (league_data.get('rivalries', None) or [])]
             # Immortality restores: retired-player snapshots (HOF ballot

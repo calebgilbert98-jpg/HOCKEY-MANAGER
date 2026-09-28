@@ -88,10 +88,31 @@ for _info in stamped:
         league=lg, narrative_ledger=None), _info, 3, 2)
 lg2 = FakeLeague(NAMES)
 lg2.outdoor_history = list(lg.outdoor_history)
+lg2.season_year = 2027  # next season: last season's hosts are in-window
 stamped2 = schedule_outdoor_games(lg2, rng=__import__("random").Random(7))
 hosts2 = {i["host"] for i in stamped2}
 check("recent hosts excluded next season", not (set(hosts) & hosts2),
       f"{set(hosts) & hosts2}")
+
+# 3b. Rotation window: a host from 4 seasons ago is eligible again; a
+# host from 2 seasons ago is still excluded; unparseable season labels
+# stay conservatively excluded.
+from outdoor_games import _recent_hosts
+_hist_league = types.SimpleNamespace(outdoor_history=[
+    {"host": "Old Host", "season": "2022-23"},      # 4 seasons back
+    {"host": "Recent Host", "season": "2024-25"},    # 2 seasons back
+    {"host": "Mystery Host", "season": "n/a"},
+], season_year=2026)
+_recent = _recent_hosts(_hist_league, years=3, season_year=2026)
+check("host from 4 seasons ago eligible again", "Old Host" not in _recent,
+      str(_recent))
+check("host from 2 seasons ago still excluded", "Recent Host" in _recent,
+      str(_recent))
+check("unparseable season stays excluded", "Mystery Host" in _recent,
+      str(_recent))
+check("window honors years=1: 2-seasons-ago host eligible again",
+      "Recent Host" not in _recent_hosts(_hist_league, years=1, season_year=2026)
+      and "Mystery Host" in _recent_hosts(_hist_league, years=1, season_year=2026))
 
 # 4. outdoor_info_for.
 g = next(x for x in lg.schedule if x.get("outdoor"))
