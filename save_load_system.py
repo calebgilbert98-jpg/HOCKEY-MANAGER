@@ -133,6 +133,8 @@ class GameSaveManager:
             'teams': [],  # teams is a list, not dict
             'standings': getattr(league, 'standings', {}),
             'schedule_generated': getattr(league, 'schedule_generated', False),
+            # Legacy events: permanent outdoor-game memory (plain dicts).
+            'outdoor_history': list(getattr(league, 'outdoor_history', []) or []),
             'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
             'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
             # Dynamic salary cap system (growth history + market comps).
@@ -287,6 +289,9 @@ class GameSaveManager:
                         'home_team': home_team.team_name if hasattr(home_team, 'team_name') else str(home_team),
                         'away_team': away_team.team_name if hasattr(away_team, 'team_name') else str(away_team),
                         'league': league,
+                        # Legacy events: the outdoor-game stamp rides along
+                        # (plain dicts -- JSON/pickle safe).
+                        'outdoor': game.get('outdoor') if isinstance(game, dict) else None,
                     })
                 except (AttributeError, TypeError, IndexError):
                     continue
@@ -710,6 +715,7 @@ class GameSaveManager:
             league.season_year = league_data.get('season_year', 2024)
             league.standings = league_data.get('standings', {})
             league.schedule_generated = league_data.get('schedule_generated', False)
+            league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
             # Tentpole event state (years the entry draft was held, event
             # prompts already shown). Defaults keep old saves working.
             league.draft_held_years = list(league_data.get('draft_held_years', []) or [])
@@ -959,13 +965,16 @@ class GameSaveManager:
                     
                     if home_team and away_team:
                         from datetime import time as dt_time
-                        schedule.append({
+                        _restored = {
                             'date': game_date,
                             'home_team': home_team,
                             'away_team': away_team,
                             'time': dt_time(19, 0),
                             'league': game_data.get('league', ''),
-                        })
+                        }
+                        if game_data.get('outdoor'):
+                            _restored['outdoor'] = game_data['outdoor']
+                        schedule.append(_restored)
                 except:
                     continue
             

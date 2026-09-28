@@ -409,6 +409,22 @@ class NarrativeLedger:
                                 e.get("id") or 0), reverse=True)
         return evs
 
+    def memory_weight(self, team_a: str, team_b: str) -> float:
+        """Total ledger weight between two teams, 0-100.
+
+        Used by arena_atmosphere (bad-blood buildings) and outdoor-game
+        host selection. Saturates: one big incident lands ~35-55, a real
+        feud with several entries pins toward 100.
+        """
+        try:
+            total = sum(float(e.get("weight", 0) or 0)
+                        for e in self._pair_events(team_a, team_b))
+        except Exception:
+            return 0.0
+        if total <= 0:
+            return 0.0
+        return min(100.0, total / (1.0 + total / 120.0))
+
     def latest_incident(self, team_a: str, team_b: str) -> Optional[Dict[str, Any]]:
         evs = self.between(team_a, team_b, kinds=[KIND_INCIDENT])
         return evs[0] if evs else None

@@ -54,6 +54,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "media_beef": _media_beef_headline,
         "narrative_shutdown": _narrative_shutdown_headline,
         "grudge_callback": _grudge_callback_headline,
+        "outdoor_pregame": _outdoor_pregame_headline,
         "milestone_hit": _milestone_headline,
     }
     fn = builders.get(kind)
@@ -338,6 +339,30 @@ def _grudge_callback_headline(game_date, home="", away="", short="",
         subject=subject,
         content="\n\n".join(parts),
         category="Rivalry",
+        priority=2,
+        is_important=True,
+    )
+
+
+def _outdoor_pregame_headline(game_date, event="", host="", away="",
+                              venue_line="", alumni_line="", rivalry_line="",
+                              **kw):
+    """Winter Classic / Stadium Series pre-game billing card."""
+    from game_classes import EmailMessage
+    subject = f"🏟️ {event}: {away} @ {host} -- outdoors"
+    parts = [f"{venue_line}\n"]
+    if rivalry_line:
+        parts.append(rivalry_line)
+    if alumni_line:
+        parts.append(alumni_line)
+    parts.append("\nPuck drop under the open sky. The loudest night of the "
+                 "regular season.")
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=subject,
+        content="\n\n".join(parts),
+        category="Spectacle",
         priority=2,
         is_important=True,
     )

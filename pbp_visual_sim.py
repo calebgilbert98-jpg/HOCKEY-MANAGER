@@ -515,7 +515,7 @@ class PBPVisualSim(InGamePopup):
     def __init__(self, parent, sim, home_team, away_team,
                  home_line=None, away_line=None, on_complete=None,
                  rivalries=None, is_playoff=False, series_game=0,
-                 user_team=None):
+                 user_team=None, outdoor=None):
         super().__init__(parent)
         self.title(f"Live Sim — {home_team.team_name} vs {away_team.team_name}")
         self.configure(bg=BG)
@@ -526,6 +526,8 @@ class PBPVisualSim(InGamePopup):
         self.home_team = home_team
         self.away_team = away_team
         self.user_team = user_team
+        # Winter Classic / Stadium Series info dict (or None).
+        self._outdoor = outdoor
         # Tactics tab state (EHM-style in-game whiteboard).
         self._tac_tab = "pbp"
         self._tac_pending = {}
@@ -2539,7 +2541,20 @@ class PBPVisualSim(InGamePopup):
             if not self._instant:
                 hab = _abbr(self.home_team.team_name)
                 aab = _abbr(self.away_team.team_name)
-                self._card_show("PUCK DYNASTY", f"{hab}  vs  {aab}", hold=2.8)
+                if self._outdoor is not None:
+                    # Winter Classic / Stadium Series: venue + weather card.
+                    _od = self._outdoor
+                    _wx = (_od.get("weather") or {}).get("framing", "")
+                    self._card_show(
+                        _od.get("event", "OUTDOOR GAME").upper(),
+                        f"{_od.get('venue', '')} -- {_wx}", hold=3.4)
+                    self._feed(
+                        f"{_od.get('event')}: {aab} vs {hab}, outdoors at "
+                        f"{_od.get('venue', '')} ({_wx}).", tag="special",
+                        ev=ev)
+                else:
+                    self._card_show("PUCK DYNASTY", f"{hab}  vs  {aab}",
+                                    hold=2.8)
         elif et == "period_start":
             self.penalty_box.clear()
             self._penalty_timers.clear()
@@ -5489,7 +5504,7 @@ class PBPVisualSim(InGamePopup):
 # ----------------------------------------------------------------------------
 def open_pbp_window(parent, home_team, away_team, on_complete=None,
                     rivalries=None, is_playoff=False, series_game=0,
-                    user_team=None):
+                    user_team=None, outdoor=None):
     """Open the visual play-by-play simulator for a game.
 
     parent: tk widget (usually the main app root)
@@ -5498,15 +5513,28 @@ def open_pbp_window(parent, home_team, away_team, on_complete=None,
         final whistle plays, so the host app can process the result.
     rivalries: optional list of rivalry records (league.rivalries) so the
         intensity meter can account for bad blood between the clubs.
+    outdoor: optional outdoor-game info dict (Winter Classic/Stadium
+        Series) -- drives the pre-game card, feed lines, and the crowd
+        energy bump in the sim.
     Returns the PBPVisualSim window. Does not block.
     """
     sim = GameSim(home_team, away_team, is_playoff=is_playoff,
                   rivalries=rivalries, series_game=series_game)
+    if outdoor is not None:
+        # The loudest night of the regular season: pin the building near-max
+        # through the existing two-sided crowd channel.
+        try:
+            from arena_atmosphere import pregame_crowd
+            _atm = pregame_crowd(home_team, away_team, outdoor=True)
+            sim._crowd_energy = float(_atm.get("energy", 50.0))
+            sim._crowd_mood = float(_atm.get("mood", 30.0))
+        except Exception:
+            pass
     win = PBPVisualSim(parent, sim, home_team, away_team,
                        home_line=_best_line(home_team),
                        away_line=_best_line(away_team),
                        on_complete=on_complete,
                        rivalries=rivalries, is_playoff=is_playoff,
                        series_game=series_game,
-                       user_team=user_team)
+                       user_team=user_team, outdoor=outdoor)
     return win

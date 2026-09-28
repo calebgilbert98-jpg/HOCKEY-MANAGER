@@ -621,6 +621,13 @@ NHL League Office""",
         
         # Generate league schedule
         self.league.generate_schedule()
+        # Legacy events: stamp the Winter Classic + Stadium Series onto
+        # chosen regular-season home games (no 83rd game is added).
+        try:
+            import outdoor_games as _og
+            _og.schedule_outdoor_games(self.league)
+        except Exception as e:
+            print(f"⚠️ Outdoor-game scheduling skipped: {e}")
         
         # Initialize all teams with 0 season records for new season start
         print("Initializing clean season records...")
@@ -1665,7 +1672,7 @@ def clamp(val, minv, maxv):
 
 def _pregame_atmosphere(home_team, away_team, is_playoff=False, series_game=1,
                         elimination_game=False, milestone_home=False,
-                        ceremony=False):
+                        ceremony=False, outdoor=False):
     """Build the crowd state for tonight (arena_atmosphere).
 
     One dict lookup + arithmetic per game -- no per-tick cost. Returns a
@@ -1678,7 +1685,8 @@ def _pregame_atmosphere(home_team, away_team, is_playoff=False, series_game=1,
             home_team, away_team, ledger=active_ledger(),
             is_playoff=is_playoff, series_game=series_game,
             elimination_game=elimination_game,
-            milestone_home=milestone_home, ceremony=ceremony)
+            milestone_home=milestone_home, ceremony=ceremony,
+            outdoor=outdoor)
     except Exception:
         return {"energy": 50.0, "mood": 30.0, "drivers": [],
                 "big_game": False}
@@ -8218,6 +8226,29 @@ class HockeyManagerGUI(tk.Tk):
             pass
 
     # -- Grudge-week presentation --------------------------------------------
+    def _deliver_outdoor_pregame(self, info, home_team, away_team):
+        """Inbox billing card for a Winter Classic / Stadium Series game.
+
+        Fires once per outdoor game (~3/season), so it never spams. Wrapped
+        defensively at every call site.
+        """
+        try:
+            import outdoor_games as _ogd
+            from headlines import deliver_spec as _deliver_spec
+            pres = _ogd.pregame_presentation(info)
+            _deliver_spec(self, {
+                "kind": "outdoor_pregame",
+                "event": info.get("event", "Outdoor Game"),
+                "home": home_team.team_name,
+                "away": away_team.team_name,
+                "venue_line": pres["venue_line"],
+                "alumni_line": pres["alumni_line"],
+                "rivalry_line": pres["rivalry_line"],
+                "involved": (home_team.team_name, away_team.team_name),
+            })
+        except Exception:
+            pass
+
     def _grudge_week_market(self, game_date, home_team, away_team):
         """Market a genuine feud as grudge week (sellout talk, loud billing).
 
@@ -8413,10 +8444,24 @@ class HockeyManagerGUI(tk.Tk):
             else:
                 use_game_viewer = False
             
+            # Legacy events: Winter Classic / Stadium Series. The stamp rides
+            # on the schedule entry; read it before the sim branches so both
+            # Watch Live and quick sim get the billing + crowd bump.
+            _outdoor_info = None
+            try:
+                import outdoor_games as _ogm
+                _outdoor_info = _ogm.outdoor_info_for(game)
+                if _outdoor_info is not None:
+                    self._deliver_outdoor_pregame(_outdoor_info, home_team,
+                                                 away_team)
+            except Exception:
+                _outdoor_info = None
+
             if use_game_viewer:
                 # Modern visual play-by-play (rink + live player bubbles).
                 # Modal: returns the standard 6-tuple once watched to the end.
-                result = self._simulate_game_with_pbp_visual(home_team, away_team)
+                result = self._simulate_game_with_pbp_visual(
+                    home_team, away_team, outdoor=_outdoor_info)
                 winner, loser, scores, events, notable_events, sim_engine = result
                 # GameSim already updated player season stats itself; the
                 # event-based stat pass below must be skipped to avoid
@@ -8489,7 +8534,8 @@ class HockeyManagerGUI(tk.Tk):
                         milestone_home=home_team.team_name in
                         getattr(self, "_milestone_watch_teams", set()),
                         ceremony=bool(getattr(home_team, "_pending_ceremony",
-                                              None))))
+                                              None)),
+                        outdoor=_outdoor_info is not None))
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
                 # Pregame ceremony (if one is queued): electric building via
@@ -8535,6 +8581,14 @@ class HockeyManagerGUI(tk.Tk):
                 headlines.drain_sim_headlines(self, sim_engine)
             except Exception:
                 pass
+            # Legacy events: permanent season memory for outdoor games.
+            if locals().get("_outdoor_info") is not None:
+                try:
+                    import outdoor_games as _ogr
+                    _ogr.record_outdoor_result(self, _outdoor_info,
+                                               scores[0], scores[1])
+                except Exception:
+                    pass
             # Media engine: post-game interviews, narratives, fines, beefs.
             try:
                 import media_engine
@@ -9289,6 +9343,16 @@ class HockeyManagerGUI(tk.Tk):
                 # Grudge-week presentation for genuine feuds (sellout talk,
                 # loud-building billing); hollow overhype gets graded post-game.
                 self._grudge_week_market(game_date, home_team, away_team)
+                # Legacy events: outdoor-game billing (~3/season, no spam).
+                _outdoor_info = None
+                try:
+                    import outdoor_games as _ogb
+                    _outdoor_info = _ogb.outdoor_info_for(game)
+                    if _outdoor_info is not None:
+                        self._deliver_outdoor_pregame(_outdoor_info, home_team,
+                                                     away_team)
+                except Exception:
+                    _outdoor_info = None
                 # Pregame ceremony (news only on the lightweight path).
                 try:
                     import immortality as _im4
@@ -9314,6 +9378,15 @@ class HockeyManagerGUI(tk.Tk):
                 
                 # Update standings immediately (no batch delay)
                 self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot)
+
+                # Legacy events: permanent season memory for outdoor games.
+                if _outdoor_info is not None:
+                    try:
+                        import outdoor_games as _ogr
+                        _ogr.record_outdoor_result(self, _outdoor_info,
+                                                   scores[0], scores[1])
+                    except Exception:
+                        pass
 
                 # Media engine: post-game coverage (cheap, additive).
                 try:
@@ -10153,7 +10226,8 @@ class HockeyManagerGUI(tk.Tk):
         # Return the simulation results INCLUDING the sim_engine
         return winner, loser, scores, events, notable_events, sim_engine
 
-    def _simulate_game_with_pbp_visual(self, home_team, away_team):
+    def _simulate_game_with_pbp_visual(self, home_team, away_team,
+                                       outdoor=None):
         """Run the modern visual play-by-play window modally for a user game.
 
         Opens the live PBP viewer (rink + player bubbles driven by real sim
@@ -10224,7 +10298,8 @@ class HockeyManagerGUI(tk.Tk):
         win = open_pbp_window(self, home_team, away_team, on_complete=_on_done,
                               rivalries=getattr(getattr(self, "league", None),
                                                 "rivalries", []),
-                              user_team=getattr(self, "user_team", None))
+                              user_team=getattr(self, "user_team", None),
+                              outdoor=outdoor)
         win_ref['win'] = win
         # Prevent closing before the sim finishes: the result is needed below.
         # (Re-enabled by _on_done when game_end plays.)

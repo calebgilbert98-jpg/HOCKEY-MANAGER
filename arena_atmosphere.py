@@ -41,7 +41,8 @@ def pregame_crowd(home_team: Any, away_team: Any, ledger: Any = None,
                   is_playoff: bool = False, series_game: int = 1,
                   elimination_game: bool = False,
                   milestone_home: bool = False,
-                  ceremony: bool = False) -> Dict[str, Any]:
+                  ceremony: bool = False,
+                  outdoor: bool = False) -> Dict[str, Any]:
     """Compute the crowd state at puck drop.
 
     energy: 0-100 loudness/engagement.
@@ -99,6 +100,13 @@ def pregame_crowd(home_team: Any, away_team: Any, ledger: Any = None,
         energy += 8.0
         mood += 10.0
         drivers.append("Pregame ceremony")
+
+    # --- outdoor games: the loudest night of the regular season --------------
+    if outdoor:
+        energy += 10.0
+        mood += 6.0
+        drivers.append("Outdoor game")
+        big_game = True
 
     # --- home-team form: a losing skid makes the building nervous -----------
     skid = _home_skid(home_team)
