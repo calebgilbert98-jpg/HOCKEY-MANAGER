@@ -17,6 +17,22 @@ important + milestone). Sections:
 - **Pipeline report** — every prospect whose rights are held: age, current → potential, outlook label (Blue-chip / On track / Project / Long shot), development text
 - **How the season netted out** — four-corner score (Media / Fans / Owner / Room), each graded F..A, plus a composite SEASON GRADE
 
+## Retention: every club keeps its own history
+
+`deliver_season_review(app)` builds a card for **every NHL club** (not just
+the user's) and archives each on that club: `team.season_reviews[year]` =
+`{season, label, lines, scores, meta}` (plain dicts — pickles with the
+save). Every season from here on is retained, each club under its own
+respective history. Only the user's club gets the inbox email and the
+`last_season` player snapshots.
+
+Non-user clubs get minimal board facts (Cup-win flag from the archives);
+their Owner corner is skipped when there's no board review on file, and
+the `<-- YOURS` hardware flag never appears on another club's card.
+
+Read them back any later season: **League History → Season Reviews tab**
+(club picker + season picker, newest first; defaults to your club).
+
 ## Module: season_review.py
 
 All functions defensive — a missing data source skips its section, never
@@ -24,8 +40,9 @@ breaks delivery.
 
 | Function | Role |
 |---|---|
-| `build_review(app)` | Assembles sections → `{subject, lines, scores, meta, year, label}` |
-| `deliver_season_review(app)` | Stashes last-season lines, records season_story events, sends the EmailMessage via `app.send_email_to_user`. **Call pre-wipe.** Returns bool. |
+| `build_review(app, team=None)` | Assembles sections → `{subject, lines, scores, meta, year, label}`; team defaults to the user's club |
+| `_archive_review(team, review)` | Stores the card on `team.season_reviews[year]` |
+| `deliver_season_review(app)` | Loops all 32 NHL clubs (build + archive each); user's club additionally gets last-season stashes, season_story events, and the inbox EmailMessage via `app.send_email_to_user`. **Call pre-wipe.** Returns bool. |
 | `snapshot_preseason_predictions(league)` | Ranks NHL clubs by opening-night roster strength → `league.preseason_predictions` (plain dict, pickles with the save) |
 | `stash_last_season_lines(players)` | `p.last_season = {gp,g,a,pts,plus_minus,w,sv_pct,gaa,shutouts}` |
 | `roster_strength(team)` | Mean overall of best 20 roster players |
@@ -75,10 +92,12 @@ at delivery — future seasons and headline callbacks can reference them.
 
 ## QA
 
-- `qa_season_review.py` — 21/21 (fake season: 44-30-8, 10-game streak,
+- `qa_season_review.py` — 32/32 (fake season: 44-30-8, 10-game streak,
   50-goal rookie, Hart/Calder winners; asserts every section, email
   metadata, 32 season_story events, preseason snapshot, graceful
-  degradation on empty/thin data).
+  degradation on empty/thin data; every club's own card archived across
+  two seasons; Season Reviews tab renders headless with club+season
+  pickers).
 - `qa_board_season_review.py` — 9/9 (board wiring underneath).
 - `qa_narrative_ledger.py` — 49/49 (ledger regression).
 - Full `League.end_of_season()` smoke: records reset, 32-club poll.

@@ -20057,6 +20057,81 @@ class LeagueHistoryView(ctk.CTkFrame):
         notebook.add(fr_frame, text="Franchise Records")
         self._build_franchise_records(fr_frame, h)
 
+        # Season Reviews tab (end-of-season cards, newest first)
+        sr_frame = ttk.Frame(notebook)
+        notebook.add(sr_frame, text="Season Reviews")
+        self._build_season_reviews(sr_frame)
+
+    def _build_season_reviews(self, parent):
+        """Archived end-of-season review cards, per club's own history.
+
+        Every NHL club keeps its own cards on team.season_reviews (written
+        at deliver_season_review() each offseason); pick a club, pick a
+        season, read the card. Defaults to the user's club, newest first.
+        """
+        import tkinter as tk
+        from tkinter import ttk
+
+        gm = self.game_manager
+        clubs = [t for t in (list(getattr(gm, "teams", []) or []) +
+                             list(getattr(gm, "league_teams", []) or []))
+                 if getattr(t, "league_name", "") == "National Hockey League"]
+        names = sorted({getattr(t, "team_name", "?") for t in clubs})
+        user_name = getattr(getattr(gm, "user_team", None), "team_name", "")
+
+        top = ttk.Frame(parent)
+        top.pack(fill='x', padx=10, pady=(10, 4))
+        ttk.Label(top, text="Club:", font=('Arial', 10, 'bold')).pack(side='left')
+        team_var = tk.StringVar(value=user_name if user_name in names
+                                else (names[0] if names else ""))
+        team_combo = ttk.Combobox(top, textvariable=team_var, values=names,
+                                  state='readonly', width=28)
+        team_combo.pack(side='left', padx=8)
+        season_var = tk.StringVar()
+        season_combo = ttk.Combobox(top, textvariable=season_var,
+                                    state='readonly', width=22)
+        season_combo.pack(side='left', padx=8)
+
+        body = ttk.Frame(parent)
+        body.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        text = tk.Text(body, wrap='word', font=('Courier', 9), state='disabled')
+        scroll = ttk.Scrollbar(body, orient='vertical', command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side='left', fill='both', expand=True)
+        scroll.pack(side='right', fill='y')
+
+        def _team(name):
+            for t in clubs:
+                if getattr(t, "team_name", "") == name:
+                    return t
+            return None
+
+        def _render(_event=None):
+            archive = dict(getattr(_team(team_var.get()),
+                                   "season_reviews", None) or {})
+            years = sorted(archive.keys(), reverse=True)
+            labels = [f"{archive[y].get('label', y)} ({y})" for y in years]
+            season_combo["values"] = labels
+            if labels and season_var.get() not in labels:
+                season_var.set(labels[0])
+            text.configure(state='normal')
+            text.delete('1.0', 'end')
+            if not years:
+                text.insert('end', "No season reviews archived for this club yet. "
+                                  "They appear here at the end of each season.")
+            else:
+                try:
+                    year = years[labels.index(season_var.get())]
+                except ValueError:
+                    year = years[0]
+                text.insert('end', "\n".join(
+                    archive[year].get("lines", [])))
+            text.configure(state='disabled')
+
+        team_combo.bind("<<ComboboxSelected>>", _render)
+        season_combo.bind("<<ComboboxSelected>>", _render)
+        _render()
+
     def _build_advanced(self, parent, h):
         """Team advanced metrics + league leaders in advanced categories."""
         import tkinter as tk

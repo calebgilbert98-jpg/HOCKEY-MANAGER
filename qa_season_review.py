@@ -219,6 +219,83 @@ def main():
     check("thin roster still builds", thin is not None
           and "SEASON GRADE:" in "\n".join(thin["lines"]))
 
+    # --- Archive: the card is stored on the team for later seasons ---
+    card = app.user_team.season_reviews.get(2027)
+    check("card archived on team", card is not None
+          and card["label"] == "2027-28"
+          and "SEASON GRADE:" in "\n".join(card["lines"]),
+          str(card["label"] if card else None))
+    check("archived scores match",
+          card["scores"].get("composite") == review["scores"]["composite"])
+
+    # A later season keeps its own card alongside the old one.
+    app.league.season_year = 2028
+    sr.deliver_season_review(app)
+    check("two seasons, two cards",
+          set(app.user_team.season_reviews.keys()) == {2027, 2028})
+
+    # --- Every club keeps its own history ---
+    club0 = app.league.teams[1]  # first fake AI club
+    check("AI club card archived",
+          2027 in getattr(club0, "season_reviews", {})
+          and 2028 in getattr(club0, "season_reviews", {}),
+          str(list(getattr(club0, "season_reviews", {}).keys())))
+    club_card = "\n".join(club0.season_reviews[2027]["lines"])
+    check("AI club card is its own (not the user's)",
+          "SEASON REVIEW -- Club 00" in club_card
+          and "Hart: Star Center" in club_card      # league-wide hardware shown
+          and "<-- YOURS" not in club_card,         # ...but not claimed
+          club_card[:80])
+    check("all 32 clubs archived",
+          all(2027 in getattr(t, "season_reviews", {})
+              for t in app.league.teams),
+          str(sum(2027 in getattr(t, "season_reviews", {}) for t in app.league.teams)))
+
+    # --- League History -> Season Reviews tab renders headless ---
+    import tkinter as tk
+    from tkinter import ttk
+    import main as main_mod
+    root = tk.Tk(); root.withdraw()
+    gm = SimpleNamespace(user_team=app.user_team,
+                         league_history=app.league_history,
+                         league=app.league,
+                         teams=app.league.teams)
+    view = main_mod.LeagueHistoryView.__new__(main_mod.LeagueHistoryView)
+    view.game_manager = gm
+    frame = ttk.Frame(root)
+    frame.pack()
+    view._build_season_reviews(frame)
+    root.update_idletasks()
+
+    combos = []
+    texts = []
+    def walk(w):
+        for c in w.winfo_children():
+            if c.winfo_class() == "TCombobox":
+                combos.append(c)
+            elif c.winfo_class() == "Text":
+                texts.append(c)
+            walk(c)
+    walk(frame)
+    check("tab has team + season pickers and a card view",
+          len(combos) == 2 and len(texts) == 1,
+          f"combos={len(combos)} texts={len(texts)}")
+    team_combo, season_combo = combos
+    check("team picker defaults to user's club",
+          team_combo.get() == "Chicago Blackhawks", team_combo.get())
+    check("user card shown by default",
+          "SEASON GRADE:" in texts[0].get("1.0", "end"))
+    check("season picker lists both archived years",
+          len(season_combo["values"]) == 2, str(season_combo["values"]))
+    # Switch club -> that club's own card renders.
+    team_combo.set("Club 00")
+    team_combo.event_generate("<<ComboboxSelected>>")
+    root.update_idletasks()
+    check("switching club shows its own card",
+          "SEASON REVIEW -- Club 00" in texts[0].get("1.0", "end"),
+          texts[0].get("1.0", "end")[:70])
+    root.destroy()
+
     print(f"\n{passed} passed, {failed} failed")
     raise SystemExit(1 if failed else 0)
 

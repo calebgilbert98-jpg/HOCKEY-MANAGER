@@ -2925,6 +2925,12 @@ class Team:
     win_streak: int = 0          # current consecutive wins
     longest_win_streak: int = 0  # season best
 
+    # Archived season-review cards, keyed by season year. Written at
+    # deliver_season_review() each offseason; read back any later season
+    # from the League History -> Season Reviews tab. Plain dicts so the
+    # save pickles cleanly.
+    season_reviews: Dict[int, dict] = field(default_factory=dict)
+
     @property
     def payroll(self) -> int:
         return sum(p.contract.salary for p in self.roster)

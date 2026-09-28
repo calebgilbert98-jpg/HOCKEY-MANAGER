@@ -105,7 +105,7 @@ def _career_ppg(p):
 def roster_strength(team):
     """Opening-night roster strength: mean overall of the best 20."""
     try:
-        ovrs = sorted((p.overall_rating() for p in (team.roster or [])
+        ovrs = sorted((p.overall_rating() for p in (getattr(team, "roster", None) or [])
                        if hasattr(p, "overall_rating")),
                       reverse=True)[:20]
         if not ovrs:
@@ -258,9 +258,9 @@ def _story_lines(app, team, year, board_facts):
 
 def _standout_lines(team):
     """Stood out / tough go, judged vs career pace."""
-    skaters = [p for p in (team.roster or [])
+    skaters = [p for p in (getattr(team, "roster", None) or [])
                if not _is_goalie(p) and _num(getattr(p, "games_played", 0)) >= 20]
-    goalies = [p for p in (team.roster or [])
+    goalies = [p for p in (getattr(team, "roster", None) or [])
                if _is_goalie(p) and _num(getattr(p, "games_played", 0)) >= 15]
     out, tough = [], []
 
@@ -318,7 +318,7 @@ def _rookie_lines(app, team, year):
         race = calder_race(list(players), season_year=year)
         mine = [r for r in race
                 if getattr(r.get("player"), "team_name", "") == team.team_name
-                or r.get("player") in (team.roster or [])][:3]
+                or r.get("player") in (getattr(team, "roster", None) or [])][:3]
         for r in mine:
             p = r["player"]
             name = getattr(p, "name", "Unknown")
@@ -349,7 +349,7 @@ def _award_lines(app, team, year):
         awards = (season or {}).get("awards") or {}
         if not awards:
             return lines
-        my_names = {getattr(p, "name", "") for p in (team.roster or [])}
+        my_names = {getattr(p, "name", "") for p in (getattr(team, "roster", None) or [])}
         for award, winner in awards.items():
             wname = winner if isinstance(winner, str) else getattr(winner, "name", str(winner))
             star = " <-- YOURS" if wname in my_names else ""
@@ -492,9 +492,30 @@ def _room_score(team):
 # Assembly + delivery
 # ----------------------------------------------------------------------
 
-def build_review(app):
-    """Assemble every section. Returns {"subject", "lines", "scores"}."""
-    team = getattr(app, "user_team", None)
+def _club_board_facts(app, team, year):
+    """Minimal season facts for a non-user club (Cup win flag).
+
+    The user's club gets the full stashed board review; every other club
+    still gets its own card with whatever the archives can prove.
+    """
+    facts = {}
+    try:
+        hist = getattr(app, "league_history", None)
+        season = hist.get_season(year) if hist else None
+        if season:
+            facts["won_cup"] = season.get("champion") == team.team_name
+    except Exception:
+        pass
+    return facts
+
+
+def build_review(app, team=None):
+    """Assemble every section. Returns {"subject", "lines", "scores"}.
+
+    team defaults to the user's club; pass any NHL club to build that
+    club's own card for its respective history.
+    """
+    team = team or getattr(app, "user_team", None)
     league = getattr(app, "league", None)
     if team is None or league is None:
         return None
@@ -502,7 +523,10 @@ def build_review(app):
     label = season_label(year)
     standings = getattr(league, "standings", None) or {}
     predictions = getattr(league, "preseason_predictions", None) or {}
-    board_facts = getattr(app, "_season_review_board", None) or {}
+    if team is getattr(app, "user_team", None):
+        board_facts = getattr(app, "_season_review_board", None) or {}
+    else:
+        board_facts = _club_board_facts(app, team, year)
 
     sections = []  # (title, lines)
 
@@ -556,9 +580,12 @@ def build_review(app):
         lines.append(title)
         lines.extend(ls)
         lines.append("")
+    score_map = {n: s for n, s, _ in scores}
+    if score_map:
+        score_map["composite"] = sum(score_map.values()) / len(score_map)
     return {"subject": f"{label} Season Review: {team.team_name}",
             "lines": lines,
-            "scores": {n: s for n, s, _ in scores},
+            "scores": score_map,
             "meta": meta, "year": year, "label": label}
 
 
@@ -602,38 +629,86 @@ def _record_season_stories(app, review):
         pass
 
 
+def _archive_review(team, review):
+    """Store the card on the team for its own respective history.
+
+    Keyed by season year so every season keeps its own card, readable
+    from any later season (League History -> Season Reviews).
+    """
+    try:
+        archive = getattr(team, "season_reviews", None)
+        if archive is None:
+            archive = {}
+            team.season_reviews = archive
+        archive[review["year"]] = {
+            "season": review["year"],
+            "label": review["label"],
+            "lines": list(review["lines"]),
+            "scores": dict(review["scores"]),
+            "meta": dict(review["meta"]),
+        }
+    except Exception:
+        pass
+
+
+def _email_review(app, review):
+    """Send the user's own card to their inbox."""
+    from game_classes import EmailMessage
+    msg = EmailMessage(
+        sender="League Office",
+        sender_type="League",
+        subject=review["subject"],
+        content="\n".join(review["lines"]),
+        category="League",
+        is_important=True,
+        is_milestone=True,
+        priority=3,
+        game_date_sent=getattr(app, "current_date", None) or date.today(),
+    )
+    app.send_email_to_user(msg)
+
+
 def deliver_season_review(app):
-    """Build the review, send it to the inbox, bank the season stories.
+    """Build every club's card, email the user's, bank the season stories.
+
+    Each NHL club's report is retained on that club's own history
+    (team.season_reviews), so every season from here on stays readable
+    from League History -> Season Reviews.
 
     Call BEFORE League.end_of_season() wipes per-season stats.
     """
     try:
-        review = build_review(app)
-        if not review:
+        league = getattr(app, "league", None)
+        user_team = getattr(app, "user_team", None)
+        clubs = [t for t in (getattr(league, "teams", None) or [])
+                 if getattr(t, "league_name", "") == "National Hockey League"]
+        if not clubs and user_team is not None:
+            clubs = [user_team]
+        user_review = None
+        for team in clubs:
+            try:
+                review = build_review(app, team)
+            except Exception:
+                continue
+            if not review:
+                continue
+            _archive_review(team, review)
+            if team is user_team:
+                user_review = review
+                # Last-season snapshot for every affiliated player (pre-wipe).
+                try:
+                    stash_last_season_lines(
+                        list(getattr(team, "roster", None) or [])
+                        + list(getattr(team, "ahl_roster", None) or [])
+                        + list(getattr(team, "prospects", None) or []))
+                except Exception:
+                    pass
+        if user_review is None:
             return False
-        # Last-season snapshot for every affiliated player (pre-wipe).
-        try:
-            team = app.user_team
-            stash_last_season_lines(
-                list(team.roster or []) + list(getattr(team, "ahl_roster", None) or [])
-                + list(getattr(team, "prospects", None) or []))
-        except Exception:
-            pass
-        _record_season_stories(app, review)
-
-        from game_classes import EmailMessage
-        msg = EmailMessage(
-            sender="League Office",
-            sender_type="League",
-            subject=review["subject"],
-            content="\n".join(review["lines"]),
-            category="League",
-            is_important=True,
-            is_milestone=True,
-            priority=3,
-            game_date_sent=getattr(app, "current_date", None) or date.today(),
-        )
-        app.send_email_to_user(msg)
+        _record_season_stories(app, user_review)
+        _email_review(app, user_review)
         return True
     except Exception:
         return False
+
+
