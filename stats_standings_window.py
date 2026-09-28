@@ -62,7 +62,8 @@ class StatsStandingsView(ctk.CTkFrame):
     MAIN_TABS = ["Standings", "Team Analytics", "Player Leaders",
                  "Analytics & Trends", "Division Analysis", "Divisions"]
     LEADER_TABS = ["Scoring Leaders", "Advanced Stats", "Goaltending",
-                   "Breakout Players", "Milestone Watch", "NHL Records"]
+                   "Breakout Players", "Rookie Leaders", "Award Races",
+                   "Milestone Watch", "NHL Records"]
     ANALYTICS_TABS = ["Dashboard", "Trends", "Insights"]
     RECORD_TABS = ["Season Records", "Career Records", "Current Leaders",
                    "Record Chase", "Achievements"]
@@ -659,6 +660,10 @@ class StatsStandingsView(ctk.CTkFrame):
             self.leaders_tabview.tab("Goaltending"), "goaltending")
         self.create_enhanced_player_section(
             self.leaders_tabview.tab("Breakout Players"), "breakout")
+        self.create_rookie_leaders_section(
+            self.leaders_tabview.tab("Rookie Leaders"))
+        self.create_award_races_section(
+            self.leaders_tabview.tab("Award Races"))
         self.create_milestone_watch_section(
             self.leaders_tabview.tab("Milestone Watch"))
         self.create_records_section(
@@ -676,6 +681,311 @@ class StatsStandingsView(ctk.CTkFrame):
         ('career_shutouts', 'shutouts', 'Shutouts', (25, 50, 75, 100), 4),
         ('career_games_goalie', 'games_played', 'Games Played', (300, 500), 20),
     ]
+
+    # ------------------------------------------------------------------
+    # Rookie Leaders + Award Races (new)
+    # ------------------------------------------------------------------
+    def _league_players_and_teams(self):
+        """Return (players, teams) for the NHL league."""
+        players, teams = [], []
+        try:
+            league = getattr(self.app, "league", None)
+            if league is None and hasattr(self.app, "game_manager"):
+                league = getattr(self.app.game_manager, "league", None)
+            candidates = []
+            if league is not None:
+                if getattr(league, "teams", None):
+                    candidates = list(league.teams)
+                elif getattr(league, "leagues", None):
+                    for lg in league.leagues:
+                        if "National Hockey League" in str(getattr(lg, "name", "")):
+                            candidates = list(getattr(lg, "teams", []) or [])
+                            break
+            for team in candidates:
+                teams.append(team)
+                for p in (getattr(team, "roster", []) or []):
+                    players.append(p)
+        except Exception:
+            pass
+        return players, teams
+
+    def _pname(self, p):
+        return (getattr(p, "full_name", None) or getattr(p, "name", None)
+                or f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
+                or "?")
+
+    def _pteam_abbr(self, p, teams):
+        tname = getattr(p, "team_name", "") or ""
+        if not tname:
+            # fall back: find the team whose roster holds this player
+            for t in teams:
+                if p in (getattr(t, "roster", []) or []):
+                    tname = getattr(t, "team_name", "")
+                    break
+        return self._get_team_abbreviation(tname) if tname else ""
+
+    def create_rookie_leaders_section(self, parent_frame):
+        """Rookie Leaders tab: rookie scoring + rookie goaltending."""
+        import awards_race as ar
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
+
+        players, teams = self._league_players_and_teams()
+
+        # Header
+        hdr = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        hdr.pack(fill="x", padx=12, pady=(10, 4))
+        title = ctk.CTkLabel(hdr, text="Rookie Leaders",
+                             font=ctk.CTkFont(size=16, weight="bold"),
+                             text_color=ct['TEXT'])
+        title.pack(side="left")
+        sub = ctk.CTkLabel(hdr, text="First-year players (rookie eligibility)",
+                           font=ctk.CTkFont(size=11),
+                           text_color=ct['TEXT_DIM'])
+        sub.pack(side="left", padx=(10, 0))
+
+        body = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+
+        # Left: rookie skaters
+        left = ctk.CTkFrame(body, fg_color=ct['CARD'])
+        left.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        ctk.CTkLabel(left, text="Rookie Scoring",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=10, pady=(8, 2))
+        cols_s = {"rank": ("#", 36), "player": ("Player", 150),
+                  "team": ("Team", 52), "gp": ("GP", 44),
+                  "g": ("G", 40), "a": ("A", 40), "p": ("P", 44)}
+        tree_s = self._make_tree(left, cols_s, height=18, padx=10, pady=6)
+        self._bind_leader_menu(tree_s)
+        tree_s._player_rows = {}
+
+        # Right: rookie goalies
+        right = ctk.CTkFrame(body, fg_color=ct['CARD'])
+        right.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        ctk.CTkLabel(right, text="Rookie Goaltending",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=10, pady=(8, 2))
+        cols_g = {"rank": ("#", 36), "player": ("Player", 150),
+                  "team": ("Team", 52), "gp": ("GP", 44),
+                  "w": ("W", 40), "sv": ("SV%", 58), "gaa": ("GAA", 52)}
+        tree_g = self._make_tree(right, cols_g, height=18, padx=10, pady=6)
+        self._bind_leader_menu(tree_g)
+        tree_g._player_rows = {}
+
+        for i, r in enumerate(ar.rookie_skaters(players)[:25], 1):
+            p = r["player"]
+            iid = tree_s.insert("", "end", values=(
+                i, self._pname(p), self._pteam_abbr(p, teams),
+                r["gp"], r["goals"], r["assists"], r["points"]))
+            tree_s._player_rows[iid] = p
+        for i, r in enumerate(ar.rookie_goalies(players)[:25], 1):
+            p = r["player"]
+            iid = tree_g.insert("", "end", values=(
+                i, self._pname(p), self._pteam_abbr(p, teams),
+                r["gp"], r["wins"], f"{r['sv_pct']:.3f}", f"{r['gaa']:.2f}"))
+            tree_g._player_rows[iid] = p
+
+    def create_award_races_section(self, parent_frame):
+        """Award Races tab: per-award candidate rankings.
+
+        Each award ranks by the criterion that drives real-world voting
+        (see awards_race.py for the winner-history rationale).
+        """
+        import awards_race as ar
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
+
+        # Top bar: award picker
+        topbar = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        topbar.pack(fill="x", padx=12, pady=(10, 4))
+        ctk.CTkLabel(topbar, text="Award Races",
+                     font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=ct['TEXT']).pack(side="left")
+        award_names = [name for name, _desc, _key in ar.AWARD_DEFINITIONS]
+        self._award_var = ctk.StringVar(value=award_names[0])
+        picker = ctk.CTkOptionMenu(topbar, variable=self._award_var,
+                                   values=award_names, width=260,
+                                   command=lambda _v: self._refresh_award_race())
+        picker.pack(side="left", padx=(12, 0))
+
+        # Criteria description
+        self._award_desc = ctk.CTkLabel(parent_frame, text="",
+                                        font=ctk.CTkFont(size=11),
+                                        text_color=ct['TEXT_DIM'],
+                                        wraplength=900, justify="left")
+        self._award_desc.pack(fill="x", padx=12, pady=(0, 6))
+
+        # Candidate table container
+        self._award_table_holder = ctk.CTkFrame(parent_frame,
+                                                fg_color="transparent")
+        self._award_table_holder.pack(fill="both", expand=True,
+                                      padx=12, pady=(0, 10))
+        self._refresh_award_race()
+
+    def _refresh_award_race(self):
+        """Rebuild the award-race table for the selected award."""
+        import awards_race as ar
+        ct = self._ct
+        holder = self._award_table_holder
+        for child in holder.winfo_children():
+            child.destroy()
+
+        name = self._award_var.get()
+        key = next((k for n, _d, k in ar.AWARD_DEFINITIONS if n == name),
+                   "hart")
+        desc = next((d for n, d, _k in ar.AWARD_DEFINITIONS if n == name), "")
+        self._award_desc.configure(
+            text=f"{name}: {desc}")
+
+        players, teams = self._league_players_and_teams()
+        team_pct = {}
+        for t in teams:
+            gp = getattr(t, "games_played", 0) or 0
+            pts = getattr(t, "points", 0) or 0
+            team_pct[getattr(t, "team_name", "")] = (pts / (2 * gp)) if gp else 0.5
+
+        rows, columns = [], {}
+        is_team_award = False
+
+        if key == "hart":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "tpct": ("Team P%", 64)}
+            for i, r in enumerate(ar.hart_race(players, team_pct)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"],
+                                 (getattr(p, "assists", 0) or 0),
+                                 r["points"], f"{r['team_pct']:.3f}")))
+        elif key == "art_ross":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44)}
+            for i, r in enumerate(ar.art_ross_race(players)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"], r["assists"], r["points"])))
+        elif key == "rocket":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "p": ("P", 44),
+                       "shpct": ("SH%", 52)}
+            for i, r in enumerate(ar.rocket_race(players)[:15], 1):
+                p = r["player"]
+                shots = getattr(p, "shots", 0) or 0
+                shpct = (r["goals"] / shots * 100) if shots else 0.0
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"], r["points"], f"{shpct:.1f}")))
+        elif key == "norris":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "pm": ("+/-", 48)}
+            for i, r in enumerate(ar.norris_race(players)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"],
+                                 (r["points"] - r["goals"]),
+                                 r["points"], r["plus_minus"])))
+        elif key == "vezina":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "w": ("W", 40), "sv": ("SV%", 58),
+                       "gaa": ("GAA", 52), "so": ("SO", 40),
+                       "gsax": ("GSAx", 58)}
+            goalies = [p for p in players if self._is_goalie(p)]
+            for i, r in enumerate(ar.vezina_race(goalies)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["wins"], f"{r['sv_pct']:.3f}",
+                                 f"{r['gaa']:.2f}", r["shutouts"],
+                                 f"{r['gsax']:+.1f}")))
+        elif key == "calder":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "note": ("", 90)}
+            for i, r in enumerate(ar.calder_race(players)[:15], 1):
+                p = r["player"]
+                if r.get("goalie"):
+                    vals = (i, self._pname(p), self._pteam_abbr(p, teams),
+                            getattr(p, "games_played", 0) or 0,
+                            "-", "-", "-",
+                            f"G: {r['sv_pct']:.3f} SV%")
+                else:
+                    vals = (i, self._pname(p), self._pteam_abbr(p, teams),
+                            getattr(p, "games_played", 0) or 0,
+                            r["goals"], r["points"] - r["goals"],
+                            r["points"], "")
+                rows.append((p, vals))
+        elif key == "selke":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "p": ("P", 44), "pm": ("+/-", 48),
+                       "tk": ("TK", 44), "fo": ("FO", 44)}
+            for i, r in enumerate(ar.selke_race(players)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["points"], r["plus_minus"],
+                                 r["takeaways"],
+                                 getattr(p, "faceoffs", 50) or 50)))
+        elif key == "byng":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "pim": ("PIM", 48)}
+            for i, r in enumerate(ar.byng_race(players)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"], r["points"] - r["goals"],
+                                 r["points"], r["pim"])))
+        elif key == "adams":
+            is_team_award = True
+            columns = {"rank": ("#", 36), "coach": ("Coach", 160),
+                       "team": ("Team", 150), "p": ("Pts", 48),
+                       "actual": ("P%", 56), "exp": ("Exp P%", 64),
+                       "over": ("Over +/-", 64)}
+            for i, r in enumerate(ar.adams_race(teams)[:15], 1):
+                rows.append((None, (i, r["coach"], r["team"], r["points"],
+                                    f"{r['actual_pct']:.3f}",
+                                    f"{r['expected_pct']:.3f}",
+                                    f"{r['score']:+.3f}")))
+        elif key == "jennings":
+            is_team_award = True
+            columns = {"rank": ("#", 36), "team": ("Team", 170),
+                       "goalies": ("Goaltenders", 220),
+                       "ga": ("GA", 48), "gagp": ("GA/GP", 58)}
+            for i, r in enumerate(ar.jennings_race(teams)[:15], 1):
+                rows.append((None, (i, r["team"], r["goalies"],
+                                    r["goals_against"],
+                                    f"{r['ga_per_game']:.2f}")))
+
+        card = ctk.CTkFrame(holder, fg_color=ct['CARD'])
+        card.pack(fill="both", expand=True)
+        tree = self._make_tree(card, columns, height=20, padx=10, pady=10)
+        tree._player_rows = {}
+        if not is_team_award:
+            self._bind_leader_menu(tree)
+        for p, vals in rows:
+            iid = tree.insert("", "end", values=vals)
+            if p is not None:
+                tree._player_rows[iid] = p
 
     def create_milestone_watch_section(self, parent_frame):
         """Milestone Watch sub-tab: players nearing career milestones.
