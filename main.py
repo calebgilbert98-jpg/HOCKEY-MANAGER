@@ -12722,6 +12722,24 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+        # BUG-015: generate the new season's slate. generate_schedule() was
+        # only ever called on new-career paths, so after the first rollover
+        # the league had zero scheduled games -- season 2+ never started
+        # (standings frozen at 0-0-0, the season-end safety net had no last
+        # date to key on). Real NHL timing: the schedule drops in late June,
+        # i.e. right here, before the July-1 jump. The template cache makes
+        # the rebuild cheap; generation is deterministic per season_year so
+        # a re-run is idempotent.
+        try:
+            self.league.generate_schedule()
+            try:
+                import outdoor_games as _og
+                _og.schedule_outdoor_games(self.league)
+            except Exception:
+                pass
+        except Exception:
+            import traceback
+            traceback.print_exc()
         # A new schedule was generated: drop cached season dates/games so the
         # season-end safety net in simulate_day recomputes from the new slate
         # instead of the previous season's.

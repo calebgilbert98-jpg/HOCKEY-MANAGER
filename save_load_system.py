@@ -1334,11 +1334,26 @@ class GameSaveManager:
             # Restore basic team info
             team.division = team_data.get('division', '')
             team.conference = team_data.get('conference', '')
-            # League identity (NHL vs AHL). Old saves lack the key ->
-            # keep the dataclass default (NHL), same as before.
-            team.league_name = team_data.get(
-                'league_name', getattr(team, 'league_name',
-                                       'National Hockey League'))
+            # League identity (NHL vs AHL). Old saves lack the key: infer
+            # from division -- farm clubs have division "Unknown" (the same
+            # discriminator the standings/snapshot code uses). Without this,
+            # pre-fix saves load all 62 clubs as NHL and downstream filters
+            # (schedule generator's 32-team check, draft lottery) admit AHL
+            # clubs. BUG-014 follow-up.
+            if 'league_name' in team_data:
+                team.league_name = team_data['league_name']
+            elif team_data.get('division', '') == 'Unknown':
+                team.league_name = 'American Hockey League'
+            else:
+                team.league_name = getattr(team, 'league_name',
+                                           'National Hockey League')
+            # Self-heal: saves re-saved while corrupted (all 62 stamped NHL
+            # by the pre-fix default) carry the wrong explicit value. Farm
+            # clubs are the ones with division "Unknown" -- never a real
+            # NHL club -- so stamp them back to the AHL unconditionally.
+            if team_data.get('division', '') == 'Unknown' and \
+                    team.league_name == 'National Hockey League':
+                team.league_name = 'American Hockey League'
             team.standings_position = team_data.get('standings_position', 0)
             team.coaching_staff = team_data.get('coaching_staff', [])
             # Team staff (coaches/scouts). Old saves lack the key -> empty.
