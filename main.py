@@ -10521,7 +10521,7 @@ class HockeyManagerGUI(tk.Tk):
         award_key_map = {
             'Hart Trophy (MVP)': 'hart',
             'Art Ross Trophy (Scoring Leader)': 'art_ross',
-            'Maurice "Rocket" Richard Trophy (Goal Leader)': 'rocket',
+            'Maurice "Rocket" Richard Trophy': 'rocket',
             'Vezina Trophy (Best Goalie)': 'vezina',
             'Norris Trophy (Best Defenseman)': 'norris',
             'Selke Trophy (Defensive Forward)': 'selke',
@@ -10831,7 +10831,7 @@ class HockeyManagerGUI(tk.Tk):
             info["stats"] = f"{e['goals']} goals"
         # Canonical: one identifier, one display label. The real trophy
         # is the Maurice "Rocket" Richard Trophy -- no duplicates.
-        awards['Maurice "Rocket" Richard Trophy (Goal Leader)'] = info
+        awards['Maurice "Rocket" Richard Trophy'] = info
 
         # Vezina - best goalie (SV%/GAA/wins + GSAx cross-check)
         e = _top(lambda: ar.vezina_race(players))

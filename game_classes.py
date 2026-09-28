@@ -4874,6 +4874,22 @@ class League:
             except Exception:
                 _env = 1.0
             player.age_one_year(env_factor=_env)
+            # Calder archive: record this season's NHL GP for rookie
+            # eligibility BEFORE stats are wiped. Only NHL-roster games
+            # count -- minor-league seasons never touch rookie status
+            # (real rule: AHL/KHL/SHL time doesn't disqualify). Keep the
+            # last five seasons; older is irrelevant to the thresholds.
+            try:
+                _gp_season = int(getattr(getattr(player, "stats", None),
+                                         "games_played", 0) or 0)
+                _prior = getattr(player, "prior_nhl_gp", None)
+                if not isinstance(_prior, list):
+                    _prior = []
+                    player.prior_nhl_gp = _prior
+                _prior.append(_gp_season if player.id in nhl_ids else 0)
+                del _prior[:-5]
+            except Exception:
+                pass
             player.stats = PlayerStats()
         
         self.season_year += 1

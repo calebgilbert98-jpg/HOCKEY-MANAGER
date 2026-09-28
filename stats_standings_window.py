@@ -852,6 +852,9 @@ class StatsStandingsView(ctk.CTkFrame):
             gp = getattr(t, "games_played", 0) or 0
             pts = getattr(t, "points", 0) or 0
             team_pct[getattr(t, "team_name", "")] = (pts / (2 * gp)) if gp else 0.5
+        # Authoritative roster mapping: team_name labels can go stale
+        # after trades; the roster is the truth.
+        roster_map = ar.roster_team_map(teams)
 
         rows, columns = [], {}
         is_team_award = False
@@ -861,7 +864,8 @@ class StatsStandingsView(ctk.CTkFrame):
                        "team": ("Team", 52), "gp": ("GP", 44),
                        "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
                        "tpct": ("Team P%", 64)}
-            for i, r in enumerate(ar.hart_race(players, team_pct)[:15], 1):
+            for i, r in enumerate(ar.hart_race(players, team_pct,
+                                                roster_map=roster_map)[:15], 1):
                 p = r["player"]
                 rows.append((p, (i, self._pname(p),
                                  self._pteam_abbr(p, teams),
@@ -2901,6 +2905,19 @@ class StatsStandingsView(ctk.CTkFrame):
 
         # Page info and controls
         self.create_pagination_controls(pagination_frame, category)
+
+        # Honest model-estimate labeling: these tabs show modeled metrics
+        # (ixG, xGF%, GSAx, ...), not tracked truth. Same disclosure as
+        # the player card's analytics section.
+        if category in ("advanced", "breakout", "goaltending"):
+            ctk.CTkLabel(
+                main_container,
+                text=("Estimates, not tracking data: ixG / xGF% / GSAx / HDSV% "
+                      "are modeled from your analytics department's lens -- "
+                      "useful signal, not measured fact."),
+                font=ctk.CTkFont(size=11, slant="italic"),
+                text_color=ct['TEXT_DIM'], wraplength=900,
+                justify="left").pack(fill="x", padx=12, pady=(0, 4))
 
         # Create treeview container
         tree_container = ctk.CTkFrame(main_container, fg_color="transparent")
