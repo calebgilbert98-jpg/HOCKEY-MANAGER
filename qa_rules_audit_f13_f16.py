@@ -143,6 +143,90 @@ check("f15: outside the zone the pick conveys",
       p2.current_team == "HOLD" and p2.protection == ""
       and any("not triggered" in e for e in ev3), str(ev3))
 
+# --- F15b: lottery/protection coincidence + 5-year pick horizon -----------
+import random as _random
+import draft_lottery as _dl
+
+_lg, _nhl = None, None
+try:
+    from game_classes import League as _League
+
+    _lg = _League("NHL")
+    _nhl = [t for t in _lg.teams
+            if getattr(t, "league_name", "") == "National Hockey League"]
+    # Deterministic standings: team i gets i*5 points (team 0 worst).
+    _lg.standings = {t.team_name: {"Points": i * 5, "W": i * 2}
+                     for i, t in enumerate(_nhl)}
+    _lg.season_year = 2026
+    _lg.initialize_all_draft_picks()
+    _Y = 2027
+    _worst, _holder_t = _nhl[0], _nhl[5]
+    # Worst club's 2027 1st (top-3 protected) sits with the holder.
+    _pp = next(p for p in _worst.get_picks_for_year(_Y)
+               if p.round == 1)
+    _pp.current_team = _holder_t.team_name
+    _pp.protection = "top-3"
+    _pp.is_conditional = True
+    _rows = _dl.run_lottery(_lg, _Y, _random.Random(42))
+    _wpos = next(r["pick"] for r in _rows
+                 if r["original_team"] == _worst.team_name)
+    _ev = _League.resolve_pick_protections(_lg, _Y)
+    if _wpos <= 3:
+        check("f15b: lottery kept pick in zone -> reverts to original",
+              _pp.current_team == _worst.team_name, f"lotto #{_wpos}")
+        _next1 = next(p for p in _worst.get_picks_for_year(_Y + 1)
+                      if p.round == 1)
+        check("f15b: holder receives next year's 1st",
+              _next1.current_team == _holder_t.team_name,
+              f"lotto #{_wpos}")
+    else:
+        check("f15b: lottery dropped pick out of zone -> conveys",
+              _pp.current_team == _holder_t.team_name, f"lotto #{_wpos}")
+    check("f15b: protection evaluated on POST-lottery position",
+          any(str(_wpos) in e for e in _ev) or _pp.protection == "",
+          f"lotto #{_wpos}")
+
+    # 5-year horizon: every club holds S+1..S+5, all tradeable, value
+    # discounts with distance.
+    _yrs = sorted(_worst.draft_picks.keys())
+    _exp = [_lg.season_year + 1 + i for i in range(5)]
+    check("f15b: picks exist 5 drafts out",
+          _yrs == _exp, str(_yrs))
+    _far = [p for p in _worst.get_picks_for_year(_exp[4])]
+    check("f15b: year+5 picks are tradeable, not dead paper",
+          len(_far) == 7 and all(p.can_be_traded() and not p.is_expired
+                                 for p in _far))
+    _other = _nhl[1]  # untouched club: owns its own 1sts
+    _v1 = next(p for p in _other.get_picks_for_year(_exp[0])
+               if p.round == 1).value
+    _v5 = next(p for p in _other.get_picks_for_year(_exp[4])
+               if p.round == 1).value
+    check("f15b: far-future 1st discounted vs near 1st",
+          _v5 < _v1, f"{_v1} vs {_v5}")
+
+    # Deferral rolls to year+4 when +1..+3 are gone.
+    _o2 = SimpleNamespace(team_name="ORIG2", draft_picks={})
+    _h2 = SimpleNamespace(team_name="HOLD2", draft_picks={})
+    _p2 = mkpick(2027, 1, "ORIG2", "HOLD2", prot="top-3", pid=701)
+    _o2.draft_picks = {2027: []}
+    for _yy, _pid in ((2028, 702), (2029, 703), (2030, 704), (2031, 705)):
+        _gone = "HOLD2" if _yy < 2031 else "ORIG2"  # +1..+3 traded away
+        _o2.draft_picks[_yy] = [mkpick(_yy, 1, "ORIG2", _gone, pid=_pid)]
+    _h2.draft_picks = {2027: [_p2]}
+    _flg = SimpleNamespace(
+        teams=[_o2, _h2],
+        standings={t.team_name: {"Points": 0} for t in [_o2, _h2]},
+        lottery_results={2027: [{"original_team": "ORIG2", "pick": 2}]},
+        PROTECTION_ZONES={"top-3": 3, "top-10": 10, "lottery": 16},
+        _protections_resolved=None)
+    _League.resolve_pick_protections(_flg, 2027)
+    check("f15b: deferral rolls forward to year+4",
+          _o2.draft_picks[2031][0].current_team == "HOLD2"
+          and _o2.draft_picks[2028][0].current_team == "HOLD2",
+          "2031->" + _o2.draft_picks[2031][0].current_team)
+except Exception as _e:  # pragma: no cover -- loud, not silent
+    check("f15b: integration setup", False, f"{type(_e).__name__}: {_e}")
+
 # --- F16: reacquire ban ------------------------------------------------------
 p = SimpleNamespace(retained_amount=5, retained_team_name="X",
                     retained_by=["X"],
