@@ -632,9 +632,11 @@ class DatabaseGenerator:
             PlayerPosition.GOALIE: max(2, int(target_size * 0.08)),
             PlayerPosition.LEFT_DEFENSE: max(3, int(target_size * 0.18)),
             PlayerPosition.RIGHT_DEFENSE: max(3, int(target_size * 0.18)),
+            # Four full forward lines need 4 of each: 12 forwards minimum.
+            # (Was 5C/3LW/3RW = 11, leaving F4_RW empty.)
             PlayerPosition.CENTER: max(4, int(target_size * 0.25)),
-            PlayerPosition.LEFT_WING: max(3, int(target_size * 0.15)),
-            PlayerPosition.RIGHT_WING: max(3, int(target_size * 0.16))
+            PlayerPosition.LEFT_WING: max(4, int(target_size * 0.15)),
+            PlayerPosition.RIGHT_WING: max(4, int(target_size * 0.16))
         }
         
         for position, count in positions_needed.items():

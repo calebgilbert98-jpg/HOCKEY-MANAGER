@@ -2631,6 +2631,43 @@ class GameSim:
     # Phase 1 shift engine: per-unit shift clocks, stamina-gated changes,
     # bench recovery, and shift/TOI accounting.
     # ------------------------------------------------------------------
+    def _flatten_nested_lineup(self, team, lineup):
+        """Flatten a nested-only lineup into flat keys. Returns True if a
+        usable nested lineup was found and flattened (preserving the user's
+        choices); False if there is nothing to flatten.
+        """
+        found = False
+        # Forwards: [['LW','C','RW'], ...] -> F1_LW..F4_RW
+        fw = lineup.get('Forwards')
+        if isinstance(fw, (list, tuple)) and fw:
+            for i, line in enumerate(fw[:4]):
+                if not isinstance(line, (list, tuple)):
+                    continue
+                for key, p in zip(('LW', 'C', 'RW'), line):
+                    if p is not None:
+                        lineup[f"F{i + 1}_{key}"] = p
+                        found = True
+        # Defense: [[L, R], ...] -> D1_L..D3_R
+        dp = lineup.get('Defense')
+        if isinstance(dp, (list, tuple)) and dp:
+            for i, pair in enumerate(dp[:3]):
+                if not isinstance(pair, (list, tuple)):
+                    continue
+                if len(pair) > 0 and pair[0] is not None:
+                    lineup[f"D{i + 1}_L"] = pair[0]
+                    found = True
+                if len(pair) > 1 and pair[1] is not None:
+                    lineup[f"D{i + 1}_R"] = pair[1]
+                    found = True
+        # Goalies: [G1, G2] -> G1, G2
+        gl = lineup.get('Goalies') or lineup.get('Goaltenders')
+        if isinstance(gl, (list, tuple)) and gl:
+            for i, g in enumerate(gl[:2]):
+                if g is not None:
+                    lineup[f"G{i + 1}"] = g
+                    found = True
+        return found
+
     def _ensure_default_lineup(self, team):
         """Dress best-available lines when a team arrives with no lineup.
 
@@ -2644,6 +2681,10 @@ class GameSim:
             team.lineup = lineup
         if any(k in lineup for k in ("F1_C", "D1_L", "G1")):
             return  # a real lineup is already dressed
+        # Nested-only editor/user lineup: flatten it into the flat keys
+        # instead of overwriting the user's choices.
+        if self._flatten_nested_lineup(team, lineup):
+            return
         roster = list(getattr(team, 'roster', []) or [])
 
         def by_pos(*pos_names):
