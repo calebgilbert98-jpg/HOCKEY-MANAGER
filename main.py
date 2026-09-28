@@ -2130,6 +2130,14 @@ class HockeyManagerGUI(tk.Tk):
                              to_team=claiming_team)
                 except Exception:
                     pass
+                # Dressing room: the room reacts to WHO arrives, bounded.
+                try:
+                    import dressing_room as _dr_arr
+                    _dr_arr.cascade_on_arrival(
+                        claiming_team, player, how="waiver claim",
+                        date_str=str(getattr(self, "current_date", "")))
+                except Exception:
+                    pass
                 
                 # Reset waiver status
                 player.on_waivers = False
@@ -6688,6 +6696,14 @@ class HockeyManagerGUI(tk.Tk):
                 _opt(_rivs, player, from_team=None, to_team=team)
         except Exception:
             pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="signing",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
         try:
             self.add_news(
                 f"{player.full_name} signed by {team.team_name}: "
@@ -6803,6 +6819,14 @@ class HockeyManagerGUI(tk.Tk):
             return False, "Not enough cap space to recall him."
         team.ahl_roster.remove(player)
         team.roster.append(player)
+        # Dressing room: first-time NHL arrival only (guarded inside).
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="callup",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
         try:
             self.add_news(f"{player.full_name} recalled by {team.team_name}.")
         except Exception:
@@ -6844,6 +6868,14 @@ class HockeyManagerGUI(tk.Tk):
             _rivs = getattr(getattr(self, "league", None), "rivalries", None)
             if isinstance(_rivs, list):
                 _opt(_rivs, player, from_team=original, to_team=team)
+        except Exception:
+            pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="waiver claim",
+                date_str=str(getattr(self, "current_date", "")))
         except Exception:
             pass
         try:
@@ -14583,6 +14615,16 @@ class HockeyManagerGUI(tk.Tk):
     def call_up_to_nhl(self, player):
         self.user_team.ahl_roster.remove(player)
         self.user_team.roster.append(player)
+        # Dressing room: a first-time NHL arrival shakes the room --
+        # the room reacts to WHO he is (blue-chip hype vs depth plug).
+        # Re-callups are guarded inside (first appearance per team only).
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                self.user_team, player, how="callup",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
         # Stamp the audition baseline: production from this point on is his
         # live NHL audition -- situational readiness reacts to it within days.
         try:
@@ -14894,6 +14936,15 @@ class HockeyManagerGUI(tk.Tk):
                 _rivs = getattr(getattr(self, "league", None), "rivalries", None)
                 if isinstance(_rivs, list):
                     _opt(_rivs, person, from_team=None, to_team=self.user_team)
+            except Exception:
+                pass
+            # Dressing room: a new face in the room -- the room reacts to
+            # WHO he is (blue-chip hype, veteran gravity), bounded.
+            try:
+                import dressing_room as _dr_arr
+                _dr_arr.cascade_on_arrival(
+                    self.user_team, person, how="signing",
+                    date_str=str(getattr(self, "current_date", "")))
             except Exception:
                 pass
         self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})

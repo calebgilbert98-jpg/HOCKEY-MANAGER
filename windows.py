@@ -1698,6 +1698,16 @@ class RosterView(ctk.CTkFrame):
         # Add to destination
         if to_roster == 'nhl':
             self.app.user_team.roster.append(player)
+            # Dressing room: a promotion into the NHL room -- the room
+            # reacts to WHO he is. First appearance per team only
+            # (guarded inside); shuffling a regular up and down is quiet.
+            try:
+                import dressing_room as _dr_arr
+                _dr_arr.cascade_on_arrival(
+                    self.app.user_team, player, how="callup",
+                    date_str=str(getattr(self.app, "current_date", "")))
+            except Exception:
+                pass
         elif to_roster == 'ahl':
             self.app.user_team.ahl_roster.append(player)
         else:

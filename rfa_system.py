@@ -971,6 +971,13 @@ def execute_offer_sheet(league, offering_team, original_team, player,
                                      to_team=offering_team)
     except Exception:
         pass
+    # Dressing room: poaching a man shakes the new room -- the room
+    # reacts to WHO he is, bounded.
+    try:
+        import dressing_room as _dr_arr
+        _dr_arr.cascade_on_arrival(offering_team, player, how="offer sheet")
+    except Exception:
+        pass
     return {"ok": True, "compensation": label, "picks": transferred,
             "story": story}
 

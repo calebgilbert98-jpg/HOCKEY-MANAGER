@@ -895,6 +895,13 @@ class AITeamManager:
                     _opt(_rivs, p, from_team=None, to_team=team)
             except Exception:
                 pass
+            # Dressing room: AI rooms react to WHO arrives, same as the
+            # user's room -- even playing field.
+            try:
+                import dressing_room as _dr_arr
+                _dr_arr.cascade_on_arrival(team, p, how="signing")
+            except Exception:
+                pass
             # Market feedback: Caleb's market engine learns from EVERY
             # signing, not just the user's. register_signing keeps only
             # true market-setters (star + top-5 AAV) as comps; those comps
