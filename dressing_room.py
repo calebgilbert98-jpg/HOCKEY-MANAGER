@@ -445,6 +445,37 @@ def cascade_on_press(team: Any, event: Any,
     return lines
 
 
+def auto_press_response(team: Any, event: Any) -> List[str]:
+    """AI press handling -- the same cascade a user's answers trigger.
+
+    The only difference is who picks the answer: a simple situational read
+    (room mood + a little noise) instead of a human at the podium. This is
+    the automation/sim difference the even-playing-field rule allows --
+    same mechanic, same magnitudes, no human in the loop.
+
+    A content room gets confident answers; a neutral room gets professional
+    ones; an unhappy room gets diplomatic/supportive spin, with the odd
+    dismissive brush-off or controversial slip, exactly as a human GM's
+    choices would land through cascade_on_press.
+    """
+    import random
+    mood = room_mood(team)
+    r = random.random()
+    if mood >= 60:
+        choice = ("confident" if r < 0.60
+                  else "supportive" if r < 0.85 else "professional")
+    elif mood >= 40:
+        choice = ("professional" if r < 0.50
+                  else "confident" if r < 0.75 else "diplomatic")
+    else:
+        choice = ("diplomatic" if r < 0.40
+                  else "supportive" if r < 0.70
+                  else "dismissive" if r < 0.90 else "controversial")
+    lines = cascade_on_press(team, event, choice)
+    _log(team, f"(Automated press answer: {choice}.)")
+    return lines
+
+
 # --------------------------------------------------------------------------
 # Team talks -> momentum
 # --------------------------------------------------------------------------

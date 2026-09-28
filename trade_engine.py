@@ -503,3 +503,25 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
                     pass
         except Exception:
             pass
+    # AI press parity (module 03): the user's press answers ripple through
+    # the user's room via media_system.handle_media_response. AI clubs get
+    # the same cascade with an automatically chosen answer -- the user's own
+    # team is excluded because the user answers for themselves. Fires once
+    # per side per trade, after the per-player cascades above.
+    try:
+        import dressing_room as _dr
+        moved_names = []
+        for a in list(user_assets) + list(partner_assets):
+            if isinstance(a, DraftPick):
+                continue
+            nm = getattr(a, "name", None) or getattr(a, "full_name", "")
+            if nm:
+                moved_names.append(str(nm))
+        if moved_names:
+            press_event = {"players_involved": moved_names, "trade": True}
+            for side in (user_team, partner_team):
+                if getattr(side, "is_user_team", False):
+                    continue
+                _dr.auto_press_response(side, press_event)
+    except Exception:
+        pass
