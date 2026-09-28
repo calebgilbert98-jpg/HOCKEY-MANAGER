@@ -208,15 +208,15 @@ items = view.canvas.find_all()
 n_windows = sum(1 for i in items if view.canvas.type(i) == "window")
 n_lines = sum(1 for i in items if view.canvas.type(i) == "line")
 check("15 series cards", n_windows == 15, str(n_windows))
-check("14 connectors", n_lines == 14, str(n_lines))
+check("14 connectors x 3 glow layers", n_lines == 42, str(n_lines))
 sr_text = view.canvas.gettags("all")
 check("scrollregion set", bool(view.canvas.cget("scrollregion")))
 # headers present
 texts = [view.canvas.itemcget(i, "text") for i in items
          if view.canvas.type(i) == "text"]
-check("no round headers (2K reference has none); Cup emblem drawn",
-      not any("ROUND 1" in t or "STANLEY CUP FINAL" in t for t in texts)
-      and any("STANLEY CUP" in t for t in texts),
+check("no round headers; single STANLEY CUP FINAL title",
+      not any("ROUND 1" in t or t == "PLAYOFFS" for t in texts)
+      and sum(1 for t in texts if t == "STANLEY CUP FINAL") == 1,
       str(texts[:4]))
 
 print("== G. projection rendering ==")

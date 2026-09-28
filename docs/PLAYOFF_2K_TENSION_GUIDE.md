@@ -206,3 +206,40 @@ rows carry real numbers (records, SV%, shutouts, top scorer), all four big-
 moment kinds fire, bad-blood storyline + grudge hype line render, players-to-
 watch rows populate. Screenshot: `~/workspace/ahl_shots/series_popup_full.png`
 (full stitched popup, header through Road ahead).
+
+## 8. Arena-render restyle (2026-09-28)
+
+Muck's reference: dark brushed-metal arena backdrop, neon-glow connectors,
+glassy dark cards with team-color glow. The series-insights popup is
+untouched.
+
+- `_bracket_bg_photo(w, h)`: PIL radial glow (`BRACKET_BG_GLOW` center ->
+  `BRACKET_BG_EDGE` edge) + faint vertical brushed streaks, rendered at
+  quarter res and upscaled, cached per quantized size. Drawn last in
+  `_display_bracket` with `tag_lower("bracket_bg")`. Canvas bg is now the
+  vignette edge so overshoot blends in.
+- `_series_card`: glassy `#12161F` body, border = top-seed team accent
+  (gold once decided), dark rows with a team-color accent bar, near-white
+  text, series-wins badge right-aligned on every card. Card stashes
+  `_bracket_accent` for the halo.
+- Connectors: same elbow path in 3 layers -- halo `#0E3A5C` (7px), neon
+  cyan `#2FB9E8` (3.5px), core `#C9F1FF` (1.5px), widths scaled by zoom.
+- Two-layer darkened-accent halo rectangles behind each card.
+- Single centered "STANLEY CUP FINAL" title above the Final (replaces the
+  trophy + STANLEY CUP / PLAYOFFS trio).
+- QA: `qa_playoff_2k.py` 47/47 (8 new restyle assertions), `qa_bracket_fit.py`
+  14/14, `qa_bracket_tree.py` 67/67. Screenshots
+  `~/workspace/ahl_shots/bracket_2k_{west,center,east}.png`.
+
+## 9. MP host-only gate + click warnings + fallback autosave (2026-09-28)
+
+- `_is_mp_client()` / `_mp_guard(action)`: in an MP session only the host
+  may Generate Bracket / Simulate Round / Simulate All Playoffs. Clients get
+  an in-game "Host only" notice and are blocked; the three buttons render
+  disabled for clients at build time, handlers re-check.
+- The click warning (`sim_progress.confirm_heavy_sim`) and the fallback
+  autosave (`sim_progress.create_fallback_save`, `saves/fallback/`) already
+  gated both sims and were verified intact -- the warning names the freeze
+  and the fallback save; the bulk/headless path skips the dialog by design.
+- QA: `qa_playoff_mpguard.py` 12/12 (client blocked x3, buttons disabled,
+  host + single-player pass through to the normal warning path).

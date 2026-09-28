@@ -1133,8 +1133,8 @@ class PlayoffView(ctk.CTkFrame):
     BRACKET_CARD_BG = "#12161F"   # glassy card body
     BRACKET_ROW_TEXT = "#F2F5F9"  # near-white row text
     BRACKET_CONN_HALO = "#0E3A5C"  # connector glow: outer halo
-    BRACKET_CONN_MID = "#2E7FBF"   # connector glow: mid
-    BRACKET_CONN_CORE = "#B9E6FF"  # connector glow: bright core
+    BRACKET_CONN_MID = "#2FB9E8"   # connector glow: neon cyan mid
+    BRACKET_CONN_CORE = "#C9F1FF"  # connector glow: bright core
 
     # Column definitions: (round_key, conference). West advances left->in,
     # East advances right->in, the Cup is decided in the middle -- the
@@ -1213,6 +1213,90 @@ class PlayoffView(ctk.CTkFrame):
             self._display_bracket()
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Reference restyle helpers (Muck's arena render)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _shade_color(hex_color, factor):
+        """Scale a #RRGGBB color toward black (factor < 1) or white
+        (factor > 1). Used for card glows and halos."""
+        try:
+            hx = str(hex_color).lstrip("#")
+            r, g, b = (int(hx[i:i + 2], 16) for i in (0, 2, 4))
+            if factor <= 1.0:
+                r, g, b = (int(c * factor) for c in (r, g, b))
+            else:
+                r, g, b = (int(c + (255 - c) * (factor - 1.0))
+                           for c in (r, g, b))
+            r = max(0, min(255, r))
+            g = max(0, min(255, g))
+            b = max(0, min(255, b))
+            return f"#{r:02X}{g:02X}{b:02X}"
+        except Exception:
+            return hex_color
+
+    def _bracket_bg_photo(self, w, h):
+        """Dark brushed-metal arena backdrop as a Tk photo image.
+
+        Radial glow (BRACKET_BG_GLOW) falling off to BRACKET_BG_EDGE, with
+        faint vertical brushed streaks. Rendered small and upscaled, cached
+        per quantized size so resizes don't thrash. Returns None on any
+        failure (callers fall back to the flat canvas bg).
+        """
+        try:
+            w, h = max(160, int(w)), max(90, int(h))
+        except Exception:
+            return None
+        qw, qh = max(120, w // 4), max(68, h // 4)
+        key = (qw, qh)
+        try:
+            cached = getattr(self, "_bracket_bg_cache", None)
+            if cached is not None and cached[0] == key:
+                return cached[1]
+        except Exception:
+            pass
+        try:
+            from PIL import Image, ImageDraw, ImageTk
+            import random
+
+            def _rgb(hx):
+                hx = str(hx).lstrip("#")
+                return tuple(int(hx[i:i + 2], 16) for i in (0, 2, 4))
+
+            er, eg, eb = _rgb(self.BRACKET_BG_EDGE)
+            gr, gg, gb = _rgb(self.BRACKET_BG_GLOW)
+            img = Image.new("RGB", (qw, qh), (er, eg, eb))
+            d = ImageDraw.Draw(img)
+            cx, cy = qw / 2.0, qh * 0.42
+            rx, ry = qw * 0.75, qh * 0.95
+            steps = 40
+            for i in range(steps, 0, -1):
+                t = i / float(steps)
+                k = (1.0 - t) ** 1.7
+                col = (int(er + (gr - er) * k),
+                       int(eg + (gg - eg) * k),
+                       int(eb + (gb - eb) * k))
+                d.ellipse([cx - rx * t, cy - ry * t,
+                           cx + rx * t, cy + ry * t], fill=col)
+            # Faint vertical brushed streaks on an overlay.
+            rnd = random.Random(11)
+            for _ in range(30):
+                x = rnd.randint(0, qw - 1)
+                shade = 6 if rnd.random() < 0.5 else -6
+                d.line([x, 0, x, qh],
+                       fill=(max(0, min(255, er + shade)),
+                             max(0, min(255, eg + shade)),
+                             max(0, min(255, eb + shade))))
+            img = img.resize((w, h), Image.BILINEAR)
+            photo = ImageTk.PhotoImage(img)
+            try:
+                self._bracket_bg_cache = (key, photo)
+            except Exception:
+                pass
+            return photo
+        except Exception:
+            return None
 
     @staticmethod
     def _series_conference(series):
@@ -1296,7 +1380,9 @@ class PlayoffView(ctk.CTkFrame):
         except Exception:
             return
         try:
-            canvas.configure(bg=self.BRACKET_NAVY)
+            # Near-black vignette edge: any canvas area beyond the brushed
+            # backdrop photo blends into the render instead of flat navy.
+            canvas.configure(bg=self.BRACKET_BG_EDGE)
         except Exception:
             pass
 
@@ -1426,7 +1512,28 @@ class PlayoffView(ctk.CTkFrame):
             except Exception:
                 pass
 
-        # --- white elbow connectors (West flows left->right, East right->left) ---
+        # --- team-color glow halos behind each card ---
+        try:
+            for k, c in cards.items():
+                accent = getattr(c["widget"], "_bracket_accent", None) \
+                    or self.BRACKET_CONN_MID
+                x, y = c["x"], c["y"]
+                ch = heights[k]
+                canvas.create_rectangle(
+                    x - 8, y - 8, x + card_w + 8, y + ch + 8,
+                    fill=self._shade_color(accent, 0.22), outline="",
+                    tags=("halo",))
+                canvas.create_rectangle(
+                    x - 4, y - 4, x + card_w + 4, y + ch + 4,
+                    fill=self._shade_color(accent, 0.40), outline="",
+                    tags=("halo",))
+            canvas.tag_lower("halo")
+        except Exception:
+            pass
+
+        # --- neon-glow elbow connectors (West flows left->right, East
+        # --- right->left): halo + mid + bright core over the same path.
+        glow_w = max(0.6, bs)
         for k, tkey in targets.items():
             if tkey not in cards:
                 continue
@@ -1441,12 +1548,15 @@ class PlayoffView(ctk.CTkFrame):
                 y1 = c["y"] + heights[k] / 2
                 y2 = t["y"] + heights[tkey] / 2
                 mx = (x1 + x2) / 2
-                canvas.create_line(x1, y1, mx, y1, mx, y2, x2, y2,
-                                   fill="#DCE3EB", width=2, smooth=False)
+                for lw, col in ((7 * glow_w, self.BRACKET_CONN_HALO),
+                                (3.5 * glow_w, self.BRACKET_CONN_MID),
+                                (1.5 * glow_w, self.BRACKET_CONN_CORE)):
+                    canvas.create_line(x1, y1, mx, y1, mx, y2, x2, y2,
+                                       fill=col, width=lw, smooth=False)
             except Exception:
                 pass
 
-        # --- Stanley Cup emblem above the Final ---
+        # --- Stanley Cup Final title above the Final card ---
         try:
             fam = self.app.FONT_FAMILY
             for k, c in cards.items():
@@ -1454,17 +1564,14 @@ class PlayoffView(ctk.CTkFrame):
                     continue
                 ex = c["x"] + card_w / 2
                 ey = max(c["y"] - 8, 96)
-                canvas.create_text(ex, ey - int(44 * bs), text="\U0001F3C6",
-                                   font=_cfont(fam, max(16, int(30 * bs)), ""),
+                canvas.create_text(ex, ey - int(52 * bs), text="\U0001F3C6",
+                                   font=_cfont(fam, max(12, int(20 * bs)), ""),
                                    anchor="s")
-                canvas.create_text(ex, ey - int(40 * bs), text="STANLEY CUP",
-                                   fill="#C9A227",
-                                   font=_cfont(fam, max(9, int(13 * bs)),
+                canvas.create_text(ex, ey - int(48 * bs),
+                                   text="STANLEY CUP FINAL",
+                                   fill="#F2F5F9",
+                                   font=_cfont(fam, max(10, int(15 * bs)),
                                               "bold"), anchor="n")
-                canvas.create_text(ex, ey - int(20 * bs), text="PLAYOFFS",
-                                   fill="#F2F2F2",
-                                   font=_cfont(fam, max(8, int(11 * bs)), ""),
-                                   anchor="n")
                 break
         except Exception:
             pass
@@ -1488,6 +1595,20 @@ class PlayoffView(ctk.CTkFrame):
 
         try:
             canvas.configure(scrollregion=canvas.bbox("all"))
+        except Exception:
+            pass
+
+        # --- brushed-metal arena backdrop, drawn last and lowered to the
+        # --- very bottom so cards, halos, and connectors sit on top of it.
+        try:
+            x1, y1, x2, y2 = canvas.bbox("all")
+            photo = self._bracket_bg_photo(int(x2 - x1), int(y2 - y1))
+            if photo is not None:
+                self._bracket_bg_image = photo  # keep a live reference
+                canvas.create_image(x1, y1, image=photo, anchor="nw",
+                                    tags=("bracket_bg",))
+                canvas.tag_lower("bracket_bg")
+                canvas.configure(scrollregion=canvas.bbox("all"))
         except Exception:
             pass
 
@@ -1555,12 +1676,16 @@ class PlayoffView(ctk.CTkFrame):
 
     def _series_card(self, series, projected=False, mirror=False,
                      width=None, scale=1.0):
-        """One 2K-style series card: two team-colored rows, the series-wins
-        badge at the outer edge (left for West, right for East). Higher
-        seed on top. Click opens the series detail.
+        """One arena-render series card: glassy dark body with a team-color
+        glow border, dark rows with a team-color accent bar, near-white
+        text, and the series-wins badge right-aligned on every card.
+        Higher seed on top. Click opens the series detail.
 
         width/scale come from the zoom-to-fit layout so the whole tree
         stays on screen; fonts and row heights shrink proportionally.
+
+        (mirror is kept for API compatibility; badges sit right on all
+        cards per the reference.)
         """
         try:
             import team_identity_system as _tid
@@ -1585,6 +1710,20 @@ class PlayoffView(ctk.CTkFrame):
         except Exception:
             pass
 
+        def _accent(tname):
+            accent, _hover, on_accent = "#2E7FBF", "#14293F", "#F2F5F9"
+            if _tid is not None:
+                try:
+                    accent, _hover, on_accent = _tid.accent_for_team(tname)
+                except Exception:
+                    pass
+            return accent, on_accent
+
+        top_accent, _ = _accent(getattr(order[0][0], 'team_name', ''))
+        card_border = gold if decided else top_accent
+        row_base = self._shade_color(self.BRACKET_CARD_BG, 1.18)
+        muted = "#8A94A3"
+
         # Tight card: exactly two rows + padding, no dead space below.
         row_h = max(26, int(40 * scale))
         card_h = 2 * row_h + 18  # top pad 6 + mid pad 6 + bottom pad 6
@@ -1592,9 +1731,9 @@ class PlayoffView(ctk.CTkFrame):
             card = ctk.CTkFrame(self.canvas, width=width or self.BRACKET_CARD_W,
                                 height=card_h,
                                 corner_radius=8,
-                                border_width=2 if decided else 1,
-                                border_color=gold if decided else "#2A3A52",
-                                fg_color="#0E1930")
+                                border_width=2,
+                                border_color=card_border,
+                                fg_color=self.BRACKET_CARD_BG)
         except Exception:
             card = ctk.CTkFrame(self.canvas, width=width or self.BRACKET_CARD_W,
                                 height=card_h)
@@ -1602,20 +1741,20 @@ class PlayoffView(ctk.CTkFrame):
             card.pack_propagate(False)
         except Exception:
             pass
+        # Stash the glow color for the canvas halo drawn behind the card.
+        try:
+            card._bracket_accent = top_accent
+        except Exception:
+            pass
 
+        bar_w = max(3, int(5 * scale))
         for idx, (team, wins) in enumerate(order):
             tname = getattr(team, 'team_name', '')
             is_winner = decided and winner_name == tname
             is_loser = decided and not is_winner
-            accent, hover, on_accent = "#1B3A5C", "#14293F", "#F2F2F2"
-            if _tid is not None:
-                try:
-                    accent, hover, on_accent = _tid.accent_for_team(tname)
-                except Exception:
-                    pass
-            row_bg = hover if is_loser else accent
+            accent, on_accent = _accent(tname)
             try:
-                row = ctk.CTkFrame(card, fg_color=row_bg, corner_radius=6,
+                row = ctk.CTkFrame(card, fg_color=row_base, corner_radius=6,
                                    height=row_h)
             except Exception:
                 row = ctk.CTkFrame(card, height=row_h)
@@ -1628,32 +1767,38 @@ class PlayoffView(ctk.CTkFrame):
                 row.pack_propagate(False)
             except Exception:
                 pass
+            # Team-color accent bar on the row's leading edge.
+            try:
+                bar = ctk.CTkFrame(row, fg_color=accent, width=bar_w,
+                                   corner_radius=0)
+                bar.pack(side="left", fill="y", padx=(0, 2))
+                bar.pack_propagate(False)
+            except Exception:
+                pass
             seed = getattr(team, 'standings_position', '')
             seed_txt = f"({seed}) " if seed else ""
             abbr = team_abbr(tname)
             winner_fg = self._winner_text_color(accent, on_accent, gold)
+            name_fg = winner_fg if is_winner else (
+                muted if is_loser else self.BRACKET_ROW_TEXT)
+            wins_fg = winner_fg if is_winner else self.BRACKET_ROW_TEXT
             try:
-                wins_lbl = ctk.CTkLabel(
-                    row, text=str(wins), anchor="center",
-                    font=_cfont(self.app.FONT_FAMILY, max(11, int(22 * scale)),
-                               "bold"),
-                    text_color=winner_fg if is_winner else on_accent)
                 name_lbl = ctk.CTkLabel(
                     row, text=f"{seed_txt}{abbr}", anchor="w",
                     font=_cfont(self.app.FONT_FAMILY, max(9, int(15 * scale)),
                                "bold"),
-                    text_color=winner_fg if is_winner else on_accent)
+                    text_color=name_fg)
+                wins_lbl = ctk.CTkLabel(
+                    row, text=str(wins), anchor="e",
+                    font=_cfont(self.app.FONT_FAMILY, max(11, int(22 * scale)),
+                               "bold"),
+                    text_color=wins_fg, width=max(20, int(34 * scale)))
             except Exception:
                 continue
             try:
-                if not mirror:
-                    # West: wins badge at the left (outer) edge.
-                    wins_lbl.pack(side="left", padx=(8, 2))
-                    name_lbl.pack(side="left", padx=(4, 0))
-                else:
-                    # East: wins badge at the right (outer) edge.
-                    wins_lbl.pack(side="right", padx=(2, 8))
-                    name_lbl.pack(side="left", padx=(10, 0))
+                # Badge right-aligned on every card, per the reference.
+                wins_lbl.pack(side="right", padx=(2, 8))
+                name_lbl.pack(side="left", padx=(6, 0))
             except Exception:
                 pass
 

@@ -234,8 +234,9 @@ time.sleep(0.6)
 root.update()
 
 canvas = view.canvas
-check("canvas navy background",
-      str(canvas.cget("bg")).upper() == "#0A1428", str(canvas.cget("bg")))
+check("canvas vignette-edge background",
+      str(canvas.cget("bg")).upper() == PlayoffView.BRACKET_BG_EDGE,
+      str(canvas.cget("bg")))
 items = canvas.find_all()
 check("canvas has drawn content", len(items) >= 30, str(len(items)))
 
@@ -256,6 +257,77 @@ check("no league gauge on bracket header",
 wins = [w for w in items if canvas.type(w) == "window"]
 check("16 series cards embedded", len(wins) == 15,
       str(len(wins)))  # 8 R1 + 4 R2 + 2 CF + 1 SCF = 15
+
+# ---- arena-render restyle assertions ----
+fills = set()
+for it in items:
+    try:
+        if canvas.type(it) == "line":
+            fills.add(str(canvas.itemcget(it, "fill")).upper())
+    except Exception:
+        pass
+for name, col in (("halo", PlayoffView.BRACKET_CONN_HALO),
+                  ("mid", PlayoffView.BRACKET_CONN_MID),
+                  ("core", PlayoffView.BRACKET_CONN_CORE)):
+    check(f"connector glow layer '{name}' drawn",
+          col.upper() in fills, str(sorted(fills))[:120])
+
+halos = [it for it in items
+         if "halo" in (canvas.gettags(it) or ())]
+check("team-color halos behind cards", len(halos) >= 15, str(len(halos)))
+
+bg_items = [it for it in items if "bracket_bg" in (canvas.gettags(it) or ())]
+check("brushed-metal backdrop image on canvas", len(bg_items) == 1,
+      str(len(bg_items)))
+try:
+    lowest = canvas.find_all()[0] if canvas.find_all() else None
+    check("backdrop is the bottom-most item",
+          lowest is not None and "bracket_bg" in (canvas.gettags(lowest) or ()))
+except Exception as e:
+    check("backdrop is the bottom-most item", False, str(e)[:60])
+
+title_txt = []
+for it in items:
+    try:
+        if canvas.type(it) == "text":
+            title_txt.append(str(canvas.itemcget(it, "text")))
+    except Exception:
+        pass
+check("single STANLEY CUP FINAL title",
+      sum(1 for t in title_txt if t == "STANLEY CUP FINAL") == 1,
+      str([t for t in title_txt if "CUP" in t.upper()])[:100])
+
+# card chrome: dark glassy body, team-glow border, right-aligned badges
+card_widgets = [canvas.itemcget(w, "window") for w in wins]
+restyle_ok = True
+restyle_why = ""
+try:
+    for wstr in card_widgets:
+        card = root.nametowidget(wstr)
+        bg = str(card.cget("fg_color")).upper()
+        bd = str(card.cget("border_color")).upper()
+        if bg != PlayoffView.BRACKET_CARD_BG.upper():
+            restyle_ok = False
+            restyle_why = f"card bg {bg}"
+            break
+        # every row packs its wins badge on the right
+        for row in card.winfo_children():
+            if row.winfo_class() != "CTkFrame" or not row.winfo_children():
+                continue
+            kids = row.winfo_children()
+            mgr = [(str(ch.winfo_manager()), ch) for ch in kids]
+            right = [ch for m, ch in mgr if m == "pack"
+                     and str(ch.pack_info().get("side")) == "right"]
+            if not right:
+                restyle_ok = False
+                restyle_why = "row without right-side badge"
+                break
+        if not restyle_ok:
+            break
+except Exception as e:
+    restyle_ok = False
+    restyle_why = str(e)[:80]
+check("cards: dark body + right-aligned wins badges", restyle_ok, restyle_why)
 
 from PIL import ImageGrab
 def shot(path, xfrac=None):
