@@ -10652,17 +10652,16 @@ class HockeyManagerGUI(tk.Tk):
             pass
 
     def _dispatch_scout_value_tips(self):
-        """Monthly pro-scout value tips: your scouts' eyes, not the answer key.
+        """Monthly pro-scout value tips -- for the USER and every AI GM.
 
-        Each Head Scout / Professional Scout on the user's staff may send
-        a tip about a player THEY believe is undervalued. Whether they're
-        right depends directly on their judging_player_ability -- elite
-        scouts spot real finds, bad scouts chase ghosts. The user still
-        has to verify against the numbers and work the trade themselves.
+        Even playing field: every team's Head Scout / Professional Scouts
+        file their reads on the 1st. The user gets tips in the news feed;
+        AI teams store theirs on the team object where their trade logic
+        reads them (see trade_engine.scout_adjusted_value).
 
-        This is what makes scout hiring a real decision and enables
-        different play styles: analytics GMs cross-check, trusting GMs
-        follow, skeptics ignore.
+        Whether a tip is RIGHT depends directly on that scout's
+        judging_player_ability -- elite scouts spot real value, bad scouts
+        chase ghosts. Same rules for silicon and flesh.
         """
         try:
             import analytics_scouting as scout_mod
@@ -10670,50 +10669,89 @@ class HockeyManagerGUI(tk.Tk):
         except ImportError:
             return
         try:
-            user_team = self.user_team
             league = self.league
             teams = list(getattr(league, "teams", []) or [])
-            if not teams or user_team is None:
+            if not teams:
                 return
-            # Pro scouts on staff
             try:
                 from game_classes import StaffRole
                 pro_roles = {StaffRole.HEAD_SCOUT, StaffRole.PROFESSIONAL_SCOUT}
             except Exception:
                 pro_roles = set()
-            staff = list(getattr(user_team, "staff", []) or [])
-            scouts = [s for s in staff
-                      if getattr(s, "role", None) in pro_roles] if pro_roles else []
-            if not scouts:
-                return
             all_players = []
             for t in teams:
                 all_players.extend(getattr(t, "roster", []) or [])
             if not all_players:
                 return
-            for s in scouts:
-                jpa = getattr(s, "judging_player_ability", 10) or 10
-                # Better scouts file tips more often (they watch more games
-                # and trust their eyes). Elite ~70%/week, poor ~20%/week.
-                tip_chance = 0.20 + 0.50 * (min(20, max(1, jpa)) - 1) / 19.0
-                if _r.random() > tip_chance:
+            user_team = getattr(self, "user_team", None)
+            user_name = getattr(user_team, "team_name", "") if user_team else ""
+            for team in teams:
+                tname = getattr(team, "team_name", "")
+                staff = list(getattr(team, "staff", []) or [])
+                scouts = [s for s in staff
+                          if getattr(s, "role", None) in pro_roles] if pro_roles else []
+                if not scouts:
                     continue
-                tips = scout_mod.scout_value_tips(
-                    s, all_players, teams, user_team=user_team, limit=2)
-                for tip in tips:
-                    sname = tip["scout"]
-                    tier = scout_mod.scout_ability_label(tip["scout_jpa"])
-                    story = (
-                        f"SCOUT TIP ({tier} -- {sname}): "
-                        f"take a look at {tip['name']} ({tip['team']}). "
-                        f"{tip['reason']} "
-                        f"[{tip['confidence']} confidence]")
-                    if tip["risks"]:
-                        story += f" Risk: {'; '.join(tip['risks'])}"
-                    try:
-                        self.add_news(story)
-                    except Exception:
-                        pass
+                is_user = (tname == user_name)
+                # Fresh sheet each month; stale tips don't linger.
+                if not is_user:
+                    team.scout_buy_tips = {}
+                    team.scout_sell_tips = {}
+                for s in scouts:
+                    jpa = getattr(s, "judging_player_ability", 10) or 10
+                    tip_chance = 0.20 + 0.50 * (min(20, max(1, jpa)) - 1) / 19.0
+                    if _r.random() > tip_chance:
+                        continue
+                    buy_tips = scout_mod.scout_value_tips(
+                        s, all_players, teams,
+                        user_team=team, limit=2)
+                    sell_tips = scout_mod.scout_sell_high_tips(
+                        s, team, limit=2)
+                    if is_user:
+                        for tip in buy_tips:
+                            tier = scout_mod.scout_ability_label(tip["scout_jpa"])
+                            story = (
+                                f"SCOUT TIP ({tier} -- {tip['scout']}): "
+                                f"take a look at {tip['name']} ({tip['team']}). "
+                                f"{tip['reason']} "
+                                f"[{tip['confidence']} confidence]")
+                            if tip["risks"]:
+                                story += f" Risk: {'; '.join(tip['risks'])}"
+                            try:
+                                self.add_news(story)
+                            except Exception:
+                                pass
+                        for tip in sell_tips:
+                            tier = scout_mod.scout_ability_label(tip["scout_jpa"])
+                            story = (
+                                f"SCOUT TIP ({tier} -- {tip['scout']}): "
+                                f"consider moving {tip['name']} while his value "
+                                f"is high. {tip['reason']} "
+                                f"[{tip['confidence']} confidence]")
+                            try:
+                                self.add_news(story)
+                            except Exception:
+                                pass
+                    else:
+                        # AI: file the tips where the trade engine reads them.
+                        bt = getattr(team, "scout_buy_tips", None)
+                        if bt is None:
+                            team.scout_buy_tips = bt = {}
+                        st = getattr(team, "scout_sell_tips", None)
+                        if st is None:
+                            team.scout_sell_tips = st = {}
+                        for tip in buy_tips:
+                            p = tip["player"]
+                            pid = getattr(p, "id", id(p))
+                            bt[pid] = {"jpa": tip["scout_jpa"],
+                                       "correct": tip["correct"],
+                                       "scout": tip["scout"]}
+                        for tip in sell_tips:
+                            p = tip["player"]
+                            pid = getattr(p, "id", id(p))
+                            st[pid] = {"jpa": tip["scout_jpa"],
+                                       "correct": tip["correct"],
+                                       "scout": tip["scout"]}
         except Exception:
             pass
 

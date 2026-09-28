@@ -152,5 +152,56 @@ hart = ar.hart_race([unlucky, fair], team_pct)
 check("hart prefers the producer on the contender",
       hart and hart[0]["player"].full_name == "Joe Fair")
 
+# --- AI parity ---------------------------------------------------------------
+import trade_engine as te
+
+
+def _mkai(name, jpa):
+    import game_classes as _g
+    return SimpleNamespace(
+        full_name=name, judging_player_ability=jpa,
+        judging_player_potential=12, role=_g.StaffRole.HEAD_SCOUT)
+
+
+ai_scout = _mkai("AI Scout", 18)
+ai_team = SimpleNamespace(team_name="AI Club", roster=[], staff=[ai_scout],
+                          scout_buy_tips={}, scout_sell_tips={})
+
+# scout_sell_high_tips runs on a team's own roster
+ai_team.roster = [mkskater("Veteran", "AI Club", 45, 30, 20, age=34)]
+sell_tips = scout.scout_sell_high_tips(ai_scout, ai_team, limit=2)
+check("sell-high tips run without error", isinstance(sell_tips, list))
+
+# Buy tip boosts perceived value; sell tip discounts it
+target = mkskater("Trade Target", "Other", 45, 30, 25, age=27)
+base_val = te.player_trade_value(target)
+ai_team.scout_buy_tips[getattr(target, "id", id(target))] = {
+    "jpa": 18, "correct": True, "scout": "AI Scout"}
+boosted = te.scout_adjusted_value(target, ai_team)
+check("AI values scout-tipped target higher", boosted > base_val)
+
+vet = ai_team.roster[0]
+vet_base = te.player_trade_value(vet)
+ai_team.scout_sell_tips[getattr(vet, "id", id(vet))] = {
+    "jpa": 18, "correct": True, "scout": "AI Scout"}
+discounted = te.scout_adjusted_value(vet, ai_team)
+check("AI discounts its own scout-flagged sell-high piece",
+      discounted < vet_base)
+
+# No tips -> base value untouched
+plain = mkskater("Plain Joe", "Other", 45, 20, 20, age=27)
+check("no tips means no adjustment",
+      te.scout_adjusted_value(plain, ai_team) == te.player_trade_value(plain))
+
+# Elite scout moves the needle more than a poor one
+ai_team.scout_buy_tips[getattr(plain, "id", id(plain))] = {
+    "jpa": 3, "correct": False, "scout": "Bad Scout"}
+plain_base = te.player_trade_value(plain)
+poor_boost = te.scout_adjusted_value(plain, ai_team)
+elite_edge = (boosted - base_val) / base_val
+poor_edge = (poor_boost - plain_base) / plain_base
+check("elite scout's read moves value more than poor scout's",
+      elite_edge > poor_edge)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

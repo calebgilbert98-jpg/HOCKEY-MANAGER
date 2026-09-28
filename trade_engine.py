@@ -137,6 +137,42 @@ class TradeEvaluation:
     partner_cap_ok: bool = True
 
 
+def scout_adjusted_value(player, team) -> int:
+    """Trade value through a team's scouts' eyes (AI parity with the user).
+
+    The user reads scout tips in the news feed and adjusts their own
+    valuation by hand. AI GMs get the same ability mechanically:
+    - A scout buy-tip on an incoming target: the AI sees the hidden
+      value and prices him closer to it (won't sell low on a find they
+      spotted, will pay up for one).
+    - A scout sell-tip on one of their own: the AI sees regression
+      coming and shops him while the league still sees surface stats.
+
+    The edge scales with the scout's JPA -- an elite scout's read moves
+    the needle more than a guess from a bad one. Bad scouts' ghost tips
+    can mislead the AI exactly like they mislead a trusting human GM.
+    """
+    base = player_trade_value(player)
+    try:
+        pid = getattr(player, "id", id(player))
+        buy_tips = getattr(team, "scout_buy_tips", None) or {}
+        sell_tips = getattr(team, "scout_sell_tips", None) or {}
+        tip = buy_tips.get(pid)
+        if tip is not None:
+            jpa = tip.get("jpa", 10)
+            # Elite eye: +25%; good: +15%; average: +8%; poor: +4%
+            edge = 0.04 + 0.21 * (min(20, max(1, jpa)) - 1) / 19.0
+            return int(base * (1.0 + edge))
+        tip = sell_tips.get(pid)
+        if tip is not None:
+            jpa = tip.get("jpa", 10)
+            edge = 0.04 + 0.16 * (min(20, max(1, jpa)) - 1) / 19.0
+            return int(base * (1.0 - edge))
+    except Exception:
+        pass
+    return base
+
+
 def evaluate_trade(user_assets, partner_assets,
                    user_team=None, partner_team=None) -> TradeEvaluation:
     user_value = sum(asset_value(a) for a in user_assets)
@@ -196,6 +232,25 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     from game_classes import DraftPick
     ev = evaluate_trade(user_assets, partner_assets)
 
+    # Scout-adjusted valuation: the AI GM sees tipped players through
+    # their scouts' eyes, exactly like a human reading the news feed.
+    # A buy-tip on an incoming target raises what the AI thinks he's
+    # worth (they won't give him up cheap / will pay for hidden value);
+    # a sell-tip on their own outgoing piece lowers it (happy to move
+    # a regression candidate at surface price).
+    try:
+        adj_incoming = sum(
+            scout_adjusted_value(a, partner_team) if not _is_pick(a)
+            else asset_value(a) for a in user_assets)
+        adj_outgoing = sum(
+            scout_adjusted_value(a, partner_team) if not _is_pick(a)
+            else asset_value(a) for a in partner_assets)
+        _scout_ratio = (adj_incoming / adj_outgoing) if adj_outgoing else 0.0
+        # Blend: scouts inform but don't override the base valuation.
+        ratio = 0.5 * ev.ratio + 0.5 * _scout_ratio
+    except Exception:
+        ratio = ev.ratio
+
     if not user_assets or not partner_assets:
         return AIResponse('reject', "There's nothing on the table yet.")
 
@@ -204,7 +259,7 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         return AIResponse('reject',
                           f"We can't make the money work under the cap.")
 
-    ratio = ev.ratio  # value AI receives / value AI gives
+    # (ratio already scout-blended above)
     needs = team_needs(partner_team)
     # AI likes getting help at weak positions
     need_bonus = 0.0

@@ -616,3 +616,57 @@ def scout_ability_label(jpa: int) -> str:
     if jpa >= 6:
         return "Average eye"
     return "Poor eye"
+
+
+def scout_sell_high_tips(scout: Any, team: Any,
+                         limit: int = 2, rng=None) -> List[Dict[str, Any]]:
+    """A scout's sell-high reads on their OWN team's roster.
+
+    The mirror of scout_value_tips: who does the scout believe is
+    overvalued and should be moved while the league still sees the
+    surface production? Same perception filter -- good scouts name real
+    regression candidates; bad scouts want to dump the wrong guys.
+
+    AI GMs use this to shop veterans at peak value, exactly like a
+    human GM would after reading the same numbers.
+    """
+    import random as _r
+    rng = rng or _r
+    jpa = _scout_jpa(scout)
+    sname = getattr(scout, "full_name", getattr(scout, "name", "Your scout"))
+    roster = list(getattr(team, "roster", []) or [])
+    truth = find_sell_high(roster, limit=20)
+    truth_ids = {id(c["player"]) for c in truth}
+
+    tips: List[Dict[str, Any]] = []
+    for c in truth:
+        if len(tips) >= limit:
+            break
+        if rng.random() < _detect_chance(jpa, c["value_score"]):
+            tips.append({
+                "player": c["player"],
+                "name": c["name"],
+                "scout": sname,
+                "scout_jpa": jpa,
+                "correct": True,
+                "reason": c["signals"][0] if c["signals"] else "Selling high window",
+                "confidence": "High" if jpa >= 16 else "Medium" if jpa >= 11 else "Low",
+            })
+    # Bad scouts want to sell the wrong guys (ghost sell tips).
+    if len(tips) < limit and rng.random() < _false_positive_chance(jpa):
+        candidates = [p for p in roster
+                      if id(p) not in truth_ids and _gp(p) >= 20
+                      and not _is_goalie(p)]
+        if candidates:
+            ghost = rng.choice(candidates)
+            gname = getattr(ghost, "full_name", getattr(ghost, "name", "?"))
+            tips.append({
+                "player": ghost,
+                "name": gname,
+                "scout": sname,
+                "scout_jpa": jpa,
+                "correct": False,
+                "reason": "I think we've seen his best hockey",
+                "confidence": "Low",
+            })
+    return tips[:limit]
