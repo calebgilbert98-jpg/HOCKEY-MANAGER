@@ -3497,7 +3497,9 @@ class League:
     # SCHEDULE_CACHE_VERSION whenever the scheduling algorithm changes so
     # stale templates are never served.
     # ------------------------------------------------------------------
-    SCHEDULE_CACHE_VERSION = 1
+    # v2: template entries carry the preseason flag (6-tuples). v1 caches
+    # predate preseason games and are ignored.
+    SCHEDULE_CACHE_VERSION = 2
     SCHEDULE_CACHE_DIR = _os.path.join("saves", "schedule_cache")
 
     def _schedule_cache_path(self, season_year, seed):
@@ -3539,7 +3541,8 @@ class League:
                     'G',
                     d.isoformat() if hasattr(d, 'isoformat') else str(d),
                     home.team_name, away.team_name,
-                    entry.get('league', '')))
+                    entry.get('league', ''),
+                    bool(entry.get('preseason', False))))
             elif isinstance(entry, (tuple, list)) and len(entry) >= 3:
                 d = entry[0]
                 template.append((
@@ -3569,12 +3572,18 @@ class League:
                 kind = item[0]
                 game_date = date.fromisoformat(item[1])
                 if kind == 'G':
-                    _, _, home_name, away_name, league = item
+                    # v2 entries carry the preseason flag (6-tuple); v1
+                    # entries (5-tuple) predate preseason games.
+                    preseason = bool(item[5]) if len(item) > 5 else False
+                    _, _, home_name, away_name, league = item[:5]
                     home, away = by_name.get(home_name), by_name.get(away_name)
                     if home is None or away is None:
                         return False  # structure changed
-                    rebuilt.append({'date': game_date, 'home_team': home,
-                                    'away_team': away, 'league': league})
+                    _g = {'date': game_date, 'home_team': home,
+                          'away_team': away, 'league': league}
+                    if preseason:
+                        _g['preseason'] = True
+                    rebuilt.append(_g)
                 elif kind == 'E':
                     _, _, event_kind, payload = item
                     rebuilt.append((game_date, event_kind, payload))
@@ -3582,10 +3591,12 @@ class League:
                     return False
         except (ValueError, IndexError, TypeError):
             return False
-        # Light validation: every NHL team must have exactly 82 games.
+        # Light validation: every NHL team must have exactly 82
+        # regular-season games (preseason exhibitions don't count).
         counts = {}
         for e in rebuilt:
-            if isinstance(e, dict) and e.get('league') == 'NHL':
+            if (isinstance(e, dict) and e.get('league') == 'NHL'
+                    and not e.get('preseason')):
                 for side in ('home_team', 'away_team'):
                     name = e[side].team_name
                     counts[name] = counts.get(name, 0) + 1
@@ -3661,6 +3672,14 @@ class League:
             print(f"Generating schedule for {league_name} ({len(league_teams)} teams)")
             if league_name == "National Hockey League":
                 self._generate_authentic_nhl_schedule(league_teams, season_year, rotation_seed)
+                # Preseason: every NHL club plays 6 exhibitions (3H/3A)
+                # across late September, like the real league. Runs after
+                # the regular-season solver so dates never collide.
+                try:
+                    self._generate_preseason_schedule(league_teams, season_year,
+                                                      rotation_seed)
+                except Exception as _e:
+                    print(f"⚠️ Preseason generation skipped: {_e}")
             else:
                 self._generate_other_league_schedule(league_teams, league_name)
         
@@ -3700,6 +3719,163 @@ class League:
         # Add NHL special events (All-Star, Trade Deadline, Draft, etc.)
         calendar_data = self._create_authentic_nhl_calendar(season_year)
         self._add_nhl_special_events(calendar_data['events'], season_year)
+
+    def _generate_preseason_schedule(self, nhl_teams, season_year,
+                                     rotation_seed=None):
+        """NHL preseason: 6 exhibitions per club (3 home / 3 away), played
+        across late September into early October, before the Oct 8 opener --
+        like the real league. Entries carry ``preseason: True`` so the
+        daily sim quick-sims them without touching standings, season
+        stats, career GP, board/morale, or milestones.
+
+        Pairing shape mirrors real preseason travel: 2 intra-division
+        rounds, 2 intra-conference rounds, 2 league-wide rounds (circle
+        method, so every club gets exactly 6 games; rematches across
+        rounds are possible, like real September home-and-homes).
+        """
+        from datetime import date as _date, time as _time, timedelta as _td
+        teams = [t for t in nhl_teams
+                 if getattr(t, 'league_name', 'National Hockey League')
+                 == 'National Hockey League']
+        if len(teams) != 32:
+            print(f"⚠️ Preseason: expected 32 NHL teams, got {len(teams)}")
+            return
+
+        rng = random.Random((rotation_seed or season_year) * 7919 + 13)
+
+        def circle_round(group, rnd):
+            """One round-robin round (circle method) for an even group."""
+            n = len(group)
+            order = list(group)
+            if n % 2:
+                order.append(None)
+                n += 1
+            fixed, rest = order[0], order[1:]
+            k = rnd % (n - 1) if n > 1 else 0
+            rot = list(rest) if k == 0 else rest[-k:] + rest[:-k]
+            ring = [fixed] + rot
+            pairs = []
+            for i in range(n // 2):
+                a, b = ring[i], ring[n - 1 - i]
+                if a is not None and b is not None:
+                    pairs.append((a, b))
+            return pairs
+
+        divisions = {}
+        for t in teams:
+            divisions.setdefault(getattr(t, 'division', '?'), []).append(t)
+        conferences = {}
+        for t in teams:
+            conferences.setdefault(getattr(t, 'conference', '?'), []).append(t)
+
+        pair_rounds = []  # 6 rounds x 16 pairings
+        # Rounds 1-2: intra-division (regional, like real September hockey).
+        for div_teams in divisions.values():
+            grp = sorted(div_teams, key=lambda t: t.team_name)
+            rng.shuffle(grp)
+            for rnd in range(2):
+                pair_rounds.append(circle_round(grp, rnd))
+        # Rounds 3-4: intra-conference cross-division.
+        for conf_teams in conferences.values():
+            grp = sorted(conf_teams, key=lambda t: t.team_name)
+            rng.shuffle(grp)
+            for rnd in range(2):
+                pair_rounds.append(circle_round(grp, rnd))
+        # Rounds 5-6: league-wide.
+        grp = sorted(teams, key=lambda t: t.team_name)
+        rng.shuffle(grp)
+        for rnd in range(2):
+            pair_rounds.append(circle_round(grp, rnd))
+
+        # Balance home/away to 3 and 3 per club.
+        home_count = {t.team_name: 0 for t in teams}
+        games_count = {t.team_name: 0 for t in teams}
+        fixtures = []  # (team_a, team_b, home_team)
+        for ridx, pairs in enumerate(pair_rounds):
+            for a, b in pairs:
+                if home_count[a.team_name] < home_count[b.team_name]:
+                    home = a
+                elif home_count[b.team_name] < home_count[a.team_name]:
+                    home = b
+                else:
+                    home = a if (ridx % 2 == 0) else b
+                fixtures.append((a, b, home))
+                home_count[home.team_name] += 1
+                games_count[a.team_name] += 1
+                games_count[b.team_name] += 1
+
+        # Repair pass: flip venues until every club is exactly 3H/3A.
+        # (Total homes == 3 x clubs, so overs and unders always pair up.)
+        for _pass in range(8):
+            over = [t for t in teams if home_count[t.team_name] > 3]
+            under = {t.team_name for t in teams
+                     if home_count[t.team_name] < 3}
+            if not over or not under:
+                break
+            moved = False
+            for i, (a, b, home) in enumerate(fixtures):
+                if home.team_name in under:
+                    continue
+                away = b if home is a else a
+                if (home.team_name in {t.team_name for t in over}
+                        and away.team_name in under):
+                    fixtures[i] = (a, b, away)
+                    home_count[home.team_name] -= 1
+                    home_count[away.team_name] += 1
+                    moved = True
+                    break
+            if not moved:
+                break
+
+        # Dates: Sep 22 -> Oct 5 (opener is Oct 8), max 8 games/day,
+        # never two games in one day for the same club.
+        start = _date(season_year, 9, 22)
+        end = _date(season_year, 10, 5)
+        overflow_end = _date(season_year, 10, 7)
+        all_dates = []
+        _d = start
+        while _d <= overflow_end:
+            all_dates.append(_d)
+            _d += _td(days=1)
+        busy = {t.team_name: set() for t in teams}
+        daily = {}
+        entries = []
+        for a, b, home in fixtures:
+            away = b if home is a else a
+            placed = False
+            # all_dates is chronological (window first, Oct 6-7 overflow
+            # last), so the first fitting date is always preferred.
+            for d in all_dates:
+                if d in busy[a.team_name] or d in busy[b.team_name]:
+                    continue
+                if daily.get(d, 0) >= 8:
+                    continue
+                entries.append({
+                    'date': d,
+                    'home_team': home,
+                    'away_team': away,
+                    'time': _time(19, 0),
+                    'league': 'NHL',
+                    'preseason': True,
+                })
+                busy[a.team_name].add(d)
+                busy[b.team_name].add(d)
+                daily[d] = daily.get(d, 0) + 1
+                placed = True
+                break
+            if not placed:
+                print(f"⚠️ Preseason: could not place "
+                      f"{a.team_name} vs {b.team_name}")
+
+        # Sanity: every club exactly 6 games; home split 2-4 (the real
+        # league doesn't play perfectly even September slates either).
+        bad = [t.team_name for t in teams
+               if games_count.get(t.team_name, 0) != 6
+               or not 2 <= home_count.get(t.team_name, 0) <= 4]
+        self.schedule.extend(entries)
+        print(f"🏒 Preseason: {len(entries)} exhibitions scheduled "
+              f"({start.isoformat()} -> {end.isoformat()})"
+              + (f" -- ⚠️ imbalance: {bad}" if bad else ""))
 
     def _create_all_nhl_matchups(self, nhl_teams):
         """Create all required NHL matchups in a simple way - exactly 82 games per team."""
@@ -4994,6 +5170,9 @@ class League:
         special_events = []
         
         for game_item in self.schedule:
+            # Preseason exhibitions never count toward the 82-game slate.
+            if isinstance(game_item, dict) and game_item.get('preseason'):
+                continue
             # Handle both dictionary and tuple formats
             if isinstance(game_item, dict):
                 # Check if it's an NHL game
@@ -5048,6 +5227,10 @@ class League:
         print(f"   Total teams: {total_teams}")
         print(f"   Teams with 82 games: {teams_with_82}")
         print(f"   Total NHL games: {len(nhl_games)}")
+        _preseason_n = sum(
+            1 for g in self.schedule
+            if isinstance(g, dict) and g.get('preseason'))
+        print(f"   Preseason exhibitions: {_preseason_n}")
         print(f"   Special events: {len(special_events)}")
         
         if teams_with_82 == total_teams and len(nhl_games) == 1312:  # 32 teams * 82 games / 2

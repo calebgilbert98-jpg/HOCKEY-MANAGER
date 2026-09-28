@@ -5047,7 +5047,8 @@ class HockeyManagerGUI(tk.Tk):
                 if game_date is None or home == 'NHL_EVENT':
                     continue
                 if self.user_team in (home, away):
-                    user_games.append((game_date, home, away))
+                    user_games.append((game_date, home, away,
+                                       bool(isinstance(item, dict) and item.get('preseason'))))
             
             # Sort by date
             user_games.sort(key=lambda x: x[0])
@@ -5057,10 +5058,12 @@ class HockeyManagerGUI(tk.Tk):
             future_games = [g for g in user_games if g[0] >= self.current_date][:5]
             
             # Add past games
-            for game_date, home, away in past_games:
+            for game_date, home, away, is_pre in past_games:
                 opponent = away if self.user_team == home else home
                 location = "vs" if self.user_team == home else "@"
                 result = "W 3-2"  # Placeholder result
+                if is_pre:
+                    result += " (Pre)"
                 
                 self.schedule_tree.insert('', 'end', values=(
                     game_date.strftime("%m/%d"),
@@ -5070,7 +5073,7 @@ class HockeyManagerGUI(tk.Tk):
                 ))
             
             # Add future games
-            for game_date, home, away in future_games:
+            for game_date, home, away, is_pre in future_games:
                 opponent = away if self.user_team == home else home
                 location = "vs" if self.user_team == home else "@"
                 
@@ -5078,7 +5081,7 @@ class HockeyManagerGUI(tk.Tk):
                     game_date.strftime("%m/%d"),
                     opponent.team_name,
                     location,
-                    "—"
+                    "Pre" if is_pre else "—"
                 ))
                 
     def update_enhanced_standings_panel(self):
@@ -5967,7 +5970,13 @@ class HockeyManagerGUI(tk.Tk):
             # Game-day inbox bundle: pre-match presser + team talk +
             # Watch/Quick choice as one interactive inbox message instead
             # of modals. When it opens, the day waits for the user's pick.
-            if not _resuming_after_bundle and self._maybe_open_game_day_bundle(todays_games):
+            # Preseason exhibitions skip the bundle -- they're quick-simmed
+            # quietly, like the real league treats September hockey.
+            _all_preseason = bool(todays_games) and all(
+                isinstance(g, dict) and g.get('preseason')
+                for g in todays_games)
+            if (not _resuming_after_bundle and not _all_preseason
+                    and self._maybe_open_game_day_bundle(todays_games)):
                 return
 
             self._set_continue_feedback(True, "Simulating games...")
@@ -5978,7 +5987,10 @@ class HockeyManagerGUI(tk.Tk):
                 if hasattr(self, '_strength_cache'):
                     self._strength_cache.clear()
                 # Milestone watches: one scan per day, pre-game presentation.
-                self._milestone_pregame(todays_games)
+                # Preseason exhibitions don't count toward career milestones.
+                self._milestone_pregame(
+                    [g for g in todays_games
+                     if not (isinstance(g, dict) and g.get('preseason'))])
                 self._process_todays_games(todays_games)
             
             self._set_continue_feedback(True, "Updating injuries...")
@@ -9500,6 +9512,10 @@ class HockeyManagerGUI(tk.Tk):
                     continue  # Skip malformed games silently
             except (IndexError, KeyError, ValueError):
                 continue  # Skip errors silently
+
+            # Preseason exhibitions: quick-simmed quietly -- no viewer, no
+            # team talk, no lore, no board/morale, no stats, no standings.
+            is_preseason = isinstance(game, dict) and bool(game.get('preseason'))
             
             # How should this user game be presented? Quick sim, watch live,
             # or ask the GM each game day. Never ask during bulk sims.
@@ -9522,6 +9538,9 @@ class HockeyManagerGUI(tk.Tk):
             elif mode == 'ask':
                 use_game_viewer = self._ask_game_mode_dialog(home_team, away_team) == 'watch'
             else:
+                use_game_viewer = False
+            if is_preseason:
+                # September hockey is never appointment viewing.
                 use_game_viewer = False
             
             # Legacy events: Winter Classic / Stadium Series. The stamp rides
@@ -9567,6 +9586,8 @@ class HockeyManagerGUI(tk.Tk):
                 opponent = away_team if home_team == self.user_team else home_team
                 if _bundle_active:
                     talk_boost = _bundle_talk_boost
+                elif is_preseason:
+                    talk_boost = 1.0  # no dressing-room speeches in September
                 else:
                     talk_boost = self._career_team_talk(opponent)
                 # Adaptive Rivals: AI scouts the user (quick sim)
@@ -9582,46 +9603,50 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
                 # Standard full simulation for user games
-                # Narrative ledger: grudge-week presentation. One dict lookup
-                # per game; the inbox card only fires for the user's games or
-                # genuine league-wide feuds (weight >= 60) so it never spams.
-                try:
-                    from narrative_ledger import (get_ledger, interpret,
-                                                  incident_short)
-                    from headlines import deliver_spec as _deliver_spec
-                    _led = get_ledger(self)
-                    _cand = _led.callback_candidate(home_team.team_name,
+                # Standard full simulation for user games
+                # Narrative ledger: grudge-week presentation. (Skipped for
+                # preseason -- exhibitions build no lore.)
+                if not is_preseason:
+                    # Narrative ledger: grudge-week presentation. One dict lookup
+                    # per game; the inbox card only fires for the user's games or
+                    # genuine league-wide feuds (weight >= 60) so it never spams.
+                    try:
+                        from narrative_ledger import (get_ledger, interpret,
+                                                      incident_short)
+                        from headlines import deliver_spec as _deliver_spec
+                        _led = get_ledger(self)
+                        _cand = _led.callback_candidate(home_team.team_name,
+                                                        away_team.team_name)
+                        if _cand is not None:
+                            _uname = getattr(getattr(self, "user_team", None),
+                                             "team_name", "")
+                            _uinvolved = _uname in (home_team.team_name,
                                                     away_team.team_name)
-                    if _cand is not None:
-                        _uname = getattr(getattr(self, "user_team", None),
-                                         "team_name", "")
-                        _uinvolved = _uname in (home_team.team_name,
-                                                away_team.team_name)
-                        if _uinvolved or _cand.get("weight", 0) >= 60:
-                            _facts = _cand.get("facts") or {}
-                            _home = home_team.team_name
-                            _spec = {
-                                "kind": "grudge_callback",
-                                "home": _home,
-                                "away": away_team.team_name,
-                                "short": incident_short(_facts),
-                                "first_meeting": not _cand.get("ref_count"),
-                                "room_line":
-                                    interpret(_cand, "room", _home) or "",
-                                "fans_line":
-                                    interpret(_cand, "fans", _home) or "",
-                                "media_line":
-                                    interpret(_cand, "media", _home) or "",
-                                "league_line":
-                                    interpret(_cand, "league", _home) or "",
-                                "involved": (home_team.team_name,
-                                             away_team.team_name),
-                            }
-                            if _deliver_spec(self, _spec):
-                                _led.mark_referenced(_cand["id"])
-                except Exception:
-                    pass
-                self._grudge_week_market(game_date, home_team, away_team)
+                            if _uinvolved or _cand.get("weight", 0) >= 60:
+                                _facts = _cand.get("facts") or {}
+                                _home = home_team.team_name
+                                _spec = {
+                                    "kind": "grudge_callback",
+                                    "home": _home,
+                                    "away": away_team.team_name,
+                                    "short": incident_short(_facts),
+                                    "first_meeting": not _cand.get("ref_count"),
+                                    "room_line":
+                                        interpret(_cand, "room", _home) or "",
+                                    "fans_line":
+                                        interpret(_cand, "fans", _home) or "",
+                                    "media_line":
+                                        interpret(_cand, "media", _home) or "",
+                                    "league_line":
+                                        interpret(_cand, "league", _home) or "",
+                                    "involved": (home_team.team_name,
+                                                 away_team.team_name),
+                                }
+                                if _deliver_spec(self, _spec):
+                                    _led.mark_referenced(_cand["id"])
+                    except Exception:
+                        pass
+                    self._grudge_week_market(game_date, home_team, away_team)
                 sim_engine = AdvancedGameSim(
                     home_team, away_team,
                     atmosphere=_pregame_atmosphere(
@@ -9641,29 +9666,33 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
                 winner, loser, scores, events, notable_events = sim_engine.run()
-                # Career service time (waiver-exemption input).
+                # Career service time (waiver-exemption input). Preseason
+                # exhibitions don't count toward the 160-game threshold.
                 try:
-                    self._credit_nhl_games_played(home_team, away_team)
+                    self._credit_nhl_games_played(home_team, away_team,
+                                                  preseason=is_preseason)
                 except Exception:
                     pass
                 # Narrative: the quick-sim never modeled fights/brawls, so
                 # roll them post-game through the shared incident module
                 # (same dice GameSim uses live); record the night's stories
                 # for both engines. Headlines for the user's game only.
-                try:
-                    _nwent_ot = any(
-                        isinstance(_e, dict) and _e.get('period', 0) > 3
-                        for _e in (notable_events or []))
-                    _nshootout = any(
-                        isinstance(_e, dict) and _e.get('event') == 'Shootout Goal'
-                        for _e in (notable_events or []))
-                    self._narrative_postgame(
-                        sim_engine, home_team, away_team, scores,
-                        went_ot=_nwent_ot, shootout=_nshootout,
-                        roll_incidents=True, deliver_headlines=True,
-                        game_date=game_date)
-                except Exception:
-                    pass
+                # Skipped for preseason -- exhibitions build no lore.
+                if not is_preseason:
+                    try:
+                        _nwent_ot = any(
+                            isinstance(_e, dict) and _e.get('period', 0) > 3
+                            for _e in (notable_events or []))
+                        _nshootout = any(
+                            isinstance(_e, dict) and _e.get('event') == 'Shootout Goal'
+                            for _e in (notable_events or []))
+                        self._narrative_postgame(
+                            sim_engine, home_team, away_team, scores,
+                            went_ot=_nwent_ot, shootout=_nshootout,
+                            roll_incidents=True, deliver_headlines=True,
+                            game_date=game_date)
+                    except Exception:
+                        pass
                 # Revert AI tactics + file tactical intel on the user's systems
                 if _qs_adapted is not None:
                     try:
@@ -9687,18 +9716,23 @@ class HockeyManagerGUI(tk.Tk):
                                                   _ushots or None, None)
                     except Exception:
                         pass
-                # AdvancedGameSim does not touch player season stats.
-                stats_from_events = True
+                # AdvancedGameSim does not touch player season stats --
+                # except in preseason, where nobody's stats count.
+                stats_from_events = not is_preseason
 
             # Update league standings and store game result for user team games
+            # (preseason: stored for viewing, standings untouched).
             self._process_single_game_result(game_date, home_team, away_team, winner, loser, scores, events, notable_events, sim_engine,
-                                             stats_from_events=stats_from_events)
+                                             stats_from_events=stats_from_events,
+                                             preseason=is_preseason)
             # Lore: deliver headlines from the watched game (line brawl, ...).
-            try:
-                import headlines
-                headlines.drain_sim_headlines(self, sim_engine)
-            except Exception:
-                pass
+            # Preseason: no lore, no media circus, no board/morale fallout.
+            if not is_preseason:
+                try:
+                    import headlines
+                    headlines.drain_sim_headlines(self, sim_engine)
+                except Exception:
+                    pass
             # Legacy events: permanent season memory for outdoor games.
             if locals().get("_outdoor_info") is not None:
                 try:
@@ -9708,40 +9742,48 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
             # Media engine: post-game interviews, narratives, fines, beefs.
-            try:
-                import media_engine
-                _mev = media_engine.cover_game(
-                    getattr(self, 'league', None), home_team, away_team,
-                    winner, loser, scores, went_ot, game_date)
-                media_engine.route_events(self, _mev, game_date)
-            except Exception:
-                pass
-            # FM-style: board, profile, morale, post-match presser
+            # (Not for preseason -- September hockey gets box scores only.)
+            # went_ot is computed up here (it used to be read before
+            # assignment and only survived inside the try/except).
             went_ot = len([e for e in (notable_events or []) if isinstance(e, dict) and e.get('period', 0) > 3]) > 0
-            self._career_after_user_game(winner, loser, scores, home_team, away_team, went_ot, sim_engine)
+            if not is_preseason:
+                try:
+                    import media_engine
+                    _mev = media_engine.cover_game(
+                        getattr(self, 'league', None), home_team, away_team,
+                        winner, loser, scores, went_ot, game_date)
+                    media_engine.route_events(self, _mev, game_date)
+                except Exception:
+                    pass
+            # FM-style: board, profile, morale, post-match presser.
+            # (Not for preseason -- the board doesn't judge exhibitions.)
+            if not is_preseason:
+                self._career_after_user_game(winner, loser, scores, home_team, away_team, went_ot, sim_engine)
         
         # Process other games using batch processing
         if other_games:
             self._simulate_games_batch(other_games)
 
     def _process_single_game_result(self, game_date, home_team, away_team, winner, loser, scores, events, notable_events, sim_engine,
-                                      stats_from_events=True):
+                                      stats_from_events=True, preseason=False):
         """Process a single game result - used for user team games.
 
         stats_from_events: when True (default), player season stats are
             derived from notable_events. Pass False when the sim engine
             (e.g. GameSim) already updated player.stats itself, to avoid
             double counting.
+        preseason: exhibition -- the result is stored for viewing but
+            never touches the standings.
         """
-        # Update league standings (safely)
+        # Update league standings (safely) -- never for preseason.
         home_score, away_score = scores
 
-        
-        # Ensure teams exist in standings
-        if home_team.team_name not in self.league.standings:
-            self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
-        if away_team.team_name not in self.league.standings:
-            self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+        if not preseason:
+            # Ensure teams exist in standings
+            if home_team.team_name not in self.league.standings:
+                self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+            if away_team.team_name not in self.league.standings:
+                self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
         
         # Detect if game went to overtime/shootout (for OTL point)
         # NHL rule: loser in OT/SO gets 1 point (OTL)
@@ -9758,16 +9800,18 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
-        # Winner gets 2 points
-        self.league.standings[winner.team_name]['W'] += 1
-        self.league.standings[winner.team_name]['Points'] += 2
-        
-        # Loser: OTL point if game went to OT/SO, else regulation loss
-        if went_to_ot:
-            self.league.standings[loser.team_name]['OTL'] += 1
-            self.league.standings[loser.team_name]['Points'] += 1
-        else:
-            self.league.standings[loser.team_name]['L'] += 1
+        # Winner gets 2 points (regular season only -- preseason
+        # exhibitions never touch the table).
+        if not preseason:
+            self.league.standings[winner.team_name]['W'] += 1
+            self.league.standings[winner.team_name]['Points'] += 2
+
+            # Loser: OTL point if game went to OT/SO, else regulation loss
+            if went_to_ot:
+                self.league.standings[loser.team_name]['OTL'] += 1
+                self.league.standings[loser.team_name]['Points'] += 1
+            else:
+                self.league.standings[loser.team_name]['L'] += 1
         
         # Store game result for later viewing
         player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
@@ -10758,11 +10802,14 @@ class HockeyManagerGUI(tk.Tk):
         
         print("Phase 3 optimizations applied to main interface!")
 
-    def _credit_nhl_games_played(self, home_team, away_team):
+    def _credit_nhl_games_played(self, home_team, away_team, preseason=False):
         """Career NHL GP counter: one credit per rostered player per
         completed NHL game. This is the service-time half of waiver
         exemption (age is the other half) -- previously a frozen dice
-        roll, now a number that actually moves with the season."""
+        roll, now a number that actually moves with the season.
+        Preseason exhibitions never count (like the real league)."""
+        if preseason:
+            return
         for _t in (home_team, away_team):
             try:
                 for _p in list(getattr(_t, "roster", None) or []):
@@ -10791,45 +10838,52 @@ class HockeyManagerGUI(tk.Tk):
                     game_date, home_team, away_team = game[:3]
                 else:
                     continue
+                # Preseason exhibitions: quick-simmed with no footprint --
+                # no stats, no standings, no career GP, no lore.
+                is_preseason = isinstance(game, dict) and bool(game.get('preseason'))
                 
                 # Narrative ledger: grudge-week presentation for non-user games.
                 # One dict lookup per game; only genuine league-wide feuds
                 # (weight >= 60) earn the inbox card. Never blocks the sim.
-                try:
-                    from narrative_ledger import (get_ledger, interpret,
-                                                  incident_short)
-                    from headlines import deliver_spec as _deliver_spec
-                    _led = get_ledger(self)
-                    _cand = _led.callback_candidate(home_team.team_name,
-                                                    away_team.team_name)
-                    if _cand is not None and _cand.get("weight", 0) >= 60:
-                        _facts = _cand.get("facts") or {}
-                        _home = home_team.team_name
-                        _spec = {
-                            "kind": "grudge_callback",
-                            "home": _home,
-                            "away": away_team.team_name,
-                            "short": incident_short(_facts),
-                            "first_meeting": not _cand.get("ref_count"),
-                            "room_line":
-                                interpret(_cand, "room", _home) or "",
-                            "fans_line":
-                                interpret(_cand, "fans", _home) or "",
-                            "media_line":
-                                interpret(_cand, "media", _home) or "",
-                            "league_line":
-                                interpret(_cand, "league", _home) or "",
-                            "involved": (home_team.team_name,
-                                         away_team.team_name),
-                        }
-                        if _deliver_spec(self, _spec):
-                            _led.mark_referenced(_cand["id"])
-                except Exception:
-                    pass
+                # (Skipped for preseason -- exhibitions build no lore.)
+                if not is_preseason:
+                    try:
+                        from narrative_ledger import (get_ledger, interpret,
+                                                      incident_short)
+                        from headlines import deliver_spec as _deliver_spec
+                        _led = get_ledger(self)
+                        _cand = _led.callback_candidate(home_team.team_name,
+                                                        away_team.team_name)
+                        if _cand is not None and _cand.get("weight", 0) >= 60:
+                            _facts = _cand.get("facts") or {}
+                            _home = home_team.team_name
+                            _spec = {
+                                "kind": "grudge_callback",
+                                "home": _home,
+                                "away": away_team.team_name,
+                                "short": incident_short(_facts),
+                                "first_meeting": not _cand.get("ref_count"),
+                                "room_line":
+                                    interpret(_cand, "room", _home) or "",
+                                "fans_line":
+                                    interpret(_cand, "fans", _home) or "",
+                                "media_line":
+                                    interpret(_cand, "media", _home) or "",
+                                "league_line":
+                                    interpret(_cand, "league", _home) or "",
+                                "involved": (home_team.team_name,
+                                             away_team.team_name),
+                            }
+                            if _deliver_spec(self, _spec):
+                                _led.mark_referenced(_cand["id"])
+                    except Exception:
+                        pass
 
                 # Grudge-week presentation for genuine feuds (sellout talk,
                 # loud-building billing); hollow overhype gets graded post-game.
-                self._grudge_week_market(game_date, home_team, away_team)
+                # (Not for preseason.)
+                if not is_preseason:
+                    self._grudge_week_market(game_date, home_team, away_team)
                 # Legacy events: outdoor-game billing (~3/season, no spam).
                 _outdoor_info = None
                 try:
@@ -10849,29 +10903,38 @@ class HockeyManagerGUI(tk.Tk):
 
                 # Per-league sim detail (new-game setup): 'full' leagues get the
                 # event-by-event engine with player stats; everything else
-                # uses the ultra-fast lightweight path.
+                # uses the ultra-fast lightweight path. Preseason always
+                # goes lightweight -- GameSim writes season stats itself and
+                # September hockey counts for nothing.
                 league_key = game.get('league') if isinstance(game, dict) else None
                 full_sim = None
-                if self._league_sim_detail(league_key) == 'full':
+                if self._league_sim_detail(league_key) == 'full' and not is_preseason:
                     winner, loser, scores, went_to_ot, full_sim = \
                         self._simulate_game_full_batch(home_team, away_team)
                 else:
-                    # LIGHTWEIGHT simulation - just calculate winner and score
-                    result = self._simulate_game_lightweight(home_team, away_team)
+                    # LIGHTWEIGHT simulation - just calculate winner and score.
+                    # Preseason suppresses the individual-stat pass: scores
+                    # stand, nobody's season line moves.
+                    result = self._simulate_game_lightweight(home_team, away_team,
+                                                             preseason=is_preseason)
                     winner, loser, scores, went_to_ot = result
 
                 batch_results.append((game_date, home_team, away_team, winner,
                                       loser, scores, went_to_ot, full_sim))
 
                 # Career service time: every rostered player on both clubs
-                # banks one NHL game (waiver-exemption input).
+                # banks one NHL game (waiver-exemption input). Not in
+                # preseason.
                 try:
-                    self._credit_nhl_games_played(home_team, away_team)
+                    self._credit_nhl_games_played(home_team, away_team,
+                                                  preseason=is_preseason)
                 except Exception:
                     pass
 
-                # Update standings immediately (no batch delay)
-                self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot)
+                # Update standings immediately (no batch delay) -- never for
+                # preseason exhibitions.
+                self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot,
+                                            preseason=is_preseason)
 
                 # Legacy events: permanent season memory for outdoor games.
                 if _outdoor_info is not None:
@@ -10921,18 +10984,21 @@ class HockeyManagerGUI(tk.Tk):
             # roll them post-game through the shared incident module; record
             # the night's stories for both engines. Headlines only if the
             # user's team was involved (no league-wide spam).
-            try:
-                _sim_cls = type(full_sim).__name__ if full_sim is not None else ""
-                _nres = self._narrative_postgame(
-                    full_sim, home_team, away_team, scores,
-                    went_ot=bool(went_to_ot), shootout=False,
-                    roll_incidents=_sim_cls != "GameSim",
-                    deliver_headlines=bool(user_team) and
-                    user_team in (home_team, away_team),
-                    game_date=game_date)
-                _gfights = int((_nres or {}).get("fights", 0) or 0)
-            except Exception:
-                _gfights = 0
+            # (Skipped for preseason -- exhibitions build no lore.)
+            _gfights = 0
+            if not is_preseason:
+                try:
+                    _sim_cls = type(full_sim).__name__ if full_sim is not None else ""
+                    _nres = self._narrative_postgame(
+                        full_sim, home_team, away_team, scores,
+                        went_ot=bool(went_to_ot), shootout=False,
+                        roll_incidents=_sim_cls != "GameSim",
+                        deliver_headlines=bool(user_team) and
+                        user_team in (home_team, away_team),
+                        game_date=game_date)
+                    _gfights = int((_nres or {}).get("fights", 0) or 0)
+                except Exception:
+                    _gfights = 0
 
             # Store minimal game result
             game_result = {
@@ -11059,8 +11125,11 @@ class HockeyManagerGUI(tk.Tk):
         went_to_ot = any(p > 3 for p in periods)
         return winner, loser, scores, went_to_ot, sim
 
-    def _simulate_game_lightweight(self, home_team, away_team):
-        """Ultra-fast game simulation with individual player effects and realistic scoring distribution"""
+    def _simulate_game_lightweight(self, home_team, away_team, preseason=False):
+        """Ultra-fast game simulation with individual player effects and realistic scoring distribution.
+
+        preseason: skip the individual season-stat pass -- exhibition
+        scores stand, nobody's season line moves."""
         import random
         
         # Calculate base team strengths
@@ -11175,8 +11244,10 @@ class HockeyManagerGUI(tk.Tk):
             winner = away_team
             loser = home_team
         
-        # Generate realistic individual player stats
-        self._generate_player_stats(home_team, away_team, home_goals, away_goals)
+        # Generate realistic individual player stats (skipped for
+        # preseason -- exhibitions don't touch season lines).
+        if not preseason:
+            self._generate_player_stats(home_team, away_team, home_goals, away_goals)
 
         # Gameplay injuries (same ~13%/team rate as the detailed sim)
         for team in (home_team, away_team):
@@ -11677,8 +11748,13 @@ class HockeyManagerGUI(tk.Tk):
             except:
                 pass
     
-    def _update_standings_fast(self, home_team, away_team, winner, scores, went_to_ot=False):
-        """Fast standings update without complex calculations"""
+    def _update_standings_fast(self, home_team, away_team, winner, scores, went_to_ot=False,
+                               preseason=False):
+        """Fast standings update without complex calculations.
+
+        preseason: exhibitions never touch the table."""
+        if preseason:
+            return
         home_score, away_score = scores
         
         # Ensure teams exist in standings
