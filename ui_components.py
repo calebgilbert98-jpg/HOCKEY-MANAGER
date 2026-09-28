@@ -182,7 +182,7 @@ class PlayerProfileView(ctk.CTkFrame):
         left_column = ttk.Frame(main_container, style='PlayerTab.TFrame')
         left_column.grid(row=1, column=0, sticky='nsew', padx=(0, 1))
         left_column.grid_columnconfigure(0, weight=1)
-        for i in range(3):
+        for i in range(4):
             left_column.grid_rowconfigure(i, weight=1)
         
         center_column = ttk.Frame(main_container, style='PlayerTab.TFrame') 
@@ -201,6 +201,7 @@ class PlayerProfileView(ctk.CTkFrame):
         # (Personal details moved to the Personality tab.)
         self._create_injury_history(left_column, 0)
         self._create_career_progression(left_column, 1)
+        self._create_career_moments(left_column, 3)
         self._create_team_chemistry(left_column, 2)
         
         # Center column content - Player Attributes (all attributes bucketed together)
@@ -2457,6 +2458,48 @@ class PlayerProfileView(ctk.CTkFrame):
             ttk.Label(career_grid, text=str(value), style='PlayerInfo.TLabel').grid(
                 row=i, column=1, sticky='w', pady=3
             )
+
+    def _create_career_moments(self, parent, row=4):
+        """Signature single-game performances (hat tricks, shutouts,
+        40-save nights...). The game log that keeps a kid's huge night
+        from being forgotten when he's the next man up or a trade chip."""
+        moments_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        moments_frame.grid(row=row, column=0, sticky='nsew', pady=(0, 5))
+
+        ttk.Label(moments_frame, text="Signature Games",
+                  style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        moments = getattr(self.player, 'career_moments', None) or []
+        moments = [m for m in moments if isinstance(m, dict)]
+        # Newest first.
+        moments = sorted(moments, key=lambda m: m.get("date", ""),
+                         reverse=True)
+
+        _emoji = {"hat_trick": "🎩", "four_point": "⭐", "five_point": "🌟",
+                  "shutout": "🧱", "forty_saves": "🥅", "steal": "🥅"}
+        if not moments:
+            ttk.Label(moments_frame, text="No signature games yet.",
+                      style='PlayerInfo.TLabel').pack(anchor='w')
+            return
+        for m in moments[:6]:
+            emo = _emoji.get(m.get("kind", ""), "🏒")
+            date_s = m.get("date", "")
+            label = m.get("label", "Big night")
+            detail = m.get("detail", "")
+            line1 = f"{emo} {label} — {date_s}"
+            if m.get("playoff"):
+                line1 += " (playoffs)"
+            ttk.Label(moments_frame, text=line1,
+                      style='PlayerValue.TLabel').pack(anchor='w')
+            if detail:
+                ttk.Label(moments_frame, text=f"    {detail}",
+                          style='PlayerInfo.TLabel').pack(anchor='w')
+        if len(moments) > 6:
+            ttk.Label(
+                moments_frame,
+                text=f"+ {len(moments) - 6} more signature "
+                     f"{'game' if len(moments) == 7 else 'games'} on record.",
+                style='PlayerInfo.TLabel').pack(anchor='w', pady=(4, 0))
 
     def _create_enhanced_key_attributes(self, parent, row=0):
         """Creates enhanced key attributes section with visual bars."""

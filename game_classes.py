@@ -294,6 +294,12 @@ class Player:
     # Family in the hockey world: linked at generation by rare shared
     # surname (the Staals/Hughes treatment). List of other player ids.
     # Old-save safe: read via getattr(player, 'family_ids', []).
+    # Career game log: signature single-game performances (hat tricks,
+    # shutouts, 40-save nights...). Bounded at ~20 entries, pruned by
+    # significance -- so a kid's huge night isn't forgotten when he's the
+    # next man up or a trade chip. Old-save safe: read via
+    # getattr(player, 'career_moments', []).
+    career_moments: list = field(default_factory=list)
     family_ids: list = field(default_factory=list)
     reputation_history: list = field(default_factory=list)
     controversy_history: list = field(default_factory=list)

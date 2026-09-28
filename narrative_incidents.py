@@ -283,21 +283,197 @@ def record_stories(home: Any, away: Any, home_score: int, away_score: int,
     return stories
 
 
+# ---------------------------------------------------------------------------
+# Per-player career game log ("big nights")
+# ---------------------------------------------------------------------------
+# A kid's huge night shouldn't be forgotten when he's sent down as the
+# next man up or packaged at the deadline. career_moments lives on the
+# Player (plain dicts -- save/load safe), capped at 20 entries and pruned
+# by significance. Only genuinely significant single games qualify:
+# hat tricks, 4+ point nights, shutouts, 40-save nights, 35+ save steals.
+# Playoff games rank higher. One moment per player per game (best wins).
+
+_MOMENT_CAP = 20
+
+_MOMENT_KINDS = {
+    # kind: (label, significance)
+    "hat_trick": ("Hat trick", 40),
+    "four_point": ("4-point night", 35),
+    "five_point": ("5-point night", 50),
+    "shutout": ("Shutout", 30),
+    "forty_saves": ("40-save night", 35),
+    "steal": ("Stole the game", 30),
+}
+
+_PLAYOFF_BUMP = 20
+
+
+def _game_lines(sim: Any, idx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Normalize per-player game lines from either engine.
+
+    AdvancedGameSim: sim.stats[team][pid] = {goals, assists, saves}.
+    GameSim: sim.game_stats[pid] = {g, a, player}."""
+    lines: List[Dict[str, Any]] = []
+    try:
+        stats = getattr(sim, "stats", None)
+        if stats:
+            for team_name, players in stats.items():
+                for pid, line in (players or {}).items():
+                    p = idx.get(str(pid))
+                    if p is None:
+                        continue
+                    lines.append({
+                        "player": p,
+                        "team_name": team_name,
+                        "goals": int((line or {}).get("goals", 0) or 0),
+                        "assists": int((line or {}).get("assists", 0) or 0),
+                        "saves": int((line or {}).get("saves", 0) or 0),
+                    })
+            return lines
+    except Exception:
+        pass
+    try:
+        gstats = getattr(sim, "game_stats", None) or {}
+        for pid, st in gstats.items():
+            p = (st or {}).get("player") or idx.get(str(pid))
+            if p is None:
+                continue
+            lines.append({
+                "player": p,
+                "team_name": getattr(p, "team_name", ""),
+                "goals": int((st or {}).get("g", 0) or 0),
+                "assists": int((st or {}).get("a", 0) or 0),
+                "saves": 0,  # GameSim goalie saves aren't per-game here
+            })
+    except Exception:
+        pass
+    return lines
+
+
+def _is_goalie(player: Any) -> bool:
+    try:
+        pos = getattr(player, "primary_position", None)
+        return getattr(pos, "name", "") == "GOALIE"
+    except Exception:
+        return False
+
+
+def log_player_moments(sim: Any, home: Any, away: Any,
+                       home_score: int, away_score: int,
+                       game_date: Any = None,
+                       is_playoff: bool = False) -> int:
+    """Append career moments to the players who earned them. Returns the
+    number of moments logged. Bounded, significant-only, never raises."""
+    logged = 0
+    try:
+        idx = _player_index(home, away)
+        hn, an = _team_name(home), _team_name(away)
+        try:
+            dstr = game_date.isoformat() if hasattr(game_date, "isoformat") \
+                else str(game_date or "")
+        except Exception:
+            dstr = ""
+        for line in _game_lines(sim, idx):
+            p = line["player"]
+            goals, assists, saves = line["goals"], line["assists"], line["saves"]
+            points = goals + assists
+            pteam = line.get("team_name") or hn
+            # Fallback: resolve side via roster membership.
+            if pteam not in (hn, an):
+                try:
+                    if p in (getattr(home, "roster", None) or []):
+                        pteam = hn
+                    elif p in (getattr(away, "roster", None) or []):
+                        pteam = an
+                    else:
+                        pteam = hn
+                except Exception:
+                    pteam = hn
+            opp = an if pteam == hn else hn
+            pscore = home_score if pteam == hn else away_score
+            oscore = away_score if pteam == hn else home_score
+            result = "W" if pscore > oscore else ("L" if pscore < oscore else "T")
+            scoreline = f"{pscore}-{oscore} {result}"
+
+            kind = None
+            detail = ""
+            if _is_goalie(p):
+                if saves <= 0:
+                    continue
+                if oscore == 0:
+                    kind = "shutout"
+                    detail = f"{saves} saves vs {opp} ({scoreline})"
+                elif saves >= 40:
+                    kind = "forty_saves"
+                    detail = f"{saves} saves vs {opp} ({scoreline})"
+                elif saves >= 35 and pscore > oscore:
+                    kind = "steal"
+                    detail = f"{saves} saves vs {opp} ({scoreline})"
+            else:
+                if points >= 5:
+                    kind = "five_point"
+                    detail = f"{goals} G, {assists} A vs {opp} ({scoreline})"
+                elif goals >= 3:
+                    kind = "hat_trick"
+                    detail = (f"{goals} G" + (f", {assists} A" if assists else "")
+                              + f" vs {opp} ({scoreline})")
+                elif points >= 4:
+                    kind = "four_point"
+                    detail = f"{goals} G, {assists} A vs {opp} ({scoreline})"
+            if kind is None:
+                continue
+            label, sig = _MOMENT_KINDS[kind]
+            if is_playoff:
+                sig += _PLAYOFF_BUMP
+            moments = getattr(p, "career_moments", None)
+            if not isinstance(moments, list):
+                try:
+                    p.career_moments = moments = []
+                except Exception:
+                    continue
+            # One moment per player per game: keep the best.
+            if any(m.get("date") == dstr and m.get("kind") == kind
+                   for m in moments if isinstance(m, dict)):
+                continue
+            moments.append({
+                "date": dstr, "kind": kind, "label": label,
+                "detail": detail, "opp": opp, "score": scoreline,
+                "playoff": bool(is_playoff), "sig": sig,
+            })
+            # Prune to the cap: lowest significance first, then oldest.
+            if len(moments) > _MOMENT_CAP:
+                moments.sort(key=lambda m: (
+                    m.get("sig", 0) if isinstance(m, dict) else 0,
+                    m.get("date", "") if isinstance(m, dict) else ""))
+                del moments[0:len(moments) - _MOMENT_CAP]
+                # Keep newest-first for display.
+                moments.sort(key=lambda m: m.get("date", "")
+                             if isinstance(m, dict) else "",
+                             reverse=True)
+            logged += 1
+    except Exception:
+        pass
+    return logged
+
+
 def process_postgame(sim: Any, home: Any, away: Any,
                      home_score: int, away_score: int,
                      went_ot: bool = False, shootout: bool = False,
                      rivalries: Optional[list] = None,
                      ledger: Any = None,
                      is_playoff: bool = False, series_game: int = 0,
-                     roll_incidents: bool = True) -> Dict[str, Any]:
+                     roll_incidents: bool = True,
+                     game_date: Any = None) -> Dict[str, Any]:
     """One call per finished game. Rolls incidents (quick-sim only --
-    GameSim models them live) and records game stories (both engines).
+    GameSim models them live), records game stories (both engines), and
+    logs career moments to the players who earned them.
 
     Returns {"fights": int, "brawl": bool, "incidents": [...],
-    "stories": [...]}. Never raises; never touches scoring or stats.
+    "stories": [...], "moments": int}. Never raises; never touches
+    scoring or stats.
     """
     out: Dict[str, Any] = {"fights": 0, "brawl": False,
-                           "incidents": [], "stories": []}
+                           "incidents": [], "stories": [], "moments": 0}
     rivalries = rivalries if rivalries is not None else []
     try:
         if roll_incidents:
@@ -310,6 +486,9 @@ def process_postgame(sim: Any, home: Any, away: Any,
         out["stories"] = record_stories(home, away, home_score,
                                         away_score, went_ot, shootout,
                                         sim, rivalries, ledger)
+        out["moments"] = log_player_moments(sim, home, away, home_score,
+                                            away_score, game_date=game_date,
+                                            is_playoff=is_playoff)
     except Exception:
         pass
     return out

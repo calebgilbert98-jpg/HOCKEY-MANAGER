@@ -8688,12 +8688,14 @@ class HockeyManagerGUI(tk.Tk):
 
     def _narrative_postgame(self, sim_engine, home_team, away_team,
                               scores, went_ot=False, shootout=False,
-                              roll_incidents=True, deliver_headlines=False):
+                              roll_incidents=True, deliver_headlines=False,
+                              game_date=None):
         """Shared post-game narrative hook (narrative_incidents.py).
 
         Rolls incidents for engines that don't model them live (AdvGS),
-        records game stories for both engines, and feeds the fight count
-        back onto the sim so the grudge-week grader sees real numbers.
+        records game stories for both engines, logs career moments to the
+        players who earned them, and feeds the fight count back onto the
+        sim so the grudge-week grader sees real numbers.
         Headlines only when deliver_headlines (user-involved games).
         Never raises; never touches scoring or stats.
         """
@@ -8708,7 +8710,8 @@ class HockeyManagerGUI(tk.Tk):
                 int(home_score), int(away_score),
                 went_ot=bool(went_ot), shootout=bool(shootout),
                 rivalries=rivalries, ledger=active_ledger(),
-                roll_incidents=bool(roll_incidents))
+                roll_incidents=bool(roll_incidents),
+                game_date=game_date)
             if roll_incidents and sim_engine is not None:
                 try:
                     if not getattr(sim_engine, "_fights_total", 0):
@@ -9016,7 +9019,8 @@ class HockeyManagerGUI(tk.Tk):
                     self._narrative_postgame(
                         sim_engine, home_team, away_team, scores,
                         went_ot=_nwent_ot, shootout=_nshootout,
-                        roll_incidents=True, deliver_headlines=True)
+                        roll_incidents=True, deliver_headlines=True,
+                        game_date=game_date)
                 except Exception:
                     pass
                 # Revert AI tactics + file tactical intel on the user's systems
@@ -9064,7 +9068,7 @@ class HockeyManagerGUI(tk.Tk):
                 self._narrative_postgame(
                     sim_engine, home_team, away_team, scores,
                     went_ot=_nwent_ot, roll_incidents=False,
-                    deliver_headlines=True)
+                    deliver_headlines=True, game_date=game_date)
             except Exception:
                 pass
             # Legacy events: permanent season memory for outdoor games.
@@ -10032,7 +10036,8 @@ class HockeyManagerGUI(tk.Tk):
                     went_ot=bool(went_to_ot), shootout=False,
                     roll_incidents=_sim_cls != "GameSim",
                     deliver_headlines=bool(user_team) and
-                    user_team in (home_team, away_team))
+                    user_team in (home_team, away_team),
+                    game_date=game_date)
                 _gfights = int((_nres or {}).get("fights", 0) or 0)
             except Exception:
                 _gfights = 0
