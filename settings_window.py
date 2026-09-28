@@ -51,7 +51,13 @@ def default_settings():
             },
             'enable_sounds': True,
             'sound_volume': 'Medium'
-        }
+        },
+        'career': {
+            # Muck's flag: user can choose whether the GM can be sacked.
+            # True = board can sack you at 0 confidence (default, classic FM).
+            # False = job is safe; confidence still affects budgets/morale.
+            'gm_can_be_sacked': True,
+        },
     }
 
 
@@ -231,7 +237,7 @@ class SettingsWindow(InGamePopup):
 
         self._tab_frames = {}
         self._tab_holders = {}
-        for key in ("results", "interface", "simulation", "notifications"):
+        for key in ("results", "interface", "simulation", "notifications", "career"):
             holder, content = self._make_scrollable_tab(self._tab_content)
             self._tab_holders[key] = holder
             self._tab_frames[key] = content
@@ -240,6 +246,7 @@ class SettingsWindow(InGamePopup):
         self._create_interface_tab(self._tab_frames["interface"])
         self._create_simulation_tab(self._tab_frames["simulation"])
         self._create_notifications_tab(self._tab_frames["notifications"])
+        self._create_career_tab(self._tab_frames["career"])
 
         self._create_footer(main)
         self._select_tab("results")
@@ -258,7 +265,8 @@ class SettingsWindow(InGamePopup):
         tabs = [("results", "Game Results"),
                 ("interface", "Interface"),
                 ("simulation", "Simulation"),
-                ("notifications", "Notifications")]
+                ("notifications", "Notifications"),
+                ("career", "Career")]
         for key, label in tabs:
             holder = tk.Frame(bar, bg=AppColors.BG)
             holder.pack(side="left", padx=(0, 6))
@@ -506,6 +514,19 @@ class SettingsWindow(InGamePopup):
         self._row(sound, "Sound volume:", self.sound_volume_var,
                   ['Off', 'Low', 'Medium', 'High'], width=10)
 
+    def _create_career_tab(self, content):
+        """Career / job security preferences."""
+        job = self._section(content, "Job Security")
+        self.gm_can_be_sacked_var = tk.BooleanVar()
+        self._check(job, "Board can sack the GM (job is on the line)",
+                    self.gm_can_be_sacked_var)
+        tk.Label(job,
+                 text=("If off, your job is safe no matter what — board confidence "
+                       "still affects budgets and morale."),
+                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
+                 font=AppFonts.SMALL, wraplength=400,
+                 justify="left").pack(anchor="w", pady=(4, 0))
+
     def _create_footer(self, parent):
         footer = tk.Frame(parent, bg=AppColors.BG)
         footer.pack(fill="x", pady=(4, 0))
@@ -596,6 +617,11 @@ class SettingsWindow(InGamePopup):
         self.sound_volume_var.set(
             notifications.get('sound_volume', 'Medium'))
 
+        # Career
+        career = self.settings.get('career', {})
+        self.gm_can_be_sacked_var.set(
+            career.get('gm_can_be_sacked', True))
+
     def _collect_current_values(self):
         """Collect current values from UI into settings, preserving any
         keys this window doesn't manage (e.g. user_game_mode)."""
@@ -639,6 +665,11 @@ class SettingsWindow(InGamePopup):
                                     in self.email_notification_vars.items()},
             'enable_sounds': self.enable_sounds_var.get(),
             'sound_volume': self.sound_volume_var.get()
+        })
+
+        # Career
+        self.settings.setdefault('career', {}).update({
+            'gm_can_be_sacked': self.gm_can_be_sacked_var.get(),
         })
 
     def _notify_parent_of_changes(self):

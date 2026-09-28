@@ -55,6 +55,9 @@ class BoardSystem:
         self.last_review: str = ""
         self.warnings_given: int = 0
         self.sacked: bool = False
+        # Muck's flag: if False, board cannot sack (confidence still matters
+        # for budgets/morale). Set from settings.json -> career.gm_can_be_sacked.
+        self.can_be_sacked: bool = True
 
     # -- setup ------------------------------------------------------------
     def set_expectation(self, key: str):
@@ -107,6 +110,12 @@ class BoardSystem:
         return delta
 
     def _check_sack(self):
+        # Respect the user's "GM can be sacked" setting. If disabled,
+        # confidence floors at 1 (job safe, but budgets/morale still suffer).
+        if not self.can_be_sacked:
+            if self.confidence <= 0:
+                self.confidence = 1
+            return
         if self.confidence <= 0 and not self.sacked:
             self.sacked = True
 
@@ -122,6 +131,29 @@ class BoardSystem:
         if self.confidence >= 20:
             return "Under Pressure"
         return "In Danger"
+
+    def current_consequences(self) -> List[str]:
+        """Concrete teeth: what low confidence costs the GM right now.
+
+        Used by the Manager Hub to show stakes, and by main.py to apply
+        budget/morale effects. Empty list = no consequences (Secure).
+        """
+        out = []
+        c = self.confidence
+        if self.sacked:
+            return ["You have been sacked."]
+        if c < 20:
+            out.append("Transfer budget frozen — board will not approve spending.")
+            out.append("Players are unsettled: morale dips across the roster.")
+            out.append("Media pressure is intense; every loss is a crisis.")
+            if self.can_be_sacked:
+                out.append("ONE more bad stretch and the board will act.")
+        elif c < 40:
+            out.append("Transfer budget cut by 25% — the board is watching the money.")
+            out.append("Star players are questioning the project.")
+        elif c < 70:
+            out.append("The board expects improvement; no new spending without approval.")
+        return out
 
     def monthly_review(self, points_pct: float) -> Tuple[str, str]:
         """Return (headline, body) for the monthly board email."""

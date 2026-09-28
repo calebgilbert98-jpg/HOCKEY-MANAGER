@@ -10827,6 +10827,12 @@ class HockeyManagerGUI(tk.Tk):
         if career is None:
             career = manager_career.CareerState()
             gm.career = career
+        # Apply the "GM can be sacked" setting (Muck's flag)
+        try:
+            can_sack = self.get_settings().get('career', {}).get('gm_can_be_sacked', True)
+            career.board.can_be_sacked = bool(can_sack)
+        except Exception:
+            pass
         return career
 
     def open_manager_hub(self):
