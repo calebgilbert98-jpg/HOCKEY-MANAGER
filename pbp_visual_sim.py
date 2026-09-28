@@ -598,6 +598,7 @@ class PBPVisualSim(InGamePopup):
         # -- momentum (recent shots/goals/fights, last ~10 per team) --
         self._mom = {"home": deque(maxlen=10), "away": deque(maxlen=10)}
         self._mom_dirty = True
+        self._momentum_open = False
 
         # -- per-period summary tracking --
         self._period_stats = {"shots": {"home": 0, "away": 0},
@@ -893,6 +894,8 @@ class PBPVisualSim(InGamePopup):
                                     highlightthickness=0, bd=0)
         self.mom_canvas.pack(fill="x")
         self.mom_canvas.bind("<Configure>", lambda e: self._draw_momentum())
+        self.mom_canvas.configure(cursor="hand2")
+        self.mom_canvas.bind("<Button-1>", lambda e: self._toggle_momentum_panel())
 
         # Intensity breakdown panel (hidden until the meter is clicked).
         # Lists every factor driving the rating, + heating / - cooling.
@@ -905,6 +908,18 @@ class PBPVisualSim(InGamePopup):
                  font=_vfont(10)).pack(side="right")
         self.tension_list = tk.Frame(self.tension_panel, bg=CONTENT_BG)
         self.tension_list.pack(fill="x", padx=14, pady=(0, 4))
+
+        # Momentum drivers panel (hidden until the strip is clicked).
+        # Shows exactly why the meter reads what it reads.
+        self.momentum_panel = tk.Frame(self, bg=CONTENT_BG)
+        mph = tk.Frame(self.momentum_panel, bg=CONTENT_BG)
+        mph.pack(fill="x", padx=14, pady=(4, 0))
+        tk.Label(mph, text="WHAT'S DRIVING THE MOMENTUM", bg=CONTENT_BG,
+                 fg="#AEB6C8", font=_vfont(10, "bold")).pack(side="left")
+        tk.Label(mph, text="click the strip to hide", bg=CONTENT_BG, fg="#AEB6C8",
+                 font=_vfont(10)).pack(side="right")
+        self.momentum_list = tk.Frame(self.momentum_panel, bg=CONTENT_BG)
+        self.momentum_list.pack(fill="x", padx=14, pady=(0, 4))
 
         # Main split
         main = tk.Frame(self, bg=BG)
@@ -4340,6 +4355,23 @@ class PBPVisualSim(InGamePopup):
     def _momentum_net(self):
         return sum(self._mom["home"]) - sum(self._mom["away"])
 
+    def _momentum_reading(self):
+        """Fused momentum from momentum.py (story + crowd + recent chances /
+        territory, with labeled drivers). Falls back to the local
+        recent-events deques when the sim has no tracker."""
+        try:
+            from momentum import read_momentum as _rm
+            sim = getattr(self, "sim", None)
+            if sim is not None and getattr(sim, "_momentum_events", None) is not None:
+                return _rm(sim)
+        except Exception:
+            pass
+        net = self._momentum_net()
+        s = max(-100.0, min(100.0, net / 24.0 * 100.0))
+        side = "Even" if abs(s) < 15 else ("Home" if s > 0 else "Away")
+        return {"score": s, "label": side, "drivers": [],
+                "risk_home": 1.0, "risk_away": 1.0}
+
     def _draw_momentum(self):
         c = getattr(self, "mom_canvas", None)
         if c is None:
@@ -4352,8 +4384,8 @@ class PBPVisualSim(InGamePopup):
         if W < 30 or H < 8:
             return
         c.delete("all")
-        net = self._momentum_net()
-        frac = max(-1.0, min(1.0, net / 24.0))
+        r = self._momentum_reading()
+        frac = max(-1.0, min(1.0, float(r.get("score", 0.0)) / 100.0))
         mid = W / 2
         top, bot = H / 2 - 6, H / 2 + 6
         c.create_rectangle(2, top, W - 2, bot, fill="#23262e", outline="")
@@ -4370,6 +4402,57 @@ class PBPVisualSim(InGamePopup):
                       fill=self._home_fg, font=_vfont(8, "bold"))
         c.create_text(W - 4, H / 2, text=aab, anchor="e",
                       fill=self._away_fg, font=_vfont(8, "bold"))
+        # Readable: state label + top driver, centered on the strip.
+        lbl = r.get("label", "")
+        drv = (r.get("drivers") or [""])[0]
+        txt = lbl + (f" -- {drv}" if drv else "")
+        if txt:
+            c.create_text(mid, H / 2, text=txt,
+                          fill="#F2F4F8", font=_vfont(8, "bold"))
+        if getattr(self, "_momentum_open", False):
+            self._render_momentum_panel()
+
+    def _toggle_momentum_panel(self):
+        try:
+            self._momentum_open = not getattr(self, "_momentum_open", False)
+            if self._momentum_open:
+                self._render_momentum_panel()
+                self.momentum_panel.pack(fill="x", padx=10, pady=(0, 4),
+                                         before=self._main_frame)
+            else:
+                self.momentum_panel.pack_forget()
+        except Exception:
+            pass
+
+    def _render_momentum_panel(self):
+        lst = getattr(self, "momentum_list", None)
+        if lst is None:
+            return
+        for w in lst.winfo_children():
+            w.destroy()
+        r = self._momentum_reading()
+        for d in (r.get("drivers") or [])[:6]:
+            tk.Label(lst, text=f"\u2022 {d}", bg=CONTENT_BG, fg=TEXT,
+                     font=_vfont(9), anchor="w").pack(anchor="w", padx=4)
+        if not (r.get("drivers") or []):
+            tk.Label(lst, text="No momentum drivers yet -- play some hockey.",
+                     bg=CONTENT_BG, fg=MUTED,
+                     font=_vfont(9)).pack(anchor="w", padx=4)
+        # Risk is the point: what the AI does with it, in the open.
+        try:
+            tk.Label(lst,
+                     text=(f"AI risk appetite -- "
+                           f"{_abbr(self.home_team.team_name)} "
+                           f"{r.get('risk_home', 1.0):.2f} / "
+                           f"{_abbr(self.away_team.team_name)} "
+                           f"{r.get('risk_away', 1.0):.2f} "
+                           f"(moves goalie-pull timing, never conversion)"),
+                     bg=CONTENT_BG, fg="#AEB6C8",
+                     font=_vfont(9, "italic"), anchor="w",
+                     wraplength=900, justify="left").pack(anchor="w", padx=4,
+                                                          pady=(4, 0))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Game intensity (tension) meter

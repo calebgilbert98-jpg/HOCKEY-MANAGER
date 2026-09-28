@@ -480,6 +480,9 @@ class GameSim:
         # through the impact-tier ctx. Live: goals swing it in _handle_goal.
         self._crowd_energy = 50.0
         self._crowd_mood = 30.0        # home perspective
+        # Readable momentum (momentum.py): rolling event log; read-only for
+        # the visualizer, risk-only for AI decisions. Never touches conversion.
+        self._momentum_events = []
         try:
             if isinstance(atmosphere, dict):
                 self._crowd_energy = float(atmosphere.get("energy", 50.0))
@@ -2509,6 +2512,12 @@ class GameSim:
         # Decide on zone entry attempt
         entry_type = self._determine_zone_entry_type(puck_carrier, defending_skaters, fatigue_factor)
         
+        try:
+            from momentum import observe as _mom_observe3
+            if entry_type in (ZoneEntryType.CONTROLLED_CARRY, ZoneEntryType.PASS_IN):
+                _mom_observe3(self, "oz_entry", attacking_team)
+        except Exception:
+            pass
         if entry_type == ZoneEntryType.CONTROLLED_CARRY:
             return self._attempt_controlled_entry(puck_carrier, attacking_team, defending_team)
         elif entry_type == ZoneEntryType.DUMP_IN:
@@ -5081,6 +5090,11 @@ class GameSim:
                 # night. Routine big stops stay quiet so the moment keeps
                 # its meaning (mirrors the hit path's story gating).
                 _imp.nudge_momentum(self, defending_team, _seff["momentum"])
+                try:
+                    from momentum import observe as _mom_observe6
+                    _mom_observe6(self, "big_save", defending_team)
+                except Exception:
+                    pass
             _freeze_mult = _seff["freeze_mult"]
         except Exception:
             _story = False
@@ -6002,6 +6016,11 @@ class GameSim:
         else:
             self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
         self._emit_pbp("fight", player=player, team=team.team_name)
+        try:
+            from momentum import observe as _mom_observe4
+            _mom_observe4(self, "fight", team)
+        except Exception:
+            pass
         self.fights_called += 1
         if team is self.home_team:
             self.home_penalties_called += 1
@@ -6301,6 +6320,12 @@ class GameSim:
             self._crowd_mood = _st["mood"]
         except Exception:
             pass
+        # Momentum: goals are the heaviest event.
+        try:
+            from momentum import observe as _mom_observe
+            _mom_observe(self, "goal", scoring_team)
+        except Exception:
+            pass
             
         log_msg = f"GOAL for {scoring_team.team_name}! Scored by {shooter.full_name}"
         
@@ -6404,6 +6429,14 @@ class GameSim:
         
         if quality == "high":
             self.team_stats[att_team_name]['high_danger_chances'] += 1
+        try:
+            from momentum import observe as _mom_observe2
+            if quality == "high":
+                _mom_observe2(self, "high_danger", attacking_team)
+            elif quality == "medium":
+                _mom_observe2(self, "medium_danger", attacking_team)
+        except Exception:
+            pass
         
         # Corsi tracking (Stage 1)
         self.game_stats[shooter.id]['corsi_for'] += 1
@@ -7190,7 +7223,12 @@ class GameSim:
     # ------------------------------------------------------------------
     def _pull_eligible(self, team):
         """Can this team pull its goalie right now? Late 3rd, trailing by
-        1-2, not shorthanded, not in OT."""
+        1-2, not shorthanded, not in OT.
+
+        Momentum moves the timing, not the decision: a team that's surging
+        pulls up to 15 seconds earlier, a team on its heels waits up to 15
+        seconds longer. Conversion is untouched -- this is risk, not a boost.
+        """
         if getattr(self, "period", 1) != 3:
             return False
         if team.team_name in getattr(self, "goalie_pulled", set()):
@@ -7199,10 +7237,16 @@ class GameSim:
                 else (self.away_score - self.home_score))
         if diff >= 0:
             return False
+        try:
+            from momentum import risk_appetite as _risk
+            _extra = int(round(60.0 * (_risk(self, team) - 1.0)))
+            _extra = max(-15, min(15, _extra))
+        except Exception:
+            _extra = 0
         deficit = -diff
-        if deficit == 1 and self.clock > 120:
+        if deficit == 1 and self.clock > 120 + _extra:
             return False
-        if deficit == 2 and self.clock > 60:
+        if deficit == 2 and self.clock > 60 + _extra:
             return False
         if deficit > 2:
             return False
@@ -7780,6 +7824,12 @@ class GameSim:
         except Exception:
             hit_impact = 1
 
+        try:
+            from momentum import observe as _mom_observe5
+            if hit_successful and hit_impact == 2:
+                _mom_observe5(self, "big_hit", _hteam)
+        except Exception:
+            pass
         if hit_successful:
             result = self._resolve_hit_result(hitting_player, target_player, hit_type,
                                               impact=hit_impact)
