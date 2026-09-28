@@ -8,7 +8,8 @@ Two lightweight, instantly-resolved tournaments:
   teams plus prospects -- this is where crossovers happen.
 
 Resolution is deliberately light: up to 8 nations, single-elim bracket,
-team strength = mean overall + noise. No games are simmed; the cost is
+team strength = effective overall (form + morale), goalies weighted 1.6x,
+plus roster chemistry (NHL-club pairs + prior-tournament bonds), then noise. No games are simmed; the cost is
 one pass over NHL rosters per tournament.
 
 Consequences (the teeth):
@@ -157,6 +158,55 @@ def _pick_nations(pool: List[Tuple[Any, Any]]) -> List[str]:
     return viable[:8]
 
 
+def _effective_overall(p: Any) -> float:
+    """Overall adjusted by everything the game already tracks.
+
+    Form (mesh_form, -1 cold .. 1 hot) moves a player ~5% either way;
+    morale (1-100) moves him 0.95x..1.05x. Short tournaments are won by
+    hot players, not just talented ones.
+    """
+    base = _overall(p)
+    try:
+        form = max(-1.0, min(1.0, float(getattr(p, "mesh_form", 0.0) or 0.0)))
+    except Exception:
+        form = 0.0
+    try:
+        morale = max(1.0, min(100.0,
+                              float(getattr(p, "morale", 70) or 70)))
+    except Exception:
+        morale = 70.0
+    return base * (1.0 + 0.05 * form) * (0.95 + (morale / 100.0) * 0.10)
+
+
+def _bond_bonus(roster: List[Tuple[Any, Any]]) -> float:
+    """Chemistry bonus for a national roster (capped at +2.0).
+
+    Countrymen who play together in the NHL arrive with chemistry
+    (+0.15/pair); pairs forged at prior tournaments bring their
+    intl_bonds (+0.25 per bond point). Familiarity wins short
+    tournaments.
+    """
+    bonus = 0.0
+    club_bonus = 0.0
+    bond_pts = 0.0
+    n = len(roster)
+    for i in range(n):
+        pi, ti = roster[i]
+        for j in range(i + 1, n):
+            pj, tj = roster[j]
+            try:
+                if ti is not None and tj is not None and ti is tj:
+                    club_bonus += 0.15
+            except Exception:
+                pass
+            try:
+                bond_pts += _bond_entry(pi, pj)[0]
+            except Exception:
+                pass
+    bonus = min(1.0, club_bonus) + min(1.0, bond_pts * 0.25)
+    return min(2.0, bonus)
+
+
 def _build_roster(pool: List[Tuple[Any, Any]],
                   nation: str) -> Dict[str, Any]:
     members = [(p, t) for p, t in pool if _nation_of(p) == nation]
@@ -165,7 +215,15 @@ def _build_roster(pool: List[Tuple[Any, Any]],
     goalies = sorted([m for m in members if _is_goalie(m[0])],
                      key=lambda m: _overall(m[0]), reverse=True)
     roster = skaters[:SKATERS_PER_ROSTER] + goalies[:GOALIES_PER_ROSTER]
-    strength = (sum(_overall(p) for p, _ in roster) / max(1, len(roster)))
+    # Strength is inclusive of every implemented player factor: effective
+    # overall (form + morale), goalies weighted 1.6x (short tournaments
+    # ride the hot goalie), plus the roster's chemistry bonus.
+    sk_eff = [_effective_overall(p) for p, _ in roster
+              if not _is_goalie(p)]
+    gk_eff = [_effective_overall(p) for p, _ in roster if _is_goalie(p)]
+    wsum = sum(sk_eff) + 1.6 * sum(gk_eff)
+    w = len(sk_eff) + 1.6 * len(gk_eff)
+    strength = (wsum / max(1.0, w)) + _bond_bonus(roster)
     return {"nation": nation, "roster": roster, "strength": strength}
 
 

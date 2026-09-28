@@ -72,6 +72,7 @@ FORECHECK_SYSTEMS: Dict[str, Dict[str, Any]] = {
                       "Vegas Golden Knights"],
         "attack": 1.00, "defense": 0.97, "pace": 0.98,
         "shot_vol": 1.00, "shot_qual": 1.00, "physical": 1.00,
+        "pressure": 1.05, "discipline": 1.00, "blocks": 1.00, "rush": 0.98,
         "wants": {"anticipation": 1.2, "positioning": 1.2, "work_rate": 1.2,
                   "decisions": 1.1},
     },
@@ -87,6 +88,7 @@ FORECHECK_SYSTEMS: Dict[str, Dict[str, Any]] = {
                       "Carolina Hurricanes"],
         "attack": 1.04, "defense": 1.03, "pace": 1.08,
         "shot_vol": 1.05, "shot_qual": 1.01, "physical": 1.15,
+        "pressure": 1.20, "discipline": 0.92, "blocks": 1.00, "rush": 1.05,
         "wants": {"skating": 1.3, "aggressiveness": 1.2, "stamina": 1.2,
                   "checking": 1.1, "work_rate": 1.2},
     },
@@ -107,6 +109,7 @@ NEUTRAL_ZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Tampa Bay Lightning", "Montreal Canadiens"],
         "attack": 0.98, "defense": 0.93, "pace": 0.90,
         "shot_vol": 0.97, "shot_qual": 1.00, "physical": 0.95,
+        "pressure": 1.05, "discipline": 1.06, "blocks": 1.00, "rush": 0.94,
         "wants": {"positioning": 1.3, "anticipation": 1.2, "decisions": 1.2,
                   "discipline": 1.1},
     },
@@ -121,6 +124,7 @@ NEUTRAL_ZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Colorado Avalanche", "Edmonton Oilers"],
         "attack": 1.02, "defense": 1.00, "pace": 1.00,
         "shot_vol": 1.00, "shot_qual": 1.03, "physical": 0.95,
+        "pressure": 0.95, "discipline": 1.02, "blocks": 1.00, "rush": 1.02,
         "wants": {"passing": 1.3, "puckhandling": 1.2, "skating": 1.2,
                   "decisions": 1.1},
     },
@@ -134,6 +138,7 @@ NEUTRAL_ZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Carolina Hurricanes", "Toronto Maple Leafs"],
         "attack": 1.03, "defense": 1.01, "pace": 1.07,
         "shot_vol": 1.03, "shot_qual": 1.01, "physical": 1.05,
+        "pressure": 1.16, "discipline": 0.95, "blocks": 1.00, "rush": 1.06,
         "wants": {"anticipation": 1.3, "skating": 1.2, "aggressiveness": 1.2,
                   "checking": 1.1},
     },
@@ -154,6 +159,7 @@ DZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Vegas Golden Knights", "Boston Bruins"],
         "attack": 1.00, "defense": 0.96, "pace": 1.00,
         "shot_vol": 1.00, "shot_qual": 0.96, "physical": 1.00,
+        "pressure": 1.02, "discipline": 1.00, "blocks": 1.06, "rush": 1.00,
         "wants": {"anticipation": 1.3, "positioning": 1.2, "decisions": 1.2,
                   "skating": 1.1},
     },
@@ -167,6 +173,7 @@ DZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Dallas Stars", "New York Islanders"],
         "attack": 0.98, "defense": 0.92, "pace": 0.95,
         "shot_vol": 0.98, "shot_qual": 0.94, "physical": 1.05,
+        "pressure": 0.90, "discipline": 1.08, "blocks": 1.25, "rush": 0.95,
         "wants": {"bravery": 1.3, "positioning": 1.2, "strength": 1.1,
                   "shot_blocking": 1.2},
     },
@@ -180,6 +187,7 @@ DZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Vegas Golden Knights", "Carolina Hurricanes"],
         "attack": 1.01, "defense": 0.95, "pace": 1.04,
         "shot_vol": 1.00, "shot_qual": 0.97, "physical": 1.05,
+        "pressure": 1.06, "discipline": 1.00, "blocks": 1.12, "rush": 1.00,
         "wants": {"skating": 1.3, "stamina": 1.2, "anticipation": 1.2,
                   "aggressiveness": 1.1},
     },
@@ -200,6 +208,7 @@ OZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Colorado Avalanche", "Tampa Bay Lightning"],
         "attack": 1.04, "defense": 1.00, "pace": 1.00,
         "shot_vol": 1.00, "shot_qual": 1.06, "physical": 0.95,
+        "pressure": 1.00, "discipline": 1.00, "blocks": 1.00, "rush": 1.02,
         "wants": {"passing": 1.3, "puckhandling": 1.3, "skating": 1.2,
                   "flair": 1.2, "decisions": 1.1},
     },
@@ -215,6 +224,7 @@ OZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
                       "Vegas Golden Knights"],
         "attack": 1.03, "defense": 0.99, "pace": 0.95,
         "shot_vol": 0.98, "shot_qual": 1.08, "physical": 1.25,
+        "pressure": 1.06, "discipline": 1.00, "blocks": 1.00, "rush": 0.90,
         "wants": {"strength": 1.3, "work_rate": 1.2, "bravery": 1.1,
                   "puckhandling": 1.1, "flair": 0.7},
     },
@@ -228,6 +238,7 @@ OZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Toronto Maple Leafs", "New Jersey Devils"],
         "attack": 1.02, "defense": 1.01, "pace": 1.03,
         "shot_vol": 1.02, "shot_qual": 1.03, "physical": 1.00,
+        "pressure": 1.00, "discipline": 1.00, "blocks": 1.00, "rush": 1.04,
         "wants": {"skating": 1.2, "passing": 1.2, "flair": 1.2,
                   "anticipation": 1.1, "decisions": 1.1},
     },
@@ -241,6 +252,7 @@ OZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Colorado Avalanche", "Edmonton Oilers"],
         "attack": 1.05, "defense": 1.02, "pace": 1.10,
         "shot_vol": 1.08, "shot_qual": 1.00, "physical": 0.90,
+        "pressure": 1.00, "discipline": 0.97, "blocks": 1.00, "rush": 1.18,
         "wants": {"skating": 1.3, "shoot_pass_tendency": 1.3, "flair": 1.1,
                   "shooting": 1.2},
     },
@@ -255,6 +267,7 @@ OZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
                       "Vegas Golden Knights"],
         "attack": 1.04, "defense": 1.00, "pace": 1.02,
         "shot_vol": 1.10, "shot_qual": 1.02, "physical": 1.20,
+        "pressure": 1.06, "discipline": 0.94, "blocks": 1.00, "rush": 0.94,
         "wants": {"bravery": 1.3, "strength": 1.2, "work_rate": 1.2,
                   "deflections": 1.2, "flair": 0.7},
     },
@@ -274,6 +287,7 @@ BREAKOUT_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Tampa Bay Lightning", "Dallas Stars"],
         "attack": 1.01, "defense": 0.99, "pace": 0.99,
         "shot_vol": 1.00, "shot_qual": 1.01, "physical": 0.95,
+        "pressure": 1.00, "discipline": 1.02, "blocks": 1.00, "rush": 1.00,
         "wants": {"passing": 1.3, "decisions": 1.2, "puckhandling": 1.2,
                   "positioning": 1.1},
     },
@@ -286,6 +300,7 @@ BREAKOUT_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Colorado Avalanche", "Edmonton Oilers"],
         "attack": 1.03, "defense": 1.02, "pace": 1.05,
         "shot_vol": 1.02, "shot_qual": 1.02, "physical": 0.95,
+        "pressure": 1.00, "discipline": 0.98, "blocks": 1.00, "rush": 1.12,
         "wants": {"passing": 1.3, "skating": 1.2, "flair": 1.1,
                   "anticipation": 1.1},
     },
@@ -298,6 +313,7 @@ BREAKOUT_SYSTEMS: Dict[str, Dict[str, Any]] = {
         "exemplars": ["Philadelphia Flyers", "Nashville Predators"],
         "attack": 1.00, "defense": 1.00, "pace": 1.03,
         "shot_vol": 1.03, "shot_qual": 0.98, "physical": 1.10,
+        "pressure": 1.06, "discipline": 0.95, "blocks": 1.00, "rush": 1.06,
         "wants": {"skating": 1.2, "work_rate": 1.3, "aggressiveness": 1.2,
                   "strength": 1.1},
     },
@@ -808,6 +824,24 @@ def _normalize_catalogs() -> None:
         for sys in cat.values():
             if "physical" in sys:
                 sys["physical"] /= ph5
+
+    # The four event factors: same 5th-root treatment as physicality, so
+    # the SEEDED league sits at 1.0 on turnovers, penalties, blocks and
+    # rush bias too. Only identity moves a team off neutral.
+    for _key in ("pressure", "discipline", "blocks", "rush"):
+        _mean = wmean(lambda sd: FORECHECK_SYSTEMS[sd["forecheck"]]
+                      .get(_key, 1.0)
+                      * NEUTRAL_ZONE_SYSTEMS[sd["neutral_zone"]]
+                      .get(_key, 1.0)
+                      * DZONE_SYSTEMS[sd["dzone"]].get(_key, 1.0)
+                      * OZONE_SYSTEMS[sd["ozone"]].get(_key, 1.0)
+                      * BREAKOUT_SYSTEMS[sd["breakout"]]
+                      .get(_key, 1.0))
+        _fifth = _mean ** (1.0 / 5.0)
+        for cat in ES_ALL:
+            for sys in cat.values():
+                if _key in sys:
+                    sys[_key] /= _fifth
 
 
 # ---------------------------------------------------------------------------
@@ -1351,8 +1385,13 @@ def resolve_team_tactics(team: Any) -> Dict[str, float]:
     attack  = forecheck x neutral_zone x ozone x breakout
     defense = forecheck x neutral_zone x dzone   (lower = stingier)
     pace    = all five even-strength modules multiplied
+    pressure / discipline / blocks / rush = the four event factors,
+    each a product across the five even-strength modules.
     Special teams resolve separately. Familiarity mutes every edge
     toward 1.0 -- a team mid-transition plays like a team thinking.
+    The legacy aggression sliders fold in here too (single channel):
+    tactic_even_strength -> attack/defense/pace/shot_vol,
+    tactic_power_play -> pp, tactic_penalty_kill -> pk.
 
     Memoized per (systems, familiarity, coach prefs): systems only change
     between games, so one resolution serves the whole game.
@@ -1407,18 +1446,64 @@ def resolve_team_tactics(team: Any) -> Dict[str, float]:
     # attempts are point shots and bad angles, not grade-A looks.
     shot_vol = _apply_edge(vol_raw ** SHOT_VOL_DAMPEN, fam)
     shot_qual = _apply_edge(qual_raw / (vol_raw ** SHOT_QUAL_TRADEOFF), fam)
+
+    # The four event factors: pressure forces turnovers, discipline avoids
+    # penalties, blocks get in shooting lanes, rush tilts transition
+    # toward shots off the rush instead of the cycle. Product across the
+    # five even-strength modules, familiarity-muted like everything else.
+    def _ef(key):
+        return _apply_edge(fc.get(key, 1.0) * nz.get(key, 1.0)
+                           * dz.get(key, 1.0) * oz.get(key, 1.0)
+                           * bo.get(key, 1.0), fam)
+    pressure = _ef("pressure")
+    discipline = _ef("discipline")
+    blocks = _ef("blocks")
+    rush = _ef("rush")
+
+    # Legacy slider fold-in: the pre-module aggression sliders
+    # (tactic_even_strength / tactic_power_play / tactic_penalty_kill)
+    # used to apply in parallel with the modules, double-counting when
+    # both pushed the same way. They now live INSIDE this resolution --
+    # legacy saves keep their behavior, the sims read one channel.
+    # Applied raw (unmuted): a game-plan choice, not a system to learn.
+    _es = getattr(team, "tactic_even_strength", "Balanced") or "Balanced"
+    _es_attack = {"Very Defensive": 0.94, "Defensive": 0.97,
+                  "Balanced": 1.0, "Offensive": 1.04,
+                  "Very Offensive": 1.08}.get(_es, 1.0)
+    _es_defense = {"Very Defensive": 0.92, "Defensive": 0.96,
+                   "Balanced": 1.0, "Offensive": 1.03,
+                   "Very Offensive": 1.06}.get(_es, 1.0)
+    _es_tempo = {"Very Defensive": 0.96, "Defensive": 0.98,
+                 "Balanced": 1.0, "Offensive": 1.02,
+                 "Very Offensive": 1.04}.get(_es, 1.0)
+    attack *= _es_attack
+    defense *= _es_defense
+    pace = max(0.85, min(1.18, pace * _es_tempo))
+    shot_vol *= _es_tempo
+    _pp_legacy = {"Conservative": 0.96, "Balanced": 1.0, "Offensive": 1.05,
+                  "Very Offensive": 1.10}.get(
+                      getattr(team, "tactic_power_play", "Offensive")
+                      or "Offensive", 1.05)
+    _pk_legacy = {"Very Defensive": 1.10, "Defensive": 1.05, "Balanced": 1.0,
+                  "Aggressive": 0.96}.get(
+                      getattr(team, "tactic_penalty_kill", "Defensive")
+                      or "Defensive", 1.05)
     out = {
         "attack": attack,
         "defense": defense,
         "pace": pace,
         "shot_vol": shot_vol,
         "shot_qual": shot_qual,
-        "pp": _apply_edge(pp["pp"], fam),
-        "pk": _apply_edge(pk["pk"], fam),
+        "pp": _apply_edge(pp["pp"], fam) * _pp_legacy,
+        "pk": _apply_edge(pk["pk"], fam) * _pk_legacy,
         "sh_threat": pk.get("sh_threat", 1.0),
         "physical": (fc.get("physical", 1.0) * nz.get("physical", 1.0)
                      * dz.get("physical", 1.0) * oz.get("physical", 1.0)
                      * bo.get("physical", 1.0)),
+        "pressure": pressure,
+        "discipline": discipline,
+        "blocks": blocks,
+        "rush": rush,
         "fit": fit,
         "familiarity": _get(team, "tactics_familiarity", 85),
         "identity": matching_identity(team),
@@ -1456,6 +1541,18 @@ def matchup_modifiers(home: Any, away: Any) -> Dict[str, float]:
         "home_shot_qual": h["shot_qual"],
         "away_shot_qual": a["shot_qual"],
         "physical": (h["physical"] + a["physical"]) / 2.0,
+        # Event factors, per side: pressure forces turnovers, discipline
+        # avoids penalties, blocks get in lanes, rush tilts to shots off
+        # the rush. Each side's own number -- the sim applies the right
+        # side's factor at each gate.
+        "home_pressure": h["pressure"],
+        "away_pressure": a["pressure"],
+        "home_discipline": h["discipline"],
+        "away_discipline": a["discipline"],
+        "home_blocks": h["blocks"],
+        "away_blocks": a["blocks"],
+        "home_rush": h["rush"],
+        "away_rush": a["rush"],
     }
 
 

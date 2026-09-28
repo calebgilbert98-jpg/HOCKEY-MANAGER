@@ -85,3 +85,27 @@ prospect inclusion, card text, forced U23 crossover, 60-seed plausibility
 
 Regressions green: outdoor 49/49, lottery 28/28, wave3 52/52, ledger 49/49,
 tactics 119/119.
+
+---
+
+## Addendum 2026-09-28 — inclusive strength + performance
+
+**Strength now uses every implemented player factor** (was: mean raw
+overall). Per player: effective overall = overall x (1 + 0.05 x
+mesh_form) x (0.95 + morale/100 x 0.10) — hot, confident players win
+short tournaments. Goalies weighted **1.6x** (short tournaments ride
+the hot goalie). Roster chemistry bonus (cap +2.0): +0.15 per
+countryman pair sharing an NHL club (cap +1.0) + 0.25 per
+prior-tournament intl_bond point (cap +1.0). Selection still picks the
+best raw overalls; the factors decide the games.
+
+**Performance.** A full 32-team Olympic tournament resolves in ~77ms
+(Worlds ~17ms) — one pass over rosters, one O(23^2) chemistry check
+per nation, a <=7-game bracket. The day-flow hook is a date-tuple
+comparison on every other day of the year; tournaments fire once per
+year (Feb 10 Olympics in Olympic years, May 12 Worlds), non-fatal,
+never touching the NHL schedule. Nothing here can slow the user
+experience: no per-tick cost, no extra passes over the league.
+
+QA: `qa_international.py` 44/44; perf assertions live in
+`qa_tactics_factors.py` (full 32-team Olympics < 2s, measured ~0.08s).

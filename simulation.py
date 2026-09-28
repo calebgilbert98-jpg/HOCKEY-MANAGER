@@ -4113,7 +4113,15 @@ class GameSim:
             self._resolve_scoring_chance(attacker, attacking_team, defending_team)
             return "Scoring Chance", attacking_team 
         else:
-            if random.random() < (defender.hitting_tendency / 1000.0) and (100 - defender.discipline) / 5 > random.randint(1, 20):
+            # Installed systems: undisciplined teams foul more when they
+            # lose the 1v1 battle.
+            try:
+                import tactics as _txd
+                _disc = _txd.resolve_team_tactics(
+                    defending_team).get("discipline", 1.0)
+            except Exception:
+                _disc = 1.0
+            if random.random() < (defender.hitting_tendency / 1000.0) * max(0.5, min(1.5, 2.0 - _disc)) and (100 - defender.discipline) / 5 > random.randint(1, 20):
                 self._resolve_penalty(defender, defending_team)
                 return "Penalty", attacking_team 
             
@@ -4282,6 +4290,15 @@ class GameSim:
         
         # Apply defensive pressure modifier (Stage 4)
         base_block_chance *= self.defensive_pressure
+
+        # Installed systems: passive-box teams sell out to block, swarm
+        # teams chase and block less.
+        try:
+            import tactics as _txb
+            base_block_chance *= _txb.resolve_team_tactics(
+                defending_team).get("blocks", 1.0)
+        except Exception:
+            pass
         
         # Choose the blocker by weighted draw: attributes x archetype block
         # tendency, so defensive D/grinders block most but not exclusively.
@@ -6662,6 +6679,26 @@ class GameSim:
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
+
+        # Installed systems: the defending side's forecheck pressure
+        # forces turnovers (swarm teams strip pucks, passive teams
+        # contain). The attacking side's rush identity tilts the mix
+        # from cycle to shots off the rush.
+        try:
+            import tactics as _txo
+            _dtx = _txo.resolve_team_tactics(defending_team)
+            _atx = _txo.resolve_team_tactics(attacking_team)
+            turnover_chance = max(0.05, min(0.5,
+                turnover_chance * _dtx.get("pressure", 1.0)))
+            _rush = _atx.get("rush", 1.0)
+            if _rush != 1.0:
+                _shift = cycle_chance * (1.0 - 1.0 / _rush)
+                _shift = max(-shot_chance * 0.5,
+                             min(cycle_chance * 0.5, _shift))
+                cycle_chance -= _shift
+                shot_chance += _shift
+        except Exception:
+            pass
         
         # Apply special situation modifiers (Stage 3)
         shot_chance = self._apply_situation_modifiers(shot_chance, current_situation, formation)
@@ -7904,6 +7941,25 @@ class GameSim:
             (HitResult.INJURY_CAUSED, 0.05)
         ]
 
+        # Installed systems: the hitting side's forecheck pressure turns
+        # more hits into turnovers; its discipline decides how often the
+        # big hit draws a penalty instead.
+        try:
+            import tactics as _txh
+            _htx = _txh.resolve_team_tactics(
+                self._get_player_team(hitting_player))
+            _hpress = _htx.get("pressure", 1.0)
+            _hdisc = max(0.5, min(1.5,
+                                  2.0 - _htx.get("discipline", 1.0)))
+            results = [
+                (HitResult.SUCCESSFUL, 0.6),
+                (HitResult.TURNOVER_CAUSED, 0.25 * _hpress),
+                (HitResult.PENALTY_DRAWN, 0.1 * _hdisc),
+                (HitResult.INJURY_CAUSED, 0.05)
+            ]
+        except Exception:
+            pass
+
         # Trait: Iron Man recipients are harder to injure (0.75x chance).
         try:
             iron_mult = _trait_bonus(target_player, "injury_chance_mult", 1.0)
@@ -8747,30 +8803,15 @@ class GameSim:
         sit_att = self._team_situation(attacking_team, situation)
         sit_def = self._team_situation(defending_team, situation)
 
-        es_attack = {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
-                     'Offensive': 1.04, 'Very Offensive': 1.08}
-        es_defense = {'Very Defensive': 0.92, 'Defensive': 0.96, 'Balanced': 1.0,
-                      'Offensive': 1.03, 'Very Offensive': 1.06}
-        factor = (es_attack.get(getattr(attacking_team, 'tactic_even_strength', 'Balanced'), 1.0)
-                  * es_defense.get(getattr(defending_team, 'tactic_even_strength', 'Balanced'), 1.0))
+        # Installed NHL systems (tactics.py) -- the single tactics channel.
+        # The legacy aggression sliders (tactic_even_strength /
+        # tactic_power_play / tactic_penalty_kill) fold into
+        # resolve_team_tactics itself now, so the old string maps below
+        # are retired: one number per side, no double-counting.
+        factor = 1.0
 
-        # Special-teams approach
-        if sit_att == SpecialSituation.POWER_PLAY:
-            pp = getattr(attacking_team, 'tactic_power_play', 'Offensive')
-            factor *= {'Conservative': 0.96, 'Balanced': 1.0, 'Offensive': 1.05,
-                       'Very Offensive': 1.10}.get(pp, 1.05)
-            pk = getattr(defending_team, 'tactic_penalty_kill', 'Defensive')
-            factor /= {'Very Defensive': 1.10, 'Defensive': 1.05, 'Balanced': 1.0,
-                       'Aggressive': 0.96}.get(pk, 1.05)
-        elif sit_def == SpecialSituation.POWER_PLAY:
-            # Attacking team is shorthanded: their PK approach suppresses own xG slightly
-            pk = getattr(attacking_team, 'tactic_penalty_kill', 'Defensive')
-            factor *= {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
-                       'Aggressive': 1.02}.get(pk, 0.97)
-
-        # Installed NHL systems (tactics.py): layered under the old
-        # aggression sliders. Your attack against their structure; your
-        # power play against their kill.
+        # Your attack against their structure; your power play against
+        # their kill.
         try:
             import tactics as _tx
             _att = _tx.resolve_team_tactics(attacking_team)

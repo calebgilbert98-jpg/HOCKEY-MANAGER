@@ -181,3 +181,50 @@ built on the zone modules (not the old sliders).
   never copy.
 - News carries historical lore (`BLUEPRINT_LORE`): e.g. trap adoption ->
   "the way the whole league chased Lemaire's trap after '95".
+
+---
+
+## Addendum 2026-09-28 — full factor coverage + legacy slider fold-in
+
+**What changed.** The zone modules now scale every sim factor they
+plausibly touch, not just shots/goals/hits/PP/PK. Four new resolved
+factors (each a product across the five even-strength modules,
+familiarity-muted, seed-normalized to 1.0):
+
+- `pressure` — the defending/forechecking side forces more turnovers
+  (2-1-2 swarm 1.20, counter-press 1.16, passive box 0.90).
+- `discipline` — >1.0 takes fewer penalties (trap/box high, swarm and
+  net-front crash low). Applied as `(2.0 - discipline)`, clamped.
+- `blocks` — gets in shooting lanes (passive box 1.25, slide-match
+  1.12, hybrid 1.06).
+- `rush` — tilts transition from cycle to shots off the rush (rush
+  O-zone 1.18, stretch breakout 1.12, cycle 0.90).
+
+**Legacy sliders folded in.** `tactic_even_strength`,
+`tactic_power_play`, `tactic_penalty_kill` used to apply in parallel
+with the modules (double-counting when both pushed the same way).
+They now live *inside* `resolve_team_tactics` — the old string maps
+verbatim (ES attack 0.94–1.08, PP 0.96–1.10, PK divisor 1.10–0.96) —
+so legacy saves keep their behavior and both sims read one channel.
+The parallel applications were removed from
+`GameSim._team_tactics_xg_factor` (simulation.py) and from
+`AdvancedGameSim`'s shot-chance pipeline (main.py). At default slider
+values the fold-in is exactly neutral (PP x1.05 cancels PK x1.05 via
+the `(2.0 - pk)` inversion), so the seeded league doesn't move.
+
+**Engine gates.** GameSim: turnover gate x defender `pressure`,
+`_check_shot_blocking` x defender `blocks`, defender-penalty check and
+hit-result PENALTY_DRAWN weight x `(2.0 - discipline)`, hit-result
+TURNOVER_CAUSED weight x hitter `pressure`, cycle->shot shift by
+attacker `rush`. AdvancedGameSim: `_determine_event_type` pass->shot
+shift by puck-team `rush`, `_resolve_pass_event` defense_skill x
+opponent `pressure`, `_check_shot_blocking` gate x `blocks`,
+`_check_for_penalty` x `(2.0 - discipline)`. `matchup_modifiers`
+exposes all eight per-side keys.
+
+**Calibration.** `_normalize_catalogs()` centers all four factors on
+the 32 NHL seeds (5th-root split, same as physicality): seeded league
+sits at 1.0000 on every factor; only identity moves a team. 40-game
+GameSim sample post-change: 3.33 team GPG (band 2.70–3.60).
+
+QA: `qa_tactics_factors.py` 157/157.

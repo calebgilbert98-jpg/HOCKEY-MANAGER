@@ -2258,6 +2258,15 @@ class AdvancedGameSim:
             _sv = _m.get("home_shot_vol" if _h else "away_shot_vol", 1.0)
             import tactics as _txl
             shot_prob *= _sv * _txl.SHOT_LIFT
+            # Rush identity: rush teams shoot off the rush instead of
+            # taking the extra pass -- shift mass pass -> shot.
+            _rush = _m.get("home_rush" if _h else "away_rush", 1.0)
+            if _rush != 1.0:
+                _rshift = pass_prob * (1.0 - 1.0 / _rush)
+                _rshift = max(-shot_prob * 0.5,
+                              min(pass_prob * 0.5, _rshift))
+                pass_prob -= _rshift
+                shot_prob += _rshift
         except Exception:
             pass
         
@@ -2643,49 +2652,11 @@ class AdvancedGameSim:
         except Exception:
             pass
         
-        if self.pp_team:
-            # Power play tactics
-            pp_tactic = getattr(shooting_team, 'tactic_power_play', 'Offensive')
-            if pp_tactic == 'Very Offensive':
-                shot_chance += 0.035  # More aggressive, higher risk/reward
-            elif pp_tactic == 'Offensive':
-                shot_chance += 0.025
-            elif pp_tactic == 'Conservative':
-                shot_chance += 0.005  # Patient, prevent shorthanded goals against
-            else:  # Balanced
-                shot_chance += 0.015
-        elif self.pk_team == puck_team_name:
-            # Shorthanded: PK tactics affect shorthanded chances
-            pk_tactic = getattr(shooting_team, 'tactic_penalty_kill', 'Defensive')
-            if pk_tactic == 'Aggressive':
-                shot_chance += 0.01  # More shorthanded rushes
-            elif pk_tactic == 'Balanced':
-                shot_chance += 0.005
-            elif pk_tactic == 'Very Defensive':
-                shot_chance -= 0.005  # Pure survival mode
-            # Defensive: focus on clearing, fewer shots
-        else:
-            # Even strength tactics
-            es_tactic = getattr(shooting_team, 'tactic_even_strength', 'Balanced')
-            if es_tactic == 'Very Offensive':
-                shot_chance += 0.02  # All-out attack
-            elif es_tactic == 'Offensive':
-                shot_chance += 0.01  # More shots, higher quality chances
-            elif es_tactic == 'Defensive':
-                shot_chance -= 0.008  # Fewer shots, focus on defense
-            elif es_tactic == 'Very Defensive':
-                shot_chance -= 0.014  # Trap hockey
-            
-            # Defending team's tactics affect shot quality against
-            def_tactic = getattr(defending_team, 'tactic_even_strength', 'Balanced')
-            if def_tactic == 'Very Defensive':
-                shot_chance -= 0.012  # Maximum structure
-            elif def_tactic == 'Defensive':
-                shot_chance -= 0.008  # Tight defense reduces quality
-            elif def_tactic == 'Offensive':
-                shot_chance += 0.005  # Aggressive D leaves gaps
-            elif def_tactic == 'Very Offensive':
-                shot_chance += 0.008  # Pinching D, odd-man rushes both ways
+        # Legacy slider blocks retired: tactic_power_play /
+        # tactic_penalty_kill / tactic_even_strength now fold into
+        # resolve_team_tactics itself, and the _systems_edge_for channel
+        # below (plus the shot_qual channel) applies them -- one channel,
+        # no double-counting with the installed modules.
         
         # Home-ice + crowd (arena_atmosphere): the structural last-change
         # edge (+0.25% flat) plus the building's mood -- a jacked crowd lifts
@@ -2924,7 +2895,14 @@ class AdvancedGameSim:
 
     def _check_shot_blocking(self, defending_team, fatigue_factor):
         """Legacy shot blocking method for compatibility"""
-        if random.random() > 0.05:  # Drastically reduced from 0.12 to 0.05 (only 5% block rate)
+        # Installed systems: passive-box teams sell out to block.
+        try:
+            _mm = self._systems_matchup or {}
+            _mh = defending_team == self.home_team.team_name
+            _block_mult = _mm.get("home_blocks" if _mh else "away_blocks", 1.0)
+        except Exception:
+            _block_mult = 1.0
+        if random.random() > 0.05 * _block_mult:  # Drastically reduced from 0.12 to 0.05 (only 5% block rate)
             return False
             
         defenders = [p for p in self.on_ice[defending_team]['Defense'] if p]
@@ -2972,6 +2950,14 @@ class AdvancedGameSim:
             getattr(defender, 'defensive_awareness', 10) * 0.4 +
             getattr(defender, 'anticipation', 10) * 0.2
         ) if defender else 10
+        # Installed systems: a pressing team's forecheck gets home more
+        # often -- swarm/counter-press defenders break up more passes.
+        try:
+            _mm = self._systems_matchup or {}
+            _mh = opp_team_name == self.home_team.team_name
+            defense_skill *= _mm.get("home_pressure" if _mh else "away_pressure", 1.0)
+        except Exception:
+            pass
         
         pass_success = pass_skill > defense_skill or random.random() < 0.7
         
@@ -3096,6 +3082,16 @@ class AdvancedGameSim:
         discipline_mod = (10 - discipline_rating) * 0.001
         aggr_mod = (aggressiveness - 10) * 0.0008
         penalty_chance = min(0.06, max(0.005, base + discipline_mod + aggr_mod))
+        # Installed systems: undisciplined teams (swarm forecheck,
+        # net-front crash) foul more; trap/box teams stay out of the box.
+        try:
+            _mm = self._systems_matchup or {}
+            _mh = puck_team_name == self.home_team.team_name
+            _disc = _mm.get("home_discipline" if _mh else "away_discipline", 1.0)
+            penalty_chance *= max(0.5, min(1.5, 2.0 - _disc))
+            penalty_chance = min(0.06, max(0.005, penalty_chance))
+        except Exception:
+            pass
 
         if random.random() >= penalty_chance:
             return
