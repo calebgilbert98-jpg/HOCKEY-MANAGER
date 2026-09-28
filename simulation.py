@@ -6165,6 +6165,22 @@ class GameSim:
         self._return_all_goalies()
         shooter.stats.goals += 1
         self.game_stats[shooter.id]['g'] += 1
+        # Plus/minus: even-strength goals only, on-ice skaters (not goalies)
+        try:
+            is_pp = self._is_team_on_power_play(scoring_team)
+            is_pk = self._is_team_on_penalty_kill(scoring_team)
+            if not is_pp and not is_pk:
+                opp = self.away_team if scoring_team == self.home_team else self.home_team
+                for p in self._get_on_ice(scoring_team):
+                    if p.primary_position != PlayerPosition.GOALIE and p.id in self.game_stats:
+                        self.game_stats[p.id]['plus_minus'] = \
+                            self.game_stats[p.id].get('plus_minus', 0) + 1
+                for p in self._get_on_ice(opp):
+                    if p.primary_position != PlayerPosition.GOALIE and p.id in self.game_stats:
+                        self.game_stats[p.id]['plus_minus'] = \
+                            self.game_stats[p.id].get('plus_minus', 0) - 1
+        except Exception:
+            pass
         if empty_net:
             self.game_stats[shooter.id]['empty_net_goals'] = \
                 self.game_stats[shooter.id].get('empty_net_goals', 0) + 1
