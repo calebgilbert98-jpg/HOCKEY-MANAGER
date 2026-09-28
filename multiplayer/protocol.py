@@ -157,7 +157,8 @@ SUPPORTED_ACTIONS = {
     # windows use.
     "sign_free_agent",  # params: {team_id, player_id, salary, years}
     "release_player",   # params: {team_id, player_id}
-    "send_to_minors",   # params: {team_id, player_id, ntc_consent?}
+    "send_to_minors",   # params: {team_id, player_id}; NMC consent is
+                       # host-side (NTC_WAIVER_REQUEST, context="waivers")
     "call_up",          # params: {team_id, player_id}
     "claim_waivers",    # params: {team_id, player_id}
     "buyout_player",    # params: {team_id, player_id}

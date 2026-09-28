@@ -1695,7 +1695,8 @@ class HockeyManagerGUI(tk.Tk):
         #              partner_team, partner_client_id|None (None = host's team)}
         self._mp_pending_offers = {}
         # NTC/NMC waiver prompts awaiting a client's player answer:
-        # player_id -> {offer snapshot..., kind: trade}
+        # waiver_id -> {kind: trade|demote, ...} (trade entries also carry
+        # the proposal snapshot + veto list)
         self._mp_pending_ntc = {}
         if self.mp_host is not None or self.mp_client is not None:
             self.after(400, self._poll_multiplayer)
@@ -6231,6 +6232,21 @@ class HockeyManagerGUI(tk.Tk):
             if team is not None:
                 # Nobody's driving: back to AI control.
                 team.is_human_managed = False
+            # Drop any waiver/trade flows owned by the departed manager --
+            # their one-transaction waivers die with the negotiation.
+            _left_team = payload.get("team_id", "")
+            if _left_team:
+                for _wid in [w for w, p in
+                             self._mp_pending_ntc.items()
+                             if p.get("team_id") == _left_team]:
+                    self._mp_pending_ntc.pop(_wid, None)
+                for _oid in [o for o, p in
+                             self._mp_pending_offers.items()
+                             if p.get("proposer_team_id") == _left_team
+                             or p.get("partner_team_id") == _left_team]:
+                    _prop = self._mp_pending_offers.pop(_oid, None)
+                    if _prop:
+                        self._mp_clear_proposal_waivers(_prop)
             self._mp_toast(
                 f"{payload.get('name', '?')} left "
                 f"({payload.get('reason', '')})")
@@ -6483,7 +6499,9 @@ class HockeyManagerGUI(tk.Tk):
             return False, "That player isn't on your club."
         team.remove_player(player)
         try:
-            fa_pool = self.free_agents() or []
+            fa_pool = self.free_agents()
+            if fa_pool is None:
+                fa_pool = []
             if player not in fa_pool:
                 fa_pool.append(player)
         except Exception:
@@ -6495,7 +6513,12 @@ class HockeyManagerGUI(tk.Tk):
         return True, f"Released {player.full_name}."
 
     def _mp_send_to_minors(self, params, team, manager):
-        """Waive-and-assign: mirrors WaiversView.place_on_waivers()."""
+        """Waive-and-assign: mirrors WaiversView.place_on_waivers().
+
+        An NMC blocks the move without the player's consent -- the host
+        asks the player itself (will_waive_ntc, context="waivers"), exactly
+        like single-player. The client's word is never trusted.
+        """
         player = self._mp_team_player(team, params.get("player_id", ""))
         if player is None:
             return False, "That player isn't on your club."
@@ -6503,13 +6526,15 @@ class HockeyManagerGUI(tk.Tk):
             return False, "Only NHL-roster players go through waivers."
         try:
             import trade_engine as te
-            if te.nmc_blocks_assignment(player) \
-                    and not params.get("ntc_consent"):
-                return False, (
-                    f"{player.full_name} has a no-movement clause -- he "
-                    "must agree first (send ntc_consent=true).")
+            kind, _detail = te.clause_of(player) or (None, "")
         except Exception:
-            pass
+            kind = None
+        if kind == "NMC":
+            return self._mp_begin_consent_flow(team, player, manager)
+        return self._mp_demote_player(team, player)
+
+    def _mp_demote_player(self, team, player):
+        """The actual waiver placement (runs after any NMC consent)."""
         player.on_waivers = True
         player.waiver_days = 2
         try:
@@ -6523,6 +6548,42 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         return True, f"{player.full_name} placed on waivers."
+
+    def _mp_begin_consent_flow(self, team, player, manager):
+        """Host-side NMC consent for a demotion: stash the intent, ask the
+        client's player via NTC_WAIVER_REQUEST (context="waivers").
+        Returns (True, status, no-broadcast) -- the demotion itself runs
+        when the answer comes back in _mp_resolve_ntc_answer."""
+        import uuid as _uuid
+        waiver_id = _uuid.uuid4().hex[:10]
+        session_id = self._mp_peer_session_for_team(team.team_name)
+        if session_id is None:
+            return False, "Could not reach your client."
+        try:
+            import trade_engine as te
+            _kind, detail = te.clause_of(player) or ("NMC", "no-movement")
+        except Exception:
+            detail = "no-movement clause"
+        self._mp_pending_ntc[waiver_id] = {
+            "kind": "demote",
+            "team_id": team.team_name,
+            "manager": manager,
+            "player_id": str(getattr(player, "id", "")),
+            "player_name": getattr(player, "full_name", "player"),
+            "clause": detail,
+        }
+        try:
+            self.mp_host.send_ntc_waiver_request(
+                session_id, waiver_id, str(getattr(player, "id", "")),
+                getattr(player, "full_name", "player"), detail,
+                "the waiver wire", "waivers")
+        except Exception:
+            self._mp_pending_ntc.pop(waiver_id, None)
+            return False, "Could not reach your client."
+        return (True,
+                f"{getattr(player, 'full_name', 'He')} has a no-movement "
+                f"clause -- waiting on his answer.",
+                False)
 
     def _mp_call_up(self, params, team, manager):
         """Recall from the AHL: mirrors the waivers-view claim checks."""
@@ -6596,23 +6657,17 @@ class HockeyManagerGUI(tk.Tk):
         player = self._mp_team_player(team, params.get("player_id", ""))
         if player is None:
             return False, "That player isn't on your club."
-        try:
-            import trade_engine as te
-            if te.nmc_blocks_assignment(player) \
-                    and not params.get("ntc_consent"):
-                return False, (
-                    f"{player.full_name} has a no-movement clause -- he "
-                    "must agree first (send ntc_consent=true).")
-        except Exception:
-            pass
+        # Note: no NMC check here -- matches single-player, where buyouts
+        # don't require the player's consent (only waivers/assignment do).
         try:
             import windows as _w
-            _sched = _w.buyout_schedule(player)
+            # Tuple like the single-player view unpacks it:
+            # (total_cost, annual_hit, buyout_years, rows).
+            _total, annual, byears, rows = _w.buyout_schedule(player)
         except Exception as e:
             return False, f"Buyout failed: {e}"
-        rows = getattr(_sched, "rows", None) or []
-        annual = int(getattr(_sched, "annual_cap_hit", 0) or 0)
-        byears = int(getattr(_sched, "buyout_years", 0) or 0)
+        annual = int(annual or 0)
+        byears = int(byears or 0)
         if not rows:
             return False, "Buyout schedule came back empty."
         try:
@@ -6629,7 +6684,9 @@ class HockeyManagerGUI(tk.Tk):
             hits[yr] = hits.get(yr, 0) + int(_hit)
         team.remove_player(player)
         try:
-            fa_pool = self.free_agents() or []
+            fa_pool = self.free_agents()
+            if fa_pool is None:
+                fa_pool = []
             if player not in fa_pool:
                 fa_pool.append(player)
         except Exception:
@@ -7014,6 +7071,7 @@ class HockeyManagerGUI(tk.Tk):
         if session_id is None:
             return False, "Could not reach your client."
         self._mp_pending_ntc[waiver_id] = {
+            "kind": "trade",
             "proposal": proposal,
             "vetoes": [{"player_id": str(getattr(v["player"], "id", "")),
                         "player_name": getattr(v["player"], "full_name",
@@ -7049,14 +7107,22 @@ class HockeyManagerGUI(tk.Tk):
                 False)
 
     def _mp_resolve_ntc_answer(self, payload):
-        """Host-side NTC_WAIVER_ANSWER: ask/remove/cancel for one veto,
-        then continue the waiver flow or route the (possibly trimmed)
-        proposal."""
+        """Host-side NTC_WAIVER_ANSWER: ask/remove/cancel.
+
+        kind="trade": for one veto, then continue the waiver flow or route
+        the (possibly trimmed) proposal.
+        kind="demote": the player's answer to a waiver-exposure request --
+        on "ask"-granted the demotion runs, anything else keeps him on
+        the roster.
+        """
         import trade_engine as te
         waiver_id = payload.get("waiver_id", "")
         choice = payload.get("choice", "cancel")
         pend = self._mp_pending_ntc.get(waiver_id)
         if pend is None:
+            return
+        if pend.get("kind", "trade") == "demote":
+            self._mp_resolve_demote_answer(pend, waiver_id, choice)
             return
         proposal = pend["proposal"]
         vetoes = pend["vetoes"]
@@ -7120,6 +7186,64 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_continue_waiver_flow(waiver_id, pend, _drop)
         else:
             _drop(f"{v['player_name']} refused to waive ({why})")
+
+    def _mp_resolve_demote_answer(self, pend, waiver_id, choice):
+        """Resolve a demotion NMC consent: "ask" rolls the player's decision
+        (context="waivers", like single-player); anything else keeps him
+        on the roster. The demotion itself only ever runs here, on the
+        host, after a granted answer."""
+        import trade_engine as te
+        self._mp_pending_ntc.pop(waiver_id, None)
+        team = self._mp_find_team(pend.get("team_id", ""))
+        name = pend.get("player_name", "The player")
+        if team is None:
+            return
+        player = self._mp_team_player(team, pend.get("player_id", ""))
+        if player is None:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} moved clubs while his waiver answer was "
+                    f"pending -- demotion cancelled.")
+            except Exception:
+                pass
+            return
+        if choice != "ask":
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} stays on the roster "
+                    f"({pend.get('manager', 'his GM')} didn't ask him to "
+                    f"waive his {pend.get('clause', 'no-movement clause')}).")
+            except Exception:
+                pass
+            return
+        try:
+            league = getattr(self, "league", None)
+            granted, why = te.will_waive_ntc(player, team, None, league,
+                                             context="waivers")
+        except Exception as e:
+            granted, why = False, str(e)
+        if not granted:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} refused to waive his "
+                    f"{pend.get('clause', 'no-movement clause')} ({why}) -- "
+                    f"he stays on the roster.")
+            except Exception:
+                pass
+            return
+        try:
+            self.mp_host.broadcast_chat(
+                f"{name} agreed to be exposed on waivers ({why}).")
+        except Exception:
+            pass
+        ok, detail = self._mp_demote_player(team, player)
+        if not ok:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Demotion failed after the waiver was granted: "
+                    f"{detail}")
+            except Exception:
+                pass
 
     def _mp_continue_waiver_flow(self, waiver_id, pend, _drop):
         """Advance a waiver flow: next prompt, or route the offer when the
@@ -7825,21 +7949,31 @@ class HockeyManagerGUI(tk.Tk):
                        if accept else "Trade offer rejected.")
 
     def _mp_answer_ntc_request(self, payload):
-        """No-trade/no-movement waiver prompt: same three choices as the
-        single-player trade screen (ask him / remove him / cancel)."""
+        """No-trade/no-movement waiver prompt: same choices as single-player
+        (ask him / remove him / cancel for trades; ask him / keep him for
+        waiver exposure)."""
         from popup_system import messagebox
         waiver_id = payload.get("waiver_id", "")
         player_id = payload.get("player_id", "")
         name = payload.get("player_name", "A player")
         clause = payload.get("clause", "clause")
         dest = payload.get("dest_team", "?")
+        context = payload.get("context", "trade")
+        if context == "waivers":
+            title = "No-movement clause"
+            question = (f"{name} has a {clause}.\n\n"
+                        f"He must approve being exposed on waivers. "
+                        f"Ask him?\n\n"
+                        f"Yes = ask him  |  No = keep him on the roster  |  "
+                        f"Cancel = stop")
+        else:
+            title = "No-trade clause"
+            question = (f"{name} has a {clause}.\n\n"
+                        f"Ask him to waive it for a move to {dest}?\n\n"
+                        f"Yes = ask him  |  No = remove him from the offer  |  "
+                        f"Cancel = stop")
         try:
-            ans = messagebox.askyesnocancel(
-                "No-trade clause",
-                f"{name} has a {clause}.\n\n"
-                f"Ask him to waive it for a move to {dest}?\n\n"
-                "Yes = ask him  |  No = remove him from the offer  |  "
-                "Cancel = stop")
+            ans = messagebox.askyesnocancel(title, question)
         except Exception:
             ans = None
         choice = "ask" if ans is True else ("remove" if ans is False
