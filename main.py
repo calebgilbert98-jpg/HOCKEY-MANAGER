@@ -6654,6 +6654,15 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         team.add_player(player)
+        # Rivalry lifecycle: an MP free-agent signing is a transfer, same
+        # as the single-player path -- personal beefs follow the man.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=None, to_team=team)
+        except Exception:
+            pass
         try:
             self.add_news(
                 f"{player.full_name} signed by {team.team_name}: "
@@ -11823,9 +11832,12 @@ class HockeyManagerGUI(tk.Tk):
                 r = race()
                 top = r[0] if r else None
                 # Rivalry lifecycle: a photo-finish award race gets
-                # personal. Top two within 5% on the race's own score
-                # reads as a genuinely contested vote. Runaways don't
-                # make enemies. Additive: rivalries only.
+                # personal -- but only when at least one man has the
+                # personality to take it personally (record_award_race
+                # gates on base_controversy / fiery temperament).
+                # Top two within 5% on the race's own score reads as a
+                # genuinely contested vote. Runaways don't make enemies.
+                # Additive: rivalries only.
                 if award_name and r and len(r) >= 2:
                     try:
                         s1 = float(r[0].get("score", 0) or 0)
@@ -14840,6 +14852,16 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
             self.user_team.add_player(person, "roster")
+            # Rivalry lifecycle: a free-agent signing is a transfer -- his
+            # personal beefs follow him to the new room; ambient noise he
+            # merely encouraged stays behind. Same chokepoint as trades.
+            try:
+                from reputation_system import on_player_transfer as _opt
+                _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+                if isinstance(_rivs, list):
+                    _opt(_rivs, person, from_team=None, to_team=self.user_team)
+            except Exception:
+                pass
         self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})
 
         # Generate media event for signing (if media system enabled)

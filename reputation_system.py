@@ -2541,6 +2541,25 @@ def record_firing(rivalries: list, coach: Any, team: Any) -> Dict[str, Any]:
 
 
 def record_award_race(rivalries: list, pa: Any, pb: Any, award: str) -> Dict[str, Any]:
+    """An award race got personal -- but only for players with the
+    personality to take it that way. A photo finish between two
+    even-keeled pros is just a good race; it takes a hothead (or a
+    fiery goalie) to carry it as a grudge. Gated on the LOCKED
+    personality baseline (controversy_baseline: base_controversy dealt
+    at generation from discipline/composure/aggressiveness), not the
+    incident ratchet -- a saint who had one bad week doesn't suddenly
+    take Hart snubs personally, and a quiet hothead still has the
+    nature. Either man qualifying is enough: he's the one who bristles.
+    Returns the record, or {} when neither man has the attitude."""
+    def _takes_it_personally(p: Any) -> bool:
+        try:
+            if str(getattr(p, "goalie_temperament", "") or "").lower() == "fiery":
+                return True
+            return int(controversy_baseline(p)) >= 40
+        except Exception:
+            return False
+    if not (_takes_it_personally(pa) or _takes_it_personally(pb)):
+        return {}
     return add_rivalry(
         rivalries, pa, pb, "player_player", 25, "award_race",
         f"{_ename(pa)} vs {_ename(pb)}: {award} race got personal.",

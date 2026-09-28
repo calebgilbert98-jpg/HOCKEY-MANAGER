@@ -140,6 +140,7 @@ lg2.add_team(_mkteam("Team A", "A"))
 lg2.add_team(_mkteam("Team B", "B"))
 lg2.season_year = 2026  # -> 2027; 2027 % 3 != 0 => decay only
 pc, pd = _mkplayer(3, "Mild One"), _mkplayer(4, "Mild Two")
+pc.base_controversy = 60  # personality to take the snub personally
 rs.record_award_race(lg2.rivalries, pc, pd, "Hart Trophy")
 r2 = rivalry_between(lg2.rivalries, pc, pd)
 i2 = r2["intensity"]
@@ -162,6 +163,7 @@ moved = _mkplayer(10, "Traded Star", overall=90)
 rs.record_major_injury(pleague.rivalries, moved, _mkplayer(11, "Old Foe"),
                        season_ending=True)
 # Ambient beef: left behind.
+moved.base_controversy = 60  # personality to take the snub personally
 rs.record_award_race(pleague.rivalries, moved, _mkplayer(12, "Rival Scorer"),
                      "Art Ross Trophy")
 te._post_trade_effects(ta, tb, [moved], [], "2026-10-01", pleague)
@@ -275,8 +277,9 @@ except Exception as e:
 # ------------------------------------------------------- award races
 import awards_race as ar
 
-# Photo finish: 3 points apart on ~120 -> personal.
+# Photo finish: 3 points apart on ~120 -> personal (for the right personality).
 a1 = _mkplayer(30, "Hart Winner"); a1.goals = 50; a1.assists = 70
+a1.base_controversy = 65  # the type to bristle at a snub
 a2 = _mkplayer(31, "Hart Runner"); a2.goals = 48; a2.assists = 69
 for p in (a1, a2):
     p.games_played = 82
@@ -304,6 +307,16 @@ race2 = ar.art_ross_race([b1, b2])
 t1s = float(race2[0]["score"]); t2s = float(race2[1]["score"])
 check("awards: runaway is NOT a photo finish",
       not (t1s > 0 and (t1s - t2s) / t1s < 0.05), f"{t1s} vs {t2s}")
+# Personality gate: same photo finish between two even-keeled pros ->
+# a good race, not a grudge.
+c1 = _mkplayer(34, "Calm One"); c1.base_controversy = 12
+c2 = _mkplayer(35, "Calm Two"); c2.base_controversy = 8
+rs.record_award_race(pleague.rivalries, c1, c2, "Hart Trophy")
+_calm = [r for r in pleague.rivalries if r["origin"] == "award_race"
+         and "Hart Trophy" in r["story"]
+         and "Calm One" in r["story"]]
+check("awards: saints in a photo finish -> no record", len(_calm) == 0,
+      f"{len(_calm)} records")
 # All eight player awards pass an award name at the call site.
 _expected_awards = ["Hart Trophy", "Art Ross Trophy", "Rocket Richard Trophy",
                     "Vezina Trophy", "Norris Trophy", "Selke Trophy",
@@ -311,6 +324,48 @@ _expected_awards = ["Hart Trophy", "Art Ross Trophy", "Rocket Richard Trophy",
 _missing = [a for a in _expected_awards if f', "{a}")' not in _main_src]
 check("awards: 8 player races wired with names", not _missing,
       f"missing: _missing")
+
+# ------------------------------------------------------- FA signing transfers
+# Every live signing path funnels through on_player_transfer so a signed
+# man's personal beefs follow him and ambient noise cools -- the ledger
+# never holds a stale "he plays for X" grudge after he signs elsewhere.
+def _method_src(path, name):
+    """Source text of a method we can't import (main)."""
+    tree = ast.parse(open(path).read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == name:
+                    return ast.get_source_segment(open(path).read(), item) or ""
+    return ""
+
+
+_fin_src = _method_src("main.py", "_finalize_contract_signing")
+check("signing: user path (_finalize_contract_signing) calls on_player_transfer",
+      "on_player_transfer" in (_fin_src or ""), "wired" if _fin_src else "method not found")
+_mp_src = _method_src("main.py", "_mp_sign_free_agent")
+check("signing: MP path (_mp_sign_free_agent) calls on_player_transfer",
+      "on_player_transfer" in (_mp_src or ""), "wired" if _mp_src else "method not found")
+_rfa_src = open("rfa_system.py").read()
+check("signing: RFA offer sheet (execute_offer_sheet) calls on_player_transfer",
+      "on_player_transfer" in _rfa_src)
+
+# Behavioral: FA signing with from_team=None (no old club).
+fa_man = _mkplayer(40, "Signed Star", overall=88)
+fa_man.base_controversy = 62
+rivs_fa = []
+rs.record_major_injury(rivs_fa, fa_man, _mkplayer(41, "Old Foe"),
+                       season_ending=True)          # personal: follows
+rs.record_award_race(rivs_fa, fa_man, _mkplayer(42, "Rival Scorer"),
+                     "Hart Trophy")                 # ambient: left behind
+res_fa = rs.on_player_transfer(rivs_fa, fa_man, from_team=None,
+                               to_team=_mkteam("New Club", "N"))
+_carried = [r["origin"] for r in res_fa["carried"]]
+_left = [r["origin"] for r in res_fa["left_behind"]]
+check("signing: personal beef follows the FA to his new club",
+      _carried == ["major_injury"], f"carried={_carried}")
+check("signing: ambient beef does not follow the FA",
+      "award_race" in _left, f"left={_left}")
 
 print(f"\n{ PASS } passed, { FAIL } failed")
 for f in FAILURES:

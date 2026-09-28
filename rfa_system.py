@@ -961,6 +961,16 @@ def execute_offer_sheet(league, offering_team, original_team, player,
             player, aav)
     except Exception:
         pass
+    # Rivalry lifecycle: an offer sheet is a transfer -- his personal
+    # beefs follow him to the offering club; ambient noise cools.
+    try:
+        import reputation_system as _rep2
+        _rivs = getattr(league, "rivalries", None)
+        if isinstance(_rivs, list):
+            _rep2.on_player_transfer(_rivs, player, from_team=original_team,
+                                     to_team=offering_team)
+    except Exception:
+        pass
     return {"ok": True, "compensation": label, "picks": transferred,
             "story": story}
 
