@@ -29,7 +29,9 @@ class DraftConfiguration:
     serpentine: bool = True
     protected_players: int = 0  # Number of players each team can protect
     salary_cap_enabled: bool = True
-    trade_deadline_round: int = 10  # Can trade picks until this round
+    # NOTE: no trading in fantasy drafts, by design. (A stale
+    # trade_deadline_round field was removed 2026-09-28: it was never read
+    # anywhere and wrongly implied pick trading existed.)
     draft_order_type: str = "Randomized"  # Type of draft order used
     
 @dataclass

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Incoming Call — Trade-Up Offer (mockup)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0e0e11; color: #F2F5FA; font-family: "Segoe UI", system-ui, sans-serif;
+         padding: 40px 14px; font-size: 14px; }
+  .note { color: #9aa0aa; font-size: 12px; margin: 0 auto 14px; max-width: 640px; }
+  .dlg { max-width: 640px; margin: 0 auto; background: #16161a; border: 1px solid #2a2a30;
+         border-radius: 12px; overflow: hidden; }
+  .head { background: #23140a; padding: 14px 20px; border-bottom: 1px solid #2a2a30; }
+  .head .from { font-size: 11px; letter-spacing: 2px; color: #d97f3c; font-weight: 700; }
+  .head .who { font-size: 20px; font-weight: 800; margin-top: 2px; }
+  .head .why { color: #9aa0aa; font-size: 13px; margin-top: 4px; font-style: italic; }
+  .body { padding: 18px 20px; }
+  .sec { font-size: 11px; letter-spacing: 2px; color: #00ceb8; font-weight: 700; margin: 14px 0 8px; }
+  .reasons { list-style: none; font-size: 13px; line-height: 1.9; }
+  .reasons li::before { content: "\25B8  "; color: #d97f3c; }
+  .minicard { background: #1e1e24; border: 1px solid #2a2a30; border-radius: 8px;
+              padding: 10px 14px; display: flex; gap: 12px; align-items: center; }
+  .minicard .nm { font-weight: 800; }
+  .minicard .sub { color: #9aa0aa; font-size: 12px; }
+  .pot { margin-left: auto; font-weight: 800; color: #46c93a; }
+  .deal { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; }
+  .side { background: #1e1e24; border-radius: 8px; padding: 12px; font-size: 13px; }
+  .side h4 { font-size: 12px; color: #9aa0aa; margin-bottom: 6px; }
+  .arrow { font-size: 22px; color: #d97f3c; }
+  .barwrap { margin-top: 12px; }
+  .barlabel { font-size: 12px; color: #9aa0aa; display: flex; justify-content: space-between; }
+  .bar { height: 10px; background: #2a2a30; border-radius: 5px; margin-top: 6px;
+         display: flex; overflow: hidden; }
+  .bar .you { background: #00ceb8; } .bar .them { background: #d97f3c; }
+  .verdict { font-size: 13px; margin-top: 8px; color: #9aa0aa; }
+  .verdict b { color: #46c93a; }
+  .foot { display: flex; gap: 10px; padding: 16px 20px; border-top: 1px solid #2a2a30;
+          background: #101014; }
+  .foot button { flex: 1; border: none; border-radius: 8px; padding: 13px; font-size: 15px;
+                 font-weight: 800; cursor: pointer; }
+  .accept { background: #00ceb8; color: #0e0e11; }
+  .counter { background: #2a2a30; color: #F2F5FA; }
+  .decline { background: transparent; color: #9aa0aa; border: 1px solid #2a2a30 !important; }
+  .kbd { font-size: 11px; color: #9aa0aa; text-align: center; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="note">MOCKUP 2 — Incoming trade-up call, redesigned as a decision dialog (static). Today this is a bare <code>askyesno</code> text box (<code>draft_day_trades.py:737</code>) with one prospect name and raw labels — no card, no reasons, no value bar, no counter path, easy to mis-click.</div>
+
+<div class="dlg">
+  <div class="head">
+    <div class="from">&#9742; INCOMING CALL &middot; ROUND 1 &middot; YOU'RE ON THE CLOCK</div>
+    <div class="who">Chicago Blackhawks</div>
+    <div class="why">"We want to move up to #7 — word is they love Marcus Bell."</div>
+  </div>
+  <div class="body">
+    <div class="sec">WHY THEY'RE CALLING</div>
+    <ul class="reasons">
+      <li><b>Positional fit:</b> RD is their weakest position — Bell fills it</li>
+      <li><b>Their target:</b> Bell is projected #3; they don't think he slides to #14</li>
+      <li><b>Franchise direction:</b> rebuilding — chasing ceiling, not readiness</li>
+    </ul>
+
+    <div class="sec">THEIR TARGET</div>
+    <div class="minicard">
+      <div><div class="nm">Marcus Bell</div><div class="sub">RD &middot; 18 &middot; your scout: A&minus; (4 viewings)</div></div>
+      <span class="pot">A&minus;</span>
+    </div>
+
+    <div class="sec">THE OFFER</div>
+    <div class="deal">
+      <div class="side"><h4>YOU GIVE</h4>Pick #7 (Round 1)</div>
+      <div class="arrow">&#8646;</div>
+      <div class="side"><h4>YOU GET</h4>Pick #14 (Round 1)<br>Pick #45 (Round 2)</div>
+    </div>
+    <div class="barwrap">
+      <div class="barlabel"><span>Your pick value</span><span>Their package value</span></div>
+      <div class="bar"><div class="you" style="width:56%"></div><div class="them" style="width:44%"></div></div>
+      <div class="verdict"><b>Fair value</b> — their package grades within 10% of #7 on the slot chart. They pay a small premium to move up, as usual.</div>
+    </div>
+  </div>
+  <div class="foot">
+    <button class="decline">Decline</button>
+    <button class="counter">Counter</button>
+    <button class="accept">Accept Deal</button>
+  </div>
+</div>
+<div class="kbd">Keyboard: A accept &middot; C counter &middot; Esc decline &middot; declining never re-rings for this slot</div>
+</body>
+</html>
