@@ -877,7 +877,10 @@ def cascade_on_trade(team: Any, traded: Any = None, arriving: Any = None,
         else:
             lines.append(f"{tname_p} was dealt. The room feels it.")
         if clique is not None:
-            lines.append(f"The {clique['name'].lower()} take it hardest.")
+            cname = str(clique['name'] or "")
+            if cname.lower().startswith("the "):
+                cname = cname[4:]
+            lines.append(f"The {cname} take it hardest.")
         # A departure clears his arrival record: if he's ever re-acquired,
         # the room treats him as a new face again.
         try:
