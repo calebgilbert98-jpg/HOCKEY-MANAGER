@@ -738,17 +738,30 @@ class PlayoffView(ctk.CTkFrame):
         control_frame = ttk.Frame(main_frame, style='Content.TFrame')
         control_frame.pack(fill='x', pady=(0, 20))
         
-        ttk.Button(control_frame, text="Generate Playoff Bracket", 
+        ttk.Button(control_frame, text="Generate Playoff Bracket",
                   command=self._generate_bracket, style='TButton').pack(side='left', padx=(0, 10))
-        
-        ttk.Button(control_frame, text="Simulate Round", 
+        self._btn_gen = control_frame.winfo_children()[-1]
+
+        ttk.Button(control_frame, text="Simulate Round",
                   command=self._simulate_current_round, style='TButton').pack(side='left', padx=(0, 10))
-        
-        ttk.Button(control_frame, text="Simulate All Playoffs", 
+        self._btn_round = control_frame.winfo_children()[-1]
+
+        ttk.Button(control_frame, text="Simulate All Playoffs",
                   command=self._simulate_all_playoffs, style='TButton').pack(side='left', padx=(0, 10))
-        
+        self._btn_all = control_frame.winfo_children()[-1]
+
         ttk.Button(control_frame, text="Refresh Bracket",
                   command=self.refresh_bracket, style='TButton').pack(side='left', padx=(0, 10))
+
+        # MP rule: a client never triggers bracket mutations -- the host
+        # owns them. Buttons are disabled up front; the handlers re-check
+        # (defense in depth) in case MP state changed after build.
+        if self._is_mp_client():
+            for _b in (self._btn_gen, self._btn_round, self._btn_all):
+                try:
+                    _b.state(["disabled"])
+                except Exception:
+                    pass
 
         # Status frame
         self.status_frame = ttk.LabelFrame(main_frame, text="Playoff Status", style='Card.TLabelframe')
@@ -822,8 +835,47 @@ class PlayoffView(ctk.CTkFrame):
                     days_remaining = (playoff_start - current_date).days
                     self.status_label.config(text=f"Regular season in progress - {days_remaining} days until playoffs")
     
+    # ------------------------------------------------------------------
+    # Multiplayer host-only gate
+    # ------------------------------------------------------------------
+    def _is_mp_client(self):
+        """True when this machine is a client in someone else's MP session.
+
+        Uses the app's own _mp_client_mode() when available; falls back to
+        the raw mp_client/mp_host attrs for test doubles.
+        """
+        try:
+            app = getattr(self, 'app', None)
+            fn = getattr(app, '_mp_client_mode', None)
+            if callable(fn):
+                return bool(fn())
+            return getattr(app, 'mp_client', None) is not None \
+                and getattr(app, 'mp_host', None) is None
+        except Exception:
+            return False
+
+    def _mp_guard(self, action):
+        """Host-only gate for bracket mutations. Returns True to proceed.
+
+        Clients get an in-game notice; the host (or single-player) passes
+        straight through to the normal warning + fallback-save flow.
+        """
+        if self._is_mp_client():
+            try:
+                messagebox.showinfo(
+                    "Host only",
+                    f"Only the session host can {action}.\n\n"
+                    "You're connected as a client -- ask the host to run it.",
+                    parent=self)
+            except Exception:
+                pass
+            return False
+        return True
+
     def _generate_bracket(self):
         """Generate the playoff bracket"""
+        if not self._mp_guard("generate the playoff bracket"):
+            return
         try:
             if not hasattr(self.app, 'league') or not self.app.league:
                 messagebox.showerror("Error", "No league data available")
@@ -883,6 +935,8 @@ class PlayoffView(ctk.CTkFrame):
     
     def _simulate_current_round(self):
         """Simulate all series in the current round"""
+        if not self._mp_guard("simulate a playoff round"):
+            return
         if not self.playoff_bracket:
             messagebox.showwarning("Warning", "Please generate playoff bracket first")
             return
@@ -946,6 +1000,8 @@ class PlayoffView(ctk.CTkFrame):
         ~69s main-thread freeze is gone). Cancel keeps every game already
         played. Headless/bulk path: synchronous, unchanged.
         """
+        if not self._mp_guard("simulate the playoffs"):
+            return
         if not self.playoff_bracket:
             messagebox.showwarning("Warning", "Please generate playoff bracket first")
             return
@@ -1069,6 +1125,16 @@ class PlayoffView(ctk.CTkFrame):
     BRACKET_GAP_Y = 26
     BRACKET_NAVY = "#0A1428"
     BRACKET_TICKER_BG = "#0E1930"
+
+    # Reference restyle (Muck's arena render): dark brushed-metal backdrop,
+    # neon-glow connectors, glassy dark cards with team-color glow.
+    BRACKET_BG_EDGE = "#04060B"    # backdrop vignette edge
+    BRACKET_BG_GLOW = "#26314A"   # backdrop center glow
+    BRACKET_CARD_BG = "#12161F"   # glassy card body
+    BRACKET_ROW_TEXT = "#F2F5F9"  # near-white row text
+    BRACKET_CONN_HALO = "#0E3A5C"  # connector glow: outer halo
+    BRACKET_CONN_MID = "#2E7FBF"   # connector glow: mid
+    BRACKET_CONN_CORE = "#B9E6FF"  # connector glow: bright core
 
     # Column definitions: (round_key, conference). West advances left->in,
     # East advances right->in, the Cup is decided in the middle -- the
