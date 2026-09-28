@@ -4220,7 +4220,17 @@ class HockeyManagerGUI(tk.Tk):
         border = tk.Frame(nav_container, bg=border_color, height=1)
         border.pack(fill="x")
         
-        # Left side - Main action buttons (most frequently used)
+        # Far left: back/forward screen navigation
+        nav_hist_frame = tk.Frame(menu_bar, bg=menu_bg)
+        nav_hist_frame.pack(side="left", padx=(2, 6))
+        self._back_btn = self._create_nav_pill(nav_hist_frame, "\u25c0",
+                                               self._nav_back,
+                                               tooltip="Back to previous screen")
+        self._fwd_btn = self._create_nav_pill(nav_hist_frame, "\u25b6",
+                                              self._nav_forward,
+                                              tooltip="Forward to next screen")
+
+        # Left side - ALL menu tabs (never split across sides)
         left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
         left_menu_frame.pack(side="left", fill="x", expand=True)
         
@@ -4273,12 +4283,12 @@ class HockeyManagerGUI(tk.Tk):
             "Waivers": self.open_waivers_window
         })
         
-        # Right side - Settings and utilities
-        right_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
-        right_menu_frame.pack(side="right")
+        # All remaining tabs continue on the left (single unified menu)
+        left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
+        left_menu_frame.pack(side="right")
 
         # Save/Load dropdown
-        self._create_dropdown_menu(right_menu_frame, "Save/Load",
+        self._create_dropdown_menu(left_menu_frame, "Save/Load",
             tooltip="Save/Load: save your game or load a previous save", menu_items={
             "Save Game": self.open_save_window,
             "Load Game": self.open_load_window,
@@ -4286,45 +4296,155 @@ class HockeyManagerGUI(tk.Tk):
         })
 
         # Right menu buttons - temporarily back to text
-        self._create_nav_pill(right_menu_frame, "News",
-                              self.open_news_window, side="right",
+        self._create_nav_pill(left_menu_frame, "News",
+                              self.open_news_window,
                               tooltip="News: the latest stories from around the league")
 
         # Media Center button (optional system)
-        self._create_nav_pill(right_menu_frame, "Media",
-                              self.open_media_center, side="right",
+        self._create_nav_pill(left_menu_frame, "Media",
+                              self.open_media_center,
                               tooltip="Media Center: press conferences and media relations")
 
         # Morale button (dressing-room health: chemistry, hierarchy, attitudes)
-        self._create_nav_pill(right_menu_frame, "Morale",
-                              self.open_morale_window, side="right",
+        self._create_nav_pill(left_menu_frame, "Morale",
+                              self.open_morale_window,
                               tooltip="Morale: team chemistry, hierarchy, and player attitudes")
 
         # Tactics button (systems, familiarity, fit -- the whiteboard)
-        self._create_nav_pill(right_menu_frame, "Tactics",
-                              self.open_tactics_window, side="right",
+        self._create_nav_pill(left_menu_frame, "Tactics",
+                              self.open_tactics_window,
                               tooltip="Tactics: systems, familiarity, roster/coach fit")
 
         # Stats & Standings button
-        self._create_nav_pill(right_menu_frame, "Stats",
-                              self.open_stats_standings_window, side="right",
+        self._create_nav_pill(left_menu_frame, "Stats",
+                              self.open_stats_standings_window,
                               tooltip="Stats: standings, scoring leaders, and team analytics")
 
         # League History button
-        self._create_nav_pill(right_menu_frame, "History",
-                              self.open_league_history_window, side="right",
+        self._create_nav_pill(left_menu_frame, "History",
+                              self.open_league_history_window,
                               tooltip="League History: champions, awards, career leaders, Hall of Fame")
 
         # GM Options as standalone button
-        self._create_nav_pill(right_menu_frame, "GM Options",
-                              self.open_gm_options_window, side="right",
+        self._create_nav_pill(left_menu_frame, "GM Options",
+                              self.open_gm_options_window,
                               tooltip="GM Options: trade block, waivers, captains, and extensions")
         
         # Settings as its own button
-        self._create_nav_pill(right_menu_frame, "Settings",
-                              self.open_settings_window, side="right",
+        self._create_nav_pill(left_menu_frame, "Settings",
+                              self.open_settings_window,
                               tooltip="Settings: game settings and preferences (? shows keyboard shortcuts)")
     
+        # Far right: Next Day button -- always fixed, always visible
+        # (except the visualizer takes over the whole window).
+        next_frame = tk.Frame(menu_bar, bg=menu_bg)
+        next_frame.pack(side="right", padx=(6, 2))
+        self._next_day_btn = self._create_nav_pill(next_frame, "Next Day",
+                                                   self.simulate_day,
+                                                   tooltip="Advance to the next day")
+        self.refresh_next_day_button()
+
+    # ------------------------------------------------------------------
+    # Screen navigation history (back/forward)
+    # ------------------------------------------------------------------
+    def _push_screen_history(self, screen_id):
+        """Record a screen visit for back/forward navigation."""
+        hist = getattr(self, '_screen_history', None)
+        if hist is None:
+            self._screen_history = hist = []
+            self._history_index = -1
+        # Truncate forward history on a new navigation
+        if self._history_index < len(hist) - 1:
+            del hist[self._history_index + 1:]
+        # Avoid duplicate consecutive entries
+        if not hist or hist[-1] != screen_id:
+            hist.append(screen_id)
+            # Cap history length
+            if len(hist) > 50:
+                del hist[0]
+        self._history_index = len(hist) - 1
+        self._update_nav_history_buttons()
+
+    def _update_nav_history_buttons(self):
+        """Enable/disable back/forward buttons based on history position."""
+        try:
+            hist = getattr(self, '_screen_history', []) or []
+            idx = getattr(self, '_history_index', -1)
+            if hasattr(self, '_back_btn'):
+                self._back_btn.configure(state='normal' if idx > 0 else 'disabled')
+            if hasattr(self, '_fwd_btn'):
+                self._fwd_btn.configure(
+                    state='normal' if 0 <= idx < len(hist) - 1 else 'disabled')
+        except Exception:
+            pass
+
+    def _nav_back(self):
+        """Go back to the previous screen."""
+        hist = getattr(self, '_screen_history', []) or []
+        idx = getattr(self, '_history_index', -1)
+        if idx > 0:
+            self._history_index = idx - 1
+            self._open_screen_by_id(hist[idx - 1])
+        self._update_nav_history_buttons()
+
+    def _nav_forward(self):
+        """Go forward to the next screen."""
+        hist = getattr(self, '_screen_history', []) or []
+        idx = getattr(self, '_history_index', -1)
+        if 0 <= idx < len(hist) - 1:
+            self._history_index = idx + 1
+            self._open_screen_by_id(hist[idx + 1])
+        self._update_nav_history_buttons()
+
+    def _open_screen_by_id(self, screen_id):
+        """Re-open a screen from history without pushing a new entry."""
+        # Map screen IDs to their opener methods
+        opener_map = {
+            'dashboard': self.show_dashboard,
+            'inbox': self.open_inbox_window,
+            'roster': self.open_roster_window,
+            'schedule': self.open_schedule_window,
+            'calendar': self.open_calendar_window,
+            'news': self.open_news_window,
+            'finances': self.open_finances_window,
+            'staff': self.open_staff_management_window,
+            'morale': self.open_morale_window,
+            'media': self.open_media_center,
+            'playoffs': self.open_playoffs_window,
+            'development': self.open_development_window,
+            'practice': self.open_practice_center,
+            'tactics': self.open_tactics_window,
+            'stats': self.open_stats_standings_window,
+            'history': self.open_league_history_window,
+            'gm_options': self.open_gm_options_window,
+            'settings': self.open_settings_window,
+            'free_agency': self.open_free_agency_window,
+            'trade': self.open_trade_window,
+            'waivers': self.open_waivers_window,
+            'draft': self.open_draft_day_central,
+        }
+        opener = opener_map.get(screen_id)
+        if opener:
+            # Suppress history push during history navigation
+            self._suppress_history = True
+            try:
+                opener()
+            finally:
+                self._suppress_history = False
+        self._update_nav_history_buttons()
+
+    def refresh_next_day_button(self):
+        """Update the fixed Next Day button label/state from continue state."""
+        try:
+            btn = getattr(self, '_next_day_btn', None)
+            if btn is None or not btn.winfo_exists():
+                return
+            label, blockers = self.get_continue_state()
+            # Show blocker count on the button when blocked
+            text = f"{label} ({len(blockers)})" if blockers else label
+            btn.configure(text=text)
+        except Exception:
+            pass
     def _create_nav_pill(self, parent, text, command, side="left", tooltip=None):
         """Create a pill-style navigation button for the top menu bar.
 
@@ -6671,6 +6791,35 @@ class HockeyManagerGUI(tk.Tk):
             import traceback
             traceback.print_exc()
 
+    def _cap_compliance_blocker(self):
+        """Return a blocker dict if the NHL roster exceeds the salary cap."""
+        team = getattr(self, 'user_team', None)
+        if team is None:
+            return None
+        cap = getattr(team, 'salary_cap', None)
+        if not cap:
+            # Fall back to league cap
+            league = getattr(self, 'league', None)
+            cap = getattr(league, 'salary_cap', 87500000)  # 2024-25-ish default
+        payroll = sum(getattr(p.contract, 'salary', 0) or 0
+                      for p in getattr(team, 'roster', [])
+                      if getattr(p, 'contract', None))
+        if payroll <= cap:
+            return None
+        over = payroll - cap
+        return {
+            'id': 'salary_cap',
+            'title': 'Roster exceeds salary cap',
+            'detail': (f"Payroll ${payroll/1e6:.2f}M is ${over/1e6:.2f}M over "
+                       f"the ${cap/1e6:.2f}M cap. Shed salary via trade, "
+                       f"waivers, or demotion before advancing."),
+            'action': ('Open Trade Center', self.open_trade_window),
+        }
+
+    def is_over_cap(self):
+        """True when the user's NHL roster payroll exceeds the cap."""
+        return self._cap_compliance_blocker() is not None
+
     def get_continue_state(self):
         """Football Manager-style continue state.
 
@@ -6696,6 +6845,14 @@ class HockeyManagerGUI(tk.Tk):
                            'advancing the day.'),
                 'action': ('Open Fantasy Draft', self.open_fantasy_draft_window),
             })
+        # Salary cap compliance: an over-cap roster must shed salary before
+        # the day can advance (real NHL rule -- rosters must be cap-compliant).
+        try:
+            cap_blocker = self._cap_compliance_blocker()
+            if cap_blocker:
+                blockers.append(cap_blocker)
+        except Exception:
+            pass
         if blockers:
             return ("Continue", blockers)
         # Trade deadline day: the day runs on a 30-minute game clock
@@ -10827,6 +10984,8 @@ class HockeyManagerGUI(tk.Tk):
         view.grid(row=1, column=0, sticky='nsew')
         self._current_screen = {'id': screen_id, 'holder': holder, 'view': view}
         self.open_windows[screen_id] = view
+        if not getattr(self, '_suppress_history', False):
+            self._push_screen_history(screen_id)
         try:
             view.focus_set()
         except Exception:
@@ -10900,6 +11059,8 @@ class HockeyManagerGUI(tk.Tk):
     def show_dashboard(self):
         """Leave the current full-screen view and restore the dashboard."""
         self._teardown_screen()
+        if not getattr(self, '_suppress_history', False):
+            self._push_screen_history('dashboard')
         if hasattr(self, '_dashboard_frame'):
             try:
                 self._dashboard_frame.grid(**self._dashboard_grid)

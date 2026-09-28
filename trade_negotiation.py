@@ -276,11 +276,21 @@ def is_deadline_rush(app) -> bool:
         return False
 
 
+def is_cap_crunch_rush(app) -> bool:
+    """True when the user's roster is over the salary cap and must shed
+    salary -- trade responses come back instantly so the user isn't stuck
+    waiting days while blocked from advancing."""
+    try:
+        return bool(app.is_over_cap())
+    except Exception:
+        return False
+
+
 def send_offer(app, partner_team, user_assets, partner_assets) -> TradeNegotiation:
     """User sends an offer. The AI GM replies in 1-3 days via the inbox --
     instantly on trade deadline day."""
     today = _today(app)
-    rush = is_deadline_rush(app)
+    rush = is_deadline_rush(app) or is_cap_crunch_rush(app)
     neg = TradeNegotiation(
         partner_team_name=getattr(partner_team, "team_name", str(partner_team)),
         direction="outgoing",
