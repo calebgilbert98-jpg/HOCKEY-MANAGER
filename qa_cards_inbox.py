@@ -135,6 +135,7 @@ fake = SimpleNamespace(
 )
 fake.send_email_to_user = lambda m: fake.inbox.append(m)
 for meth in ("handle_contract_offer", "_finalize_contract_signing",
+             "_clear_offered_clause",
              "_notify_contract_result", "_inbox_contract_result",
              "_find_inbox_player", "accept_contract_counter",
              "reopen_contract_negotiation"):

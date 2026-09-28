@@ -40,6 +40,13 @@ class TradeNegotiation:
     history: List[dict] = field(default_factory=list)
     last_message: str = ""
     inbox_message_id: Optional[str] = None
+    # Deal sweeteners, keyed by str(asset id):
+    #   retention: player id -> pct of cap hit the USER retains (1-50)
+    #   pick_protection: pick id -> "top-3" | "top-10" | "lottery"
+    # Only the user sets these (on the trade screen); the engine honors
+    # them for both sides symmetrically at completion.
+    retention: Dict[str, float] = field(default_factory=dict)
+    pick_protection: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -58,11 +65,16 @@ class TradeNegotiation:
                     kw[k] = date.fromisoformat(v)
                 except Exception:
                     kw[k] = None
+        # Normalize term keys to str (old saves predate these fields).
+        for k in ("retention", "pick_protection"):
+            v = kw.get(k)
+            kw[k] = {str(_k): _v for _k, _v in (v or {}).items()} \
+                if isinstance(v, dict) else {}
         return cls(**{f: kw.get(f, getattr(cls, f, None))
                       for f in ("id", "partner_team_name", "direction", "status",
                                 "rounds", "patience", "user_assets", "partner_assets",
                                 "response_due", "created", "history", "last_message",
-                                "inbox_message_id")})
+                                "inbox_message_id", "retention", "pick_protection")})
 
     @property
     def is_open(self) -> bool:
@@ -210,17 +222,55 @@ def resolve_assets(app, asset_dicts: List[dict]) -> Tuple[List, List[str]]:
     return objs, missing
 
 
-def asset_summary(asset_dicts: List[dict]) -> str:
+def asset_summary(asset_dicts: List[dict], retention=None,
+                  pick_protection=None) -> str:
+    """One-line summary of serialized assets, with deal terms annotated."""
     parts = []
     for ad in asset_dicts or []:
         if not isinstance(ad, dict):
             continue
         if ad.get("kind") == "pick":
-            parts.append(ad.get("label", "pick"))
+            label = ad.get("label", "pick")
+            try:
+                import trade_engine as _te
+                prot = (pick_protection or {}).get(str(ad.get("id", "")))
+                tag = _te.protection_label(prot)
+                if tag:
+                    label = f"{label} ({tag})"
+            except Exception:
+                pass
+            parts.append(label)
         else:
-            parts.append(f"{ad.get('name', '?')} "
-                         f"({ad.get('pos', '')} {ad.get('ovr', '')})".strip())
+            label = (f"{ad.get('name', '?')} "
+                     f"({ad.get('pos', '')} {ad.get('ovr', '')})".strip())
+            try:
+                pct = float((retention or {}).get(str(ad.get("id", "")), 0) or 0)
+                if pct > 0:
+                    label += f" [{pct:g}% salary retained]"
+            except Exception:
+                pass
+            parts.append(label)
     return ", ".join(parts) if parts else "nothing"
+
+
+def _terms_note(retention, pick_protection) -> str:
+    """Inbox-friendly rendering of the deal's retention/protection terms."""
+    bits = []
+    for _pid, _pct in (retention or {}).items():
+        try:
+            if float(_pct or 0) > 0:
+                bits.append(f"salary retained: {_pct:g}%")
+        except Exception:
+            pass
+    for _kid, _prot in (pick_protection or {}).items():
+        try:
+            import trade_engine as _te
+            tag = _te.protection_label(_prot)
+            if tag:
+                bits.append(f"pick protection: {tag}")
+        except Exception:
+            pass
+    return ("Terms: " + "; ".join(bits)) if bits else ""
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +333,28 @@ def is_cap_crunch_rush(app) -> bool:
         return False
 
 
-def send_offer(app, partner_team, user_assets, partner_assets) -> TradeNegotiation:
+def _pct_ok(v) -> bool:
+    """A retention pct is sane: 0 < pct <= 50 (real NHL max)."""
+    try:
+        return 0 < float(v or 0) <= 50
+    except Exception:
+        return False
+
+
+def send_offer(app, partner_team, user_assets, partner_assets,
+               retention=None, pick_protection=None) -> TradeNegotiation:
     """User sends an offer. The AI GM replies in 1-3 days via the inbox --
-    instantly on trade deadline day."""
+    instantly on trade deadline day.
+
+    retention: {player id: pct} salary the user keeps on outgoing players.
+    pick_protection: {pick id: "top-3"|"top-10"|"lottery"} on outgoing picks.
+    """
     today = _today(app)
     rush = is_deadline_rush(app) or is_cap_crunch_rush(app)
+    retention = {str(k): float(v) for k, v in (retention or {}).items()
+                 if _pct_ok(v)}
+    pick_protection = {str(k): v for k, v in (pick_protection or {}).items()
+                       if v}
     neg = TradeNegotiation(
         partner_team_name=getattr(partner_team, "team_name", str(partner_team)),
         direction="outgoing",
@@ -297,10 +364,12 @@ def send_offer(app, partner_team, user_assets, partner_assets) -> TradeNegotiati
         user_assets=assets_to_dicts(user_assets, getattr(app.user_team, "team_name", "")),
         partner_assets=assets_to_dicts(partner_assets,
                                        getattr(partner_team, "team_name", "")),
+        retention=retention,
+        pick_protection=pick_protection,
         response_due=today if rush else today + timedelta(days=random.randint(1, 3)),
         created=today,
         history=[{"date": today.isoformat(), "by": "user",
-                  "summary": f"Offered {asset_summary(assets_to_dicts(user_assets))} "
+                  "summary": f"Offered {asset_summary(assets_to_dicts(user_assets), retention, pick_protection)} "
                              f"for {asset_summary(assets_to_dicts(partner_assets))}"}],
     )
     _store(app).append(neg)
@@ -308,13 +377,14 @@ def send_offer(app, partner_team, user_assets, partner_assets) -> TradeNegotiati
                  if rush else
                  "Expect an answer within a few days. You can keep working -- "
                  "this won't interrupt you.")
+    terms = _terms_note(retention, pick_protection)
     neg.inbox_message_id = _deliver(
         app,
         subject=f"Trade offer sent to {neg.partner_team_name}",
         content=(f"Your offer is with {neg.partner_team_name}'s front office:\n\n"
-                 f"YOU SEND: {asset_summary(neg.user_assets)}\n"
-                 f"YOU GET: {asset_summary(neg.partner_assets)}\n\n"
-                 f"{wait_note}"),
+                 f"YOU SEND: {asset_summary(neg.user_assets, retention, pick_protection)}\n"
+                 f"YOU GET: {asset_summary(neg.partner_assets)}\n"
+                 f"{terms + chr(10) if terms else ''}\n{wait_note}"),
         sender=f"{neg.partner_team_name} (pending)",
     )
     if rush:
@@ -360,9 +430,21 @@ def incoming_offer(app, partner_team, package, player_wanted=None) -> TradeNegot
     return neg
 
 
+def _is_pick_asset(a) -> bool:
+    try:
+        from game_classes import DraftPick
+        return isinstance(a, DraftPick)
+    except Exception:
+        return False
+
+
 def send_counter(app, neg: TradeNegotiation,
-                 user_assets, partner_assets) -> TradeNegotiation:
-    """User answers an AI counter with adjusted terms. Patience decays."""
+                 user_assets, partner_assets,
+                 retention=None, pick_protection=None) -> TradeNegotiation:
+    """User answers an AI counter with adjusted terms. Patience decays.
+
+    retention / pick_protection are the user's CURRENT deal terms from the
+    trade screen (the screen is the source of truth each round)."""
     today = _today(app)
     neg.rounds += 1
     neg.patience = max(0.35, neg.patience - 0.15)
@@ -371,6 +453,18 @@ def send_counter(app, neg: TradeNegotiation,
     neg.user_assets = assets_to_dicts(user_assets,
                                       getattr(app.user_team, "team_name", ""))
     neg.partner_assets = assets_to_dicts(partner_assets, neg.partner_team_name)
+    # Re-stamp the user's deal terms; drop terms for assets no longer offered.
+    if retention is not None or pick_protection is not None:
+        offered_p = {str(getattr(a, "id", "")) for a in (user_assets or [])
+                     if not _is_pick_asset(a)}
+        offered_k = {str(getattr(a, "id", "")) for a in (user_assets or [])
+                     if _is_pick_asset(a)}
+        neg.retention = {str(k): float(v)
+                         for k, v in (retention or {}).items()
+                         if str(k) in offered_p and _pct_ok(v)}
+        neg.pick_protection = {str(k): v
+                               for k, v in (pick_protection or {}).items()
+                               if str(k) in offered_k and v}
     rush = is_deadline_rush(app)
     neg.response_due = today if rush else today + timedelta(days=random.randint(1, 3))
     neg.history.append({"date": today.isoformat(), "by": "user",
@@ -381,7 +475,7 @@ def send_counter(app, neg: TradeNegotiation,
         app,
         subject=f"Counter-offer sent to {neg.partner_team_name}",
         content=(f"Your revised proposal is with {neg.partner_team_name}:\n\n"
-                 f"YOU SEND: {asset_summary(neg.user_assets)}\n"
+                 f"YOU SEND: {asset_summary(neg.user_assets, neg.retention, neg.pick_protection)}\n"
                  f"YOU GET: {asset_summary(neg.partner_assets)}\n\n"
                  f"{wait_note}"
                  f"{'They are losing patience -- make this one count.' if neg.patience < 0.7 else ''}"),
@@ -395,6 +489,55 @@ def send_counter(app, neg: TradeNegotiation,
     return neg
 
 
+def _neg_terms(neg: TradeNegotiation, user_objs, partner_objs, stamp=True):
+    """Resolve a negotiation's deal terms against live objects.
+
+    Returns (retention, protected_picks):
+      retention: {player id: pct} for user-outgoing players still in the deal
+      protected_picks: list of live DraftPick objects with protection stamped
+    Stale terms (assets that left the deal during counters) are dropped.
+    stamp=False resolves retention without touching the live picks (used
+    while the AI is still considering, so a declined deal leaves no flags).
+    """
+    from game_classes import DraftPick
+    retention = {}
+    try:
+        user_ids = {getattr(p, "id", None) for p in (user_objs or [])}
+        for k, v in (getattr(neg, "retention", None) or {}).items():
+            if not _pct_ok(v):
+                continue
+            for p in (user_objs or []):
+                if str(getattr(p, "id", "")) == str(k) \
+                        and getattr(p, "id", None) in user_ids \
+                        and not isinstance(p, DraftPick):
+                    retention[getattr(p, "id", None)] = float(v)
+                    break
+    except Exception:
+        pass
+    protected = []
+    if not stamp:
+        return retention, protected
+    try:
+        import trade_engine as _te
+        for p in list(user_objs or []) + list(partner_objs or []):
+            if not isinstance(p, DraftPick):
+                continue
+            prot = (getattr(neg, "pick_protection", None) or {}).get(
+                str(getattr(p, "id", "")))
+            if prot in ("top-3", "top-10", "lottery"):
+                tag = _te.protection_label(prot)
+                p.protection = prot
+                p.is_conditional = True
+                p.condition = (
+                    f"{tag}: if this pick falls in the protected range, "
+                    f"{getattr(p, 'original_team', 'the original club')} keeps it "
+                    f"and the holder receives their next-year 1st-rounder instead.")
+                protected.append(p)
+    except Exception:
+        pass
+    return retention, protected
+
+
 def _complete(app, neg: TradeNegotiation, user_objs, partner_objs) -> bool:
     """Execute the agreed deal. Returns False if it can no longer happen."""
     import trade_engine as te
@@ -402,12 +545,15 @@ def _complete(app, neg: TradeNegotiation, user_objs, partner_objs) -> bool:
     partner = find_team(app, neg.partner_team_name)
     if user_team is None or partner is None:
         return False
-    if not te._cap_ok_after(user_team, user_objs, partner_objs):
+    retention, _protected = _neg_terms(neg, user_objs, partner_objs)
+    if not te._cap_ok_after(user_team, user_objs, partner_objs,
+                            retention=retention):
         _deliver(app,
                  subject=f"Trade with {neg.partner_team_name} fell through",
                  content="The agreed deal can't fit under your salary cap anymore. "
                          "Shed salary and re-open talks if you still want it.",
                  sender="League Office")
+        _clear_waivers(app, neg)
         neg.status = "expired"
         return False
     date_str = str(_today(app))
@@ -415,7 +561,20 @@ def _complete(app, neg: TradeNegotiation, user_objs, partner_objs) -> bool:
         getattr(app, 'league', None)
     _board = getattr(getattr(app, 'career', None), 'board', None)
     trade = te.execute_trade(user_team, partner, user_objs, partner_objs,
-                             date_str, league=_lg, board=_board)
+                             date_str, league=_lg, board=_board,
+                             retention=retention)
+    if trade.summary.startswith("BLOCKED:"):
+        # A clause veto killed the deal at completion (e.g. the player was
+        # traded... no -- a waiver expired or was never granted). Nothing
+        # moved; tell the user why instead of recording a phantom trade.
+        _deliver(app,
+                 subject=f"Trade with {neg.partner_team_name} fell through",
+                 content=(f"{trade.summary[8:]}\n\nAsk the player to waive his "
+                          f"clause and re-open talks if you still want it."),
+                 sender="League Office")
+        _clear_waivers(app, neg)
+        neg.status = "expired"
+        return False
     gm = _gm(app)
     if gm is not None:
         if not hasattr(gm, "trade_history"):
@@ -454,6 +613,7 @@ def accept_negotiation(app, neg_id: str) -> bool:
     user_objs, missing_u = resolve_assets(app, neg.user_assets)
     partner_objs, missing_p = resolve_assets(app, neg.partner_assets)
     if missing_u or missing_p:
+        _clear_waivers(app, neg)
         neg.status = "expired"
         _deliver(app, subject=f"Trade with {neg.partner_team_name} expired",
                  content="One of the players involved is no longer available, "
@@ -469,6 +629,7 @@ def decline_negotiation(app, neg_id: str) -> bool:
     neg = get_negotiation(app, neg_id)
     if neg is None or not neg.is_open:
         return False
+    _clear_waivers(app, neg)
     neg.status = "declined"
     neg.history.append({"date": _today(app).isoformat(), "by": "user",
                         "summary": "Walked away"})
@@ -490,6 +651,24 @@ def _mark_action_done(app, neg: TradeNegotiation):
             if getattr(m, "action_data", None) and \
                m.action_data.get("negotiation_id") == neg.id:
                 m.action_done = True
+    except Exception:
+        pass
+
+
+def _clear_waivers(app, neg: TradeNegotiation):
+    """A dead deal spends nothing: clear one-transaction clause waivers
+    stamped on this negotiation's assets so a later, separate trade
+    starts from a clean slate."""
+    try:
+        import trade_engine as te
+        user_objs, _u = resolve_assets(app, neg.user_assets)
+        partner_objs, _p = resolve_assets(app, neg.partner_assets)
+        for a in list(user_objs) + list(partner_objs):
+            try:
+                if not te._is_pick(a) and getattr(a, "contract", None) is not None:
+                    a.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -519,6 +698,7 @@ def process_due_negotiations(app):
             continue
         if neg.status == "awaiting_user" and neg.created is not None:
             if (today - neg.created).days > 14:
+                _clear_waivers(app, neg)
                 neg.status = "expired"
                 _mark_action_done(app, neg)
 
@@ -532,6 +712,7 @@ def _resolve_one(app, neg: TradeNegotiation, te, today: date):
     user_objs, missing_u = resolve_assets(app, neg.user_assets)
     partner_objs, missing_p = resolve_assets(app, neg.partner_assets)
     if missing_u or missing_p or not user_objs or not partner_objs:
+        _clear_waivers(app, neg)
         neg.status = "expired"
         _deliver(app, subject=f"Talks with {neg.partner_team_name} fizzled",
                  content="The pieces involved have moved -- this one is dead.",
@@ -552,7 +733,10 @@ def _resolve_one(app, neg: TradeNegotiation, te, today: date):
             situational = None
         resp = te.ai_consider_trade(partner, user_objs, partner_objs,
                                     user_team=user_team, patience=neg.patience,
-                                    situational=situational)
+                                    situational=situational,
+                                    retention=_neg_terms(neg, user_objs,
+                                                         partner_objs,
+                                                         stamp=False)[0])
     except TypeError:
         # Older ai_consider_trade without the situational kwarg
         resp = te.ai_consider_trade(partner, user_objs, partner_objs,
@@ -561,6 +745,7 @@ def _resolve_one(app, neg: TradeNegotiation, te, today: date):
         _complete(app, neg, user_objs, partner_objs)
         _mark_action_done(app, neg)
     elif resp.decision == "reject":
+        _clear_waivers(app, neg)
         neg.status = "declined"
         neg.last_message = resp.message
         neg.history.append({"date": today.isoformat(), "by": "ai",

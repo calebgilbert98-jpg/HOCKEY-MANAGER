@@ -189,6 +189,21 @@ class Contract:
     signing_bonus: int = 0
     performance_bonus: int = 0
     no_trade_clause: bool = False
+    # Full no-movement clause: blocks trades AND waiver/AHL assignment.
+    no_movement_clause: bool = False
+    # Modified NTC: size of the player's no-trade list (0 = none). When the
+    # actual teams are known they live in no_trade_list; otherwise the list
+    # is private (as in real life) and the waiver engine estimates the
+    # chance the destination is on it from modified_ntc_teams.
+    modified_ntc_teams: int = 0
+    # Teams this player refuses to be traded to (real-life submitted list).
+    no_trade_list: list = field(default_factory=list)
+    # One-transaction waiver: destination team name the player already
+    # approved. Cleared when the trade completes or the deal dies.
+    ntc_waiver_for: str = ""
+    # When modified_ntc_teams is an approved-teams list (not a no-trade
+    # list), set alongside it.
+    modified_ntc_approved: bool = False
 
 @dataclass
 class PlayerStats:
@@ -412,6 +427,13 @@ class Player:
     
     contract: Contract = field(default_factory=Contract)
     stats: PlayerStats = field(default_factory=PlayerStats)
+
+    # Salary retention (real NHL retained-salary transactions): when this
+    # player is traded, his former club may keep up to 50% of the cap hit.
+    # retained_amount lowers THIS player's cap hit for his current club;
+    # the retaining club carries it as dead cap in team.retained_salary.
+    retained_amount: int = 0
+    retained_team_name: str = ""
     
     team_name: str = "Free Agent"
     x: int = 0  # X position on ice
@@ -2009,6 +2031,10 @@ class DraftPick:
     overall_pick: int = 0  # Overall pick number (calculated when draft order is set)
     is_conditional: bool = False  # If this pick has conditions attached
     condition: str = ""  # Description of any conditions
+    # Structured pick protection (real NHL lottery protection): "", "top-3",
+    # "top-10", or "lottery". Set on the trade screen; resolved at the draft
+    # lottery by League.resolve_pick_protections().
+    protection: str = ""
     traded_from: str = ""  # Team this pick was traded from (if applicable)
     trade_date: str = ""  # When this pick was traded
     
@@ -2109,6 +2135,11 @@ class Team:
     salary_cap: int = 104000000  # 2026-27 NHL cap (modern day)
     scouting_reports: Dict[int, ScoutingReport] = field(default_factory=dict)
     inbox: EmailInbox = field(default_factory=EmailInbox)  # Email inbox system
+    # Retained-salary ledger (real NHL: max 3 active retentions per club).
+    # Each entry: {"player_id", "player_name", "amount", "seasons_remaining"}.
+    # Counts as dead cap in salary_cap_system.total_cap_charge(); ticks down
+    # in League.end_of_season().
+    retained_salary: list = field(default_factory=list)
     
     # Team tactics (connected to strategy UI and sim engine)
     # Even strength: 'Offensive', 'Balanced', 'Defensive'
@@ -4925,6 +4956,34 @@ class League:
         except Exception:
             pass
         
+        # Tick down retained-salary ledgers: each entry lasts the remaining
+        # term of the player's contract at the time of the trade. Expired
+        # entries drop off. A player can carry two retentions (two clubs);
+        # his retained_amount clears only when NO club still holds him.
+        _live_retained_ids = set()
+        for team in self.teams:
+            ledger = getattr(team, "retained_salary", None)
+            if ledger:
+                kept = []
+                for e in ledger:
+                    try:
+                        e["seasons_remaining"] = int(e.get("seasons_remaining", 0)) - 1
+                    except Exception:
+                        e["seasons_remaining"] = 0
+                    if e["seasons_remaining"] > 0:
+                        kept.append(e)
+                        _live_retained_ids.add(e.get("player_id"))
+                team.retained_salary = kept
+        if _live_retained_ids is not None:
+            try:
+                for p in self.get_all_players():
+                    if (getattr(p, "retained_amount", 0)
+                            and getattr(p, "id", None) not in _live_retained_ids):
+                        p.retained_amount = 0
+                        p.retained_team_name = ""
+            except Exception:
+                pass
+
         # Initialize draft picks for upcoming years
         self.initialize_all_draft_picks()
         
@@ -4938,6 +4997,117 @@ class League:
         for team in self.teams:
             team.initialize_draft_picks(future_years)
 
+    # Protection zones for conditional 1st-rounders (real NHL usage).
+    PROTECTION_ZONES = {"top-3": 3, "top-10": 10, "lottery": 16}
+
+    def resolve_pick_protections(self, year: int) -> List[str]:
+        """Resolve conditional 1st-round picks for a draft year.
+
+        Real NHL lottery protection: if a traded 1st-rounder lands inside
+        its protected zone, the original club keeps this year's pick and
+        the holder instead receives the original club's next-year
+        1st-rounder, unprotected (protection consumed either way).
+
+        Idempotent per (pick id, year): resolved picks are recorded in
+        ``self._protections_resolved`` so repeated draft-order builds don't
+        double-defer or duplicate news. Returns human-readable event lines.
+        """
+        events: List[str] = []
+        resolved = getattr(self, "_protections_resolved", None)
+        if resolved is None:
+            resolved = set()
+            self._protections_resolved = resolved
+
+        # Lottery position by ORIGINAL team (traded picks keep original slot).
+        lotto_pos = {}
+        try:
+            _lr = getattr(self, "lottery_results", None) or {}
+            for _k, _rows in _lr.items():
+                if int(_k) == int(year):
+                    for _r in (_rows or []):
+                        lotto_pos[_r.get("original_team")] = _r.get("pick")
+                    break
+        except Exception:
+            pass
+        if not lotto_pos:
+            # No televised lottery stored: fall back to reverse standings.
+            try:
+                _sorted = sorted(
+                    self.teams,
+                    key=lambda t: self.standings.get(t.team_name, {}).get("Points", 0))
+                lotto_pos = {t.team_name: i + 1 for i, t in enumerate(_sorted)}
+            except Exception:
+                return events
+
+        by_name = {t.team_name: t for t in self.teams}
+        for team in self.teams:
+            for pick in (getattr(team, "draft_picks", {}) or {}).get(year, []):
+                try:
+                    if pick.round != 1:
+                        continue
+                    prot = getattr(pick, "protection", "") or ""
+                    if prot not in self.PROTECTION_ZONES:
+                        continue
+                    if pick.current_team == pick.original_team:
+                        # Never traded (or already reverted): consume stale flag.
+                        pick.protection = ""
+                        pick.is_conditional = False
+                        continue
+                    key = (str(getattr(pick, "id", "")), int(year))
+                    if key in resolved:
+                        continue
+                    pos = lotto_pos.get(pick.original_team)
+                    if pos is None:
+                        continue
+                    zone = self.PROTECTION_ZONES[prot]
+                    holder = pick.current_team
+                    orig = by_name.get(pick.original_team)
+                    # Find the deferral asset: original club's next-year 1st
+                    # that it still owns.
+                    defer = None
+                    if orig is not None:
+                        for cand in (getattr(orig, "draft_picks", {}) or {}).get(year + 1, []):
+                            if (cand.round == 1
+                                    and cand.current_team == orig.team_name):
+                                defer = cand
+                                break
+                    # Protection is consumed whatever happens.
+                    pick.protection = ""
+                    pick.is_conditional = False
+                    pick.condition = ""
+                    resolved.add(key)
+                    if defer is not None and orig is not None:
+                        pick.current_team = orig.team_name  # reverts this year
+                        defer.current_team = holder
+                        defer.protection = ""
+                        defer.is_conditional = False
+                        defer.condition = ""
+                        zone_label = {"top-3": "top-3", "top-10": "top-10",
+                                      "lottery": "lottery"}[prot]
+                        events.append(
+                            f"Pick protection triggered: {orig.team_name} keeps "
+                            f"its {year} 1st-rounder (#{pos} overall, {zone_label} "
+                            f"protected); {holder} receives {orig.team_name}'s "
+                            f"{year + 1} 1st-rounder instead.")
+                    else:
+                        events.append(
+                            f"Pick protection could not be honored: "
+                            f"{pick.original_team} no longer holds its "
+                            f"{year + 1} 1st-rounder, so {holder} keeps the "
+                            f"{year} 1st-rounder (#{pos} overall).")
+                except Exception:
+                    continue
+        if events:
+            try:
+                _news = getattr(self, "pick_protection_news", None)
+                if _news is None:
+                    _news = []
+                    self.pick_protection_news = _news
+                _news.extend(events)
+            except Exception:
+                pass
+        return events
+
     def get_draft_order(self, year: int) -> List[Tuple[int, Team, DraftPick]]:
         """Generate the draft order for a specific year based on standings.
         
@@ -4945,6 +5115,14 @@ class League:
             List of tuples: (overall_pick_number, team, draft_pick)
         """
         draft_order = []
+        # Resolve pick protections FIRST: a protected pick that lands in its
+        # protected zone reverts to the original club this year, and the
+        # holder instead receives the original club's next-year 1st
+        # (protection consumed). Idempotent per (pick id, year).
+        try:
+            self.resolve_pick_protections(year)
+        except Exception:
+            pass
         
         # Sort teams by points (worst to best for each round)
         sorted_teams = sorted(self.teams, 

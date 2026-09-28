@@ -3685,6 +3685,11 @@ class TradeWindow(InGamePopup):
         self.configure(fg_color=BG)
         self.trade_offers = {'user': [], 'partner': []}
         self._asset_levels = {'user': {}, 'partner': {}}  # id(player) -> NHL/AHL/Prospects
+        # Deal sweeteners (user's outgoing assets only):
+        #   _retention: player id -> pct of cap hit retained (0/25/50)
+        #   _pick_protection: pick id -> "top-3" | "top-10" | "lottery"
+        self._retention = {}
+        self._pick_protection = {}
         self._history_visible = False
         self._preset = preset or {}
         self._negotiation_id = self._preset.get("negotiation_id")
@@ -3778,6 +3783,15 @@ class TradeWindow(InGamePopup):
                          command=lambda: self._remove_from_trade('user')).pack(
                              anchor='e', padx=12, pady=(4, 8))
 
+        # Salary retention (real NHL retained-salary transactions): keep up
+        # to 50% of an outgoing player's cap hit to sweeten the deal. The
+        # retained slice becomes your dead cap for the rest of his contract.
+        body(center, "SALARY RETENTION", size=10, dim=True).pack(anchor='w', padx=12)
+        self._retention_slots_label = body(center, "", size=10, dim=True)
+        self._retention_slots_label.pack(anchor='w', padx=12)
+        self.retention_frame = ctk.CTkFrame(center, fg_color="transparent")
+        self.retention_frame.pack(fill='x', padx=8, pady=(2, 4))
+
         # Live trade meter
         body(center, "TRADE METER", size=10, dim=True).pack(anchor='w', padx=12)
         self.meter_canvas = tk.Canvas(center, width=self.METER_W, height=self.METER_H,
@@ -3851,6 +3865,25 @@ class TradeWindow(InGamePopup):
         self._refresh_offer_lists()
         self._update_meter()
         if pr.get("mode") == "counter":
+            # Restore the deal's retention/protection terms so the user
+            # counters from the same terms, not from scratch.
+            try:
+                import trade_negotiation as _tn
+                _neg = _tn.get_negotiation(self.parent, self._negotiation_id)
+                if _neg is not None:
+                    self._retention = {
+                        getattr(a, 'id', None): float(v)
+                        for a in self.trade_offers['user']
+                        for k, v in (_neg.retention or {}).items()
+                        if str(k) == str(getattr(a, 'id', '')) and float(v or 0) > 0}
+                    self._pick_protection = {
+                        getattr(a, 'id', ''): v
+                        for a in self.trade_offers['user']
+                        for k, v in (_neg.pick_protection or {}).items()
+                        if str(k) == str(getattr(a, 'id', '')) and v}
+            except Exception:
+                pass
+            self._refresh_offer_lists()
             try:
                 self.propose_btn.configure(text="Send Counter-Offer")
                 self.title(f"Trade Center -- countering {partner.team_name}"
@@ -3916,8 +3949,84 @@ class TradeWindow(InGamePopup):
             for a in self.trade_offers[side]:
                 lvl = self._asset_levels[side].get(id(a), "NHL")
                 tag = "" if lvl == "NHL" else f" ({lvl})"
-                labels.append(f"{self.te.asset_label(a)}{tag}  [{self.te.asset_value(a)}]")
+                label = f"{self.te.asset_label(a)}{tag}  [{self.te.asset_value(a)}]"
+                if not self.te._is_pick(a):
+                    # Trade protection badge -- real clauses, real consequences.
+                    ctag = self.te.clause_tag(a)
+                    if ctag:
+                        label += f"  [{ctag}]"
+                if side == 'user':
+                    if not self.te._is_pick(a):
+                        pct = self._retention.get(getattr(a, 'id', None), 0)
+                        if pct:
+                            label += f"  ⟡ retains {pct:g}%"
+                    else:
+                        prot = self.te.protection_label(
+                            self._pick_protection.get(getattr(a, 'id', ''), ''))
+                        if prot:
+                            label += f"  ⟡ {prot}"
+                labels.append(label)
             lst.set_items(labels)
+        self._refresh_retention_section()
+
+    # ------------------------------------------------------------------
+    # Salary retention
+    # ------------------------------------------------------------------
+    def _refresh_retention_section(self):
+        """Rebuild the per-player retention rows for the user's offer."""
+        for child in self.retention_frame.winfo_children():
+            child.destroy()
+        try:
+            from ctk_theme import body as _body
+            used = self.te.retention_slots_used(self.parent.user_team)
+            self._retention_slots_label.configure(
+                text=f"Retention slots used: {used}/{self.te.MAX_RETENTION_SLOTS}")
+        except Exception:
+            pass
+        players = [a for a in self.trade_offers['user']
+                   if not self.te._is_pick(a)]
+        if not players:
+            return
+        import customtkinter as ctk
+        from ctk_theme import body as _body
+        for p in players:
+            row = ctk.CTkFrame(self.retention_frame, fg_color="transparent")
+            row.pack(fill='x', pady=1)
+            try:
+                hit = self.te._player_cap_hit(p)
+                name = f"{p.full_name} (${hit / 1e6:.2f}M)"
+            except Exception:
+                name = str(p)
+            _body(row, name, size=11).pack(side='left', padx=(4, 8))
+            var = ctk.StringVar(
+                value=f"{self._retention.get(getattr(p, 'id', None), 0):g}%")
+            seg = ctk.CTkSegmentedButton(
+                row, values=["0%", "25%", "50%"], variable=var, width=150,
+                command=lambda v, _p=p: self._set_retention(_p, v))
+            seg.pack(side='right', padx=4)
+
+    def _set_retention(self, player, value):
+        """User picked a retention pct for one outgoing player."""
+        try:
+            pct = float(str(value).replace("%", "") or 0)
+        except Exception:
+            pct = 0
+        pid = getattr(player, 'id', None)
+        if pct > 0:
+            # Validate now so the meter never shows an illegal promise.
+            ok, note = self.te.apply_retention_dry_run(
+                self.parent.user_team, player, pct,
+                extra={k: v for k, v in self._retention.items() if k != pid})
+            if not ok:
+                from tkinter import messagebox
+                messagebox.showwarning("Can't retain", note)
+                self._refresh_retention_section()
+                return
+            self._retention[pid] = pct
+        else:
+            self._retention.pop(pid, None)
+        self._refresh_offer_lists()
+        self._update_meter()
 
     # ------------------------------------------------------------------
     # Trade meter
@@ -3972,18 +4081,25 @@ class TradeWindow(InGamePopup):
                 text_color=color)
         # Cap impact for the user (central cap accounting: roster + dead cap,
         # so this label always agrees with the actual trade validation).
+        # Retention-aware: money you retain on outgoing players stays home
+        # as your dead cap instead of leaving with them.
         gm_team = self.parent.user_team
-        in_sal = sum(self.te._player_cap_hit(p) for p in self.trade_offers['partner']
-                     if not self.te._is_pick(p))
-        out_sal = sum(self.te._player_cap_hit(p) for p in self.trade_offers['user']
-                      if not self.te._is_pick(p))
+        user_players = [p for p in self.trade_offers['user']
+                        if not self.te._is_pick(p)]
+        partner_players = [p for p in self.trade_offers['partner']
+                           if not self.te._is_pick(p)]
+        in_sal = sum(self.te._player_cap_hit(p) for p in partner_players)
+        out_sal = sum(self.te._player_cap_hit(p) for p in user_players)
         try:
             from salary_cap_system import total_cap_charge
-            new_pay = total_cap_charge(gm_team) - out_sal + in_sal
+            kept_home = self.te._retention_adjustment(user_players, self._retention)
+            new_pay = total_cap_charge(gm_team) - out_sal + kept_home + in_sal
             room = gm_team.salary_cap - new_pay
             ok = room >= 0
+            ret_note = (f" (incl. ${kept_home / 1e6:.2f}M retained)"
+                        if kept_home else "")
             self.cap_label.configure(
-                text=f"Cap room after: ${room / 1e6:.1f}M"
+                text=f"Cap room after: ${room / 1e6:.1f}M{ret_note}"
                      if ok else f"OVER CAP by ${-room / 1e6:.1f}M — shed salary!",
                 text_color=ct['GREEN'] if ok else ct['RED'])
         except Exception:
@@ -4008,7 +4124,13 @@ class TradeWindow(InGamePopup):
         idx = lst.get_selected_index()
         if idx is None or idx >= len(self.trade_offers[side]):
             return
+        gone = self.trade_offers[side][idx]
         del self.trade_offers[side][idx]
+        if side == 'user':
+            # Deal terms die with the asset.
+            self._retention.pop(getattr(gone, 'id', None), None)
+            self._pick_protection.pop(getattr(gone, 'id', ''), None)
+            self._pick_protection.pop(str(getattr(gone, 'id', '')), None)
         self._refresh_offer_lists()
         self._update_meter()
 
@@ -4034,19 +4156,85 @@ class TradeWindow(InGamePopup):
             return
         dlg = InGamePopup(self)
         dlg.title("Add draft pick")
-        dlg.geometry("420x360")
+        dlg.geometry("420x420")
         dlg.configure(fg_color=BG)
         dlg.transient(self)
         heading(dlg, f"Select a {team.team_name} pick:", size=12).pack(pady=(14, 6))
-        pick_list = CTkOfferList(dlg, height=200)
+        pick_list = CTkOfferList(dlg, height=170)
         pick_list.pack(fill='both', expand=True, padx=12)
         pick_list.set_items([f"{self.te.asset_label(pk)}  [{self.te.asset_value(pk)}]"
                              for pk in picks])
 
+        # Pick protection (real NHL lottery protection, 1st-rounders only):
+        # if the pick lands in the protected zone, the original club keeps
+        # it and the holder gets their next-year 1st instead. Requires the
+        # club to still hold its next-year 1st-rounder.
+        prot_var = ctk.StringVar(value="None")
+        prot_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        prot_frame.pack(fill='x', padx=12, pady=(6, 0))
+        body(prot_frame, "Protection:", size=11, dim=True).pack(side='left')
+        prot_seg = ctk.CTkSegmentedButton(
+            prot_frame, values=["None", "Top-3", "Top-10", "Lottery"],
+            variable=prot_var, width=240)
+        prot_seg.pack(side='right')
+        prot_note = body(dlg, "", size=10, dim=True)
+        prot_note.pack(padx=12, pady=(2, 0))
+
+        def _refresh_prot_state(*_a):
+            idx = pick_list.get_selected_index()
+            ok, why = True, ""
+            if idx is not None and 0 <= idx < len(picks):
+                pk = picks[idx]
+                if pk.round != 1:
+                    ok, why = False, "Only 1st-round picks can be protected."
+                else:
+                    nxt = pk.year + 1
+                    own_next = any(
+                        q.round == 1 and q.current_team == team.team_name
+                        for q in (getattr(team, 'draft_picks', {}) or {}).get(nxt, []))
+                    if not own_next:
+                        ok, why = False, (
+                            f"{team.team_name} doesn't hold its {nxt} 1st-rounder "
+                            f"-- nothing to defer to.")
+            try:
+                prot_seg.configure(state="normal" if ok else "disabled")
+            except Exception:
+                pass
+            prot_note.configure(text=why if not ok else
+                                "If the pick lands in the protected zone, it defers "
+                                "to next year's 1st.")
+            if not ok:
+                prot_var.set("None")
+
+        try:
+            _last_prot_idx = {"i": None}
+
+            def _poll_prot():
+                try:
+                    if not dlg.winfo_exists():
+                        return
+                    cur = pick_list.get_selected_index()
+                    if cur != _last_prot_idx["i"]:
+                        _last_prot_idx["i"] = cur
+                        _refresh_prot_state()
+                    dlg.after(200, _poll_prot)
+                except Exception:
+                    pass
+
+            _poll_prot()
+        except Exception:
+            pass
+        _refresh_prot_state()
+
         def add():
             idx = pick_list.get_selected_index()
             if idx is not None:
-                self.trade_offers[side].append(picks[idx])
+                pk = picks[idx]
+                self.trade_offers[side].append(pk)
+                prot = {"Top-3": "top-3", "Top-10": "top-10",
+                        "Lottery": "lottery"}.get(prot_var.get(), "")
+                if prot and side == 'user' and pk.round == 1:
+                    self._pick_protection[pk.id] = prot
                 self._refresh_offer_lists()
                 self._update_meter()
                 dlg.destroy()
@@ -4073,15 +4261,62 @@ class TradeWindow(InGamePopup):
         if not user_assets or not partner_assets:
             messagebox.showwarning("Incomplete", "Put assets on both sides first.")
             return
-        # Cap check for the user before bothering the AI
-        if not self.te._cap_ok_after(self.parent.user_team, user_assets, partner_assets):
+        # No-trade / no-movement clauses: the user's own clause players must
+        # waive for this specific destination before the offer goes out.
+        # Yes = ask him, No = pull him from the offer, Cancel = stop.
+        _league = (getattr(getattr(self.parent, 'game_manager', None),
+                           'league', None)
+                   or getattr(self.parent, 'league', None))
+        for _v in self.te.trade_vetoes(
+                self.parent.user_team, partner,
+                [p for p in user_assets if not self.te._is_pick(p)], _league):
+            _p, _pname = _v["player"], getattr(
+                _v["player"], "full_name", str(_v["player"]))
+            _ans = messagebox.askyesnocancel(
+                "No-trade clause",
+                f"{_pname} has a {_v['detail']}.\n\nAsk him to waive it for "
+                f"a move to the {partner.team_name}?\n\n"
+                f"Yes = ask him  |  No = remove him from the offer  |  "
+                f"Cancel = stop")
+            if _ans is None:
+                return
+            if _ans is False:
+                self.trade_offers['user'] = [
+                    a for a in self.trade_offers['user'] if a is not _p]
+                self._retention.pop(getattr(_p, 'id', None), None)
+                user_assets = list(self.trade_offers['user'])
+                self._refresh_offer_lists()
+                self._update_meter()
+                continue
+            _ok, _why = self.te.will_waive_ntc(
+                _p, self.parent.user_team, partner, _league)
+            if _ok:
+                try:
+                    _p.contract.ntc_waiver_for = partner.team_name
+                except Exception:
+                    pass
+                messagebox.showinfo("Waiver granted", _why)
+            else:
+                messagebox.showwarning(
+                    "Waiver refused",
+                    f"{_why}\n\nHe's staying put -- remove him from the "
+                    f"offer or cancel.")
+                return
+        # Deal terms the user set on this screen (retention %, pick protection)
+        retention = {k: v for k, v in self._retention.items() if v}
+        pick_protection = dict(self._pick_protection)
+        # Cap check for the user before bothering the AI (retention-aware)
+        if not self.te._cap_ok_after(self.parent.user_team, user_assets,
+                                     partner_assets, retention=retention):
             messagebox.showerror("Cap problem",
                                  "This trade puts YOU over the salary cap. Shed salary first.")
             return
         if self._negotiation_id and self._preset.get("mode") == "counter":
             neg = tn.get_negotiation(self.parent, self._negotiation_id)
             if neg is not None and neg.is_open:
-                tn.send_counter(self.parent, neg, user_assets, partner_assets)
+                tn.send_counter(self.parent, neg, user_assets, partner_assets,
+                                retention=retention,
+                                pick_protection=pick_protection)
                 messagebox.showinfo(
                     "Counter-offer sent",
                     f"Your revised proposal is with {partner.team_name}.\n"
@@ -4089,7 +4324,8 @@ class TradeWindow(InGamePopup):
                     "your inbox. You can close this window.")
                 self.destroy()
                 return
-        tn.send_offer(self.parent, partner, user_assets, partner_assets)
+        tn.send_offer(self.parent, partner, user_assets, partner_assets,
+                      retention=retention, pick_protection=pick_protection)
         messagebox.showinfo(
             "Offer sent",
             f"Your offer is with {partner.team_name}'s front office.\n"
@@ -7978,6 +8214,8 @@ class ContractNegotiationView(ctk.CTkFrame):
                 "asking_price": None,  # last known agent ask
                 "draft_salary": "",
                 "draft_years": 1,
+                "draft_clause": "none",
+                "draft_clause_size": 10,
             }
             sessions[key] = sess
         self._sess_key = key
@@ -8143,6 +8381,45 @@ class ContractNegotiationView(ctk.CTkFrame):
         ttk.Label(years_row, text=f"year(s)  (max {max_years})",
                   style="Secondary.TLabel").pack(side=tk.LEFT)
 
+        # ---- Trade protection (real clauses, real leverage) ----
+        import trade_engine as _te
+        clause_row = ttk.Frame(left, style="Card.TFrame")
+        clause_row.pack(fill=tk.X, pady=4)
+        ttk.Label(clause_row, text="Trade protection:",
+                  style="TLabel").pack(side=tk.LEFT)
+        self._clause_names = {"none": "None",
+                              "nmc": "No-movement clause",
+                              "ntc": "Full no-trade",
+                              "mntc": "Modified no-trade"}
+        self._clause_keys = {v: k for k, v in self._clause_names.items()}
+        _cur = str(self._session.get("draft_clause") or "none")
+        if _cur not in self._clause_names:
+            _cur = "none"
+        self.clause_var = tk.StringVar(master=self,
+                                       value=self._clause_names[_cur])
+        self.clause_menu = ttk.OptionMenu(
+            clause_row, self.clause_var, self._clause_names[_cur],
+            *self._clause_names.values(), command=self._on_clause_change)
+        self.clause_menu.pack(side=tk.LEFT, padx=8)
+        self.clause_size_frame = ttk.Frame(clause_row, style="Card.TFrame")
+        ttk.Label(self.clause_size_frame, text="blocked teams:",
+                  style="Secondary.TLabel").pack(side=tk.LEFT)
+        self.clause_size_var = tk.IntVar(
+            master=self, value=int(self._session.get("draft_clause_size")
+                                   or 10))
+        ttk.Scale(self.clause_size_frame, from_=3, to=20,
+                  variable=self.clause_size_var,
+                  orient="horizontal", length=110).pack(side=tk.LEFT, padx=6)
+        ttk.Label(self.clause_size_frame, textvariable=self.clause_size_var,
+                  style="TLabel", width=3).pack(side=tk.LEFT)
+        self.clause_size_var.trace_add("write", self._on_clause_size_change)
+        self.clause_hint_var = tk.StringVar(master=self, value="")
+        ttk.Label(left, textvariable=self.clause_hint_var,
+                  style="Secondary.TLabel", wraplength=520).pack(anchor="w",
+                                                                 pady=(0, 4))
+        self._on_clause_change(self.clause_var.get())
+        self._refresh_clause_hint()
+
         self.total_label = ttk.Label(left, text="Total: $0", style="TLabel",
                                      font=(app.FONT_FAMILY, 12, "bold"))
         self.total_label.pack(anchor="w", pady=(8, 4))
@@ -8215,6 +8492,51 @@ class ContractNegotiationView(ctk.CTkFrame):
             pass
 
     # ---------- live updates ----------
+
+    def _on_clause_change(self, _display=None):
+        key = self._clause_keys.get(self.clause_var.get(), "none")
+        self._session["draft_clause"] = key
+        if key == "mntc":
+            self.clause_size_frame.pack(side=tk.LEFT, padx=(4, 0))
+        else:
+            self.clause_size_frame.pack_forget()
+        self._refresh_clause_hint()
+
+    def _on_clause_size_change(self, *args):
+        try:
+            self._session["draft_clause_size"] = int(
+                self.clause_size_var.get())
+        except Exception:
+            pass
+        self._refresh_clause_hint()
+
+    def _clause_key(self):
+        return self._clause_keys.get(self.clause_var.get(), "none")
+
+    def _refresh_clause_hint(self):
+        import trade_engine as _te
+        try:
+            key = self._clause_key()
+            demand = _te.clause_demand_score(
+                self.player, getattr(self.app, "user_team", None),
+                getattr(self.app, "league", None))
+            if key == "none":
+                if demand >= 0.65:
+                    self.clause_hint_var.set(
+                        "His camp is pushing hard for trade protection -- "
+                        "expect to pay more without it.")
+                elif demand >= 0.35:
+                    self.clause_hint_var.set(
+                        "Trade protection would sweeten your offer.")
+                else:
+                    self.clause_hint_var.set("")
+            else:
+                val = _te.clause_annual_value(self.player, key)
+                self.clause_hint_var.set(
+                    f"Offering {_te.clause_offer_label(key, self.clause_size_var.get())} "
+                    f"-- worth about ${val:,}/yr to him.")
+        except Exception:
+            self.clause_hint_var.set("")
 
     def _update_total(self, *args):
         try:
@@ -8299,16 +8621,24 @@ class ContractNegotiationView(ctk.CTkFrame):
             return
         # Same signing path as the original popup: stage the offer on the
         # player object, then run the central handler (inbox routing).
+        # Clause terms ride along as staged single-use attributes.
         p.salary = salary
         p.contract_years = years
+        p.offered_clause_kind = self._clause_key()
+        p.offered_clause_list_size = int(self.clause_size_var.get() or 10)
+        import trade_engine as _te
+        _clause_txt = _te.clause_offer_label(
+            p.offered_clause_kind, p.offered_clause_list_size)
         accepted = self.app.handle_contract_offer(
             p, extension=self.is_extension, notify="inbox")
         if accepted:
-            self._record_offer(salary, years, "accepted ✓")
+            self._record_offer(salary, years, f"accepted ✓ ({_clause_txt})")
             self._close_session()
             self.close_view()
         else:
-            self._record_offer(salary, years, "rejected — agent responded via inbox")
+            self._record_offer(salary, years,
+                               f"rejected — agent responded via inbox "
+                               f"({_clause_txt})")
             self.banner_var.set(
                 "Offer rejected. The agent's response is in your inbox — "
                 "adjust the offer or jump back here from the navbar chip.")
@@ -9674,9 +10004,12 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         if bonus > 0:
             chance += min(0.1, bonus / (salary * years) * 0.5)
         
-        # No-trade clause adds value for veterans
-        if self.ntc_var.get() and self.player.age >= 28:
-            chance += 0.1
+        # Trade protection: one shared valuation (trade_engine), scaled by
+        # how hard this player actually pushes for a clause -- not a flat
+        # veteran bonus.
+        if self.ntc_var.get():
+            import trade_engine as _te
+            chance += _te.clause_acceptance_bonus(self.player, "ntc")
         
         # Cap the chance between 5% and 95%
         return max(0.05, min(0.95, chance))

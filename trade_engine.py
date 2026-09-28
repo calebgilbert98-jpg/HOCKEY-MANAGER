@@ -16,6 +16,311 @@ from typing import List, Optional, Tuple
 # Real OVR scale in-game: ~62 (fringe) to ~90 (superstar), median ~76.
 POTENTIAL_BONUS = {'A': 220, 'B': 130, 'C': 50, 'D': 10, 'F': 0}
 
+# Real NHL retained-salary rules (additive; the engine never had them).
+MAX_RETENTION_SLOTS = 3   # max active retained-salary transactions per club
+MAX_RETENTION_PCT = 50    # max percent of the cap hit one club may retain
+
+# ---------------------------------------------------------------------------
+# No-trade / no-movement clauses + waiver decisions
+# ---------------------------------------------------------------------------
+# Real NHL trade protection, seeded from real_ntc_data.py on new 2026-27
+# games: full NMCs (block trades AND waivers/AHL assignment), full NTCs
+# (block all trades), and modified NTCs (the player holds a no-trade or
+# approved list of N teams). A player with a clause must be asked to waive
+# it for a specific destination; his answer depends on his personality,
+# his team's situation and performance, and his happiness -- never on a
+# bare coin flip. Additive: players without clauses behave exactly as
+# before.
+
+
+def clause_of(player):
+    """Return (kind, detail) for a player's trade protection.
+
+    kind is "NMC", "NTC", "M-NTC", or None. detail is a short human label
+    like "full no-movement clause" or "10-team no-trade list".
+    """
+    try:
+        c = getattr(player, "contract", None)
+        if c is None:
+            return None, ""
+        if bool(getattr(c, "no_movement_clause", False)):
+            n = int(getattr(c, "modified_ntc_teams", 0) or 0)
+            d = "full no-movement clause" + (f" ({n}-team list)" if n else "")
+            return "NMC", d
+        # A list size on the contract means modified NTC, even though the
+        # underlying flag is the same no-trade bit -- check it first.
+        n = int(getattr(c, "modified_ntc_teams", 0) or 0)
+        if n > 0:
+            if bool(getattr(c, "modified_ntc_approved", False)):
+                return "M-NTC", f"{n}-team approved list"
+            return "M-NTC", f"{n}-team no-trade list"
+        if bool(getattr(c, "no_trade_clause", False)):
+            return "NTC", "full no-trade clause"
+    except Exception:
+        pass
+    return None, ""
+
+
+def clause_tag(player):
+    """Short badge for trade-screen asset rows: NMC / NTC / M-NTC / ''."""
+    kind, _detail = clause_of(player)
+    return kind or ""
+
+
+def _team_points_pct(team, league=None):
+    """Team's points percentage from league standings (0..1, 0.5 default)."""
+    try:
+        name = getattr(team, "team_name", team)
+        st = (getattr(league, "standings", {}) or {}).get(name, {})
+        w = float(st.get("W", 0) or 0)
+        l = float(st.get("L", 0) or 0)
+        otl = float(st.get("OTL", 0) or 0)
+        gp = w + l + otl
+        if gp > 0:
+            return (w * 2 + otl) / (gp * 2)
+    except Exception:
+        pass
+    try:  # fallback: raw points/games attributes
+        pts = float(getattr(team, "points", 0) or 0)
+        gp = float(getattr(team, "games_played", 0) or 0)
+        if gp > 0:
+            return pts / (gp * 2)
+    except Exception:
+        pass
+    return 0.5
+
+
+def will_waive_ntc(player, from_team, to_team, league=None, rng=None):
+    """Would the player waive his clause for from_team -> to_team?
+
+    Decided by personality (loyalty, controversy, age/cup-chase), team
+    situation and performance (points pace of both clubs), and happiness --
+    never a bare coin flip. Returns (bool, reason).
+    """
+    import random as _random
+    rng = rng or _random
+    name = getattr(player, "full_name", str(player))
+    kind, detail = clause_of(player)
+    if kind is None:
+        return True, f"{name} has no clause to waive."
+    from_name = getattr(from_team, "team_name", str(from_team))
+    to_name = getattr(to_team, "team_name", str(to_team))
+
+    # Explicit no-trade list: that team is named -- the answer is no.
+    try:
+        blocked = [str(t) for t in
+                   (getattr(player.contract, "no_trade_list", []) or [])]
+        if to_name in blocked or any(to_name in b or b in to_name
+                                     for b in blocked):
+            return False, (f"{to_name} is on {name}'s no-trade list -- "
+                           f"he won't waive for them.")
+    except Exception:
+        pass
+
+    score = 45.0
+    notes = []
+
+    # -- Happiness: unhappy players want out, happy ones stay put.
+    happiness = float(getattr(player, "happiness", 70) or 70)
+    if happiness < 40:
+        score += 22
+        notes.append("he's unhappy here and wants a fresh start")
+    elif happiness < 55:
+        score += 8
+    elif happiness > 78:
+        score -= 16
+        notes.append("he's happy here")
+    morale = float(getattr(player, "morale", 70) or 70)
+    if morale < 35:
+        score += 6
+    elif morale > 80:
+        score -= 5
+
+    # -- Team situation + performance: players chase winning.
+    from_pct = _team_points_pct(from_team, league)
+    to_pct = _team_points_pct(to_team, league)
+    diff = to_pct - from_pct
+    score += diff * 70
+    if diff > 0.12:
+        notes.append(f"the {to_name} are contending while the {from_name} struggle")
+    elif diff < -0.12:
+        notes.append("he'd be leaving a contender for a worse team")
+
+    # -- Personality: loyalty anchors, controversy loosens, age chases cups.
+    try:
+        from reputation_system import contract_loyalty
+        loyalty = float(contract_loyalty(player))  # 0..1
+    except Exception:
+        loyalty = 0.5
+    score -= (loyalty - 0.5) * 40
+    if loyalty > 0.75:
+        notes.append("he's fiercely loyal to the club")
+    controversy = float(getattr(player, "controversy", 0) or 0)
+    if controversy > 70:
+        score += 8
+        notes.append("he's never been afraid of a change of scenery")
+    age = int(getattr(player, "age", 28) or 28)
+    if age >= 33 and diff > 0.06:
+        score += 18
+        notes.append(f"at {age}, he's chasing a Cup before time runs out")
+    elif age <= 24 and diff < -0.05:
+        score -= 8
+        notes.append("he'd rather develop with a winner")
+
+    # -- Clause strength: NMCs are the hardest to move.
+    if kind == "NMC":
+        score -= 18
+        notes.append("a full no-movement clause is the hardest to waive")
+    elif kind == "M-NTC":
+        # His list is private; estimate the chance the destination is on it.
+        n = int(getattr(player.contract, "modified_ntc_teams", 0) or 0)
+        approved = bool(getattr(player.contract, "modified_ntc_approved", False))
+        if approved:
+            # Approved list: only desirable destinations are on it.
+            desirability = to_pct + (0.1 if happiness < 50 else 0)
+            if desirability < 0.52:
+                return False, (f"{to_name} isn't on {name}'s {n}-team approved "
+                                f"list -- he won't waive.")
+            score += 6
+            notes.append("the destination made his approved list")
+        else:
+            p_on_list = max(0.05, min(0.85, (n / 31.0) *
+                                      (1.35 if to_pct < 0.5 else 0.7)))
+            if rng.random() < p_on_list:
+                return False, (f"{to_name} is on {name}'s {n}-team no-trade "
+                                f"list -- he blocked the move.")
+            score += 5
+
+    waives = rng.random() * 100 < max(5, min(95, score))
+    why = f"{name} {'waives' if waives else 'refuses to waive'} his {detail}"
+    if notes:
+        why += " -- " + "; ".join(notes[:2])
+    why += "."
+    return waives, why
+
+
+def trade_vetoes(from_team, to_team, assets, league=None):
+    """Clause vetoes blocking from_team -> to_team for these assets.
+
+    Returns a list of {"player", "clause", "detail"} for players whose
+    NTC/NMC/M-NTC blocks the move. Players who already waived for this
+    destination (contract.ntc_waiver_for) are skipped. Picks never veto.
+    """
+    to_name = getattr(to_team, "team_name", str(to_team))
+    vetoes = []
+    for a in assets or []:
+        if _is_pick(a):
+            continue
+        kind, detail = clause_of(a)
+        if kind is None:
+            continue
+        try:
+            if str(getattr(a.contract, "ntc_waiver_for", "") or "") == to_name:
+                continue
+        except Exception:
+            pass
+        vetoes.append({"player": a, "clause": kind, "detail": detail})
+    return vetoes
+
+
+def protection_label(prot: str) -> str:
+    """Human label for a pick-protection code ('top-10' -> 'Top-10 protected')."""
+    return {"top-3": "Top-3 protected",
+            "top-10": "Top-10 protected",
+            "lottery": "Lottery protected"}.get(prot or "", "")
+
+
+def retention_slots_used(team) -> int:
+    """Active retained-salary transactions on a club (NHL max is 3)."""
+    try:
+        from salary_cap_system import retention_slots_used as _rsu
+        return _rsu(team)
+    except Exception:
+        return 0
+
+
+def _retention_check(retaining_team, player, pct, extra=None):
+    """Shared retention validation. Returns (ok, amount, reason).
+
+    extra: {player_id: pct} other PROPOSED retentions in the same deal --
+    they consume slots too, so the UI can validate the whole package.
+    """
+    try:
+        pct = float(pct or 0)
+    except Exception:
+        return False, 0, "Retention must be a number."
+    if pct <= 0 or pct > MAX_RETENTION_PCT:
+        return False, 0, f"Retention must be 1-{MAX_RETENTION_PCT}%."
+    contract = getattr(player, "contract", None)
+    salary = int(getattr(contract, "salary", 0) or 0) if contract else 0
+    if salary <= 0:
+        return False, 0, "That player has no cap hit to retain."
+    # Slot count: active ledger entries + other proposed terms (distinct
+    # players), minus this player if he already holds a slot.
+    try:
+        ledger = getattr(retaining_team, "retained_salary", None) or []
+        active_ids = {e.get("player_id") for e in ledger
+                      if int(e.get("seasons_remaining", 0) or 0) > 0}
+        pid = getattr(player, "id", None)
+        others = {str(k) for k in (extra or {}).keys()} - {str(pid)}
+        others -= {str(_i) for _i in active_ids}
+        if len(active_ids) + len(others) + (0 if pid in active_ids else 1) \
+                > MAX_RETENTION_SLOTS:
+            return False, 0, (
+                f"{getattr(retaining_team, 'team_name', 'That club')} would "
+                f"exceed the {MAX_RETENTION_SLOTS} retention-slot limit.")
+    except Exception:
+        pass
+    effective = salary - int(getattr(player, "retained_amount", 0) or 0)
+    amount = int(round(effective * pct / 100.0))
+    if amount <= 0 or int(getattr(player, "retained_amount", 0) or 0) + amount >= salary:
+        return False, 0, "Retention would wipe out the whole cap hit."
+    return True, amount, ""
+
+
+def apply_retention_dry_run(retaining_team, player, pct, extra=None):
+    """Validate retention terms without recording anything (for UI)."""
+    ok, _amount, reason = _retention_check(retaining_team, player, pct, extra)
+    return ok, (reason or "OK")
+
+
+def apply_retention(retaining_team, player, pct) -> Tuple[bool, str]:
+    """Record a retained-salary transaction when a player is traded.
+
+    Real NHL rules: the trading club may keep up to 50% of the player's
+    CURRENT effective cap hit; max 3 active retentions per club; the
+    retained amount becomes dead cap on the retaining club for the
+    remaining term of the contract, and the player's cap hit drops for
+    his new club. Additive -- existing trades without retention are
+    untouched. Returns (True, note) or (False, reason).
+    """
+    ok, amount, reason = _retention_check(retaining_team, player, pct)
+    if not ok:
+        return False, reason
+    contract = getattr(player, "contract", None)
+    years = int(getattr(contract, "years_remaining", 0) or 0) if contract else 0
+    try:
+        pct = float(pct or 0)
+        ledger = getattr(retaining_team, "retained_salary", None)
+        if ledger is None:
+            ledger = []
+            retaining_team.retained_salary = ledger
+        ledger.append({
+            "player_id": getattr(player, "id", None),
+            "player_name": getattr(player, "full_name", str(player)),
+            "amount": amount,
+            "seasons_remaining": max(1, years),
+        })
+        player.retained_amount = int(getattr(player, "retained_amount", 0) or 0) + amount
+        if not getattr(player, "retained_team_name", ""):
+            player.retained_team_name = getattr(
+                retaining_team, "team_name", "")
+    except Exception as e:
+        return False, f"Could not record retention: {e}"
+    return True, (f"{getattr(retaining_team, 'team_name', 'Club')} retains "
+                  f"${amount:,} ({pct:g}%) of "
+                  f"{getattr(player, 'full_name', 'the player')}'s cap hit.")
+
 
 def player_trade_value(player) -> int:
     """Trade value of a player in 'pick points' (a 1st-round pick ~= 1000)."""
@@ -86,11 +391,20 @@ def asset_label(asset) -> str:
     """Human label for a player or pick asset."""
     from game_classes import DraftPick
     if isinstance(asset, DraftPick):
-        return asset.description
+        desc = asset.description
+        prot = protection_label(getattr(asset, "protection", ""))
+        return f"{desc} ({prot})" if prot else desc
     try:
-        return f"{asset.full_name} ({asset.primary_position.value}, {asset.overall_rating()} OVR)"
+        label = f"{asset.full_name} ({asset.primary_position.value}, {asset.overall_rating()} OVR)"
     except Exception:
         return str(asset)
+    try:
+        ret = int(getattr(asset, "retained_amount", 0) or 0)
+        if ret > 0:
+            label += f" [${ret / 1e6:.2f}M retained]"
+    except Exception:
+        pass
+    return label
 
 
 def asset_value(asset) -> int:
@@ -209,11 +523,16 @@ def _player_cap_hit(p) -> int:
     which was always 0, so outgoing/incoming money never registered:
     an over-cap club failed the check on every deal, even pure
     salary dumps. This restores cap-shedding trades for both sides.
+
+    Retained salary (p.retained_amount, kept as dead cap by a former
+    club) lowers the hit for the player's current club.
     """
     try:
         contract = getattr(p, "contract", None)
         if contract is not None:
-            return int(getattr(contract, "salary", 0) or 0)
+            hit = int(getattr(contract, "salary", 0) or 0)
+            hit -= int(getattr(p, "retained_amount", 0) or 0)
+            return max(0, hit)
     except Exception:
         pass
     try:
@@ -222,7 +541,28 @@ def _player_cap_hit(p) -> int:
         return 0
 
 
-def _cap_ok_after(team, outgoing, incoming) -> bool:
+def _retention_adjustment(assets, retention) -> int:
+    """New dead-cap dollars a side keeps by retaining on outgoing assets.
+
+    ``retention`` maps player id -> pct (1-50). Pure helper so the cap
+    check and the UI meter agree.
+    """
+    total = 0
+    if not retention:
+        return 0
+    for p in assets or []:
+        if _is_pick(p):
+            continue
+        try:
+            pct = float(retention.get(getattr(p, "id", None), 0) or 0)
+        except Exception:
+            pct = 0
+        if pct > 0:
+            total += int(round(_player_cap_hit(p) * min(pct, MAX_RETENTION_PCT) / 100.0))
+    return total
+
+
+def _cap_ok_after(team, outgoing, incoming, retention=None) -> bool:
     """Cap legality of a trade -- identical rule for AI and user.
 
     Dead-cap penalties count in the pre/post totals but never move as part
@@ -234,6 +574,10 @@ def _cap_ok_after(team, outgoing, incoming) -> bool:
       reduces the total cap burden (a genuine salary shed), even if the
       club remains over afterward. Neutral or worsening deals are
       rejected -- you can't tread water or dig deeper while over.
+
+    ``retention`` (optional, player id -> pct) models proposed
+    retained-salary terms: the retaining side keeps that slice as dead
+    cap, the receiving side's incoming hit drops by the same slice.
     """
     try:
         from salary_cap_system import total_cap_charge
@@ -245,7 +589,11 @@ def _cap_ok_after(team, outgoing, incoming) -> bool:
                   if not _is_pick(p))
     in_sal = sum(_player_cap_hit(p) for p in incoming
                  if not _is_pick(p))
-    resulting = current - out_sal + in_sal
+    # Retention: the retaining side's outgoing money partly stays home as
+    # dead cap; the receiving side's incoming money drops by the same.
+    kept_home = _retention_adjustment(outgoing, retention)
+    relief_in = _retention_adjustment(incoming, retention)
+    resulting = current - out_sal + kept_home + in_sal - relief_in
     if current <= cap:
         return resulting <= cap
     # Over the cap: only a strict reduction of the burden is legal.
@@ -267,7 +615,8 @@ class AIResponse:
 
 
 def ai_consider_trade(partner_team, user_assets, partner_assets,
-                      user_team=None, patience=1.0, situational=None) -> AIResponse:
+                      user_team=None, patience=1.0, situational=None,
+                      retention=None) -> AIResponse:
     """AI GM evaluates your offer. Returns accept / reject / counter.
 
     patience: 1.0 = fresh talks. Drops each counter round; a tired GM
@@ -277,6 +626,10 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     situational: optional dict from trade_storylines.situational_context()
     with a 'greed_mult' nudge (<1 = more eager, >1 = harder bargain).
     Purely additive -- None means classic behavior.
+
+    retention: optional player id -> pct map of proposed retained-salary
+    terms; the AI's cap check sees the reduced incoming hit, exactly
+    like a real GM pricing retained money.
     """
     from game_classes import DraftPick
     ev = evaluate_trade(user_assets, partner_assets)
@@ -303,10 +656,26 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     if not user_assets or not partner_assets:
         return AIResponse('reject', "There's nothing on the table yet.")
 
-    # Cap reality check
-    if not _cap_ok_after(partner_team, partner_assets, user_assets):
+    # Cap reality check (retention-aware: retained money costs the AI less)
+    if not _cap_ok_after(partner_team, partner_assets, user_assets,
+                         retention=retention):
         return AIResponse('reject',
                           f"We can't make the money work under the cap.")
+
+    # Trade protection: the AI GM knows his own room. A clause player the
+    # user demands must agree to waive for the user's team -- if he won't,
+    # the deal is dead, and the AI says so plainly.
+    if user_team is not None:
+        for _v in trade_vetoes(partner_team, user_team, partner_assets):
+            _p = _v["player"]
+            _pname = getattr(_p, "full_name", str(_p))
+            _ok, _why = will_waive_ntc(_p, partner_team, user_team)
+            if not _ok:
+                return AIResponse('reject', _why)
+            try:
+                _p.contract.ntc_waiver_for = getattr(user_team, 'team_name', '')
+            except Exception:
+                pass
 
     # (ratio already scout-blended above)
     needs = team_needs(partner_team)
@@ -374,6 +743,18 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         sweeteners = sorted(partner_roster, key=asset_value)
         for s in sweeteners[:3]:
             if asset_value(s) < ev.diff * -0.5 + 200:
+                # The AI GM knows his own room: a player whose clause vetoes
+                # a move to your team is only offered if he'd waive -- and
+                # the granted waiver is stamped so completion honors it.
+                if trade_vetoes(partner_team, user_team, [s]):
+                    ok, _why = will_waive_ntc(s, partner_team, user_team)
+                    if not ok:
+                        continue
+                    try:
+                        s.contract.ntc_waiver_for = getattr(
+                            user_team, 'team_name', '')
+                    except Exception:
+                        pass
                 return AIResponse(
                     'counter',
                     f"We're close. If you take {asset_label(s)} too, I'll do it.",
@@ -397,16 +778,168 @@ class CompletedTrade:
     summary: str
 
 
+# ============================================================================
+# CONTRACT CLAUSE NEGOTIATION -- shared by user talks, AI signings, and both
+# contract UIs. One valuation so nobody gets a private mechanic.
+# ============================================================================
+
+CLAUSE_KINDS = ("none", "nmc", "ntc", "mntc")
+
+# Fraction of the player's market rate a clause is "worth" to him per year.
+_CLAUSE_FRAC = {"nmc": 0.07, "ntc": 0.05, "mntc": 0.03, "none": 0.0}
+
+
+def clause_demand_score(player, team=None, league=None):
+    """0..1 -- how hard this player pushes for trade protection in talks.
+
+    Driven by leverage (established stars), age (veterans want stability),
+    and loyalty (low-loyalty players want contractual control). Kids and
+    journeymen don't get to ask.
+    """
+    score = 0.0
+    try:
+        ovr = player.overall_rating()
+    except Exception:
+        ovr = 70
+    age = getattr(player, "age", 27)
+    if ovr >= 85:
+        score += 0.45
+    elif ovr >= 80:
+        score += 0.25
+    elif ovr >= 75:
+        score += 0.10
+    if age >= 32:
+        score += 0.25
+    elif age >= 29:
+        score += 0.15
+    try:
+        from reputation_system import contract_loyalty
+        if contract_loyalty(player) < 0.35:
+            score += 0.15
+    except Exception:
+        pass
+    # Cup-chasing veterans on contenders would rather keep their options
+    # open than lock in -- slight cooling.
+    try:
+        if team is not None and league is not None \
+                and _team_points_pct(team, league) >= 0.60 and age >= 33:
+            score -= 0.10
+    except Exception:
+        pass
+    return max(0.0, min(1.0, score))
+
+
+def clause_annual_value(player, kind):
+    """Dollar value the player attaches to a clause, per year.
+
+    A star's NMC is worth real money to him (~7% of his market rate);
+    a depth player's clause barely moves the needle.
+    """
+    if kind in (None, "none"):
+        return 0
+    try:
+        base = max(750_000, (player.overall_rating() - 60) * 250_000)
+    except Exception:
+        base = 1_000_000
+    frac = _CLAUSE_FRAC.get(kind, 0.0)
+    return int(base * frac)
+
+
+def clause_acceptance_bonus(player, kind):
+    """0..0.2 bump to a probabilistic acceptance roll, scaled by demand."""
+    if kind in (None, "none"):
+        return 0.0
+    return 0.20 * clause_demand_score(player)
+
+
+def clause_offer_label(kind, list_size=10):
+    if kind == "nmc":
+        return "no-movement clause"
+    if kind == "ntc":
+        return "full no-trade clause"
+    if kind == "mntc":
+        return f"modified no-trade ({list_size}-team list)"
+    return "no trade protection"
+
+
+def apply_clause_to_contract(contract, kind, list_size=10):
+    """Stamp a negotiated clause onto a fresh contract. Returns True."""
+    if contract is None or kind in (None, "none"):
+        return False
+    try:
+        if kind == "nmc":
+            contract.no_movement_clause = True
+        else:
+            contract.no_trade_clause = True
+            if kind == "mntc":
+                contract.modified_ntc_teams = int(list_size or 10)
+        return True
+    except Exception:
+        return False
+
+
 def execute_trade(user_team, partner_team, user_assets, partner_assets,
-                  date_str="", league=None, board=None) -> CompletedTrade:
+                  date_str="", league=None, board=None, retention=None) -> CompletedTrade:
     """Move players and picks. Assumes the deal was accepted.
 
     league/board are optional: when provided (user-involved deals), the
     trade's fallout is scored -- GM stature moves, the fleeced GM holds a
     personal grudge, and the board logs it via record_big_event. The asset
     movement itself is untouched.
+
+    retention (optional, player id -> pct): retained-salary terms.
+    Preflighted BEFORE the move (an illegal term blocks the whole deal);
+    applied after, with the retaining club being whichever side traded the
+    player away. Real NHL limits (50%, 3 slots) are enforced per player.
+
+    No-trade/no-movement preflight: a clause veto in either direction that
+    was never waived (contract.ntc_waiver_for) kills the deal BEFORE any
+    asset moves -- the returned CompletedTrade carries the veto in its
+    summary and moves nothing.
     """
     from game_classes import DraftPick
+    # Retention preflight -- every term validated BEFORE anything moves.
+    # An illegal term (over 50%, no slot left, no cap hit to retain) kills
+    # the deal instead of silently changing its economics mid-trade.
+    if retention:
+        _all_terms = {}
+        for _k, _v in retention.items():
+            try:
+                if float(_v or 0) > 0:
+                    _all_terms[str(_k)] = float(_v)
+            except Exception:
+                pass
+        for _src_team, _assets in ((user_team, user_assets),
+                                   (partner_team, partner_assets)):
+            for a in _assets:
+                if isinstance(a, DraftPick):
+                    continue
+                _pct = _all_terms.get(str(getattr(a, "id", None)), 0)
+                if _pct > 0:
+                    _extra = {k: v for k, v in _all_terms.items()
+                              if k != str(getattr(a, "id", None))}
+                    ok, _amt, reason = _retention_check(
+                        _src_team, a, _pct, extra=_extra)
+                    if not ok:
+                        _pname = getattr(a, "full_name", str(a))
+                        return CompletedTrade(
+                            date=date_str, team_a=user_team.team_name,
+                            team_b=partner_team.team_name, a_gave=[], b_gave=[],
+                            summary=(f"BLOCKED: retained-salary term on "
+                                     f"{_pname} is illegal ({reason}). "
+                                     f"No assets moved."))
+    # Clause preflight -- both directions, before anything moves.
+    for _src, _dst, _assets in ((user_team, partner_team, user_assets),
+                               (partner_team, user_team, partner_assets)):
+        vetoes = trade_vetoes(_src, _dst, _assets, league)
+        if vetoes:
+            v = vetoes[0]
+            pname = getattr(v["player"], "full_name", str(v["player"]))
+            return CompletedTrade(
+                date=date_str, team_a=user_team.team_name,
+                team_b=partner_team.team_name, a_gave=[], b_gave=[],
+                summary=(f"BLOCKED: {pname} used his {v['detail']} to veto "
+                         f"the move to {_dst.team_name}. No assets moved."))
     for a in user_assets:
         if isinstance(a, DraftPick):
             a.current_team = partner_team.team_name
@@ -420,10 +953,40 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
             partner_team.remove_player(a)
             user_team.add_player(a)
 
+    # Retained salary: record each term against the club that traded the
+    # player away. Terms were preflighted above, so failures here are
+    # unexpected -- still guarded, never fatal to the completed move.
+    retention_notes = []
+    if retention:
+        for _src_team, _assets in ((user_team, user_assets),
+                                   (partner_team, partner_assets)):
+            for a in _assets:
+                if isinstance(a, DraftPick):
+                    continue
+                try:
+                    pct = float(retention.get(getattr(a, "id", None), 0) or 0)
+                except Exception:
+                    pct = 0
+                if pct > 0:
+                    ok, note = apply_retention(_src_team, a, pct)
+                    if ok:
+                        retention_notes.append(note)
+                    else:
+                        print(f"retention skipped: {note}")
+
     a_labels = [asset_label(a) for a in user_assets]
     b_labels = [asset_label(a) for a in partner_assets]
+    # Waivers are spent: a granted waiver covered this one transaction.
+    for a in list(user_assets) + list(partner_assets):
+        try:
+            if not _is_pick(a) and getattr(a, "contract", None) is not None:
+                a.contract.ntc_waiver_for = ""
+        except Exception:
+            pass
     summary = (f"{user_team.team_name} acquires {', '.join(b_labels)} from "
                f"{partner_team.team_name} for {', '.join(a_labels)}.")
+    if retention_notes:
+        summary += " " + " ".join(retention_notes)
     # GM stature fallout: the league saw this deal. A fleece builds the
     # winner's "shark" reputation but the loser holds a personal grudge;
     # getting worked costs stature; fair dealing builds trust both ways.

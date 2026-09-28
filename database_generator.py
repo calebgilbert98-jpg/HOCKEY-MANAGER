@@ -979,9 +979,22 @@ class DatabaseGenerator:
         contract = Contract(
             salary=salary,
             years_remaining=years,
-            no_trade_clause=overall >= 47 and random.random() < 0.3
         )
-        
+        # Trade protection: the same demand model the user negotiates
+        # against (trade_engine.clause_demand_score) -- stars with leverage
+        # get clauses, kids don't, no flat dice roll.
+        try:
+            import trade_engine as _te
+            _demand = _te.clause_demand_score(player)
+            if random.random() < _demand * 0.85:
+                _te.apply_clause_to_contract(
+                    contract,
+                    "nmc" if overall >= 86 and random.random() < 0.35
+                    else ("mntc" if random.random() < 0.55 else "ntc"),
+                    random.choice([8, 10, 12, 15, 16, 20]))
+        except Exception:
+            pass
+
         return contract
     
     def _get_weighted_nationality(self) -> str:

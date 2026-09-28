@@ -183,6 +183,10 @@ class GameSaveManager:
                 'standings_position': getattr(team, 'standings_position', 0),
                 'board_expectation': getattr(team, 'board_expectation', None),
                 'buyout_cap_hits': dict(getattr(team, 'buyout_cap_hits', {}) or {}),
+                # In-game retained-salary ledger (real NHL retained
+                # transactions). Absent in old saves -> empty.
+                'retained_salary': [dict(e) for e in
+                                    (getattr(team, 'retained_salary', None) or [])],
                 # Seeded real-life 2026-27 dead-cap penalties (0/absent on
                 # old saves and when "start without cap penalties").
                 'real_buyout_cap': int(getattr(team, 'real_buyout_cap', 0) or 0),
@@ -833,6 +837,9 @@ class GameSaveManager:
             team.trade_block = team_data.get('trade_block', [])
             team.board_expectation = team_data.get('board_expectation')
             team.buyout_cap_hits = dict(team_data.get('buyout_cap_hits', {}) or {})
+            # Retained-salary ledger. Absent in old saves -> empty.
+            team.retained_salary = [dict(e) for e in
+                                    (team_data.get('retained_salary', None) or [])]
             # Seeded real-life dead-cap penalties. Absent in old saves -> 0.
             team.real_buyout_cap = int(team_data.get('real_buyout_cap', 0) or 0)
             team.real_retained_salary = int(team_data.get('real_retained_salary', 0) or 0)

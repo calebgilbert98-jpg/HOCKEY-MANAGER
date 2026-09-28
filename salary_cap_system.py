@@ -305,22 +305,29 @@ class SalaryCapSystem:
 # via getattr with zero defaults, so old saves without the newer fields
 # simply report 0 (additive, never a redesign of Team.payroll).
 #
-# Total cap charge = NHL roster salaries
+# Total cap charge = NHL roster salaries (net of retained salary)
 #                  + in-game buyout hits (current season)
+#                  + in-game retained-salary hits (team.retained_salary)
 #                  + seeded real-life buyout hits (2026-27)
 #                  + seeded real-life retained salary (2026-27)
 #                  + seeded real-life bonus overages (2026-27)
 
 
 def roster_cap_charge(team) -> int:
-    """Sum of active NHL roster contract salaries (mirrors Team.payroll)."""
+    """Sum of active NHL roster contract salaries (mirrors Team.payroll).
+
+    Retained salary lowers the charge: a player carrying retained_amount
+    (kept by his former club) counts salary - retained here, while the
+    retaining club carries it as dead cap via retained_charge().
+    """
     try:
         total = 0
         for p in (getattr(team, "roster", None) or []):
             contract = getattr(p, "contract", None)
             if contract is not None:
                 total += int(getattr(contract, "salary", 0) or 0)
-        return total
+                total -= int(getattr(p, "retained_amount", 0) or 0)
+        return max(0, total)
     except Exception:
         return 0
 
@@ -360,12 +367,39 @@ def seeded_overage_charge(team) -> int:
         return 0
 
 
+def retained_charge(team) -> int:
+    """In-game retained-salary dead cap (real NHL retained transactions).
+
+    Each entry in team.retained_salary is dead money for its remaining
+    term; expired entries are dropped by League.end_of_season().
+    """
+    try:
+        ledger = getattr(team, "retained_salary", None) or []
+        return int(sum(int(e.get("amount", 0) or 0)
+                       for e in ledger
+                       if int(e.get("seasons_remaining", 0) or 0) > 0))
+    except Exception:
+        return 0
+
+
+def retention_slots_used(team) -> int:
+    """Active retained-salary transactions (NHL max is 3 per club)."""
+    try:
+        ledger = getattr(team, "retained_salary", None) or []
+        return sum(1 for e in ledger
+                   if int(e.get("seasons_remaining", 0) or 0) > 0)
+    except Exception:
+        return 0
+
+
 def dead_cap_charge(team, season_year=None) -> int:
-    """All dead-cap penalties: in-game buyouts + seeded real-life penalties."""
+    """All dead-cap penalties: in-game buyouts + seeded real-life penalties
+    + in-game retained salary."""
     return (in_game_buyout_charge(team, season_year)
             + seeded_buyout_charge(team)
             + seeded_retained_charge(team)
-            + seeded_overage_charge(team))
+            + seeded_overage_charge(team)
+            + retained_charge(team))
 
 
 def total_cap_charge(team, season_year=None) -> int:
@@ -394,11 +428,12 @@ def cap_breakdown(team, season_year=None) -> Dict:
     s_buyout = seeded_buyout_charge(team)
     s_retained = seeded_retained_charge(team)
     s_overage = seeded_overage_charge(team)
+    retained = retained_charge(team)
     try:
         cap = int(getattr(team, "salary_cap", DEFAULT_CAP) or DEFAULT_CAP)
     except Exception:
         cap = DEFAULT_CAP
-    total = roster + buyouts + s_buyout + s_retained + s_overage
+    total = roster + buyouts + s_buyout + s_retained + s_overage + retained
     return {
         "cap": cap,
         "roster": roster,
@@ -406,7 +441,9 @@ def cap_breakdown(team, season_year=None) -> Dict:
         "seeded_buyout": s_buyout,
         "seeded_retained": s_retained,
         "seeded_overage": s_overage,
-        "dead_cap": buyouts + s_buyout + s_retained + s_overage,
+        "retained": retained,
+        "retention_slots": f"{retention_slots_used(team)}/3",
+        "dead_cap": buyouts + s_buyout + s_retained + s_overage + retained,
         "total": total,
         "space": cap - total,
         "over_cap": (cap - total) < 0,

@@ -313,6 +313,17 @@ class GameManager:
                         print(f"Seeded real-life dead-cap penalties for {n} teams.")
                 except Exception as e:
                     print(f"Dead-cap seeding skipped: {e}")
+                # Real-life trade protection: stamp actual 2026-27 NTC/NMC/
+                # M-NTC clauses onto matching players (only when the player
+                # is on the listed team -- real-life moves never leak stale
+                # clauses into the game).
+                try:
+                    import real_ntc_data
+                    if getattr(self.league, 'season_year', 2026) == real_ntc_data.SEASON:
+                        n = real_ntc_data.seed_real_clauses(self.league)
+                        print(f"Seeded real-life trade clauses for {n} players.")
+                except Exception as e:
+                    print(f"Trade-clause seeding skipped: {e}")
             
             # Apply comprehensive game settings
             debug_print("DEBUG: Applying game settings...")
@@ -944,9 +955,19 @@ NHL League Office""",
         player.contract.salary = salary
         player.contract.years_remaining = years
         
-        # Elite players might get no-trade clauses
-        if ovr >= 82 and age >= 27:
-            player.contract.no_trade_clause = random.random() < 0.4
+        # Trade protection: the same demand model the user negotiates
+        # against (trade_engine.clause_demand_score) -- stars with leverage
+        # get clauses, kids don't, no flat dice roll.
+        import trade_engine as _te
+        _demand = _te.clause_demand_score(player)
+        if random.random() < _demand * 0.85:
+            if ovr >= 86 and random.random() < 0.35:
+                player.contract.no_movement_clause = True
+            else:
+                player.contract.no_trade_clause = True
+                if random.random() < 0.55:
+                    player.contract.modified_ntc_teams = random.choice(
+                        [8, 10, 12, 15, 16, 20])
 
     def _generate_staff(self, count):
         """Generate staff with strategic role distribution for EHM-style management"""
@@ -7042,6 +7063,9 @@ class HockeyManagerGUI(tk.Tk):
         if seller is None or buyer is None:
             return False
         # Seller's piece: highest-value veteran (30+) on an expiring-ish deal.
+        # Clause-aware: a veteran whose NTC/NMC vetoes the move to this
+        # buyer is skipped unless he'd waive for them (waiver stamped so
+        # the trade preflight honors it).
         vets = [p for p in getattr(seller, 'roster', [])
                 if getattr(p, 'age', 0) >= 29]
         if not vets:
@@ -7052,7 +7076,25 @@ class HockeyManagerGUI(tk.Tk):
             vets.sort(key=lambda p: te.player_trade_value(p), reverse=True)
         except Exception:
             pass
-        piece = vets[0]
+        piece = None
+        for _vet in vets:
+            _vetoes = te.trade_vetoes(seller, buyer, [_vet])
+            if not _vetoes:
+                piece = _vet
+                break
+            _ok, _why = te.will_waive_ntc(_vet, seller, buyer)
+            if _ok:
+                try:
+                    _vet.contract.ntc_waiver_for = getattr(
+                        buyer, 'team_name', '')
+                except Exception:
+                    pass
+                piece = _vet
+                break
+            print(f"deadline: {getattr(_vet, 'full_name', '?')} vetoed "
+                  f"a move to {getattr(buyer, 'team_name', '?')} ({_why})")
+        if piece is None:
+            return False
         # Buyer's payment: a mid-round pick they own, else a prospect.
         payment = None
         try:
@@ -7082,20 +7124,27 @@ class HockeyManagerGUI(tk.Tk):
         bname = getattr(buyer, 'team_name', '')
         try:
             sit = tsl.situational_context(self, buyer, seller)
-            resp = te.ai_consider_trade(buyer, [payment], [piece],
+            # NOTE: user_assets = what the buyer RECEIVES ([piece]),
+            # partner_assets = what the buyer GIVES ([payment]).
+            resp = te.ai_consider_trade(buyer, [piece], [payment],
                                         user_team=seller, patience=1.0,
                                         situational=sit)
         except TypeError:
-            resp = te.ai_consider_trade(buyer, [payment], [piece],
+            # Older ai_consider_trade without the situational kwarg
+            resp = te.ai_consider_trade(buyer, [piece], [payment],
                                         user_team=seller, patience=1.0)
         except Exception:
             return False
         if resp.decision != 'accept':
             return False
         try:
-            te.execute_trade(seller, buyer, [piece], [payment],
-                             date_str=self.current_date.isoformat())
+            trade = te.execute_trade(seller, buyer, [piece], [payment],
+                                     date_str=self.current_date.isoformat())
         except Exception:
+            return False
+        if getattr(trade, 'summary', '').startswith("BLOCKED:"):
+            # Clause veto at completion -- nothing moved, announce nothing.
+            print(f"deadline deal blocked: {trade.summary}")
             return False
         # (Fresh start + steal watch now fire authoritatively inside
         # trade_engine.execute_trade -- every trade path gets them.)
@@ -13165,6 +13214,19 @@ class HockeyManagerGUI(tk.Tk):
             messagebox.showerror("Error", "This contract would exceed the player budget.")
             return False
 
+        # Trade protection on the table: a clause the player wants is worth
+        # money to him, so the *effective* offer is salary + clause value.
+        # Shared valuation with the AI (trade_engine), not a user-only perk.
+        import trade_engine as te
+        _clause_kind = getattr(person, "offered_clause_kind", "none") or "none"
+        _clause_size = getattr(person, "offered_clause_list_size", 10) or 10
+        _demand = te.clause_demand_score(
+            person, getattr(self, "user_team", None),
+            getattr(self, "league", None))
+        _clause_val = te.clause_annual_value(person, _clause_kind) \
+            if _demand > 0.25 else 0
+        _effective_salary = salary + _clause_val
+
         # If extension, use current salary and offer +X years
         if extension:
             # Create/assign negotiate_contract if missing
@@ -13176,16 +13238,19 @@ class HockeyManagerGUI(tk.Tk):
                     max_salary = value * 1.2
                     return min_salary <= salary <= max_salary and years >= 1
                 person.negotiate_contract = negotiate_contract
-            accepted = person.negotiate_contract(salary, 2)
+            accepted = person.negotiate_contract(_effective_salary, 2)
             if accepted:
                 person.contract_years = 2
                 person.salary = salary
                 if hasattr(person, "contract"):
                     person.contract.salary = salary
                     person.contract.years_remaining = 2
+                    te.apply_clause_to_contract(person.contract, _clause_kind,
+                                                _clause_size)
             self._notify_contract_result("accepted" if accepted else "rejected",
                                          person, salary, 2, salary, extension,
                                          notify)
+            self._clear_offered_clause(person)
             return accepted
 
         # Cap-relative asking price: base demand as % of cap, scaled by
@@ -13207,25 +13272,42 @@ class HockeyManagerGUI(tk.Tk):
         else:
             asking_price = int(_base_pct * _live_cap)
         asking_price = max(asking_price, 750_000)
-        
-        if person.salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
+
+        # A player who badly wants protection and isn't getting it charges
+        # for the missing clause.
+        if _demand >= 0.65 and _clause_kind == "none":
+            asking_price = int(asking_price * 1.08)
+
+        if _effective_salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
             self._finalize_contract_signing(person, person.salary,
                                             person.contract_years,
                                             asking_price, extension)
             self._notify_contract_result("accepted", person, person.salary,
                                          person.contract_years, asking_price,
                                          extension, notify)
+            self._clear_offered_clause(person)
             return True
-        elif person.salary >= asking_price * 0.7: # Counter-offers if between 70-90%
+        elif _effective_salary >= asking_price * 0.7: # Counter-offers if between 70-90%
             self._notify_contract_result("counter", person, person.salary,
                                          person.contract_years, asking_price,
                                          extension, notify)
+            self._clear_offered_clause(person)
             return False
         else: # Rejects if below 70%
             self._notify_contract_result("rejected", person, person.salary,
                                          person.contract_years, asking_price,
                                          extension, notify)
+            self._clear_offered_clause(person)
             return False
+
+    def _clear_offered_clause(self, person):
+        """Staged clause terms are single-use: never leak into a later deal."""
+        for _attr in ("offered_clause_kind", "offered_clause_list_size"):
+            try:
+                if hasattr(person, _attr):
+                    delattr(person, _attr)
+            except Exception:
+                pass
 
     def _finalize_contract_signing(self, person, salary, years, asking_price,
                                    extension):
@@ -13238,6 +13320,12 @@ class HockeyManagerGUI(tk.Tk):
         if _contract is not None:
             _contract.salary = salary
             _contract.years_remaining = years
+            # Trade protection negotiated at the table lands on the deal.
+            import trade_engine as _te2
+            _te2.apply_clause_to_contract(
+                _contract,
+                getattr(person, "offered_clause_kind", "none") or "none",
+                getattr(person, "offered_clause_list_size", 10) or 10)
         _cap_sys = getattr(getattr(self, 'league', None),
                            'salary_cap_system', None)
         # Track market-setting contracts (star + top-5 AAV)
