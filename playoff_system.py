@@ -59,6 +59,7 @@ class PlayoffBracket:
         }
         self.current_round = 'wild_card'
         self.stanley_cup_champion: Optional[Team] = None
+        self._history = None  # LeagueHistory, attached by the app
         
     def generate_playoff_bracket(self):
         """Generate the complete playoff bracket based on standings.
@@ -156,6 +157,8 @@ class PlayoffBracket:
         elif round_name == 'stanley_cup_final':
             if winners:
                 self.stanley_cup_champion = winners[0]
+                # F2: record the season in the league's permanent memory
+                self._record_season_to_history()
 
         # Move the current-round pointer forward
         try:
@@ -247,6 +250,23 @@ class PlayoffBracket:
             ),
             'stanley_cup_champion': self.stanley_cup_champion
         }
+
+
+    def _record_season_to_history(self):
+        """F2: write the completed season to LeagueHistory."""
+        if self._history is None:
+            try:
+                from league_history import LeagueHistory, SeasonSummary
+                self._history = LeagueHistory()
+            except ImportError:
+                return
+        from league_history import SeasonSummary
+        champ = self.stanley_cup_champion
+        summary = SeasonSummary(
+            season_id=getattr(self, 'season_id', 'unknown'),
+            champion=champ.team_name if champ else None,
+        )
+        self._history.record_season(summary)
 
 
 class PlayoffWindow(tk.Toplevel):
