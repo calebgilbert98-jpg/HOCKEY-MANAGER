@@ -98,6 +98,310 @@ def _season_year(league) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Dynamic M-NTC list engine: what puts a team on a player's no-trade list.
+#
+# Real no-trade lists aren't random -- they're built from a player's
+# circumstances. Four factors drive the model:
+#   * Hometown: players want to be near home (same state/province is a
+#     strong pull; some prefer to stay in their home country).
+#   * Taxes: the smallest factor by far. No-income-tax markets
+#     (FL/TX/NV/TN/WA) nudge slightly; high-tax markets (CA/NY/QC/ON/...)
+#     nudge slightly the other way -- and only for players not making
+#     major dollars. Stars barely notice; role players feel the bite.
+#   * Team situation: veterans chasing Cups block rebuilders; prime-age
+#     players lean toward contenders; youngsters care less about winning.
+#   * Circumstantial opportunity: a young player blocks clubs that are
+#     stacked at his position (no ice time); a star welcomes a club
+#     where he'd be the guy.
+# The factors feed a per-(player, destination, season) block probability.
+# The list stays season-fixed and deterministic (hash, not re-rollable),
+# but its *membership* now reflects the player's situation instead of a
+# flat league-wide estimate.
+# ---------------------------------------------------------------------------
+
+# team_name -> (region code, country, tax tier). Tax tiers reflect real
+# top-marginal income-tax reality: "none" = no state/provincial income tax.
+_TEAM_LOCALE = {
+    # Metropolitan
+    "Carolina Hurricanes": ("NC", "USA", "low"),
+    "Columbus Blue Jackets": ("OH", "USA", "low"),
+    "New Jersey Devils": ("NJ", "USA", "high"),
+    "New York Islanders": ("NY", "USA", "high"),
+    "New York Rangers": ("NY", "USA", "high"),
+    "Philadelphia Flyers": ("PA", "USA", "low"),
+    "Pittsburgh Penguins": ("PA", "USA", "low"),
+    "Washington Capitals": ("DC", "USA", "mid"),
+    # Atlantic
+    "Boston Bruins": ("MA", "USA", "mid"),
+    "Buffalo Sabres": ("NY", "USA", "high"),
+    "Detroit Red Wings": ("MI", "USA", "low"),
+    "Florida Panthers": ("FL", "USA", "none"),
+    "Montréal Canadiens": ("QC", "Canada", "high"),
+    "Ottawa Senators": ("ON", "Canada", "high"),
+    "Tampa Bay Lightning": ("FL", "USA", "none"),
+    "Toronto Maple Leafs": ("ON", "Canada", "high"),
+    # Central
+    "Chicago Blackhawks": ("IL", "USA", "low"),
+    "Colorado Avalanche": ("CO", "USA", "low"),
+    "Dallas Stars": ("TX", "USA", "none"),
+    "Minnesota Wild": ("MN", "USA", "mid"),
+    "Nashville Predators": ("TN", "USA", "none"),
+    "St. Louis Blues": ("MO", "USA", "low"),
+    "Utah Hockey Club": ("UT", "USA", "low"),
+    "Winnipeg Jets": ("MB", "Canada", "mid"),
+    # Pacific
+    "Anaheim Ducks": ("CA", "USA", "high"),
+    "Calgary Flames": ("AB", "Canada", "low"),
+    "Edmonton Oilers": ("AB", "Canada", "low"),
+    "Los Angeles Kings": ("CA", "USA", "high"),
+    "San Jose Sharks": ("CA", "USA", "high"),
+    "Seattle Kraken": ("WA", "USA", "none"),
+    "Vancouver Canucks": ("BC", "Canada", "high"),
+    "Vegas Golden Knights": ("NV", "USA", "none"),
+}
+
+_CANADA_REGIONS = {"ON", "QC", "BC", "AB", "MB", "SK", "NS", "NB", "NL",
+                   "PE", "NT", "YT", "NU"}
+_USA_REGIONS = {"AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL",
+                "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME",
+                "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH",
+                "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI",
+                "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI",
+                "WY"}
+# Country name -> (region code, country) for birthplaces without a region
+# ("Stockholm") -- falls back to the player's nationality first.
+_BIRTH_COUNTRY_REGION = {
+    "sweden": ("SE", "Sweden"), "finland": ("FI", "Finland"),
+    "russia": ("RU", "Russia"), "czech": ("CZ", "Czechia"),
+    "czechia": ("CZ", "Czechia"), "slovakia": ("SK", "Slovakia"),
+    "germany": ("DE", "Germany"), "switzerland": ("CH", "Switzerland"),
+    "austria": ("AT", "Austria"), "norway": ("NO", "Norway"),
+    "denmark": ("DK", "Denmark"), "latvia": ("LV", "Latvia"),
+    "belarus": ("BY", "Belarus"), "ukraine": ("UA", "Ukraine"),
+    "kazakhstan": ("KZ", "Kazakhstan"),
+}
+
+
+def _team_locale(team):
+    """(region, country, tax_tier) for a team; ("", "", "mid") unknown."""
+    try:
+        name = getattr(team, "team_name", str(team))
+        return _TEAM_LOCALE.get(name, ("", "", "mid"))
+    except Exception:
+        return ("", "", "mid")
+
+
+def _birth_locale(player):
+    """(region, country) parsed from birthplace + nationality.
+
+    "Toronto, ON" -> ("ON", "Canada"); "Boston, MA" -> ("MA", "USA");
+    "Stockholm" -> ("SE", "Sweden") via nationality/country lookup.
+    Returns ("", "") when nothing is known.
+    """
+    try:
+        bp = str(getattr(player, "birthplace", "") or "").strip()
+        nat = str(getattr(player, "nationality", "") or "").strip()
+    except Exception:
+        return "", ""
+    region, country = "", ""
+    if "," in bp:
+        _city, _, tail = bp.rpartition(",")
+        code = tail.strip().upper()
+        if code in _CANADA_REGIONS:
+            region, country = code, "Canada"
+        elif code in _USA_REGIONS:
+            region, country = code, "USA"
+    if not country:
+        # No region code: identify the country from the birthplace text or
+        # the player's nationality ("Sweden" -> SE).
+        low = (bp + " " + nat).lower()
+        for cname, (rcode, cfull) in _BIRTH_COUNTRY_REGION.items():
+            if cname in low:
+                region, country = rcode, cfull
+                break
+        else:
+            if "canada" in low:
+                country = "Canada"
+            elif "usa" in low or "united states" in low or \
+                    "america" in low:
+                country = "USA"
+    return region, country
+
+
+def _hometown_factor(player, to_team):
+    """Multiplier + note: players avoid blocking teams near home."""
+    try:
+        pregion, pcountry = _birth_locale(player)
+        tregion, tcountry, _tax = _team_locale(to_team)
+    except Exception:
+        return 1.0, ""
+    if not pcountry or not tcountry:
+        return 1.0, ""
+    if pregion and pregion == tregion:
+        return 0.25, "close to home"
+    if pcountry.lower() == tcountry.lower():
+        return 0.85, ""
+    return 1.10, ""
+
+
+def _tax_salience(player):
+    """How much taxes matter to this player: 1.0 for role players, fading
+    to 0.25 for stars on major dollars. A $1.5M player feels the bite of
+    a high-tax market; an $11M star barely notices."""
+    try:
+        salary = float(getattr(getattr(player, "contract", None),
+                               "salary", 0) or 0)
+    except Exception:
+        return 1.0
+    if salary <= 2_000_000:
+        return 1.0
+    if salary >= 10_000_000:
+        return 0.25
+    return 1.0 - 0.75 * (salary - 2_000_000) / 8_000_000
+
+
+def _tax_factor(player, to_team):
+    """Multiplier + note: taxes are the smallest list factor by far, and
+    salary-scaled -- they nudge role players, not stars."""
+    _region, _country, tier = _team_locale(to_team)
+    w = _tax_salience(player)
+    base = {"none": 0.90, "low": 0.95, "mid": 1.0, "high": 1.08}.get(tier, 1.0)
+    mult = 1.0 + (base - 1.0) * w
+    note = ""
+    if w > 0.5:
+        if tier == "none":
+            note = "no state income tax"
+        elif tier == "high":
+            note = "a high-tax market"
+    return mult, note
+
+
+def _situation_factor(player, to_team, league):
+    """Multiplier + note: contention matters most to veterans."""
+    try:
+        age = int(getattr(player, "age", 28) or 28)
+        to_pct = _team_points_pct(to_team, league)
+    except Exception:
+        return 1.0, ""
+    if age >= 33:
+        if to_pct < 0.45:
+            return 1.55, "rebuilding while he's chasing a Cup"
+        if to_pct > 0.62:
+            return 0.70, "a contender"
+    elif age > 25:
+        if to_pct < 0.45:
+            return 1.25, ""
+        if to_pct > 0.62:
+            return 0.85, ""
+    # 25 and under: winning matters less than playing time (see the
+    # opportunity factor below).
+    return 1.0, ""
+
+
+def _position_group(player):
+    """'F', 'D', or 'G' for a player."""
+    try:
+        from game_classes import PlayerPosition as _PP
+        pos = getattr(player, "primary_position", None)
+        if pos == _PP.GOALIE:
+            return "G"
+        if pos in (_PP.LEFT_DEFENSE, _PP.RIGHT_DEFENSE, _PP.DEFENSE):
+            return "D"
+        return "F"
+    except Exception:
+        return "F"
+
+
+def _opportunity_factor(player, to_team):
+    """Multiplier + note: is there actually ice time for him there?
+
+    Counts destination roster players in his position group playing at
+    (or above) his level. Young players block buried depth charts;
+    established stars welcome a club where they'd be the guy.
+    """
+    try:
+        group = _position_group(player)
+        age = int(getattr(player, "age", 28) or 28)
+        mine = float(player.overall_rating())
+        mates = [p for p in (getattr(to_team, "roster", None) or [])
+                 if _position_group(p) == group]
+    except Exception:
+        return 1.0, ""
+    try:
+        if group == "G":
+            if age <= 28 and len(mates) >= 2:
+                return 1.50, "they're deep in net"
+            if len(mates) <= 1:
+                return 0.75, "he'd own the crease there"
+            return 1.0, ""
+        ahead = sum(1 for m in mates
+                    if float(m.overall_rating()) >= mine - 5)
+        if age <= 27 and ahead >= 6:
+            return 1.45, "buried on their depth chart"
+        if ahead <= 1:
+            return 0.80, "he'd play big minutes there"
+    except Exception:
+        pass
+    return 1.0, ""
+
+
+def _mntc_block_probability(player, to_team, league=None):
+    """Probability (0.05..0.92) this destination sits on the player's
+    no-trade list, from hometown, taxes, team situation and opportunity.
+    Returns (p, notes) -- notes name the factors that moved the needle.
+    """
+    c = getattr(player, "contract", None)
+    n = int(getattr(c, "modified_ntc_teams", 0) or 0) if c is not None else 0
+    base = max(0.01, min(0.99, n / 31.0))
+    notes = []
+    p = base
+    for factor in (_hometown_factor(player, to_team),
+                   _tax_factor(player, to_team),
+                   _situation_factor(player, to_team, league),
+                   _opportunity_factor(player, to_team)):
+        try:
+            mult, note = factor[0], factor[1]
+        except Exception:
+            continue
+        p *= mult
+        if note and mult != 1.0:
+            notes.append(note)
+    return max(0.05, min(0.92, p)), notes, base
+
+
+def mntc_list_teams(player, league, n=None, exclude=None):
+    """Materialize the player's dynamic no-trade list: the n teams with
+    the highest block probability (deterministic; season-fixed).
+
+    exclude: team name (or team) left off the list -- normally his own
+    club. Returns a list of team names, longest-blocked first.
+    """
+    try:
+        c = getattr(player, "contract", None)
+        n = int(n if n is not None
+                else getattr(c, "modified_ntc_teams", 0) or 0)
+    except Exception:
+        n = 0
+    if n <= 0:
+        return []
+    try:
+        excl = getattr(exclude, "team_name", exclude)
+        teams = [t for t in (getattr(league, "teams", None) or [])
+                 if getattr(t, "team_name", t) != excl]
+    except Exception:
+        return []
+    scored = []
+    for t in teams:
+        try:
+            p, _notes, _base = _mntc_block_probability(player, t, league)
+        except Exception:
+            continue
+        scored.append((p, str(getattr(t, "team_name", t))))
+    scored.sort(key=lambda s: (-s[0], s[1]))
+    return [name for _p, name in scored[:n]]
+
+
 def _mntc_blocks(player, to_team, league=None):
     """Does his modified no-trade clause actually block THIS destination?
 
@@ -105,9 +409,11 @@ def _mntc_blocks(player, to_team, league=None):
     year, refreshed at the season's start. The list itself is private (as
     in real life): when it isn't explicitly known, membership is derived
     deterministically from (player, destination, season), so there is no
-    re-roll exploit -- asking twice can't change the answer. When his
-    agent names a team, the GM learns it and it is recorded on the
-    contract's no_trade_list.
+    re-roll exploit -- asking twice can't change the answer. The chance a
+    destination sits on the list comes from the dynamic list engine
+    (hometown, taxes, team situation, opportunity), not a flat estimate.
+    When his agent names a team, the GM learns it and it is recorded on
+    the contract's no_trade_list.
 
     Returns (blocked: bool, reason: str).
     """
@@ -129,28 +435,36 @@ def _mntc_blocks(player, to_team, league=None):
     approved = bool(getattr(c, "modified_ntc_approved", False)) if c is not None else False
     if n >= 31 and not approved:
         return True, f"his {n}-team list covers the whole league"
-    # Private list: deterministic per (player, destination, season).
+    # Private list: deterministic per (player, destination, season) --
+    # the membership chance comes from the dynamic list engine (hometown,
+    # taxes, team situation, opportunity), so the list reads like a real
+    # player's submitted list instead of a flat league-wide estimate.
     import hashlib as _hl
     season = _season_year(league)
     pid = str(getattr(player, "id", "") or "")
     digest = _hl.sha256(f"{pid}|{to_name}|{season}".encode()).hexdigest()
     u = int(digest[:8], 16) / 0xFFFFFFFF
+    try:
+        p, notes, base = _mntc_block_probability(player, to_team, league)
+    except Exception:
+        p, notes, base = max(0.05, min(0.9, n / 31.0)), [], n / 31.0
     if approved:
-        # Approved list: only n teams are acceptable.
-        if u < max(0.03, min(0.97, n / 31.0)):
+        # Approved list: only n teams are acceptable. Desirable teams
+        # (low block probability) land on it more often -- the inverse of
+        # the block model: p_accept = base * (base / p).
+        p_accept = max(0.03, min(0.97, base * (base / max(0.01, p))))
+        if u < p_accept:
             return False, f"{to_name} made his {n}-team approved list"
         return True, f"{to_name} isn't on {name}'s {n}-team approved list"
-    # Blocked list: n teams he won't go to. Players disproportionately
-    # block struggling clubs (buyers they don't want) -- same weighting
-    # the old estimate used, now season-stable instead of re-rollable.
-    to_pct = _team_points_pct(to_team, league)
-    p = max(0.05, min(0.9, (n / 31.0) * (1.35 if to_pct < 0.5 else 0.7)))
     if u < p:
         try:
             c.no_trade_list.append(to_name)  # his agent named them: learned
         except Exception:
             pass
-        return True, f"{to_name} is on {name}'s {n}-team no-trade list"
+        why = f"{to_name} is on {name}'s {n}-team no-trade list"
+        if notes:
+            why += f" ({'; '.join(notes[:2])})"
+        return True, why
     return False, f"{to_name} isn't on {name}'s {n}-team no-trade list"
 
 
@@ -252,6 +566,31 @@ def will_waive_ntc(player, from_team, to_team=None, league=None, rng=None,
     elif age <= 24 and diff < -0.05:
         score -= 8
         notes.append("he'd rather develop with a winner")
+
+    # -- Destination pull: taxes and home shape a waiver the same way
+    # they shape the list itself. Taxes are a small nudge, and only for
+    # players not on major dollars.
+    if to_team is not None:
+        try:
+            _tr, _tc, _tier = _team_locale(to_team)
+            _w = _tax_salience(player)
+            if _tier == "none":
+                score += 3.0 * _w
+                if _w > 0.5:
+                    notes.append("there's no state income tax there")
+            elif _tier == "high":
+                score -= 2.5 * _w
+                if _w > 0.5:
+                    notes.append("the tax bite there is brutal")
+            _pr, _pc = _birth_locale(player)
+            if _pr and _pr == _tr:
+                score += 10
+                notes.append("it's close to home")
+            elif _pc and _tc and _pc.lower() != _tc.lower():
+                score -= 4
+                notes.append("it's across the border from home")
+        except Exception:
+            pass
 
     # -- Clause strength: NMCs are the hardest to move.
     if kind == "NMC":
