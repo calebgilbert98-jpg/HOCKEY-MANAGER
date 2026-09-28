@@ -5835,10 +5835,10 @@ class HockeyManagerGUI(tk.Tk):
         settings = self.get_settings()
         use_game_viewer = settings.get('simulation', {}).get('use_game_viewer', False)
         if use_game_viewer and 'event_log' in game_result and game_result['event_log']:
-            viewer_btn = tk.Button(action_frame, text="Launch EHM Game Viewer", 
+            viewer_btn = tk.Button(action_frame, text="Launch Game Viewer", 
                                   font=('Segoe UI', 10, 'bold'), bg=self.ACCENT_COLOR, fg='white',
                                   activebackground=self.ACCENT_ACTIVE, relief='flat', padx=20, pady=8,
-                                  command=lambda: self._launch_ehm_replay_viewer(game_result))
+                                  command=lambda: self._launch_standalone_viewer(game_result.get('event_log', [])))
             viewer_btn.pack(side='left')
         
         # Close button
@@ -6218,29 +6218,6 @@ class HockeyManagerGUI(tk.Tk):
         events_scroll.pack(side='right', fill='y', pady=10)
         
         return frame
-
-    def _launch_ehm_replay_viewer(self, game_result):
-        """Launch the EHM game viewer for replay viewing."""
-        try:
-            # Use the EHM integration for replay viewing
-            from ehm_integration import EHMReplayViewer
-            
-            # Extract teams and event log from game result
-            home_team = game_result.get('home_team')
-            away_team = game_result.get('away_team')
-            event_log = game_result.get('event_log', [])
-            
-            if not event_log:
-                print("No event log found in game result")
-                return
-                
-            # Launch the EHM replay viewer
-            viewer = EHMReplayViewer(self.root, home_team, away_team, event_log)
-            
-        except Exception as e:
-            print(f"Error launching EHM replay viewer: {e}")
-            # Fallback to old viewer if needed
-            self._launch_standalone_viewer(game_result.get('event_log', []))
 
     def _launch_standalone_viewer(self, event_log):
         """Launch the standalone game viewer window"""
@@ -6814,49 +6791,6 @@ class HockeyManagerGUI(tk.Tk):
             messagebox.showerror("Game Viewer Error", f"Error launching game viewer: {str(e)}")
             print(f"Game viewer error: {e}")
     
-    def launch_ehm_viewer(self):
-        """Launch the EHM-style game with enhanced simulation"""
-        try:
-            # Import EHM integration
-            from ehm_integration import EHMGameIntegration
-            
-            # Initialize EHM integration if not already done
-            if not hasattr(self, 'ehm_integration'):
-                self.ehm_integration = EHMGameIntegration(self)
-            
-            # Get teams for the game (use real teams from game manager)
-            teams = list(self.game_manager.league.teams)
-            if len(teams) >= 2:
-                home_team = teams[0]
-                away_team = teams[1]
-            else:
-                # Create sample teams if needed
-                from game_classes import Team
-                home_team = Team("Thunderbirds")
-                away_team = Team("Eagles")
-                
-                # Add sample players
-                from game_classes import Player, PlayerPosition
-                for team in [home_team, away_team]:
-                    for _ in range(25):  # 25 players per team
-                        position = random.choice(list(PlayerPosition))
-                        player = Player(
-                            first_name=random.choice(FIRST_NAMES),
-                            last_name=random.choice(LAST_NAMES),
-                            age=random.randint(18, 35),
-                            primary_position=position
-                        )
-                        team.roster.append(player)
-            
-            # Launch EHM game viewer
-            self.ehm_integration.launch_ehm_game_viewer(home_team, away_team)
-            
-        except Exception as e:
-            messagebox.showerror("EHM Viewer Error", f"Error launching EHM viewer: {str(e)}")
-            print(f"EHM viewer error: {e}")
-            import traceback
-            traceback.print_exc()
-
     def _cap_compliance_blocker(self):
         """Return a blocker dict if the NHL roster exceeds the salary cap."""
         team = getattr(self, 'user_team', None)
