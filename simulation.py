@@ -2974,8 +2974,16 @@ class GameSim:
         if late_3rd and goal_diff >= 2:
             pool = [1, 2]
             reason = 'protect:top4'
+        # LRU like the forwards: avoid the 1<->2 bounce that would
+        # permanently bench the 3rd pair.
+        st = self._ensure_shift_state(team)
+        d_last = st.get('_pair_last', {})
         choices = [i for i in pool if i != old_idx] or pool
-        return choices[0], reason
+        choices.sort(key=lambda i: d_last.get(i, 0.0))
+        pick = choices[0]
+        d_last[pick] = self._game_elapsed
+        st['_pair_last'] = d_last
+        return pick, reason
 
     def _change_unit(self, team, group, log_shift=True):
         """Rotate one unit off, log the completed shift, dress the next."""
