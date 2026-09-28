@@ -12417,77 +12417,6 @@ class CleanEditLinesWindow(InGamePopup):
         if hasattr(self, '_sel_hint'):
             self._sel_hint.config(text=f"Selected: {player.full_name} \u2192 click a slot")
 
-    # ------------------------------------------------------------------
-    # Line matchups: per-line "match to line X" preferences (right panel)
-    # ------------------------------------------------------------------
-    def create_matchup_panel(self, parent):
-        """Right-side panel: for each forward line and D pair, a dropdown
-        choosing which opponent forward line to match it against at home
-        (last change). Writes straight to team.line_matchups."""
-        panel = tk.Frame(parent, bg=self.C_BG, width=272)
-        panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(16, 0))
-        panel.pack_propagate(False)
-
-        tk.Label(panel, text="Matchups", bg=self.C_BG, fg=self.C_TEXT,
-                 font=(self.parent.FONT_FAMILY, 15, 'bold')).pack(anchor='w')
-        tk.Label(panel, text="Who each line faces at home\nwith last change.",
-                 bg=self.C_BG, fg=self.C_TER,
-                 font=(self.parent.FONT_FAMILY, 9), justify='left').pack(
-                     anchor='w', pady=(2, 10))
-
-        team = self.parent.user_team
-        prefs = getattr(team, 'line_matchups', None) or {}
-        self._matchup_vars = {}
-        values = ["Auto", "Opp Line 1", "Opp Line 2", "Opp Line 3", "Opp Line 4"]
-
-        def _section(title):
-            tk.Label(panel, text=title, bg=self.C_BG, fg=self.C_TER,
-                     font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(
-                         anchor='w', pady=(8, 4))
-
-        def _row(kind, idx, label):
-            row = tk.Frame(panel, bg=self.C_CARD)
-            row.pack(fill='x', pady=3)
-            tk.Frame(row, bg='#2e2e36', height=1).pack(fill='x', side='top')
-            inner = tk.Frame(row, bg=self.C_CARD)
-            inner.pack(fill='x', padx=10, pady=7)
-            tk.Label(inner, text=label, bg=self.C_CARD, fg=self.C_TEXT,
-                     font=(self.parent.FONT_FAMILY, 10, 'bold'),
-                     width=9, anchor='w').pack(side='left')
-            tk.Label(inner, text="vs", bg=self.C_CARD, fg=self.C_TER,
-                     font=(self.parent.FONT_FAMILY, 9)).pack(side='left',
-                                                            padx=(0, 6))
-            var = tk.StringVar()
-            cur = None
-            try:
-                cur = (prefs.get(kind) or [])[idx]
-            except Exception:
-                cur = None
-            var.set(values[cur] if isinstance(cur, int) and 1 <= cur <= 4
-                    else "Auto")
-            cb = ttk.Combobox(inner, textvariable=var, values=values,
-                              state='readonly', width=11,
-                              style='Clean.TCombobox',
-                              font=(self.parent.FONT_FAMILY, 10))
-            cb.pack(side='left')
-            cb.bind('<<ComboboxSelected>>',
-                    lambda e, k=kind, i=idx, v=var:
-                    self._on_matchup_change(k, i, v.get()))
-            self._matchup_vars[(kind, idx)] = var
-            tk.Frame(row, bg='#08080a', height=1).pack(fill='x', side='bottom')
-
-        _section("FORWARDS")
-        for i in range(4):
-            _row('F', i, f"Line {i+1}")
-        _section("DEFENSE")
-        for i in range(3):
-            _row('D', i, f"Pair {i+1}")
-
-        tk.Label(panel, text="Auto = coach decides.\nApplies with Aggressive\nline matching.",
-                 bg=self.C_BG, fg=self.C_TER,
-                 font=(self.parent.FONT_FAMILY, 9), justify='left').pack(
-                     anchor='w', pady=(12, 0))
-
     def _on_matchup_change(self, kind, idx, value):
         """Persist a 'match to line' dropdown choice onto the team."""
         try:
@@ -12554,7 +12483,6 @@ class CleanEditLinesWindow(InGamePopup):
         body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 8))
 
         self.create_roster_panel(body)
-        self.create_matchup_panel(body)
 
         unit_wrap = tk.Frame(body, bg=self.C_BG)
         unit_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -12710,6 +12638,7 @@ class CleanEditLinesWindow(InGamePopup):
                 card.pack_forget()
         self._fwd_shown = 0
         self._sync_selector_text('F')
+        self._sync_match_dropdown('F')
 
         # ---- Defense (own group frame: locked between forwards and goalies) ----
         self._def_group = tk.Frame(inner, bg=self.C_BG)
@@ -12737,6 +12666,7 @@ class CleanEditLinesWindow(InGamePopup):
                 card.pack_forget()
         self._def_shown = 0
         self._sync_selector_text('D')
+        self._sync_match_dropdown('D')
 
         # ---- Goalies (own group frame: locked at the bottom, never moves) ----
         self._goalie_group = tk.Frame(inner, bg=self.C_BG)
@@ -12784,6 +12714,29 @@ class CleanEditLinesWindow(InGamePopup):
             menu.config(postcommand=lambda m=menu,
                         k=kind: self._refresh_unit_menu(m, k))
             mb.config(menu=menu)
+            # Tiny matchup dropdown on the opposite side: which opponent
+            # forward line the SHOWN line/pair wants to face at home.
+            # Synced on every line/pair switch.
+            mwrap = tk.Frame(row, bg='#3a3a42')
+            mwrap.pack(side='right')
+            mmb = tk.Menubutton(
+                mwrap, text="vs Auto \u25be", bg=self.C_BG, fg=self.C_SEC,
+                activebackground='#2b2b31', activeforeground=self.C_ACCENT,
+                font=(self.parent.FONT_FAMILY, 9),
+                relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
+                indicatoron=0)
+            mmb.pack(padx=1, pady=1)
+            mmenu = tk.Menu(mmb, tearoff=0, bg=self.C_CARD2, fg=self.C_TEXT,
+                            activebackground=self.C_ACCENT,
+                            activeforeground='#06231f',
+                            font=(self.parent.FONT_FAMILY, 10))
+            mmenu.config(postcommand=lambda m=mmenu,
+                         k=kind: self._refresh_match_menu(m, k))
+            mmb.config(menu=mmenu)
+            if kind == 'F':
+                self._fwd_match_mb = mmb
+            else:
+                self._def_match_mb = mmb
         tk.Frame(bar, bg='#08080a', height=2).pack(fill='x', side='bottom')
         return mb
 
@@ -12818,6 +12771,43 @@ class CleanEditLinesWindow(InGamePopup):
             menu.add_radiobutton(label=label, variable=self._menu_var,
                                  value=i, command=lambda i=i: switch(i))
 
+    def _match_pref(self, kind, idx):
+        """Current matchup pref (1-4) or None for team line idx."""
+        try:
+            prefs = getattr(self.parent.user_team, 'line_matchups', None) or {}
+            cur = (prefs.get(kind) or [])[idx]
+            return cur if isinstance(cur, int) and 1 <= cur <= 4 else None
+        except Exception:
+            return None
+
+    def _sync_match_dropdown(self, kind):
+        """Sync the tiny 'vs' dropdown to the currently shown line/pair."""
+        shown = self._fwd_shown if kind == 'F' else self._def_shown
+        cur = self._match_pref(kind, shown)
+        mb = self._fwd_match_mb if kind == 'F' else self._def_match_mb
+        mb.config(text=f"vs {('Opp ' + str(cur)) if cur else 'Auto'} \u25be")
+
+    def _refresh_match_menu(self, menu, kind):
+        """Rebuild the tiny matchup menu for the shown line/pair."""
+        shown = self._fwd_shown if kind == 'F' else self._def_shown
+        cur = self._match_pref(kind, shown)
+        menu.delete(0, 'end')
+        var = tk.IntVar(value=cur or 0)
+        menu.add_radiobutton(
+            label="Auto (coach decides)", variable=var, value=0,
+            command=lambda: self._set_match_and_sync(kind, None))
+        for n in range(1, 5):
+            menu.add_radiobutton(
+                label=f"Opp Line {n}", variable=var, value=n,
+                command=lambda n=n: self._set_match_and_sync(kind, n))
+
+    def _set_match_and_sync(self, kind, value):
+        shown = self._fwd_shown if kind == 'F' else self._def_shown
+        self._on_matchup_change(
+            kind, shown,
+            f"Opp Line {value}" if value else "Auto")
+        self._sync_match_dropdown(kind)
+
     def show_forward_line(self, i):
         """Swap the visible forward-line card (selector dropdown)."""
         if i == self._fwd_shown:
@@ -12826,6 +12816,7 @@ class CleanEditLinesWindow(InGamePopup):
         self._fwd_cards[i].pack(fill=tk.X, pady=(0, 12), padx=2)
         self._fwd_shown = i
         self._sync_selector_text('F')
+        self._sync_match_dropdown('F')
         self._clear_selection()
 
     def show_defense_pair(self, i):
@@ -12836,6 +12827,7 @@ class CleanEditLinesWindow(InGamePopup):
         self._def_cards[i].pack(fill=tk.X, pady=(0, 12), padx=2)
         self._def_shown = i
         self._sync_selector_text('D')
+        self._sync_match_dropdown('D')
         self._clear_selection()
 
     def _build_pp_view(self, parent):
