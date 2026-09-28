@@ -2327,7 +2327,21 @@ class HockeyManagerGUI(tk.Tk):
         return False
         
     def _generate_initial_emails(self):
-        """Generate initial emails when starting the game."""
+        """Generate initial emails when starting the game.
+
+        Idempotent: app construction also runs on save/load, so skip when
+        the welcome set is already in the inbox (prevents duplicate
+        triplicates on every load).
+        """
+        try:
+            inbox = getattr(self.user_team, "inbox", None)
+            msgs = list(getattr(inbox, "messages", []) or [])
+            for m in msgs:
+                subj = str(getattr(m, "subject", getattr(m, "title", "")))
+                if subj.startswith("Welcome Aboard,"):
+                    return
+        except Exception:
+            pass
         from game_classes import EmailGenerator
         
         # Add GM hiring announcement email

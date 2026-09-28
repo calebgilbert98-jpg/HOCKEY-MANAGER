@@ -757,10 +757,17 @@ class HomeDashboard:
 
     def _cap_space_text(self):
         try:
+            import salary_cap_system as scs
+            space = scs.cap_breakdown(self.user_team).get("space", 0)
+            return f"${space / 1e6:.1f}M"
+        except Exception:
+            pass
+        try:
+            # Fallback: contract salaries (players don't carry a .salary attr).
             cap = getattr(self.user_team, "salary_cap", 0)
-            payroll = sum(getattr(p, "salary", 0) or 0 for p in self.user_team.roster)
-            space = (cap - payroll) / 1e6
-            return f"${space:.1f}M"
+            payroll = sum((getattr(getattr(p, "contract", None), "salary", 0) or 0)
+                          for p in self.user_team.roster)
+            return f"${(cap - payroll) / 1e6:.1f}M"
         except Exception:
             return "-"
 
@@ -1006,10 +1013,11 @@ class HomeDashboard:
                      bg=bg).pack(anchor="w")
             return
 
-        mor = [getattr(p, "morale", 7) or 7 for p in roster]
+        mor = [getattr(p, "morale", 70) or 70 for p in roster]
         avg = sum(mor) / len(mor)
         label = morale_label(int(round(avg)))
-        avg100 = avg * 10
+        # morale is stored 0-100 (morale_label bands are 0-100); display as-is.
+        avg100 = max(0.0, min(100.0, avg))
 
         head = tk.Frame(content, bg=bg)
         head.pack(fill="x")

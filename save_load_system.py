@@ -214,6 +214,14 @@ class GameSaveManager:
             # wave). Missing keys = old save -> graceful defaults.
             'prospect_awards_news': list(getattr(league, 'prospect_awards_news', []) or []),
             'draft_prospects_year': getattr(league, 'draft_prospects_year', None),
+            # Draft class + staff pools. These were never serialized: every
+            # save/load wiped the draft class (scouting wasted; the draft
+            # regenerated a different class), all team coaches/scouts, and
+            # the staff hiring pool. Missing keys = old save -> [].
+            'draft_prospects': [self._serialize_player(p)
+                                for p in (getattr(league, 'draft_prospects', None) or [])],
+            'free_agent_staff': [self._serialize_staff(s)
+                                 for s in (getattr(league, 'free_agent_staff', None) or [])],
             'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
             # Dynamic salary cap system (growth history + market comps).
             # Missing key = old save -> defaults to the modern $104M cap.
@@ -242,6 +250,10 @@ class GameSaveManager:
                 'ahl_roster': [self._serialize_player(p) for p in getattr(team, 'ahl_roster', [])],
                 'prospects': [self._serialize_player(p) for p in getattr(team, 'prospects', [])],
                 'coaching_staff': getattr(team, 'coaching_staff', []),
+                # Team staff (coaches, scouts, development). Was never
+                # serialized: every load wiped every club's staff.
+                'staff': [self._serialize_staff(s)
+                          for s in (getattr(team, 'staff', None) or [])],
                 'stats': self._serialize_team_stats(getattr(team, 'stats', None)),
                 'salary_cap_info': getattr(team, 'salary_cap_info', {}),
                 'draft_picks': getattr(team, 'draft_picks', {}),
@@ -313,6 +325,51 @@ class GameSaveManager:
             print(f"Error serializing player: {e}")
             return {}
     
+    def _serialize_staff(self, staff) -> Dict[str, Any]:
+        """Serialize a Staff member (generic __dict__ walk; enums by name)."""
+        try:
+            if hasattr(staff, '__dict__'):
+                data = {}
+                for key, value in staff.__dict__.items():
+                    if isinstance(value, (date, datetime)):
+                        data[key] = value.isoformat()
+                    elif hasattr(value, 'name'):  # Enum (StaffRole) handling
+                        data[key] = value.name
+                    else:
+                        data[key] = value
+                return data
+            return {}
+        except Exception as e:
+            print(f"Error serializing staff: {e}")
+            return {}
+
+    def _restore_staff(self, staff_data: Dict[str, Any]):
+        """Restore a Staff member from save data."""
+        try:
+            from game_classes import Staff, StaffRole
+            if not staff_data:
+                return None
+            role = staff_data.get('role')
+            try:
+                role = StaffRole[role] if isinstance(role, str) else role
+            except Exception:
+                role = StaffRole.HEAD_COACH
+            if role is None:
+                role = StaffRole.HEAD_COACH
+            staff = Staff(
+                staff_data.get('first_name', ''),
+                staff_data.get('last_name', ''),
+                role,
+            )
+            for key, value in staff_data.items():
+                if key in ('first_name', 'last_name', 'role'):
+                    continue
+                setattr(staff, key, value)
+            return staff
+        except Exception as e:
+            print(f"Error restoring staff: {e}")
+            return None
+
     def _serialize_contract(self, contract) -> Dict[str, Any]:
         """Serialize a contract object"""
         try:
@@ -916,6 +973,23 @@ class GameSaveManager:
             league.prospect_awards_news = list(
                 league_data.get('prospect_awards_news', []) or [])
             league.draft_prospects_year = league_data.get('draft_prospects_year', None)
+            # Draft class + staff pools (see serialize side). Old saves lack
+            # the keys -> empty lists (draft regenerates its class at draft
+            # time when empty; staff stays empty for old saves).
+            try:
+                league.draft_prospects = [
+                    p for p in (self._restore_player(d)
+                                for d in (league_data.get('draft_prospects', None) or []))
+                    if p is not None]
+            except Exception:
+                league.draft_prospects = []
+            try:
+                league.free_agent_staff = [
+                    s for s in (self._restore_staff(d)
+                                for d in (league_data.get('free_agent_staff', None) or []))
+                    if s is not None]
+            except Exception:
+                league.free_agent_staff = []
             league.event_day_prompted = [
                 list(p) for p in (league_data.get('event_day_prompted', []) or [])
             ]
@@ -1055,6 +1129,14 @@ class GameSaveManager:
             team.conference = team_data.get('conference', '')
             team.standings_position = team_data.get('standings_position', 0)
             team.coaching_staff = team_data.get('coaching_staff', [])
+            # Team staff (coaches/scouts). Old saves lack the key -> empty.
+            try:
+                team.staff = [
+                    s for s in (self._restore_staff(d)
+                                for d in (team_data.get('staff', None) or []))
+                    if s is not None]
+            except Exception:
+                team.staff = []
             team.salary_cap_info = team_data.get('salary_cap_info', {})
             team.draft_picks = team_data.get('draft_picks', {})
             team.trade_block = team_data.get('trade_block', [])
