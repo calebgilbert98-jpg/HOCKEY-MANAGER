@@ -414,7 +414,11 @@ def _complete(app, neg: TradeNegotiation, user_objs, partner_objs) -> bool:
         neg.status = "expired"
         return False
     date_str = str(_today(app))
-    trade = te.execute_trade(user_team, partner, user_objs, partner_objs, date_str)
+    _lg = getattr(getattr(app, 'game_manager', None), 'league', None) or \
+        getattr(app, 'league', None)
+    _board = getattr(getattr(app, 'career', None), 'board', None)
+    trade = te.execute_trade(user_team, partner, user_objs, partner_objs,
+                             date_str, league=_lg, board=_board)
     gm = _gm(app)
     if gm is not None:
         if not hasattr(gm, "trade_history"):

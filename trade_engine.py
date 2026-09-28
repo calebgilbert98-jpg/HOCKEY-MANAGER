@@ -294,8 +294,14 @@ class CompletedTrade:
 
 
 def execute_trade(user_team, partner_team, user_assets, partner_assets,
-                  date_str="") -> CompletedTrade:
-    """Move players and picks. Assumes the deal was accepted."""
+                  date_str="", league=None, board=None) -> CompletedTrade:
+    """Move players and picks. Assumes the deal was accepted.
+
+    league/board are optional: when provided (user-involved deals), the
+    trade's fallout is scored -- GM stature moves, the fleeced GM holds a
+    personal grudge, and the board logs it via record_big_event. The asset
+    movement itself is untouched.
+    """
     from game_classes import DraftPick
     for a in user_assets:
         if isinstance(a, DraftPick):
@@ -314,5 +320,18 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     b_labels = [asset_label(a) for a in partner_assets]
     summary = (f"{user_team.team_name} acquires {', '.join(b_labels)} from "
                f"{partner_team.team_name} for {', '.join(a_labels)}.")
+    # GM stature fallout: the league saw this deal. A fleece builds the
+    # winner's "shark" reputation but the loser holds a personal grudge;
+    # getting worked costs stature; fair dealing builds trust both ways.
+    # Additive -- asset movement above is untouched.
+    try:
+        from reputation_system import record_trade_outcome
+        ev = evaluate_trade(user_assets, partner_assets)
+        partner_ratio = float(ev.ratio) if ev.ratio else 1.0
+        user_ratio = (1.0 / partner_ratio) if partner_ratio > 0 else 1.0
+        record_trade_outcome(league, user_team, partner_team, user_ratio,
+                             board_a=board)
+    except Exception:
+        pass
     return CompletedTrade(date_str, user_team.team_name, partner_team.team_name,
                           a_labels, b_labels, summary)

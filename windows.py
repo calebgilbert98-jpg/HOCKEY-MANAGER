@@ -2738,6 +2738,14 @@ class FreeAgencyView(ctk.CTkFrame):
         rating = to_100_scale(staff.overall_rating)
         prestige = getattr(self.app.game_manager.user_team, 'prestige', 50)
         base = 0.45 + (salary_mult - 1.0) * 1.4 + (prestige - 50) / 400 - (rating - 60) / 600
+        # GM stature: top coaches want to work for a GM the league
+        # respects. Additive, bounded +/-0.08.
+        try:
+            import reputation_system as _rs
+            base += _rs.gm_staff_accept_delta(
+                self.app.game_manager.user_team)
+        except Exception:
+            pass
         return max(0.05, min(0.98, base))
 
     def _resolve_staff_offer(self, staff, years, salary, dlg):
@@ -9069,6 +9077,20 @@ class ContractExtensionsView(ctk.CTkFrame):
         # Calculate minimum acceptable salary based on overall rating and age
         # (100-scale: ~75% of the market-value base curve, NHL-minimum floor)
         min_salary = max(750000, (player.overall_rating() - 60) * 187500)
+
+        # GM stature: a GM the league doesn't respect pays a dysfunction
+        # premium (up to +15%) to get a signature; respected GMs pay
+        # sticker. Additive to the existing age curve.
+        _uteam = (getattr(getattr(self, 'app', None), 'game_manager', None)
+                  is not None and
+                  getattr(self.app.game_manager, 'user_team', None)) or \
+            getattr(getattr(self, 'app', None), 'user_team', None)
+        try:
+            if _uteam is not None:
+                import reputation_system as _rs
+                min_salary *= _rs.gm_ask_premium(_uteam)
+        except Exception:
+            pass
         
         # Adjust for age
         if player.age >= 30:
@@ -9101,7 +9123,17 @@ class ContractExtensionsView(ctk.CTkFrame):
         # Adjust for player loyalty
         if hasattr(player, 'teamwork') and player.teamwork > 15:
             acceptance_chance += 0.1  # Loyal player
-        
+
+        # GM stature: stars can afford to be picky about who they play
+        # for -- a respected GM gets a small bump, a clown GM gets the
+        # cold shoulder. Depth players just want a contract. Additive.
+        try:
+            if _uteam is not None:
+                import reputation_system as _rs
+                acceptance_chance += _rs.gm_fa_accept_delta(_uteam, player)
+        except Exception:
+            pass
+
         # Final result
         return random.random() < max(0.05, min(0.95, acceptance_chance))
 

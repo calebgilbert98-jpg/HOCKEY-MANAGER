@@ -191,6 +191,22 @@ def situational_context(app, team, partner=None):
                 mult *= bump
                 notes.append('bitter rivals -- premium demanded')
 
+        # GM stature: the league judges YOU. Personal gm_gm heat was
+        # invisible here (only team_team counted) -- a GM you burned
+        # taxes you harder than any team rivalry. Stature moves the
+        # needle softly: respect earns a small discount, a clown
+        # reputation gets you squeezed. Additive; the clamp below keeps
+        # it a whisper.
+        if partner is not None:
+            try:
+                import reputation_system as _rs
+                _gmult, _gnotes = _rs.gm_trade_greed_mult(
+                    _league(app), partner, team)
+                mult *= _gmult
+                notes.extend(_gnotes)
+            except Exception:
+                pass
+
         # Deadline rush: as 3 PM nears, buyers get desperate, sellers deal
         prog = _deadline_progress(app)
         if prog > 0:

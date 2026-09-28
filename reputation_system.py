@@ -20,7 +20,7 @@
 import random
 import re
 from datetime import date
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 # ---------------------------------------------------------------------------
 # Tuning
@@ -4496,3 +4496,223 @@ def evaluate_contract_decision(player: Any, aav: float, expected_aav: float,
             "contract_pressure": pressure,
             "market_setter": bool(market_setter),
             "story": " ".join(texts), "effects": effects}
+
+
+# ===========================================================================
+# GM STATURE EFFECTS — the league judges YOU
+# ---------------------------------------------------------------------------
+# career_reputation (0-100, tracked on the GM staff entity) was half-built:
+# nudged by signings/offer sheets but read by nothing. This section gives it
+# teeth. Stature is the "shrewd <-> incompetent" axis; gm_gm rivalry heat is
+# the "ruthless <-> honorable" axis. Both feed the same decision points:
+#
+#   trades      -> AI greed (stature) + refusal pressure (personal heat)
+#   free agency -> star acceptance + dysfunction premium on the ask
+#   staff       -> top coaches' willingness to sign
+#   board       -> monthly confidence drift toward stature
+#
+# Guardrails (Muck's rules): additive only, never overrides agreed logic;
+# every consumer clamps its effect ("whisper, never shout"); nothing raises.
+# ===========================================================================
+
+GM_STATURE_NEUTRAL = 50
+
+
+def gm_stature(team: Any) -> int:
+    """The GM's league-wide stature, 0-100. Never raises.
+
+    A brand-new GM (no history, rep still 0) seeds to neutral 50 through the
+    existing seed_staff_reputation -- unknown, not a mark.
+    """
+    try:
+        gm = _team_gm_staff(team)
+        if gm is None:
+            return GM_STATURE_NEUTRAL
+        ensure_reputation_fields(gm)
+        rep = int(getattr(gm, "career_reputation", 0) or 0)
+        if rep == 0 and not getattr(gm, "reputation_history", None):
+            try:
+                rep = int(seed_staff_reputation(gm))
+            except Exception:
+                rep = GM_STATURE_NEUTRAL
+        return max(0, min(100, rep))
+    except Exception:
+        return GM_STATURE_NEUTRAL
+
+
+def gm_gm_heat(league: Any, team_a: Any, team_b: Any) -> int:
+    """Personal heat (0-100) between two GMs. Never raises.
+
+    Reads the gm_gm rivalry records -- offer sheets, market resets, trade
+    fleecings. Distinct from team_team heat: this is personal.
+    """
+    try:
+        store = _rivalry_store(league) if league is not None else []
+        r = rivalry_between(store, gm_persona(team_a), gm_persona(team_b),
+                            kind="gm_gm")
+        return int(r.get("intensity", 0)) if r else 0
+    except Exception:
+        return 0
+
+
+def gm_trade_greed_mult(league: Any, user_team: Any,
+                        partner_team: Any) -> Tuple[float, List[str]]:
+    """Greed multiplier for an AI GM facing YOUR offer. Never raises.
+
+    Stature moves the needle softly (respect gets a small discount, a clown
+    reputation gets you squeezed). Personal gm_gm heat bites harder than any
+    team rivalry -- a GM you burned will tax you or refuse outright.
+    """
+    mult, notes = 1.0, []
+    try:
+        rep = gm_stature(user_team)
+        if rep >= 75:
+            mult *= 0.95
+            notes.append("respected around the league")
+        elif rep < 20:
+            mult *= 1.12
+            notes.append("the league thinks you're a mark")
+        elif rep < 40:
+            mult *= 1.06
+            notes.append("rival GMs smell blood")
+        heat = gm_gm_heat(league, user_team, partner_team)
+        if heat >= 70:
+            mult *= 1.25
+            notes.append("won't do business with you")
+        elif heat >= 40:
+            mult *= 1.12
+            notes.append("bad blood with this GM")
+        mult = max(0.85, min(1.35, mult))
+    except Exception:
+        pass
+    return round(mult, 3), notes
+
+
+def gm_fa_accept_delta(team: Any, player: Any) -> float:
+    """Acceptance-chance delta for a free agent offer. Never raises.
+
+    Stars can afford to be picky about who they play for; depth players just
+    want a contract. Bounded to +/-0.10.
+    """
+    try:
+        rep = gm_stature(team)
+        try:
+            star = player.overall_rating() >= 85
+        except Exception:
+            star = False
+        scale = 1.0 if star else 0.4
+        if rep >= 75:
+            return round(0.08 * scale, 3)
+        if rep <= 35:
+            return round(-0.10 * scale, 3)
+    except Exception:
+        pass
+    return 0.0
+
+
+def gm_ask_premium(team: Any) -> float:
+    """Dysfunction premium on a player's salary ask. Never raises.
+
+    A GM the league doesn't respect pays up to 15% over market to get a
+    signature. Respected GMs pay sticker.
+    """
+    try:
+        rep = gm_stature(team)
+        return round(1.0 + max(0.0, (45 - rep) / 45.0) * 0.15, 3)
+    except Exception:
+        return 1.0
+
+
+def gm_staff_accept_delta(team: Any) -> float:
+    """Acceptance-chance delta for a staff/coach offer. Never raises.
+
+    Top coaches want to work for winners -- or at least for GMs the league
+    respects. Bounded to +/-0.08.
+    """
+    try:
+        rep = gm_stature(team)
+        if rep >= 70:
+            return 0.08
+        if rep <= 30:
+            return -0.08
+    except Exception:
+        pass
+    return 0.0
+
+
+def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
+                         board_a: Any = None) -> Dict[str, Any]:
+    """Score a completed trade's fallout. Never raises.
+
+    ratio_a = value team A receives / value team A gives (>=1 means A won).
+    A fleece builds A's "shark" stature but the fleeced GM holds a personal
+    grudge; getting worked costs stature; fair dealing builds trust both
+    ways. Feeds the board's (previously uncalled) record_big_event hook.
+    """
+    out: Dict[str, Any] = {"rep_a": 0, "rep_b": 0, "heat": 0, "notes": []}
+    try:
+        ratio = float(ratio_a)
+    except Exception:
+        return out
+    try:
+        if ratio >= 1.30:
+            _nudge_gm_rep(team_a, 2, "trade_fleece")
+            out["rep_a"] = 2
+            try:
+                store = _rivalry_store(league) if league is not None else []
+                r = add_rivalry(
+                    store, gm_persona(team_b), gm_persona(team_a), "gm_gm",
+                    55, "trade_fleece",
+                    f"{_ename(gm_persona(team_b))} got worked by "
+                    f"{_ename(gm_persona(team_a))} in a lopsided deal.",
+                    grudge=60)
+                if r:
+                    out["heat"] = 55
+            except Exception:
+                pass
+            out["notes"].append("the league saw the fleece")
+            if board_a is not None:
+                try:
+                    board_a.record_big_event("good_trade")
+                except Exception:
+                    pass
+        elif ratio <= 0.75:
+            _nudge_gm_rep(team_a, -2, "trade_fleeced")
+            out["rep_a"] = -2
+            out["notes"].append("the league saw you get worked")
+            if board_a is not None:
+                try:
+                    board_a.record_big_event("bad_trade")
+                except Exception:
+                    pass
+        elif 0.90 <= ratio <= 1.10:
+            _nudge_gm_rep(team_a, 1, "trade_fair")
+            _nudge_gm_rep(team_b, 1, "trade_fair")
+            out["rep_a"] = 1
+            out["rep_b"] = 1
+            out["notes"].append("fair dealing builds trust")
+    except Exception:
+        pass
+    return out
+
+
+def gm_board_drift(board: Any, team: Any) -> int:
+    """Monthly board-confidence drift toward GM stature. Never raises.
+
+    A respected GM gets a longer leash from the board; a GM the league
+    laughs at gets a shorter one. +/-2 per month max -- results still
+    dominate. Respects the can_be_sacked toggle (drift applies, the sack
+    check itself honors the toggle as before).
+    """
+    try:
+        rep = gm_stature(team)
+        delta = int(round((rep - 50) / 50.0 * 2))
+        if delta:
+            board.confidence = max(0, min(100, board.confidence + delta))
+            try:
+                board._check_sack()
+            except Exception:
+                pass
+        return delta
+    except Exception:
+        return 0

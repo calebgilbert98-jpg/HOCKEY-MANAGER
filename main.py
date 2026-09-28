@@ -11373,6 +11373,16 @@ class HockeyManagerGUI(tk.Tk):
         points = b.season_wins * 2 + b.season_otl
         pct = points / (games * 2)
         headline, body = b.monthly_review(pct)
+        # GM stature: the board gives a respected GM a longer leash and a
+        # clown GM a shorter one. Drift only (+/-2/mo); results dominate.
+        try:
+            import reputation_system as _rs
+            _drift = _rs.gm_board_drift(b, self.user_team)
+            if _drift:
+                body += (f" The board also notes your standing around the "
+                         f"league ({'growing' if _drift > 0 else 'slipping'}).")
+        except Exception:
+            pass
         self.send_email_to_user(EmailMessage(
             sender="Board of Directors", sender_type="Owner",
             subject=headline, content=body, date_sent=self.current_date,
