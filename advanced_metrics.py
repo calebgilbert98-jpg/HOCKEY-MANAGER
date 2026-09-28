@@ -71,6 +71,33 @@ def _parse_toi(toi_str: str) -> float:
         return 0.0
 
 
+def estimate_toi(player: Any) -> float:
+    """Estimate average TOI (minutes) when the sim doesn't track it.
+
+    The engine does not populate Player.avg_toi, so per-60 metrics would
+    always read zero. Estimate from position + overall, mirroring real
+    NHL deployment: elite forwards ~20 min, top-pair D ~24 min.
+    """
+    toi = _parse_toi(getattr(player, "avg_toi", "0:00"))
+    if toi > 0:
+        return toi
+    ovr_fn = getattr(player, "overall_rating", None)
+    try:
+        ovr = float(ovr_fn()) if callable(ovr_fn) else float(ovr_fn or 78)
+    except (TypeError, ValueError):
+        ovr = 78.0
+    if _is_goalie(player):
+        return 58.0
+    pos = getattr(getattr(player, "primary_position", None), "name",
+                  str(getattr(player, "primary_position", ""))).upper()
+    is_d = "DEFEN" in pos or pos.strip() == "D"
+    if is_d:
+        # 70 OVR -> ~18 min, 95 OVR -> ~25 min
+        return 18.0 + max(0.0, min(1.0, (ovr - 70) / 25.0)) * 7.0
+    # Forwards: 70 OVR -> ~12 min, 95 OVR -> ~21 min
+    return 12.0 + max(0.0, min(1.0, (ovr - 70) / 25.0)) * 9.0
+
+
 def _is_goalie(player: Any) -> bool:
     pos = getattr(player, "primary_position", None)
     name = getattr(pos, "name", str(pos or "")).upper()
@@ -112,7 +139,7 @@ def skater_advanced(player: Any, team_avg_sh_pct: float = 9.5,
     shots = getattr(st, "shots", 0) or 0
     assists = getattr(st, "assists", 0) or 0
     gp = getattr(st, "games_played", 0) or 0
-    toi = _parse_toi(getattr(player, "avg_toi", "0:00"))
+    toi = estimate_toi(player)
     toi_hours = (toi * max(gp, 1)) / 60.0 if toi else 0.0
 
     # --- Actuals ---
