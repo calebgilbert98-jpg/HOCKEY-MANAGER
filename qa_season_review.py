@@ -234,6 +234,55 @@ def main():
     check("two seasons, two cards",
           set(app.user_team.season_reviews.keys()) == {2027, 2028})
 
+    # --- Bad blood report: locked / new / heating up ---
+    def plant(app2, other, intensity, origin, rdate, story=""):
+        lg = app2.league
+        if getattr(lg, "rivalries", None) is None:
+            lg.rivalries = []
+        me = "Chicago Blackhawks"
+        a, b, an, bn = ("team", me), ("team", other), me, other
+        if a > b:
+            a, b, an, bn = b, a, bn, an
+        lg.rivalries.append({"a": a, "b": b, "a_name": an, "b_name": bn,
+                             "kind": "team_team", "intensity": intensity,
+                             "origin": origin, "story": story or origin,
+                             "date": rdate, "grudge": 50, "career_cost": 0})
+
+    rapp = make_app()
+    plant(rapp, "Detroit Red Wings", 88, "regional", "2022-10-01",
+          "Original Six hatred that never dies")
+    plant(rapp, "Boston Bruins", 55, "playoff", "2027-03-15",
+          "seven-game first-round war")
+    plant(rapp, "Toronto Maple Leafs", 50, "trade", "2025-11-01",
+          "the fleece they still talk about")
+    plant(rapp, "Arizona Coyotes", 20, "regular", "2026-01-01", "meh")
+    rrev = sr.build_review(rapp)
+    rcontent = "\n".join(rrev["lines"])
+    check("bad blood section present", "BAD BLOOD REPORT" in rcontent)
+    check("locked rival flagged",
+          "Detroit Red Wings (88)" in rcontent and "LOCKED RIVAL" in rcontent)
+    check("new-this-season rival",
+          "Boston Bruins (55)" in rcontent and "new this season" in rcontent)
+    check("heating-up rival",
+          "Toronto Maple Leafs (50)" in rcontent and "heating up" in rcontent)
+    check("background noise skipped", "Arizona Coyotes" not in rcontent)
+    check("story snippet shown", "seven-game first-round war" in rcontent)
+
+    # No rivalries at all -> the honest line.
+    bcontent = "\n".join(sr.build_review(make_app())["lines"])
+    check("no bad blood yet", "No real bad blood yet" in bcontent)
+
+    # AI club cards carry their own bad blood.
+    clubx = rapp.league.teams[1]  # "Club 00"
+    clubx.roster = []
+    plant(rapp, "Club 00", 75, "playoff", "2027-04-20",
+          "they swept us, we remember")
+    xcontent = "\n".join(sr.build_review(rapp, team=clubx)["lines"])
+    check("AI club gets its own bad blood",
+          "BAD BLOOD REPORT" in xcontent
+          and "Chicago Blackhawks (75)" in xcontent
+          and "LOCKED RIVAL" in xcontent)
+
     # --- Every club keeps its own history ---
     club0 = app.league.teams[1]  # first fake AI club
     check("AI club card archived",

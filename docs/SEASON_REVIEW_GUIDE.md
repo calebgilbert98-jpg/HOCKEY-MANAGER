@@ -11,6 +11,7 @@ important + milestone). Sections:
 
 - **The year in one line** — record, final league rank, vs the preseason media poll
 - **Story of the season** — longest win streak, playoff run, top-5 ledger moments
+- **Bad blood report** — rivalry status per club: LOCKED RIVALS (user-declared, regional, or intensity 70+ — the hate that never cools), new this season (first declared within 12 months), heating up (intensity 40-69); each with intensity + origin + story snippet. Clubs with no bad blood get the honest line.
 - **Stood out / Tough go** — top-3 by points (+career-year flags); bottom-3 regulars by production vs career pace (a player can't appear in both)
 - **Rookie watch** — club rookies in the Calder race + league rookie goal leader
 - **Hardware** — major award winners, club winners flagged `<-- YOURS`

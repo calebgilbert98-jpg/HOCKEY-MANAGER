@@ -492,6 +492,77 @@ def _room_score(team):
 # Assembly + delivery
 # ----------------------------------------------------------------------
 
+def _origin_label(origin):
+    o = str(origin or "").lower()
+    if o == "regional":
+        return "regional hatred"
+    if o == "playoff":
+        return "playoff history"
+    if o == "declared":
+        return "declared bad blood"
+    if o == "trade":
+        return "trade fallout"
+    return o or "bad blood"
+
+
+def _rivalry_lines(app, team, year):
+    """Bad blood report: locked rivals / heating up / new this season.
+
+    Locked = structural hate (user-declared, regional, or intensity >= 70):
+    these barely cool off in decay. Heating up = simmering at 40-69.
+    New = first declared within the last 12 months.
+    """
+    try:
+        from reputation_system import get_rivalries_for
+    except Exception:
+        return []
+    try:
+        league = getattr(app, "league", None)
+        rivalries = list(getattr(league, "rivalries", None) or [])
+        mine = [r for r in get_rivalries_for(rivalries, team, 1)
+                if isinstance(r, dict) and r.get("kind") == "team_team"]
+    except Exception:
+        return []
+    if not mine:
+        return ["- No real bad blood yet -- every game is just a game."]
+    me = getattr(team, "team_name", "")
+    try:
+        today = getattr(app, "current_date", None)
+        today = today.date() if hasattr(today, "date") else today
+        if not hasattr(today, "year"):
+            raise ValueError
+    except Exception:
+        today = date.today()
+    recent_cutoff = date(today.year - 1, today.month, today.day)
+    locked, heating, new = [], [], []
+    for r in mine:
+        other = r.get("b_name") if r.get("a_name") == me else r.get("a_name")
+        inten = _num(r.get("intensity", 0))
+        origin = _origin_label(r.get("origin"))
+        story = str(r.get("story", "") or "").strip()
+        snippet = (story[:72] + "...") if len(story) > 72 else story
+        detail = f"{origin}" + (f" -- {snippet}" if snippet else "")
+        try:
+            rdate = date.fromisoformat(str(r.get("date", ""))[:10])
+        except Exception:
+            rdate = None
+        is_recent = bool(rdate is not None and rdate >= recent_cutoff)
+        if r.get("user_declared") or str(r.get("origin", "")).lower() == "regional" or inten >= 70:
+            locked.append((other, inten, detail))
+        elif is_recent:
+            new.append((other, inten, detail))
+        elif inten >= 40:
+            heating.append((other, inten, detail))
+    lines = []
+    for other, inten, detail in locked[:4]:
+        lines.append(f"- {other} ({inten}) -- LOCKED RIVAL: {detail}")
+    for other, inten, detail in new[:3]:
+        lines.append(f"- {other} ({inten}) -- new this season: {detail}")
+    for other, inten, detail in heating[:3]:
+        lines.append(f"- {other} ({inten}) -- heating up: {detail}")
+    return lines
+
+
 def _club_board_facts(app, team, year):
     """Minimal season facts for a non-user club (Cup win flag).
 
@@ -536,6 +607,10 @@ def build_review(app, team=None):
     story = _story_lines(app, team, year, board_facts)
     if story:
         sections.append(("STORY OF THE SEASON", story))
+
+    blood = _rivalry_lines(app, team, year)
+    if blood:
+        sections.append(("BAD BLOOD REPORT", blood))
 
     out, tough = _standout_lines(team)
     if out:
