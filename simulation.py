@@ -621,6 +621,10 @@ class GameSim:
         # Stage 2: Fatigue tracking
         self.player_fatigue = {}
         self.line_change_timer = 0
+        # Real shift engine: per-team shift state (see shift_engine.py).
+        # Initialized lazily by shift_engine.get_shift_state; the dict just
+        # needs to exist before the first _get_on_ice call.
+        self._shift_states = {}
         
         # Stage 3: Special situations and faceoffs
         self.current_situation = SpecialSituation.EVEN_STRENGTH
@@ -2645,27 +2649,61 @@ class GameSim:
                 self.player_fatigue[player.id] = max(0, self.player_fatigue[player.id] - fatigue_loss)
 
     def _should_change_lines(self):
-        """Determine if lines should be changed based on fatigue and time."""
-        self.line_change_timer += 1
+        """Determine if lines should be changed based on shift state.
 
-        # Rotation phase flip: keep the stored units in lockstep with the
-        # clock-phase rotation that game logic (and the visualizer) uses.
+        Real shift engine (shift_engine.py): evaluates on-the-fly change
+        conditions per team (shift age, puck safety, staggered F/D). If any
+        unit changes, returns True so the caller refreshes on-ice units.
+        """
+        self.line_change_timer += 1
+        try:
+            from shift_engine import (
+                get_shift_state, should_change_on_fly, change_lines,
+                emit_line_change_event,
+            )
+            changed = False
+            for team in (self.home_team, self.away_team):
+                st = get_shift_state(self, team)
+                change_f, change_d = should_change_on_fly(self, team, st)
+                # Hard cap: no shift beyond 60s without a whistle. Force
+                # the change even if the puck isn't safe (tired legs).
+                clock = getattr(self, "clock", 0)
+                if st.f_age(clock) >= 50:
+                    change_f = True
+                if st.d_age(clock) >= 50:
+                    change_d = True
+                if change_f or change_d:
+                    info = change_lines(self, team, st,
+                                        change_f=change_f, change_d=change_d,
+                                        reason="on_the_fly")
+                    emit_line_change_event(self, team, info)
+                    changed = True
+            # Legacy safety net: if the shift engine didn't change anything
+            # for a long time (e.g. disabled), force a rotation.
+            if not changed and self.line_change_timer > 90:
+                return True
+            return changed
+        except Exception:
+            pass
+
+        # Fallback: legacy timer-based rotation (shift engine unavailable).
         phase = (self.clock // 45, self.clock // 60)
         if phase != getattr(self, "_line_phase", None):
             self._line_phase = phase
             return True
-
-        # Force change every 45-60 seconds
         if self.line_change_timer > random.randint(45, 60):
             return True
-        
-        # Change if key players are too fatigued
-        avg_fatigue = sum(self.player_fatigue.get(p.id, 100) for p in self.home_on_ice + self.away_on_ice) / len(self.home_on_ice + self.away_on_ice)
-        
-        if avg_fatigue < 70:  # 70% fatigue threshold
-            return True
-        
-        # Change during stoppages (faceoffs, goals, etc.)
+        try:
+            on_ice = (getattr(self, "home_on_ice", []) or []) + \
+                     (getattr(self, "away_on_ice", []) or [])
+            if on_ice:
+                avg_fatigue = sum(
+                    self.player_fatigue.get(p.id, 100) for p in on_ice
+                ) / len(on_ice)
+                if avg_fatigue < 70:
+                    return True
+        except Exception:
+            pass
         return False
 
     def _successful_zone_entry(self, player, team, entry_type):
@@ -2759,8 +2797,15 @@ class GameSim:
         self._emit_pbp("icing", player=icer, team=offending_team.team_name)
         # Freeze current lines BEFORE the faceoff clears the flag; the faceoff
         # itself is the whistle, then the freeze applies until the next whistle.
-        self._frozen_line = (self.clock // 45) % 4 + 1
-        self._frozen_d_pair = (self.clock // 60) % 3 + 1
+        # (Shift engine: freeze the state-chosen units, not clock math.)
+        try:
+            from shift_engine import get_shift_state as _gss
+            _fsst = _gss(self, offending_team)
+            self._frozen_line = _fsst.f_line
+            self._frozen_d_pair = _fsst.d_pair
+        except Exception:
+            self._frozen_line = (self.clock // 45) % 4 + 1
+            self._frozen_d_pair = (self.clock // 60) % 3 + 1
         self._forced_faceoff_team = offending_team
         # Freeze starts at the icing whistle: the offending team's tired
         # skaters take the draw and can't change until the next stoppage.
@@ -4985,7 +5030,54 @@ class GameSim:
             self.faceoff_zone = random.choice([FaceoffZone.OFFENSIVE_ZONE, FaceoffZone.DEFENSIVE_ZONE])
         else:
             self.faceoff_zone = FaceoffZone.NEUTRAL_ZONE
-        
+
+        # Real shift engine: line changes at the stoppage, before the draw.
+        # Away team declares first (rolls rotation); home team matches with
+        # last change (if the coach's tactic_line_matching is Aggressive).
+        # Icing-frozen team cannot change.
+        try:
+            from shift_engine import (
+                get_shift_state, stoppage_change, emit_line_change_event,
+            )
+            _fz = self.faceoff_zone
+            # Zone from each team's perspective for the stoppage logic
+            def _zone_for(team):
+                is_home = team is self.home_team
+                if _fz == FaceoffZone.OFFENSIVE_ZONE:
+                    # Offensive zone faceoff: need to know WHOSE zone.
+                    # Use the winner-relative logic below; for now, use
+                    # current_zone as an approximation.
+                    return "offensive" if (
+                        (is_home and self.current_zone == Zone.OFFENSIVE_ZONE) or
+                        (not is_home and self.current_zone == Zone.DEFENSIVE_ZONE)
+                    ) else "defensive"
+                elif _fz == FaceoffZone.DEFENSIVE_ZONE:
+                    return "defensive" if (
+                        (is_home and self.current_zone == Zone.DEFENSIVE_ZONE) or
+                        (not is_home and self.current_zone == Zone.OFFENSIVE_ZONE)
+                    ) else "offensive"
+                return "neutral"
+            _frozen = getattr(self, "_no_line_change_team", None)
+            # Away declares first
+            _ast = get_shift_state(self, self.away_team)
+            _ainfo = stoppage_change(
+                self, self.away_team, _ast, is_home=False,
+                zone=_zone_for(self.away_team),
+                icing_frozen=_frozen is self.away_team)
+            emit_line_change_event(self, self.away_team, _ainfo)
+            # Home matches (if Aggressive matching; otherwise rolls)
+            _hst = get_shift_state(self, self.home_team)
+            _do_match = (getattr(self.home_team, "tactic_line_matching",
+                                 "Standard") == "Aggressive")
+            _hinfo = stoppage_change(
+                self, self.home_team, _hst, is_home=True,
+                away_line=_ast.f_line if _do_match else None,
+                zone=_zone_for(self.home_team),
+                icing_frozen=_frozen is self.home_team)
+            emit_line_change_event(self, self.home_team, _hinfo)
+        except Exception:
+            pass
+
         # Get centers for faceoff
         home_centers = [p for p in self._get_on_ice(self.home_team) if p.primary_position == PlayerPosition.CENTER]
         away_centers = [p for p in self._get_on_ice(self.away_team) if p.primary_position == PlayerPosition.CENTER]
@@ -6618,22 +6710,24 @@ class GameSim:
         else:
             num_skaters = max(3, 5 - len(penalized_skaters))
         
-        # Simple line rotation logic
-        current_line = (self.clock // 45) % 4 + 1 # Change lines every 45 seconds
-        current_d_pair = (self.clock // 60) % 3 + 1
+        # Real shift engine: the on-ice unit comes from shift state, not
+        # clock math. Falls back to the old rotation if state is missing.
+        try:
+            from shift_engine import get_shift_state as _gss
+            _sst = _gss(self, team)
+            current_line = _sst.f_line
+            current_d_pair = _sst.d_pair
+        except Exception:
+            current_line = (self.clock // 45) % 4 + 1 # Change lines every 45 seconds
+            current_d_pair = (self.clock // 60) % 3 + 1
         # Icing: offending team cannot change lines (tired skaters stay out)
         if getattr(self, '_no_line_change_team', None) is team:
             current_line = getattr(self, '_frozen_line', current_line)
             current_d_pair = getattr(self, '_frozen_d_pair', current_d_pair)
 
-        # Line matching: aggressive home-ice deployment reacts to score state
-        if team == self.home_team and getattr(team, 'tactic_line_matching', 'Standard') == 'Aggressive':
-            goal_diff = self.home_score - self.away_score
-            rotation = (self.clock // 45) % 2
-            if goal_diff <= -2:
-                current_line = 1 if rotation == 0 else 2  # chase the game: top six
-            elif goal_diff >= 2:
-                current_line = 3 if rotation == 0 else 4  # protect the lead: bottom six
+        # Line matching is now handled by the shift engine at stoppages
+        # (see _resolve_faceoff hook). The old score-state override lives on
+        # in shift_engine.stoppage_change.
 
         on_ice = []
 
