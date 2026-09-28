@@ -414,19 +414,25 @@ check("third retaining club refused", not ok2 and "two clubs" in why2)
 
 # -- one-year reacquire ban after retaining
 ua3 = mkteam("Retainers"); pb3 = mkteam("Buyers")
+# Post-season league context: season_year rolled past the deadline's
+# season, so the freeze is lifted and the date-based ban is what's under
+# test here.
+_cup_lg = SimpleNamespace(season_year=2028)
 gem = mkplayer(8_000_000, age=30, name="Gem Stone"); ua3.roster.append(gem)
 ua3.roster.extend(mkplayer(4_000_000) for _ in range(19))
 back3 = mkplayer(4_000_000, name="Return Piece"); pb3.roster.append(back3)
 pb3.roster.extend(mkplayer(4_000_000) for _ in range(19))
 tr3a = te.execute_trade(ua3, pb3, [gem], [back3], date_str="2026-11-01",
-                        retention={gem.id: 50})
+                        league=_cup_lg, retention={gem.id: 50})
 check("retention trade completes", not tr3a.summary.startswith("BLOCKED:"))
 check("ban recorded on the player",
       any(b.get("team") == "Retainers"
           for b in (getattr(gem, "retention_bans", None) or [])))
-tr3b = te.execute_trade(pb3, ua3, [gem], [back3], date_str="2027-03-01")
+tr3b = te.execute_trade(pb3, ua3, [gem], [back3], date_str="2027-03-01",
+                        league=_cup_lg)
 check("one-year reacquire ban blocks", tr3b.summary.startswith("BLOCKED:"))
-tr3c = te.execute_trade(pb3, ua3, [gem], [back3], date_str="2028-06-01")
+tr3c = te.execute_trade(pb3, ua3, [gem], [back3], date_str="2028-06-01",
+                        league=_cup_lg)
 check("ban lifts after a year", not tr3c.summary.startswith("BLOCKED:"))
 
 # -- per-side retention slots (the other club's terms don't eat yours)
@@ -582,7 +588,7 @@ check("counter drops retention terms for removed assets",
       _neg.retention == {})
 
 # --- Fix 4: clause survives agent-counter -> inbox accept ---
-from main import HockeyManagerGUI, SALARY_CAP as _SALARY_CAP
+from main import HockeyManagerGUI, GameManager, SALARY_CAP as _SALARY_CAP
 
 _c4_team = mkteam("Cap Club")
 _c4_league = _SN(teams=[_c4_team], free_agents=[], salary_cap_system=None,
@@ -594,9 +600,10 @@ _c4_app.send_email_to_user = lambda m: _c4_app.inbox.append(m)
 for _meth in ("handle_contract_offer", "_finalize_contract_signing",
               "_clear_offered_clause", "_notify_contract_result",
               "_inbox_contract_result", "_find_inbox_player",
+              "_validate_contract_terms", "get_live_cap",
               "accept_contract_counter"):
-    setattr(_c4_app, _meth,
-            _types.MethodType(getattr(HockeyManagerGUI, _meth), _c4_app))
+    _fn = getattr(HockeyManagerGUI, _meth, None) or getattr(GameManager, _meth)
+    setattr(_c4_app, _meth, _types.MethodType(_fn, _c4_app))
 
 _p5 = mkplayer(3_000_000, ovr=88, age=30, name="Clause Star")
 _p5.contract = _SN(salary=0, years_remaining=0, no_trade_clause=False,

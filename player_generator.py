@@ -47,6 +47,9 @@ AGE_DISTRIBUTIONS = {
 # ($13.5M), Matthews $13.25M, K. Connor 8x$96M ($12M). Agents negotiate in
 # cap percentage now: 15% of the $104M cap is $15.6M, so the superstar
 # gate runs $14M-$19M with record deals pushing past it.
+# NOTE: ENTRY_LEVEL is overridden dynamically inside determine_contract_info
+# (new-CBA floor = signing-season league minimum, ceiling = draft-class ELC
+# max, term 3/2 by signing age). The static row below is a legacy fallback.
 CONTRACT_VALUES = {
     "ENTRY_LEVEL": {"min": 775000, "max": 975000, "years": [3]},
     "BRIDGE": {"min": 1200000, "max": 5000000, "years": [2, 3]},
@@ -302,6 +305,30 @@ class PlayerGenerator:
 
         contract_info = CONTRACT_VALUES[contract_type]
 
+        if contract_type == "ENTRY_LEVEL":
+            # New CBA (2026): the ELC band is dynamic. The floor is the
+            # signing-season league minimum ($850k in 2026-27, rising to
+            # $1M by 2029-30). The ceiling is the max flat-salary
+            # equivalent (AAV) for the deal length: $1.075M for a 3-year
+            # ELC ($3.225M total base), $1.05M for a 2-year ELC -- the new
+            # CBA defines the max per contract year (1.025/1.075/1.125).
+            # Term follows the real signing-age table: 3 years at 18-21,
+            # 2 years at 22-23 (the only ages that reach this gate are
+            # <= 22).
+            try:
+                from salary_cap_system import league_minimum_salary as _lms
+                from salary_cap_system import elc_max_salary as _elcmax
+                _elc_years = [3 if age <= 21 else 2]
+                _elc_floor = int(_lms())
+                _elc_ceil = int(_elcmax(_elc_years[0]))
+                contract_info = {
+                    "min": _elc_floor,
+                    "max": max(_elc_floor, _elc_ceil),
+                    "years": _elc_years,
+                }
+            except Exception:
+                pass
+
         # Calculate salary based on overall rating. Star tiers normalize
         # within their own overall band so franchise players spread across
         # the gate instead of all pinning at the max.
@@ -352,7 +379,14 @@ class PlayerGenerator:
                 # pay; the NHL salary is league minimum for call-up
                 # accounting.
                 ahl_salary = final_salary
-                final_salary = 775000
+                try:
+                    from salary_cap_system import league_minimum_salary as _lms2
+                    final_salary = int(_lms2())
+                except Exception:
+                    final_salary = 775000
+            elif contract_type == "ENTRY_LEVEL":
+                # New CBA: ELC two-way minors pay caps at $87,500.
+                ahl_salary = min(ahl_salary, 87500)
 
         return final_salary, contract_length, two_way, ahl_salary
     
@@ -473,7 +507,21 @@ class PlayerGenerator:
         # Set some additional properties
         player.shooting_tendency = random.randint(30, 70)
         player.hitting_tendency = random.randint(30, 70)
-        player.nhl_games_played = random.randint(0, min(age * 40, 1000)) if age > 18 else 0
+        # Career NHL games: age-plausible service time, not a dice roll.
+        # A 20-year-old cannot have 800 NHL games. Young players start
+        # near zero and accrue real games (see _credit_nhl_games_played);
+        # veterans arrive with a believable history. Drives waiver
+        # exemption (same table as database_generator's post-pass).
+        if age <= 20:
+            player.nhl_games_played = 0
+        elif age <= 22:
+            player.nhl_games_played = random.randint(0, (age - 20) * 60)
+        else:
+            _seasons = age - 21
+            _per = random.randint(40, 78)
+            if random.random() < 0.25:
+                _per = random.randint(5, 30)  # fringe / late-bloomer
+            player.nhl_games_played = min(1400, _seasons * _per)
 
         # Deal a locked personality: identity is forever, volatility is scenario.
         try:

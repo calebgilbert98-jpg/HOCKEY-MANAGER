@@ -1139,7 +1139,27 @@ class DatabaseGenerator:
         # Generate contract information for professional players
         if age >= 18:
             player.contract = self._generate_contract(player, age)
-        
+
+        # Career NHL games: age-plausible service time, not a dice roll.
+        # Young players start near zero and accrue real games from here
+        # (see _credit_nhl_games_played); veterans arrive with a believable
+        # history behind them. Drives waiver exemption.
+        try:
+            if age <= 20:
+                player.nhl_games_played = 0
+            elif age <= 22:
+                player.nhl_games_played = random.randint(
+                    0, (age - 20) * 60)
+            else:
+                _seasons = age - 21
+                _per = random.randint(40, 78)
+                if random.random() < 0.25:
+                    # Fringe / late-bloomer: less NHL time.
+                    _per = random.randint(5, 30)
+                player.nhl_games_played = min(1400, _seasons * _per)
+        except Exception:
+            pass
+
         return player
     
     def _set_enhanced_attributes(self, player: Player, age: int, quality_modifier: float):

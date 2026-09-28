@@ -2016,112 +2016,139 @@ class HockeyManagerGUI(tk.Tk):
         for player in self.waiver_list:
             if player in claimed_players:
                 continue
-                
-            # Don't process players just placed on waivers
-            if player.waiver_days == 2:
-                player.waiver_days -= 1
+
+            # The 2-day clock ticks in the daily advance (see above); a
+            # player is only eligible for claim processing once it has
+            # fully elapsed. No same-day claims for fresh placements.
+            if player.waiver_days > 0:
                 continue
-                
-            # Last day on waivers, process possible claims
-            if player.waiver_days == 1:
-                # Determine claiming team (if any)
-                claiming_team = None
-                for team in teams_by_ranking:
-                    # Skip player's current team
-                    if team.team_name == player.team_name:
-                        continue
-                        
-                    # Skip user team (user must claim manually)
-                    try:
-                        import game_classes as _gc
-                        _skip = bool(_gc.is_human_managed(team))
-                    except Exception:
-                        _skip = bool(getattr(team, 'is_user_team', False))
-                    if _skip:
-                        continue
-                        
-                    # Check if team is interested (based on player quality and team needs)
-                    if len(team.roster) < 23 and team.cap_space > player.contract.salary:
-                        # Calculate team interest based on player quality vs. team needs
-                        player_rating = player.overall_rating()
-                        position_need = 1.0  # Default need
-                        
-                        # Check position needs
-                        if player.primary_position == PlayerPosition.GOALIE:
-                            goalies = [p for p in team.roster if p.primary_position == PlayerPosition.GOALIE]
-                            if len(goalies) < 2:
-                                position_need = 1.5  # High need for goalies
-                        elif player.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
-                            forwards = [p for p in team.roster if p.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]]
-                            if len(forwards) < 12:
-                                position_need = 1.3  # Need forwards
-                        else:  # Defensemen
-                            defensemen = [p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]]
-                            if len(defensemen) < 6:
-                                position_need = 1.3  # Need defensemen
-                                
-                        # Teams are more likely to claim higher-rated players
-                        claim_chance = min(0.9, (player_rating / 100) * position_need)
-                        
-                        if random.random() < claim_chance:
-                            claiming_team = team
-                            break
-                
-                # Process claim if a team is interested
-                if claiming_team:
-                    # Remove from original team
-                    original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
-                    if original_team:
-                        if player in original_team.roster:
-                            original_team.remove_player(player)
-                        elif hasattr(original_team, 'ahl_roster') and player in original_team.ahl_roster:
-                            original_team.ahl_roster.remove(player)
+
+            # Clock elapsed: process possible claims
+            # Determine claiming team (if any)
+            claiming_team = None
+            for team in teams_by_ranking:
+                # Skip player's current team
+                if team.team_name == player.team_name:
+                    continue
                     
-                    # Add to claiming team
-                    claiming_team.add_player(player)
-                    player.team_name = claiming_team.team_name
+                # Skip user team (user must claim manually)
+                try:
+                    import game_classes as _gc
+                    _skip = bool(_gc.is_human_managed(team))
+                except Exception:
+                    _skip = bool(getattr(team, 'is_user_team', False))
+                if _skip:
+                    continue
                     
-                    # Reset waiver status
-                    player.on_waivers = False
-                    player.waiver_days = 0
+                # Check if team is interested (based on player quality and team needs)
+                if len(team.roster) < 23 and team.cap_space > player.contract.salary:
+                    # Calculate team interest based on player quality vs. team needs
+                    player_rating = player.overall_rating()
+                    position_need = 1.0  # Default need
                     
-                    # Add to news log
-                    self.add_news(f"{player.full_name} claimed off waivers by {claiming_team.team_name}.")
+                    # Check position needs
+                    if player.primary_position == PlayerPosition.GOALIE:
+                        goalies = [p for p in team.roster if p.primary_position == PlayerPosition.GOALIE]
+                        if len(goalies) < 2:
+                            position_need = 1.5  # High need for goalies
+                    elif player.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
+                        forwards = [p for p in team.roster if p.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]]
+                        if len(forwards) < 12:
+                            position_need = 1.3  # Need forwards
+                    else:  # Defensemen
+                        defensemen = [p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]]
+                        if len(defensemen) < 6:
+                            position_need = 1.3  # Need defensemen
+                            
+                    # Teams are more likely to claim higher-rated players
+                    claim_chance = min(0.9, (player_rating / 100) * position_need)
                     
-                    # Mark as claimed
-                    claimed_players.append(player)
-                else:
-                    # Player cleared waivers
-                    player.waiver_days = 0
-                    player.on_waivers = False
-                    
-                    # Add to original team's AHL roster for human-run clubs
-                    # (they placed the player on waivers deliberately).
-                    original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
-                    try:
-                        import game_classes as _gc2
-                        _human = bool(_gc2.is_human_managed(original_team)) \
-                            if original_team else False
-                    except Exception:
-                        _human = bool(getattr(original_team, 'is_user_team', False))
-                    if original_team and _human and hasattr(original_team, 'ahl_roster'):
-                        if player in original_team.roster:
-                            original_team.roster.remove(player)
-                        original_team.ahl_roster.append(player)
-                        
-                    self.add_news(f"{player.full_name} cleared waivers.")
+                    if random.random() < claim_chance:
+                        claiming_team = team
+                        break
             
-            # Reduce waiver days for players still on waivers
-            elif player.waiver_days > 0:
-                player.waiver_days -= 1
-        
+            # Process claim if a team is interested
+            if claiming_team:
+                # Remove from original team
+                original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
+                if original_team:
+                    if player in original_team.roster:
+                        original_team.remove_player(player)
+                    elif hasattr(original_team, 'ahl_roster') and player in original_team.ahl_roster:
+                        original_team.ahl_roster.remove(player)
+                
+                # Add to claiming team
+                claiming_team.add_player(player)
+                player.team_name = claiming_team.team_name
+                
+                # Reset waiver status
+                player.on_waivers = False
+                player.waiver_days = 0
+                
+                # Add to news log
+                self.add_news(f"{player.full_name} claimed off waivers by {claiming_team.team_name}.")
+                
+                # Mark as claimed
+                claimed_players.append(player)
+            else:
+                # Player cleared waivers
+                player.waiver_days = 0
+                player.on_waivers = False
+                
+                # Add to original team's AHL roster for human-run clubs
+                # (they placed the player on waivers deliberately).
+                original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
+                try:
+                    import game_classes as _gc2
+                    _human = bool(_gc2.is_human_managed(original_team)) \
+                        if original_team else False
+                except Exception:
+                    _human = bool(getattr(original_team, 'is_user_team', False))
+                if original_team and _human and hasattr(original_team, 'ahl_roster'):
+                    if player in original_team.roster:
+                        original_team.roster.remove(player)
+                    # CHL-NHL agreement: a cleared under-20 CHL prospect
+                    # who isn't AHL-eligible (new CBA: 19-year-old
+                    # first-rounders excepted) goes back to junior, not
+                    # the AHL.
+                    try:
+                        import game_classes as _gcw
+                        _to_junior = (
+                            getattr(player, "contract", None) is not None
+                            and _gcw.junior_track_of(player) == "CHL"
+                            and not _gcw.prospect_ahl_eligible(player))
+                    except Exception:
+                        _to_junior = False
+                    if _to_junior:
+                        try:
+                            player.playing_where = \
+                                _gcw.junior_assignment_label(player)
+                        except Exception:
+                            pass
+                        if player not in original_team.prospects:
+                            original_team.prospects.append(player)
+                    else:
+                        original_team.ahl_roster.append(player)
+                else:
+                    _to_junior = False
+                # Clearance is league news regardless of who runs the club.
+                if _to_junior:
+                    self.add_news(
+                        f"{player.full_name} cleared waivers and was "
+                        f"returned to junior.")
+                else:
+                    self.add_news(f"{player.full_name} cleared waivers.")
+
         # Remove claimed players from waiver list
         for player in claimed_players:
             if player in self.waiver_list:
                 self.waiver_list.remove(player)
-                
-        # Remove players who cleared waivers
-        self.waiver_list = [p for p in self.waiver_list if p.on_waivers and p.waiver_days > 0]
+
+        # Remove players who cleared waivers (on_waivers=False now).
+        # Players whose clock hit 0 but who await the next Mon/Thu
+        # processing stay listed -- the shed already ended when the
+        # clock elapsed.
+        self.waiver_list = [p for p in self.waiver_list if p.on_waivers]
         
         # Update any open waiver windows
         if 'waivers' in self.open_windows and self.open_windows['waivers'].winfo_exists():
@@ -3968,7 +3995,7 @@ class HockeyManagerGUI(tk.Tk):
     def update_finances_panel(self):
         _live_cap = self.get_live_cap()
         finance_text = (
-            f"{'Player Budget:':<18}${PLAYER_BUDGET:,}\n"
+            f"{'Player Budget:':<18}${_live_cap:,}\n"
             f"{'Salary Cap:':<18}${_live_cap:,}\n"
             f"{'Total Salaries:':<18}${self.user_team.payroll:,}\n"
             f"{'Cap Space:':<18}${self.user_team.cap_space:,}"
@@ -5529,7 +5556,8 @@ class HockeyManagerGUI(tk.Tk):
             return False
         try:
             trade = te.execute_trade(seller, buyer, [piece], [payment],
-                                     date_str=self.current_date.isoformat())
+                                     date_str=self.current_date.isoformat(),
+                                     league=getattr(self, "league", None))
         except Exception:
             try:
                 if piece is not None and getattr(piece, "contract", None) \
@@ -5816,6 +5844,14 @@ class HockeyManagerGUI(tk.Tk):
             # the day's career totals are final.
             self._milestone_postgame()
             self.current_date += timedelta(days=1)
+
+            # Future 1st-round pick slots track the standings (regressed
+            # toward mid-round -- a projection, not a promise).
+            try:
+                import trade_engine as _te_ps
+                _te_ps.project_pick_slots(getattr(self, "league", None))
+            except Exception:
+                pass
 
             # Trade talks: AI GMs answer due offers/counters via the inbox.
             # Non-fatal by design -- a negotiation must never break the sim.
@@ -6470,10 +6506,20 @@ class HockeyManagerGUI(tk.Tk):
         return None
 
     def _mp_cap_room(self, team):
+        # Central cap accounting (waiver shed, retention, burial, dead
+        # cap) -- the same number team.cap_space now reports and the
+        # league office enforces.
         try:
-            return int(getattr(team, "cap_space", 0) or 0)
+            _cap_sys = getattr(getattr(self, 'league', None),
+                               'salary_cap_system', None)
+            _live_cap = _cap_sys.current_cap if _cap_sys else SALARY_CAP
+            from salary_cap_system import total_cap_charge as _tcc
+            return max(0, int(_live_cap) - int(_tcc(team)))
         except Exception:
-            return 0
+            try:
+                return int(getattr(team, "cap_space", 0) or 0)
+            except Exception:
+                return 0
 
     def _mp_peer_session_for_team(self, team_id):
         """session_id of the client managing team_id, or None."""
@@ -6515,8 +6561,12 @@ class HockeyManagerGUI(tk.Tk):
             years = int(params.get("years", 0))
         except (TypeError, ValueError):
             return False, "Invalid contract terms."
-        if salary <= 0 or not 1 <= years <= 8:
-            return False, "Invalid contract terms."
+        # Same rulebook as single-player: league minimum, 20%-of-cap max,
+        # 7-year max for new deals, live-cap budget, draft lock.
+        ok, err = self._validate_contract_terms(player, salary, years,
+                                                extension=False, team=team)
+        if not ok:
+            return False, err
         if len(getattr(team, "roster", []) or []) >= 23:
             return False, "Roster is full (23)."
         if salary > self._mp_cap_room(team):
@@ -6791,11 +6841,24 @@ class HockeyManagerGUI(tk.Tk):
             years = int(params.get("years", 0))
         except (TypeError, ValueError):
             return False, "Invalid contract terms."
-        if salary <= 0 or not 1 <= years <= 8:
-            return False, "Invalid contract terms."
         contract = getattr(player, "contract", None)
         if contract is None:
             return False, "That player has no contract to extend."
+        # Extensions are a final-year privilege, same as single-player:
+        # no mid-deal renegotiations.
+        try:
+            _yrs_left = int(getattr(contract, "years_remaining", 1) or 1)
+        except Exception:
+            _yrs_left = 1
+        if _yrs_left > 1:
+            return False, (f"{player.full_name} has {_yrs_left} years left -- "
+                           f"extensions are for the final year of a deal.")
+        # Shared gates: league minimum, 20%-of-cap max, 8-year max for
+        # extensions, live-cap budget for the raise.
+        ok, err = self._validate_contract_terms(player, salary, years,
+                                                extension=True, team=team)
+        if not ok:
+            return False, err
         old_salary = int(getattr(contract, "salary", 0) or 0)
         if salary - old_salary > self._mp_cap_room(team):
             return False, "Not enough cap space for that raise."
@@ -8281,6 +8344,15 @@ class HockeyManagerGUI(tk.Tk):
                 pass
         
         # Process waivers - reduced frequency
+        # Waiver clock: exactly 2 calendar days on the wire, as the UI
+        # promises. The clock ticks every day; claim *processing* still
+        # runs Monday/Thursday only.
+        for _wp in list(self.waiver_list):
+            try:
+                if _wp.on_waivers and _wp.waiver_days > 0:
+                    _wp.waiver_days -= 1
+            except Exception:
+                pass
         if self.current_date.weekday() in [0, 3]:  # Monday and Thursday only
             self.process_waivers()
         
@@ -9054,6 +9126,11 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
                 winner, loser, scores, events, notable_events = sim_engine.run()
+                # Career service time (waiver-exemption input).
+                try:
+                    self._credit_nhl_games_played(home_team, away_team)
+                except Exception:
+                    pass
                 # Narrative: the quick-sim never modeled fights/brawls, so
                 # roll them post-game through the shared incident module
                 # (same dice GameSim uses live); record the night's stories
@@ -9723,6 +9800,18 @@ class HockeyManagerGUI(tk.Tk):
                                     _up.team_name = "Free Agent"
                                 except Exception:
                                     pass
+                                # Belt-and-suspenders: an aged-out player is a
+                                # true free agent -- no stale rights stamps or
+                                # re-entry flags may survive on him.
+                                try:
+                                    _up.rights_team = ""
+                                    _up.rights_expiry_year = 0
+                                    _up.rights_type = ""
+                                    _up.camp_invite = False
+                                    _up.draft_reentry = False
+                                    _up.draft_reentry_from = ""
+                                except Exception:
+                                    pass
                                 if isinstance(_fa, list) and \
                                         _up not in _fa:
                                     _fa.append(_up)
@@ -10108,6 +10197,22 @@ class HockeyManagerGUI(tk.Tk):
         
         print("Phase 3 optimizations applied to main interface!")
 
+    def _credit_nhl_games_played(self, home_team, away_team):
+        """Career NHL GP counter: one credit per rostered player per
+        completed NHL game. This is the service-time half of waiver
+        exemption (age is the other half) -- previously a frozen dice
+        roll, now a number that actually moves with the season."""
+        for _t in (home_team, away_team):
+            try:
+                for _p in list(getattr(_t, "roster", None) or []):
+                    try:
+                        _p.nhl_games_played = int(
+                            getattr(_p, "nhl_games_played", 0) or 0) + 1
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
     def _simulate_games_batch(self, games):
         """Simulate multiple games efficiently using LIGHTWEIGHT batch processing"""
         # Ultra-fast simulation for non-user games
@@ -10196,7 +10301,14 @@ class HockeyManagerGUI(tk.Tk):
 
                 batch_results.append((game_date, home_team, away_team, winner,
                                       loser, scores, went_to_ot, full_sim))
-                
+
+                # Career service time: every rostered player on both clubs
+                # banks one NHL game (waiver-exemption input).
+                try:
+                    self._credit_nhl_games_played(home_team, away_team)
+                except Exception:
+                    pass
+
                 # Update standings immediately (no batch delay)
                 self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot)
 
@@ -11028,7 +11140,13 @@ class HockeyManagerGUI(tk.Tk):
         print(f"Simulation complete! {winner.team_name} {scores[0]} - {loser.team_name} {scores[1]}")
         print(f"Total events generated: {len(sim_engine.event_log)}")
         print(f"Notable events: {len(notable_events)}")
-        
+
+        # Career service time (waiver-exemption input).
+        try:
+            self._credit_nhl_games_played(home_team, away_team)
+        except Exception:
+            pass
+
         # Prepare data for the game viewer
         game_data = {
             'event_log': sim_engine.event_log,
@@ -11186,6 +11304,12 @@ class HockeyManagerGUI(tk.Tk):
 
         events = getattr(sim, 'game_log', []) or []
         notable_events = list(getattr(sim, 'notable_events', []) or [])
+
+        # Career service time (waiver-exemption input).
+        try:
+            self._credit_nhl_games_played(home_team, away_team)
+        except Exception:
+            pass
 
         # GameSim notable events lack period info; derive OT/shootout from the
         # played PBP stream so standings award the OTL point correctly.
@@ -11944,18 +12068,38 @@ class HockeyManagerGUI(tk.Tk):
                 base *= random.uniform(0.94, 1.06)
                 scored.append((base, p))
             scored.sort(key=lambda s: s[0], reverse=True)
-            selected = scored[0][1]
+            # Real NHL rule (mirrors DraftView.execute_pick): a club that
+            # held a prospect's rights and lost them unsigned may not
+            # re-select him in the immediate re-entry draft. Walk down the
+            # board past banned prospects.
+            selected = None
+            _team_name = getattr(team, 'team_name', '')
+            for _base, _p in scored:
+                try:
+                    _banned_from = str(
+                        getattr(_p, 'draft_reentry_from', '') or '')
+                except Exception:
+                    _banned_from = ''
+                if _banned_from and _banned_from == _team_name:
+                    continue
+                selected = _p
+                break
+            if selected is None:
+                continue
             try:
                 team.add_player(selected, "prospects")
             except Exception:
                 continue
-            # Draft rights: mirror the draft board (DraftView.execute_pick)
-            # so the headless path feeds the rights lifecycle too --
-            # the rollover backstop only covers contract-less prospects,
-            # and real draftees carry a default Contract.
+            # Draft rights: stamp at pick time (CHL 4yr/3yr, NCAA+Europe
+            # 4yr -- new CBA), same as the interactive path. The re-entry
+            # ban is spent once he's selected by anyone.
             try:
-                league.stamp_draft_rights(
-                    selected, getattr(team, 'team_name', ''), draft_year)
+                league.stamp_draft_rights(selected, _team_name,
+                                          int(draft_year))
+            except Exception:
+                pass
+            try:
+                selected.draft_reentry_from = ""
             except Exception:
                 pass
             try:
@@ -14268,6 +14412,57 @@ class HockeyManagerGUI(tk.Tk):
         return None
         
     def send_to_ahl(self, player):
+        # Real NHL: demoting a veteran isn't a quiet roster move -- it's
+        # waivers, and an NMC blocks it without the player's consent. The
+        # waiver wire is not optional (MP already enforces this; SP now
+        # matches so both paths share one rulebook).
+        import trade_engine as _te
+        try:
+            _kind, _detail = _te.clause_of(player) or (None, "")
+        except Exception:
+            _kind, _detail = None, ""
+        if _kind == "NMC":
+            _ask = messagebox.askyesno(
+                "No-movement clause",
+                f"{player.full_name} has a {_detail}.\n\n"
+                "He must approve the demotion. Ask him?")
+            if not _ask:
+                return
+            _lg = getattr(getattr(self, 'game_manager', None),
+                          'league', None) or getattr(self, 'league', None)
+            _ok, _why = _te.will_waive_ntc(
+                player, self.user_team, None, _lg, context="waivers")
+            if not _ok:
+                messagebox.showwarning(
+                    "Demotion refused",
+                    f"{_why}\n\nHe's staying on the roster.")
+                return
+        # Waiver eligibility: non-exempt players (25+ or 160+ NHL games)
+        # must clear the wire -- no quiet burial of veterans.
+        _games = getattr(player, 'nhl_games_played', 0) or 0
+        _age = getattr(player, 'age', 0) or 0
+        if _age >= 25 or _games >= 160:
+            player.on_waivers = True
+            player.waiver_days = 2
+            try:
+                if player not in self.waiver_list:
+                    self.waiver_list.append(player)
+            except Exception:
+                pass
+            try:
+                self.add_news(f"{player.full_name} placed on waivers by "
+                              f"{self.user_team.team_name}.")
+            except Exception:
+                pass
+            messagebox.showinfo(
+                "Placed on Waivers",
+                f"{player.full_name} isn't waiver-exempt -- he can't be "
+                f"quietly sent down. He's on the wire for 2 days and other "
+                f"clubs may claim him. His cap hit is temporarily shed "
+                f"until waivers clear.")
+            self.update_all_views()
+            return
+        # Exempt: quiet demotion, as before.
         self.user_team.roster.remove(player)
         self.user_team.ahl_roster.append(player)
         # Audition over -- the next call-up starts a fresh one.
@@ -14298,36 +14493,68 @@ class HockeyManagerGUI(tk.Tk):
         self.show_screen('contract_negotiation', title,
                          ContractNegotiationView, player, is_extension)
 
-    def handle_contract_offer(self, person, extension=False, notify="popup"):
-        # NHL contract rules (cap-relative: uses the live league cap):
-        # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style
-        # inbox message; counter-offers become interactive), "quiet" (no
-        # notification -- bulk callers send one digest themselves).
-        min_salary = 750_000
+    def _validate_contract_terms(self, person, salary, years, extension=False,
+                                   team=None):
+        """Shared signing gates for every contract path (offer window,
+        inbox counter-accept, MP). Returns (ok, error_message).
+
+        One rulebook: new-CBA league-minimum salary (season-aware:
+        $850k in 2026-27 rising to $1M by 2029-30), 20%-of-live-cap
+        maximum, 7/6-year max term (new CBA: 7 to re-sign, 6 externally),
+        live-cap budget check on CENTRAL cap accounting (not the stale
+        Team.payroll / $92M PLAYER_BUDGET constant, which blocked legal
+        spending up to the real cap), and the draft-eligibility lock.
+        Existing contracts are grandfathered -- the minimum and term
+        limits gate NEW deals only.
+        """
+        try:
+            from salary_cap_system import league_minimum_salary as _min_fn
+            _sy = getattr(getattr(self, 'league', None), 'season_year', None)
+            min_salary = _min_fn(_sy)
+        except Exception:
+            min_salary = 775_000
         _cap_sys = getattr(getattr(self, 'league', None),
                            'salary_cap_system', None)
         _live_cap = _cap_sys.current_cap if _cap_sys else SALARY_CAP
         max_salary = int(0.20 * _live_cap)
-        max_years = 8 if extension else 7
+        try:
+            from salary_cap_system import max_contract_term as _mct
+            max_years = _mct(extension)
+        except Exception:
+            max_years = 7 if extension else 6
+        _team = team if team is not None else getattr(self, "user_team", None)
 
-        # Defensive: ensure salary and contract_years attributes exist
-        salary = getattr(person, "salary", getattr(person.contract, "salary", min_salary))
-        years = getattr(person, "contract_years", getattr(person.contract, "years_remaining", 1))
-        person.salary = salary
-        person.contract_years = years
+        try:
+            salary = int(salary)
+        except Exception:
+            return False, "Invalid salary."
+        try:
+            years = int(years)
+        except Exception:
+            return False, "Invalid term."
 
         if salary < min_salary:
-            messagebox.showerror("Error", f"Minimum salary is ${min_salary:,}.")
-            return False
+            return False, f"Minimum salary is ${min_salary:,}."
         if salary > max_salary:
-            messagebox.showerror("Error", f"Maximum salary is ${max_salary:,}.")
-            return False
-        if years > max_years:
-            messagebox.showerror("Error", f"Maximum contract length is {max_years} years.")
-            return False
-        if self.user_team.payroll + salary > PLAYER_BUDGET:
-            messagebox.showerror("Error", "This contract would exceed the player budget.")
-            return False
+            return False, f"Maximum salary is ${max_salary:,}."
+        if years < 1 or years > max_years:
+            return False, f"Maximum contract length is {max_years} years."
+
+        # Budget check on the central cap charge (waiver shed, retention,
+        # burial, dead cap all accounted). Extensions replace the player's
+        # existing hit rather than stacking on top of it.
+        try:
+            from salary_cap_system import total_cap_charge as _tcc
+            _charge = int(_tcc(_team)) if _team is not None else 0
+            if extension:
+                _cur = getattr(getattr(person, "contract", None),
+                               "salary", 0) or 0
+                _charge -= int(_cur)
+            if _charge + salary > _live_cap:
+                return False, ("This contract would put the club over "
+                               f"the ${_live_cap:,} salary cap.")
+        except Exception:
+            pass
 
         # Draft lock: a draft-eligible player can't be signed as a free
         # agent -- that would sidestep the draft. Extensions (already under
@@ -14336,15 +14563,35 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 from draft_generator import player_locked_by_draft as _locked
                 if _locked(person):
-                    messagebox.showerror(
-                        "Draft-Eligible Player",
+                    return False, (
                         f"{getattr(person, 'full_name', 'This player')} is "
                         f"eligible for the upcoming NHL Entry Draft and "
                         f"can't be signed as a free agent. Draft him -- "
                         f"don't sidestep the rules.")
-                    return False
             except Exception:
                 pass
+        return True, ""
+
+    def handle_contract_offer(self, person, extension=False, notify="popup"):
+        # NHL contract rules (cap-relative: uses the live league cap):
+        # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style
+        # inbox message; counter-offers become interactive), "quiet" (no
+        # notification -- bulk callers send one digest themselves).
+        # Defensive: ensure salary and contract_years attributes exist
+        salary = getattr(person, "salary",
+                         getattr(getattr(person, "contract", None),
+                                 "salary", 750_000))
+        years = getattr(person, "contract_years",
+                        getattr(getattr(person, "contract", None),
+                                "years_remaining", 1))
+        person.salary = salary
+        person.contract_years = years
+
+        ok, err = self._validate_contract_terms(
+            person, salary, years, extension=extension)
+        if not ok:
+            messagebox.showerror("Error", err)
+            return False
 
         # Trade protection on the table: a clause the player wants is worth
         # money to him, so the *effective* offer is salary + clause value.
@@ -14370,9 +14617,9 @@ class HockeyManagerGUI(tk.Tk):
                     max_salary = value * 1.2
                     return min_salary <= salary <= max_salary and years >= 1
                 person.negotiate_contract = negotiate_contract
-            accepted = person.negotiate_contract(_effective_salary, 2)
+            accepted = person.negotiate_contract(_effective_salary, years)
             if accepted:
-                person.contract_years = 2
+                person.contract_years = years
                 person.salary = salary
                 # A new SPC starts with no retained salary: the old deal's
                 # discount and two-club history die with it (the retaining
@@ -14383,17 +14630,20 @@ class HockeyManagerGUI(tk.Tk):
                     pass
                 if hasattr(person, "contract"):
                     person.contract.salary = salary
-                    person.contract.years_remaining = 2
+                    person.contract.years_remaining = years
                     te.apply_clause_to_contract(person.contract, _clause_kind,
                                                 _clause_size, player=person)
             self._notify_contract_result("accepted" if accepted else "rejected",
-                                         person, salary, 2, salary, extension,
+                                         person, salary, years, salary, extension,
                                          notify)
             self._clear_offered_clause(person)
             return accepted
 
         # Cap-relative asking price: base demand as % of cap, scaled by
         # the live cap and any market-setter premium (the McDavid effect).
+        _cap_sys = getattr(getattr(self, 'league', None),
+                           'salary_cap_system', None)
+        _live_cap = self.get_live_cap()
         _ovr = person.overall_rating()
         try:
             from game_classes import to_100_scale
@@ -14576,12 +14826,13 @@ class HockeyManagerGUI(tk.Tk):
 
     def _inbox_contract_result(self, kind, person, name, salary, years,
                                asking_price, extension, clause_kind="none",
-                               clause_list_size=10):
+                               clause_list_size=10, reject_note=None):
         """FM24/EHM-style: contract news lands in the inbox. Counter-offers
         arrive as interactive messages (accept / new offer / walk away).
 
         clause_kind/size travel with a counter so the trade protection the
-        user offered is still on the table when the inbox accept lands."""
+        user offered is still on the table when the inbox accept lands.
+        reject_note overrides the rejected text (e.g. league-office veto)."""
         from game_classes import EmailMessage
         import trade_engine as _te3
         pid = getattr(person, "id", None)
@@ -14602,13 +14853,15 @@ class HockeyManagerGUI(tk.Tk):
                          f"with the league office."),
                 **base)
         elif kind == "rejected":
+            _rej_text = (reject_note or
+                         (f"{name} has rejected your offer of "
+                          f"${salary:,} per year outright and is not "
+                          f"countering at this time.\n\n"
+                          f"His camp feels the number needs to be "
+                          f"significantly higher before talks resume."))
             msg = EmailMessage(
                 subject=f"Talks break down: {name}",
-                content=(f"{name} has rejected your offer of "
-                         f"${salary:,} per year outright and is not "
-                         f"countering at this time.\n\n"
-                         f"His camp feels the number needs to be "
-                         f"significantly higher before talks resume."),
+                content=_rej_text,
                 **base)
         else:  # counter -- interactive
             _still = (f" Your {_clause_txt} offer is still on the table."
@@ -14664,6 +14917,24 @@ class HockeyManagerGUI(tk.Tk):
         asking = data.get("asking_price", 0)
         years = data.get("years", 1)
         extension = data.get("is_extension", False)
+        # The counter travels through the same gates as a fresh offer:
+        # an agent can't smuggle in a sub-minimum, over-max, over-term,
+        # over-cap, or draft-sidestepping deal via the inbox.
+        ok, err = self._validate_contract_terms(person, asking, years,
+                                                extension=bool(extension))
+        if not ok:
+            self._inbox_contract_result(
+                "rejected", person,
+                getattr(person, "full_name", "The player"),
+                asking, years, asking, extension,
+                clause_kind="none", clause_list_size=10,
+                reject_note=(
+                    f"The league office rejected {getattr(person, 'full_name', 'the player')}'s "
+                    f"counter-offer of ${int(asking):,} x {int(years)} year(s): {err}\n\n"
+                    f"Illegal terms can't be filed -- his camp will need to come back "
+                    f"with a compliant number."))
+            message.action_done = True
+            return False
         # The clause the user offered travels with the counter: re-stage it
         # so the signed deal carries the protection, then clear (single-use).
         person.offered_clause_kind = data.get("clause_kind", "none") or "none"
