@@ -10,7 +10,7 @@ verifies:
   6. Click journey: card click -> ticker updates + popup card opens.
   7. Resize to 1920: debounced refit grows the scale, still no overflow.
 
-Screenshots -> ~/workspace/ahl_shots/bracket_fit_*.png (repo QA: qa_bracket_fit.py)
+Screenshots -> ~/workspace/ahl_shots/bracket_fit_*.png
 """
 import os
 import sys
@@ -154,6 +154,23 @@ check("bracket bbox fits canvas width (no h-scroll)",
 # --- 3: all 15 series cards drawn ---
 nwins = sum(1 for it in canvas.find_all() if canvas.type(it) == "window")
 check("15 series cards on canvas", nwins == 15, str(nwins))
+
+# --- 3b: no dead space: cards hug their two rows ---
+_sc = view._bracket_scale()
+_row_h = max(26, int(40 * _sc))
+_tight, _worst = True, 0
+for _it in canvas.find_all():
+    if canvas.type(_it) == "window":
+        try:
+            _w = canvas.nametowidget(canvas.itemcget(_it, "window"))
+            _rh = int(_w.winfo_reqheight())
+        except Exception:
+            continue
+        _worst = max(_worst, _rh)
+        if _rh > 2 * _row_h + 30:
+            _tight = False
+check("cards hug content (no dead space)", _tight,
+      f"worst_h={_worst} budget={2 * _row_h + 30}")
 
 # --- 4: winner contrast on light accents ---
 check("BOS gold accent -> black winner text",

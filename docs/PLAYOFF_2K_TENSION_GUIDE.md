@@ -161,6 +161,13 @@ render in gold *unless* the club's accent is equally light (BOS/PIT gold,
 LA silver), where contrast(gold, accent) < 2.0 falls back to the accent's
 designed on-color (black on gold). Fixes gold-on-gold unreadable winners.
 
+**Tight cards** (2026-09-28): card frames now get an explicit height of
+`2 * row_h + 18` — exactly two team rows plus padding, no dead space below
+the second team. (Root cause of the old slack: `pack_propagate(False)` with
+no height froze the frame at CTk's 200px default.) The tree compresses
+vertically and everything fits the screen at once. QA asserts every embedded
+card's requested height stays within budget.
+
 ## 6. Popup card background fix (2026-09-28)
 
 `InGamePopup.__new__` created its tk.Frame with no `bg`, so it took the

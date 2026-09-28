@@ -1519,14 +1519,19 @@ class PlayoffView(ctk.CTkFrame):
         except Exception:
             pass
 
+        # Tight card: exactly two rows + padding, no dead space below.
+        row_h = max(26, int(40 * scale))
+        card_h = 2 * row_h + 18  # top pad 6 + mid pad 6 + bottom pad 6
         try:
             card = ctk.CTkFrame(self.canvas, width=width or self.BRACKET_CARD_W,
+                                height=card_h,
                                 corner_radius=8,
                                 border_width=2 if decided else 1,
                                 border_color=gold if decided else "#2A3A52",
                                 fg_color="#0E1930")
         except Exception:
-            card = ctk.CTkFrame(self.canvas, width=width or self.BRACKET_CARD_W)
+            card = ctk.CTkFrame(self.canvas, width=width or self.BRACKET_CARD_W,
+                                height=card_h)
         try:
             card.pack_propagate(False)
         except Exception:
@@ -1543,7 +1548,6 @@ class PlayoffView(ctk.CTkFrame):
                 except Exception:
                     pass
             row_bg = hover if is_loser else accent
-            row_h = max(26, int(40 * scale))
             try:
                 row = ctk.CTkFrame(card, fg_color=row_bg, corner_radius=6,
                                    height=row_h)
