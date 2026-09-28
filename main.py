@@ -12623,6 +12623,31 @@ class HockeyManagerGUI(tk.Tk):
                     f"champions win with it{_lorebit}.")
         except Exception:
             pass
+        # Buyout window (June 15-30, real NHL timing): AI GMs clear dead
+        # weight; the user's candidates arrive as an interactive inbox
+        # message (same pattern as RFA qualifying). The stamped date moves
+        # INTO the window -- previously the July-1 jump skipped June 15-30
+        # entirely, so the transaction_windows gate meant nobody (user or
+        # AI) could ever execute a buyout. Runs before the draft (June
+        # 23-25), matching the real calendar order.
+        try:
+            self.current_date = date(self.league.season_year + 1, 6, 15)
+        except Exception:
+            pass
+        try:
+            import buyout_window as _bw
+            _bw_summary = _bw.process_buyout_window(
+                self.league, app=self, rng=getattr(self, "_rng", None)) or {}
+            _n_bought = len(_bw_summary.get("ai_buyouts") or [])
+            if _n_bought:
+                self.add_news(
+                    f"Buyout window (June 15-30): {_n_bought} player"
+                    f"{'s' if _n_bought != 1 else ''} bought out "
+                    f"league-wide.")
+        except Exception:
+            debug_print("Buyout window failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
         # Tentpole guarantee: the draft lottery (May 8) and entry draft
         # (June 23-25) are date-triggered, but the July-1 jump below would
         # otherwise skip them every season. Run them now when missed; the
@@ -12841,6 +12866,16 @@ class HockeyManagerGUI(tk.Tk):
                           f"(confidence {board.confidence}/100).")
         except Exception:
             pass
+        # The season-review card: big moments, standouts/tough-go, story of
+        # the year, prospect pipeline report, four-corner season score --
+        # delivered to the inbox. Must run before league.end_of_season()
+        # wipes the per-season stats it reads. Guarded: a card bug must
+        # never break the season rollover.
+        try:
+            from season_review import deliver_season_review
+            deliver_season_review(self)
+        except Exception:
+            pass
 
     def _record_season_to_history(self):
         """Record the completed season to League Memory.
@@ -12936,9 +12971,12 @@ class HockeyManagerGUI(tk.Tk):
                     "team": team.team_name,
                     "w": w, "l": l, "otl": otl, "pts": pts,
                 })
-            # Sort by points, keep top 16 (playoff teams)
+            # Sort by points and keep ALL 32 clubs with their final rank --
+            # history should remember a 29th-place finish, not just the
+            # playoff field.
             standings_snapshot.sort(key=lambda x: x["pts"], reverse=True)
-            standings_snapshot = standings_snapshot[:16]
+            for _rank, _row in enumerate(standings_snapshot, 1):
+                _row["rank"] = _rank
         except Exception:
             pass
 
@@ -12962,6 +13000,13 @@ class HockeyManagerGUI(tk.Tk):
             season_label = f"{year}-{str(year + 1)[-2:]}"
             for team in self.league.teams:
                 hist.franchise_records.update_from_season(team, season_label)
+                try:
+                    _streak = int(getattr(team, "longest_win_streak", 0) or 0)
+                    if _streak >= 3:
+                        hist.franchise_records.record_streak(
+                            team.team_name, "win", _streak, season_label)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -15725,6 +15770,56 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         return bool(res.get("ok"))
+
+    # ----- Buyout window inbox actions (buyout_window) -----
+    def apply_buyout_decision(self, message, player_id, buyout):
+        """Inbox action: buy out (or keep) one flagged contract.
+
+        The message itself is the June 15-30 window authorization, so --
+        like the RFA actions -- this does NOT re-check the calendar gate
+        in transaction_windows (the user may resolve it after July 1).
+        """
+        import buyout_window as _bw
+        data = message.action_data or {}
+        ok = False
+        if buyout:
+            person = self._find_inbox_player({"player_id": player_id})
+            team = getattr(self, "user_team", None)
+            if person is not None and team is not None \
+                    and person in (getattr(team, "roster", None) or []):
+                try:
+                    season_year = int(data.get("season_year") or
+                                     getattr(self.league, "season_year", 2026)
+                                     or 2026)
+                    total, annual, byears, _rows = _bw.execute_buyout(
+                        self.league, team, person,
+                        season_year=season_year)
+                    ok = True
+                    try:
+                        self.add_news(
+                            f"✂️ You bought out "
+                            f"{getattr(person, 'full_name', 'a player')} "
+                            f"(${int(total):,} over {int(byears)} years).")
+                    except Exception:
+                        pass
+                except Exception:
+                    ok = False
+            else:
+                ok = False
+        else:
+            ok = True  # "Keep" is always a valid decision
+        decided = data.get("decided", {}) or {}
+        decided[str(player_id)] = bool(buyout)
+        data["decided"] = decided
+        message.action_data = data
+        cards = data.get("cards", []) or []
+        if len(decided) >= len(cards):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return ok
 
     def apply_offer_sheet_match_decision(self, message, match):
         """Inbox action: match an offer sheet or take the pick compensation."""

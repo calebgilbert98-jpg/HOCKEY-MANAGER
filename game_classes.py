@@ -6100,6 +6100,18 @@ class League:
         except Exception:
             pass
 
+        # Preseason media poll: snapshot every club's predicted finish from
+        # opening-night roster strength. The season-review card grades each
+        # team against this (the "vs media expectations" axis). Rosters are
+        # final here -- draft and rights rollover are done above. Guarded so
+        # it can never break the rollover; seasons that predate this snapshot
+        # simply grade against the board mandate instead.
+        try:
+            from season_review import snapshot_preseason_predictions
+            snapshot_preseason_predictions(self)
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Part 5: unsigned drafted-prospect rights lifecycle
     #
