@@ -361,7 +361,10 @@ def contract_appeal(player, team, aav: int, years: int, *,
 
     # --- money + term security -------------------------------------------
     ratio = (aav / max(1, market))
-    money_score = max(0.0, min(1.0, (ratio - 0.65) / 0.65))
+    # BUG-021: the old curve ((ratio-0.65)/0.65) left money_score at 0.54 for
+    # a full-market offer and let 50%-of-market offers ride on the other
+    # parts -- UFAs signed at half price ~1 in 3. Full market now scores 1.0.
+    money_score = max(0.0, min(1.2, (ratio - 0.55) / 0.45))
     ideal = 7 if age <= 26 else 5 if age <= 30 else 3
     term_score = max(0.0, 1.0 - abs(years - ideal) / 6.0)
     if years >= 4 and age <= 30:
@@ -426,6 +429,14 @@ def contract_appeal(player, team, aav: int, years: int, *,
     if blood_reason:
         reasons.append(blood_reason)
     appeal -= blood_cost
+
+    # Insult-offer guard (BUG-021): below ~2/3 of market, no room, role, or
+    # hometown makes up the gap -- real players hang up. The veteran
+    # cup-chase discount above is the one exemption (classic real case).
+    _cup_discount = (ambition == AMBITION_CUP and age >= 32 and ratio < 1.0)
+    if ratio < 0.65 and not _cup_discount:
+        appeal *= 0.35
+        reasons.append(f"an insult offer ({ratio:.0%} of market)")
 
     # situation sanity: a cup-chaser won't sign with a rebuilder at any price
     # short of a ransom; a mercenary always has a price.
