@@ -50,7 +50,7 @@ class InboxWindow(InGamePopup):
         self.parent = parent
         self.title("Inbox")
         self.configure(fg_color=BG)
-        self.geometry("1050x720")
+        self.geometry("1050x800")
         self.minsize(900, 600)
 
         # Initialize inbox reference
@@ -139,10 +139,11 @@ class InboxWindow(InGamePopup):
         content_frame = ctk.CTkFrame(main_container, fg_color="transparent")
         content_frame.pack(fill='both', expand=True, pady=(12, 0))
         content_frame.grid_columnconfigure(0, weight=1)
-        # uniform group: the cavity is split strictly 2:3 by weight, so the
-        # message list (with its tall treeview) can't starve the preview.
-        content_frame.grid_rowconfigure(0, weight=2, uniform="inbox_rows")
-        content_frame.grid_rowconfigure(1, weight=3, uniform="inbox_rows")
+        # uniform group: the cavity is split strictly 1:2 by weight -- the
+        # open email is the biggest part of the window, EHM-style, while the
+        # message list (with its tall treeview) scrolls in its strip.
+        content_frame.grid_rowconfigure(0, weight=1, uniform="inbox_rows")
+        content_frame.grid_rowconfigure(1, weight=2, uniform="inbox_rows")
 
         list_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
                                   corner_radius=12)
@@ -215,7 +216,7 @@ class InboxWindow(InGamePopup):
         table_frame.pack(fill='both', expand=True, padx=8, pady=(0, 8))
 
         self.email_tree = ttk.Treeview(table_frame, columns=list(columns.keys()),
-                                       show='headings', height=20,
+                                       show='headings', height=8,
                                        style='Inbox.Treeview')
 
         for col, (text, width) in columns.items():
