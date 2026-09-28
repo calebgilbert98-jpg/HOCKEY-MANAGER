@@ -254,12 +254,14 @@ check("minimum 2028 = 950k", scs.league_minimum_salary(2028) == 950_000)
 check("minimum 2029 = 1M", scs.league_minimum_salary(2029) == 1_000_000)
 check("minimum 2025 = 775k (old CBA)", scs.league_minimum_salary(2025) == 775_000)
 check("minimum holds at 1M past CBA", scs.league_minimum_salary(2032) == 1_000_000)
-check("ELC 3yr max total base = 3.225M",
-      scs.elc_max_total(3) == 3_225_000)
-check("ELC 3yr max flat salary (AAV) = 1.075M",
-      scs.elc_max_salary(3) == 1_075_000)
-check("ELC 2yr max flat salary (AAV) = 1.05M",
-      scs.elc_max_salary(2) == 1_050_000)
+check("ELC 3yr max total base = 3.075M (flat 1.025M x 3)",
+      scs.elc_max_total(3) == 3_075_000)
+check("ELC 3yr max flat salary (AAV) = 1.025M",
+      scs.elc_max_salary(3) == 1_025_000)
+check("ELC 2yr max flat salary (AAV) = 1.025M",
+      scs.elc_max_salary(2) == 1_025_000)
+check("ELC max is League-Year based: 2027-28 = 1.075M",
+      scs.elc_max_annual_comp(2027) == 1_075_000)
 check("max term re-sign = 7", scs.max_contract_term(True) == 7)
 check("max term external = 6", scs.max_contract_term(False) == 6)
 check("burial 2026 = 2M (1.15M + min)",
@@ -272,12 +274,15 @@ def mkunsigned(age, junior_league, draft_round=2):
     p = g.Player(first_name="Test", last_name="Unsigned", age=age,
                  primary_position=PlayerPosition.CENTER)
     p.contract = None
+    # Coherent birth_date: the CBA 9.2 Sept-15 signing age is read from
+    # birth_date, so it must agree with the stated age.
+    p.birth_date = f"{2026 - age}-06-15"
     p.junior_league = junior_league
     p.draft_round = draft_round
     return p
 _pe = mkunsigned(18, "OHL"); _pe.drafted_year = 2026
 _sal, _yrs, _tw, _ahl = _PG().determine_contract_info(_pe, "NHL_ROOKIE")
-check("ELC salary within 850k-1.075M band", 850_000 <= _sal <= 1_075_000)
+check("ELC salary within 850k-1.025M band", 850_000 <= _sal <= 1_025_000)
 check("ELC term 3 years at 18", _yrs == 3)
 check("ELC minors pay capped at 87.5k", _ahl <= 87_500)
 _pe22 = mkunsigned(22, "OHL"); _pe22.drafted_year = 2026

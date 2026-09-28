@@ -48,10 +48,11 @@ AGE_DISTRIBUTIONS = {
 # cap percentage now: 15% of the $104M cap is $15.6M, so the superstar
 # gate runs $14M-$19M with record deals pushing past it.
 # NOTE: ENTRY_LEVEL is overridden dynamically inside determine_contract_info
-# (new-CBA floor = signing-season league minimum, ceiling = draft-class ELC
-# max, term 3/2 by signing age). The static row below is a legacy fallback.
+# (new-CBA floor = signing-season league minimum, ceiling = the 9.3(a) max
+# annual compensation for the signing season, term 3/2/1 by signing age).
+# The static row below is a legacy fallback.
 CONTRACT_VALUES = {
-    "ENTRY_LEVEL": {"min": 775000, "max": 975000, "years": [3]},
+    "ENTRY_LEVEL": {"min": 850000, "max": 1025000, "years": [3]},
     "BRIDGE": {"min": 1200000, "max": 5000000, "years": [2, 3]},
     "STANDARD": {"min": 1000000, "max": 6500000, "years": [3, 4, 5, 6]},
     "PREMIUM": {"min": 9000000, "max": 13500000, "years": [5, 6, 7, 8]},
@@ -288,7 +289,16 @@ class PlayerGenerator:
         # the league), 90+ a first-line star (the Draisaitl/Matthews/
         # MacKinnon/Eichel tier). Kids sign entry-level deals regardless
         # of rating -- a 21-year-old stud is still on his ELC in real life.
-        if age <= 22:
+        # The gate is the real 3/2/1 signing-age table (CBA 9.1(b)):
+        # 24-and-under first-SPC signers are Group 1; 25+ is not
+        # ELC-eligible at all (the new CBA removed the old European
+        # 25-27 exception).
+        try:
+            from salary_cap_system import elc_years_for_age as _elc_yrs
+            _entry_years = _elc_yrs(age)
+        except Exception:
+            _entry_years = 3 if age <= 21 else (2 if age <= 23 else 0)
+        if _entry_years > 0:
             contract_type = "ENTRY_LEVEL"
         elif overall >= 95:
             contract_type = "SUPERSTAR"
@@ -308,17 +318,15 @@ class PlayerGenerator:
         if contract_type == "ENTRY_LEVEL":
             # New CBA (2026): the ELC band is dynamic. The floor is the
             # signing-season league minimum ($850k in 2026-27, rising to
-            # $1M by 2029-30). The ceiling is the max flat-salary
-            # equivalent (AAV) for the deal length: $1.075M for a 3-year
-            # ELC ($3.225M total base), $1.05M for a 2-year ELC -- the new
-            # CBA defines the max per contract year (1.025/1.075/1.125).
-            # Term follows the real signing-age table: 3 years at 18-21,
-            # 2 years at 22-23 (the only ages that reach this gate are
-            # <= 22).
+            # $1M by 2029-30). The ceiling is the 9.3(a) max annual
+            # compensation for the signing season (league minimum +
+            # $175k: $1.025M in 2026-27). Term follows the real
+            # signing-age table: 3 years at 18-21, 2 at 22-23, 1 at 24
+            # (only ages that reach this gate are <= 24).
             try:
                 from salary_cap_system import league_minimum_salary as _lms
                 from salary_cap_system import elc_max_salary as _elcmax
-                _elc_years = [3 if age <= 21 else 2]
+                _elc_years = [max(1, int(_entry_years))]
                 _elc_floor = int(_lms())
                 _elc_ceil = int(_elcmax(_elc_years[0]))
                 contract_info = {
@@ -385,8 +393,13 @@ class PlayerGenerator:
                 except Exception:
                     final_salary = 775000
             elif contract_type == "ENTRY_LEVEL":
-                # New CBA: ELC two-way minors pay caps at $87,500.
-                ahl_salary = min(ahl_salary, 87500)
+                # New CBA: ELC two-way minors pay caps at the 9.4 limit
+                # for the prospect's draft year ($87.5k for 2026/27).
+                try:
+                    from salary_cap_system import elc_minor_salary_max as _emx
+                    ahl_salary = min(ahl_salary, _emx())
+                except Exception:
+                    ahl_salary = min(ahl_salary, 87500)
 
         return final_salary, contract_length, two_way, ahl_salary
     

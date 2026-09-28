@@ -1379,6 +1379,22 @@ class RosterView(ctk.CTkFrame):
                         and (getattr(player, "rights_team", "") or "")
                         == getattr(getattr(self.app, "user_team", None),
                                     "team_name", ""))
+                    # ELC eligibility: 25+ is outside the Entry Level
+                    # System (CBA 9.1(b); new CBA, no European exception).
+                    if _elc_elig:
+                        try:
+                            from draft_generator import age_on_sept15 as _s15m
+                            import salary_cap_system as _scs_m
+                            _sy_m = getattr(getattr(self.app, "league", None),
+                                            "season_year", None)
+                            _s15v = _s15m(getattr(player, "birth_date", ""),
+                                          _sy_m)
+                            _elc_age_m = (_s15v if _s15v is not None
+                                          else getattr(player, "age", 20))
+                            if _scs_m.elc_years_for_age(_elc_age_m) <= 0:
+                                _elc_elig = False
+                        except Exception:
+                            pass
                 except Exception:
                     _elc_elig = False
                 if _elc_elig:
@@ -1643,6 +1659,29 @@ class RosterView(ctk.CTkFrame):
             # the ELC explicitly ("Offer ELC" on the prospects menu).
             # Promotion just routes into contract talks.
             if getattr(player, "contract", None) is None:
+                # ELC eligibility backstop: 25+ prospects sit outside the
+                # Entry Level System (CBA 9.1(b); new CBA) -- the ELC
+                # dialog can't serve them. (Nearly unreachable: rights
+                # expire long before 25.)
+                _elc_ok = True
+                try:
+                    from draft_generator import age_on_sept15 as _s15p
+                    import salary_cap_system as _scs_p
+                    _sy_p = getattr(getattr(self.app, "league", None),
+                                    "season_year", None)
+                    _s15v_p = _s15p(getattr(player, "birth_date", ""), _sy_p)
+                    _elc_age_p = (_s15v_p if _s15v_p is not None
+                                  else getattr(player, "age", 20))
+                    if _scs_p.elc_years_for_age(_elc_age_p) <= 0:
+                        _elc_ok = False
+                except Exception:
+                    pass
+                if not _elc_ok:
+                    messagebox.showwarning(
+                        "Outside the Entry Level System",
+                        f"{player.full_name} is past ELC age and can't "
+                        f"sign an entry-level contract.")
+                    return
                 # Backstop: prospects who predate rights stamping
                 # get stamped on the fly so the ELC gate has
                 # something to consume.
@@ -9473,9 +9512,21 @@ class ContractNegotiationView(ctk.CTkFrame):
         if self.is_elc:
             try:
                 import salary_cap_system as _scs_b
+                try:
+                    from draft_generator import age_on_sept15 as _s15_b
+                except Exception:
+                    _s15_b = None
                 _sy = getattr(getattr(app, "league", None), "season_year", None)
+                _elc_age_b = getattr(p, "age", 20)
+                if _s15_b is not None:
+                    try:
+                        _s15v = _s15_b(getattr(p, "birth_date", ""), _sy)
+                        if _s15v is not None:
+                            _elc_age_b = _s15v
+                    except Exception:
+                        pass
                 self._elc_floor, self._elc_ceil, self._elc_years = \
-                    _scs_b.elc_band(getattr(p, "age", 20), _sy)
+                    _scs_b.elc_band(_elc_age_b, _sy)
             except Exception:
                 pass
 
@@ -9508,6 +9559,15 @@ class ContractNegotiationView(ctk.CTkFrame):
                           font=(app.FONT_FAMILY, 11)).pack(anchor="w")
             except Exception:
                 pass
+        if self.is_elc and int(getattr(self, "_elc_years", 0) or 0) <= 0:
+            # 25+ prospects sit outside the Entry Level System -- the
+            # dialog can't produce a legal offer (handle_elc_offer will
+            # refuse on submit; the menu gates normally prevent this).
+            ttk.Label(header,
+                      text="Not ELC-eligible: 25+ is outside the Entry "
+                           "Level System (CBA 9.1(b)).",
+                      style="Secondary.TLabel",
+                      font=(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
 
         # Two columns in a scrollable area (fits full-screen and popup wrapper)
         scroll = ctk.CTkScrollableFrame(self, fg_color=self.app.BG_COLOR)

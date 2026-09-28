@@ -27,6 +27,9 @@ def prospect(seed=1, age=19, overall_pick=0, draft_round=0, selfishness=50):
     random.seed(seed)
     p = Player("Kirby", "Dachau", age, PlayerPosition.CENTER)
     p.contract = None
+    # Coherent birth_date: the CBA 9.2 Sept-15 age must match the stated
+    # age (June birthday -> Sept-15 age == age exactly).
+    p.birth_date = f"{2026 - age}-06-15"
     p.overall_pick = overall_pick
     p.draft_round = draft_round
     p.selfishness = selfishness
@@ -44,13 +47,16 @@ def league_with(team_name="Test Team"):
     return lg, t
 
 
-# 1. Signing-age term table (3/2/1).
+# 1. Signing-age term table (3/2/1); 25+ is outside the Entry Level
+# System (new CBA killed the old European 25-27 exception).
 check("age 18 -> 3 yrs", scs.elc_years_for_age(18) == 3)
 check("age 21 -> 3 yrs", scs.elc_years_for_age(21) == 3)
 check("age 22 -> 2 yrs", scs.elc_years_for_age(22) == 2)
 check("age 23 -> 2 yrs", scs.elc_years_for_age(23) == 2)
 check("age 24 -> 1 yr", scs.elc_years_for_age(24) == 1)
-check("age 30 -> 1 yr", scs.elc_years_for_age(30) == 1)
+check("age 25 -> 0 yrs (not ELC-eligible)", scs.elc_years_for_age(25) == 0)
+check("age 30 -> 0 yrs (not ELC-eligible)", scs.elc_years_for_age(30) == 0)
+check("age 25 band is 0 yrs", scs.elc_band(25)[2] == 0)
 
 # 2. ELC band sanity.
 floor, ceil, yrs = scs.elc_band(19)
@@ -101,24 +107,37 @@ low_verdict_ok = low["verdict"] in ("rejected", "counter", "accepted")
 check("floor offer to a top-10 pick is not accepted",
       low["verdict"] != "accepted", repr(low))
 
-# 5. Shared finalizer: contract + rights + assignment.
+# 5. Shared finalizer: contract + rights + assignment. The fixture deal
+# is CBA-legal: $925k base + $90k signing bonus = $1.015M aggregate,
+# under the $1.025M 9.3(a) max; $500k Schedule-A perf bonus is capped
+# separately. A $1M base + $100k SB ($1.1M aggregate) must be REFUSED.
 lg, t = league_with()
 p = prospect(seed=31, age=19, overall_pick=15)
 t.prospects.append(p)
-ok = lg.finalize_elc_signing(t, p, 1_000_000, 3, 100_000, 500_000)
+ok = lg.finalize_elc_signing(t, p, 925_000, 3, 90_000, 500_000)
 check("finalize succeeds", ok)
 c = p.contract
 check("contract has negotiated terms",
-      c is not None and c.salary == 1_000_000 and c.years_remaining == 3,
+      c is not None and c.salary == 925_000 and c.years_remaining == 3,
       repr(getattr(c, "salary", None)))
 check("contract carries bonuses",
-      getattr(c, "signing_bonus", 0) == 100_000
+      getattr(c, "signing_bonus", 0) == 90_000
       and getattr(c, "performance_bonus", 0) == 500_000)
 check("contract is two-way", bool(getattr(c, "two_way", False)))
+check("contract is stamped entry-level", bool(getattr(c, "entry_level", False)))
+check("slide state stamped",
+      getattr(p, "elc_signing_sept15_age", None) == 19
+      and getattr(p, "elc_slides_used", None) == 0
+      and getattr(p, "elc_seasons_completed", None) == 0)
+check("draft history preserved", getattr(p, "drafted_by", "") == "Test Team"
+      and getattr(p, "elc_signed_season", None) == 2026)
 check("rights consumed",
       p.rights_team == "" and p.drafted_year == 0 and p.rights_expiry_year == 0)
 check("assigned somewhere real", p.playing_where in ("AHL", "Junior")
       or "Junior" in str(p.playing_where), repr(p.playing_where))
+check("minor salary capped to draft-year max",
+      (c.ahl_salary or 0) <= scs.elc_minor_salary_max(2026),
+      repr(getattr(c, "ahl_salary", None)))
 
 # 5b. Finalizer guards: wrong team / already signed.
 lg2, t2 = league_with("Other Team")
@@ -132,6 +151,24 @@ p3.contract = "signed"
 t.prospects.append(p3)
 check("finalize refuses already-signed",
       lg.finalize_elc_signing(t, p3, 900_000, 3) is False)
+
+# 5c. Finalizer enforces the CBA caps (fail closed).
+p5 = prospect(seed=35, age=19, overall_pick=40)
+t.prospects.append(p5)
+check("finalize refuses over-aggregate deal (1M base + 100k SB > 1.025M)",
+      lg.finalize_elc_signing(t, p5, 1_000_000, 3, 100_000, 0) is False)
+check("refused prospect is untouched",
+      p5.contract is None and p5.rights_team == "Test Team")
+p6 = prospect(seed=36, age=26)
+t.prospects.append(p6)
+check("finalize refuses 25+ (not ELC-eligible)",
+      lg.finalize_elc_signing(t, p6, 900_000, 1) is False)
+p7 = prospect(seed=37, age=22, overall_pick=40)
+t.prospects.append(p7)
+ok7 = lg.finalize_elc_signing(t, p7, 900_000, 3)
+check("forged 3-yr term for a 22yo is corrected to 2",
+      ok7 and p7.contract.years_remaining == 2,
+      repr(getattr(getattr(p7, "contract", None), "years_remaining", None)))
 
 # 6. Auto-sign refactor still works (delegates to the finalizer).
 lg3, t3 = league_with()

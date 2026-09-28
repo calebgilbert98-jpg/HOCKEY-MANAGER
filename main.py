@@ -56,6 +56,7 @@ from stats_standings_window import StatsStandingsWindow, StatsStandingsView
 from ahl_stats_window import AHLStatsView
 from GAME_VIEWER import launch_game_viewer
 from draft_generator import generate_draft_class
+from draft_generator import age_on_sept15 as _age_on_sept15
 from database_manager import initialize_game_database
 from database_generator import generate_database, get_database_options
 from save_load_system import GameSaveManager
@@ -10068,6 +10069,19 @@ class HockeyManagerGUI(tk.Tk):
                     del _plive[:]
             except Exception:
                 pass
+            # ELC slide headlines (same pattern).
+            try:
+                _smsgs = list(getattr(_league, "elc_slide_news", None) or [])
+                for _m in _smsgs:
+                    try:
+                        self.add_news("📝 " + str(_m))
+                    except Exception:
+                        pass
+                _slive = getattr(_league, "elc_slide_news", None)
+                if _slive is not None:
+                    del _slive[:]
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -12540,6 +12554,18 @@ class HockeyManagerGUI(tk.Tk):
                 self.league.prospect_awards_news = []
         except Exception:
             pass
+        # ELC slide headlines from end_of_season (CBA 9.1(d)).
+        try:
+            _sn = list(getattr(self.league, "elc_slide_news", None) or [])
+            for _msg in _sn:
+                try:
+                    self.add_news("📝 " + str(_msg))
+                except Exception:
+                    pass
+            if _sn:
+                self.league.elc_slide_news = []
+        except Exception:
+            pass
 
         # Restricted free agency (rfa_system.py): qualifying offers at the
         # real CBA minimums, rare AI offer sheets with real pick
@@ -14927,7 +14953,20 @@ class HockeyManagerGUI(tk.Tk):
             age = int(getattr(player, 'age', 20) or 20)
         except Exception:
             age = 20
-        floor, ceil, years = _scs.elc_band(age, season)
+        # CBA 9.2: ELC term and eligibility use the player's age on
+        # September 15 of the signing year, not his current age.
+        try:
+            _s15 = _age_on_sept15(getattr(player, 'birth_date', ''), season)
+        except Exception:
+            _s15 = None
+        _elc_age = _s15 if _s15 is not None else age
+        floor, ceil, years = _scs.elc_band(_elc_age, season)
+        if years <= 0:
+            return {"verdict": "invalid", "counter": None,
+                    "note": ("He isn't ELC-eligible: at 25+, the Entry "
+                             "Level System no longer applies (new CBA -- "
+                             "the old European 25-27 exception is gone). "
+                             "Sign him to a standard contract instead.")}
         try:
             salary = int(salary)
             signing_bonus = int(signing_bonus or 0)
@@ -14948,6 +14987,14 @@ class HockeyManagerGUI(tk.Tk):
             return {"verdict": "invalid", "counter": None,
                     "note": (f"Performance bonus is capped at "
                              f"${_scs.ELC_PERF_BONUS_MAX:,}/yr.")}
+        # 9.3(a): base salary + signing bonus (+ games-played bonuses,
+        # not modeled) may not exceed the max annual compensation.
+        # Schedule-A performance bonuses are capped separately.
+        if salary + signing_bonus > _scs.elc_max_annual_comp(season):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Base + signing bonus may not exceed the ELC "
+                             f"max of "
+                             f"${_scs.elc_max_annual_comp(season):,}/yr.")}
         ask = _scs.elc_prospect_ask(player, season)
         res = _scs.elc_handshake(ask, salary, signing_bonus,
                                  performance_bonus)

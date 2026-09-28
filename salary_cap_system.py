@@ -337,13 +337,66 @@ MINIMUM_SALARY_SCHEDULE = {
     2029: 1_000_000,  # 2029-30
 }
 
-# New-CBA entry-level maximum, defined PER CONTRACT YEAR (not a flat
-# number): $1.025M in year 1, $1.075M in year 2, $1.125M in year 3 --
-# $3.225M total base for a 3-year deal. TSN/Chris Johnston and Field
-# Level Media, July 2026 (McKenna's max ELC). Schedule A bonuses (up to
-# $1M) and Schedule B (up to $2.5M) per season are NOT modeled -- the
-# game has no performance-bonus system.
-ELC_MAX_BY_CONTRACT_YEAR = (1_025_000, 1_075_000, 1_125_000)
+# New-CBA entry-level maximum compensation (Article 29 of the MOU).
+# Starting in 2026-27 it is NO LONGER based on draft year: in each League
+# Year the max annual aggregate (Paragraph 1 salary + signing bonus +
+# games-played bonuses) is that season's league minimum + $175,000 --
+# $1.025M in 2026-27, $1.075M in 2027-28, $1.125M in 2028-29
+# (PuckPedia, "Entry Level Contract Maximum Compensation").
+# Schedule A bonuses (up to $1M/yr) are modeled separately below.
+def elc_max_annual_comp(season_year=None) -> int:
+    """Max ELC compensation in a given season (new-CBA 9.3(a))."""
+    sy = _season_year_or_current(season_year)
+    if sy >= 2026:
+        return league_minimum_salary(sy) + 175_000
+    if sy >= 2024:
+        return 975_000
+    if sy >= 2022:
+        return 950_000
+    return 925_000
+
+
+def elc_max_total(contract_years=3, season_year=None) -> int:
+    """Max total base compensation for an ELC of the given length.
+
+    The game models one flat salary for every contract year, so the
+    legal max total is the signing season's max annual compensation
+    times the term (e.g. $1.025M x 3 = $3.075M for a 2026-27 ELC).
+    """
+    yrs = max(1, min(3, int(contract_years or 3)))
+    return elc_max_salary(yrs, season_year) * yrs
+
+
+def elc_max_salary(contract_years=3, season_year=None) -> int:
+    """Max flat salary for an ELC signed in the given season.
+
+    The game models one salary for every year of a contract, so the
+    faithful ceiling is the FIRST season's max -- the binding year,
+    since the per-season max only rises after that.
+    """
+    return elc_max_annual_comp(season_year)
+
+
+# 9.4 maximum minor-league compensation on an ELC, by draft year
+# (MOU table: 2026/27 -> $87.5k; 2028/29 -> $90k; 2030 -> $92.5k).
+def elc_minor_salary_max(draft_year=None) -> int:
+    """Max AHL salary on an ELC for a prospect of the given draft year."""
+    try:
+        dy = int(draft_year if draft_year is not None
+                 else _season_year_or_current())
+    except (TypeError, ValueError):
+        dy = _season_year_or_current()
+    if dy >= 2030:
+        return 92_500
+    if dy >= 2028:
+        return 90_000
+    if dy >= 2026:
+        return 87_500
+    if dy >= 2024:
+        return 85_000
+    if dy >= 2022:
+        return 82_500
+    return 80_000
 
 # New-CBA maximum contract term: 7 years re-signing with the same club,
 # 6 years signing elsewhere as a free agent (was 8/7). Existing deals are
@@ -386,23 +439,6 @@ def league_minimum_salary(season_year=None) -> int:
     return MINIMUM_SALARY_SCHEDULE.get(sy, 1_000_000)
 
 
-def elc_max_total(contract_years=3) -> int:
-    """Max total base compensation for an ELC of the given length."""
-    yrs = max(1, min(3, int(contract_years or 3)))
-    return sum(ELC_MAX_BY_CONTRACT_YEAR[:yrs])
-
-
-def elc_max_salary(contract_years=3) -> int:
-    """Max flat-salary equivalent (AAV) for an ELC of the given length.
-
-    The game models one salary for every year of a contract, so the
-    faithful ceiling is the deal's max total base divided by its length:
-    $1.075M for a 3-year ELC, $1.05M for a 2-year ELC.
-    """
-    yrs = max(1, min(3, int(contract_years or 3)))
-    return elc_max_total(yrs) // yrs
-
-
 def burial_exemption(season_year=None) -> int:
     """Burial exemption ($1.15M + league minimum) for a season."""
     return 1_150_000 + league_minimum_salary(season_year)
@@ -425,11 +461,13 @@ ELC_BONUS_WEIGHT = 0.5         # bonuses aren't guaranteed money
 
 
 def elc_years_for_age(age) -> int:
-    """ELC term by signing age (the real 3/2/1 table).
+    """Number of ELC years for a signing age (CBA 9.1(b) chart).
 
-    18-21 -> 3 years; 22-23 -> 2 years; 24+ -> 1 year. v1 implements the
-    shape; the full rookie-contract review may refine the edges (European
-    exceptions, slides).
+    18-21 -> 3 years; 22-23 -> 2 years; 24 -> 1 year; 25+ -> 0, meaning
+    NOT in the Entry Level System at all. (The new CBA removed the old
+    European 25-27 one-year exception, so this is uniform for every
+    prospect.) Callers MUST refuse an ELC offer when this returns 0 --
+    never clamp or fall through.
     """
     try:
         a = int(age or 0)
@@ -439,15 +477,74 @@ def elc_years_for_age(age) -> int:
         return 3
     if a <= 23:
         return 2
-    return 1
+    if a == 24:
+        return 1
+    return 0
 
 
 def elc_band(age, season_year=None):
-    """(floor, ceiling, years) for an ELC signed at this age."""
+    """(floor, ceiling, years) for an ELC signed at this age.
+
+    Floor is the league minimum; ceiling is the 9.3(a) max annual
+    compensation for the signing season. years == 0 means the player is
+    NOT ELC-eligible (25+) -- the caller must refuse the offer.
+    """
     years = elc_years_for_age(age)
     floor = int(league_minimum_salary(season_year))
-    ceil = int(elc_max_salary(years))
+    ceil = int(elc_max_annual_comp(season_year))
     return max(0, floor), max(floor, ceil), years
+
+
+def _turns_20_late_in_signing_year(birth_date, signing_year) -> bool:
+    """The 9.1(d) slide exception: a nominal 19-year-old (Sept-15 age)
+    who turns 20 between September 16 and December 31 of the signing
+    year never gets the automatic extension."""
+    try:
+        parts = str(birth_date or "").strip().split("-")
+        by, bm, bd = int(parts[0]), int(parts[1]), int(parts[2])
+        sy = int(signing_year)
+    except (ValueError, TypeError, AttributeError, IndexError):
+        return False
+    if by != sy - 20:
+        return False
+    return (bm, bd) >= (9, 16)
+
+
+def elc_slide_applies(signing_sept15_age, slides_used, seasons_completed,
+                      nhl_games_this_season, birth_date=None,
+                      signing_year=None) -> bool:
+    """Whether an ELC slides at this season rollover (CBA 9.1(d)).
+
+    - Signed at 18 or 19 (Sept-15 age) and played fewer than 10 NHL
+      games in the first season under the SPC -> extend one year.
+    - Signed at 18, slid after year one, fewer than 10 NHL games in the
+      second season -> extend one more year (the double slide). The
+      second slide REQUIRES the first: seasons_completed must equal
+      slides_used (a slide happens at most once per completed season,
+      only in the first one/two seasons).
+    - Exception: a nominal 19-year-old who turns 20 between Sept 16 and
+      Dec 31 of the signing year is never slide-eligible.
+    Sliding extends Paragraph 1 salary and bonuses but NOT the signing
+    bonus (already paid); the game models that by extending years only.
+    """
+    try:
+        age = int(signing_sept15_age)
+        used = int(slides_used or 0)
+        done = int(seasons_completed or 0)
+        gp = int(nhl_games_this_season or 0)
+    except (TypeError, ValueError):
+        return False
+    if gp >= 10:
+        return False
+    if done != used:
+        return False
+    if age == 18:
+        return done < 2
+    if age == 19:
+        if _turns_20_late_in_signing_year(birth_date, signing_year):
+            return False
+        return done < 1
+    return False
 
 
 def elc_prospect_ask(player, season_year=None) -> Dict:
@@ -458,11 +555,21 @@ def elc_prospect_ask(player, season_year=None) -> Dict:
     asks for the max, a 7th-rounder's takes the floor. Selfishness
     (1-100, dealt at generation) pushes the ask up; anything unselfish
     pulls it toward the floor. All clamped to the ELC band.
+
+    The band uses the CBA 9.2 Sept-15 signing age (deferred import --
+    salary_cap_system can't import draft_generator at module level).
     """
     try:
         age = int(getattr(player, "age", 20) or 20)
     except Exception:
         age = 20
+    try:
+        from draft_generator import age_on_sept15 as _s15
+        _sv = _s15(getattr(player, "birth_date", ""), season_year)
+        if _sv is not None:
+            age = _sv
+    except Exception:
+        pass
     floor, ceil, years = elc_band(age, season_year)
     span = max(1, ceil - floor)
 
