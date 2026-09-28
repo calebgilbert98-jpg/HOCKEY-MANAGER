@@ -104,6 +104,23 @@ Per playoff game: one pass over the finished `game_stats` table (~40 entries)
 32 teams + one bracket walk per team + one reputation recompute per playoff
 player. No per-day cost. Nothing touches load times.
 
+## Conn Smythe criteria (real-life rules)
+
+1. Default: the Stanley Cup champion's playoff scoring leader (points, goals
+   as tiebreak) -- what voters do ~90% of the time.
+2. Goalie exception: the champion's goalie steals it only on an all-time run --
+   SV% >= .935 with 12+ wins (Vasilevskiy '21, Quick '12, Giguere '03).
+3. Historic-run exception (NEW): a skater on the LOSING side wins only when
+   his run was genuinely historic -- >= 35 playoff points AND >= 1.5x the
+   champion's best skater total. Covers McDavid '24 (42 pts vs Florida's
+   ~24) and Leach '76 (24 pts incl. 19 goals, the record before McDavid).
+   The 35-point floor means this path fires maybe once a decade in sim --
+   as in real life (5 non-champion winners in 60 years).
+4. Known limitation: narrative exceptions the numbers can't capture --
+   Crosby '16 (complete-game case over Kessel), Hedman '20 (defense-first
+   series), Crozier '66 / Hextall '87 (losing goalies with no .935+ case).
+   No voter model exists; documented, not simulated.
+
 ## Files
 
 - NEW `coach_records.py`, NEW `qa_smythe_coaches.py`

@@ -377,6 +377,18 @@ class StatsStandingsView(ctk.CTkFrame):
         self.period_combo.set("Season")
         self.period_combo.pack(side='left', padx=(0, 12))
 
+        # Regular Season / Playoffs: the whole screen (team analytics,
+        # player leaders, dashboard) re-reads from the matching ledger.
+        # Standings stay the final regular-season table in both modes.
+        self._body(filters_frame, text="Season:", dim=True,
+                   size=11).pack(side='left', padx=(0, 6))
+        self.season_type = tk.StringVar(value="Regular Season")
+        self._combo(
+            filters_frame, variable=self.season_type,
+            values=["Regular Season", "Playoffs"],
+            command=self.on_season_type_change, width=130).pack(
+                side='left', padx=(0, 12))
+
         self._secondary_button(filters_frame, text="Close",
                                command=self.close_view).pack(side='left')
 
@@ -662,6 +674,124 @@ class StatsStandingsView(ctk.CTkFrame):
                     tname = getattr(t, "team_name", "")
                     break
         return self._get_team_abbreviation(tname) if tname else ""
+
+    # ------------------------------------------------------------------
+    # Regular Season / Playoffs split
+    # ------------------------------------------------------------------
+    def _in_playoff_mode(self):
+        """True when the Season toggle is on Playoffs."""
+        try:
+            return self.season_type.get() == "Playoffs"
+        except Exception:
+            return False
+
+    def _stat_ledger(self, player):
+        """The active per-player stat ledger for the current Season toggle.
+
+        Regular Season -> player.stats; Playoffs -> player.playoff_stats
+        (folded from GameSim.game_stats after every playoff game). Falls
+        back to whichever ledger exists -- old saves predate playoff_stats.
+        NHL only: neither ledger ever includes AHL numbers (ahl_stats is a
+        separate object read only by the AHL Stats screen).
+        """
+        if self._in_playoff_mode():
+            led = getattr(player, "playoff_stats", None)
+            return led if led is not None else getattr(player, "stats", None)
+        return getattr(player, "stats", None)
+
+    def _pstat(self, player, attr, default=0):
+        """One stat from the active ledger, direct-attr fallback."""
+        led = self._stat_ledger(player)
+        if led is not None and hasattr(led, attr):
+            try:
+                return getattr(led, attr)
+            except Exception:
+                pass
+        return getattr(player, attr, default)
+
+    def get_team_playoff_stats(self):
+        """Per-team playoff numbers from the bracket's per-game results.
+
+        Returns {team_name: {GP, W, L, GF, GA, result}} where result is
+        'Won Stanley Cup' or 'Lost <round>'. Empty dict when no playoff
+        games have been played yet. Read-only walk -- nothing persisted.
+        """
+        out = {}
+        try:
+            league = getattr(getattr(self.app, "game_manager", self.app),
+                             "league", None)
+            bracket = getattr(league, "playoff_bracket", None)
+            if bracket is None:
+                pw = getattr(self.app, "open_windows", {}).get("playoffs")
+                if pw is not None:
+                    try:
+                        if pw.winfo_exists():
+                            bracket = getattr(pw, "playoff_bracket", None)
+                    except Exception:
+                        bracket = None
+            if bracket is None:
+                return out
+            series_map = getattr(bracket, "playoff_series", None) or {}
+            champ = getattr(bracket, "stanley_cup_champion", None)
+            champ_name = getattr(champ, "team_name", None)
+            round_order = ["wild_card", "division_semifinals",
+                           "division_finals", "conference_finals",
+                           "stanley_cup_final"]
+            round_names = {"wild_card": "Round 1",
+                           "division_semifinals": "Round 2",
+                           "division_finals": "Round 3",
+                           "conference_finals": "Conf. Final",
+                           "stanley_cup_final": "Cup Final"}
+            for key in round_order:
+                for s in series_map.get(key, None) or []:
+                    t1, t2 = getattr(s, "team1", None), getattr(s, "team2", None)
+                    for t, is_t1 in ((t1, True), (t2, False)):
+                        if t is None:
+                            continue
+                        tname = getattr(t, "team_name",
+                                        getattr(t, "name", "?"))
+                        e = out.setdefault(
+                            tname, {"GP": 0, "W": 0, "L": 0, "GF": 0,
+                                    "GA": 0, "result": ""})
+                        w = getattr(s, "team1_wins", 0) if is_t1 else \
+                            getattr(s, "team2_wins", 0)
+                        for g in getattr(s, "game_results", None) or []:
+                            try:
+                                t1s = int(g.get("t1_score", 0) or 0)
+                                t2s = int(g.get("t2_score", 0) or 0)
+                            except Exception:
+                                continue
+                            mine, theirs = (t1s, t2s) if is_t1 else (t2s, t1s)
+                            e["GP"] += 1
+                            e["GF"] += mine
+                            e["GA"] += theirs
+                        e["W"] += w
+                        e["result"] = ("Won Stanley Cup"
+                                       if tname == champ_name
+                                       else "Lost " + round_names.get(key, key))
+            # Losses = games - wins (a team appears in several series).
+            for e in out.values():
+                e["L"] = max(0, e["GP"] - e["W"])
+        except Exception:
+            pass
+        return out
+
+    def on_season_type_change(self, value=None):
+        """Season toggle flipped: regular-season-only tabs can't show
+        playoff data, so park the leaders view on Scoring Leaders, then
+        refresh whatever main tab is showing."""
+        try:
+            if self._in_playoff_mode() and hasattr(self, "leaders_tabview"):
+                rs_only = {"Breakout Players", "Rookie Leaders",
+                           "Award Races", "Milestone Watch", "NHL Records"}
+                if self.leaders_tabview.get() in rs_only:
+                    self.leaders_tabview.set("Scoring Leaders")
+        except Exception:
+            pass
+        try:
+            self.refresh_all_data()
+        except Exception as e:
+            print(f"Error refreshing on season-type change: {e}")
 
     def create_rookie_leaders_section(self, parent_frame):
         """Rookie Leaders tab: rookie scoring + rookie goaltending."""
@@ -2627,6 +2757,19 @@ class StatsStandingsView(ctk.CTkFrame):
     
     def get_advanced_stats_columns(self, category):
         """Get column definitions for advanced stats (all backed by real data)"""
+        if self._in_playoff_mode():
+            # Playoffs: one honest table -- series record from the bracket.
+            # Small samples make the per-category splits noise.
+            return {
+                'team': ('Team', 170),
+                'gp': ('GP', 50),
+                'w': ('W', 45),
+                'l': ('L', 45),
+                'gf': ('GF', 55),
+                'ga': ('GA', 55),
+                'diff': ('+/-', 60),
+                'result': ('Playoff Result', 170),
+            }
         if category == "Overall Performance":
             return {
                 'team': ('Team', 170),
@@ -2716,6 +2859,9 @@ class StatsStandingsView(ctk.CTkFrame):
 
     def add_advanced_stats_data(self, tree, category, mode):
         """Add advanced statistics data (all from real tracked stats)"""
+        if self._in_playoff_mode():
+            self._add_playoff_team_stats(tree, mode)
+            return
         try:
             teams = self._filtered_analytics_teams()
             if not teams:
@@ -2803,6 +2949,36 @@ class StatsStandingsView(ctk.CTkFrame):
             # Fallback to basic calculated data
             self._add_calculated_advanced_stats(tree, category)
     
+    def _add_playoff_team_stats(self, tree, mode):
+        """Playoff-mode Team Analytics: series record per playoff team.
+
+        Built read-only from the bracket's per-game results -- no new
+        stored data. Non-playoff teams don't appear: they played zero
+        playoff games.
+        """
+        try:
+            pstats = self.get_team_playoff_stats()
+            rows = []
+            for team_name, e in pstats.items():
+                gp, w, l = e["GP"], e["W"], e["L"]
+                gf, ga = e["GF"], e["GA"]
+                diff = gf - ga
+                rows.append((team_name,
+                             (team_name, gp, w, l, gf, ga, f"{diff:+d}",
+                              e["result"] or "—")))
+            # Sort: wins first, then goal differential.
+            rows.sort(key=lambda r: (r[1][2], r[1][4] - r[1][5]),
+                      reverse=True)
+            if not rows:
+                tree.insert('', 'end', values=(
+                    "No playoff games played yet", "", "", "", "", "", "",
+                    ""))
+                return
+            for _name, values in rows:
+                tree.insert('', 'end', values=values)
+        except Exception as e:
+            print(f"Error adding playoff team stats: {e}")
+
     def _add_calculated_advanced_stats(self, tree, category):
         """Fallback: basic real team data if the main loader fails."""
         teams = self._standings_teams()[:8]
@@ -2978,6 +3154,21 @@ class StatsStandingsView(ctk.CTkFrame):
                 'shots': ('SOG', 50)
             }
         elif category == "advanced":
+            if self._in_playoff_mode():
+                # Playoffs: no xG model -- scoring-rate table (min GP
+                # enforced by the Min Games filter in playoff mode).
+                return {
+                    'rank': ('Rank', 50),
+                    'player': ('Player', 150),
+                    'team': ('Team', 60),
+                    'pos': ('Pos', 50),
+                    'gp': ('GP', 40),
+                    'goals': ('G', 40),
+                    'assists': ('A', 40),
+                    'points': ('PTS', 50),
+                    'ppg': ('P/GP', 55),
+                    'gpg': ('G/GP', 55),
+                }
             return {
                 'rank': ('Rank', 50),
                 'player': ('Player', 150),
@@ -3037,6 +3228,17 @@ class StatsStandingsView(ctk.CTkFrame):
         name = getattr(player, 'full_name', 'Unknown')
 
         if category == "scoring":
+            if self._in_playoff_mode():
+                # Playoff scoring: +/- isn't tracked in the playoff ledger.
+                goals = int(self._pstat(player, "goals", 0) or 0)
+                assists = int(self._pstat(player, "assists", 0) or 0)
+                games = int(self._pstat(player, "games_played", 0) or 0)
+                points = goals + assists
+                ppg = round(points / max(games, 1), 2)
+                pim = int(self._pstat(player, "penalties_in_minutes", 0) or 0)
+                shots = int(self._pstat(player, "shots", 0) or 0)
+                return (rank, name, team_abbr, position,
+                        games, goals, assists, points, ppg, "—", pim, shots)
             goals = getattr(player, 'goals', 0)
             assists = getattr(player, 'assists', 0)
             games = getattr(player, 'games_played', 0)
@@ -3049,6 +3251,15 @@ class StatsStandingsView(ctk.CTkFrame):
                     games, goals, assists, points, ppg, plus_minus, pim, shots)
 
         elif category == "advanced":
+            if self._in_playoff_mode():
+                goals = int(self._pstat(player, "goals", 0) or 0)
+                assists = int(self._pstat(player, "assists", 0) or 0)
+                games = int(self._pstat(player, "games_played", 0) or 0)
+                points = goals + assists
+                return (rank, name, team_abbr, position, games, goals,
+                        assists, points,
+                        f"{points / max(games, 1):.2f}",
+                        f"{goals / max(games, 1):.2f}")
             import advanced_metrics as am
             try:
                 m = am.skater_advanced(player)
@@ -3090,6 +3301,20 @@ class StatsStandingsView(ctk.CTkFrame):
                         "—", "—", "—", "—", "—")
 
         else:  # goaltending
+            if self._in_playoff_mode():
+                # Playoff goalies: GSAx/HDSV% need the season xG model --
+                # not available for the playoff sample. Wins + SV% + SO.
+                games = int(self._pstat(player, "games_played", 0) or 0)
+                wins = int(self._pstat(player, "wins", 0) or 0)
+                losses = int(self._pstat(player, "losses", 0) or 0)
+                gaa = float(self._pstat(player, "goals_against_avg", 0) or 0)
+                sv = float(self._pstat(player, "save_percentage", 0) or 0)
+                shutouts = int(self._pstat(player, "shutouts", 0) or 0)
+                sa = int(self._pstat(player, "shots_against", 0) or 0)
+                sv_pct = f"{sv:.3f}"[1:] if sa > 0 else "—"
+                return (rank, name, team_abbr, games, wins, losses,
+                        f"{gaa:.2f}" if games > 0 else "—", sv_pct,
+                        "—", "—", shutouts, sa)
             import advanced_metrics as am
             games = getattr(player, 'games_played', 0)
             wins = getattr(player, 'wins', 0)
@@ -3542,27 +3767,51 @@ Analysis will be updated as the season progresses.
                                 all_players.append((player, team))
                         elif not is_g:
                             all_players.append((player, team))
-            
+
+            # Playoff mode: the active ledger is playoff_stats, and the
+            # Min Games filter actually applies (a 1-game 3-point night
+            # must not top a P/GP board).
+            playoff = self._in_playoff_mode()
+            if playoff:
+                try:
+                    _mg = int(self.min_games.get())
+                except Exception:
+                    _mg = 1
+                all_players = [(p, t) for p, t in all_players
+                               if int(self._pstat(p, "games_played", 0) or 0)
+                               >= _mg]
+
             # Sort players based on category
             if category == "scoring":
                 def get_points(player_team):
                     player, team = player_team
-                    goals = getattr(player.stats, 'goals', 0) if hasattr(player, 'stats') else getattr(player, 'goals', 0)
-                    assists = getattr(player.stats, 'assists', 0) if hasattr(player, 'stats') else getattr(player, 'assists', 0)
-                    return goals + assists
+                    return (int(self._pstat(player, "goals", 0) or 0)
+                            + int(self._pstat(player, "assists", 0) or 0))
                 sorted_players = sorted(all_players, key=get_points, reverse=True)
-                
+
             elif category == "advanced":
-                import advanced_metrics as am
-                def get_advanced_score(player_team):
-                    player, team = player_team
-                    try:
-                        m = am.skater_advanced(player)
-                        return (m.xgf_pct, m.game_score)
-                    except Exception:
-                        return (0, 0)
-                sorted_players = sorted(all_players, key=get_advanced_score, reverse=True)
-                
+                if playoff:
+                    # No xG model for the playoffs: rate table (P/GP).
+                    def get_playoff_rate(player_team):
+                        player, team = player_team
+                        gp = max(1, int(self._pstat(player, "games_played", 0)
+                                        or 0))
+                        pts = (int(self._pstat(player, "goals", 0) or 0)
+                               + int(self._pstat(player, "assists", 0) or 0))
+                        return pts / gp
+                    sorted_players = sorted(all_players, key=get_playoff_rate,
+                                            reverse=True)
+                else:
+                    import advanced_metrics as am
+                    def get_advanced_score(player_team):
+                        player, team = player_team
+                        try:
+                            m = am.skater_advanced(player)
+                            return (m.xgf_pct, m.game_score)
+                        except Exception:
+                            return (0, 0)
+                    sorted_players = sorted(all_players, key=get_advanced_score, reverse=True)
+
             elif category == "breakout":
                 import advanced_metrics as am
                 young_players = [(p, t) for p, t in all_players
@@ -3584,15 +3833,26 @@ Analysis will be updated as the season progresses.
                 sorted_players = sorted(young_players, key=get_breakout_potential, reverse=True)
                 
             else:  # goaltending
-                import advanced_metrics as am
-                def get_goalie_score(player_team):
-                    player, team = player_team
-                    try:
-                        return (am.goalie_advanced(player).gsax,
-                                getattr(player, 'save_percentage', 0))
-                    except Exception:
-                        return (0, 0)
-                sorted_players = sorted(all_players, key=get_goalie_score, reverse=True)
+                if playoff:
+                    # Playoff goalies: wins first, then SV% -- the Smythe lens.
+                    def get_playoff_goalie(player_team):
+                        player, team = player_team
+                        return (int(self._pstat(player, "wins", 0) or 0),
+                                float(self._pstat(player, "save_percentage",
+                                                  0) or 0))
+                    sorted_players = sorted(all_players,
+                                            key=get_playoff_goalie,
+                                            reverse=True)
+                else:
+                    import advanced_metrics as am
+                    def get_goalie_score(player_team):
+                        player, team = player_team
+                        try:
+                            return (am.goalie_advanced(player).gsax,
+                                    getattr(player, 'save_percentage', 0))
+                        except Exception:
+                            return (0, 0)
+                    sorted_players = sorted(all_players, key=get_goalie_score, reverse=True)
             
             # Store sorted players
             self.pagination_data[category]['all_players'] = sorted_players
@@ -4175,6 +4435,9 @@ Analysis will be updated as the season progresses.
         """Create analytics dashboard content"""
         ct = self._ct
         parent_frame.configure(fg_color=ct['PANEL'])
+        # Rebuild-safe: refresh re-calls this on the same frame.
+        for _w in parent_frame.winfo_children():
+            _w.destroy()
         # Title
         title_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
         title_frame.pack(fill='x', padx=10, pady=(10, 4))
@@ -4203,16 +4466,21 @@ Analysis will be updated as the season progresses.
 
     def _fill_metric_cards(self, metrics_frame):
         """Fill the analytics metric cards from real league data."""
+        if self._in_playoff_mode():
+            self._fill_playoff_metric_cards(metrics_frame)
+            return
         if hasattr(self.app, 'game_manager') and self.app.game_manager.league:
             league = self.app.game_manager.league
 
-            # Total goals scored across league
+            # Total goals scored across league -- NHL roster ONLY. AHL
+            # numbers live on player.ahl_stats and never enter this screen
+            # (they have their own AHL Stats screen).
             total_goals = 0
             total_games = 0
             avg_attendance = 0
 
             for team in league.teams:
-                team_goals = sum(getattr(p, 'goals', 0) for p in team.roster + team.ahl_roster)
+                team_goals = sum(getattr(p, 'goals', 0) for p in team.roster)
                 total_goals += team_goals
                 total_games += team.games_played if hasattr(team, 'games_played') else 0
                 avg_attendance += getattr(team, 'avg_attendance', 15000)
@@ -4224,6 +4492,42 @@ Analysis will be updated as the season progresses.
             self._create_metric_card(metrics_frame, "Games Played", f"{total_games:,}", "#2196F3")
             self._create_metric_card(metrics_frame, "Avg Attendance", f"{avg_attendance:,.0f}", "#FF9800")
             self._create_metric_card(metrics_frame, "Active Teams", f"{len(league.teams)}", "#9C27B0")
+
+    def _fill_playoff_metric_cards(self, metrics_frame):
+        """Playoff-mode dashboard: goals, games, OT games, champion."""
+        try:
+            pstats = self.get_team_playoff_stats()
+            total_goals = sum(e["GF"] for e in pstats.values())
+            total_games = sum(e["GP"] for e in pstats.values()) // 2
+            ot_games = 0
+            champion = "TBD"
+            try:
+                league = getattr(getattr(self.app, "game_manager", self.app),
+                                 "league", None)
+                bracket = getattr(league, "playoff_bracket", None)
+                if bracket is not None:
+                    champ = getattr(bracket, "stanley_cup_champion", None)
+                    if champ is not None:
+                        champion = getattr(champ, "team_name", "TBD")
+                    for series_list in (getattr(
+                            bracket, "playoff_series", None) or {}).values():
+                        for s in series_list or []:
+                            for g in getattr(s, "game_results",
+                                             None) or []:
+                                if g.get("ot"):
+                                    ot_games += 1
+            except Exception:
+                pass
+            self._create_metric_card(metrics_frame, "Playoff Goals",
+                                     f"{total_goals:,}", "#4CAF50")
+            self._create_metric_card(metrics_frame, "Playoff Games",
+                                     f"{total_games:,}", "#2196F3")
+            self._create_metric_card(metrics_frame, "OT Games",
+                                     f"{ot_games:,}", "#FF9800")
+            self._create_metric_card(metrics_frame, "Champion",
+                                     champion, "#9C27B0")
+        except Exception as e:
+            print(f"Error filling playoff metric cards: {e}")
     
     def create_trends_analysis_content(self, parent_frame):
         """Create trends analysis content"""

@@ -415,11 +415,21 @@ class PlayoffBracket:
     def _decide_conn_smythe(self) -> Optional[Any]:
         """Pick the playoff MVP by real-life criteria and bank it.
 
-        The Conn Smythe goes to the most valuable player of the playoffs --
-        in practice, the Stanley Cup champion's playoff scoring leader,
-        unless a goalie authored an all-time run (SV% >= .935 with 12+
-        wins). The winner is banked into his trophy case immediately and
-        stashed on the bracket (``conn_smythe_winner`` / ``conn_smythe_name``)
+        The Conn Smythe goes to the most valuable player of the playoffs.
+        In practice that means:
+          1. The Stanley Cup champion's playoff scoring leader, UNLESS
+          2. the champion's goalie authored an all-time run (SV% >= .935
+             with 12+ wins -- Vasilevskiy '21, Quick '12, Giguere '03), OR
+          3. a skater on the LOSING side authored a historic run:
+             >= 35 playoff points AND >= 1.5x the champion's best skater
+             total (McDavid '24: 42 pts vs the Panthers' best ~24;
+             Leach '76: 24 pts, 19 goals).
+        Narrative exceptions the numbers can't capture (Crosby '16,
+        Hedman '20, Crozier '66, Hextall '87) are documented in
+        docs/CONN_SMYTHE_COACHES_GUIDE.md as a known limitation.
+
+        The winner is banked into his trophy case immediately and stashed
+        on the bracket (``conn_smythe_winner`` / ``conn_smythe_name``)
         for the offseason rollover (season history + reputation).
         """
         champ = getattr(self, "stanley_cup_champion", None)
@@ -456,7 +466,15 @@ class PlayoffBracket:
             if gw >= self._SMYTHE_GOALIE_WINS and gsv >= self._SMYTHE_GOALIE_SV:
                 winner = best_goalie
         if winner is None:
-            winner = best_skater if best_skater is not None else best_goalie
+            # McDavid/Leach historic-run exception: a skater on a losing
+            # team wins only if his run was genuinely historic -- >= 35
+            # playoff points AND >= 1.5x the champion's best skater total.
+            loser = self._historic_loser_run(best_skater_key)
+            if loser is not None:
+                winner = loser
+            else:
+                winner = (best_skater if best_skater is not None
+                          else best_goalie)
         if winner is None:
             return None
         self.conn_smythe_winner = winner
@@ -477,6 +495,48 @@ class PlayoffBracket:
         except Exception:
             pass
         return winner
+
+    def _historic_loser_run(self, champ_best_key):
+        """McDavid '24 / Leach '76 exception.
+
+        Scan every NON-champion playoff roster for a skater with >= 35
+        playoff points and a total >= 1.5x the champion's best skater.
+        Returns the player, or None.
+        """
+        try:
+            if not champ_best_key:
+                return None
+            champ_pts = champ_best_key[0]
+            league = getattr(self, "league", None)
+            teams = list(getattr(league, "teams", None) or [])
+            champ = getattr(self, "stanley_cup_champion", None)
+            champ_name = getattr(champ, "team_name", None)
+            best = None
+            best_key = None
+            for t in teams:
+                if getattr(t, "team_name", None) == champ_name:
+                    continue
+                for p in list(getattr(t, "roster", None) or []):
+                    if self._smythe_is_goalie(p):
+                        continue
+                    ps = getattr(p, "playoff_stats", None)
+                    if ps is None:
+                        continue
+                    gp = int(getattr(ps, "games_played", 0) or 0)
+                    if gp <= 0:
+                        continue
+                    pts = (int(getattr(ps, "goals", 0) or 0)
+                           + int(getattr(ps, "assists", 0) or 0))
+                    if pts < 35:
+                        continue
+                    if champ_pts and pts < 1.5 * champ_pts:
+                        continue
+                    key = (pts, int(getattr(ps, "goals", 0) or 0))
+                    if best_key is None or key > best_key:
+                        best, best_key = p, key
+            return best
+        except Exception:
+            return None
     
     def get_playoff_status(self) -> Dict:
         """Get current playoff status for display"""

@@ -287,6 +287,9 @@ class GameSaveManager:
                     elif key == 'playoff_stats' and value:
                         # Playoff ledger: same shape as stats
                         player_data[key] = self._serialize_player_stats(value)
+                    elif key == 'ahl_stats' and value:
+                        # AHL ledger: same shape as stats, never mixed w/ NHL
+                        player_data[key] = self._serialize_player_stats(value)
                     elif isinstance(value, (date, datetime)):
                         # Handle date/datetime objects
                         player_data[key] = value.isoformat()
@@ -1040,6 +1043,8 @@ class GameSaveManager:
                     player.stats = self._restore_player_stats(value)
                 elif key == 'playoff_stats' and value:
                     player.playoff_stats = self._restore_player_stats(value)
+                elif key == 'ahl_stats' and value:
+                    player.ahl_stats = self._restore_player_stats(value)
                 elif key.endswith('_date') and value:
                     # Handle date fields
                     try:

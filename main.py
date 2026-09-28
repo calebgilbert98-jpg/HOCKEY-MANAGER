@@ -53,6 +53,7 @@ from staff_management_window import StaffManagementWindow, StaffManagementView
 from professional_scouting_window import ProfessionalScoutingWindow, ProfessionalScoutingView
 from modern_scouting_window import ModernScoutingWindow, ModernScoutingView
 from stats_standings_window import StatsStandingsWindow, StatsStandingsView
+from ahl_stats_window import AHLStatsView
 from GAME_VIEWER import launch_game_viewer
 from draft_generator import generate_draft_class
 from database_manager import initialize_game_database
@@ -2702,6 +2703,11 @@ class HockeyManagerGUI(tk.Tk):
                               self.open_stats_standings_window,
                               tooltip="Stats: standings, scoring leaders, and team analytics")
 
+        # AHL Stats button (minors only -- separate screen per design)
+        self._create_nav_pill(left_menu_frame, "AHL",
+                              self.open_ahl_stats_window,
+                              tooltip="AHL Stats: top farm performers -- who's cooking on the minors")
+
         # League History button
         self._create_nav_pill(left_menu_frame, "History",
                               self.open_league_history_window,
@@ -2797,6 +2803,7 @@ class HockeyManagerGUI(tk.Tk):
             'practice': self.open_practice_center,
             'tactics': self.open_tactics_window,
             'stats': self.open_stats_standings_window,
+            'ahl': self.open_ahl_stats_window,
             'history': self.open_league_history_window,
             'gm_options': self.open_gm_options_window,
             'settings': self.open_settings_window,
@@ -8277,6 +8284,32 @@ class HockeyManagerGUI(tk.Tk):
 
         # FM-style career systems: board, happiness, youth, press (cheap daily)
         self._process_career_daily()
+
+        # AHL farm stat lines: no AHL game sim exists, so the minors get a
+        # lightweight generated ledger (ahl_system) -- just enough for the
+        # AHL Stats screen to show who's cooking. AHL regular season only
+        # (Oct 1 - Apr 20); never during the NHL playoffs.
+        try:
+            import ahl_system as _ahl
+            _sy = getattr(getattr(self, "league", None), "season_year", None)
+            _in_window = True
+            try:
+                from datetime import date as _d
+                if _sy is not None:
+                    _in_window = (_d(_sy, 10, 1) <= self.current_date
+                                  <= _d(_sy + 1, 4, 20))
+            except Exception:
+                pass
+            _bracket = getattr(getattr(self, "league", None),
+                               "playoff_bracket", None)
+            _playoffs_live = bool(
+                _bracket is not None
+                and getattr(_bracket, "stanley_cup_champion", None) is None
+                and getattr(_bracket, "playoff_series", None))
+            if _in_window and not _playoffs_live:
+                _ahl.simulate_ahl_day(self.league)
+        except Exception:
+            pass
     
     def _process_training_programs(self):
         """Run one weekly session for each active Development-Center program.
@@ -12494,6 +12527,10 @@ class HockeyManagerGUI(tk.Tk):
         if focus_tab:
             window.set_focus_tab(focus_tab)
         return window
+
+    def open_ahl_stats_window(self):
+        """Open the AHL Stats screen (minors only -- separate from NHL numbers)."""
+        return self.show_screen('ahl_stats', 'AHL Stats', AHLStatsView)
 
     def open_league_history_window(self):
         """Open the League History window (champions, awards, leaders, HOF)."""
