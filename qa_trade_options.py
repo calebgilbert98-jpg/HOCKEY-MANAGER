@@ -181,11 +181,14 @@ print("== waiver decision factors ==")
 ok, why = te.will_waive_ntc(mkplayer(3_000_000), u8, p8)
 check("no clause -> will_waive True", ok is True)
 
-# explicit no-trade list naming the destination -> hard no
+# explicitly naming the destination on his list -> almost always refuses
+# (he can still be talked into an exception, but it's rare)
 listed = give_clause(mkplayer(6_000_000, name="Listed Guy"), "mntc", size=10)
 listed.contract.no_trade_list = ["P8"]
-ok, why = te.will_waive_ntc(listed, u8, p8)
-check("destination on no-trade list -> refuses", ok is False)
+_refusals = sum(1 for _i in range(40)
+                if not te.will_waive_ntc(listed, u8, p8,
+                                         rng=random.Random(1000 + _i))[0])
+check("destination on no-trade list -> refuses ~always", _refusals >= 36)
 
 # happiness moves the needle: unhappy waives far more often than happy
 def waiver_rate(happiness, n=60):
@@ -375,6 +378,172 @@ pk3 = g.DraftPick(year=2027, round=1, original_team="A", current_team="A")
 pk3.protection = "top-3"
 pk3b = pickle.loads(pickle.dumps(pk3))
 check("pick protection survives pickle", pk3b.protection == "top-3")
+
+# ------------------------------------------------- realism audit (2026-09-28)
+print("== realism audit: real NHL rules ==")
+from types import SimpleNamespace
+
+# -- 15% retained-salary aggregate (CBA: max 15% of the upper limit)
+u15 = mkteam("CapClub"); p15 = mkteam("Other")
+star15 = mkplayer(6_000_000, age=30, name="Big Ticket"); u15.roster.append(star15)
+u15.roster.extend(mkplayer(4_000_000) for _ in range(19))
+u15.retained_salary = [
+    {"player_id": "x1", "player_name": "X1", "amount": 7_000_000,
+     "seasons_remaining": 2},
+    {"player_id": "x2", "player_name": "X2", "amount": 7_000_000,
+     "seasons_remaining": 2},
+]
+vic15 = mkplayer(4_000_000, name="Victim"); p15.roster.append(vic15)
+p15.roster.extend(mkplayer(4_000_000) for _ in range(19))
+tr15 = te.execute_trade(u15, p15, [star15], [vic15],
+                        retention={star15.id: 50})
+check("15% aggregate blocks the deal ($14M + $3M > $15.6M)",
+      tr15.summary.startswith("BLOCKED:"))
+check("15%-blocked deal moves nothing",
+      star15 in u15.roster and vic15 in p15.roster)
+
+# -- one contract, at most two retaining clubs (double retention is real)
+trio = mkteam("ClubC")
+dbl = mkplayer(8_000_000, age=31, name="Twice Retained")
+dbl.retained_amount = 6_000_000
+dbl.retained_team_name = "ClubA"
+dbl.retained_by = ["ClubA", "ClubB"]
+trio.roster.append(dbl)
+ok2, _a2, why2 = te._retention_check(trio, dbl, 25)
+check("third retaining club refused", not ok2 and "two clubs" in why2)
+
+# -- one-year reacquire ban after retaining
+ua3 = mkteam("Retainers"); pb3 = mkteam("Buyers")
+gem = mkplayer(8_000_000, age=30, name="Gem Stone"); ua3.roster.append(gem)
+ua3.roster.extend(mkplayer(4_000_000) for _ in range(19))
+back3 = mkplayer(4_000_000, name="Return Piece"); pb3.roster.append(back3)
+pb3.roster.extend(mkplayer(4_000_000) for _ in range(19))
+tr3a = te.execute_trade(ua3, pb3, [gem], [back3], date_str="2026-11-01",
+                        retention={gem.id: 50})
+check("retention trade completes", not tr3a.summary.startswith("BLOCKED:"))
+check("ban recorded on the player",
+      any(b.get("team") == "Retainers"
+          for b in (getattr(gem, "retention_bans", None) or [])))
+tr3b = te.execute_trade(pb3, ua3, [gem], [back3], date_str="2027-03-01")
+check("one-year reacquire ban blocks", tr3b.summary.startswith("BLOCKED:"))
+tr3c = te.execute_trade(pb3, ua3, [gem], [back3], date_str="2028-06-01")
+check("ban lifts after a year", not tr3c.summary.startswith("BLOCKED:"))
+
+# -- per-side retention slots (the other club's terms don't eat yours)
+ua4 = mkteam("UserA"); pa4 = mkteam("PartnerA")
+u1 = mkplayer(5_000_000, name="U One"); ua4.roster.append(u1)
+ua4.roster.extend(mkplayer(4_000_000) for _ in range(19))
+pps = [mkplayer(5_000_000, name=f"P{i}") for i in range(3)]
+for _x in pps:
+    pa4.roster.append(_x)
+pa4.roster.extend(mkplayer(4_000_000) for _ in range(17))
+ret4 = {u1.id: 10, pps[0].id: 10, pps[1].id: 10, pps[2].id: 10}
+tr4 = te.execute_trade(ua4, pa4, [u1], pps, retention=ret4)
+check("per-side slots: partner's 3 terms don't eat user's slot",
+      not tr4.summary.startswith("BLOCKED:"))
+
+# -- league-office cap preflight (both clubs, over-cap shed exception)
+uo = mkteam("Overcaps"); po = mkteam("Partners")
+uo.roster.extend(mkplayer(4_000_000) for _ in range(27))  # $108M vs $104M
+a_out = uo.roster[0]
+b_in = mkplayer(4_000_000, name="Sideways"); po.roster.append(b_in)
+po.roster.extend(mkplayer(4_000_000) for _ in range(19))
+tr5 = te.execute_trade(uo, po, [a_out], [b_in])
+check("neutral deal while over cap is blocked",
+      tr5.summary.startswith("BLOCKED:"))
+cheap = mkplayer(1_000_000, name="Cheap"); po.roster.append(cheap)
+tr5b = te.execute_trade(uo, po, [a_out], [cheap])
+check("genuine salary shed while over cap is legal",
+      not tr5b.summary.startswith("BLOCKED:"))
+
+# -- asset ownership: you can't trade a pick you don't own
+ux = mkteam("UserX"); px = mkteam("PartnerX")
+ax = mkplayer(4_000_000, name="Ax"); ux.roster.append(ax)
+ux.roster.extend(mkplayer(4_000_000) for _ in range(19))
+bx = mkplayer(4_000_000, name="Bx"); px.roster.append(bx)
+px.roster.extend(mkplayer(4_000_000) for _ in range(19))
+ghost = g.DraftPick(year=2027, round=2, original_team="Ghosts",
+                    current_team="Ghosts")
+tr6 = te.execute_trade(ux, px, [ax], [bx, ghost])
+check("unowned pick blocks the deal", tr6.summary.startswith("BLOCKED:"))
+check("ownership-blocked deal moves nothing",
+      ax in ux.roster and bx in px.roster)
+
+# -- M-NTC: season-fixed lists, veto only when actually listed
+lst = mkplayer(5_000_000, age=30, name="List Guy")
+give_clause(lst, "mntc", 10)
+lst.contract.no_trade_list = ["Rival Town"]
+tA = mkteam("Home"); tB = mkteam("Rival Town"); tC = mkteam("Neutral City")
+tA.roster.append(lst)
+_bl, _why = te._mntc_blocks(lst, tB, None)
+check("explicit no-trade list blocks", _bl and "no-trade list" in _why)
+_b2, _ = te._mntc_blocks(lst, tC, None)
+_b2b, _ = te._mntc_blocks(lst, tC, None)
+check("list answer is season-stable (no re-roll)", _b2 == _b2b)
+_vv = te.trade_vetoes(tA, tB, [lst], None)
+check("M-NTC vetoes a listed destination", len(_vv) == 1)
+_vv2 = te.trade_vetoes(tA, tC, [lst], None)
+_b2c, _ = te._mntc_blocks(lst, tC, None)
+check("veto matches list membership", (len(_vv2) == 1) == _b2c)
+_okw, _whyw = te.will_waive_ntc(lst, tA, tB, None, rng=random.Random(7))
+check("listed M-NTC waiver asks for an exception", "exception" in _whyw)
+_okw2, _whyw2 = te.will_waive_ntc(lst, tA, tC, None, rng=random.Random(7))
+_b2d, _ = te._mntc_blocks(lst, tC, None)
+check("M-NTC waiver consistent with list",
+      (not _b2d and _okw2 and "doesn't block" in _whyw2)
+      or (_b2d and "exception" in _whyw2))
+
+# -- NMC waiver consent (context="waivers")
+nmc9 = mkplayer(7_000_000, age=33, name="No Move")
+give_clause(nmc9, "nmc")
+tH9 = mkteam("Home Team")
+_ok9, _why9 = te.will_waive_ntc(nmc9, tH9, None, None,
+                               rng=random.Random(3), context="waivers")
+check("NMC waiver consent returns a verdict",
+      isinstance(_ok9, bool) and "waiver placement" in _why9)
+
+# -- clause eligibility: UFA bar (27+ or 7 pro seasons)
+kid = mkplayer(2_000_000, age=23, name="Kid Prospect")
+check("under-27 without 7 seasons is clause-ineligible",
+      not te.clause_eligible(kid))
+vet9 = mkplayer(6_000_000, age=32, name="Veteran Presence")
+check("32-year-old is clause-eligible", te.clause_eligible(vet9))
+check("clause demand is zero for ineligible players",
+      te.clause_demand_score(kid) == 0.0)
+check("apply_clause refuses ineligible player",
+      te.apply_clause_to_contract(kid.contract, "ntc", player=kid) is False
+      and kid.contract.no_trade_clause is False)
+check("apply_clause stamps eligible player",
+      te.apply_clause_to_contract(vet9.contract, "mntc", 12,
+                                 player=vet9) is True
+      and vet9.contract.modified_ntc_teams == 12)
+
+# -- pick protection only triggers INSIDE the zone
+lg = SimpleNamespace(PROTECTION_ZONES=g.League.PROTECTION_ZONES)
+tO = mkteam("Originals"); tH2 = mkteam("Holders")
+pkz = g.DraftPick(year=2027, round=1, original_team="Originals",
+                  current_team="Holders")
+pkz.protection = "top-10"
+pk28 = g.DraftPick(year=2028, round=1, original_team="Originals",
+                   current_team="Originals")
+tO.draft_picks = {2027: [], 2028: [pk28]}
+tH2.draft_picks = {2027: [pkz]}
+lg.teams = [tO, tH2]
+lg.standings = {"Originals": {"Points": 60}, "Holders": {"Points": 100}}
+lg.lottery_results = {2027: [{"original_team": "Originals", "pick": 15}]}
+evz = g.League.resolve_pick_protections(lg, 2027)
+check("top-10 protection NOT triggered at #15",
+      pkz.current_team == "Holders" and pkz.protection == "")
+check("non-trigger is logged", any("not triggered" in e for e in evz))
+pkz2 = g.DraftPick(year=2027, round=1, original_team="Originals",
+                   current_team="Holders")
+pkz2.protection = "top-10"
+tH2.draft_picks = {2027: [pkz2]}
+lg.lottery_results = {2027: [{"original_team": "Originals", "pick": 8}]}
+evz2 = g.League.resolve_pick_protections(lg, 2027)
+check("top-10 protection triggers at #8",
+      pkz2.current_team == "Originals" and pk28.current_team == "Holders"
+      and any("triggered" in e for e in evz2))
 
 print()
 print(f"{len(passed)} passed, {len(failed)} failed")

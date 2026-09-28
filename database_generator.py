@@ -991,7 +991,8 @@ class DatabaseGenerator:
                     contract,
                     "nmc" if overall >= 86 and random.random() < 0.35
                     else ("mntc" if random.random() < 0.55 else "ntc"),
-                    random.choice([8, 10, 12, 15, 16, 20]))
+                    random.choice([8, 10, 12, 15, 16, 20]),
+                    player=player)
         except Exception:
             pass
 

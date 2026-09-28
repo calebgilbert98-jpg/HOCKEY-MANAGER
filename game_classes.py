@@ -5062,10 +5062,13 @@ class League:
                     zone = self.PROTECTION_ZONES[prot]
                     holder = pick.current_team
                     orig = by_name.get(pick.original_team)
+                    # Protection only bites INSIDE the zone: a top-10
+                    # protected pick landing at #15 overall conveys normally.
+                    in_zone = pos is not None and int(pos) <= int(zone)
                     # Find the deferral asset: original club's next-year 1st
                     # that it still owns.
                     defer = None
-                    if orig is not None:
+                    if orig is not None and in_zone:
                         for cand in (getattr(orig, "draft_picks", {}) or {}).get(year + 1, []):
                             if (cand.round == 1
                                     and cand.current_team == orig.team_name):
@@ -5076,7 +5079,7 @@ class League:
                     pick.is_conditional = False
                     pick.condition = ""
                     resolved.add(key)
-                    if defer is not None and orig is not None:
+                    if in_zone and defer is not None and orig is not None:
                         pick.current_team = orig.team_name  # reverts this year
                         defer.current_team = holder
                         defer.protection = ""
@@ -5089,12 +5092,20 @@ class League:
                             f"its {year} 1st-rounder (#{pos} overall, {zone_label} "
                             f"protected); {holder} receives {orig.team_name}'s "
                             f"{year + 1} 1st-rounder instead.")
-                    else:
+                    elif in_zone:
                         events.append(
                             f"Pick protection could not be honored: "
                             f"{pick.original_team} no longer holds its "
                             f"{year + 1} 1st-rounder, so {holder} keeps the "
                             f"{year} 1st-rounder (#{pos} overall).")
+                    # Outside the zone the pick simply conveys: the holder
+                    # keeps it and the spent protection is noted for the log.
+                    elif pos is not None:
+                        events.append(
+                            f"Pick protection not triggered: {holder} keeps "
+                            f"{orig.team_name if orig else pick.original_team}'s "
+                            f"{year} 1st-rounder (#{pos} overall, outside the "
+                            f"{prot} zone).")
                 except Exception:
                     continue
         if events:

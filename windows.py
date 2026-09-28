@@ -8401,6 +8401,15 @@ class ContractNegotiationView(ctk.CTkFrame):
             clause_row, self.clause_var, self._clause_names[_cur],
             *self._clause_names.values(), command=self._on_clause_change)
         self.clause_menu.pack(side=tk.LEFT, padx=8)
+        # Real NHL: trade protection requires UFA eligibility (27+ / 7 pro
+        # seasons) -- kids can't be offered what the CBA won't allow.
+        try:
+            if not _te.clause_eligible(getattr(self, "player", None)):
+                self.clause_menu.configure(state="disabled")
+                self.clause_var.set(self._clause_names["none"])
+                self._session["draft_clause"] = "none"
+        except Exception:
+            pass
         self.clause_size_frame = ttk.Frame(clause_row, style="Card.TFrame")
         ttk.Label(self.clause_size_frame, text="blocked teams:",
                   style="Secondary.TLabel").pack(side=tk.LEFT)
@@ -8516,6 +8525,12 @@ class ContractNegotiationView(ctk.CTkFrame):
     def _refresh_clause_hint(self):
         import trade_engine as _te
         try:
+            # Real NHL: no trade protection without UFA eligibility.
+            if not _te.clause_eligible(self.player):
+                self.clause_hint_var.set(
+                    "Trade protection isn't available here -- the NHL only "
+                    "allows it for players 27+ or with 7 pro seasons.")
+                return
             key = self._clause_key()
             demand = _te.clause_demand_score(
                 self.player, getattr(self.app, "user_team", None),
@@ -9260,6 +9275,28 @@ class WaiversView(ctk.CTkFrame):
         player = next((p for p in self.app.user_team.roster if p.id == player_id), None)
         
         if player:
+            # Real NHL: a no-movement clause blocks waiver placement (and
+            # the AHL assignment that follows) without the player's
+            # consent. A no-trade clause alone does NOT block waivers.
+            import trade_engine as _te
+            _kind, _detail = _te.clause_of(player)
+            if _kind == "NMC":
+                _ask = messagebox.askyesno(
+                    "No-movement clause",
+                    f"{player.full_name} has a {_detail}.\n\n"
+                    "He must approve being exposed on waivers. Ask him?")
+                if not _ask:
+                    return
+                _lg = getattr(getattr(self.app, 'game_manager', None),
+                              'league', None) or getattr(self.app, 'league', None)
+                _ok, _why = _te.will_waive_ntc(
+                    player, self.app.user_team, None, _lg, context="waivers")
+                if not _ok:
+                    messagebox.showwarning(
+                        "Waiver refused",
+                        f"{_why}\n\nHe's staying on the roster.")
+                    return
+                messagebox.showinfo("Waiver approved", _why)
             confirm = qol_confirm(self, "Confirm Waiver",
                                   f"Place {player.full_name} on waivers? "
                                   "Other teams will have a chance to claim them.",

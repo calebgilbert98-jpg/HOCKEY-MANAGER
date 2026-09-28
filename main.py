@@ -13246,7 +13246,7 @@ class HockeyManagerGUI(tk.Tk):
                     person.contract.salary = salary
                     person.contract.years_remaining = 2
                     te.apply_clause_to_contract(person.contract, _clause_kind,
-                                                _clause_size)
+                                                _clause_size, player=person)
             self._notify_contract_result("accepted" if accepted else "rejected",
                                          person, salary, 2, salary, extension,
                                          notify)
@@ -13325,7 +13325,8 @@ class HockeyManagerGUI(tk.Tk):
             _te2.apply_clause_to_contract(
                 _contract,
                 getattr(person, "offered_clause_kind", "none") or "none",
-                getattr(person, "offered_clause_list_size", 10) or 10)
+                getattr(person, "offered_clause_list_size", 10) or 10,
+                player=person)
         _cap_sys = getattr(getattr(self, 'league', None),
                            'salary_cap_system', None)
         # Track market-setting contracts (star + top-5 AAV)
