@@ -14725,11 +14725,104 @@ class HockeyManagerGUI(tk.Tk):
             player.nhl_audition = None
         self.update_all_views()
         
-    def open_contract_negotiation_window(self, player, is_extension=False):
+    def open_contract_negotiation_window(self, player, is_extension=False,
+                                         is_elc=False):
         from windows import ContractNegotiationView
-        title = f"Contract: {getattr(player, 'full_name', 'Player')}"
+        if is_elc:
+            title = (f"Entry-Level Contract: "
+                     f"{getattr(player, 'full_name', 'Player')}")
+        else:
+            title = f"Contract: {getattr(player, 'full_name', 'Player')}"
         self.show_screen('contract_negotiation', title,
-                         ContractNegotiationView, player, is_extension)
+                         ContractNegotiationView, player, is_extension,
+                         is_elc=is_elc)
+
+    def handle_elc_offer(self, player, salary, signing_bonus=0,
+                         performance_bonus=0):
+        """Negotiated ELC signing with an unsigned rights-held prospect.
+
+        Validates the ELC band (base inside [floor, ceiling], signing
+        bonus <= 10% of base, performance bonus <= $1M/yr), runs the
+        prospect handshake (accept / counter / reject), and on acceptance
+        finalizes through the league's canonical ELC path: contract with
+        bonuses, rights consumed, assigned to junior/AHL by eligibility.
+
+        Returns {verdict, counter, note}. "counter" carries the agent's
+        number for one-click acceptance in the view.
+        """
+        import salary_cap_system as _scs
+        league = getattr(self, 'league', None)
+        team = getattr(self, 'user_team', None)
+        try:
+            season = getattr(league, 'season_year', None)
+        except Exception:
+            season = None
+        # Guard: only the user's unsigned rights-held prospect.
+        try:
+            _own = (getattr(player, 'contract', None) is None
+                    and (getattr(player, 'rights_team', '') or '')
+                    == getattr(team, 'team_name', ''))
+        except Exception:
+            _own = False
+        if not _own or league is None or team is None:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "He isn't your unsigned prospect."}
+        try:
+            age = int(getattr(player, 'age', 20) or 20)
+        except Exception:
+            age = 20
+        floor, ceil, years = _scs.elc_band(age, season)
+        try:
+            salary = int(salary)
+            signing_bonus = int(signing_bonus or 0)
+            performance_bonus = int(performance_bonus or 0)
+        except Exception:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "Bonuses must be numbers."}
+        max_signing = int(round(salary * _scs.ELC_SIGNING_BONUS_PCT))
+        if not (floor <= salary <= ceil):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"ELC base must sit inside the band "
+                             f"${floor:,} - ${ceil:,}/yr.")}
+        if not (0 <= signing_bonus <= max_signing):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Signing bonus is capped at 10% of base "
+                             f"(${max_signing:,}/yr).")}
+        if not (0 <= performance_bonus <= _scs.ELC_PERF_BONUS_MAX):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Performance bonus is capped at "
+                             f"${_scs.ELC_PERF_BONUS_MAX:,}/yr.")}
+        ask = _scs.elc_prospect_ask(player, season)
+        res = _scs.elc_handshake(ask, salary, signing_bonus,
+                                 performance_bonus)
+        if res["verdict"] != "accepted":
+            return res
+        try:
+            ok = bool(league.finalize_elc_signing(
+                team, player, salary, years, signing_bonus,
+                performance_bonus))
+        except Exception:
+            ok = False
+        if not ok:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "The signing couldn't be completed."}
+        try:
+            self.add_news(
+                f"{player.full_name} signs an entry-level contract with "
+                f"{getattr(team, 'team_name', 'the club')} "
+                f"(${salary:,}/yr x {years} yrs, ${signing_bonus:,} signing "
+                f"bonus, ${performance_bonus:,}/yr in performance bonuses).")
+        except Exception:
+            pass
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return {"verdict": "accepted", "counter": None,
+                "note": (f"Signed: ${salary:,}/yr x {years} yrs "
+                         f"(+${signing_bonus:,} SB, "
+                         f"+${performance_bonus:,}/yr perf). He'll report to "
+                         f"{getattr(player, 'playing_where', 'the minors')}.")}
 
     def _validate_contract_terms(self, person, salary, years, extension=False,
                                    team=None):

@@ -408,6 +408,180 @@ def burial_exemption(season_year=None) -> int:
     return 1_150_000 + league_minimum_salary(season_year)
 
 
+# ---------------------------------------------------------------------------
+# Entry-level contract negotiation
+# ---------------------------------------------------------------------------
+# An ELC is the one deal a prospect's camp actually negotiates: base salary
+# inside the ELC band, a signing bonus (capped at 10% of base -- the real
+# CBA's signing-bonus limit), and attainable performance bonuses
+# (Schedule-A style, capped at $1M/yr). Term is NOT negotiable: it follows
+# the signing-age table. All tuning here is a judgment call -- flag before
+# changing.
+
+ELC_SIGNING_BONUS_PCT = 0.10   # of base salary, per year
+ELC_PERF_BONUS_MAX = 1_000_000  # per year, Schedule-A style
+ELC_BASE_RESPECT = 0.80       # base < 80% of the ask's base -> insult, rejected
+ELC_BONUS_WEIGHT = 0.5         # bonuses aren't guaranteed money
+
+
+def elc_years_for_age(age) -> int:
+    """ELC term by signing age (the real 3/2/1 table).
+
+    18-21 -> 3 years; 22-23 -> 2 years; 24+ -> 1 year. v1 implements the
+    shape; the full rookie-contract review may refine the edges (European
+    exceptions, slides).
+    """
+    try:
+        a = int(age or 0)
+    except Exception:
+        return 3
+    if a <= 21:
+        return 3
+    if a <= 23:
+        return 2
+    return 1
+
+
+def elc_band(age, season_year=None):
+    """(floor, ceiling, years) for an ELC signed at this age."""
+    years = elc_years_for_age(age)
+    floor = int(league_minimum_salary(season_year))
+    ceil = int(elc_max_salary(years))
+    return max(0, floor), max(floor, ceil), years
+
+
+def elc_prospect_ask(player, season_year=None) -> Dict:
+    """The prospect camp's opening ask: salary, signing_bonus,
+    performance_bonus, plus a flavor line.
+
+    Pedigree anchors it (overall_pick / draft_round): a top-5 pick's camp
+    asks for the max, a 7th-rounder's takes the floor. Selfishness
+    (1-100, dealt at generation) pushes the ask up; anything unselfish
+    pulls it toward the floor. All clamped to the ELC band.
+    """
+    try:
+        age = int(getattr(player, "age", 20) or 20)
+    except Exception:
+        age = 20
+    floor, ceil, years = elc_band(age, season_year)
+    span = max(1, ceil - floor)
+
+    try:
+        pick = int(getattr(player, "overall_pick", 0) or 0)
+    except Exception:
+        pick = 0
+    try:
+        rnd = int(getattr(player, "draft_round", 0) or 0)
+    except Exception:
+        rnd = 0
+    if pick >= 1:
+        if pick <= 5:
+            pedigree, plabel = 1.0, "top-5 pick"
+        elif pick <= 32:
+            pedigree, plabel = 0.85, "first-rounder"
+        elif pick <= 64:
+            pedigree, plabel = 0.65, "second-rounder"
+        elif pick <= 96:
+            pedigree, plabel = 0.45, "third-rounder"
+        else:
+            pedigree, plabel = 0.25, "late-round pick"
+    elif rnd >= 1:
+        pedigree = {1: 0.85, 2: 0.65, 3: 0.45}.get(rnd, 0.25)
+        plabel = {1: "first-rounder", 2: "second-rounder",
+                  3: "third-rounder"}.get(rnd, "late-round pick")
+    else:
+        pedigree, plabel = 0.15, "undrafted free agent"
+
+    try:
+        selfish = float(getattr(player, "selfishness", 50) or 50)
+    except Exception:
+        selfish = 50.0
+    selfish = max(1.0, min(100.0, selfish))
+
+    ask_salary = floor + span * pedigree
+    # Selfishness swings the ask up to +/-15% of the band around neutral.
+    ask_salary += span * 0.15 * ((selfish - 50.0) / 50.0)
+    ask_salary = max(floor, min(ceil, int(round(ask_salary))))
+
+    if pick >= 1 and pick <= 32:
+        ask_signing = int(round(ask_salary * ELC_SIGNING_BONUS_PCT))
+    elif rnd in (2, 3) or (64 < pick <= 96):
+        ask_signing = int(round(ask_salary * ELC_SIGNING_BONUS_PCT * 0.5))
+    else:
+        ask_signing = 0
+
+    if pick >= 1 and pick <= 10:
+        ask_perf = ELC_PERF_BONUS_MAX
+    elif (pick >= 1 and pick <= 32) or rnd == 1:
+        ask_perf = ELC_PERF_BONUS_MAX // 2
+    elif rnd in (2, 3):
+        ask_perf = ELC_PERF_BONUS_MAX // 4
+    else:
+        ask_perf = 0
+
+    if pedigree >= 0.85:
+        flavor = (f"As a {plabel}, his camp expects the full ELC -- max "
+                  f"base, max signing bonus, and performance bonuses.")
+    elif pedigree >= 0.45:
+        flavor = (f"A {plabel}: his camp wants a strong ELC but knows "
+                  f"he has to earn the top of the band.")
+    else:
+        flavor = (f"A {plabel}, he's just happy for the opportunity -- "
+                  f"his camp isn't driving a hard bargain.")
+    if selfish >= 70:
+        flavor += " He's known to look after himself at the table."
+    elif selfish <= 30:
+        flavor += " By all accounts he's an easy sign."
+    return {
+        "salary": ask_salary,
+        "signing_bonus": ask_signing,
+        "performance_bonus": ask_perf,
+        "years": years,
+        "floor": floor,
+        "ceiling": ceil,
+        "flavor": flavor,
+    }
+
+
+def elc_offer_value(salary, signing_bonus, performance_bonus) -> int:
+    """Comparable value of an ELC offer: base + signing bonus + half the
+    performance bonus (bonuses aren't guaranteed money)."""
+    try:
+        return (int(salary or 0) + int(signing_bonus or 0)
+                + int(int(performance_bonus or 0) * ELC_BONUS_WEIGHT))
+    except Exception:
+        return 0
+
+
+def elc_handshake(ask: Dict, salary, signing_bonus, performance_bonus) -> Dict:
+    """Resolve one ELC offer against the camp's ask.
+
+    The base salary is the respect signal: meeting the ask's value signs
+    him; a base that's clearly lowballed (< 80% of the ask's base) gets a
+    flat rejection; anything in the neighborhood draws a counter at the
+    full ask. Returns {verdict, counter, note}.
+    """
+    ask_value = elc_offer_value(ask["salary"], ask["signing_bonus"],
+                                ask["performance_bonus"])
+    offer_value = elc_offer_value(salary, signing_bonus, performance_bonus)
+    if offer_value >= ask_value:
+        return {"verdict": "accepted", "counter": None,
+                "note": "The agent shakes your hand. Deal."}
+    ask_base = ask["salary"] or 1
+    if salary < ELC_BASE_RESPECT * ask_base and offer_value < 0.9 * ask_value:
+        short = ask_value - offer_value
+        return {"verdict": "rejected", "counter": None,
+                "note": (f"Rejected -- you're about ${short:,} short of where "
+                         f"his camp is. They'll listen to a better offer.")}
+    return {"verdict": "counter", "counter": {
+                "salary": ask["salary"],
+                "signing_bonus": ask["signing_bonus"],
+                "performance_bonus": ask["performance_bonus"],
+                "years": ask["years"]},
+            "note": ("Not quite -- the agent counters at his ask. "
+                     "Take it or adjust your offer.")}
+
+
 def max_contract_term(is_extension: bool) -> int:
     """New-CBA maximum term: 7 years to re-sign, 6 years externally."""
     return MAX_TERM_RESIGN if is_extension else MAX_TERM_EXTERNAL

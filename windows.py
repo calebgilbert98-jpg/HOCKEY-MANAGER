@@ -1371,6 +1371,21 @@ class RosterView(ctk.CTkFrame):
                 roster_options = [
                     ("Promote to AHL", lambda: self.move_player(player, 'prospects', 'ahl'))
                 ]
+                # Unsigned rights-held prospect: explicit ELC negotiation
+                # instead of the silent auto-sign on promotion.
+                try:
+                    _elc_elig = (
+                        getattr(player, "contract", None) is None
+                        and (getattr(player, "rights_team", "") or "")
+                        == getattr(getattr(self.app, "user_team", None),
+                                    "team_name", ""))
+                except Exception:
+                    _elc_elig = False
+                if _elc_elig:
+                    roster_options.insert(
+                        0, ("Offer ELC…",
+                            lambda: self.app.open_contract_negotiation_window(
+                                player, is_elc=True)))
 
             # Add contract options
             roster_options.append(("Contract Extension",
@@ -1538,6 +1553,9 @@ class RosterView(ctk.CTkFrame):
         _junior_bulk = (from_roster in ('nhl', 'ahl')
                         and to_roster not in ('nhl', 'ahl'))
         _skipped = 0
+        _unsigned_skipped = 0
+        _is_promotion_bulk = (from_roster not in ('nhl', 'ahl')
+                              and to_roster in ('nhl', 'ahl'))
         for player in players_to_move:
             if _junior_bulk:
                 try:
@@ -1550,12 +1568,23 @@ class RosterView(ctk.CTkFrame):
                 if not _ok:
                     _skipped += 1
                     continue
+            if _is_promotion_bulk and getattr(player, "contract", None) is None:
+                # Unsigned prospects need an explicit ELC first -- one
+                # summary instead of a dialog per kid.
+                _unsigned_skipped += 1
+                continue
             self.move_player(player, from_roster, to_roster)
         if _skipped:
             messagebox.showinfo(
                 "Return to Junior",
                 f"{_skipped} selected player(s) can't go back to junior -- "
                 f"only signed under-20 CHL prospects are eligible.")
+        if _unsigned_skipped:
+            messagebox.showinfo(
+                "Unsigned prospects",
+                f"{_unsigned_skipped} selected prospect(s) need an "
+                f"entry-level contract first -- right-click and choose "
+                f"'Offer ELC' to negotiate, then promote.")
 
         # Clear selections and update views
         self.selected_players[from_roster].clear()
@@ -1565,8 +1594,8 @@ class RosterView(ctk.CTkFrame):
         """Move a single player between rosters.
 
         Promotion (prospects -> NHL/AHL): an unsigned prospect can't
-        skate for $0 -- promoting him signs the ELC first through the
-        league's canonical path, which also consumes his draft rights.
+        skate for $0 -- promotion is blocked until he has an ELC, and
+        the user is routed straight into contract talks ("Offer ELC").
         The CHL-NHL agreement gates AHL assignment for under-20 CHL
         prospects (new CBA: 19-year-old first-rounders excepted).
 
@@ -1610,46 +1639,39 @@ class RosterView(ctk.CTkFrame):
                     "first.")
                 return
             # Signing gate: an unsigned prospect (contract=None) can't
-            # skate for $0. Promoting him signs the ELC first through
-            # the league's canonical path -- which also consumes his
-            # draft rights, so the rights lifecycle actually means
-            # something. No contract, no promotion.
+            # skate for $0. No silent auto-sign -- the user negotiates
+            # the ELC explicitly ("Offer ELC" on the prospects menu).
+            # Promotion just routes into contract talks.
             if getattr(player, "contract", None) is None:
                 # Backstop: prospects who predate rights stamping
-                # get stamped on the fly so the signing gate has
+                # get stamped on the fly so the ELC gate has
                 # something to consume.
                 _league = getattr(self.app, 'league', None)
-                _signed = False
                 try:
-                    if _league is not None:
-                        if not getattr(player, "rights_team", ""):
-                            from datetime import date as _date
-                            _yr = getattr(_league, "current_year",
-                                          _date.today().year)
-                            try:
-                                _league.stamp_draft_rights(
-                                    player,
-                                    self.app.user_team.team_name, int(_yr))
-                            except Exception:
-                                pass
-                        _signed = bool(_league.sign_drafted_prospect(
-                            self.app.user_team, player))
-                except Exception:
-                    _signed = False
-                if not _signed:
-                    messagebox.showerror(
-                        "Unsigned prospect",
-                        f"{player.full_name} couldn't be signed to an "
-                        f"entry-level deal -- only signed players can "
-                        f"join a roster.")
-                    return
-                try:
-                    self.app.add_news(
-                        f"{player.full_name} signed an entry-level contract "
-                        f"({int(getattr(getattr(player, 'contract', None), 'salary', 0) or 0):,}/yr) "
-                        f"and joins the {to_roster.upper()} roster.")
+                    if _league is not None and not getattr(
+                            player, "rights_team", ""):
+                        from datetime import date as _date
+                        _yr = getattr(_league, "current_year",
+                                      _date.today().year)
+                        try:
+                            _league.stamp_draft_rights(
+                                player,
+                                self.app.user_team.team_name, int(_yr))
+                        except Exception:
+                            pass
                 except Exception:
                     pass
+                if messagebox.askyesno(
+                        "Unsigned prospect",
+                        f"{player.full_name} needs an entry-level contract "
+                        f"before he can join the {to_roster.upper()} "
+                        f"roster.\n\nOpen contract talks now?"):
+                    try:
+                        self.app.open_contract_negotiation_window(
+                            player, is_elc=True)
+                    except Exception:
+                        pass
+                return
             try:
                 player.playing_where = "NHL" if to_roster == 'nhl' \
                     else "AHL"
@@ -9306,12 +9328,19 @@ class ContractNegotiationView(ctk.CTkFrame):
     user can jump to another screen mid-talks and resume from the navbar.
     """
 
-    def __init__(self, parent, player=None, is_extension=False, app=None):
+    def __init__(self, parent, player=None, is_extension=False, app=None,
+                 is_elc=False):
         ctk.CTkFrame.__init__(self, parent)
         self.app = app if app is not None else parent
         self._close_screen = None  # set by show_screen() or the wrapper
         self.player = player
         self.is_extension = is_extension
+        # ELC mode: negotiating a first contract with an unsigned
+        # rights-held prospect. Term is locked to the signing-age table,
+        # salary lives inside the ELC band, and signing/performance
+        # bonuses are on the table instead of trade protection.
+        self.is_elc = bool(is_elc)
+        self._elc_counter = None  # agent's counter terms, when offered
         self.configure(fg_color=self.app.BG_COLOR)
         self._session = self._get_session()
         self._build()
@@ -9332,12 +9361,15 @@ class ContractNegotiationView(ctk.CTkFrame):
             sess = {
                 "player": player,
                 "is_extension": self.is_extension,
+                "is_elc": self.is_elc,
                 "offers": [],          # (salary, years, result)
                 "asking_price": None,  # last known agent ask
                 "draft_salary": "",
                 "draft_years": 1,
                 "draft_clause": "none",
                 "draft_clause_size": 10,
+                "draft_signing_bonus": "",
+                "draft_perf_bonus": "",
             }
             sessions[key] = sess
         self._sess_key = key
@@ -9432,7 +9464,20 @@ class ContractNegotiationView(ctk.CTkFrame):
     def _build(self):
         p = self.player
         app = self.app
-        title_text = "Contract Extension" if self.is_extension else "Contract Offer"
+        if self.is_elc:
+            title_text = "Entry-Level Contract"
+        else:
+            title_text = "Contract Extension" if self.is_extension else "Contract Offer"
+        # ELC band for the hint line (term locked to the signing-age table).
+        self._elc_floor, self._elc_ceil, self._elc_years = None, None, None
+        if self.is_elc:
+            try:
+                import salary_cap_system as _scs_b
+                _sy = getattr(getattr(app, "league", None), "season_year", None)
+                self._elc_floor, self._elc_ceil, self._elc_years = \
+                    _scs_b.elc_band(getattr(p, "age", 20), _sy)
+            except Exception:
+                pass
 
         # Header
         header = ttk.Frame(self, style="Panel.TFrame", padding=14)
@@ -9489,67 +9534,126 @@ class ContractNegotiationView(ctk.CTkFrame):
         self.salary_var = tk.StringVar(master=self, value=str(init_sal))
         ttk.Entry(salary_row, textvariable=self.salary_var,
                   width=16).pack(side=tk.LEFT, padx=(6, 0))
+        if self.is_elc and self._elc_floor is not None:
+            ttk.Label(salary_row,
+                      text=f"  (ELC band ${self._elc_floor:,}-"
+                           f"${self._elc_ceil:,}/yr)",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
 
         years_row = ttk.Frame(left, style="Card.TFrame")
         years_row.pack(fill=tk.X, pady=4)
-        ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
-        max_years = 7 if self.is_extension else 6  # new CBA: 7 to re-sign, 6 external
-        self.years_var = tk.IntVar(master=self,
-                                   value=int(self._session.get("draft_years") or 1))
-        ttk.Scale(years_row, from_=1, to=max_years, variable=self.years_var,
-                  orient="horizontal", length=220).pack(side=tk.LEFT, padx=8)
-        ttk.Label(years_row, textvariable=self.years_var,
-                  style="TLabel", width=3).pack(side=tk.LEFT)
-        ttk.Label(years_row, text=f"year(s)  (max {max_years})",
-                  style="Secondary.TLabel").pack(side=tk.LEFT)
+        if self.is_elc:
+            # Term isn't negotiable on an ELC: the signing-age table sets
+            # it (3/2/1). years_var is still kept for the shared paths.
+            self.years_var = tk.IntVar(master=self,
+                                       value=int(self._elc_years or 3))
+            ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
+            ttk.Label(years_row,
+                      text=f"{int(self._elc_years or 3)} year(s)  "
+                           f"(ELC term set by signing age -- not negotiable)",
+                      style="TLabel").pack(side=tk.LEFT, padx=(8, 0))
+        else:
+            ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
+            max_years = 7 if self.is_extension else 6  # new CBA: 7 to re-sign, 6 external
+            self.years_var = tk.IntVar(master=self,
+                                       value=int(self._session.get("draft_years") or 1))
+            ttk.Scale(years_row, from_=1, to=max_years, variable=self.years_var,
+                      orient="horizontal", length=220).pack(side=tk.LEFT, padx=8)
+            ttk.Label(years_row, textvariable=self.years_var,
+                      style="TLabel", width=3).pack(side=tk.LEFT)
+            ttk.Label(years_row, text=f"year(s)  (max {max_years})",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+
+        # ---- ELC bonuses (instead of trade protection) ----
+        if self.is_elc:
+            try:
+                import salary_cap_system as _scs_c
+                _sb_cap_txt = "10% of base"
+                _pb_cap = _scs_c.ELC_PERF_BONUS_MAX
+            except Exception:
+                _pb_cap = 1000000
+            sb_row = ttk.Frame(left, style="Card.TFrame")
+            sb_row.pack(fill=tk.X, pady=4)
+            ttk.Label(sb_row, text="Signing bonus: $",
+                      style="TLabel").pack(side=tk.LEFT)
+            self.signing_var = tk.StringVar(
+                master=self,
+                value=str(self._session.get("draft_signing_bonus") or "0"))
+            ttk.Entry(sb_row, textvariable=self.signing_var,
+                      width=16).pack(side=tk.LEFT, padx=(6, 0))
+            ttk.Label(sb_row, text=f"/yr  (max {_sb_cap_txt})",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+            pb_row = ttk.Frame(left, style="Card.TFrame")
+            pb_row.pack(fill=tk.X, pady=4)
+            ttk.Label(pb_row, text="Performance bonus: $",
+                      style="TLabel").pack(side=tk.LEFT)
+            self.perf_var = tk.StringVar(
+                master=self,
+                value=str(self._session.get("draft_perf_bonus") or "0"))
+            ttk.Entry(pb_row, textvariable=self.perf_var,
+                      width=16).pack(side=tk.LEFT, padx=(6, 0))
+            ttk.Label(pb_row, text=f"/yr  (max ${_pb_cap:,})",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+            self.signing_var.trace_add("write", self._update_total)
+            self.perf_var.trace_add("write", self._update_total)
 
         # ---- Trade protection (real clauses, real leverage) ----
-        import trade_engine as _te
-        clause_row = ttk.Frame(left, style="Card.TFrame")
-        clause_row.pack(fill=tk.X, pady=4)
-        ttk.Label(clause_row, text="Trade protection:",
-                  style="TLabel").pack(side=tk.LEFT)
-        self._clause_names = {"none": "None",
-                              "nmc": "No-movement clause",
-                              "ntc": "Full no-trade",
-                              "mntc": "Modified no-trade"}
-        self._clause_keys = {v: k for k, v in self._clause_names.items()}
-        _cur = str(self._session.get("draft_clause") or "none")
-        if _cur not in self._clause_names:
-            _cur = "none"
-        self.clause_var = tk.StringVar(master=self,
-                                       value=self._clause_names[_cur])
-        self.clause_menu = ttk.OptionMenu(
-            clause_row, self.clause_var, self._clause_names[_cur],
-            *self._clause_names.values(), command=self._on_clause_change)
-        self.clause_menu.pack(side=tk.LEFT, padx=8)
-        # Real NHL: trade protection requires UFA eligibility (27+ / 7 pro
-        # seasons) -- kids can't be offered what the CBA won't allow.
-        try:
-            if not _te.clause_eligible(getattr(self, "player", None)):
-                self.clause_menu.configure(state="disabled")
-                self.clause_var.set(self._clause_names["none"])
-                self._session["draft_clause"] = "none"
-        except Exception:
-            pass
-        self.clause_size_frame = ttk.Frame(clause_row, style="Card.TFrame")
-        ttk.Label(self.clause_size_frame, text="blocked teams:",
-                  style="Secondary.TLabel").pack(side=tk.LEFT)
-        self.clause_size_var = tk.IntVar(
-            master=self, value=int(self._session.get("draft_clause_size")
-                                   or 10))
-        ttk.Scale(self.clause_size_frame, from_=3, to=20,
-                  variable=self.clause_size_var,
-                  orient="horizontal", length=110).pack(side=tk.LEFT, padx=6)
-        ttk.Label(self.clause_size_frame, textvariable=self.clause_size_var,
-                  style="TLabel", width=3).pack(side=tk.LEFT)
-        self.clause_size_var.trace_add("write", self._on_clause_size_change)
-        self.clause_hint_var = tk.StringVar(master=self, value="")
-        ttk.Label(left, textvariable=self.clause_hint_var,
-                  style="Secondary.TLabel", wraplength=520).pack(anchor="w",
-                                                                 pady=(0, 4))
-        self._on_clause_change(self.clause_var.get())
-        self._refresh_clause_hint()
+        if not self.is_elc:
+            import trade_engine as _te
+            clause_row = ttk.Frame(left, style="Card.TFrame")
+            clause_row.pack(fill=tk.X, pady=4)
+            ttk.Label(clause_row, text="Trade protection:",
+                      style="TLabel").pack(side=tk.LEFT)
+            self._clause_names = {"none": "None",
+                                  "nmc": "No-movement clause",
+                                  "ntc": "Full no-trade",
+                                  "mntc": "Modified no-trade"}
+            self._clause_keys = {v: k for k, v in self._clause_names.items()}
+            _cur = str(self._session.get("draft_clause") or "none")
+            if _cur not in self._clause_names:
+                _cur = "none"
+            self.clause_var = tk.StringVar(master=self,
+                                           value=self._clause_names[_cur])
+            self.clause_menu = ttk.OptionMenu(
+                clause_row, self.clause_var, self._clause_names[_cur],
+                *self._clause_names.values(), command=self._on_clause_change)
+            self.clause_menu.pack(side=tk.LEFT, padx=8)
+            # Real NHL: trade protection requires UFA eligibility (27+ / 7 pro
+            # seasons) -- kids can't be offered what the CBA won't allow.
+            try:
+                if not _te.clause_eligible(getattr(self, "player", None)):
+                    self.clause_menu.configure(state="disabled")
+                    self.clause_var.set(self._clause_names["none"])
+                    self._session["draft_clause"] = "none"
+            except Exception:
+                pass
+            self.clause_size_frame = ttk.Frame(clause_row, style="Card.TFrame")
+            ttk.Label(self.clause_size_frame, text="blocked teams:",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+            self.clause_size_var = tk.IntVar(
+                master=self, value=int(self._session.get("draft_clause_size")
+                                       or 10))
+            ttk.Scale(self.clause_size_frame, from_=3, to=20,
+                      variable=self.clause_size_var,
+                      orient="horizontal", length=110).pack(side=tk.LEFT, padx=6)
+            ttk.Label(self.clause_size_frame, textvariable=self.clause_size_var,
+                      style="TLabel", width=3).pack(side=tk.LEFT)
+            self.clause_size_var.trace_add("write", self._on_clause_size_change)
+            self.clause_hint_var = tk.StringVar(master=self, value="")
+            ttk.Label(left, textvariable=self.clause_hint_var,
+                      style="Secondary.TLabel", wraplength=520).pack(anchor="w",
+                                                                     pady=(0, 4))
+            self._on_clause_change(self.clause_var.get())
+            self._refresh_clause_hint()
+        else:
+            # ELC mode: no trade protection on an entry-level deal. Stubs
+            # keep the shared paths (history, walk-away) from touching
+            # missing attributes.
+            self._clause_names = {"none": "None"}
+            self._clause_keys = {"None": "none"}
+            self.clause_var = tk.StringVar(master=self, value="None")
+            self.clause_size_var = tk.IntVar(master=self, value=10)
+            self.clause_hint_var = tk.StringVar(master=self, value="")
 
         self.total_label = ttk.Label(left, text="Total: $0", style="TLabel",
                                      font=(app.FONT_FAMILY, 12, "bold"))
@@ -9563,11 +9667,27 @@ class ContractNegotiationView(ctk.CTkFrame):
         self.banner = ttk.Label(left, textvariable=self.banner_var,
                                 style="Secondary.TLabel", wraplength=520)
         self.banner.pack(anchor="w", pady=(4, 8))
+        if self.is_elc and self._elc_floor is not None:
+            # The banner doubles as the ELC rule card: band, locked term,
+            # and why there's no clause picker.
+            self.banner_var.set(
+                f"Entry-Level Contract: base must sit inside the band "
+                f"(${self._elc_floor:,}-${self._elc_ceil:,}/yr); term is "
+                f"fixed at {int(self._elc_years or 3)} year(s). No trade "
+                f"protection on an ELC -- signing and performance bonuses "
+                f"are the sweetener.")
 
         btn_row = ttk.Frame(left, style="Card.TFrame")
         btn_row.pack(fill=tk.X, pady=(4, 2))
         ttk.Button(btn_row, text="Submit Offer",
                    command=self.submit_offer).pack(side=tk.LEFT, padx=(0, 8))
+        # ELC mode: appears when the agent counters -- one click accepts
+        # his number.
+        self.counter_btn = ttk.Button(btn_row, text="",
+                                      command=self._accept_elc_counter)
+        if self.is_elc:
+            self.counter_btn.pack(side=tk.LEFT, padx=(0, 8))
+            self.counter_btn.pack_forget()
         ttk.Button(btn_row, text="Walk Away",
                    command=self.walk_away).pack(side=tk.LEFT)
 
@@ -9679,6 +9799,25 @@ class ContractNegotiationView(ctk.CTkFrame):
         try:
             salary = int(str(self.salary_var.get()).replace(",", ""))
             years = int(self.years_var.get())
+            if self.is_elc:
+                # ELC total: base + signing bonus + performance bonus, per
+                # year, times the locked term.
+                def _n(v):
+                    try:
+                        return int(str(v.get()).replace(",", "") or 0)
+                    except (ValueError, AttributeError):
+                        return 0
+                sb = _n(self.signing_var)
+                pb = _n(self.perf_var)
+                self.total_label.config(
+                    text=f"Total: ${(salary + sb + pb) * years:,}  "
+                         f"(${salary:,}/yr + ${sb:,} SB + ${pb:,} perf "
+                         f"× {years} yr)")
+                self._session["draft_salary"] = str(salary)
+                self._session["draft_years"] = years
+                self._session["draft_signing_bonus"] = str(sb)
+                self._session["draft_perf_bonus"] = str(pb)
+                return
             self.total_label.config(
                 text=f"Total: ${salary * years:,}  "
                      f"(${salary:,}/yr × {years} yr)")
@@ -9690,6 +9829,9 @@ class ContractNegotiationView(ctk.CTkFrame):
     def _refresh_context(self):
         app = self.app
         p = self.player
+        if self.is_elc:
+            self._refresh_elc_context()
+            return
         lines = []
         # Cap
         try:
@@ -9722,6 +9864,41 @@ class ContractNegotiationView(ctk.CTkFrame):
         self.context_box.insert("end", "\n".join(lines))
         self.context_box.configure(state="disabled")
 
+    def _refresh_elc_context(self):
+        """Right-column context in ELC mode: the camp's ask, not comparables.
+
+        An unsigned prospect has no NHL comparables worth showing -- what
+        matters is pedigree (what his draft slot usually gets) and what
+        his camp is asking for.
+        """
+        lines = []
+        try:
+            import salary_cap_system as _scs_e
+            _sy = getattr(getattr(self.app, "league", None),
+                          "season_year", None)
+            ask = _scs_e.elc_prospect_ask(self.player, _sy)
+            lines.append(
+                f"Agent's ask: ${ask['salary']:,}/yr × {ask['years']} yr(s)")
+            if ask["signing_bonus"]:
+                lines.append(
+                    f"  + ${ask['signing_bonus']:,}/yr signing bonus")
+            if ask["performance_bonus"]:
+                lines.append(
+                    f"  + ${ask['performance_bonus']:,}/yr performance bonus")
+            lines.append("")
+            lines.append(ask["flavor"])
+            lines.append("")
+            lines.append(
+                f"ELC band: ${ask['floor']:,}-${ask['ceiling']:,}/yr base. "
+                f"Term is fixed at {ask['years']} year(s) by signing age -- "
+                f"the one thing you can't negotiate.")
+        except Exception as e:
+            lines.append(f"(ask unavailable: {e})")
+        self.context_box.configure(state="normal")
+        self.context_box.delete("1.0", "end")
+        self.context_box.insert("end", "\n".join(lines))
+        self.context_box.configure(state="disabled")
+
     def _refresh_history(self):
         offers = self._session.get("offers", [])
         self.history_box.configure(state="normal")
@@ -9741,6 +9918,9 @@ class ContractNegotiationView(ctk.CTkFrame):
         self._refresh_history()
 
     def submit_offer(self):
+        if self.is_elc:
+            self._submit_elc_offer()
+            return
         p = self.player
         try:
             salary = int(str(self.salary_var.get()).replace(",", ""))
@@ -9783,6 +9963,70 @@ class ContractNegotiationView(ctk.CTkFrame):
                 self.app.refresh_screen_navbar()
             except Exception:
                 pass
+
+    def _submit_elc_offer(self):
+        """One ELC offer round: validate the band, run the prospect
+        handshake, and either sign him, show the agent's counter, or
+        report the rejection. The view stays open until it's signed or
+        the user walks away."""
+        p = self.player
+
+        def _num(var):
+            try:
+                return int(str(var.get()).replace(",", "") or 0)
+            except (ValueError, AttributeError):
+                return None
+
+        salary, sb, pb = (_num(self.salary_var), _num(self.signing_var),
+                          _num(self.perf_var))
+        if salary is None or sb is None or pb is None or salary <= 0:
+            self.banner_var.set("Enter valid numbers for salary and bonuses.")
+            return
+        years = int(self.years_var.get() or 0)
+        res = self.app.handle_elc_offer(p, salary, sb, pb)
+        verdict = res.get("verdict")
+        if verdict == "accepted":
+            self._record_offer(salary, years,
+                               f"accepted ✓ (${sb:,} SB, ${pb:,}/yr perf)")
+            self._close_session()
+            self.close_view()
+        elif verdict == "counter":
+            c = res.get("counter") or {}
+            self._elc_counter = c
+            self._record_offer(salary, years, "countered by agent")
+            self.banner_var.set(
+                f"Agent counters: ${c.get('salary', 0):,}/yr "
+                f"× {c.get('years', years)} + ${c.get('signing_bonus', 0):,} "
+                f"signing bonus + ${c.get('performance_bonus', 0):,}/yr "
+                f"performance bonus. Accept below or adjust your offer.")
+            try:
+                self.counter_btn.config(
+                    text=f"Accept ${c.get('salary', 0):,}/yr counter")
+                self.counter_btn.pack(side=tk.LEFT, padx=(0, 8))
+            except Exception:
+                pass
+        else:
+            self._record_offer(
+                salary, years, f"{verdict} -- {res.get('note', '')}")
+            self.banner_var.set(res.get("note") or "Offer rejected.")
+            self._elc_counter = None
+            try:
+                self.counter_btn.pack_forget()
+            except Exception:
+                pass
+
+    def _accept_elc_counter(self):
+        """One-click acceptance: fill the agent's number and submit."""
+        c = self._elc_counter or {}
+        if not c:
+            return
+        try:
+            self.salary_var.set(str(c.get("salary", 0)))
+            self.signing_var.set(str(c.get("signing_bonus", 0)))
+            self.perf_var.set(str(c.get("performance_bonus", 0)))
+        except Exception:
+            pass
+        self._submit_elc_offer()
 
     def walk_away(self):
         self._record_offer(

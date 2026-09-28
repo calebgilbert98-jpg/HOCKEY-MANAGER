@@ -5412,21 +5412,18 @@ class League:
         except Exception:
             pass
 
-    def sign_drafted_prospect(self, team, player):
-        """Sign an unsigned drafted prospect to an ELC-like deal.
+    def finalize_elc_signing(self, team, player, salary, years,
+                             signing_bonus=0, performance_bonus=0,
+                             ahl_salary=None):
+        """Sign an unsigned drafted prospect to explicit ELC terms.
 
-        Reuses the existing contract-creation path
-        (player_generator.PlayerGenerator.determine_contract_info, which
-        routes age <= 22 prospects through the ENTRY_LEVEL gate:
-        $775k-$975k x 3 years, two-way). No new cap logic: the deal is a
-        plain Contract assignment, and cap reads it through the existing
-        systems. On success the rights fields are cleared (the prospect is
-        no longer "unsigned") and playing_where is set by real
-        eligibility: junior-aged CHL prospects return to junior,
-        ex-college players go to the AHL (an NHL deal ends NCAA
-        eligibility -- never back to college), everyone else to the AHL;
-        returns True. Returns False when the prospect isn't this team's
-        unsigned rights-holder asset.
+        The shared finalizer for every ELC path: the auto-sign
+        (sign_drafted_prospect computes the terms) and the negotiated
+        offer (the ELC negotiation view / handle_elc_offer). One
+        rulebook: rights-holder check, Contract creation (two-way, with
+        signing + performance bonuses), rights consumption, and
+        eligibility-based assignment (junior-aged CHL -> junior, everyone
+        else -> AHL). Returns True on success.
         """
         try:
             team_name = team if isinstance(team, str) else getattr(team, "team_name", "")
@@ -5444,20 +5441,26 @@ class League:
             if player not in prospects:
                 return False
             # Only the rights holder can sign; already-signed prospects
-            # (rights cleared) are skipped.
+            # (rights cleared) are skipped. The contract check is explicit:
+            # a prospect who somehow holds both is never re-signed.
+            if getattr(player, "contract", None) is not None:
+                return False
             rights_team = getattr(player, "rights_team", "") or ""
             if not rights_team or rights_team != getattr(team_obj, "team_name", ""):
                 return False
-            try:
-                from player_generator import PlayerGenerator
-                salary, years, two_way, ahl_salary = \
-                    PlayerGenerator().determine_contract_info(player, "NHL_ROOKIE")
-            except Exception:
-                salary, years, two_way, ahl_salary = 925000, 3, True, 85000
+            if ahl_salary is None:
+                try:
+                    from player_generator import PlayerGenerator
+                    _s, _y, _tw, ahl_salary = \
+                        PlayerGenerator().determine_contract_info(player, "NHL_ROOKIE")
+                except Exception:
+                    ahl_salary = 85000
             player.contract = Contract(salary=int(salary),
                                        years_remaining=int(years),
-                                       two_way=bool(two_way),
-                                       ahl_salary=int(ahl_salary))
+                                       two_way=True,
+                                       ahl_salary=int(ahl_salary or 85000),
+                                       signing_bonus=int(signing_bonus or 0),
+                                       performance_bonus=int(performance_bonus or 0))
             # Rights consumed: the prospect is now signed. drafted_year is
             # cleared too -- it now means "drafted but never signed", which
             # the five-year unsigned-retirement scan relies on.
@@ -5482,6 +5485,31 @@ class League:
             return True
         except Exception:
             return False
+
+    def sign_drafted_prospect(self, team, player):
+        """Sign an unsigned drafted prospect to an ELC-like deal.
+
+        Reuses the existing contract-creation path
+        (player_generator.PlayerGenerator.determine_contract_info, which
+        routes age <= 22 prospects through the ENTRY_LEVEL gate:
+        $775k-$975k x 3 years, two-way). No new cap logic: the deal is a
+        plain Contract assignment, and cap reads it through the existing
+        systems. On success the rights fields are cleared (the prospect is
+        no longer "unsigned") and playing_where is set by real
+        eligibility: junior-aged CHL prospects return to junior,
+        ex-college players go to the AHL (an NHL deal ends NCAA
+        eligibility -- never back to college), everyone else to the AHL;
+        returns True. Returns False when the prospect isn't this team's
+        unsigned rights-holder asset.
+        """
+        try:
+            from player_generator import PlayerGenerator
+            salary, years, two_way, ahl_salary = \
+                PlayerGenerator().determine_contract_info(player, "NHL_ROOKIE")
+        except Exception:
+            salary, years, two_way, ahl_salary = 925000, 3, True, 85000
+        return self.finalize_elc_signing(team, player, salary, years,
+                                         ahl_salary=ahl_salary)
 
     def invite_prospect_to_camp(self, team_name, player):
         """Invite an unsigned drafted prospect to development camp.
