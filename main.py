@@ -7168,6 +7168,16 @@ class HockeyManagerGUI(tk.Tk):
                              date_str=self.current_date.isoformat())
         except Exception:
             return False
+        # Fresh start: a player rescued from a bad situation gets a
+        # morale lift -- the "you both win" payoff for analytics finds.
+        try:
+            import reputation_system as _rs
+            _moved = piece if not isinstance(piece, (list, tuple)) else piece[0]
+            if hasattr(_moved, "full_name"):
+                _rs.apply_fresh_start(_moved, seller, buyer,
+                                      teams=self.league.teams)
+        except Exception:
+            pass
         # Break the news: ticker + inbox.
         pay_label = te.asset_label(payment)
         piece_label = te.asset_label(piece)
@@ -7870,6 +7880,10 @@ class HockeyManagerGUI(tk.Tk):
         # Process trade block offers (once per week) - unchanged
         if self.current_date.weekday() == 0:  # Monday
             self.process_trade_block_offers()
+        # Scout value tips: once a month (1st), not weekly -- tips should
+        # feel like real pro-scouting work, not a daily cheat sheet.
+        if self.current_date.day == 1:
+            self._dispatch_scout_value_tips()
         
         # Process scouting assignments - optimized to run every 3 days instead of daily
         if self.current_date.day % 3 == 0:  # Every 3 days
@@ -9945,8 +9959,11 @@ class HockeyManagerGUI(tk.Tk):
         award_key_map = {
             'Hart Trophy (MVP)': 'hart',
             'Art Ross Trophy (Scoring Leader)': 'art_ross',
+            'Maurice Richard Trophy (Goal Leader)': 'rocket',
             'Vezina Trophy (Best Goalie)': 'vezina',
             'Norris Trophy (Best Defenseman)': 'norris',
+            'Selke Trophy (Defensive Forward)': 'selke',
+            'Lady Byng Trophy (Sportsmanship)': 'lady_byng',
             'Calder Trophy (Rookie of the Year)': 'calder',
         }
         name_to_awards = {}
@@ -10176,85 +10193,134 @@ class HockeyManagerGUI(tk.Tk):
             row += 1
             
     def _calculate_season_awards(self, all_players):
-        """Calculate award winners based on season performance."""
+        """Calculate award winners using the awards_race voting model.
+
+        The same rankings the user sees in the Award Races tab decide the
+        actual trophies -- no more display-vs-reality split. Each race
+        mirrors real voting history (Hart: points + team success, Norris:
+        modern offense-first D voting, Vezina: SV%/GAA/wins + GSAx, etc.).
+        """
         awards = {}
-        
-        # Filter out players without stats
-        players_with_stats = [p for p in all_players if hasattr(p, 'stats') and p.stats]
-        skaters = [p for p in players_with_stats if p.primary_position.name != 'GOALIE']
-        goalies = [p for p in players_with_stats if p.primary_position.name == 'GOALIE']
-        
-        # Hart Trophy - MVP
-        if skaters:
-            mvp = max(skaters, key=lambda p: getattr(p.stats, 'points', 0) + p.overall_rating() * 0.5)
-            awards['Hart Trophy (MVP)'] = {
-                'name': mvp.full_name,
-                'team': getattr(mvp, 'team_name', 'Unknown'),
-                'stats': f"{getattr(mvp.stats, 'points', 0)} pts"
-            }
+        try:
+            import awards_race as ar
+        except ImportError:
+            return awards
+
+        players = [p for p in (all_players or []) if p is not None]
+        teams = list(getattr(getattr(self, "league", None), "teams", []) or [])
+
+        # Authoritative team strength map for Hart voting (from standings,
+        # not player.team_name which may be stale).
+        team_pct = {}
+        for t in teams:
+            gp = getattr(t, "games_played", 0) or 0
+            pts = getattr(t, "points", 0) or 0
+            team_pct[getattr(t, "team_name", "")] = (pts / (2 * gp)) if gp else 0.5
+
+        def _info(entry):
+            """Normalize a race entry to the {name, team, stats} contract."""
+            if not entry:
+                return None
+            p = entry.get("player")
+            if p is None:
+                # Team-level award (Jennings, Adams)
+                return {"name": entry.get("team") or entry.get("coach") or "?",
+                        "team": entry.get("team", "?"),
+                        "stats": ""} if entry else None
+            name = getattr(p, "full_name", getattr(p, "name", "?"))
+            team = getattr(p, "team_name", "Unknown") or "Unknown"
+            return {"name": name, "team": team, "stats": ""}
+
+        def _top(race):
+            try:
+                r = race()
+                return r[0] if r else None
+            except Exception:
+                return None
+
+        # Hart Trophy - MVP (points + team success)
+        e = _top(lambda: ar.hart_race(players, team_pct))
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
+        awards["Hart Trophy (MVP)"] = info
+
+        # Art Ross - pure points
+        e = _top(lambda: ar.art_ross_race(players))
+        info = _info(e)
+        if info:
+            p = e["player"]
+            info["stats"] = (f"{getattr(p, 'goals', 0)}G "
+                             f"{getattr(p, 'assists', 0)}A = {e['points']} pts")
+        awards["Art Ross Trophy (Scoring Leader)"] = info
+
+        # Rocket Richard - pure goals
+        e = _top(lambda: ar.rocket_race(players))
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['goals']} goals"
+        awards["Maurice Richard Trophy (Goal Leader)"] = info
+        # (Keep the legacy display key working for the reputation map.)
+        awards["Rocket Richard Trophy (Goal Leader)"] = info
+
+        # Vezina - best goalie (SV%/GAA/wins + GSAx cross-check)
+        e = _top(lambda: ar.vezina_race(players))
+        info = _info(e)
+        if info:
+            p = e["player"]
+            sv = getattr(p, "saves", 0) / max(1, getattr(p, "shots_against", 0) or 1)
+            info["stats"] = f".{int(sv * 1000)} SV%, {getattr(p, 'wins', 0)}W"
+        awards["Vezina Trophy (Best Goalie)"] = info
+
+        # Norris - best defenseman (modern offense-first voting)
+        e = _top(lambda: ar.norris_race(players))
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts"
+        awards["Norris Trophy (Best Defenseman)"] = info
+
+        # Selke - best defensive forward
+        e = _top(lambda: ar.selke_race(players))
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['score']:.1f} defensive score"
+        awards["Selke Trophy (Defensive Forward)"] = info
+
+        # Lady Byng - skill + sportsmanship (points discounted by PIM)
+        e = _top(lambda: ar.byng_race(players))
+        info = _info(e)
+        if info:
+            p = e["player"]
+            info["stats"] = f"{e['points']} pts, {getattr(p, 'pim', 0)} PIM"
+        awards["Lady Byng Trophy (Sportsmanship)"] = info
+
+        # Calder - rookie of the year (NHL rookie eligibility)
+        e = _top(lambda: ar.calder_race(players))
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts (rookie)"
+        awards["Calder Trophy (Rookie of the Year)"] = info
+
+        # Jennings - fewest team goals against
+        e = _top(lambda: ar.jennings_race(teams))
+        if e:
+            awards["Jennings Trophy (Fewest GA)"] = {
+                "name": e["team"], "team": e["team"],
+                "stats": f"{e['goals_against']} GA"}
         else:
-            awards['Hart Trophy (MVP)'] = None
-            
-        # Art Ross Trophy - Scoring Leader
-        if skaters:
-            scoring_leader = max(skaters, key=lambda p: getattr(p.stats, 'points', 0))
-            awards['Art Ross Trophy (Scoring Leader)'] = {
-                'name': scoring_leader.full_name,
-                'team': getattr(scoring_leader, 'team_name', 'Unknown'),
-                'stats': f"{getattr(scoring_leader.stats, 'goals', 0)}G {getattr(scoring_leader.stats, 'assists', 0)}A = {getattr(scoring_leader.stats, 'points', 0)} pts"
-            }
+            awards["Jennings Trophy (Fewest GA)"] = None
+
+        # Jack Adams - most overachieving coach
+        e = _top(lambda: ar.adams_race(teams))
+        if e:
+            awards["Jack Adams (Best Coach)"] = {
+                "name": e["coach"], "team": e["team"],
+                "stats": f"+{e['score']:.3f} vs expectation"}
         else:
-            awards['Art Ross Trophy (Scoring Leader)'] = None
-            
-        # Rocket Richard Trophy - Goal Leader
-        if skaters:
-            goal_leader = max(skaters, key=lambda p: getattr(p.stats, 'goals', 0))
-            awards['Rocket Richard Trophy (Goal Leader)'] = {
-                'name': goal_leader.full_name,
-                'team': getattr(goal_leader, 'team_name', 'Unknown'),
-                'stats': f"{getattr(goal_leader.stats, 'goals', 0)} goals"
-            }
-        else:
-            awards['Rocket Richard Trophy (Goal Leader)'] = None
-            
-        # Vezina Trophy - Best Goalie
-        if goalies:
-            best_goalie = max(goalies, key=lambda p: getattr(p.stats, 'save_percentage', 0) if hasattr(p.stats, 'save_percentage') else p.overall_rating())
-            sv_pct = getattr(best_goalie.stats, 'save_percentage', 0)
-            awards['Vezina Trophy (Best Goalie)'] = {
-                'name': best_goalie.full_name,
-                'team': getattr(best_goalie, 'team_name', 'Unknown'),
-                'stats': f".{int(sv_pct * 1000) if sv_pct > 0 else 'N/A'} SV%"
-            }
-        else:
-            awards['Vezina Trophy (Best Goalie)'] = None
-            
-        # Norris Trophy - Best Defenseman
-        defensemen = [p for p in skaters if 'DEFENSE' in p.primary_position.name]
-        if defensemen:
-            best_dman = max(defensemen, key=lambda p: getattr(p.stats, 'points', 0) + p.overall_rating() * 0.3)
-            awards['Norris Trophy (Best Defenseman)'] = {
-                'name': best_dman.full_name,
-                'team': getattr(best_dman, 'team_name', 'Unknown'),
-                'stats': f"{getattr(best_dman.stats, 'points', 0)} pts"
-            }
-        else:
-            awards['Norris Trophy (Best Defenseman)'] = None
-            
-        # Calder Trophy - Rookie of the Year (age <= 24 and first year)
-        rookies = [p for p in skaters if p.age <= 24]
-        if rookies:
-            best_rookie = max(rookies, key=lambda p: getattr(p.stats, 'points', 0))
-            awards['Calder Trophy (Rookie of the Year)'] = {
-                'name': best_rookie.full_name,
-                'team': getattr(best_rookie, 'team_name', 'Unknown'),
-                'stats': f"{getattr(best_rookie.stats, 'points', 0)} pts"
-            }
-        else:
-            awards['Calder Trophy (Rookie of the Year)'] = None
-            
+            awards["Jack Adams (Best Coach)"] = None
+
         return awards
-    
+
     def _create_leaders_section(self, parent):
         """Create league leaders section."""
         ttk.Label(parent, text="League Statistical Leaders", 
@@ -10464,8 +10530,11 @@ class HockeyManagerGUI(tk.Tk):
             # Normalize to {award_name: player_name}
             for award_name, winner in raw_awards.items():
                 if winner is not None:
-                    awards[str(award_name)] = getattr(
-                        winner, 'full_name', getattr(winner, 'name', str(winner)))
+                    if isinstance(winner, dict):
+                        awards[str(award_name)] = winner.get('name', '?')
+                    else:
+                        awards[str(award_name)] = getattr(
+                            winner, 'full_name', getattr(winner, 'name', str(winner)))
         except Exception:
             pass
 
@@ -10513,6 +10582,110 @@ class HockeyManagerGUI(tk.Tk):
             season_label = f"{year}-{str(year + 1)[-2:]}"
             for team in self.league.teams:
                 hist.franchise_records.update_from_season(team, season_label)
+        except Exception:
+            pass
+
+    def _dispatch_scout_value_tips(self):
+        """Monthly pro-scout value tips -- for the USER and every AI GM.
+
+        Even playing field: every team's Head Scout / Professional Scouts
+        file their reads on the 1st. The user gets tips in the news feed;
+        AI teams store theirs on the team object where their trade logic
+        reads them (see trade_engine.scout_adjusted_value).
+
+        Whether a tip is RIGHT depends directly on that scout's
+        judging_player_ability -- elite scouts spot real value, bad scouts
+        chase ghosts. Same rules for silicon and flesh.
+        """
+        try:
+            import analytics_scouting as scout_mod
+            import random as _r
+        except ImportError:
+            return
+        try:
+            league = self.league
+            teams = list(getattr(league, "teams", []) or [])
+            if not teams:
+                return
+            try:
+                from game_classes import StaffRole
+                pro_roles = {StaffRole.HEAD_SCOUT, StaffRole.PROFESSIONAL_SCOUT}
+            except Exception:
+                pro_roles = set()
+            all_players = []
+            for t in teams:
+                all_players.extend(getattr(t, "roster", []) or [])
+            if not all_players:
+                return
+            user_team = getattr(self, "user_team", None)
+            user_name = getattr(user_team, "team_name", "") if user_team else ""
+            for team in teams:
+                tname = getattr(team, "team_name", "")
+                staff = list(getattr(team, "staff", []) or [])
+                scouts = [s for s in staff
+                          if getattr(s, "role", None) in pro_roles] if pro_roles else []
+                if not scouts:
+                    continue
+                is_user = (tname == user_name)
+                # Fresh sheet each month; stale tips don't linger.
+                if not is_user:
+                    team.scout_buy_tips = {}
+                    team.scout_sell_tips = {}
+                for s in scouts:
+                    jpa = getattr(s, "judging_player_ability", 10) or 10
+                    tip_chance = 0.20 + 0.50 * (min(20, max(1, jpa)) - 1) / 19.0
+                    if _r.random() > tip_chance:
+                        continue
+                    buy_tips = scout_mod.scout_value_tips(
+                        s, all_players, teams,
+                        user_team=team, limit=2)
+                    sell_tips = scout_mod.scout_sell_high_tips(
+                        s, team, limit=2)
+                    if is_user:
+                        for tip in buy_tips:
+                            tier = scout_mod.scout_ability_label(tip["scout_jpa"])
+                            story = (
+                                f"SCOUT TIP ({tier} -- {tip['scout']}): "
+                                f"take a look at {tip['name']} ({tip['team']}). "
+                                f"{tip['reason']} "
+                                f"[{tip['confidence']} confidence]")
+                            if tip["risks"]:
+                                story += f" Risk: {'; '.join(tip['risks'])}"
+                            try:
+                                self.add_news(story)
+                            except Exception:
+                                pass
+                        for tip in sell_tips:
+                            tier = scout_mod.scout_ability_label(tip["scout_jpa"])
+                            story = (
+                                f"SCOUT TIP ({tier} -- {tip['scout']}): "
+                                f"consider moving {tip['name']} while his value "
+                                f"is high. {tip['reason']} "
+                                f"[{tip['confidence']} confidence]")
+                            try:
+                                self.add_news(story)
+                            except Exception:
+                                pass
+                    else:
+                        # AI: file the tips where the trade engine reads them.
+                        bt = getattr(team, "scout_buy_tips", None)
+                        if bt is None:
+                            team.scout_buy_tips = bt = {}
+                        st = getattr(team, "scout_sell_tips", None)
+                        if st is None:
+                            team.scout_sell_tips = st = {}
+                        for tip in buy_tips:
+                            p = tip["player"]
+                            pid = getattr(p, "id", id(p))
+                            bt[pid] = {"jpa": tip["scout_jpa"],
+                                       "correct": tip["correct"],
+                                       "scout": tip["scout"]}
+                        for tip in sell_tips:
+                            p = tip["player"]
+                            pid = getattr(p, "id", id(p))
+                            st[pid] = {"jpa": tip["scout_jpa"],
+                                       "correct": tip["correct"],
+                                       "scout": tip["scout"]}
         except Exception:
             pass
 

@@ -235,7 +235,7 @@ def goalie_advanced(player: Any, league_avg_sv_pct: float = 0.905) -> GoalieAdva
 
     m.sv_pct = (saves / sa) if sa else 0.0
     m.gaa = getattr(st, "goals_against_avg", 0.0) or 0.0
-    toi = _parse_toi(getattr(player, "avg_toi", "0:00"))
+    toi = estimate_toi(player)
     if toi and gp:
         m.sa_per60 = sa / ((toi * gp) / 60.0)
 
@@ -262,7 +262,11 @@ def goalie_advanced(player: Any, league_avg_sv_pct: float = 0.905) -> GoalieAdva
 
     # Quality-start % estimate: modeled from consistency + overall ability
     consistency = _attr(player, "consistency", 50)
-    overall = _attr(player, "overall", 75)
+    ovr_fn = getattr(player, "overall_rating", None)
+    try:
+        overall = float(ovr_fn()) if callable(ovr_fn) else float(ovr_fn or 75)
+    except (TypeError, ValueError):
+        overall = 75.0
     m.qs_pct = round(max(0.0, min(1.0,
                         0.45 + (consistency - 50) * 0.006 + (overall - 75) * 0.008)), 3)
     return m
@@ -338,13 +342,34 @@ def team_advanced(team: Any, league_avg_gf: float = 3.1) -> TeamAdvanced:
         m.gf_per60 = round(gf / gp, 2)
         m.ga_per60 = round(ga / gp, 2)
 
-    # Special teams (actuals)
+    # Special teams: the engine tracks PP chances in per-game sim state but does
+    # not aggregate them onto Team, so model from personnel. PP units lean on
+    # the most offensively gifted skaters; PK units on defensive awareness.
+    # Documented as estimates; real team attributes take precedence if present.
     ppo = getattr(team, "power_play_opportunities", 0) or 0
     ppg = getattr(team, "power_play_goals", 0) or 0
-    pko = getattr(team, "penalty_kill_opportunities", 0) or ppo  # fallback symmetry
+    if ppo:
+        m.pp_pct = round(100.0 * ppg / ppo, 1)
+    elif skaters:
+        pp_unit = sorted(skaters,
+                         key=lambda p: _attr(p, "offensive_awareness", 50),
+                         reverse=True)[:6]
+        pp_talent = sum(0.5 * _attr(p, "offensive_awareness", 50)
+                        + 0.3 * _attr(p, "shooting", 50)
+                        + 0.2 * _attr(p, "passing", 50) for p in pp_unit) / 6.0
+        # 70 talent -> ~21% (league avg), +/-0.45pp per attribute point
+        m.pp_pct = round(max(12.0, min(32.0, 21.0 + (pp_talent - 70.0) * 0.45)), 1)
+    pko = getattr(team, "penalty_kill_opportunities", 0) or 0
     pkga = getattr(team, "penalty_kill_goals_against", 0) or 0
-    m.pp_pct = round(100.0 * ppg / ppo, 1) if ppo else 0.0
-    m.pk_pct = round(100.0 * (pko - pkga) / pko, 1) if pko else 0.0
+    if pko:
+        m.pk_pct = round(100.0 * (pko - pkga) / pko, 1)
+    elif skaters:
+        pk_unit = sorted(skaters,
+                         key=lambda p: _attr(p, "defensive_awareness", 50),
+                         reverse=True)[:6]
+        pk_talent = sum(_attr(p, "defensive_awareness", 50) for p in pk_unit) / 6.0
+        # 70 talent -> ~80% (league avg), +/-0.45pp per attribute point
+        m.pk_pct = round(max(70.0, min(90.0, 80.0 + (pk_talent - 70.0) * 0.45)), 1)
 
     # SRS: goal differential per game vs league average (schedule-naive)
     if gp:
@@ -405,7 +430,7 @@ GLOSSARY: Dict[str, str] = {
     "QS%": "Quality-start %: share of starts with above-average save %.",
     "SH%": "Shooting %: goals divided by shots on goal.",
     "GF%": "Goal share at even strength: actual results vs the xGF% process.",
-    "PP%": "Power-play conversion rate.",
-    "PK%": "Penalty-kill success rate.",
+    "PP%": "Power-play conversion rate (modeled from PP personnel when actuals unavailable).",
+    "PK%": "Penalty-kill success rate (modeled from PK personnel when actuals unavailable).",
     "SRS": "Simple Rating System: goal differential per game (schedule-naive).",
 }

@@ -4516,8 +4516,7 @@ def evaluate_contract_decision(player: Any, aav: float, expected_aav: float,
             "story": " ".join(texts), "effects": effects}
 
 
-# ===========================================================================
-# GM STATURE EFFECTS — the league judges YOU
+# ====================================================================# GM STATURE EFFECTS — the league judges YOU
 #
 # Three axes, all whispers:
 #   stature  — league-wide: dealings (shrewd <-> reckless) + accolades
@@ -4878,3 +4877,124 @@ def gm_board_drift(board: Any, team: Any) -> int:
         return delta
     except Exception:
         return 0
+# ---------------------------------------------------------------------------
+# Fresh start: the "you both win" payoff for analytics finds
+# ---------------------------------------------------------------------------
+
+def apply_fresh_start(player: Any, old_team: Any, new_team: Any,
+                      teams: List[Any] = None) -> Dict[str, Any]:
+    """A player rescued from a bad situation gets a new lease on hockey.
+
+    When the analytics department finds the right guy in the wrong
+    situation and the GM brings him home, both sides win: the player gets
+    a real room, real linemates, real stakes -- and the team gets his
+    real game. This is the mechanical payoff for the Moneyball loop.
+
+    Effects scale with the size of the upgrade:
+    - Lottery team -> contender: big morale/happiness lift, "reborn" narrative
+    - Bad -> middling or middling -> good: moderate lift
+    - Lateral or downward: no bonus (and a small grumble if it's a clear
+      step down -- nobody celebrates a downgrade)
+
+    Also records the move in the dynamics feed so the room notices the
+    new guy arriving with something to prove.
+    """
+    ensure_reputation_fields(player)
+    result: Dict[str, Any] = {"morale_delta": 0, "happiness_delta": 0,
+                              "story": "", "rescue": False}
+
+    def _pct(t) -> float:
+        if t is None:
+            return 0.5
+        gp = getattr(t, "games_played", 0) or 0
+        pts = getattr(t, "points", 0) or 0
+        return (pts / (2 * gp)) if gp > 0 else 0.5
+
+    old_pct = _pct(old_team)
+    new_pct = _pct(new_team)
+    upgrade = new_pct - old_pct
+
+    pname = getattr(player, "full_name", getattr(player, "name", "The newcomer"))
+    old_name = getattr(old_team, "team_name", "his old club") if old_team else "his old club"
+    new_name = getattr(new_team, "team_name", "his new club") if new_team else "his new club"
+
+    happiness = getattr(player, "happiness", 70) or 70
+    morale = getattr(player, "morale", 70) or 70
+
+    if upgrade >= 0.150:
+        # Lottery -> contender: the full rebirth.
+        dh, dm = 12, 10
+        result["rescue"] = True
+        result["story"] = (
+            f"{pname} looks reborn after escaping {old_name} for {new_name}. "
+            f"Going from a {old_pct:.3f} club to a {new_pct:.3f} contender has "
+            f"him playing like the guy the analytics department said he was.")
+    elif upgrade >= 0.070:
+        dh, dm = 7, 6
+        result["rescue"] = True
+        result["story"] = (
+            f"{pname} is settling in nicely at {new_name} after leaving "
+            f"{old_name}. Better linemates, better stakes -- the underlying "
+            f"numbers said this was coming.")
+    elif upgrade >= 0.020:
+        dh, dm = 3, 3
+        result["story"] = (f"{pname} welcomes the change of scenery from "
+                           f"{old_name} to {new_name}.")
+    elif upgrade <= -0.100:
+        # Clear step down: the guy knows it.
+        dh, dm = -6, -4
+        result["story"] = (
+            f"{pname} isn't hiding his disappointment at going from "
+            f"{old_name} to {new_name}. Somebody's agent is already "
+            f"working the phones.")
+    else:
+        # Lateral move: small novelty bump, nothing more.
+        dh, dm = 2, 1
+        result["story"] = ""
+
+    try:
+        player.happiness = max(0, min(100, happiness + dh))
+    except Exception:
+        pass
+    try:
+        player.morale = max(0, min(100, morale + dm))
+    except Exception:
+        pass
+    result["morale_delta"] = dm
+    result["happiness_delta"] = dh
+
+    # The room notices: log to the new team's dynamics feed.
+    if result["story"] and new_team is not None:
+        try:
+            record_team_event(new_team, "fresh_start", result["story"],
+                              morale_delta=dm,
+                              tone="up" if dm >= 0 else "down")
+        except Exception:
+            pass
+    return result
+
+
+def note_analytics_steal(player: Any, team: Any, value_score: float,
+                         signals: List[str]) -> None:
+    """The room and the press notice when the analytics find pays off.
+
+    Call when a buy-low candidate identified by analytics_scouting starts
+    producing after the move -- it banks reputation for the player and a
+    little GM credibility narrative.
+    """
+    ensure_reputation_fields(player)
+    pname = getattr(player, "full_name", getattr(player, "name", "?"))
+    tname = getattr(team, "team_name", "?") if team is not None else "?"
+    story = (f"The analytics department called it: {pname} is producing "
+             f"like a star at {tname} ({'; '.join(signals[:2])}). "
+             f"Somebody's pro scouts earned their paychecks.")
+    try:
+        record_team_event(team, "analytics_steal", story,
+                          morale_delta=2, tone="up")
+    except Exception:
+        pass
+    # A validated breakout banks real standing.
+    try:
+        player.reputation = min(100, (getattr(player, "reputation", 0) or 0) + 4)
+    except Exception:
+        pass
