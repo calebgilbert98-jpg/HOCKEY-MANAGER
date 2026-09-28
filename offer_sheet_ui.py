@@ -35,26 +35,25 @@ def _money(n):
 def compensation_pick_status(user_team, year, picks):
     """Preview which compensation picks the user can actually furnish.
 
-    Mirrors execute_offer_sheet's find logic (own pick in `year`, else
-    `year + 1`) with transfer semantics simulated through a used-set, so
-    the preview never promises the same pick twice. Returns
-    (lines, missing_rounds); lines are (ok, text) tuples.
+    Mirrors execute_offer_sheet's find logic (walk forward through the
+    club's own upcoming picks, as far as picks exist) with transfer
+    semantics simulated through a used-set, so the preview never
+    promises the same pick twice. Returns (lines, missing_rounds);
+    lines are (ok, text) tuples.
     """
     import rfa_system as _rfa
     lines, missing, used_ids = [], [], set()
     for rnd in picks:
         pk, y = None, year
-        cand = _rfa.own_pick_available(user_team, year, rnd)
-        if cand is not None and id(cand) not in used_ids:
-            pk = cand
-        else:
-            cand = _rfa.own_pick_available(user_team, year + 1, rnd)
+        for _yy in range(year, year + 7):
+            cand = _rfa.own_pick_available(user_team, _yy, rnd)
             if cand is not None and id(cand) not in used_ids:
-                pk, y = cand, year + 1
+                pk, y = cand, _yy
+                break
         if pk is None:
             missing.append(rnd)
             lines.append((False,
-                          f"round {rnd}: not yours to trade ({year}/{year + 1})"))
+                          f"round {rnd}: not yours to trade ({year}-{year + 6})"))
         else:
             used_ids.add(id(pk))
             lines.append((True, f"{y} round {rnd} (your own pick)"))
