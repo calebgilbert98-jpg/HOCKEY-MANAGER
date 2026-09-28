@@ -405,6 +405,12 @@ class Player:
     on_waivers: bool = False
     waiver_days: int = 0
     nhl_games_played: int = 0  # career NHL GP; seeded at generation, accrued per game played
+    # New-CBA paper-transaction rule (2026): a player assigned (loaned) to
+    # the AHL must play at least one AHL game before he can be recalled.
+    #   None -> grandfathered (old save / never assigned) -> recall OK
+    #   0    -> assigned, hasn't dressed yet              -> recall BLOCKED
+    #   >= 1 -> has played down there                     -> recall OK
+    ahl_games_since_assignment: Optional[int] = None
     # NHL games played in each PRECEDING season (most recent last).
     # Drives Calder eligibility (25-game / 6-game rules). European pro
     # leagues don't count -- only NHL GP is recorded here.
@@ -537,6 +543,10 @@ class Player:
     on_waivers: bool = False
     waiver_days: int = 0
     nhl_games_played: int = 0  # career NHL GP; seeded at generation, accrued per game played
+    # New-CBA paper-transaction rule (2026): a player assigned (loaned) to
+    # the AHL must play at least one AHL game before he can be recalled.
+    # None = grandfathered (old save / never assigned) -> recall OK.
+    ahl_games_since_assignment: Optional[int] = None
 
     def __post_init__(self):
         """Adjusts attributes based on position after initialization."""

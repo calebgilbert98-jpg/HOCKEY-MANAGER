@@ -130,6 +130,81 @@ def _goalie_game(player, ledger):
         pass
 
 
+# ---------------------------------------------------------------------------
+# New-CBA paper-transaction rule (2026)
+#
+# The old CBA let clubs "loan" a player to the AHL on paper and recall him
+# the next day without him ever reporting -- a cap-space maneuver (the
+# Marco Kasper shuttle). The new deal closes it: any player assigned to
+# the AHL must play at least one game down there before he can be
+# recalled to the NHL.
+#
+# The counter lives on player.ahl_games_since_assignment:
+#   None -> grandfathered (old save, initial roster construction, or never
+#           assigned under this rule) -> recall is legal.
+#   0    -> freshly assigned, hasn't dressed yet -> recall is BLOCKED.
+#   >= 1 -> has played at least one AHL game -> recall is legal.
+#
+# Every NHL->AHL assignment stamps the counter to 0; every dressed AHL
+# appearance increments it. The counter survives trades (he still hasn't
+# played), and a fresh assignment re-stamps it. Emergency recalls don't
+# exist as a mechanic in Puck Dynasty, so there's no carve-out to write.
+# ---------------------------------------------------------------------------
+
+def stamp_ahl_assignment(player):
+    """Mark an NHL->AHL assignment: the recall gate starts counting.
+
+    Call at every demotion point (quiet demote, waiver clearing,
+    roster-move screen). Idempotent and exception-safe.
+    """
+    try:
+        player.ahl_games_since_assignment = 0
+    except Exception:
+        pass
+
+
+def ahl_recall_block_reason(player):
+    """None if recalling this player is legal, else a human-readable
+    reason the recall is blocked. Old saves and never-assigned players
+    (counter None) are grandfathered -- always legal."""
+    try:
+        n = getattr(player, "ahl_games_since_assignment", None)
+    except Exception:
+        return None
+    if n is None:
+        return None
+    try:
+        if int(n) >= 1:
+            return None
+    except Exception:
+        return None
+    name = str(getattr(player, "full_name", "He") or "He")
+    return (
+        f"{name} was just assigned to the AHL and hasn't played a game "
+        f"down there yet. Under the new CBA a player must play at least "
+        f"one AHL game before he can be recalled -- no more paper "
+        f"transactions."
+    )
+
+
+def note_ahl_appearance(player):
+    """Count one dressed AHL game toward the recall gate.
+
+    Only call when the player actually dressed (a generated stat line).
+    Grandfathered players (counter None) are left alone.
+    """
+    try:
+        n = getattr(player, "ahl_games_since_assignment", None)
+    except Exception:
+        return
+    if n is None:
+        return
+    try:
+        player.ahl_games_since_assignment = int(n) + 1
+    except Exception:
+        pass
+
+
 def simulate_ahl_day(league):
     """Roll one day of AHL stat lines for every farm roster in the league.
 
@@ -157,9 +232,13 @@ def simulate_ahl_day(league):
                 if _is_goalie(player):
                     if random.random() < GOALIE_START_PROBABILITY:
                         _goalie_game(player, ledger)
+                        # He dressed: counts toward the recall gate.
+                        note_ahl_appearance(player)
                     # Non-starters don't dress: no GP, no line.
                 else:
                     _skater_game(player, ledger)
+                    # He dressed: counts toward the recall gate.
+                    note_ahl_appearance(player)
             except Exception:
                 continue
 

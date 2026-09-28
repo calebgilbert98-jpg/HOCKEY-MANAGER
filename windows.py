@@ -1687,6 +1687,19 @@ class RosterView(ctk.CTkFrame):
                 except Exception:
                     pass
 
+        # New-CBA paper-transaction rule: a player assigned to the AHL must
+        # play at least one game down there before he can be recalled.
+        # Grandfathered players (old saves, never assigned) pass through.
+        if from_roster == 'ahl' and to_roster == 'nhl':
+            try:
+                import ahl_system as _ahl_gate_w
+                _block = _ahl_gate_w.ahl_recall_block_reason(player)
+            except Exception:
+                _block = None
+            if _block:
+                messagebox.showwarning("Recall blocked (new CBA)", _block)
+                return
+
         # Remove from source
         if from_roster == 'nhl':
             self.app.user_team.roster.remove(player)
@@ -1710,6 +1723,14 @@ class RosterView(ctk.CTkFrame):
                 pass
         elif to_roster == 'ahl':
             self.app.user_team.ahl_roster.append(player)
+            # NHL->AHL is an assignment under the new CBA: stamp the
+            # recall gate (a promotion from the prospect pool is not).
+            if from_roster == 'nhl':
+                try:
+                    import ahl_system as _ahl_stamp_w
+                    _ahl_stamp_w.stamp_ahl_assignment(player)
+                except Exception:
+                    pass
         else:
             self.app.user_team.prospects.append(player)
 

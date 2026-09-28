@@ -2195,6 +2195,14 @@ class HockeyManagerGUI(tk.Tk):
                             original_team.prospects.append(player)
                     else:
                         original_team.ahl_roster.append(player)
+                        # New-CBA paper-transaction rule: the assignment
+                        # stamps the recall gate -- he must play an AHL
+                        # game before he can come back up.
+                        try:
+                            import ahl_system as _ahl_stamp2
+                            _ahl_stamp2.stamp_ahl_assignment(player)
+                        except Exception:
+                            pass
                 else:
                     _to_junior = False
                 # Clearance is league news regardless of who runs the club.
@@ -6833,6 +6841,16 @@ class HockeyManagerGUI(tk.Tk):
             return False, "That player isn't on your club."
         if player not in (getattr(team, "ahl_roster", None) or []):
             return False, "That player isn't in the minors."
+        # New-CBA paper-transaction rule (same as single-player): a
+        # freshly assigned player must play at least one AHL game before
+        # he can be recalled.
+        try:
+            import ahl_system as _ahl_gate_mp
+            _block = _ahl_gate_mp.ahl_recall_block_reason(player)
+        except Exception:
+            _block = None
+        if _block:
+            return False, _block
         if len(getattr(team, "roster", []) or []) >= 23:
             return False, "Roster is full (23)."
         salary = int(getattr(getattr(player, "contract", None),
@@ -14658,6 +14676,13 @@ class HockeyManagerGUI(tk.Tk):
         # Exempt: quiet demotion, as before.
         self.user_team.roster.remove(player)
         self.user_team.ahl_roster.append(player)
+        # New-CBA paper-transaction rule: he must play an AHL game before
+        # he can be recalled.
+        try:
+            import ahl_system as _ahl_stamp
+            _ahl_stamp.stamp_ahl_assignment(player)
+        except Exception:
+            pass
         # Audition over -- the next call-up starts a fresh one.
         try:
             player.nhl_audition = None
@@ -14666,6 +14691,16 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
 
     def call_up_to_nhl(self, player):
+        # New-CBA paper-transaction rule: a freshly assigned player must
+        # play at least one AHL game before he can be recalled.
+        try:
+            import ahl_system as _ahl_gate
+            _block = _ahl_gate.ahl_recall_block_reason(player)
+        except Exception:
+            _block = None
+        if _block:
+            messagebox.showwarning("Recall blocked (new CBA)", _block)
+            return
         self.user_team.ahl_roster.remove(player)
         self.user_team.roster.append(player)
         # Dressing room: a first-time NHL arrival shakes the room --
