@@ -481,6 +481,13 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
     messages. Returns a summary dict for the offseason report.
     """
     r = rng or random.Random()
+    # The pass models July mechanics while the stamped game date is still
+    # late June: offer sheets are judged on July 1 of the new league year.
+    from datetime import date as _date
+    try:
+        _july_year = int(getattr(league, "season_year", 2026) or 2026) + 1
+    except Exception:
+        _july_year = 2027
     summary: Dict[str, Any] = {
         "rfas": 0, "ufas": 0, "qualified": 0, "non_tendered": 0,
         "offer_sheets": 0, "arbitration_filings": 0, "arbitration_awards": [],
@@ -639,7 +646,8 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             else:
                 res = execute_offer_sheet(league, offering_team,
                                           original_team, player, aav, years,
-                                          app=app, rng=r)
+                                          app=app, rng=r,
+                                          as_of=_date(_july_year, 7, 1))
                 if res.get("ok"):
                     summary["offer_sheets"] += 1
             break  # one suitor per RFA per summer
@@ -892,14 +900,33 @@ def _transfer_pick(pick, from_team, to_team) -> None:
 
 
 def execute_offer_sheet(league, offering_team, original_team, player,
-                        aav: int, years: int, app=None, rng=None) -> Dict[str, Any]:
+                        aav: int, years: int, app=None, rng=None,
+                        as_of=None) -> Dict[str, Any]:
     """Sign an unsigned RFA to an offer sheet.
 
     Moves the player, transfers the real compensation picks, feeds the
     existing reputation hooks (record_offer_sheet), and posts league news.
     Matching is the caller's decision — call this only for the signed
     outcome (matched = player stays; unmatched = this runs).
+
+    as_of: the date the window is judged on. The July RFA pass runs while
+    the stamped game date is still late June, so it passes July 1
+    explicitly (the pass models July mechanics).
     """
+    # Offer-sheet window (real NHL: July 1 - December 1). One rulebook in
+    # transaction_windows.py. The AI caller runs inside the July pass; this
+    # gate covers any future UI path and both engines identically.
+    try:
+        import transaction_windows as _tw
+        from datetime import date as _date
+        _d = as_of
+        if _d is None and app is not None:
+            _d = getattr(app, "current_date", None)
+        _ok, _why = _tw.check_window("offer_sheet", _d)
+        if not _ok:
+            return {"ok": False, "reason": "window_closed", "detail": _why}
+    except Exception:
+        pass
     r = rng or random.Random()
     label, picks = offer_sheet_compensation(aav)
     year = int(getattr(league, "season_year", 2026) or 2026) + 1

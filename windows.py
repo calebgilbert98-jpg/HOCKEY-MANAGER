@@ -2908,6 +2908,18 @@ class FreeAgencyView(ctk.CTkFrame):
             messagebox.showwarning("No Selection", "Please select a player to sign.")
             return
 
+        # UFA window (real NHL: the market opens July 1 -- no free-agent
+        # signings in June). One rulebook in transaction_windows.py.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "sign_ufa", getattr(self.app, "current_date", None))
+            if not _ok:
+                messagebox.showinfo("Free Agency", _why)
+                return
+        except Exception:
+            pass
+
         player = self.app.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
             self.app.open_contract_negotiation_window(player)
@@ -10365,6 +10377,17 @@ class WaiversView(ctk.CTkFrame):
     
     def place_on_waivers(self, item=None):
         """Place the selected player on waivers."""
+        # Waiver window (the wire doesn't run in the June dead month).
+        # One rulebook in transaction_windows.py.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "waiver_place", getattr(self.app, "current_date", None))
+            if not _ok:
+                messagebox.showinfo("Waivers", _why)
+                return
+        except Exception:
+            pass
         if not item:
             selected = self.eligible_tree.selection()
             if not selected:
@@ -10422,6 +10445,17 @@ class WaiversView(ctk.CTkFrame):
     
     def claim_from_waivers(self, item=None):
         """Claim a player from the waiver wire."""
+        # Waiver window (the wire doesn't run in the June dead month).
+        # One rulebook in transaction_windows.py.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "waiver_claim", getattr(self.app, "current_date", None))
+            if not _ok:
+                messagebox.showinfo("Waivers", _why)
+                return
+        except Exception:
+            pass
         if not item:
             selected = self.waiver_tree.selection()
             if not selected:
@@ -12152,6 +12186,17 @@ class BuyoutCalculatorView(ctk.CTkFrame):
                    command=self._render_detail).pack(side=tk.LEFT)
 
     def _confirm_buyout(self, p, total, annual, byears, rows):
+        # Buyout window (real NHL: June 15-30). One rulebook in
+        # transaction_windows.py.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "buyout", getattr(self.app, "current_date", None))
+            if not _ok:
+                messagebox.showinfo("Buyout Window", _why)
+                return
+        except Exception:
+            pass
         team = self.app.user_team
         league = self.app.league
         season = getattr(league, 'season_year', 2026)

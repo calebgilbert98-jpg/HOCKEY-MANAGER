@@ -1805,6 +1805,16 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     _frozen, _freeze_why = _trade_freeze_active(date_str, league)
     if _frozen:
         return _blocked(_freeze_why)
+    # Holiday roster freeze (real NHL: Dec 20-27). One rulebook in
+    # transaction_windows.py; the deadline freeze above keeps its own
+    # league/season-year context.
+    try:
+        import transaction_windows as _tw
+        if _tw.holiday_freeze_active(date_str):
+            return _blocked("The holiday roster freeze is in effect "
+                            "(Dec 20-27) -- no trades.")
+    except Exception:
+        pass
 
     # -- Asset ownership: you can't trade what you don't own.
     for _src_team, _assets in ((user_team, user_assets),

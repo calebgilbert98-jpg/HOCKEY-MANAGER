@@ -6760,6 +6760,15 @@ class HockeyManagerGUI(tk.Tk):
         asks the player itself (will_waive_ntc, context="waivers"), exactly
         like single-player. The client's word is never trusted.
         """
+        # Waiver window, same as single-player (transaction_windows.py).
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "waiver_place", getattr(self, "current_date", None))
+            if not _ok:
+                return False, _why
+        except Exception:
+            pass
         player = self._mp_team_player(team, params.get("player_id", ""))
         if player is None:
             return False, "That player isn't on your club."
@@ -14691,6 +14700,19 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
         
     def open_contract_negotiation_window(self, player, is_extension=False):
+        # Extension window (real NHL: extensions only in the final year of
+        # a deal). One rulebook in transaction_windows.py.
+        if is_extension:
+            try:
+                import transaction_windows as _tw
+                _ok, _why = _tw.check_window(
+                    "extension", getattr(self, "current_date", None),
+                    ctx={"player": player})
+                if not _ok:
+                    messagebox.showinfo("Extension", _why)
+                    return
+            except Exception:
+                pass
         from windows import ContractNegotiationView
         title = f"Contract: {getattr(player, 'full_name', 'Player')}"
         self.show_screen('contract_negotiation', title,
