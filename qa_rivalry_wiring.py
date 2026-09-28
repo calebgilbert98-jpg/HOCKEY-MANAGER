@@ -589,6 +589,59 @@ check("ai fa: counter-zone offer walks when the ask breaks the budget",
                            salary=int(0.85 * _ask80)), _lg8)
       and len(_lg8.free_agents) == 1 and len(_t8.roster) == 0)
 
+# -- market feedback: AI signings move Caleb's market like the user's do --
+class _FakeCapSys:
+    """Records register_signing; demand_for mirrors the real choke point."""
+    def __init__(self, market_setter=True):
+        self.registered = []
+        self.current_cap = 104_000_000
+        self._market_setter = market_setter
+    def demand_for(self, base_pct, ovr, pos, age, season):
+        return int(base_pct * self.current_cap)
+    def register_signing(self, name, aav, ovr, pos, age, season):
+        self.registered.append((name, aav, ovr, pos, age, season))
+        return self._market_setter
+
+_fcap = _FakeCapSys(market_setter=True)
+_mkt_fa = _mkfa(130, "Market Star", PlayerPosition.CENTER, ovr=90)
+_mkt_team = _FakeTeam("Market Club", [])
+_mkt_lg = SimpleNamespace(free_agents=[_mkt_fa], rivalries=[],
+                          season_year=2026, salary_cap_system=_fcap)
+_mkt_mgr = _mkmgr(_mkt_lg, _mkt_team, _mkstrategy([PlayerPosition.CENTER]))
+_mkt_mgr._cap_system = _fcap
+_mkt_ok = _mkt_mgr._execute_free_agent_signing(
+    _mkt_team, _mkdecision(_mkt_fa), _mkt_lg)
+check("ai fa: signing registers with the market engine",
+      _mkt_ok and _fcap.registered == [
+          ("Market Star", _ask(90), 90, PlayerPosition.CENTER.value,
+           27, 2026)],
+      f"registered={_fcap.registered}")
+check("ai fa: market-setter queues the signing + market headlines",
+      any("have signed Market Star" in s for s in _mkt_mgr._pending_news)
+      and any("sets the market" in s for s in _mkt_mgr._pending_news),
+      f"pending={_mkt_mgr._pending_news}")
+_drained = _mkt_mgr.drain_pending_news()
+check("ai fa: drain_pending_news flushes and clears",
+      len(_drained) >= 2 and _mkt_mgr.drain_pending_news() == []
+      and _mkt_mgr._pending_news == [])
+# A non-market-setting signing: registered, no market headline.
+_fcap2 = _FakeCapSys(market_setter=False)
+_mkt_fa2 = _mkfa(131, "Role Player", PlayerPosition.LEFT_WING, ovr=78)
+_mkt_team2 = _FakeTeam("Quiet Club", [])
+_mkt_lg2 = SimpleNamespace(free_agents=[_mkt_fa2], rivalries=[],
+                           season_year=2026, salary_cap_system=_fcap2)
+_mkt_mgr2 = _mkmgr(_mkt_lg2, _mkt_team2,
+                   _mkstrategy([PlayerPosition.LEFT_WING]))
+_mkt_mgr2._cap_system = _fcap2
+_mkt_ok2 = _mkt_mgr2._execute_free_agent_signing(
+    _mkt_team2, _mkdecision(_mkt_fa2), _mkt_lg2)
+check("ai fa: ordinary signing registers without a market headline",
+      _mkt_ok2 and len(_fcap2.registered) == 1
+      and any("have signed Role Player" in s
+              for s in _mkt_mgr2._pending_news)
+      and not any("sets the market" in s
+                  for s in _mkt_mgr2._pending_news))
+
 # Waiver claims call the transfer hook on both paths.
 _pw_src = _method_src("main.py", "process_waivers")
 check("claims: single-player process_waivers calls on_player_transfer",

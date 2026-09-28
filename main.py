@@ -5888,6 +5888,19 @@ class HockeyManagerGUI(tk.Tk):
             except Exception as e:
                 # Don't crash the game if AI fails
                 print(f"AI manager error (non-fatal): {e}")
+            # AI signings write their own headlines (signings,
+            # market-setters, contract fallout) -- flush them into the
+            # news feed with today's date.
+            try:
+                _ai_mgr = getattr(getattr(self, "game_manager", None),
+                                  "ai_manager", None)
+                _drain = getattr(_ai_mgr, "drain_pending_news", None)
+                if callable(_drain):
+                    for _story in _drain():
+                        self.news_log.append({'date': self.current_date,
+                                              'story': _story})
+            except Exception:
+                pass
             
             # ALWAYS advance date and update UI (whether games existed or not)
             # Milestones hit today: ledger + four-viewpoint headlines, once

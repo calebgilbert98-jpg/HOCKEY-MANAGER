@@ -89,6 +89,11 @@ class AITeamManager:
         # Decision-making parameters
         self.decision_frequency = 7  # Check every 7 days
         self.last_decision_date = date.today()
+
+        # Stories queued by AI signings (signing, market-setter, contract
+        # fallout). The app flushes these into the news feed; the manager
+        # holds no app ref.
+        self._pending_news: List[str] = []
         
         # Market analysis cache
         self.player_values: Dict[str, int] = {}
@@ -99,6 +104,16 @@ class AITeamManager:
         """Attach the league's salary cap system for cap-relative demands."""
         self._cap_system = cap_system
         self._league_ref = league
+
+    def drain_pending_news(self) -> List[str]:
+        """Stories queued by AI signings. The app flushes these into the
+        news feed with today's date."""
+        try:
+            pend = getattr(self, "_pending_news", None)
+            self._pending_news = []
+            return list(pend) if isinstance(pend, list) else []
+        except Exception:
+            return []
 
     def _team_gm(self, team: Team):
         """Return the team's General Manager staff member, if any."""
@@ -878,6 +893,58 @@ class AITeamManager:
                 _rivs = getattr(league, "rivalries", None)
                 if isinstance(_rivs, list):
                     _opt(_rivs, p, from_team=None, to_team=team)
+            except Exception:
+                pass
+            # Market feedback: Caleb's market engine learns from EVERY
+            # signing, not just the user's. register_signing keeps only
+            # true market-setters (star + top-5 AAV) as comps; those comps
+            # feed market_premium, which is exactly what the handshake's
+            # _player_ask prices in. So a bold AI overpay for a star
+            # raises the next star's ask -- offers change the league.
+            # The human fallout lands on AI GMs exactly like the user:
+            # overpay verdict, fan beef, GM rep, GM-GM heat.
+            _set_market = False
+            try:
+                _cap_sys2 = getattr(league, "salary_cap_system", None)
+                if _cap_sys2 is not None:
+                    _p2 = getattr(p, "primary_position", "")
+                    _pn2 = _p2.value if hasattr(_p2, "value") else str(_p2)
+                    try:
+                        from game_classes import to_100_scale as _t100b
+                        _ovr100b = int(_t100b(p.overall_rating()))
+                    except Exception:
+                        _ovr100b = 75
+                    _set_market = bool(_cap_sys2.register_signing(
+                        getattr(p, "full_name", "Unknown"), salary,
+                        _ovr100b, _pn2,
+                        int(getattr(p, "age", 27) or 27),
+                        int(getattr(league, "season_year", 0) or 0)))
+            except Exception:
+                pass
+            try:
+                from reputation_system import evaluate_contract_decision \
+                    as _ecd
+                _cd = _ecd(p, salary, _ask, team=team, league=league,
+                           market_setter=bool(_set_market))
+            except Exception:
+                _cd = {}
+            # Stories queue on the manager; the app flushes them into the
+            # news feed with today's date (the manager holds no app ref).
+            try:
+                _pname = getattr(p, "full_name", "Unknown")
+                _stories = [
+                    f"The {team.team_name} have signed {_pname} to a "
+                    f"{years}-year contract."]
+                if _set_market:
+                    _stories.append(
+                        f"{_pname}'s ${salary:,} deal sets the market -- "
+                        f"comparable stars will demand more.")
+                if isinstance(_cd, dict) and _cd.get("story"):
+                    _stories.append(_cd["story"])
+                _pend = getattr(self, "_pending_news", None)
+                if not isinstance(_pend, list):
+                    _pend = self._pending_news = []
+                _pend.extend(_stories)
             except Exception:
                 pass
             return True
