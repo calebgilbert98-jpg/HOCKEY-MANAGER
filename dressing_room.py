@@ -12,7 +12,6 @@ This is the management layer; the sim reads only the momentum modifier.
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
-import random
 
 
 # Team-talk tones (FM12's six, adapted for hockey)
