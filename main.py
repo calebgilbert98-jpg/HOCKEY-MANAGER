@@ -9010,6 +9010,33 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+        # International windows: Olympics (Feb 10, Olympic years) and World
+        # Championship (May 12), each once per year. Instant lightweight
+        # resolution + inbox card; the NHL schedule is never touched.
+        try:
+            from international import (
+                OLYMPIC_MONTH, OLYMPIC_DAY, WORLDS_MONTH, WORLDS_DAY,
+                is_olympic_year, hold_olympics, hold_worlds)
+            _md = (today.month, today.day)
+            if _md == (OLYMPIC_MONTH, OLYMPIC_DAY) and is_olympic_year(year):
+                _held = (getattr(league, "intl_held", None) or {}).get(
+                    "olympics", [])
+                if year not in _held:
+                    _res = hold_olympics(self, year)
+                    if _res:
+                        self._deliver_intl_card(_res)
+            elif _md == (WORLDS_MONTH, WORLDS_DAY):
+                _held = (getattr(league, "intl_held", None) or {}).get(
+                    "worlds", [])
+                if year not in _held:
+                    _res = hold_worlds(self, year)
+                    if _res:
+                        self._deliver_intl_card(_res)
+        except Exception:
+            debug_print("International window failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+
         # Hub prompt: once per (event, year)
         try:
             event = get_todays_event(today)
@@ -9122,6 +9149,24 @@ class HockeyManagerGUI(tk.Tk):
                               f"(#1 overall)."))
         except Exception:
             pass
+
+    def _deliver_intl_card(self, res):
+        """Inbox card for a finished international tournament."""
+        try:
+            from headlines import make_headline, deliver
+            from international import result_card_text
+            msg = make_headline("international_results", self.current_date,
+                                title=res.get("title", ""),
+                                year=res.get("year", 0),
+                                summary=result_card_text(res))
+            if msg is not None:
+                deliver(self, msg)
+        except Exception:
+            try:
+                from international import result_card_text
+                self.add_news(result_card_text(res))
+            except Exception:
+                pass
 
     def conduct_fantasy_draft(self):
         """Conduct a fantasy draft by redistributing all players among NHL teams"""

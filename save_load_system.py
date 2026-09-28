@@ -139,6 +139,10 @@ class GameSaveManager:
                                 for k, v in
                                 (getattr(league, 'lottery_results', None) or {}).items()},
             'lottery_held_years': sorted(getattr(league, 'lottery_held_years', None) or []),
+            'intl_held': {k: sorted(v) for k, v in
+                          (getattr(league, 'intl_held', None) or {}).items()},
+            'intl_history': [dict(h) for h in
+                             (getattr(league, 'intl_history', None) or [])],
             'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
             'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
             # Dynamic salary cap system (growth history + market comps).
@@ -729,6 +733,19 @@ class GameSaveManager:
                 league.lottery_results = {}
             league.lottery_held_years = sorted(
                 league_data.get('lottery_held_years', None) or [])
+            try:
+                league.intl_held = {
+                    str(k): sorted(v) for k, v in
+                    (league_data.get('intl_held', None) or {}).items()
+                }
+                if "olympics" not in league.intl_held:
+                    league.intl_held["olympics"] = []
+                if "worlds" not in league.intl_held:
+                    league.intl_held["worlds"] = []
+            except Exception:
+                league.intl_held = {"olympics": [], "worlds": []}
+            league.intl_history = [dict(h) for h in
+                                   (league_data.get('intl_history', None) or [])]
             # Tentpole event state (years the entry draft was held, event
             # prompts already shown). Defaults keep old saves working.
             league.draft_held_years = list(league_data.get('draft_held_years', []) or [])

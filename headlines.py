@@ -57,6 +57,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "outdoor_pregame": _outdoor_pregame_headline,
         "milestone_hit": _milestone_headline,
         "lottery_results": _lottery_headline,
+        "international_results": _intl_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -384,6 +385,20 @@ def _lottery_headline(game_date, year=0, summary="", watch_hint=True, **kw):
         content=content,
         category="League",
         priority=3,
+        is_important=True,
+    )
+
+
+def _intl_headline(game_date, title="", year=0, summary="", **kw):
+    """International tournament results card (Olympics / Worlds)."""
+    from game_classes import EmailMessage
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🏅 {title} {year}: {summary.splitlines()[0] if summary else 'final'}",
+        content=summary,
+        category="League",
+        priority=2,
         is_important=True,
     )
 

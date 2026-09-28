@@ -2453,6 +2453,11 @@ class League:
     # the May 8 lottery was already held.
     lottery_results: Dict[int, List[Dict]] = field(default_factory=dict)
     lottery_held_years: List[int] = field(default_factory=list)
+    # International windows (persisted): years each tournament was held and
+    # a short history of results for billing.
+    intl_held: Dict[str, List[int]] = field(
+        default_factory=lambda: {"olympics": [], "worlds": []})
+    intl_history: List[Dict] = field(default_factory=list)
     # League-wide bad blood: coach-coach, GM-coach, player-player, team-team
     rivalries: List[dict] = field(default_factory=list)
     # Dynamic salary cap system: growth, history, market-setting contracts.

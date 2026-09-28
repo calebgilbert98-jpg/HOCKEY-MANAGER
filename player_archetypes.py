@@ -451,6 +451,20 @@ def line_chemistry_report(players):
             drivers.append(
                 (f"{n1} ({a1}) + {n2} ({a2}): {sign}{value:g} — {reason}",
                  value))
+            # International bond (additive): NHL teammates who played a
+            # tournament together carry a small familiarity bump.
+            try:
+                from international import intl_bond, intl_bond_event
+                bond = intl_bond(p1, p2)
+                etag = intl_bond_event(p1, p2) if bond > 0 else ""
+            except Exception:
+                bond, etag = 0, ""
+            if bond > 0:
+                bval = min(3.0, 0.5 * bond)
+                total += bval
+                drivers.append(
+                    (f"{n1} + {n2}: +{bval:g} — international bond"
+                     + (f" ({etag})" if etag else ""), bval))
     drivers.sort(key=lambda d: abs(d[1]), reverse=True)
     return total, drivers
 
