@@ -292,8 +292,15 @@ def stoppage_change(sim: Any, team: Any, st: ShiftState,
     return result
 
 
-def _matching_response(away_line: int, sim: Any, home_team: Any) -> Tuple[int, int]:
-    """Home team's line-matching response to the away team's declared line.
+def matching_response(away_line: int, f_prefs, d_prefs,
+                      roll_f: int, roll_d: int) -> Tuple[int, int]:
+    """Shared last-change decision, used by BOTH engines (1-based).
+
+    This is the single source of truth for "who does the home team send
+    out against the away team's declared line". GameSim calls it with the
+    live shift state's current lines as the roll context; AdvancedGameSim
+    (the speed-optimized engine) calls it with its own rotation pick.
+    Same decision, different fidelity -- never two copies of the logic.
 
     The user can override the automatic response per line via the lines
     screen "Match to line" dropdowns (Team.line_matchups): the first of my
@@ -303,26 +310,48 @@ def _matching_response(away_line: int, sim: Any, home_team: Any) -> Tuple[int, i
 
     vs 1st line -> checking line (3rd) + top D pair (1st)
     vs 4th line -> 1st line (exploit the mismatch)
-    vs 2nd/3rd -> roll (keep current, signaled by returning current)
+    vs 2nd/3rd -> roll (roll_f, roll_d)
     """
-    # We need the home team's current state to "roll" — get it
-    st = get_shift_state(sim, home_team)
+    f_prefs = list(f_prefs or [])[:4] + [None] * 4
+    d_prefs = list(d_prefs or [])[:3] + [None] * 3
     if away_line == 1:
         auto_f, auto_d = 3, 1
     elif away_line == 4:
         auto_f, auto_d = 1, 1  # top pair with the top line to exploit
     else:
-        auto_f, auto_d = st.f_line, st.d_pair  # roll
+        auto_f, auto_d = roll_f, roll_d  # roll
 
     # User-set matchup preferences (1-4 opponent forward line, or None).
-    prefs = getattr(home_team, "line_matchups", None) or {}
-    f_prefs = list(prefs.get("F") or [])[:4] + [None] * 4
-    d_prefs = list(prefs.get("D") or [])[:3] + [None] * 3
     want_f = next((i + 1 for i, want in enumerate(f_prefs[:4])
                    if want == away_line), None)
     want_d = next((i + 1 for i, want in enumerate(d_prefs[:3])
                    if want == away_line), None)
     return (want_f or auto_f, want_d or auto_d)
+
+
+def matching_is_active(away_line: int, f_prefs, d_prefs) -> Tuple[bool, bool]:
+    """Was the last-change decision a real call, per side (1-based)?
+
+    True when the auto behavior names a unit (vs 1st/4th) or a "Match to
+    line" pref hit -- i.e. the home bench won the matchup battle rather
+    than just rolling its rotation. AdvancedGameSim uses this for its
+    small directed-matchup edge channel.
+    """
+    if away_line in (1, 4):
+        return True, True
+    f_prefs = list(f_prefs or [])[:4]
+    d_prefs = list(d_prefs or [])[:3]
+    return (any(w == away_line for w in f_prefs if w),
+            any(w == away_line for w in d_prefs if w))
+
+
+def _matching_response(away_line: int, sim: Any, home_team: Any) -> Tuple[int, int]:
+    """GameSim adapter: builds the roll context from the live shift state,
+    then delegates to the shared matching_response."""
+    st = get_shift_state(sim, home_team)
+    prefs = getattr(home_team, "line_matchups", None) or {}
+    return matching_response(away_line, prefs.get("F"), prefs.get("D"),
+                             st.f_line, st.d_pair)
 
 
 def _goal_diff_for(sim: Any, team: Any, is_home: bool) -> int:

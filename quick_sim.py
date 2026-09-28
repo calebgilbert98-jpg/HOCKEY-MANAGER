@@ -565,32 +565,19 @@ class AdvancedGameSim:
         goalie = goalies[0] if goalies and goalies[0] else None
         return fw_lines[fw_idx], df_pairs[df_idx], goalie, fw_idx, df_idx
 
-    def _last_change_response(self, away_f_idx):
+    def _last_change_response(self, away_f_idx, fresh_f, fresh_d):
         """Home's last-change answer to the away forward line (0-based).
 
-        Mirrors shift_engine._matching_response: the lines-screen "Match to
-        line" prefs (Team.line_matchups) first, then the auto behavior --
-        vs the 1st line send the checkers (3rd) + top pair, vs the 4th line
-        exploit it with the 1st line, otherwise roll (None = fresh pick).
-        Returns (fw_idx or None, df_idx or None), 0-based.
+        Delegates to the SHARED shift_engine.matching_response -- the same
+        decision GameSim makes, with AdvGS's rotation pick as the roll
+        context. Returns 0-based (want_f, want_d); a side equal to the
+        fresh pick means "roll", not a directed matchup.
         """
-        try:
-            prefs = getattr(self.home_team, "line_matchups", None) or {}
-            f_prefs = list(prefs.get("F") or [])[:4] + [None] * 4
-            d_prefs = list(prefs.get("D") or [])[:3] + [None] * 3
-            want_f = next((i for i, want in enumerate(f_prefs[:4])
-                           if want == away_f_idx + 1), None)
-            want_d = next((i for i, want in enumerate(d_prefs[:3])
-                           if want == away_f_idx + 1), None)
-            if want_f is not None or want_d is not None:
-                return want_f, want_d
-        except Exception:
-            pass
-        if away_f_idx == 0:
-            return 2, 0
-        if away_f_idx == 3:
-            return 0, 0
-        return None, None
+        from shift_engine import matching_response as _mr
+        prefs = getattr(self.home_team, "line_matchups", None) or {}
+        want_f, want_d = _mr(away_f_idx + 1, prefs.get("F"), prefs.get("D"),
+                             fresh_f + 1, fresh_d + 1)
+        return want_f - 1, want_d - 1
 
     def _select_home_lines(self, team_name, away_f_idx):
         """Last change: answer the away declaration, with a fatigue veto.
@@ -600,19 +587,27 @@ class AdvancedGameSim:
         unit instead. Returns (fw, df, goalie, fw_idx, df_idx, directed).
         """
         fw, df, goalie, fresh_f, fresh_d = self._select_lines_idx(team_name)
-        want_f, want_d = self._last_change_response(away_f_idx)
-        if want_f is None and want_d is None:
-            return fw, df, goalie, fresh_f, fresh_d, False
+        want_f, want_d = self._last_change_response(away_f_idx, fresh_f,
+                                                    fresh_d)
+        from shift_engine import matching_is_active as _mia
+        prefs = getattr(self.home_team, "line_matchups", None) or {}
+        act_f, act_d = _mia(away_f_idx + 1, prefs.get("F"), prefs.get("D"))
         lineup = self.lineups[team_name]
         fw_lines = lineup['Forwards']
         df_pairs = lineup['Defense']
         use_f, use_d, directed = fresh_f, fresh_d, False
-        if want_f is not None and 0 <= want_f < len(fw_lines):
-            if (self._line_fatigue(team_name, fw_lines[want_f])
+        if 0 <= want_f < len(fw_lines):
+            if want_f == fresh_f:
+                if act_f:
+                    directed = True  # rotation already had the matchup unit
+            elif (self._line_fatigue(team_name, fw_lines[want_f])
                     <= self._line_fatigue(team_name, fw_lines[fresh_f]) + 6):
                 use_f, directed = want_f, True
-        if want_d is not None and 0 <= want_d < len(df_pairs):
-            if (self._line_fatigue(team_name, df_pairs[want_d])
+        if 0 <= want_d < len(df_pairs):
+            if want_d == fresh_d:
+                if act_d:
+                    directed = True
+            elif (self._line_fatigue(team_name, df_pairs[want_d])
                     <= self._line_fatigue(team_name, df_pairs[fresh_d]) + 6):
                 use_d, directed = want_d, True
         return fw_lines[use_f], df_pairs[use_d], goalie, use_f, use_d, directed
