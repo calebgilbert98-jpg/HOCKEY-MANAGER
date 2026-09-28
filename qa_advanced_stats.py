@@ -115,5 +115,39 @@ check("old saves backfill", True)  # from_dict({}) must not crash
 h3 = LeagueHistory.from_dict({})
 check("empty dict backfill", h3.franchise_records.get_career_records("X") == {})
 
+
+
+
+# --- Franchise historical seeding (real NHL records) ---
+from franchise_records_seed import FRANCHISE_RECORDS_SEED
+
+h = LeagueHistory()
+fr = h.franchise_records
+check("seed covers 32+ teams", len(fr.season_records) >= 32)
+gretzky = fr.season_records.get("Edmonton Oilers", {}).get("goals", {})
+check("Gretzky 92 seeded",
+      gretzky.get("player") == "Wayne Gretzky" and gretzky.get("value") == 92)
+brodeur = fr.goalie_career_records.get("New Jersey Devils", {}).get("wins", {})
+check("Brodeur 688 seeded",
+      brodeur.get("player") == "Martin Brodeur" and brodeur.get("value") == 688)
+# Simulated record beats historical
+p = g.Player("Test", "Breaker", 24, PlayerPosition.CENTER, 95)
+p.goals = 95; p.assists = 0; p.shots = 300; p.games_played = 82
+p.penalty_minutes = 10
+t = g.Team("Edmonton Oilers", "Edmonton", "Pacific", "Western")
+t.roster = [p]
+fr.update_from_season(t, "2026-27")
+rec = fr.season_records["Edmonton Oilers"]["goals"]
+check("95 beats Gretzky 92",
+      rec["value"] == 95 and "Breaker" in rec["player"])
+# Re-seeding does not clobber the simulated mark
+fr.seed_historical_records(FRANCHISE_RECORDS_SEED)
+rec = fr.season_records["Edmonton Oilers"]["goals"]
+check("reseed keeps simulated record", rec["value"] == 95)
+# Old-save backfill: empty from_dict gets seeded
+h2 = LeagueHistory.from_dict({"seasons": [], "franchise_records": {}})
+check("from_dict backfills seed",
+      len(h2.franchise_records.season_records) >= 32)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

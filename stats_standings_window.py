@@ -2708,11 +2708,13 @@ class StatsStandingsView(ctk.CTkFrame):
                 'team': ('Team', 60),
                 'pos': ('Pos', 50),
                 'gp': ('GP', 40),
+                'ixg': ('ixG', 55),
+                'cf_pct': ('CF%', 55),
+                'xgf_pct': ('xGF%', 60),
+                'pdo': ('PDO', 60),
+                'p_per60': ('P/60', 55),
+                'game_score': ('GSc', 55),
                 'sh_pct': ('SH%', 55),
-                'ppg': ('PPG', 55),
-                'plus_minus': ('+/-', 50),
-                'pim': ('PIM', 45),
-                'shots': ('SOG', 55)
             }
         elif category == "breakout":
             return {
@@ -2720,9 +2722,11 @@ class StatsStandingsView(ctk.CTkFrame):
                 'player': ('Player', 150),
                 'team': ('Team', 60),
                 'age': ('Age', 40),
-                'improvement': ('Improvement', 100),
-                'current_pace': ('Current Pace', 90),
-                'projection': ('Season Projection', 120)
+                'ixg_vs_g': ('ixG vs G', 90),
+                'xgf_pct': ('xGF%', 60),
+                'pdo': ('PDO', 60),
+                'p_per60': ('P/60', 55),
+                'signal': ('Breakout Signal', 140),
             }
         else:  # goaltending
             return {
@@ -2734,6 +2738,8 @@ class StatsStandingsView(ctk.CTkFrame):
                 'l': ('L', 35),
                 'gaa': ('GAA', 50),
                 'sv_pct': ('SV%', 60),
+                'gsax': ('GSAx', 55),
+                'hdsv': ('HDSV%', 60),
                 'so': ('SO', 40),
                 'sa': ('SA', 55)
             }
@@ -2767,30 +2773,48 @@ class StatsStandingsView(ctk.CTkFrame):
                     games, goals, assists, points, ppg, plus_minus, pim, shots)
 
         elif category == "advanced":
-            goals = getattr(player, 'goals', 0)
-            assists = getattr(player, 'assists', 0)
-            games = getattr(player, 'games_played', 0)
-            points = goals + assists
-            shots = getattr(player, 'shots', 0)
-            sh_pct = f"{goals / shots * 100:.1f}%" if shots > 0 else "—"
-            ppg = round(points / max(games, 1), 2)
-            plus_minus = getattr(player, 'plus_minus', 0)
-            pim = getattr(player, 'penalty_minutes', 0)
-            return (rank, name, team_abbr, position,
-                    games, sh_pct, ppg, plus_minus, pim, shots)
+            import advanced_metrics as am
+            try:
+                m = am.skater_advanced(player)
+                return (rank, name, team_abbr, position,
+                        getattr(player, 'games_played', 0),
+                        f"{m.ixg:.1f}", f"{m.cf_pct:.1f}%",
+                        f"{m.xgf_pct:.1f}%", f"{m.pdo:.3f}",
+                        f"{m.p_per60:.2f}", f"{m.game_score:.1f}",
+                        f"{m.sh_pct:.1f}%" if m.sh_pct else "—")
+            except Exception:
+                return (rank, name, team_abbr, position,
+                        getattr(player, 'games_played', 0),
+                        "—", "—", "—", "—", "—", "—", "—")
 
         elif category == "breakout":
+            import advanced_metrics as am
             age = getattr(player, 'age', 22)
-            current = getattr(player, 'overall_rating', lambda: 70)
-            current = current() if callable(current) else current
-            grade = getattr(player, 'potential_grade', 'C') or 'C'
-            improvement = f"{grade}-grade potential"
-            current_pace = f"{to_100_scale(current)} OVR"
-            projection = f"{grade} ceiling"
-            return (rank, name, team_abbr, age,
-                    improvement, current_pace, projection)
+            try:
+                m = am.skater_advanced(player)
+                goals = getattr(player, 'goals', 0)
+                ixg_gap = m.ixg - goals
+                # Breakout signal: elite underlying numbers, production catching up
+                signals = []
+                if m.xgf_pct >= 55 and age <= 25:
+                    signals.append("Driving play")
+                if ixg_gap >= 5:
+                    signals.append("Due for goals")
+                if m.pdo <= 0.985:
+                    signals.append("Unlucky PDO")
+                if m.p_per60 >= 2.5 and age <= 23:
+                    signals.append("Elite rate")
+                signal = ", ".join(signals) if signals else "Steady"
+                return (rank, name, team_abbr, age,
+                        f"{m.ixg:.1f} vs {goals}",
+                        f"{m.xgf_pct:.1f}%", f"{m.pdo:.3f}",
+                        f"{m.p_per60:.2f}", signal)
+            except Exception:
+                return (rank, name, team_abbr, age,
+                        "—", "—", "—", "—", "—")
 
         else:  # goaltending
+            import advanced_metrics as am
             games = getattr(player, 'games_played', 0)
             wins = getattr(player, 'wins', 0)
             losses = getattr(player, 'losses', 0)
@@ -2799,9 +2823,15 @@ class StatsStandingsView(ctk.CTkFrame):
             shutouts = getattr(player, 'shutouts', 0)
             sa = getattr(player, 'shots_against', 0)
             sv_pct = f"{sv:.3f}"[1:] if sa > 0 else "—"
+            try:
+                gm = am.goalie_advanced(player)
+                gsax_s = f"{gm.gsax:+.1f}"
+                hdsv_s = f"{gm.hdsv_pct:.3f}"[1:]
+            except Exception:
+                gsax_s, hdsv_s = "—", "—"
             return (rank, name, team_abbr, games, wins, losses,
                     f"{gaa:.2f}" if games > 0 else "—", sv_pct,
-                    shutouts, sa)
+                    gsax_s, hdsv_s, shutouts, sa)
 
     def add_enhanced_player_data(self, tree, category):
         """Add enhanced player data from real game data (top 20, no pagination)."""
@@ -3247,29 +3277,45 @@ Analysis will be updated as the season progresses.
                 sorted_players = sorted(all_players, key=get_points, reverse=True)
                 
             elif category == "advanced":
+                import advanced_metrics as am
                 def get_advanced_score(player_team):
                     player, team = player_team
-                    shots = getattr(player, 'shots', 0)
-                    shp = (getattr(player, 'goals', 0) / shots) if shots else 0
-                    return (getattr(player, 'goals', 0)
-                            + getattr(player, 'assists', 0), shp)
+                    try:
+                        m = am.skater_advanced(player)
+                        return (m.xgf_pct, m.game_score)
+                    except Exception:
+                        return (0, 0)
                 sorted_players = sorted(all_players, key=get_advanced_score, reverse=True)
                 
             elif category == "breakout":
-                young_players = [(p, t) for p, t in all_players if getattr(p, 'age', 25) <= 23]
+                import advanced_metrics as am
+                young_players = [(p, t) for p, t in all_players
+                                 if getattr(p, 'age', 25) <= 25]
                 def get_breakout_potential(player_team):
                     player, team = player_team
-                    age_factor = 25 - getattr(player, 'age', 25)
-                    potential = getattr(player, 'potential', 75)
-                    current_rating = getattr(player, 'overall_rating', lambda: 70)() if callable(getattr(player, 'overall_rating', None)) else 70
-                    return age_factor * 2 + potential + current_rating * 0.5
+                    try:
+                        m = am.skater_advanced(player)
+                        goals = getattr(player, 'goals', 0) or 0
+                        # Elite process + youth + positive regression signals
+                        score = ((m.xgf_pct - 50) * 2.0
+                                 + max(0, m.ixg - goals) * 1.5
+                                 + max(0, 1.000 - m.pdo) * 200
+                                 + max(0, 25 - getattr(player, 'age', 25)) * 1.2
+                                 + m.p_per60 * 3.0)
+                        return score
+                    except Exception:
+                        return 0
                 sorted_players = sorted(young_players, key=get_breakout_potential, reverse=True)
                 
             else:  # goaltending
+                import advanced_metrics as am
                 def get_goalie_score(player_team):
                     player, team = player_team
-                    return (getattr(player, 'save_percentage', 0),
-                            getattr(player, 'wins', 0))
+                    try:
+                        return (am.goalie_advanced(player).gsax,
+                                getattr(player, 'save_percentage', 0))
+                    except Exception:
+                        return (0, 0)
                 sorted_players = sorted(all_players, key=get_goalie_score, reverse=True)
             
             # Store sorted players

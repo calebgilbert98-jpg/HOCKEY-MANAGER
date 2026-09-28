@@ -36,13 +36,30 @@ def _attr(player: Any, name: str, default: int = 50) -> int:
         return default
 
 
+def _stat_val(src: Any, *names: str, default: Any = 0) -> Any:
+    """Read a stat trying multiple attribute names (direct vs .stats)."""
+    for n in names:
+        v = getattr(src, n, None)
+        if v:
+            return v
+    return default
+
+
 def _stats(player: Any) -> Any:
-    """Current-season PlayerStats (or a blank-like object)."""
+    """Season stat source for a player.
+
+    The sim's authoritative season totals live directly on the Player
+    (player.goals, player.games_played, ...) via add_game_stats(); the
+    .stats sub-object is a secondary store. Return whichever has data,
+    preferring the direct attributes.
+    """
+    direct_gp = getattr(player, "games_played", 0) or 0
+    if direct_gp:
+        return player
     s = getattr(player, "stats", None)
-    if s is None:
-        # Some code paths store season stats under season_stats
-        s = getattr(player, "season_stats", None)
-    return s
+    if s is not None and (getattr(s, "games_played", 0) or 0):
+        return s
+    return getattr(player, "season_stats", None) or s or player
 
 
 def _parse_toi(toi_str: str) -> float:
@@ -132,12 +149,13 @@ def skater_advanced(player: Any, team_avg_sh_pct: float = 9.5,
     m.cf_pct = max(35.0, min(65.0, m.cf_pct))
     m.ff_pct = max(35.0, min(65.0, m.ff_pct))
 
-    # --- xGF% (model): shot quality for vs against ---
-    # For: shooting + playmaking quality; Against: defensive awareness.
-    xgf = (m.ixg * 1.15) + (assists * 0.28)          # quality-weighted offense
-    xga = max(0.5, (100.0 - def_supp) / 100.0 * (toi / 18.0) * max(gp, 1) * 0.55)
-    m.xgf_pct = round(100.0 * xgf / (xgf + xga), 1) if (xgf + xga) else 50.0
-    m.xgf_pct = max(35.0, min(65.0, m.xgf_pct))
+    # --- xGF% (model): expected goal share from two-way profile ---
+    # Calibrated so 90/90 two-way -> ~60%, 75/75 -> ~53%, 60/60 -> ~47%.
+    # (Baseline 68 ~= league-average NHL regular in the 1-100 system.)
+    m.xgf_pct = round(50.0 + (off_drive - 68.0) * 0.25
+                      + (def_supp - 68.0) * 0.18
+                      + (m.ixg_per60 - 0.9) * 1.5, 1)
+    m.xgf_pct = max(38.0, min(62.0, m.xgf_pct))
 
     # --- PDO: on-ice shooting + save % ---
     # On-ice SH% regresses toward team average; individual finishers nudge it.
@@ -156,7 +174,7 @@ def skater_advanced(player: Any, team_avg_sh_pct: float = 9.5,
     # SOG=0.075, BLK=0.05, PIM=-0.15, plus on-ice proxies omitted.
     a1 = assists * 0.6
     a2 = assists * 0.4
-    pim = getattr(st, "penalties_in_minutes", 0) or 0
+    pim = _stat_val(st, "penalty_minutes", "penalties_in_minutes")
     m.game_score = round(goals * 0.75 + a1 * 0.70 + a2 * 0.55
                          + shots * 0.075 + m.blocks * 0.05 - pim * 0.15, 2)
     return m

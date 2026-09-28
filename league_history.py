@@ -26,6 +26,22 @@ class LeagueHistory:
         self.hall_of_fame: List[Dict[str, Any]] = []  # inducted players
         self.first_season_year: Optional[int] = None
         self.franchise_records = FranchiseRecords()
+        self._seed_historical_records()
+
+    def _seed_historical_records(self):
+        """Backfill real NHL franchise history into an empty record book."""
+        fr = self.franchise_records
+        # Skip if any records already exist (simulated or previously seeded)
+        stores = (fr.career_records, fr.season_records,
+                  fr.goalie_career_records, fr.goalie_season_records,
+                  fr.team_season_records)
+        if any(s for s in stores):
+            return
+        try:
+            from franchise_records_seed import FRANCHISE_RECORDS_SEED
+        except ImportError:
+            return
+        fr.seed_historical_records(FRANCHISE_RECORDS_SEED)
 
     # -- Season archive --
 
@@ -191,6 +207,8 @@ class LeagueHistory:
         h.first_season_year = data.get("first_season_year")
         h.franchise_records = FranchiseRecords.from_dict(
             data.get("franchise_records", {}))
+        # Old saves predate the record book: backfill real NHL history
+        h._seed_historical_records()
         return h
 
 
@@ -292,7 +310,11 @@ class FranchiseRecords:
                    list(getattr(team, "ahl_roster", []) or []))
 
         for p in rosters:
-            st = getattr(p, "stats", None) or getattr(p, "season_stats", None)
+            # Authoritative season totals live directly on the Player
+            # (add_game_stats); fall back to the .stats sub-object.
+            gp_direct = getattr(p, "games_played", 0) or 0
+            st = p if gp_direct else (
+                getattr(p, "stats", None) or getattr(p, "season_stats", None))
             if st is None:
                 continue
             acc = self._accum(team_name, p)
@@ -324,10 +346,11 @@ class FranchiseRecords:
             else:
                 for cat, attr in (("games", "games_played"), ("goals", "goals"),
                                   ("assists", "assists"),
-                                  ("pim", "penalties_in_minutes"),
                                   ("shots", "shots")):
                     v = getattr(st, attr, 0) or 0
                     acc[cat] += v
+                acc["pim"] += (getattr(st, "penalty_minutes", 0) or 0
+                               or getattr(st, "penalties_in_minutes", 0) or 0)
                 acc["points"] += (getattr(st, "goals", 0) or 0) + (getattr(st, "assists", 0) or 0)
                 for cat in SKATER_CAREER_RECORDS:
                     if self._maybe_record(self.career_records, team_name,
@@ -341,7 +364,8 @@ class FranchiseRecords:
                     "assists": getattr(st, "assists", 0) or 0,
                     "points": (getattr(st, "goals", 0) or 0) + (getattr(st, "assists", 0) or 0),
                     "shots": getattr(st, "shots", 0) or 0,
-                    "pim": getattr(st, "penalties_in_minutes", 0) or 0,
+                    "pim": (getattr(st, "penalty_minutes", 0) or 0
+                            or getattr(st, "penalties_in_minutes", 0) or 0),
                 }
                 for cat, v in season_vals.items():
                     if self._maybe_record(self.season_records, team_name,
@@ -431,3 +455,83 @@ class FranchiseRecords:
         fr.streaks = data.get("streaks", {})
         fr._names = data.get("names", {})
         return fr
+
+    # -- historical seeding (real NHL franchise records) --
+
+    @staticmethod
+    def _normalize_team_name(name: str) -> str:
+        n = (name or "").strip().lower()
+        n = n.replace("\u00e9", "e").replace("\u00e8", "e")
+        return " ".join(n.split())
+
+    def seed_historical_records(self, seed: dict) -> int:
+        """Seed the record book with real NHL franchise history.
+
+        `seed` maps team name -> {"season": {cat: (holder, value[, season])},
+        "career": {...}, "goalie_season": {...}, "goalie_career": {...},
+        "team_season": {cat: (value[, season])}}.
+
+        Existing records are only overwritten when the seed value is
+        strictly better, so simulated marks are never clobbered by weaker
+        historical ones. Returns the number of teams seeded.
+        """
+        norm_seed = {self._normalize_team_name(k): v
+                     for k, v in (seed or {}).items()}
+        # Canonical team names already present (from simulated seasons)
+        canon = {self._normalize_team_name(t): t
+                 for t in list(self.career_records.keys())
+                 + list(self.season_records.keys())}
+        seeded = 0
+
+        def _set(store, team, cat, value, holder, season,
+                 higher_is_better=True):
+            recs = store.setdefault(team, {})
+            cur = recs.get(cat)
+            beats = (cur is None or
+                     (higher_is_better and value > cur["value"]) or
+                     (not higher_is_better and value < cur["value"]))
+            if beats:
+                recs[cat] = {"value": value, "player": holder,
+                             "season": season}
+                return True
+            return False
+
+        for norm_name, data in norm_seed.items():
+            team = canon.get(norm_name)
+            if team is None:
+                # No simulated history yet; use the seed's own team key
+                # (find original key with this normalized form)
+                orig = next((k for k in (seed or {})
+                             if self._normalize_team_name(k) == norm_name),
+                            norm_name)
+                team = orig
+            did_any = False
+            for cat, tup in (data.get("season") or {}).items():
+                holder, value = tup[0], tup[1]
+                season = tup[2] if len(tup) > 2 else ""
+                did_any |= _set(self.season_records, team, cat,
+                                value, holder, season)
+            for cat, tup in (data.get("career") or {}).items():
+                holder, value = tup[0], tup[1]
+                did_any |= _set(self.career_records, team, cat,
+                                value, holder, "")
+            for cat, tup in (data.get("goalie_season") or {}).items():
+                holder, value = tup[0], tup[1]
+                season = tup[2] if len(tup) > 2 else ""
+                did_any |= _set(self.goalie_season_records, team, cat,
+                                value, holder, season)
+            for cat, tup in (data.get("goalie_career") or {}).items():
+                holder, value = tup[0], tup[1]
+                did_any |= _set(self.goalie_career_records, team, cat,
+                                value, holder, "")
+            for cat, tup in (data.get("team_season") or {}).items():
+                value = tup[0] if isinstance(tup, (list, tuple)) else tup
+                season = (tup[1] if isinstance(tup, (list, tuple))
+                          and len(tup) > 1 else "")
+                hib = cat not in ("fewest_ga",)
+                did_any |= _set(self.team_season_records, team, cat,
+                                value, "", season,
+                                higher_is_better=hib)
+            if did_any:
+                seeded += 1
+        return seeded
