@@ -216,6 +216,68 @@ def shell_of(popup):
         return popup
 
 # ================================================================= main
+# ----------------------------------------------------------------------
+# Tab QA: player card tabs + staff card tabs (FM24-style) + inbox layout
+# ----------------------------------------------------------------------
+def check_player_tabs(win):
+    """Exercise every player tab: switch, assert only it is visible."""
+    tabs = ["Overview", "Personality", "Scout Report", "Dynamics"]
+    for t in tabs:
+        assert t in win._tab_pages, f"player tab missing: {t}"
+    for t in tabs:
+        win._switch_tab(t)
+        win.update_idletasks()
+        for name, page in win._tab_pages.items():
+            visible = bool(page.winfo_ismapped())
+            if name == t:
+                check("fail", f"player tab '{t}' page visible after switch", visible)
+            else:
+                check("fail", f"player tab '{t}' hides '{name}'", not visible)
+    return tabs
+
+
+def check_staff_tabs(staff_win):
+    """Drive the staff tab strip: 4 buttons, each invokes cleanly."""
+    import customtkinter as ctk
+    tab_names = ["Overview", "Attributes", "Standing", "Personality"]
+    buttons = {}
+    for ch in walk(staff_win):
+        try:
+            if isinstance(ch, ctk.CTkButton) and ch.cget("text") in tab_names:
+                buttons[ch.cget("text")] = ch
+        except Exception:
+            pass
+    check("fail", f"staff tab strip has 4 tabs (found {len(buttons)})", len(buttons) == 4)
+    ok = True
+    for t in tab_names:
+        try:
+            if t in buttons:
+                buttons[t].invoke()
+                staff_win.update_idletasks()
+        except Exception as e:
+            ok = False
+            print(f"  staff tab '{t}' invoke failed: {e}")
+    check("fail", "staff tabs all switch without error", ok)
+    return buttons
+
+
+def check_inbox_layout(inbox_win):
+    """Messages list must sit ABOVE the message content pane."""
+    msgs_y = msg_y = None
+    for ch in walk(inbox_win):
+        try:
+            txt = ch.cget("text")
+        except Exception:
+            continue
+        if txt == "Messages":
+            msgs_y = ch.winfo_rooty()
+        elif txt == "Message":
+            msg_y = ch.winfo_rooty()
+    check("fail", "inbox list + content headings found", msgs_y is not None and msg_y is not None)
+    if msgs_y is not None and msg_y is not None:
+        check("fail", f"inbox list above content ({msgs_y} < {msg_y})", msgs_y < msg_y)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--res", default="1600x900")
@@ -243,6 +305,8 @@ def main():
     player = g.Player(first_name="Test", last_name="Player", age=24,
                       primary_position=g.PlayerPosition.CENTER, jersey_number=9)
     rs.ensure_reputation_fields(player)
+    player.salary = 5_250_000
+    player.contract_years = 2
     team = SimpleNamespace(team_name="Test Club", roster=[player], staff=[],
                            inbox=[])
     league = SimpleNamespace(teams=[team], free_agents=[])
@@ -260,6 +324,16 @@ def main():
     check_contrast("player card", psh)
     check_clipping("player card", psh)
     check_nested_scroll("player card", psh)
+
+    # Player card tabs: exercise every tab, screenshot each
+    ptabs = check_player_tabs(pw)
+    for t in ptabs:
+        pw._switch_tab(t)
+        root.update()
+        slug = t.lower().replace(" ", "_")
+        shot(psh, f"{args.shots}/player_tab_{slug}_{args.res}.png")
+    pw._switch_tab("Overview")
+    root.update()
 
     # ---------------- staff card ----------------
     from staff_management_window import StaffManagementWindow
@@ -292,6 +366,17 @@ def main():
         check_contrast("staff card", sw)
         check_clipping("staff card", sw)
         check_nested_scroll("staff card", sw)
+        # Staff card tabs: drive the strip, screenshot each tab
+        staff_win = mgr._stack[-1]["popup"]
+        sbuttons = check_staff_tabs(staff_win)
+        for t in ("Overview", "Attributes", "Standing", "Personality"):
+            try:
+                if t in sbuttons:
+                    sbuttons[t].invoke()
+                    root.update()
+                shot(sw, f"{args.shots}/staff_tab_{t.lower()}_{args.res}.png")
+            except Exception as e:
+                check("fail", f"staff tab '{t}' screenshot", False, str(e))
     else:
         check("fail", "staff card window found", False)
 
@@ -357,8 +442,11 @@ def main():
     check_contrast("inbox", ish)
     check_clipping("inbox", ish)
     check_nested_scroll("inbox", ish)
+    check_inbox_layout(iw)
 
     print(f"\n{PASS and len(PASS)} passed, {len(FAIL)} failed, {len(WARN)} warnings")
     return 1 if FAIL else 0
 
 sys.exit(main())
+
+

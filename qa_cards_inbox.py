@@ -45,7 +45,16 @@ walk(w, grab_labels)
 check("player card builds", w.winfo_exists())
 check("FM24 groups Technical/Mental/Physical",
       {"Technical", "Mental", "Physical"} <= labels, str(sorted(labels)[:5]))
-check("Personality & Dressing Room section", "Personality & Dressing Room" in labels)
+check("player tab strip",
+      {"Overview", "Personality", "Scout Report", "Dynamics"} <= labels,
+      "all four tabs present")
+check("Personality tab card", "Personality" in labels)
+# flip to the Dynamics + Scout tabs and confirm their cards build
+w._switch_tab("Dynamics"); root.update(); labels.clear(); walk(w, grab_labels)
+check("Dynamics tab card", "Team Dynamics" in labels)
+w._switch_tab("Scout Report"); root.update(); labels.clear(); walk(w, grab_labels)
+check("Scout Report tab card", "Scout Report" in labels)
+w._switch_tab("Overview"); root.update(); labels.clear(); walk(w, grab_labels)
 check("NHL Readiness kept", "NHL Readiness" in labels)
 check("contract strip in header",
       any("Test Club" in t for t in labels), "team line present")

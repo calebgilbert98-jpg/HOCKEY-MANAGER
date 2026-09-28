@@ -133,22 +133,26 @@ class InboxWindow(InGamePopup):
         # before the content frame so it always keeps its space)
         self._create_toolbar(main_container)
 
-        # Main content area - split between email list and preview
+        # Main content area - emails above, message content below. The
+        # preview pane carries the email itself and gets the larger share
+        # of the space; the list is just the index.
         content_frame = ctk.CTkFrame(main_container, fg_color="transparent")
         content_frame.pack(fill='both', expand=True, pady=(12, 0))
-        content_frame.grid_columnconfigure(0, weight=3)
-        content_frame.grid_columnconfigure(1, weight=2)
-        content_frame.grid_rowconfigure(0, weight=1)
+        content_frame.grid_columnconfigure(0, weight=1)
+        # uniform group: the cavity is split strictly 2:3 by weight, so the
+        # message list (with its tall treeview) can't starve the preview.
+        content_frame.grid_rowconfigure(0, weight=2, uniform="inbox_rows")
+        content_frame.grid_rowconfigure(1, weight=3, uniform="inbox_rows")
 
-        left_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
+        list_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
                                   corner_radius=12)
-        left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
-        right_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
-                                   corner_radius=12)
-        right_frame.grid(row=0, column=1, sticky='nsew', padx=(6, 0))
+        list_frame.grid(row=0, column=0, sticky='nsew', pady=(0, 6))
+        preview_frame = ctk.CTkFrame(content_frame, fg_color=ct['CARD'],
+                                     corner_radius=12)
+        preview_frame.grid(row=1, column=0, sticky='nsew', pady=(6, 0))
 
-        self._create_email_list(left_frame)
-        self._create_email_preview(right_frame)
+        self._create_email_list(list_frame)
+        self._create_email_preview(preview_frame)
 
     def _create_filter_pills(self, parent):
         """Two rows of rounded CTk filter pills (selected pill is teal).
@@ -200,11 +204,11 @@ class InboxWindow(InGamePopup):
 
         columns = {
             'priority': ('!', 30),
-            'sender': ('From', 150),
-            'subject': ('Subject', 260),
-            'category': ('Category', 90),
-            'date': ('Date', 90),
-            'status': ('Status', 80)
+            'sender': ('From', 170),
+            'subject': ('Subject', 460),
+            'category': ('Category', 110),
+            'date': ('Date', 100),
+            'status': ('Status', 90)
         }
 
         table_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -253,24 +257,32 @@ class InboxWindow(InGamePopup):
     def _create_email_preview(self, parent):
         """Create the email preview pane."""
         ct = self._ct
-        self._heading(parent, "Message Preview", size=14).pack(
+        self._heading(parent, "Message", size=14).pack(
             anchor='w', padx=14, pady=(12, 6))
 
-        # Email header card
+        # Email header card (compact two-column grid -- the pane is now
+        # full width, so From/Date and Subject/Category share rows and the
+        # message body gets the vertical room).
         header_frame = ctk.CTkFrame(parent, fg_color=ct['PANEL'],
                                     corner_radius=10)
         header_frame.pack(fill='x', padx=12, pady=(0, 8))
+        header_frame.grid_columnconfigure(0, weight=1)
+        header_frame.grid_columnconfigure(1, weight=1)
 
         self.preview_from_label = self._body(header_frame, "From: ", size=11)
-        self.preview_from_label.pack(anchor='w', padx=12, pady=(8, 2))
+        self.preview_from_label.grid(row=0, column=0, sticky='w',
+                                     padx=12, pady=(8, 2))
+        self.preview_date_label = self._body(header_frame, "Date: ", size=11)
+        self.preview_date_label.grid(row=0, column=1, sticky='w',
+                                     padx=12, pady=(8, 2))
         self.preview_subject_label = self._body(header_frame, "Subject: ",
                                                 size=11)
-        self.preview_subject_label.pack(anchor='w', padx=12, pady=2)
-        self.preview_date_label = self._body(header_frame, "Date: ", size=11)
-        self.preview_date_label.pack(anchor='w', padx=12, pady=2)
+        self.preview_subject_label.grid(row=1, column=0, sticky='w',
+                                        padx=12, pady=(2, 8))
         self.preview_category_label = self._body(header_frame, "Category: ",
                                                  size=11)
-        self.preview_category_label.pack(anchor='w', padx=12, pady=(2, 8))
+        self.preview_category_label.grid(row=1, column=1, sticky='w',
+                                         padx=12, pady=(2, 8))
 
         # Email content (dark CTkTextbox with styled scrollbar)
         self.content_text = ctk.CTkTextbox(

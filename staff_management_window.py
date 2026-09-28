@@ -1025,7 +1025,7 @@ class StaffManagementWindow(InGamePopup):
                      justify="left").pack(anchor="w", padx=4, pady=2)
 
     def show_staff_details_window(self, staff: Staff, is_current: bool):
-        """Show detailed staff information window."""
+        """Show detailed staff information window -- FM24-style tabs."""
         ct = self._ct
         details_window = InGamePopup(self)
         details_window.title(f"Staff Details - {staff.full_name}")
@@ -1033,42 +1033,74 @@ class StaffManagementWindow(InGamePopup):
         details_window.geometry("680x820")
         details_window.transient(self)
 
-        # Main frame (scrollable so the tall dialog always fits)
-        main_frame = ctk.CTkScrollableFrame(details_window, fg_color="transparent")
-        main_frame.pack(fill="both", expand=True, padx=14, pady=14)
-
-        # Header
-        self._heading(main_frame, text=staff.full_name, size=18).pack(
+        # Fixed header
+        header = ctk.CTkFrame(details_window, fg_color="transparent")
+        header.pack(fill="x", padx=14, pady=(14, 4))
+        self._heading(header, text=staff.full_name, size=18).pack(
             anchor="w", pady=(0, 2))
-        ctk.CTkLabel(main_frame, text=f"{staff.role.value}  •  Rating {staff.overall_rating}",
+        ctk.CTkLabel(header,
+                     text=f"{staff.role.value}  •  Rating {staff.overall_rating}",
                      font=(self._ff, 11), text_color=ct['TEAL']).pack(
                          anchor="w", pady=(0, 4))
         # FM24-style identity line: coaching style, ambition, boyhood team
-        self._staff_identity_line(main_frame, staff, ct)
+        self._staff_identity_line(header, staff, ct)
 
-        # Basic info
-        info_inner = self._dialog_card(main_frame, "Basic Information")
+        # FM24-style tab strip
+        tabbar = ctk.CTkFrame(details_window, fg_color="transparent")
+        tabbar.pack(fill="x", padx=14, pady=(6, 0))
+        tab_pages = {}
+        tab_buttons = {}
+
+        def switch_tab(name):
+            for tname, page in tab_pages.items():
+                if tname == name:
+                    page.pack(fill="both", expand=True)
+                else:
+                    page.pack_forget()
+            for tname, btn in tab_buttons.items():
+                active = tname == name
+                btn.configure(
+                    text_color=ct['TEXT'] if active else ct['TEXT_DIM'],
+                    fg_color=ct['CARD'] if active else "transparent")
+
+        # Scrollable page host (a single scroll region; pages swap inside)
+        pages_frame = ctk.CTkScrollableFrame(details_window,
+                                             fg_color="transparent")
+        pages_frame.pack(fill="both", expand=True, padx=14, pady=(6, 6))
+
+        # -- Overview page ------------------------------------------------
+        overview = ctk.CTkFrame(pages_frame, fg_color="transparent")
+        info_inner = self._dialog_card(overview, "Basic Information")
         self._info_label(info_inner, f"Age: {staff.age}")
         self._info_label(info_inner, f"Nationality: {staff.nationality}")
         self._info_label(info_inner, f"Experience: {staff.experience} years")
         self._info_label(info_inner, f"Overall Rating: {staff.overall_rating}")
         self._info_label(info_inner, f"Reputation: {staff.reputation}")
 
-        # Contract info
-        contract_inner = self._dialog_card(main_frame, "Contract Information")
+        contract_inner = self._dialog_card(overview, "Contract Information")
         self._info_label(contract_inner, f"Salary: ${staff.salary:,}")
-        self._info_label(contract_inner, f"Contract Length: {staff.contract_years} years")
+        self._info_label(contract_inner,
+                         f"Contract Length: {staff.contract_years} years")
 
-        # Attributes -- FM24-style grouped bars (native 1-100 scale)
-        attr_inner = self._dialog_card(main_frame, "Attributes")
+        desc_inner = self._dialog_card(overview, "Role Description")
+        ctk.CTkLabel(desc_inner, text=staff.get_role_description(),
+                     font=(self._ff, 10), text_color=ct['TEXT_DIM'],
+                     wraplength=580, justify="left",
+                     anchor="w").pack(anchor="w", padx=4, pady=4)
+        tab_pages["Overview"] = overview
+
+        # -- Attributes page ----------------------------------------------
+        attrs_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
+        attr_inner = self._dialog_card(attrs_page, "Attributes")
         self._staff_attribute_groups(attr_inner, staff, ct)
+        tab_pages["Attributes"] = attrs_page
 
-        # Standing -- room status, trust, control, assistant effectiveness
-        standing_inner = self._dialog_card(main_frame, "Standing")
+        # -- Standing page -------------------------------------------------
+        standing_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
+        standing_inner = self._dialog_card(standing_page, "Standing")
         self._staff_standing_lines(standing_inner, staff, ct)
 
-        # On-Ice Impact - what this staffer's attributes verifiably affect
-        impact_inner = self._dialog_card(main_frame, "On-Ice Impact")
+        impact_inner = self._dialog_card(standing_page, "On-Ice Impact")
         for line, kind in self._staff_impact_lines(staff):
             fg = {'ok': ct['GREEN'], 'warn': ct['GOLD'],
                   'info': ct['TEXT_FAINT']}.get(kind, ct['TEXT_FAINT'])
@@ -1076,17 +1108,26 @@ class StaffManagementWindow(InGamePopup):
                          font=(self._ff, 9), text_color=fg,
                          wraplength=560, justify="left",
                          anchor="w").pack(anchor="w", padx=8, pady=2)
+        tab_pages["Standing"] = standing_page
 
-        # Role description
-        desc_inner = self._dialog_card(main_frame, "Role Description")
-        ctk.CTkLabel(desc_inner, text=staff.get_role_description(),
-                     font=(self._ff, 10), text_color=ct['TEXT_DIM'],
-                     wraplength=580, justify="left",
-                     anchor="w").pack(anchor="w", padx=4, pady=4)
+        # -- Personality page ----------------------------------------------
+        personality_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
+        self._staff_personality_tab(personality_page, staff, ct)
+        tab_pages["Personality"] = personality_page
 
-        # Buttons
-        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        button_frame.pack(fill="x", pady=(4, 0))
+        for tname in ("Overview", "Attributes", "Standing", "Personality"):
+            btn = ctk.CTkButton(
+                tabbar, text=tname, fg_color="transparent",
+                text_color=ct['TEXT_DIM'], hover_color=ct['CARD'],
+                font=(self._ff, 12, "bold"), corner_radius=8,
+                command=lambda n=tname: switch_tab(n))
+            btn.pack(side="left", padx=(0, 4))
+            tab_buttons[tname] = btn
+        switch_tab("Overview")
+
+        # Fixed button bar
+        button_frame = ctk.CTkFrame(details_window, fg_color="transparent")
+        button_frame.pack(fill="x", padx=14, pady=(0, 14))
 
         if is_current:
             self._secondary_button(button_frame, text="Negotiate Contract",
@@ -1103,6 +1144,66 @@ class StaffManagementWindow(InGamePopup):
         self._secondary_button(button_frame, text="Close",
                                command=details_window.destroy,
                                width=110, height=36).pack(side="right", padx=5)
+
+    def _staff_personality_tab(self, parent, staff, ct):
+        """Personality page: coaching style writeup, ambition, control style,
+        management manner -- who he is behind the bench."""
+        import reputation_system as rs
+        inner = self._dialog_card(parent, "Personality")
+        try:
+            style = rs.coach_style(staff)
+            ctk.CTkLabel(inner, text=style.get("label", "Balanced"),
+                         font=(self._ff, 13, "bold"),
+                         text_color=ct['TEAL'], anchor="w").pack(
+                             anchor="w", padx=8, pady=(4, 2))
+            if style.get("description"):
+                ctk.CTkLabel(inner, text=style["description"],
+                             font=(self._ff, 10), text_color=ct['TEXT_DIM'],
+                             wraplength=560, justify="left",
+                             anchor="w").pack(anchor="w", padx=8, pady=2)
+        except Exception:
+            pass
+        ambition_text = {
+            "stanley_cup": "Burning to win the Stanley Cup.",
+            "climb": "Climbing -- wants a bigger chair.",
+            "developer": "Lives to develop young players.",
+            "hometown": "Dreams of coaching his hometown team.",
+            "lifer": "A lifer -- happy wherever the game takes him.",
+        }.get(str(getattr(staff, "ambition", "") or ""), "")
+        lines = []
+        if ambition_text:
+            lines.append(f"Ambition: {ambition_text}")
+        fav = getattr(staff, "favorite_team", None)
+        if fav:
+            lines.append(f"Boyhood team: {fav}")
+        try:
+            cn = float(getattr(staff, "control_need", 50))
+            if cn >= 75:
+                lines.append("Runs the room his way -- needs full control.")
+            elif cn >= 45:
+                lines.append("Comfortable sharing the room with his staff.")
+            else:
+                lines.append("Collaborative -- delegates freely to assistants.")
+        except Exception:
+            pass
+        try:
+            mot = float(getattr(staff, "motivating", 50))
+            disc = float(getattr(staff, "discipline", 50))
+            if mot >= 75 and disc >= 75:
+                lines.append("Demanding and inspiring in equal measure.")
+            elif mot >= 75 and disc < 60:
+                lines.append("An arm-around-the-shoulder motivator.")
+            elif disc >= 75 and mot < 60:
+                lines.append("A demanding disciplinarian.")
+            elif mot < 45 and disc < 45:
+                lines.append("Hands-off -- lets the leaders run the room.")
+        except Exception:
+            pass
+        for line in lines:
+            ctk.CTkLabel(inner, text=f"\u2022  {line}", font=(self._ff, 10),
+                         text_color=ct['TEXT_FAINT'], wraplength=560,
+                         justify="left", anchor="w").pack(
+                             anchor="w", padx=8, pady=2)
 
     # ------------------------------------------------------------------
     # FM24-style staff card sections

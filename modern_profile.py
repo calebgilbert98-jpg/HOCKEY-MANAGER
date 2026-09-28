@@ -130,33 +130,96 @@ class PlayerProfile(InGamePopup):
 
     # -- layout ----------------------------------------------------------
     def _create_ui(self):
-        """Create the profile UI."""
-        # Scrollable main
-        canvas = tk.Canvas(self, bg=AppColors.BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        """Create the profile UI: fixed header, FM24-style tab strip, and
+        one scrollable host whose pages swap under the tabs."""
+        outer = tk.Frame(self, bg=AppColors.BG)
+        outer.pack(fill="both", expand=True)
+
+        self._create_header(outer)
+
+        # FM24-style tab strip
+        tab_defs = [
+            ("Overview", self._page_overview),
+            ("Personality", self._page_personality),
+            ("Scout Report", self._page_scout),
+            ("Dynamics", self._page_dynamics),
+        ]
+        self._tab_buttons = {}
+        self._tab_pages = {}
+        tabbar = tk.Frame(outer, bg=AppColors.BG)
+        tabbar.pack(fill="x", padx=24)
+        for name, _builder in tab_defs:
+            holder = tk.Frame(tabbar, bg=AppColors.BG, cursor="hand2")
+            holder.pack(side="left", padx=(0, 4))
+            lbl = tk.Label(holder, text=name, font=AppFonts.SMALL_BOLD,
+                           fg=AppColors.TEXT_SECONDARY, bg=AppColors.BG,
+                           padx=12, pady=6)
+            lbl.pack()
+            underline = tk.Frame(holder, bg=AppColors.BG, height=2)
+            underline.pack(fill="x")
+            for w in (holder, lbl):
+                w.bind("<Button-1>", lambda e, n=name: self._switch_tab(n))
+            self._tab_buttons[name] = (lbl, underline)
+
+        # Scrollable page host (a single scroll region; pages swap inside)
+        canvas = tk.Canvas(outer, bg=AppColors.BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical",
+                                  command=canvas.yview)
         main = tk.Frame(canvas, bg=AppColors.BG)
 
-        main.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=main, anchor="nw")
+        main.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        win_id = canvas.create_window((0, 0), window=main, anchor="nw")
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(win_id, width=e.width))
         canvas.configure(yscrollcommand=scrollbar.set)
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Content
         content = tk.Frame(main, bg=AppColors.BG)
-        content.pack(fill="both", expand=True, padx=24, pady=24)
+        content.pack(fill="both", expand=True, padx=24, pady=16)
 
-        self._create_header(content)
-        self._create_stats(content)
-        self._create_attributes(content)
-        self._create_personality(content)
-        self._create_readiness(content)
+        for name, builder in tab_defs:
+            page = tk.Frame(content, bg=AppColors.BG)
+            builder(page)
+            self._tab_pages[name] = page
+
+        self._switch_tab("Overview")
+
+    def _switch_tab(self, name):
+        """Show one tab page and restyle the strip."""
+        for tname, page in self._tab_pages.items():
+            if tname == name:
+                page.pack(fill="both", expand=True)
+            else:
+                page.pack_forget()
+        for tname, (lbl, underline) in self._tab_buttons.items():
+            active = tname == name
+            lbl.configure(fg=AppColors.TEXT_PRIMARY if active
+                          else AppColors.TEXT_SECONDARY)
+            underline.configure(bg=AppColors.ACCENT if active
+                                else AppColors.BG)
+
+    # -- tab pages -------------------------------------------------------
+    def _page_overview(self, parent):
+        self._create_stats(parent)
+        self._create_attributes(parent)
+
+    def _page_personality(self, parent):
+        self._create_personality_traits(parent)
+
+    def _page_scout(self, parent):
+        self._create_readiness(parent)
+        self._create_scout_notes(parent)
+
+    def _page_dynamics(self, parent):
+        self._create_dynamics(parent)
 
     def _create_header(self, parent):
         """Player header: avatar, name, pills, team + contract strip."""
         header = tk.Frame(parent, bg=AppColors.BG)
-        header.pack(fill="x", pady=(0, 24))
+        header.pack(fill="x", pady=(0, 8))
 
         # Large avatar
         size = 96
@@ -342,43 +405,32 @@ class PlayerProfile(InGamePopup):
                 self._create_attribute_bar(col, label, val, card.card_bg,
                                            compact=True)
 
-    def _create_personality(self, parent):
-        """Personality & Dressing Room: FM24-style personality panel fed by
-        the reputation/social systems -- pills, morale bars, relationships."""
+    def _create_personality_traits(self, parent):
+        """Personality: character, morale, reputation -- who he is."""
         import reputation_system as rs
         p = self.player
         try:
             rs.ensure_reputation_fields(p)
         except Exception:
             pass
-        league = getattr(getattr(self, "parent_app", None), "league", None)
         team = self._find_team()
-        roster = list(getattr(team, "roster", []) or []) if team else []
 
         card = AppCard(parent)
         card.pack(fill="x", pady=(0, 16))
         content = card.get_content_frame()
-        tk.Label(content, text="Personality & Dressing Room",
+        tk.Label(content, text="Personality",
                  font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
                  bg=card.card_bg).pack(anchor="w", pady=(0, 12))
-
         try:
             att = rs.describe_attitude(p)
             ff = rs.fan_favourite_score(p, team)
-            tier = "-"
-            if roster:
-                tiers = rs.team_hierarchy(roster)
-                for tname, ps in tiers.items():
-                    if p in ps:
-                        tier = tname
-                        break
 
-            # Pills row
             pills = tk.Frame(content, bg=card.card_bg)
             pills.pack(anchor="w", pady=(0, 10))
             att_colors = {
                 "Volatile": AppColors.DANGER, "Fiery": AppColors.WARNING,
-                "Emotional": AppColors.WARNING, "Even-keeled": AppColors.SUCCESS,
+                "Emotional": AppColors.WARNING,
+                "Even-keeled": AppColors.SUCCESS,
                 "Model professional": AppColors.INFO,
             }
             PillBadge(pills, text=att,
@@ -388,36 +440,7 @@ class PlayerProfile(InGamePopup):
             PillBadge(pills, text=f"Fans: {ff['tier']}",
                       bg=AppColors.BG_ELEVATED,
                       fg=AppColors.TEXT_SECONDARY).pack(side="left", padx=(0, 8))
-            if tier != "-":
-                PillBadge(pills, text=f"Room: {tier}",
-                          bg=AppColors.BG_ELEVATED,
-                          fg=AppColors.TEXT_SECONDARY).pack(side="left", padx=(0, 8))
-            # Coach fit badge
-            coach = self._head_coach_of(team) if team else None
-            if coach is not None:
-                try:
-                    resp = rs.player_coach_response(p, coach)
-                    label = resp.get("response", "Neutral") if isinstance(resp, dict) else str(resp)
-                    PillBadge(pills, text=f"Coach: {label}",
-                              bg=AppColors.BG_ELEVATED,
-                              fg=AppColors.TEXT_SECONDARY).pack(side="left", padx=(0, 8))
-                except Exception:
-                    pass
-            # Trade-request risk pill (only when notable)
-            try:
-                risk = rs.trade_request_risk(p)
-                if risk >= 0.5:
-                    PillBadge(pills, text="Trade risk: HIGH",
-                              bg=AppColors.BG_ELEVATED,
-                              fg=AppColors.DANGER).pack(side="left", padx=(0, 8))
-                elif risk >= 0.3:
-                    PillBadge(pills, text="Trade risk: elevated",
-                              bg=AppColors.BG_ELEVATED,
-                              fg=AppColors.WARNING).pack(side="left", padx=(0, 8))
-            except Exception:
-                pass
 
-            # Morale / happiness bars + reputation line
             bars = tk.Frame(content, bg=card.card_bg)
             bars.pack(fill="x", pady=(0, 6))
             self._create_attribute_bar(bars, "Morale",
@@ -432,12 +455,78 @@ class PlayerProfile(InGamePopup):
                      fg=AppColors.TEXT_SECONDARY, bg=card.card_bg,
                      justify="left").pack(anchor="w", pady=(4, 2))
             if ff["reasons"]:
-                tk.Label(content, text="Why fans care: " + "; ".join(ff["reasons"][:2]),
+                tk.Label(content,
+                         text="Why fans care: " + "; ".join(ff["reasons"][:2]),
                          font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                          bg=card.card_bg, wraplength=850,
                          justify="left").pack(anchor="w", pady=2)
+        except Exception as e:
+            tk.Label(content, text=f"Personality unavailable ({e})",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=card.card_bg).pack(anchor="w")
 
-            # Relationships
+    def _create_dynamics(self, parent):
+        """Team Dynamics: his place in the room -- hierarchy, coach fit,
+        relationships."""
+        import reputation_system as rs
+        p = self.player
+        try:
+            rs.ensure_reputation_fields(p)
+        except Exception:
+            pass
+        league = getattr(getattr(self, "parent_app", None), "league", None)
+        team = self._find_team()
+        roster = list(getattr(team, "roster", []) or []) if team else []
+
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        content = card.get_content_frame()
+        tk.Label(content, text="Team Dynamics",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=card.card_bg).pack(anchor="w", pady=(0, 12))
+        try:
+            tier = "-"
+            if roster:
+                tiers = rs.team_hierarchy(roster)
+                for tname, ps in tiers.items():
+                    if p in ps:
+                        tier = tname
+                        break
+
+            pills = tk.Frame(content, bg=card.card_bg)
+            pills.pack(anchor="w", pady=(0, 10))
+            if tier != "-":
+                PillBadge(pills, text=f"Room: {tier}",
+                          bg=AppColors.BG_ELEVATED,
+                          fg=AppColors.TEXT_SECONDARY).pack(side="left",
+                                                           padx=(0, 8))
+            coach = self._head_coach_of(team) if team else None
+            if coach is not None:
+                try:
+                    resp = rs.player_coach_response(p, coach)
+                    label = (resp.get("response", "Neutral")
+                             if isinstance(resp, dict) else str(resp))
+                    PillBadge(pills, text=f"Coach: {label}",
+                              bg=AppColors.BG_ELEVATED,
+                              fg=AppColors.TEXT_SECONDARY).pack(side="left",
+                                                               padx=(0, 8))
+                except Exception:
+                    pass
+            try:
+                risk = rs.trade_request_risk(p)
+                if risk >= 0.5:
+                    PillBadge(pills, text="Trade risk: HIGH",
+                              bg=AppColors.BG_ELEVATED,
+                              fg=AppColors.DANGER).pack(side="left",
+                                                       padx=(0, 8))
+                elif risk >= 0.3:
+                    PillBadge(pills, text="Trade risk: elevated",
+                              bg=AppColors.BG_ELEVATED,
+                              fg=AppColors.WARNING).pack(side="left",
+                                                        padx=(0, 8))
+            except Exception:
+                pass
+
             friends = rs.get_friends(p, roster) if roster else []
             if friends:
                 tk.Label(content,
@@ -455,13 +544,74 @@ class PlayerProfile(InGamePopup):
                          font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                          bg=card.card_bg, wraplength=850,
                          justify="left").pack(anchor="w", pady=2)
-            for _cid, story in list(getattr(p, "coach_bonds", None) or {}.items())[:3]:
+            for _cid, story in list(
+                    getattr(p, "coach_bonds", None) or {}.items())[:3]:
                 tk.Label(content, text="Forged bond  " + story,
                          font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                          bg=card.card_bg, wraplength=850,
                          justify="left").pack(anchor="w", pady=2)
+            if not friends and not rivals:
+                tk.Label(content,
+                         text="No notable relationships on this roster yet.",
+                         font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                         bg=card.card_bg).pack(anchor="w", pady=2)
         except Exception as e:
             tk.Label(content, text=f"Dynamics unavailable ({e})",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=card.card_bg).pack(anchor="w")
+
+    def _create_scout_notes(self, parent):
+        """Scout Report: strengths/weaknesses read off the attribute groups,
+        plus the potential grade -- the written report behind the bars."""
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        content = card.get_content_frame()
+        tk.Label(content, text="Scout Report",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=card.card_bg).pack(anchor="w", pady=(0, 12))
+        try:
+            from game_classes import to_100_scale
+        except Exception:
+            def to_100_scale(v):
+                return v
+        try:
+            is_goalie = 'GOALIE' in str(self.player.primary_position).upper()
+        except Exception:
+            is_goalie = False
+        flat = (GOALIE_TECHNICAL + GOALIE_MENTAL + GOALIE_PHYSICAL
+                if is_goalie else
+                SKATER_TECHNICAL + SKATER_MENTAL + SKATER_PHYSICAL)
+        scored = []
+        for label, field in flat:
+            val = getattr(self.player, field, None)
+            if val is None:
+                continue
+            try:
+                scored.append((label, int(to_100_scale(val))))
+            except Exception:
+                pass
+        try:
+            scored.sort(key=lambda t: t[1], reverse=True)
+            strengths = [f"{n} ({v})" for n, v in scored[:3]]
+            weak = sorted([t for t in scored if t[1] < 60],
+                          key=lambda t: t[1])
+            weaknesses = [f"{n} ({v})" for n, v in weak[:2]]
+            grade = (getattr(self.player, "potential_grade", None)
+                     or getattr(self.player, "potential", "?"))
+            lines = [f"Potential grade:  {grade}"]
+            if strengths:
+                lines.append("Best assets:  " + ", ".join(strengths))
+            if weaknesses:
+                lines.append("Needs work:  " + ", ".join(weaknesses))
+            else:
+                lines.append("No glaring holes in his game.")
+            for ln in lines:
+                tk.Label(content, text=ln, font=AppFonts.SMALL,
+                         fg=AppColors.TEXT_SECONDARY, bg=card.card_bg,
+                         wraplength=850, justify="left"
+                         ).pack(anchor="w", pady=2)
+        except Exception as e:
+            tk.Label(content, text=f"Scout report unavailable ({e})",
                      font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                      bg=card.card_bg).pack(anchor="w")
 
