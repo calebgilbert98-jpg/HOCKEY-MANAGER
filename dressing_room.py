@@ -83,7 +83,11 @@ class DressingRoom:
         if abs(delta) < 2:
             return  # small moves don't cascade
         pid = player.id
-        amp = 1.5 if getattr(player, 'captaincy', None) == 'C' else 1.0
+        # E6: leadership (1-100) scales cascade reach. Captains get 1.5x base.
+        leadership = getattr(player, 'leadership', 50)
+        amp = (0.5 + leadership / 100.0)
+        if getattr(player, 'captaincy', None) == 'C':
+            amp *= 1.5
         roster_by_id = {p.id: p for p in team.roster}
         for g in self.groups:
             if pid not in g.member_ids:

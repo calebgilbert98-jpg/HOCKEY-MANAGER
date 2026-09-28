@@ -2617,6 +2617,10 @@ class GameSim:
                 elif self._is_on_power_play(player):
                     fatigue_rate *= 0.7
 
+                # E6: stamina (1-100) resists fatigue. 50 = baseline.
+                stamina = getattr(player, 'stamina', 50)
+                fatigue_rate *= (1.3 - stamina / 100.0)
+
                 # Apply fatigue
                 fatigue_loss = fatigue_rate * time_elapsed
                 self.player_fatigue[player.id] = max(0, self.player_fatigue[player.id] - fatigue_loss)
@@ -4827,6 +4831,9 @@ class GameSim:
                 if tendency_key == "shoot":
                     # flatten: a sniper should lead, not own, the shot chart
                     w = w ** 0.5
+                if tendency_key == "hit":
+                    # E6: aggression (1-100) directly scales hit selection
+                    w *= (0.5 + getattr(p, 'aggression', 50) / 100.0)
                 if recent and getattr(p, "id", None) in recent:
                     w *= 0.35  # you just shot; the puck moves on
                 weights.append(w)
@@ -4970,6 +4977,16 @@ class GameSim:
             x = 200.0 - x
         return x, y
 
+    def _is_clutch_moment(self):
+        """E6: late and close, or overtime/playoffs."""
+        try:
+            late = getattr(self, 'period', 1) >= 3 and getattr(self, 'clock', 0) <= 300
+            close_game = abs(self.home_score - self.away_score) <= 1
+            ot = getattr(self, 'period', 1) > 3
+            return (late and close_game) or ot
+        except Exception:
+            return False
+
     def _resolve_shot_on_goal(self, shooter, attacking_team, defending_team, shot_type, location, quality, distance,
                               quality_factor=1.0):
         """
@@ -5092,6 +5109,15 @@ class GameSim:
         
         # Apply shot skill bonus to save probability
         adjusted_save_prob = save_probability * (1.0 - (shot_skill_bonus / 200))  # Slight reduction for good passes
+        # E6: poise matters in clutch moments (late/close games, playoffs).
+        # High-poise shooters are less likely to be denied when it counts.
+        try:
+            if self._is_clutch_moment():
+                poise = getattr(shooter, 'poise', 50)
+                clutch_edge = (poise - 50) / 500.0  # +/-10%
+                adjusted_save_prob *= (1.0 - clutch_edge)
+        except Exception:
+            pass
 
         # Scoring-level preference: scale the per-shot goal probability.
         # (Low = current tuning; Medium = NHL baseline ~6 gpg; High = 7+ gpg.)

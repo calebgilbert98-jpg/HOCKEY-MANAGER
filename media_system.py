@@ -443,9 +443,20 @@ class MediaSystem:
             
             # Apply to team morale (if morale system exists)
             if hasattr(self.game_manager, 'user_team') and self.game_manager.user_team:
-                for player in self.game_manager.user_team.roster:
+                team = self.game_manager.user_team
+                for player in team.roster:
                     if hasattr(player, 'morale'):
                         player.morale = max(1, min(20, player.morale + morale_change))
+                # F3: trigger dressing-room cascade from press conference
+                try:
+                    from dressing_room import get_team_dynamics
+                    dyn = get_team_dynamics(team)
+                    if morale_change > 0:
+                        dyn.morale_cascade('positive', 1, team.roster)
+                    elif morale_change < 0:
+                        dyn.morale_cascade('negative', 1, team.roster)
+                except ImportError:
+                    pass
     
     def generate_daily_storylines(self):
         """Generate new storylines based on current team situation"""
