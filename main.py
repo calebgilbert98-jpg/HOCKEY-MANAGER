@@ -1378,8 +1378,11 @@ NHL League Office""",
                 pass
             for roster_name in ('roster', 'prospects'):
                 for player in getattr(team, roster_name, []) or []:
+                    # team= enables the archetype/system coaching
+                    # dimensions (additive; legacy formula unchanged).
                     changes = self._dev_engine.process_monthly_development(
-                        player, coach=getattr(team, 'head_coach', None))
+                        player, coach=getattr(team, 'head_coach', None),
+                        team=team)
                     if not changes:
                         continue
                     # Refresh archetype as attributes develop (e.g. prospect
@@ -8305,7 +8308,11 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 can, _ = engine.can_practice(player, ptype, intensity)
                 if can:
-                    engine.execute_practice(player, ptype, intensity, 60, 12)
+                    # Team context: the real coaching staff runs the drill
+                    # (who teaches it, archetype affinity, attitude, fit,
+                    # system) instead of a flat trainer number.
+                    engine.execute_practice(player, ptype, intensity, 60, 12,
+                                            team=user_team)
             except Exception:
                 continue
         for pid in expired:
@@ -8353,6 +8360,36 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+    def _weekly_coaching_mults(self, team, player, attrs, _cache):
+        """Per-attribute coaching multipliers for the weekly all-team
+        development tick. Same practice_breakdown math as practice
+        sessions (drill knowledge, archetype affinity, attitude, fit,
+        system) -- one mechanic for all 32 clubs, user and AI alike.
+        Additive: returns 1.0 for anything it can't price. Never raises.
+        """
+        try:
+            import coach_practice as _cp
+        except Exception:
+            return {}
+        out = {}
+        for attr in attrs:
+            drill = _cp.attribute_drill(attr)
+            if drill is None or not hasattr(player, attr):
+                continue
+            # Keyed by team too: the same player object must never borrow
+            # another club's staff pricing.
+            key = (id(team), id(player), drill)
+            mult = _cache.get(key)
+            if mult is None:
+                try:
+                    mult = float(_cp.practice_breakdown(
+                        team, player, drill).get("total_mult", 1.0))
+                except Exception:
+                    mult = 1.0
+                _cache[key] = mult
+            out[attr] = mult
+        return out
+
     def _process_player_development(self):
         """Process weekly player development for all teams"""
         if not hasattr(self, 'development_engine') or self.development_engine is None:
@@ -8360,6 +8397,9 @@ class HockeyManagerGUI(tk.Tk):
         
         try:
             development_events = []
+            # Per-tick cache: (player, drill) -> coaching multiplier, so
+            # the breakdown is priced once per player per drill.
+            _coach_cache = {}
             
             for team in self.league.teams:
                 for roster_type, roster_list in (('roster', team.roster),
@@ -8410,6 +8450,12 @@ class HockeyManagerGUI(tk.Tk):
                                 
                                 # Determine which attributes can develop
                                 developable_attrs = self._get_developable_attributes(player)
+                                # Coaching parity: this club's staff shapes the
+                                # weekly tick exactly the way they shape a
+                                # practice session (same model, all 32 teams).
+                                coach_mults = self._weekly_coaching_mults(
+                                    team, player, developable_attrs,
+                                    _coach_cache)
                                 
                                 for attr in developable_attrs:
                                     if hasattr(player, attr):
@@ -8425,7 +8471,8 @@ class HockeyManagerGUI(tk.Tk):
                                         # Check if there's room to grow
                                         if current_val < max_val and current_val < 50:
                                             # Small chance of improvement each week
-                                            improvement_chance = weekly_rate * 0.15
+                                            improvement_chance = (weekly_rate * 0.15
+                                                                  * coach_mults.get(attr, 1.0))
 
                                             if random.random() < improvement_chance:
                                                 new_val = min(current_val + 1, max_val, 50)
