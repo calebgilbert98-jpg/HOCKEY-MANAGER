@@ -368,6 +368,10 @@ class Player:
     on_waivers: bool = False
     waiver_days: int = 0
     nhl_games_played: int = field(default_factory=lambda: random.randint(0, 500))
+    # NHL games played in each PRECEDING season (most recent last).
+    # Drives Calder eligibility (25-game / 6-game rules). European pro
+    # leagues don't count -- only NHL GP is recorded here.
+    prior_nhl_gp: List[int] = field(default_factory=list)
 
     skating: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     strength: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
@@ -1009,6 +1013,18 @@ class Player:
     
     def reset_season_stats(self):
         """Reset season statistics for a new season"""
+        # Archive the finished season's NHL GP for Calder eligibility
+        # BEFORE zeroing. Only NHL games count -- AHL/European pro
+        # seasons don't touch rookie status.
+        try:
+            prior = getattr(self, "prior_nhl_gp", None)
+            if prior is None:
+                prior = []
+                self.prior_nhl_gp = prior
+            prior.append(int(getattr(self, "games_played", 0) or 0))
+            del prior[:-5]  # keep the last five seasons; older is irrelevant
+        except Exception:
+            pass
         self.games_played = 0
         self.goals = 0
         self.assists = 0
@@ -2094,6 +2110,14 @@ class Team:
                                   "D": [None, None, None]})
     # Dressing-room dynamics (Morale screen): event feed + who picks the lines
     dynamics_log: List[dict] = field(default_factory=list)
+    # Analytics scouting state (monthly tips + steal validation).
+    # scout_*_tips: {player_id: {jpa, correct, scout}} from the monthly
+    # pro-scout dispatch. steal_watch: {player_id: {...}} tracking
+    # tipped players acquired via trade until their post-trade
+    # production validates (or quietly expires) the scout's call.
+    scout_buy_tips: Dict[int, dict] = field(default_factory=dict)
+    scout_sell_tips: Dict[int, dict] = field(default_factory=dict)
+    steal_watch: Dict[int, dict] = field(default_factory=dict)
     line_control: str = "coach"  # 'coach' | 'gm'
     # Roster continuity for the situations factor: offseason snapshot of NHL
     # roster names + measured summer turnover (0-1). High churn = gelling

@@ -388,5 +388,68 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                              board_a=board)
     except Exception:
         pass
+    # Authoritative post-trade integration point: EVERY completed trade
+    # path (user deals, AI deadline deals) flows through here.
+    #  - Fresh start: rescued players get their morale payoff.
+    #  - Steal watch: scout-tipped acquisitions are tracked until their
+    #    post-trade production validates (or quietly expires) the call.
+    # Both are idempotent per trade via the _trade_stamp key.
+    try:
+        _post_trade_effects(user_team, partner_team, user_assets,
+                            partner_assets, date_str, league)
+    except Exception:
+        pass
     return CompletedTrade(date_str, user_team.team_name, partner_team.team_name,
                           a_labels, b_labels, summary)
+
+
+def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
+                        date_str, league) -> None:
+    """One integration point for all post-trade effects. Idempotent."""
+    from game_classes import DraftPick
+    try:
+        import reputation_system as _rs
+    except ImportError:
+        return
+    teams = []
+    try:
+        teams = list(getattr(league, "teams", []) or [])
+    except Exception:
+        pass
+    if not teams:
+        teams = [user_team, partner_team]
+    # (incoming players, old team, new team) for both directions
+    moves = []
+    for a in partner_assets:
+        if not isinstance(a, DraftPick):
+            moves.append((a, partner_team, user_team))
+    for a in user_assets:
+        if not isinstance(a, DraftPick):
+            moves.append((a, user_team, partner_team))
+    for player, old_team, new_team in moves:
+        try:
+            stamp = (date_str,
+                     getattr(old_team, "team_name", ""),
+                     getattr(new_team, "team_name", ""))
+            if getattr(player, "_trade_stamp", None) == stamp:
+                continue  # already processed for this trade
+            player._trade_stamp = stamp
+        except Exception:
+            pass
+        # Fresh start: the rescue payoff.
+        try:
+            _rs.apply_fresh_start(player, old_team, new_team, teams=teams)
+        except Exception:
+            pass
+        # Steal watch: was this player scout-tipped to the acquiring team?
+        try:
+            pid = getattr(player, "id", id(player))
+            tips = getattr(new_team, "scout_buy_tips", None) or {}
+            tip = tips.get(pid)
+            if tip is not None:
+                enriched = dict(tip)
+                enriched.setdefault("signals", [])
+                enriched.setdefault("value_score", 0.0)
+                _rs.watch_steal_candidate(player, new_team, enriched)
+        except Exception:
+            pass

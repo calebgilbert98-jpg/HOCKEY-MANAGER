@@ -582,8 +582,10 @@ class PlayerProfile(InGamePopup):
                  font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
                  bg=card.card_bg).pack(anchor="w", pady=(0, 4))
         tk.Label(content,
-                 text="Possession and shot-quality metrics are modeled from attributes "
-                      "and usage, like public xG models.",
+                 text="Estimates, not tracking data: every metric below is modeled from "
+                      "attributes and box-score production. No shot locations are tracked. "
+                      "Useful for comparing players and spotting trends -- not measured truth. "
+                      "Hover ⓘ on any metric for what it is (and isn't).",
                  font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                  bg=card.card_bg, wraplength=640, justify="left").pack(anchor="w", pady=(0, 12))
 

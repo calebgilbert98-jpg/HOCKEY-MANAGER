@@ -56,6 +56,94 @@ def _is_rookie(p) -> bool:
     return bool(getattr(p, "is_rookie", False))
 
 
+def calder_season_year(d) -> int:
+    """September-year of the season containing date d.
+
+    The Calder's September-15 age cutoff belongs to the season's START
+    year: June 2027 awards judge the 2026-27 season (year 2026).
+    """
+    try:
+        return int(d.year) if int(d.month) >= 9 else int(d.year) - 1
+    except Exception:
+        import datetime as _dt
+        _td = _dt.date.today()
+        return _td.year if _td.month >= 9 else _td.year - 1
+
+
+def _migrate_prior_gp(p) -> List[int]:
+    """Backfill prior_nhl_gp for saves that predate it.
+
+    Old saves only kept the is_rookie flag. A flagged rookie was in his
+    first NHL season (0 prior NHL GP) -- exact. For everyone else, use
+    career NHL GP minus the current season: if that exceeds 25, the
+    player must have had a disqualifying season (sentinel 999).
+    """
+    prior = getattr(p, "prior_nhl_gp", None)
+    if isinstance(prior, list):
+        return prior
+    # Old save: only the is_rookie flag survived. A flagged rookie was in
+    # his first NHL season (0 prior NHL GP) -- exact. Anyone else has
+    # prior professional seasons of unknowable NHL GP; the conservative
+    # call preserves the old behavior (non-rookies were never candidates).
+    # Real per-season tracking takes over from here via reset_season_stats.
+    prior = [] if getattr(p, "is_rookie", False) else [999]
+    try:
+        p.prior_nhl_gp = prior
+    except Exception:
+        pass
+    return prior
+
+
+def _calder_age_ok(p, season_year: int) -> bool:
+    """26 or younger on September 15 of the season's start year.
+
+    Turning 27 ON September 15 disqualifies (must not have attained the
+    27th birthday by that date). Unparseable birth dates fail open.
+    """
+    try:
+        bstr = (getattr(p, "birth_date", "") or "").strip()
+        y, m, d = [int(x) for x in bstr.split("-")[:3]]
+        return (y, m, d) > (season_year - 27, 9, 15)
+    except Exception:
+        return True
+
+
+def calder_eligible(p, season_year: int = None) -> Tuple[bool, str]:
+    """Centralized Calder Memorial Trophy eligibility.
+
+    Real NHL rules, end to end:
+    - Age: 26 or younger on September 15 of the season's start year.
+    - Games: no more than 25 NHL games in any single preceding season,
+      nor more than 6 NHL games in each of any two preceding seasons.
+    - Only NHL games count: AHL time and European pro leagues (KHL, SHL,
+      Liiga...) never disqualify -- a 24-year-old KHL veteran with 0 NHL
+      games is a rookie here, as in real life.
+
+    Returns (eligible, reason). The reason string explains the ruling
+    for UI tooltips and the audit trail.
+    """
+    import datetime as _dt
+    if season_year is None:
+        _td = _dt.date.today()
+        season_year = _td.year if _td.month >= 9 else _td.year - 1
+    try:
+        season_year = int(season_year)
+    except Exception:
+        return False, "no season year"
+
+    if not _calder_age_ok(p, season_year):
+        return False, "age: 27+ on September 15"
+    prior = _migrate_prior_gp(p) or []
+    try:
+        if any(int(g or 0) > 25 for g in prior):
+            return False, "played 25+ NHL games in a prior season"
+        if sum(1 for g in prior if int(g or 0) > 6) >= 2:
+            return False, "played 6+ NHL games in two prior seasons"
+    except Exception:
+        pass
+    return True, "eligible rookie"
+
+
 def _sv_pct(p) -> float:
     sa = getattr(p, "shots_against", 0) or 0
     sv = getattr(p, "saves", 0) or 0
@@ -78,12 +166,38 @@ def _team_points_pct(team) -> float:
 # Skater awards
 # ---------------------------------------------------------------------------
 
+def roster_team_map(teams: List[Any]) -> Dict[int, str]:
+    """Authoritative player -> team mapping from roster membership.
+
+    Player.team_name is a convenience label that can go stale (trades,
+    callups, old saves). The roster is the truth: if a player is in a
+    team's roster list, that team is his team.
+    """
+    out: Dict[int, str] = {}
+    for t in teams or []:
+        try:
+            tname = getattr(t, "team_name", "") or ""
+            for p in list(getattr(t, "roster", []) or []):
+                try:
+                    out[int(getattr(p, "id", -1) or -1)] = tname
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return out
+
+
 def hart_race(players: List[Any], team_pct: Dict[str, float],
-              min_gp: int = 20) -> List[Dict[str, Any]]:
+              min_gp: int = 20,
+              roster_map: Dict[int, str] = None) -> List[Dict[str, Any]]:
     """Hart Trophy (MVP): points-driven with goals tiebreak + team success.
 
     Real history: the Hart goes to an elite scorer on a winning team.
     Score = points + 0.4*goals, multiplied by a team-success factor.
+
+    Team-success weighting comes from the authoritative roster mapping
+    (roster_map), not the player's team_name label, which can go stale
+    after trades or in old saves.
     """
     out = []
     for p in players:
@@ -91,7 +205,14 @@ def hart_race(players: List[Any], team_pct: Dict[str, float],
             continue
         pts = _pts(p)
         goals = getattr(p, "goals", 0) or 0
-        team = getattr(p, "team_name", "") or ""
+        try:
+            pid = int(getattr(p, "id", -1) or -1)
+        except Exception:
+            pid = -1
+        if roster_map is not None and pid in roster_map:
+            team = roster_map[pid]
+        else:
+            team = getattr(p, "team_name", "") or ""
         pct = team_pct.get(team, 0.5)
         # Team factor: playoff-calibre teams (~.550+) get full credit,
         # lottery teams get discounted — mirrors real voting.
@@ -117,7 +238,7 @@ def art_ross_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
 
 
 def rocket_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
-    """Rocket Richard Trophy: most goals. Pure goal-scoring title."""
+    """Maurice "Rocket" Richard Trophy: most goals. Pure goal-scoring title."""
     out = []
     for p in players:
         if _is_goalie(p) or _gp(p) < min_gp:
@@ -198,11 +319,17 @@ def byng_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
     return out
 
 
-def calder_race(players: List[Any], min_gp: int = 10) -> List[Dict[str, Any]]:
-    """Calder Trophy: rookie of the year. Points dominate for skaters."""
+def calder_race(players: List[Any], min_gp: int = 10,
+                season_year: int = None) -> List[Dict[str, Any]]:
+    """Calder Trophy: rookie of the year. Points dominate for skaters.
+
+    Eligibility is centralized in calder_eligible() (age + prior-games
+    rules); pass the season's September-year for the age cutoff.
+    """
     out = []
     for p in players:
-        if not _is_rookie(p) or _gp(p) < min_gp:
+        eligible, _reason = calder_eligible(p, season_year)
+        if not eligible or _gp(p) < min_gp:
             continue
         if _is_goalie(p):
             # Rare but possible: rank goalies by SV% + wins
@@ -332,11 +459,13 @@ def adams_race(teams: List[Any]) -> List[Dict[str, Any]]:
 # Rookie leaders
 # ---------------------------------------------------------------------------
 
-def rookie_skaters(players: List[Any], min_gp: int = 10) -> List[Dict[str, Any]]:
-    """Rookie skater scoring leaders."""
+def rookie_skaters(players: List[Any], min_gp: int = 10,
+                 season_year: int = None) -> List[Dict[str, Any]]:
+    """Rookie skater scoring leaders (Calder-eligible only)."""
     out = []
     for p in players:
-        if not _is_rookie(p) or _is_goalie(p) or _gp(p) < min_gp:
+        eligible, _ = calder_eligible(p, season_year)
+        if not eligible or _is_goalie(p) or _gp(p) < min_gp:
             continue
         out.append({"player": p, "points": _pts(p),
                     "goals": getattr(p, "goals", 0) or 0,
@@ -346,11 +475,13 @@ def rookie_skaters(players: List[Any], min_gp: int = 10) -> List[Dict[str, Any]]
     return out
 
 
-def rookie_goalies(players: List[Any], min_gp: int = 5) -> List[Dict[str, Any]]:
-    """Rookie goaltender leaders, ranked by SV% then wins."""
+def rookie_goalies(players: List[Any], min_gp: int = 5,
+                 season_year: int = None) -> List[Dict[str, Any]]:
+    """Rookie goaltender leaders, ranked by SV% then wins (Calder-eligible)."""
     out = []
     for p in players:
-        if not _is_rookie(p) or not _is_goalie(p) or _gp(p) < min_gp:
+        eligible, _ = calder_eligible(p, season_year)
+        if not eligible or not _is_goalie(p) or _gp(p) < min_gp:
             continue
         out.append({"player": p, "sv_pct": _sv_pct(p), "gaa": _gaa(p),
                     "wins": getattr(p, "wins", 0) or 0,

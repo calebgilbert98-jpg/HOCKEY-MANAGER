@@ -414,23 +414,58 @@ def league_leaders_advanced(players: List[Any], category: str,
 # ---------------------------------------------------------------------------
 # Metric glossary (for UI tooltips)
 # ---------------------------------------------------------------------------
+# HONESTY NOTE: every metric below is a MODEL-DERIVED ESTIMATE built from
+# the player's attributes (shooting, awareness, positioning...) and his
+# box-score production (goals, shots, ice time). This game does NOT track
+# shot locations, optical data, or puck tracking -- there is no "real"
+# xG here the way an NHL analytics department has it. Treat these numbers
+# as the front office's best statistical guess, not measured truth: useful
+# for comparing players and spotting trends, not for declaring exactly how
+# many goals a shot "should" have been.
 
 GLOSSARY: Dict[str, str] = {
-    "CF%": "Corsi For %: share of all shot attempts (shots+misses+blocks) for the player's team while on ice. Raw possession proxy.",
-    "FF%": "Fenwick For %: like Corsi but excludes blocked shots. Slightly more repeatable.",
-    "xGF%": "Expected-goal share while on ice: xGF/(xGF+xGA). Shot-quality-aware possession; the best predictive process metric.",
-    "ixG": "Individual expected goals: goal-probability value of the player's own shots (location, angle, shot quality).",
-    "PDO": "On-ice shooting % + on-ice save % (avg 1.000). High PDO = likely lucky; regresses to the mean.",
-    "OZ%": "Offensive-zone start %: deployment context. High OZ% = sheltered offensive minutes.",
-    "P/60": "Points per 60 minutes: TOI-normalized production; fair across roles.",
-    "Game Score": "Single-number game rating weighting goals, assists, shots, blocks and penalties.",
-    "GSAx": "Goals Saved Above Expected: expected goals against minus actual goals allowed. Positive = above expected.",
-    "GSAA": "Goals Saved Above Average: expected goals allowed at league-average save % minus actual goals allowed.",
-    "HDSV%": "High-danger save %: the most predictive single-season goalie stat.",
-    "QS%": "Quality-start %: share of starts with above-average save %.",
-    "SH%": "Shooting %: goals divided by shots on goal.",
-    "GF%": "Goal share at even strength: actual results vs the xGF% process.",
-    "PP%": "Power-play conversion rate (modeled from PP personnel when actuals unavailable).",
-    "PK%": "Penalty-kill success rate (modeled from PK personnel when actuals unavailable).",
-    "SRS": "Simple Rating System: goal differential per game (schedule-naive).",
+    "_about": ("These are model-derived estimates from player attributes and "
+               "box-score production -- not optical or puck-tracking data. "
+               "Useful for comparing players and spotting trends; not measured truth."),
+    "CF%": ("Modeled Corsi share: estimated share of shot attempts for the player's "
+            "team while he's on ice. Useful: who tilts the ice. Not: real attempt counts."),
+    "FF%": ("Modeled Fenwick share: like Corsi but unblocked attempts only. Useful: a "
+            "slightly cleaner possession read. Not: tracked data."),
+    "xGF%": ("Modeled expected-goal share while on ice. Useful: the best guess at "
+             "who drives quality play. Not: real shot-location data -- quality is inferred "
+             "from attributes and role, not measured."),
+    "ixG": ("Modeled individual expected goals: what the player's shot volume and "
+            "shooting attributes suggest he 'should' have scored. Useful: spotting finishing "
+            "luck (ixG >> goals = snake-bitten). Not: a real shot chart."),
+    "PDO": ("On-ice shooting % + on-ice save % (averages 1.000). Useful: high PDO "
+            "usually means luck that regresses. Fairly attribute-independent, so this one "
+            "is closer to observed results than the modeled metrics."),
+    "OZ%": ("Modeled offensive-zone start share: deployment context. Useful: high OZ% "
+            "means sheltered offensive minutes -- discount the raw scoring a little. "
+            "Not: real faceoff-location tracking."),
+    "P/60": ("Points per 60 minutes, TOI-normalized. Useful: fair scoring comparison "
+             "across roles and ice time. Note: ice time itself is estimated from role "
+             "and rating when the sim doesn't track it."),
+    "Game Score": ("Single-number game rating weighting goals, assists, shots, blocks, "
+                   "penalties. Useful: one-glance night-by-night form. Not: a scouting report."),
+    "GSAx": ("Modeled goals saved above expected: estimated shot difficulty (from team "
+             "defense and workload) minus goals allowed. Useful: separating the goalie from "
+             "his defense. Not: real expected-goals-against from tracking."),
+    "GSAA": ("Goals saved above average: league-average expectation minus actual. Useful: "
+             "quick era-adjusted comparison. Rougher than GSAx."),
+    "HDSV%": ("Modeled high-danger save %: estimated from save % and workload, not real "
+              "danger tracking. Useful: directional read on clutch shot-stopping. "
+              "Treat small gaps with skepticism."),
+    "QS%": ("Quality-start share: starts with above-average save %. Mostly observed "
+            "results, lightly modeled. Useful: consistency check."),
+    "SH%": ("Shooting %: goals / shots on goal. Observed, not modeled. Useful: high SH% "
+            "over small samples screams regression."),
+    "GF%": ("Goal share at even strength: actual results vs the xGF% process. Useful: "
+            "results-vs-process gap -- the heart of the analytics puzzle."),
+    "PP%": ("Power-play conversion rate. Modeled from PP personnel when actuals are "
+            "unavailable. Useful: unit quality estimate. Not: tracked outcomes."),
+    "PK%": ("Penalty-kill success rate. Modeled from PK personnel when actuals are "
+            "unavailable. Useful: unit quality estimate. Not: tracked outcomes."),
+    "SRS": ("Simple Rating System: goal differential per game, schedule-naive. "
+            "Observed results. Useful: rough team strength."),
 }

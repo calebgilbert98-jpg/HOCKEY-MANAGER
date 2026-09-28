@@ -449,31 +449,190 @@ def analytics_storylines(players: List[Any], teams: List[Any],
     return stories[:limit]
 
 
+def _analytics_story_log(media_system) -> dict:
+    """Dedup log: {(kind, player_id): iso_date} of published analytics stories."""
+    try:
+        log = getattr(media_system, "analytics_story_log", None)
+        if log is None:
+            log = {}
+            media_system.analytics_story_log = log
+        return log
+    except Exception:
+        return {}
+
+
+def _season_phase(month: int):
+    """Which analytics narratives fit this point of the season.
+
+    Returns (allowed_kinds, priority_kinds). September (preseason) is
+    skipped entirely -- there is no sample to analyze yet.
+    """
+    if month == 9:
+        return None  # preseason: no stories
+    if month in (10, 11):
+        return ({"breakout_watch", "snake_bitten"},
+                ["breakout_watch", "snake_bitten"])
+    if month in (12, 1):
+        return ({"breakout_watch", "snake_bitten", "goalie_regression",
+                 "carrying_bad_team", "wasted_prime_goalie"},
+                ["breakout_watch", "wasted_prime_goalie", "snake_bitten",
+                 "carrying_bad_team", "goalie_regression"])
+    if month in (2, 3):
+        # Deadline approach: "is he available?" narratives lead.
+        return ({"wasted_prime_goalie", "goalie_regression",
+                 "carrying_bad_team", "snake_bitten"},
+                ["wasted_prime_goalie", "carrying_bad_team",
+                 "goalie_regression", "snake_bitten"])
+    # Apr+: playoffs -- only stakes stories.
+    return ({"carrying_bad_team", "wasted_prime_goalie"},
+            ["carrying_bad_team", "wasted_prime_goalie"])
+
+
+# Minimum significance bar per story kind. A story must clear its bar
+# AND intensity >= 5 to reach the press; anything weaker stays in the
+# analytics department's notebooks.
+_STORY_SIGNIFICANCE = {
+    "wasted_prime_goalie": 15.0,   # GSAx
+    "goalie_regression": 8.0,      # |GSAx|
+    "breakout_watch": 55.0,        # xGF%
+    "snake_bitten": 10.0,          # ixG - goals gap
+    "carrying_bad_team": 57.0,     # xGF%
+}
+
+_PLAYER_COOLDOWN_DAYS = 45
+_KIND_ACTIVE_CAP = 2
+
+
+def _story_active(media_system, kind: str, now) -> int:
+    """How many analytics stories of this kind are currently active."""
+    n = 0
+    try:
+        for sl in getattr(media_system, "storylines", []) or []:
+            sid = getattr(sl, "id", "") or ""
+            if not sid.startswith("analytics_"):
+                continue
+            created = getattr(sl, "created_date", None)
+            dur = int(getattr(sl, "duration_days", 21) or 21)
+            try:
+                alive = (now - created).days < dur if (now and created) else True
+            except Exception:
+                alive = True
+            if not alive:
+                continue
+            title = (getattr(sl, "title", "") or "").lower()
+            # Kind is encoded in the seed; match loosely on title markers.
+            markers = {
+                "wasted_prime_goalie": "wasting his prime",
+                "goalie_regression": "house of cards",
+                "breakout_watch": "breakout watch",
+                "snake_bitten": "can't buy a goal",
+                "carrying_bad_team": "all alone",
+            }
+            if markers.get(kind, "") in title:
+                n += 1
+    except Exception:
+        pass
+    return n
+
+
 def publish_analytics_storylines(media_system: Any, players: List[Any],
                                  teams: List[Any], game_manager: Any = None,
                                  limit: int = 4) -> int:
-    """Push analytics storylines into the media system (best-effort).
+    """Push analytics storylines into the media system.
 
-    Non-invasive: if the media system isn't available or doesn't accept
-    them, this silently does nothing.
+    Season-aware cadence (call monthly, e.g. the 15th):
+    - Preseason: nothing -- no sample yet.
+    - Early season: breakout watch / snake-bitten.
+    - Deadline approach: wasted-prime (trade bait) leads.
+    - Playoffs: only stakes stories.
+
+    Dedup: a (kind, player) combo never publishes twice; each player
+    has a 45-day cooldown between analytics stories; at most 2 active
+    stories of the same kind league-wide.
+
+    Significance: intensity >= 5 AND the kind's statistical bar must
+    clear, or the story stays in the analytics department's notebook.
     """
     try:
-        seeds = analytics_storylines(players, teams, limit=limit)
-        if not seeds or media_system is None:
-            return 0
-        from media_system import MediaStoryline, StorylineType
-        import random
         import datetime
         now = None
         try:
             now = game_manager.current_date if game_manager else None
         except Exception:
             now = None
+        month = now.month if now is not None else 1
+        phase = _season_phase(month)
+        if phase is None:
+            return 0
+        allowed, priority = phase
+
+        seeds = analytics_storylines(players, teams, limit=limit * 3)
+        if not seeds or media_system is None:
+            return 0
+        from media_system import MediaStoryline, StorylineType
+
+        log = _analytics_story_log(media_system)
+
+        def _pid_of(seed) -> int:
+            try:
+                nm = (seed.get("players_involved") or ["?"])[0]
+                for p in players or []:
+                    pn = getattr(p, "full_name", getattr(p, "name", "?"))
+                    if pn == nm:
+                        return int(getattr(p, "id", -1) or -1)
+            except Exception:
+                pass
+            return -1
+
+        def _cooled_down(pid: int) -> bool:
+            try:
+                for (k, q), dstr in log.items():
+                    if q != pid:
+                        continue
+                    d = datetime.date.fromisoformat(dstr)
+                    if now is not None and (now - d).days < _PLAYER_COOLDOWN_DAYS:
+                        return False
+                return True
+            except Exception:
+                return True
+
+        def _significant(seed) -> bool:
+            try:
+                if int(seed.get("intensity", 0) or 0) < 5:
+                    return False
+                return True  # generator already enforces per-kind bars
+            except Exception:
+                return False
+
+        # Order by phase priority, then intensity.
+        def _rank(seed):
+            kind = seed.get("kind", "")
+            try:
+                pri = priority.index(kind)
+            except ValueError:
+                pri = len(priority)
+            return (pri, -int(seed.get("intensity", 0) or 0))
+        seeds.sort(key=_rank)
+
         added = 0
         for s in seeds:
+            if added >= limit:
+                break
+            kind = s.get("kind", "")
+            if kind not in allowed:
+                continue
+            if not _significant(s):
+                continue
+            pid = _pid_of(s)
+            if (kind, pid) in log:
+                continue  # never repeat a (kind, player) combo
+            if not _cooled_down(pid):
+                continue
+            if _story_active(media_system, kind, now) >= _KIND_ACTIVE_CAP:
+                continue
             try:
                 sl = MediaStoryline(
-                    id=f"analytics_{random.randint(1000, 9999)}",
+                    id=f"analytics_{kind}_{pid}_{(now or datetime.date.today()).isoformat()}",
                     type=StorylineType.PLAYER_DEVELOPMENT,
                     title=s["title"],
                     description=s["description"],
@@ -484,6 +643,7 @@ def publish_analytics_storylines(media_system: Any, players: List[Any],
                     last_mentioned=now or datetime.date.today(),
                 )
                 media_system.storylines.append(sl)
+                log[(kind, pid)] = (now or datetime.date.today()).isoformat()
                 added += 1
             except Exception:
                 continue

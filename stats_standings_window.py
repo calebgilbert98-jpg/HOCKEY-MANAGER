@@ -69,6 +69,14 @@ class StatsStandingsView(ctk.CTkFrame):
                    "Record Chase", "Achievements"]
 
     def __init__(self, parent, app=None):
+        # Calder season year for rookie eligibility (Sept-15 age cutoff
+        # belongs to the season's start year).
+        try:
+            import awards_race as _ar
+            _d = getattr(app, "current_date", None)
+            self._calder_year = _ar.calder_season_year(_d) if _d is not None else None
+        except Exception:
+            self._calder_year = None
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -773,13 +781,13 @@ class StatsStandingsView(ctk.CTkFrame):
         self._bind_leader_menu(tree_g)
         tree_g._player_rows = {}
 
-        for i, r in enumerate(ar.rookie_skaters(players)[:25], 1):
+        for i, r in enumerate(ar.rookie_skaters(players, season_year=self._calder_year)[:25], 1):
             p = r["player"]
             iid = tree_s.insert("", "end", values=(
                 i, self._pname(p), self._pteam_abbr(p, teams),
                 r["gp"], r["goals"], r["assists"], r["points"]))
             tree_s._player_rows[iid] = p
-        for i, r in enumerate(ar.rookie_goalies(players)[:25], 1):
+        for i, r in enumerate(ar.rookie_goalies(players, season_year=self._calder_year)[:25], 1):
             p = r["player"]
             iid = tree_g.insert("", "end", values=(
                 i, self._pname(p), self._pteam_abbr(p, teams),
@@ -917,7 +925,7 @@ class StatsStandingsView(ctk.CTkFrame):
                        "team": ("Team", 52), "gp": ("GP", 44),
                        "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
                        "note": ("", 90)}
-            for i, r in enumerate(ar.calder_race(players)[:15], 1):
+            for i, r in enumerate(ar.calder_race(players, season_year=self._calder_year)[:15], 1):
                 p = r["player"]
                 if r.get("goalie"):
                     vals = (i, self._pname(p), self._pteam_abbr(p, teams),

@@ -4974,6 +4974,120 @@ def apply_fresh_start(player: Any, old_team: Any, new_team: Any,
     return result
 
 
+def watch_steal_candidate(player: Any, team: Any, tip: dict) -> None:
+    """Open a steal watch when a scout-tipped player is acquired via trade.
+
+    A tip is not success; the player's later performance is. This
+    snapshots his pre-trade pace so check_steal_watch() can validate
+    the scout's call against what actually happens in the new uniform.
+    Idempotent: re-watching the same player refreshes the snapshot.
+    """
+    try:
+        from game_classes import PlayerPosition
+        is_goalie = (getattr(player, "primary_position", None)
+                     == PlayerPosition.GOALIE)
+    except Exception:
+        is_goalie = False
+    try:
+        pid = getattr(player, "id", id(player))
+        watch = getattr(team, "steal_watch", None)
+        if watch is None:
+            team.steal_watch = watch = {}
+        entry = {
+            "date": str(__import__("datetime").datetime.now().date()),
+            "scout": tip.get("scout", "?"),
+            "jpa": tip.get("jpa", 10),
+            "value_score": tip.get("value_score", 0.0),
+            "signals": list(tip.get("signals", []) or []),
+            "is_goalie": bool(is_goalie),
+            "pre_gp": int(getattr(player, "games_played", 0) or 0),
+        }
+        if is_goalie:
+            entry["pre_saves"] = int(getattr(player, "saves", 0) or 0)
+            entry["pre_sa"] = int(getattr(player, "shots_against", 0) or 0)
+        else:
+            entry["pre_points"] = int((getattr(player, "goals", 0) or 0)
+                                      + (getattr(player, "assists", 0) or 0))
+        watch[pid] = entry
+    except Exception:
+        pass
+
+
+def check_steal_watch(team: Any) -> List[Dict[str, Any]]:
+    """Validate pending steal watches against post-trade production.
+
+    Called monthly. For each watched player with 15+ games since the
+    trade (10+ for goalies):
+    - Skaters: VALIDATED if post-trade P/GP beats pre-trade pace by
+      0.30+ or reaches star pace (0.85+). The scout saw it coming.
+    - Goalies: VALIDATED if post-trade SV% beats pre-trade by .015+.
+    Watches expire quietly after 50 games without validation -- the
+    scout was wrong; no reward, no story, no penalty. The tip alone
+    never triggers note_analytics_steal(); only the breakout does.
+    Returns the list of validated steals.
+    """
+    validated: List[Dict[str, Any]] = []
+    try:
+        watch = getattr(team, "steal_watch", None) or {}
+        if not watch:
+            return validated
+        roster = list(getattr(team, "roster", []) or [])
+        by_id = {getattr(p, "id", id(p)): p for p in roster}
+        for pid in list(watch.keys()):
+            entry = watch[pid]
+            player = by_id.get(pid)
+            if player is None:
+                # Player moved on; watch dies with the tenure.
+                del watch[pid]
+                continue
+            gp_now = int(getattr(player, "games_played", 0) or 0)
+            post_gp = gp_now - int(entry.get("pre_gp", 0) or 0)
+            if post_gp < 0:
+                # Season rollover wiped totals; re-baseline the watch.
+                entry["pre_gp"] = gp_now
+                if entry.get("is_goalie"):
+                    entry["pre_saves"] = int(getattr(player, "saves", 0) or 0)
+                    entry["pre_sa"] = int(getattr(player, "shots_against", 0) or 0)
+                else:
+                    entry["pre_points"] = int((getattr(player, "goals", 0) or 0)
+                                              + (getattr(player, "assists", 0) or 0))
+                continue
+            hit = False
+            if entry.get("is_goalie"):
+                if post_gp >= 10:
+                    sa = int(getattr(player, "shots_against", 0) or 0) - int(entry.get("pre_sa", 0) or 0)
+                    sv = int(getattr(player, "saves", 0) or 0) - int(entry.get("pre_saves", 0) or 0)
+                    if sa > 0:
+                        post_sv = sv / sa
+                        pre_sa = int(entry.get("pre_sa", 0) or 0)
+                        pre_sv_n = int(entry.get("pre_saves", 0) or 0)
+                        pre_sv = (pre_sv_n / pre_sa) if pre_sa > 0 else 0.900
+                        hit = (post_sv - pre_sv) >= 0.015
+            else:
+                if post_gp >= 15:
+                    pts_now = int((getattr(player, "goals", 0) or 0)
+                                  + (getattr(player, "assists", 0) or 0))
+                    post_pts = pts_now - int(entry.get("pre_points", 0) or 0)
+                    post_ppg = post_pts / post_gp
+                    pre_gp = int(entry.get("pre_gp", 0) or 0)
+                    pre_ppg = (int(entry.get("pre_points", 0) or 0) / pre_gp) if pre_gp > 0 else 0.0
+                    hit = (post_ppg - pre_ppg) >= 0.30 or post_ppg >= 0.85
+            if hit:
+                note_analytics_steal(player, team,
+                                     float(entry.get("value_score", 0.0) or 0.0),
+                                     list(entry.get("signals", []) or []))
+                validated.append({"player": player, "team": team,
+                                  "scout": entry.get("scout"),
+                                  "post_gp": post_gp})
+                del watch[pid]
+            elif post_gp >= 50:
+                # Quiet expiry: the scout was wrong. No story.
+                del watch[pid]
+    except Exception:
+        pass
+    return validated
+
+
 def note_analytics_steal(player: Any, team: Any, value_score: float,
                          signals: List[str]) -> None:
     """The room and the press notice when the analytics find pays off.

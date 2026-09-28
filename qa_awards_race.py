@@ -32,10 +32,16 @@ def skater(first, goals, assists, gp=50, pos=PlayerPosition.CENTER,
     p.defensive_awareness = da; p.faceoffs = fo; p.takeaways = tk
     p.is_rookie = rookie; p.team_name = team
     p.shots = max(goals * 8, 10)
+    # Keep birth_date consistent with age (the game generator does this;
+    # the raw constructor randomizes it). Calder age checks read birth_date.
+    p.birth_date = "2002-06-01"
+    p.prior_nhl_gp = []
     return p
 
 def goalie(first, wins, sv, gaa, gp=30, rookie=False, team="Team A"):
     p = g.Player(first, "Goalie", 26, PlayerPosition.GOALIE, 88)
+    p.birth_date = "2000-06-01"
+    p.prior_nhl_gp = []
     p.wins = wins; p.games_played = gp; p.shutouts = 3
     sa = 900
     p.shots_against = sa; p.saves = int(sa * sv)
@@ -90,6 +96,7 @@ check("byng favors low PIM", byng[0]["player"] is clean)
 rk1 = skater("Rk1", 22, 30, rookie=True)
 rk2 = skater("Rk2", 15, 20, rookie=True)
 vet = skater("Vet", 40, 60, rookie=False)
+vet.prior_nhl_gp = [70, 65]  # established veteran: real prior NHL games
 calder = ar.calder_race([rk1, rk2, vet])
 check("calder rookies only",
       all(r["player"].is_rookie for r in calder))
@@ -132,6 +139,7 @@ rl = ar.rookie_skaters([rk1, rk2, vet])
 check("rookie skaters exclude vets", all(r["player"].is_rookie for r in rl))
 check("rookie skaters sorted", rl[0]["points"] >= rl[1]["points"])
 rg1 = goalie("RkG", 12, 0.915, 2.50, gp=20, rookie=True)
+g1.prior_nhl_gp = [55]  # established veteran netminder
 rg = ar.rookie_goalies([rg1, g1])
 check("rookie goalies only rookies", len(rg) == 1 and rg[0]["player"] is rg1)
 

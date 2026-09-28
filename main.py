@@ -6812,16 +6812,8 @@ class HockeyManagerGUI(tk.Tk):
                              date_str=self.current_date.isoformat())
         except Exception:
             return False
-        # Fresh start: a player rescued from a bad situation gets a
-        # morale lift -- the "you both win" payoff for analytics finds.
-        try:
-            import reputation_system as _rs
-            _moved = piece if not isinstance(piece, (list, tuple)) else piece[0]
-            if hasattr(_moved, "full_name"):
-                _rs.apply_fresh_start(_moved, seller, buyer,
-                                      teams=self.league.teams)
-        except Exception:
-            pass
+        # (Fresh start + steal watch now fire authoritatively inside
+        # trade_engine.execute_trade -- every trade path gets them.)
         # Break the news: ticker + inbox.
         pay_label = te.asset_label(payment)
         piece_label = te.asset_label(piece)
@@ -7528,6 +7520,29 @@ class HockeyManagerGUI(tk.Tk):
         # feel like real pro-scouting work, not a daily cheat sheet.
         if self.current_date.day == 1:
             self._dispatch_scout_value_tips()
+            # Steal watch: only post-trade production validates a scout's
+            # tip. The tip alone never pays off -- the breakout does.
+            try:
+                import reputation_system as _rs
+                for _t in self.league.teams:
+                    _rs.check_steal_watch(_t)
+            except Exception:
+                pass
+        # Analytics storylines: mid-month (15th), season-aware, deduped,
+        # significance-gated. The press reads the same numbers the
+        # analytics department does -- but only the loud ones.
+        if self.current_date.day == 15:
+            try:
+                import analytics_scouting as _as
+                _players = []
+                for _t in self.league.teams:
+                    _players.extend(getattr(_t, "roster", []) or [])
+                _as.publish_analytics_storylines(
+                    getattr(self, "media_system", None),
+                    _players, list(self.league.teams),
+                    game_manager=self, limit=3)
+            except Exception:
+                pass
         
         # Process scouting assignments - optimized to run every 3 days instead of daily
         if self.current_date.day % 3 == 0:  # Every 3 days
@@ -9603,7 +9618,7 @@ class HockeyManagerGUI(tk.Tk):
         award_key_map = {
             'Hart Trophy (MVP)': 'hart',
             'Art Ross Trophy (Scoring Leader)': 'art_ross',
-            'Maurice Richard Trophy (Goal Leader)': 'rocket',
+            'Maurice "Rocket" Richard Trophy (Goal Leader)': 'rocket',
             'Vezina Trophy (Best Goalie)': 'vezina',
             'Norris Trophy (Best Defenseman)': 'norris',
             'Selke Trophy (Defensive Forward)': 'selke',
@@ -9860,6 +9875,9 @@ class HockeyManagerGUI(tk.Tk):
             gp = getattr(t, "games_played", 0) or 0
             pts = getattr(t, "points", 0) or 0
             team_pct[getattr(t, "team_name", "")] = (pts / (2 * gp)) if gp else 0.5
+        # Authoritative player -> team map from roster membership. The
+        # roster is the truth; player.team_name is just a label.
+        roster_map = ar.roster_team_map(teams)
 
         def _info(entry):
             """Normalize a race entry to the {name, team, stats} contract."""
@@ -9872,7 +9890,11 @@ class HockeyManagerGUI(tk.Tk):
                         "team": entry.get("team", "?"),
                         "stats": ""} if entry else None
             name = getattr(p, "full_name", getattr(p, "name", "?"))
-            team = getattr(p, "team_name", "Unknown") or "Unknown"
+            try:
+                _pid = int(getattr(p, "id", -1) or -1)
+            except Exception:
+                _pid = -1
+            team = roster_map.get(_pid) or getattr(p, "team_name", "Unknown") or "Unknown"
             return {"name": name, "team": team, "stats": ""}
 
         def _top(race):
@@ -9883,7 +9905,8 @@ class HockeyManagerGUI(tk.Tk):
                 return None
 
         # Hart Trophy - MVP (points + team success)
-        e = _top(lambda: ar.hart_race(players, team_pct))
+        e = _top(lambda: ar.hart_race(players, team_pct,
+                                   roster_map=roster_map))
         info = _info(e)
         if info:
             info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
@@ -9903,9 +9926,9 @@ class HockeyManagerGUI(tk.Tk):
         info = _info(e)
         if info:
             info["stats"] = f"{e['goals']} goals"
-        awards["Maurice Richard Trophy (Goal Leader)"] = info
-        # (Keep the legacy display key working for the reputation map.)
-        awards["Rocket Richard Trophy (Goal Leader)"] = info
+        # Canonical: one identifier, one display label. The real trophy
+        # is the Maurice "Rocket" Richard Trophy -- no duplicates.
+        awards['Maurice "Rocket" Richard Trophy (Goal Leader)'] = info
 
         # Vezina - best goalie (SV%/GAA/wins + GSAx cross-check)
         e = _top(lambda: ar.vezina_race(players))
@@ -9939,7 +9962,8 @@ class HockeyManagerGUI(tk.Tk):
         awards["Lady Byng Trophy (Sportsmanship)"] = info
 
         # Calder - rookie of the year (NHL rookie eligibility)
-        e = _top(lambda: ar.calder_race(players))
+        _syr = ar.calder_season_year(getattr(self, "current_date", None))
+        e = _top(lambda: ar.calder_race(players, season_year=_syr))
         info = _info(e)
         if info:
             info["stats"] = f"{e['points']} pts (rookie)"
@@ -16280,6 +16304,10 @@ class LeagueHistoryView(ctk.CTkFrame):
         # Team advanced table
         ttk.Label(parent, text="Team Advanced Metrics (5v5 process)",
                   font=('Arial', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
+        ttk.Label(parent,
+                  text="Modeled estimates from attributes and production -- not tracking data. "
+                       "Hover a column header for what each metric is (and isn't).",
+                  font=('Arial', 8, 'italic')).pack(anchor='w', padx=10, pady=(0, 4))
         cols = ["Team", "CF%", "FF%", "xGF%", "GF%", "PDO", "PP%", "PK%", "SRS"]
         tree = ttk.Treeview(parent, columns=cols, show='headings', height=12)
         for c in cols:
