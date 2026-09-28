@@ -12911,25 +12911,15 @@ class BuyoutCalculatorView(ctk.CTkFrame):
             pass
         team = self.app.user_team
         league = self.app.league
-        season = getattr(league, 'season_year', 2026)
-        hits = getattr(team, 'buyout_cap_hits', None)
-        if hits is None:
-            hits = {}
-            team.buyout_cap_hits = hits
-        for i, hit, _s in rows:
-            yr = season + i - 1
-            hits[yr] = hits.get(yr, 0) + hit
-        if p in team.roster:
-            team.roster.remove(p)
-        p.team_name = "Free Agent"
-        # His SPC is dead: the player-side retention fields clear (no more
-        # discount for anyone). The retaining club's ledger entry stays live
-        # -- that dead cap survives the buyout, per CBA.
+        # One rulebook: the shared buyout mutation (buyout_window.py).
+        # Same math + same season-year keying as before this refactor.
         try:
-            from trade_engine import clear_retention_state as _clr_ret
-            _clr_ret(p)
+            import buyout_window as _bw
+            total, annual, byears, rows = _bw.execute_buyout(
+                league, team, p,
+                season_year=getattr(league, 'season_year', 2026))
         except Exception:
-            pass
+            return
         self._selected = None
         for child in self.detail.winfo_children():
             child.destroy()

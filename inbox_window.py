@@ -665,7 +665,7 @@ class InboxView(ctk.CTkFrame):
                 "game_day", "postmatch_presser",
                 "trade_offer", "trade_counter", "contract_counter",
                 "rfa_qualifying", "offer_sheet_match",
-                "arbitration_walkaway"):
+                "arbitration_walkaway", "buyout_window"):
             self._show_interactive_action(message)
         else:
             self._hide_interactive_action()
@@ -867,6 +867,8 @@ class InboxView(ctk.CTkFrame):
             self._render_offer_sheet_match(message)
         elif message.action_type == "arbitration_walkaway":
             self._render_arbitration_walkaway(message)
+        elif message.action_type == "buyout_window":
+            self._render_buyout_window(message)
 
     def _hide_interactive_action(self):
         """Restore the plain text content view."""
@@ -1231,6 +1233,65 @@ class InboxView(ctk.CTkFrame):
             self.app.apply_rfa_qualifying_decision(message, player_id, qualify)
         except Exception as e:
             print(f"rfa qualify failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    # ---------- Buyout window ----------
+    def _render_buyout_window(self, message):
+        """Per-candidate Buy out / Keep buttons (buyout_window)."""
+        data = message.action_data or {}
+        self._iwrap("BUYOUT WINDOW — JUNE 15-30", size=15, bold=True,
+                    padx=10, pady=(10, 2))
+        if message.action_done:
+            self._iwrap("The window has closed.", size=11, dim=True, padx=10)
+            return
+        cards = data.get("cards", []) or []
+        decided = data.get("decided", {}) or {}
+        remaining = [c for c in cards
+                     if str(c.get("player_id")) not in decided]
+        if not remaining:
+            message.action_done = True
+            self._iwrap("All buyout decisions are in.", size=11, dim=True,
+                        padx=10)
+            return
+        for c in remaining:
+            pid = str(c.get("player_id"))
+            name = c.get("name", "Unknown")
+            flag = "  ⚠️ DEAD WEIGHT" if c.get("dead_weight") else ""
+            self._action_section(f"{name.upper()}{flag}")
+            self._iwrap(
+                f"Age {c.get('age')} • {c.get('overall')} ovr • "
+                f"${c.get('cap_hit'):,}/yr × {c.get('years_left')} left",
+                size=11, padx=10, pady=(2, 2))
+            self._iwrap(
+                f"Buyout: ${c.get('buyout_cost'):,} total → "
+                f"${c.get('annual_dead'):,}/yr dead cap × "
+                f"{c.get('dead_years')} yrs. "
+                f"Saves ${c.get('savings_y1'):,} this season.",
+                size=11, padx=10, pady=(0, 4))
+            btn_row = ctk.CTkFrame(self.interactive_frame,
+                                   fg_color="transparent")
+            btn_row.pack(fill="x", padx=10, pady=(0, 4))
+            self._primary_button(
+                btn_row,
+                text=f"Buy out ({name.split()[-1]})",
+                command=lambda m=message, p=pid:
+                    self._on_buyout_decide(m, p, True),
+            ).pack(fill="x", pady=(0, 6))
+            self._secondary_button(
+                btn_row, text="Keep him",
+                command=lambda m=message, p=pid:
+                    self._on_buyout_decide(m, p, False),
+            ).pack(fill="x")
+        self._iwrap("Buyouts clear cap now but leave dead money for "
+                    "years. Undecided players stay put.",
+                    size=10, dim=True, padx=10, pady=(6, 0))
+
+    def _on_buyout_decide(self, message, player_id, buyout):
+        try:
+            self.app.apply_buyout_decision(message, player_id, buyout)
+        except Exception as e:
+            print(f"buyout decide failed: {e}")
         self._refresh_inbox()
         self._display_message_preview(message)
 
