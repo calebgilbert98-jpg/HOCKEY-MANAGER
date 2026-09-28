@@ -13,7 +13,7 @@ import customtkinter as ctk
 import reputation_system as rs
 
 
-class MoraleWindow(InGamePopup):
+class MoraleView(ctk.CTkFrame):
     """Team Morale - dressing-room dynamics at a glance."""
 
     RESPONSE_TAGS = {
@@ -23,7 +23,7 @@ class MoraleWindow(InGamePopup):
         "Quit on coach": "resp_bad",
     }
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -41,27 +41,32 @@ class MoraleWindow(InGamePopup):
         self._body = body
         init_ctk_theme()
 
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Team Morale")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the MoraleWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1280x920")
-        self.minsize(1060, 760)
 
         self._setup_tree_style()
         self._create_interface()
         self.refresh()
 
-        parent.open_windows['morale'] = self
-        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+        self.app.open_windows['morale'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _on_closing(self):
         try:
-            if 'morale' in self.parent.open_windows:
-                del self.parent.open_windows['morale']
+            if 'morale' in self.app.open_windows:
+                del self.app.open_windows['morale']
         except Exception:
             pass
-        self.destroy()
+        self.close_view()
 
     # ------------------------------------------------------------------
     # Styling
@@ -200,8 +205,8 @@ class MoraleWindow(InGamePopup):
     def _team_context(self):
         ctx = {"win_pct": 0.5, "room_leadership": 50, "losing_streak": 0}
         try:
-            team = self.parent.user_team
-            st = self.parent.league.standings.get(team.team_name, {})
+            team = self.app.user_team
+            st = self.app.league.standings.get(team.team_name, {})
             w = st.get('W', st.get('Wins', 0))
             l = st.get('L', st.get('Losses', 0))
             otl = st.get('OTL', 0)
@@ -234,11 +239,11 @@ class MoraleWindow(InGamePopup):
         exactly as before.
         """
         try:
-            client = getattr(self.parent, "mp_client", None)
+            client = getattr(self.app, "mp_client", None)
             if client is None:
                 return False
             params = dict(params or {})
-            team = getattr(self.parent, "user_team", None)
+            team = getattr(self.app, "user_team", None)
             params.setdefault("team_id",
                               getattr(team, "team_name", "") if team else "")
             client.send_action(action, params)
@@ -253,7 +258,7 @@ class MoraleWindow(InGamePopup):
         if self._mp_send("team_event", {"event": "bag_skate"}):
             return
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             coach = self._head_coach(team)
             if coach is None:
                 return
@@ -266,7 +271,7 @@ class MoraleWindow(InGamePopup):
         if self._mp_send("team_event", {"event": "inspiring_speech"}):
             return
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             coach = self._head_coach(team)
             if coach is None:
                 return
@@ -279,7 +284,7 @@ class MoraleWindow(InGamePopup):
         if self._mp_send("team_event", {"event": "great_practice"}):
             return
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             coach = self._head_coach(team)
             if coach is None:
                 return
@@ -294,9 +299,9 @@ class MoraleWindow(InGamePopup):
             return
         try:
             import media_engine
-            team = self.parent.user_team
+            team = self.app.user_team
             media_engine.gm_public_backing(
-                getattr(self.parent, 'league', None), team, "room",
+                getattr(self.app, 'league', None), team, "room",
                 user_triggered=True)
             self.refresh()
         except Exception:
@@ -304,7 +309,7 @@ class MoraleWindow(InGamePopup):
 
     def _open_line_control_popup(self):
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             current = getattr(team, 'line_control', 'coach') or 'coach'
             if current == 'gm':
                 # Giving the pen back is always amicable.
@@ -324,15 +329,15 @@ class MoraleWindow(InGamePopup):
 
     def _open_declare_rival_popup(self):
         try:
-            team = self.parent.user_team
-            DeclareRivalPopup(self, team, self.parent.league,
+            team = self.app.user_team
+            DeclareRivalPopup(self, team, self.app.league,
                               on_done=self.refresh)
         except Exception:
             pass
 
     def _open_advise_popup(self):
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             coach = self._head_coach(team)
             if coach is None:
                 return
@@ -347,7 +352,7 @@ class MoraleWindow(InGamePopup):
     def refresh(self):
         ct = self._ct
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             roster = list(team.roster)
         except Exception:
             return
@@ -460,7 +465,7 @@ class MoraleWindow(InGamePopup):
 
     def _refresh_rivalries(self, team, coach, roster):
         try:
-            league = getattr(self.parent, 'league', None)
+            league = getattr(self.app, 'league', None)
             rivalries = list(getattr(league, 'rivalries', []) or [])
         except Exception:
             rivalries = []
@@ -495,12 +500,27 @@ class MoraleWindow(InGamePopup):
 
     def _record(self):
         try:
-            st = self.parent.league.standings.get(self.parent.user_team.team_name, {})
+            st = self.app.league.standings.get(self.app.user_team.team_name, {})
             return st.get('W', st.get('Wins', 0)), st.get('L', st.get('Losses', 0))
         except Exception:
             return 0, 0
 
-
+class MoraleWindow(InGamePopup):
+    """Popup wrapper around MoraleView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Team Morale")
+        self._view = MoraleView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 class AdviseCoachPopup(InGamePopup):
     """GM advisory popup: pick guidance, see whether the coach listens."""
 
@@ -519,8 +539,8 @@ class AdviseCoachPopup(InGamePopup):
         self._team = team
         self._roster = roster
         self._on_done = on_done
-        # parent_win is the Morale window; its parent is the app (host or MP client).
-        self._app = getattr(parent_win, 'parent', None)
+        # parent_win is the Morale view; its app is the host (or MP client).
+        self._app = getattr(parent_win, 'app', None) or getattr(parent_win, 'parent', None)
 
         cname = getattr(coach, 'full_name', 'Coach')
         style = rs.coach_style(coach)
@@ -655,7 +675,7 @@ class LineControlPopup(InGamePopup):
         self._on_done = on_done
         self._GREEN = GREEN
         self._RED = RED
-        self._app = getattr(parent_win, 'parent', None)
+        self._app = getattr(parent_win, 'app', None) or getattr(parent_win, 'parent', None)
 
         cname = getattr(coach, 'full_name', 'Coach')
         preview = rs.preview_line_control_discussion(coach, ctx)
@@ -741,8 +761,8 @@ class DeclareRivalPopup(InGamePopup):
         self._on_done = on_done
         self._GREEN = GREEN
         self._RED = RED
-        # parent_win is the Morale window; its parent is the app.
-        self._app = getattr(parent_win, 'parent', None)
+        # parent_win is the Morale view; its app is the host (or MP client).
+        self._app = getattr(parent_win, 'app', None) or getattr(parent_win, 'parent', None)
 
         heading(self, text="Declare a rival").pack(anchor='w', padx=16, pady=(12, 2))
         ctk.CTkLabel(self,

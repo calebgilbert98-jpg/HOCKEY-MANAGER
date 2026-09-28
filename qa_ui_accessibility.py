@@ -336,27 +336,23 @@ def main():
     root.update()
 
     # ---------------- staff card ----------------
-    from staff_management_window import StaffManagementWindow
-    from ctk_theme import (TEAL, TEAL_HOVER, TEAL_DARK, BG, PANEL, CARD, BORDER,
-                           TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
-                           ROW_HOVER, ROW_SELECTED,
-                           primary_button, secondary_button, heading, body)
-    smw = StaffManagementWindow.__new__(StaffManagementWindow)
-    smw._ct = dict(TEAL=TEAL, BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER,
-                   TEXT=TEXT, TEXT_DIM=TEXT_DIM, TEXT_FAINT=TEXT_FAINT,
-                   GOLD=GOLD, GREEN=GREEN, RED=RED, BLUE=BLUE,
-                   ROW_HOVER=ROW_HOVER, ROW_SELECTED=ROW_SELECTED)
-    smw._primary_button = primary_button
-    smw._secondary_button = secondary_button
-    smw._heading = heading; smw._body = body
-    smw._ff = "Segoe UI"
-    smw.parent = SimpleNamespace(game_manager=SimpleNamespace(user_team=team))
+    from staff_management_window import StaffManagementView
+    staff_app = SimpleNamespace(
+        league=league, user_team=team, open_windows={}, tree_maps={},
+        BG_COLOR="#1a1a2e", CONTENT_BG="#0e0e11", TEXT_COLOR="#ffffff",
+        FONT_FAMILY="Helvetica",
+        game_manager=SimpleNamespace(user_team=team, league=league))
+    staff_holder = tk.Frame(root, width=1600, height=900)
+    staff_holder.pack(fill="both", expand=True)
+    smv = StaffManagementView(staff_holder, app=staff_app)
+    root.update()
     staff = g.Staff(first_name="Test", last_name="Coach",
                     role=g.StaffRole.HEAD_COACH, age=50)
     staff.ambition = "stanley_cup"; staff.favorite_team = "Test Club"
     staff.control_need = 80; staff.gm_trust = 70
-    smw.show_staff_details_window(staff, True)
+    smv.show_staff_details_window(staff, True)
     root.update()
+    staff_holder.destroy()
     # staff details opens as a popup-manager card; take the newest card shell
     sw = mgr._stack[-1]["shell"] if mgr._stack else None
     if sw is not None and sw is not psh:
@@ -428,7 +424,7 @@ def main():
     # Full-screen inbox: what the user actually sees (embedded view, not
     # the legacy popup wrapper).
     from inbox_window import InboxView, InboxWindow
-    iview = InboxView(root, app=app, show_back=True)
+    iview = InboxView(root, app=app)
     iview.pack(fill="both", expand=True)
     root.update(); root.update()
     shot(iview, f"{args.shots}/inbox_fullscreen_{args.res}.png")
@@ -451,14 +447,10 @@ def main():
     check_clipping("inbox", iview)
     check_nested_scroll("inbox", iview)
     check_inbox_layout(iview)
-    # back button present in full-screen mode
-    def _has_back_text(w):
-        try:
-            return "Dashboard" in str(w.cget("text") or "")
-        except Exception:
-            return False
-    back = [c for c in walk(iview) if _has_back_text(c)]
-    check("fail", "inbox back button present", len(back) > 0)
+    # close contract: the screen manager's nav bar wires ‹ Dashboard to this
+    check("fail", "inbox exposes close_view contract",
+          callable(getattr(iview, "close_view", None))
+          and hasattr(iview, "_close_screen"))
     iview.destroy()
     root.update()
     # Legacy popup wrapper: still constructs and focuses a message.

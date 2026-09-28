@@ -23,7 +23,7 @@ from ctk_theme import (
 )
 
 
-class StaffManagementWindow(InGamePopup):
+class StaffManagementView(ctk.CTkFrame):
     """Comprehensive staff management interface with EHM-style functionality."""
 
     # Roles whose attributes are verifiably read by the sim engine (scouting.py)
@@ -31,7 +31,7 @@ class StaffManagementWindow(InGamePopup):
                     StaffRole.AMATEUR_SCOUT, StaffRole.EUROPEAN_SCOUT,
                     StaffRole.ADVANCE_SCOUT}
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         init_ctk_theme()
         self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, TEAL_DARK=TEAL_DARK,
                         BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER,
@@ -44,11 +44,10 @@ class StaffManagementWindow(InGamePopup):
         self._body = body
         self._ff = getattr(parent, 'FONT_FAMILY', 'Segoe UI')
 
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Staff Management - Hockey Manager")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the StaffManagementWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1280x860")
 
         # Staff candidates hired through the Free Agency window land here briefly
         # during negotiation; the authoritative lists live on the team/league.
@@ -67,16 +66,23 @@ class StaffManagementWindow(InGamePopup):
         self.update_current_staff_view()
 
         # Track window under the same key the main app uses
-        self.parent.open_windows['staff_management'] = self
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.app.open_windows['staff_management'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _on_close(self):
         """Unregister from the main app's window tracker and close."""
         try:
-            self.parent.open_windows.pop('staff_management', None)
+            self.app.open_windows.pop('staff_management', None)
         except Exception:
             pass
-        self.destroy()
+        self.close_view()
 
     def _get_user_team(self):
         """Return the user's team from live game state (never fabricated).
@@ -84,7 +90,7 @@ class StaffManagementWindow(InGamePopup):
         Prefers the game manager's canonical user_team reference, falling back
         to the is_user_team scan used elsewhere in the codebase.
         """
-        gm = getattr(self.parent, 'game_manager', None)
+        gm = getattr(self.app, 'game_manager', None)
         team = getattr(gm, 'user_team', None) if gm is not None else None
         if team is not None:
             return team
@@ -351,18 +357,18 @@ class StaffManagementWindow(InGamePopup):
         """Redirect to Free Agency staff page and close this window."""
         # Unregister this window before opening Free Agency
         try:
-            self.parent.open_windows.pop('staff_management', None)
+            self.app.open_windows.pop('staff_management', None)
         except Exception:
             pass
 
         # Open the enhanced free agency window
-        self.parent.open_free_agency_window()
+        self.app.open_free_agency_window()
 
         # Select the staff tab ("Free Agent Staff") once it is ready.
         # (The CTk rebuild dropped FA's old ttk `notebook` attribute, so the
         # legacy `notebook.select(1)` call is replaced with the tabview API.)
         def select_staff_tab():
-            fa_window = self.parent.open_windows.get('free_agency')
+            fa_window = self.app.open_windows.get('free_agency')
             if fa_window is not None and hasattr(fa_window, 'tabview'):
                 try:
                     if fa_window.winfo_exists():
@@ -372,10 +378,10 @@ class StaffManagementWindow(InGamePopup):
                     pass
 
         # Schedule the tab selection for after the window is fully created
-        self.parent.after_idle(select_staff_tab)
+        self.app.after_idle(select_staff_tab)
 
         # Close this window
-        self.destroy()
+        self.close_view()
 
     def create_staff_overview_tab(self):
         """Staff overview and organizational chart."""
@@ -944,7 +950,7 @@ class StaffManagementWindow(InGamePopup):
             try:
                 from game_classes import EmailMessage
                 from datetime import date
-                self.parent.send_email_to_user(EmailMessage(
+                self.app.send_email_to_user(EmailMessage(
                     sender="System", sender_type="System",
                     date_sent=date.today(), category="Contracts", priority=2,
                     subject="Staff Negotiation Results",
@@ -1342,7 +1348,7 @@ class StaffManagementWindow(InGamePopup):
             try:
                 from game_classes import EmailMessage
                 from datetime import date
-                self.parent.send_email_to_user(EmailMessage(
+                self.app.send_email_to_user(EmailMessage(
                     sender="System", sender_type="System",
                     date_sent=date.today(), category="Contracts", priority=2,
                     subject=f"Staff re-signed: {staff.full_name}",
@@ -2000,3 +2006,20 @@ class StaffManagementWindow(InGamePopup):
                 chart += "\n"
 
         return chart
+
+class StaffManagementWindow(InGamePopup):
+    """Popup wrapper around StaffManagementView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Staff Management - Hockey Manager")
+        self._view = StaffManagementView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

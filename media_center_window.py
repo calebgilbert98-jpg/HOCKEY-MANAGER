@@ -12,7 +12,7 @@ import random
 import customtkinter as ctk
 
 
-class MediaCenterWindow(InGamePopup):
+class MediaCenterView(ctk.CTkFrame):
     """Media Center - Optional immersive media interactions"""
 
     _ENGAGEMENT_DESCRIPTIONS = {
@@ -22,7 +22,7 @@ class MediaCenterWindow(InGamePopup):
         "Full Immersion": "Complete storylines & all interactions",
     }
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -40,35 +40,40 @@ class MediaCenterWindow(InGamePopup):
         self._body = body
         init_ctk_theme()
 
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Media Center")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the MediaCenterWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1250x840")
-        self.minsize(1000, 680)
 
         # Initialize media system if not exists
-        if not hasattr(parent.game_manager, 'media_system'):
-            parent.game_manager.media_system = MediaSystem(parent.game_manager)
+        if not hasattr(self.app.game_manager, 'media_system'):
+            self.app.game_manager.media_system = MediaSystem(self.app.game_manager)
 
-        self.media_system = parent.game_manager.media_system
+        self.media_system = self.app.game_manager.media_system
 
         self._setup_tree_style()
         self._create_interface()
         self._update_display()
 
         # Add to tracked windows
-        parent.open_windows['media_center'] = self
-        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+        self.app.open_windows['media_center'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _on_closing(self):
         """Remove self from tracked windows on close."""
         try:
-            if 'media_center' in self.parent.open_windows:
-                del self.parent.open_windows['media_center']
+            if 'media_center' in self.app.open_windows:
+                del self.app.open_windows['media_center']
         except Exception:
             pass
-        self.destroy()
+        self.close_view()
 
     # ------------------------------------------------------------------
     # Styling helpers
@@ -446,7 +451,7 @@ class MediaCenterWindow(InGamePopup):
         for item in self.storylines_tree.get_children():
             self.storylines_tree.delete(item)
 
-        current_date = self.parent.game_manager.current_date
+        current_date = self.app.game_manager.current_date
         active_storylines = [s for s in self.media_system.storylines
                              if s.is_active(current_date)]
 
@@ -599,7 +604,22 @@ TIP: {"Higher engagement = more storylines but more interactions" if status['eng
         InterviewWindow(self, view if view is not None else self._event_view(event),
                         event)
 
-
+class MediaCenterWindow(InGamePopup):
+    """Popup wrapper around MediaCenterView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Media Center")
+        self._view = MediaCenterView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 class InterviewWindow(InGamePopup):
     """Interactive interview window for media events"""
 

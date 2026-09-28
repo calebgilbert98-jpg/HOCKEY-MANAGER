@@ -60,29 +60,23 @@ check("contract strip in header",
       any("Test Club" in t for t in labels), "team line present")
 
 # ---------------------------------------------------------------- staff card
-from staff_management_window import StaffManagementWindow
-smw = StaffManagementWindow.__new__(StaffManagementWindow)
-from ctk_theme import (TEAL, TEAL_HOVER, TEAL_DARK, BG, PANEL, CARD, BORDER,
-                       TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
-                       ROW_HOVER, ROW_SELECTED,
-                       primary_button, secondary_button, heading, body)
-smw._ct = dict(TEAL=TEAL, BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER,
-               TEXT=TEXT, TEXT_DIM=TEXT_DIM, TEXT_FAINT=TEXT_FAINT, GOLD=GOLD,
-               GREEN=GREEN, RED=RED, BLUE=BLUE, ROW_HOVER=ROW_HOVER,
-               ROW_SELECTED=ROW_SELECTED)
-smw._primary_button = primary_button
-smw._secondary_button = secondary_button
-smw._heading = heading
-smw._body = body
-smw._ff = "Segoe UI"
-smw.parent = SimpleNamespace(game_manager=SimpleNamespace(user_team=team))
+from staff_management_window import StaffManagementView
+staff_app = SimpleNamespace(
+    league=league, user_team=team, open_windows={},
+    tree_maps={}, BG_COLOR="#1a1a2e", CONTENT_BG="#0e0e11",
+    TEXT_COLOR="#ffffff", FONT_FAMILY="Helvetica",
+    game_manager=SimpleNamespace(user_team=team, league=league))
+staff_holder = tk.Frame(root, width=1600, height=900)
+staff_holder.pack(fill="both", expand=True)
+smv = StaffManagementView(staff_holder, app=staff_app)
+root.update()
 
 staff = g.Staff(first_name="Test", last_name="Coach",
                 role=g.StaffRole.HEAD_COACH, age=50)
 staff.ambition = "stanley_cup"; staff.favorite_team = "Test Club"
 staff.control_need = 80; staff.gm_trust = 70
 try:
-    smw.show_staff_details_window(staff, True)
+    smv.show_staff_details_window(staff, True)
     root.update()
     check("staff details window builds", True)
 except Exception as e:
@@ -220,7 +214,10 @@ check("quiet -> no inbox spam", len(fake.inbox) == 0)
 from inbox_window import InboxView
 from game_classes import EmailMessage
 iw = InboxView.__new__(InboxView)
-from ctk_theme import init_ctk_theme, primary_button, secondary_button, heading, body
+from ctk_theme import (init_ctk_theme, primary_button, secondary_button,
+                       heading, body, TEAL, TEAL_HOVER, TEAL_DARK, BG, PANEL,
+                       CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN,
+                       RED, BLUE, ROW_HOVER, ROW_SELECTED)
 iw._ct = dict(TEAL=TEAL, BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER,
               TEXT=TEXT, TEXT_DIM=TEXT_DIM, TEXT_FAINT=TEXT_FAINT, GOLD=GOLD,
               GREEN=GREEN, RED=RED, BLUE=BLUE, ROW_HOVER=ROW_HOVER,

@@ -40,7 +40,7 @@ except ImportError:
         except (TypeError, ValueError):
             return 50
 
-class StatsStandingsWindow(InGamePopup):
+class StatsStandingsView(ctk.CTkFrame):
     """Advanced Stats and Standings window with deep analytics and multiple view modes"""
 
     # Tab names in order -- kept as lists so tab-name <-> index mapping stays
@@ -53,7 +53,7 @@ class StatsStandingsWindow(InGamePopup):
     RECORD_TABS = ["Season Records", "Career Records", "Current Leaders",
                    "Record Chase", "Achievements"]
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -72,12 +72,10 @@ class StatsStandingsWindow(InGamePopup):
         self._teamcolor_tags = set()  # reserved (grid table needs no tags)
         self._ff = "Segoe UI"
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Advanced League Analytics & Standings - Hockey Manager")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the StatsStandingsWindow wrapper
         self.configure(fg_color=self._ct['BG'])
-        self.geometry("1600x1000")
-        self.minsize(1400, 800)
 
         # Enhanced state tracking
         self.selected_tab = 0
@@ -103,7 +101,15 @@ class StatsStandingsWindow(InGamePopup):
         self.create_interface()
 
         # Track window
-        self.parent.open_windows['stats_standings'] = self
+        self.app.open_windows['stats_standings'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # CTk styling helpers
@@ -221,11 +227,11 @@ class StatsStandingsWindow(InGamePopup):
             tree.selection_set(item)
             player = None
             try:
-                player = self.parent.tree_maps.get(tree, {}).get(item)
+                player = self.app.tree_maps.get(tree, {}).get(item)
             except Exception:
                 player = None
             if player:
-                PlayerContextMenu(self.parent).show_context_menu(event, player)
+                PlayerContextMenu(self.app).show_context_menu(event, player)
 
         tree.bind("<Button-3>", _show)
 
@@ -238,7 +244,7 @@ class StatsStandingsWindow(InGamePopup):
         were created but never packed, rendering them invisible.
         """
         frame = ctk.CTkFrame(parent, fg_color="transparent")
-        tree = self.parent._create_treeview(frame, columns, height=height)
+        tree = self.app._create_treeview(frame, columns, height=height)
         tree.configure(style='Stats.Treeview')
         scrollbar = ttk.Scrollbar(frame, orient="vertical",
                                   command=tree.yview,
@@ -267,15 +273,15 @@ class StatsStandingsWindow(InGamePopup):
     def _initialize_analytics_from_game_data(self):
         """Initialize analytics engine with current game data"""
         try:
-            if not self.parent.game_manager or not self.parent.game_manager.league:
+            if not self.app.game_manager or not self.app.game_manager.league:
                 return
                 
             # Find NHL teams
             nhl_teams = []
-            if hasattr(self.parent.game_manager.league, 'teams'):
-                nhl_teams = self.parent.game_manager.league.teams
-            elif hasattr(self.parent.game_manager.league, 'leagues'):
-                for league in self.parent.game_manager.league.leagues:
+            if hasattr(self.app.game_manager.league, 'teams'):
+                nhl_teams = self.app.game_manager.league.teams
+            elif hasattr(self.app.game_manager.league, 'leagues'):
+                for league in self.app.game_manager.league.leagues:
                     if hasattr(league, 'name') and "National Hockey League" in league.name:
                         nhl_teams = league.teams
                         break
@@ -418,7 +424,7 @@ class StatsStandingsWindow(InGamePopup):
         self.period_combo.pack(side='left', padx=(0, 12))
 
         self._secondary_button(filters_frame, text="Close",
-                               command=self.destroy).pack(side='left')
+                               command=self.close_view).pack(side='left')
 
         # Main tabs
         self.tabview = self._make_tabview(main_frame)
@@ -472,7 +478,7 @@ class StatsStandingsWindow(InGamePopup):
     def update_data_summary(self):
         """Update the data summary in the status bar"""
         try:
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             if league and hasattr(league, 'teams'):
                 team_count = len(league.teams)
                 # Count total players
@@ -723,10 +729,10 @@ class StatsStandingsWindow(InGamePopup):
         try:
             for item in tree.get_children():
                 tree.delete(item)
-            if hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps.setdefault(tree, {}).clear()
+            if hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps.setdefault(tree, {}).clear()
 
-            league = getattr(self.parent, 'league', None)
+            league = getattr(self.app, 'league', None)
             teams = getattr(league, 'teams', []) if league else []
             if not teams:
                 self._milestone_empty_row("No league data available.")
@@ -771,8 +777,8 @@ class StatsStandingsWindow(InGamePopup):
                 _mid = tree.insert('', 'end', values=(
                     w['player'], w['team'], w['pos'], w['milestone'],
                     w['current'], w['needed'], w['season']))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[tree][_mid] = w['player_obj']
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[tree][_mid] = w['player_obj']
         except Exception as e:
             print(f"Error populating milestone watch: {e}")
     
@@ -842,13 +848,13 @@ class StatsStandingsWindow(InGamePopup):
         title_container.grid(row=0, column=0, sticky="w")
         
         title_label = ttk.Label(title_container, text="NHL Records & Achievements", 
-                               font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                               foreground='#FFFFFF', background=self.parent.BG_COLOR)
+                               font=(self.app.FONT_FAMILY, 16, 'bold'),
+                               foreground='#FFFFFF', background=self.app.BG_COLOR)
         title_label.pack(anchor='w')
         
         desc_label = ttk.Label(title_container, text="Track legendary performances and chase greatness",
-                              font=(self.parent.FONT_FAMILY, 10),
-                              foreground='#B0B0B0', background=self.parent.BG_COLOR)
+                              font=(self.app.FONT_FAMILY, 10),
+                              foreground='#B0B0B0', background=self.app.BG_COLOR)
         desc_label.pack(anchor='w', pady=(3, 0))
         
         # Stats summary
@@ -856,7 +862,7 @@ class StatsStandingsWindow(InGamePopup):
         stats_frame.grid(row=0, column=2, sticky="e")
         
         try:
-            record_manager = self.parent.game_manager.record_manager
+            record_manager = self.app.game_manager.record_manager
             total_records = len(record_manager.nhl_records.season_records) + len(record_manager.nhl_records.career_records)
             stats_text = f"{total_records} Official NHL Records"
             if hasattr(record_manager, 'achievements') and record_manager.achievements:
@@ -865,8 +871,8 @@ class StatsStandingsWindow(InGamePopup):
             stats_text = "Official NHL Records Database"
             
         stats_label = ttk.Label(stats_frame, text=stats_text,
-                               font=(self.parent.FONT_FAMILY, 9),
-                               foreground='#888888', background=self.parent.BG_COLOR)
+                               font=(self.app.FONT_FAMILY, 9),
+                               foreground='#888888', background=self.app.BG_COLOR)
         stats_label.pack(anchor='e')
         
         # Enhanced toolbar
@@ -879,12 +885,12 @@ class StatsStandingsWindow(InGamePopup):
         search_container.grid(row=0, column=0, sticky="w")
         
         ttk.Label(search_container, text="Search:", 
-                 font=(self.parent.FONT_FAMILY, 9), foreground=self.parent.TEXT_COLOR,
-                 background=self.parent.BG_COLOR).pack(side='left', padx=(0, 5))
+                 font=(self.app.FONT_FAMILY, 9), foreground=self.app.TEXT_COLOR,
+                 background=self.app.BG_COLOR).pack(side='left', padx=(0, 5))
         
         self.records_search_var = tk.StringVar()
         search_entry = ttk.Entry(search_container, textvariable=self.records_search_var,
-                                font=(self.parent.FONT_FAMILY, 9), width=25)
+                                font=(self.app.FONT_FAMILY, 9), width=25)
         search_entry.pack(side='left', padx=(0, 20))
         
         # Category filter
@@ -892,13 +898,13 @@ class StatsStandingsWindow(InGamePopup):
         filter_container.grid(row=0, column=1, sticky="")
         
         ttk.Label(filter_container, text="Category:",
-                 font=(self.parent.FONT_FAMILY, 9), foreground=self.parent.TEXT_COLOR,
-                 background=self.parent.BG_COLOR).pack(side='left', padx=(0, 5))
+                 font=(self.app.FONT_FAMILY, 9), foreground=self.app.TEXT_COLOR,
+                 background=self.app.BG_COLOR).pack(side='left', padx=(0, 5))
         
         self.records_filter_var = tk.StringVar(value="All Records")
         filter_combo = ttk.Combobox(filter_container, textvariable=self.records_filter_var,
                                    values=["All Records", "Scoring", "Goaltending", "Team Records"],
-                                   state="readonly", font=(self.parent.FONT_FAMILY, 9), width=15)
+                                   state="readonly", font=(self.app.FONT_FAMILY, 9), width=15)
         filter_combo.pack(side='left')
         
         # Refresh button
@@ -1129,8 +1135,8 @@ class StatsStandingsWindow(InGamePopup):
         
         # Get standings data from the dashboard system
         try:
-            if hasattr(self.parent, 'atmospheric_dashboard'):
-                standings_data = self.parent.atmospheric_dashboard._get_standings_data()
+            if hasattr(self.app, 'atmospheric_dashboard'):
+                standings_data = self.app.atmospheric_dashboard._get_standings_data()
             else:
                 standings_data = self.get_standings_data()
             
@@ -1151,7 +1157,7 @@ class StatsStandingsWindow(InGamePopup):
     def create_conference_standings(self, parent, standings_data):
         """Create standings tables for conferences/divisions"""
         # Create scrollable frame
-        canvas = tk.Canvas(parent, bg=self.parent.BG_COLOR, highlightthickness=0)
+        canvas = tk.Canvas(parent, bg=self.app.BG_COLOR, highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
@@ -1182,7 +1188,7 @@ class StatsStandingsWindow(InGamePopup):
             # Team data
             for rank, team in enumerate(teams, 1):
                 # Highlight user team
-                style = 'Title.TLabel' if team['name'] == getattr(self.parent, 'user_team', {}).get('team_name', '') else 'TLabel'
+                style = 'Title.TLabel' if team['name'] == getattr(self.app, 'user_team', {}).get('team_name', '') else 'TLabel'
                 
                 ttk.Label(scrollable_frame, text=str(rank), style=style).grid(row=row, column=0, sticky='w', padx=5)
                 # Team identity chip + name
@@ -1331,8 +1337,8 @@ class StatsStandingsWindow(InGamePopup):
         """Get standings data from the parent application"""
         try:
             # Try to get data from the atmospheric dashboard
-            if hasattr(self.parent, 'atmospheric_dashboard'):
-                data = self.parent.atmospheric_dashboard._get_standings_data()
+            if hasattr(self.app, 'atmospheric_dashboard'):
+                data = self.app.atmospheric_dashboard._get_standings_data()
                 if isinstance(data, dict):
                     return data
             # Fallback: get data directly from league
@@ -1345,15 +1351,15 @@ class StatsStandingsWindow(InGamePopup):
     
     def get_league_standings(self):
         """Get standings directly from league data"""
-        if not hasattr(self.parent, 'league') or not self.parent.league:
+        if not hasattr(self.app, 'league') or not self.app.league:
             return self.get_fallback_standings()
         
         # Get NHL teams
-        nhl_teams = [team for team in self.parent.league.teams 
+        nhl_teams = [team for team in self.app.league.teams 
                     if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
         
         if not nhl_teams:
-            nhl_teams = self.parent.league.teams[:32]  # Assume first 32 are NHL
+            nhl_teams = self.app.league.teams[:32]  # Assume first 32 are NHL
         
         # Group by division
         divisions = {}
@@ -1481,7 +1487,7 @@ class StatsStandingsWindow(InGamePopup):
         """Populate team stats with real game data"""
         try:
             # Get teams from game manager - properly access league object
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             if league and hasattr(league, 'teams'):
                 teams = league.teams
             else:
@@ -1530,8 +1536,8 @@ class StatsStandingsWindow(InGamePopup):
         try:
             # Try to get some real teams first
             sample_teams = []
-            if hasattr(self.parent, 'league') and self.parent.league.teams:
-                real_teams = self.parent.league.teams[:8]  # Take first 8 teams
+            if hasattr(self.app, 'league') and self.app.league.teams:
+                real_teams = self.app.league.teams[:8]  # Take first 8 teams
                 
                 for team in real_teams:
                     # Use real team data if available, fallback to 0 for missing stats
@@ -1572,18 +1578,18 @@ class StatsStandingsWindow(InGamePopup):
     def populate_player_leaders_data(self, tree, category):
         """Populate player leaders with real game data"""
         # Get all players from all teams
-        if hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps.setdefault(tree, {}).clear()
+        if hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps.setdefault(tree, {}).clear()
         all_players = []
         
         try:
             # Get teams from game manager
             teams = []
-            if hasattr(self.parent.game_manager, 'league'):
-                if hasattr(self.parent.game_manager.league, 'teams'):
-                    teams = self.parent.game_manager.league.teams
-                elif hasattr(self.parent.game_manager.league, 'leagues'):
-                    for league in self.parent.game_manager.league.leagues:
+            if hasattr(self.app.game_manager, 'league'):
+                if hasattr(self.app.game_manager.league, 'teams'):
+                    teams = self.app.game_manager.league.teams
+                elif hasattr(self.app.game_manager.league, 'leagues'):
+                    for league in self.app.game_manager.league.leagues:
                         if hasattr(league, 'name') and "National Hockey League" in league.name:
                             teams = league.teams
                             break
@@ -1639,8 +1645,8 @@ class StatsStandingsWindow(InGamePopup):
                     assists,
                     points
                 ))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[tree][_plid] = player
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[tree][_plid] = player
                     
         elif category == "goaltending":
             # Filter for goalies and sort by wins
@@ -1674,8 +1680,8 @@ class StatsStandingsWindow(InGamePopup):
                     f"{gaa:.2f}" if games_played > 0 else "0.00",
                     save_pct
                 ))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[tree][_plid] = player
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[tree][_plid] = player
                     
         else:  # rookies
             # Filter for young players (age < 24) and sort by points
@@ -1701,8 +1707,8 @@ class StatsStandingsWindow(InGamePopup):
                     assists,
                     points
                 ))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[tree][_plid] = player
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[tree][_plid] = player
     
     def _get_team_abbreviation(self, team_name):
         """Get team abbreviation from full name"""
@@ -1731,8 +1737,8 @@ class StatsStandingsWindow(InGamePopup):
             all_players = []
             
             # Primary source: game manager league
-            if hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'league'):
-                league = self.parent.game_manager.league
+            if hasattr(self.app, 'game_manager') and hasattr(self.app.game_manager, 'league'):
+                league = self.app.game_manager.league
                 if hasattr(league, 'teams'):
                     for team in league.teams:
                         if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
@@ -1740,15 +1746,15 @@ class StatsStandingsWindow(InGamePopup):
                                 all_players.extend(team.roster)
             
             # Secondary source: direct league access
-            if not all_players and hasattr(self.parent, 'league'):
-                for team in getattr(self.parent.league, 'teams', []):
+            if not all_players and hasattr(self.app, 'league'):
+                for team in getattr(self.app.league, 'teams', []):
                     if hasattr(team, 'roster'):
                         all_players.extend(team.roster)
             
             # Tertiary source: user team league
-            if not all_players and hasattr(self.parent, 'user_team'):
-                if hasattr(self.parent.user_team, 'league'):
-                    for team in getattr(self.parent.user_team.league, 'teams', []):
+            if not all_players and hasattr(self.app, 'user_team'):
+                if hasattr(self.app.user_team, 'league'):
+                    for team in getattr(self.app.user_team.league, 'teams', []):
                         if hasattr(team, 'roster'):
                             all_players.extend(team.roster)
             
@@ -1807,8 +1813,8 @@ class StatsStandingsWindow(InGamePopup):
                             )
                         
                         _plid = tree.insert('', 'end', values=values)
-                        if hasattr(self.parent, 'tree_maps'):
-                            self.parent.tree_maps.setdefault(tree, {})[_plid] = player
+                        if hasattr(self.app, 'tree_maps'):
+                            self.app.tree_maps.setdefault(tree, {})[_plid] = player
                         
                     except Exception as e:
                         print(f"Error adding player {player.full_name}: {e}")
@@ -1991,7 +1997,7 @@ class StatsStandingsWindow(InGamePopup):
             # Export team standings
             data = []
             rank = 1
-            for team in sorted(self.parent.league.teams, key=lambda t: t.points, reverse=True):
+            for team in sorted(self.app.league.teams, key=lambda t: t.points, reverse=True):
                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
                     data.append([
                         rank,
@@ -2018,7 +2024,7 @@ class StatsStandingsWindow(InGamePopup):
             rank = 1
             all_players = []
             
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
                     for player in team.roster:
                         all_players.append(player)
@@ -2126,7 +2132,7 @@ class StatsStandingsWindow(InGamePopup):
 
         # Header row
         for col, (_key, title) in enumerate(columns):
-            tk.Label(body, text=title, bg=self.parent.BG_COLOR,
+            tk.Label(body, text=title, bg=self.app.BG_COLOR,
                      fg='#9aa3b2',
                      font=('TkDefaultFont', 9, 'bold')).grid(
                 row=0, column=col, sticky='w', padx=6, pady=(4, 8))
@@ -2173,7 +2179,7 @@ class StatsStandingsWindow(InGamePopup):
                 }
 
                 # Team-true color lives ONLY in the Team column.
-                _bg, _fg = self.parent.BG_COLOR, _fg_default
+                _bg, _fg = self.app.BG_COLOR, _fg_default
                 if _accent_for_team is not None:
                     try:
                         _bg, _, _fg = _accent_for_team(team.team_name)
@@ -2200,7 +2206,7 @@ class StatsStandingsWindow(InGamePopup):
                                  font=('TkDefaultFont', 9, 'bold')).grid(
                             row=r, column=col, sticky='ew', padx=2, pady=1)
                     else:
-                        tk.Label(body, text=vals[key], bg=self.parent.BG_COLOR,
+                        tk.Label(body, text=vals[key], bg=self.app.BG_COLOR,
                                  fg=_fg_default).grid(
                             row=r, column=col, sticky='w', padx=6, pady=2)
             except Exception as e:
@@ -2210,10 +2216,10 @@ class StatsStandingsWindow(InGamePopup):
     def _standings_teams(self):
         """NHL teams for standings, with real-team fallback."""
         teams = []
-        gm = getattr(self.parent, 'game_manager', None)
+        gm = getattr(self.app, 'game_manager', None)
         league = getattr(gm, 'league', None) if gm else None
         if league is None:
-            league = getattr(self.parent, 'league', None)
+            league = getattr(self.app, 'league', None)
         if league is not None and hasattr(league, 'teams'):
             teams = [t for t in league.teams
                      if getattr(t, 'league_name', 'National Hockey League')
@@ -2281,20 +2287,20 @@ class StatsStandingsWindow(InGamePopup):
         """Get teams from alternative data sources if main source fails"""
         try:
             # Try direct access to parent league
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'teams'):
-                teams = [team for team in self.parent.league.teams 
+            if hasattr(self.app, 'league') and hasattr(self.app.league, 'teams'):
+                teams = [team for team in self.app.league.teams 
                         if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
                 if teams:
                     return teams
             
             # Try accessing user team's league
-            if hasattr(self.parent, 'user_team') and hasattr(self.parent.user_team, 'league'):
-                teams = getattr(self.parent.user_team.league, 'teams', [])
+            if hasattr(self.app, 'user_team') and hasattr(self.app.user_team, 'league'):
+                teams = getattr(self.app.user_team.league, 'teams', [])
                 if teams:
                     return teams
             
             # Try game manager league access
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             if league and hasattr(league, 'teams'):
                 teams = league.teams
                 if teams:
@@ -2404,7 +2410,7 @@ class StatsStandingsWindow(InGamePopup):
         elif filt == "Western Conference":
             teams = [t for t in teams if getattr(t, 'conference', '') == 'Western']
         elif filt == "Division Rivals":
-            user_div = getattr(getattr(self.parent, 'user_team', None), 'division', '')
+            user_div = getattr(getattr(self.app, 'user_team', None), 'division', '')
             if user_div:
                 teams = [t for t in teams if getattr(t, 'division', '') == user_div]
         elif filt == "Playoff Teams":
@@ -2787,7 +2793,7 @@ class StatsStandingsWindow(InGamePopup):
         """Add enhanced player data from real game data (top 20, no pagination)."""
         try:
             all_players = []
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if hasattr(team, 'roster') and team.roster:
                     for player in team.roster:
                         try:
@@ -2841,7 +2847,7 @@ class StatsStandingsWindow(InGamePopup):
             overtime_games = 0
             shutouts = 0
             
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
                     total_teams += 1
                     team_games = max(team.games_played, 1)
@@ -2892,7 +2898,7 @@ class StatsStandingsWindow(InGamePopup):
         """Populate statistical outliers panel with real game data"""
         try:
             outliers = []
-            nhl_teams = [team for team in self.parent.league.teams 
+            nhl_teams = [team for team in self.app.league.teams 
                         if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
             
             if nhl_teams:
@@ -2990,8 +2996,8 @@ class StatsStandingsWindow(InGamePopup):
             widget.destroy()
         
         # Create trends display
-        trends_text = tk.Text(self.trends_container, bg=self.parent.BG_COLOR, 
-                             fg=self.parent.TEXT_COLOR, wrap='word', height=20)
+        trends_text = tk.Text(self.trends_container, bg=self.app.BG_COLOR, 
+                             fg=self.app.TEXT_COLOR, wrap='word', height=20)
         trends_text.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Get real trends data from actual teams
@@ -3005,8 +3011,8 @@ class StatsStandingsWindow(InGamePopup):
         try:
             # Get real teams
             teams = []
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'teams'):
-                teams = [team for team in self.parent.league.teams 
+            if hasattr(self.app, 'league') and hasattr(self.app.league, 'teams'):
+                teams = [team for team in self.app.league.teams 
                         if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
             
             if not teams:
@@ -3098,8 +3104,8 @@ Analysis will be updated as the season progresses.
         # Get real teams for this division
         division_teams = []
         try:
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'teams'):
-                all_teams = [team for team in self.parent.league.teams
+            if hasattr(self.app, 'league') and hasattr(self.app.league, 'teams'):
+                all_teams = [team for team in self.app.league.teams
                            if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
 
                 # For now, take any NHL teams and group them by division placeholder
@@ -3162,14 +3168,14 @@ Analysis will be updated as the season progresses.
 
             # Get teams from this division
             division_teams = []
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if (hasattr(team, 'league_name') and team.league_name == "National Hockey League" and
                     hasattr(team, 'division') and division.lower() in team.division.lower()):
                     division_teams.append(team)
 
             if not division_teams:
                 # Fallback: show a few NHL teams
-                division_teams = [team for team in self.parent.league.teams
+                division_teams = [team for team in self.app.league.teams
                                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League"][:4]
 
             if division_teams:
@@ -3207,7 +3213,7 @@ Analysis will be updated as the season progresses.
             all_players = []
 
             # Collect all players from all teams
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if hasattr(team, 'roster') and team.roster:
                     for player in team.roster:
                         is_g = self._is_goalie(player)
@@ -3426,10 +3432,10 @@ Analysis will be updated as the season progresses.
             for widget in self.season_scrollable_frame.winfo_children():
                 widget.destroy()
             
-            record_manager = self.parent.game_manager.record_manager
+            record_manager = self.app.game_manager.record_manager
             
             # Get current league for player comparisons
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             current_leaders = {}
             
             if league and hasattr(league, 'teams'):
@@ -3465,9 +3471,9 @@ Analysis will be updated as the season progresses.
             for category_name, records in season_categories:
                 # Category header
                 header = ttk.Label(self.season_scrollable_frame, text=category_name,
-                                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
-                                  foreground=self.parent.ACCENT_COLOR,
-                                  background=self.parent.CONTENT_BG)
+                                  font=(self.app.FONT_FAMILY, 14, 'bold'),
+                                  foreground=self.app.ACCENT_COLOR,
+                                  background=self.app.CONTENT_BG)
                 header.grid(row=row, column=0, columnspan=4, sticky="w", pady=(15, 10), padx=10)
                 row += 1
                 
@@ -3480,16 +3486,16 @@ Analysis will be updated as the season progresses.
                         
                         # Record name
                         name_label = ttk.Label(self.season_scrollable_frame, text=f"{display_name}:",
-                                              font=(self.parent.FONT_FAMILY, 11),
-                                              foreground=self.parent.TEXT_COLOR,
-                                              background=self.parent.CONTENT_BG)
+                                              font=(self.app.FONT_FAMILY, 11),
+                                              foreground=self.app.TEXT_COLOR,
+                                              background=self.app.CONTENT_BG)
                         name_label.grid(row=row, column=0, sticky="w", padx=(30, 10), pady=2)
                         
                         # NHL Record value
                         value_label = ttk.Label(self.season_scrollable_frame, text=record_display,
-                                               font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                                               font=(self.app.FONT_FAMILY, 11, 'bold'),
                                                foreground='#FFD700',  # Gold color
-                                               background=self.parent.CONTENT_BG)
+                                               background=self.app.CONTENT_BG)
                         value_label.grid(row=row, column=1, sticky="w", pady=2, padx=(0, 20))
                         
                         # Current season leader comparison
@@ -3510,9 +3516,9 @@ Analysis will be updated as the season progresses.
                                     color = '#B0B0B0'  # Gray for normal
                                 
                                 leader_label = ttk.Label(self.season_scrollable_frame, text=leader_text,
-                                                        font=(self.parent.FONT_FAMILY, 9),
+                                                        font=(self.app.FONT_FAMILY, 9),
                                                         foreground=color,
-                                                        background=self.parent.CONTENT_BG)
+                                                        background=self.app.CONTENT_BG)
                                 leader_label.grid(row=row, column=2, sticky="w", pady=2)
                         
                         row += 1
@@ -3527,10 +3533,10 @@ Analysis will be updated as the season progresses.
             for widget in self.career_scrollable_frame.winfo_children():
                 widget.destroy()
             
-            record_manager = self.parent.game_manager.record_manager
+            record_manager = self.app.game_manager.record_manager
             
             # Get current league for player comparisons
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             current_leaders = {}
             
             if league and hasattr(league, 'teams'):
@@ -3566,9 +3572,9 @@ Analysis will be updated as the season progresses.
             for category_name, records in career_categories:
                 # Category header
                 header = ttk.Label(self.career_scrollable_frame, text=category_name,
-                                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
-                                  foreground=self.parent.ACCENT_COLOR,
-                                  background=self.parent.CONTENT_BG)
+                                  font=(self.app.FONT_FAMILY, 14, 'bold'),
+                                  foreground=self.app.ACCENT_COLOR,
+                                  background=self.app.CONTENT_BG)
                 header.grid(row=row, column=0, columnspan=4, sticky="w", pady=(15, 10), padx=10)
                 row += 1
                 
@@ -3581,16 +3587,16 @@ Analysis will be updated as the season progresses.
                         
                         # Record name
                         name_label = ttk.Label(self.career_scrollable_frame, text=f"{display_name}:",
-                                              font=(self.parent.FONT_FAMILY, 11),
-                                              foreground=self.parent.TEXT_COLOR,
-                                              background=self.parent.CONTENT_BG)
+                                              font=(self.app.FONT_FAMILY, 11),
+                                              foreground=self.app.TEXT_COLOR,
+                                              background=self.app.CONTENT_BG)
                         name_label.grid(row=row, column=0, sticky="w", padx=(30, 10), pady=2)
                         
                         # NHL Record value
                         value_label = ttk.Label(self.career_scrollable_frame, text=record_display,
-                                               font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                                               font=(self.app.FONT_FAMILY, 11, 'bold'),
                                                foreground='#FFD700',  # Gold color
-                                               background=self.parent.CONTENT_BG)
+                                               background=self.app.CONTENT_BG)
                         value_label.grid(row=row, column=1, sticky="w", pady=2, padx=(0, 20))
                         
                         # Current career leader comparison
@@ -3600,9 +3606,9 @@ Analysis will be updated as the season progresses.
                                 leader_text = f"Current Leader: {getattr(player, 'full_name', 'Unknown')} ({current_value})"
                                 
                                 leader_label = ttk.Label(self.career_scrollable_frame, text=leader_text,
-                                                        font=(self.parent.FONT_FAMILY, 9),
+                                                        font=(self.app.FONT_FAMILY, 9),
                                                         foreground='#B0B0B0',
-                                                        background=self.parent.CONTENT_BG)
+                                                        background=self.app.CONTENT_BG)
                                 leader_label.grid(row=row, column=2, sticky="w", pady=2)
                         
                         row += 1
@@ -3616,11 +3622,11 @@ Analysis will be updated as the season progresses.
             # Clear existing items
             for item in self.current_leaders_tree.get_children():
                 self.current_leaders_tree.delete(item)
-            if hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps.setdefault(self.current_leaders_tree, {}).clear()
+            if hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps.setdefault(self.current_leaders_tree, {}).clear()
             
             # Get current league data
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             if not league or not hasattr(league, 'teams'):
                 return
             
@@ -3667,8 +3673,8 @@ Analysis will be updated as the season progresses.
                             stat_name,
                             str(value)
                         ))
-                        if hasattr(self.parent, 'tree_maps'):
-                            self.parent.tree_maps[self.current_leaders_tree][_lid] = player
+                        if hasattr(self.app, 'tree_maps'):
+                            self.app.tree_maps[self.current_leaders_tree][_lid] = player
                 
         except Exception as e:
             print(f"Error populating current leaders: {e}")
@@ -3679,12 +3685,12 @@ Analysis will be updated as the season progresses.
             # Clear existing items
             for item in self.record_chase_tree.get_children():
                 self.record_chase_tree.delete(item)
-            if hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps.setdefault(self.record_chase_tree, {}).clear()
+            if hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps.setdefault(self.record_chase_tree, {}).clear()
             
             # Get current league data and record manager
-            league = getattr(self.parent.game_manager, 'league', None)
-            record_manager = self.parent.game_manager.record_manager
+            league = getattr(self.app.game_manager, 'league', None)
+            record_manager = self.app.game_manager.record_manager
             
             if not league or not hasattr(league, 'teams') or not record_manager:
                 return
@@ -3770,8 +3776,8 @@ Analysis will be updated as the season progresses.
                     str(chase_info['difference']),
                     f"{chase_info['percentage']:.1f}%"
                 ))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[self.record_chase_tree][_rcid] = chase_info['player_obj']
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[self.record_chase_tree][_rcid] = chase_info['player_obj']
                 
         except Exception as e:
             print(f"Error populating record chase: {e}")
@@ -3783,7 +3789,7 @@ Analysis will be updated as the season progresses.
             for item in self.achievements_tree.get_children():
                 self.achievements_tree.delete(item)
             
-            record_manager = self.parent.game_manager.record_manager
+            record_manager = self.app.game_manager.record_manager
             
             # Get recent records broken in the game
             recent_records = record_manager.get_recent_records(20)
@@ -3861,8 +3867,8 @@ Analysis will be updated as the season progresses.
 
     def _fill_metric_cards(self, metrics_frame):
         """Fill the analytics metric cards from real league data."""
-        if hasattr(self.parent, 'game_manager') and self.parent.game_manager.league:
-            league = self.parent.game_manager.league
+        if hasattr(self.app, 'game_manager') and self.app.game_manager.league:
+            league = self.app.game_manager.league
 
             # Total goals scored across league
             total_goals = 0
@@ -3903,8 +3909,8 @@ Analysis will be updated as the season progresses.
                                                  pady=(10, 4))
 
         trends_text = tk.Text(trends_card, height=20, wrap='word',
-                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                              font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                              bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                              font=(self.app.FONT_FAMILY, 10), relief='flat',
                               highlightthickness=0)
         trends_text.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
@@ -3936,8 +3942,8 @@ Analysis will be updated as the season progresses.
         team_insights_frame.configure(fg_color=ct['PANEL'])
 
         team_text = tk.Text(team_insights_frame, height=15, wrap='word',
-                            bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                            font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                            bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                            font=(self.app.FONT_FAMILY, 10), relief='flat',
                             highlightthickness=0)
         team_text.pack(fill='both', expand=True, padx=10, pady=10)
 
@@ -3946,8 +3952,8 @@ Analysis will be updated as the season progresses.
         player_insights_frame.configure(fg_color=ct['PANEL'])
 
         player_text = tk.Text(player_insights_frame, height=15, wrap='word',
-                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                              font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                              bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                              font=(self.app.FONT_FAMILY, 10), relief='flat',
                               highlightthickness=0)
         player_text.pack(fill='both', expand=True, padx=10, pady=10)
 
@@ -4045,3 +4051,21 @@ Analysis will be updated as the season progresses.
         ctk.CTkLabel(card_frame, text=value,
                      font=(self._ff, 16, 'bold'),
                      text_color=color).pack(pady=(0, 10))
+
+
+class StatsStandingsWindow(InGamePopup):
+    """Popup wrapper around StatsStandingsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Advanced League Analytics & Standings - Hockey Manager")
+        self._view = StatsStandingsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

@@ -6,20 +6,19 @@ Modern, polished interface with enhanced functionality and visual design
 import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
+import customtkinter as ctk
 import math
 from datetime import datetime, timedelta
 from player_development_system import PlayerDevelopmentEngine, initialize_player_potential
 from game_classes import Player, PlayerPosition, to_100_scale
 from player_context_menu import PlayerContextMenu
 
-class PlayerDevelopmentWindowProfessional(InGamePopup):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Player Development Center")
-        self.geometry("1400x900")
-        self.minsize(1200, 700)
-        self.configure(background=parent.BG_COLOR)
+class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the PlayerDevelopmentWindowProfessional wrapper
+        self.configure(fg_color=self.app.BG_COLOR)
         
         # Initialize development engine
         self.dev_engine = PlayerDevelopmentEngine()
@@ -45,14 +44,22 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         self._populate_data()
         
         # Track window for lifecycle management
-        self.parent.open_windows['development'] = self
-        
+        self.app.open_windows['development'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _initialize_player_potentials(self):
         """Initialize potential for players that don't have it"""
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            all_players = (self.parent.user_team.roster + 
-                          self.parent.user_team.ahl_roster + 
-                          self.parent.user_team.prospects)
+        if hasattr(self.app, 'user_team') and self.app.user_team:
+            all_players = (self.app.user_team.roster + 
+                          self.app.user_team.ahl_roster + 
+                          self.app.user_team.prospects)
             
             for player in all_players:
                 if not hasattr(player, 'potential'):
@@ -64,21 +71,21 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         
         # Use parent's dark theme colors
         self.colors = {
-            'primary': self.parent.HEADER_COLOR,      # White text
-            'secondary': self.parent.TEXT_COLOR,      # Light gray text
-            'accent': self.parent.ACCENT_COLOR,       # Red accent
+            'primary': self.app.HEADER_COLOR,      # White text
+            'secondary': self.app.TEXT_COLOR,      # Light gray text
+            'accent': self.app.ACCENT_COLOR,       # Red accent
             'success': '#27AE60',                     # Green
             'warning': '#F39C12',                     # Orange
             'danger': '#E74C3C',                      # Red
-            'light': self.parent.TEXT_COLOR,          # Light text
-            'dark': self.parent.BG_COLOR,             # Dark background
-            'card_bg': self.parent.CONTENT_BG,        # Dark card background
+            'light': self.app.TEXT_COLOR,          # Light text
+            'dark': self.app.BG_COLOR,             # Dark background
+            'card_bg': self.app.CONTENT_BG,        # Dark card background
             'border': '#444444'                       # Dark border
         }
         
         # Configure notebook style for tabs
         style.configure('Professional.TNotebook', 
-                       background=self.parent.BG_COLOR,
+                       background=self.app.BG_COLOR,
                        borderwidth=0)
         style.configure('Professional.TNotebook.Tab',
                        padding=[20, 12],
@@ -87,40 +94,40 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         
         # Configure card-style frames with dark theme
         style.configure('Card.TLabelframe',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.TEXT_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.TEXT_COLOR,
                        relief='flat',
                        borderwidth=1,
                        labelanchor='n')
         style.configure('Card.TLabelframe.Label',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.HEADER_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.HEADER_COLOR,
                        font=('Segoe UI', 11, 'bold'))
                        
         # Configure search and filter frames with dark theme
         style.configure('Filter.TFrame',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.TEXT_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.TEXT_COLOR,
                        relief='flat',
                        borderwidth=1)
                        
         # Configure dark frame style
         style.configure('Dark.TFrame',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.TEXT_COLOR)
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.TEXT_COLOR)
                        
         # Configure dark label styles
         style.configure('Dark.TLabel',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.TEXT_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.TEXT_COLOR,
                        font=('Segoe UI', 10))
         style.configure('DarkBold.TLabel',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.HEADER_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.HEADER_COLOR,
                        font=('Segoe UI', 10, 'bold'))
         style.configure('DarkTitle.TLabel',
-                       background=self.parent.BG_COLOR,
-                       foreground=self.parent.HEADER_COLOR,
+                       background=self.app.BG_COLOR,
+                       foreground=self.app.HEADER_COLOR,
                        font=('Segoe UI', 18, 'bold'))
                        
     def _create_interface(self):
@@ -154,10 +161,10 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         stats_frame = ttk.Frame(header_frame)
         stats_frame.pack(anchor='w', pady=(10, 0))
         
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            all_players = (self.parent.user_team.roster + 
-                          self.parent.user_team.ahl_roster + 
-                          self.parent.user_team.prospects)
+        if hasattr(self.app, 'user_team') and self.app.user_team:
+            all_players = (self.app.user_team.roster + 
+                          self.app.user_team.ahl_roster + 
+                          self.app.user_team.prospects)
             
             # Calculate quick stats
             total_players = len(all_players)
@@ -176,13 +183,13 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         value_label = ttk.Label(card, text=value, 
                                font=('Segoe UI', 16, 'bold'),
                                foreground=color,
-                               background=self.parent.CONTENT_BG)
+                               background=self.app.CONTENT_BG)
         value_label.pack()
         
         title_label = ttk.Label(card, text=title,
                                font=('Segoe UI', 9),
-                               foreground=self.parent.TEXT_COLOR,
-                               background=self.parent.CONTENT_BG)
+                               foreground=self.app.TEXT_COLOR,
+                               background=self.app.CONTENT_BG)
         title_label.pack()
     
     def _create_filters_section(self, parent):
@@ -200,7 +207,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         
         search_label = ttk.Label(search_frame, text="Search Players:", 
                                font=('Segoe UI', 10, 'bold'))
-        search_label.configure(foreground=self.parent.HEADER_COLOR, background=self.parent.CONTENT_BG)
+        search_label.configure(foreground=self.app.HEADER_COLOR, background=self.app.CONTENT_BG)
         search_label.pack(anchor='w')
         
         search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30,
@@ -330,7 +337,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         details_container.pack(fill='both', expand=True, padx=15, pady=15)
         
         # Create scrollable frame for details with dark theme
-        self.details_canvas = tk.Canvas(details_container, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        self.details_canvas = tk.Canvas(details_container, bg=self.app.CONTENT_BG, highlightthickness=0)
         details_scrollbar = ttk.Scrollbar(details_container, orient='vertical',
                                         command=self.details_canvas.yview)
         self.scrollable_details = ttk.Frame(self.details_canvas)
@@ -436,7 +443,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         self.notebook.add(analysis_frame, text="Team Analysis")
         
         # Scrollable frame for analytics with dark theme
-        analysis_canvas = tk.Canvas(analysis_frame, bg=self.parent.BG_COLOR, highlightthickness=0)
+        analysis_canvas = tk.Canvas(analysis_frame, bg=self.app.BG_COLOR, highlightthickness=0)
         analysis_scrollbar = ttk.Scrollbar(analysis_frame, orient='vertical',
                                          command=analysis_canvas.yview)
         self.scrollable_analysis = ttk.Frame(analysis_canvas)
@@ -743,13 +750,13 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
     
     def _populate_data(self):
         """Populate the player data and apply filters"""
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return
             
         # Get all players
-        all_players = (self.parent.user_team.roster + 
-                      self.parent.user_team.ahl_roster + 
-                      self.parent.user_team.prospects)
+        all_players = (self.app.user_team.roster + 
+                      self.app.user_team.ahl_roster + 
+                      self.app.user_team.prospects)
         
         # Store player data
         self.player_data = []
@@ -924,12 +931,12 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
     
     def _update_training_players(self):
         """Update the training player combobox"""
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return
             
-        all_players = (self.parent.user_team.roster + 
-                      self.parent.user_team.ahl_roster + 
-                      self.parent.user_team.prospects)
+        all_players = (self.app.user_team.roster + 
+                      self.app.user_team.ahl_roster + 
+                      self.app.user_team.prospects)
         
         player_names = [f"{p.full_name} ({p.primary_position.value}, {p.age})" for p in all_players]
         self.training_player_combo['values'] = player_names
@@ -940,11 +947,11 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         
     def _find_training_player(self, player_name):
         """Resolve a combobox player name to the actual Player object."""
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return None
-        for roster_list in (self.parent.user_team.roster,
-                            self.parent.user_team.ahl_roster,
-                            self.parent.user_team.prospects):
+        for roster_list in (self.app.user_team.roster,
+                            self.app.user_team.ahl_roster,
+                            self.app.user_team.prospects):
             for p in roster_list:
                 if p.full_name == player_name:
                     return p
@@ -1000,7 +1007,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         # Record the program (shared registry; survives window close).
         # Assignment is stamped with the GAME date and mirrored into the
         # persistent game-manager dict so it survives saves/restarts.
-        game_date = getattr(self.parent, 'current_date', None) or date.today()
+        game_date = getattr(self.app, 'current_date', None) or date.today()
         prog = {
             'focus': focus,
             'intensity': intensity_label,
@@ -1008,7 +1015,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
             'player_name': player.full_name,
         }
         ACTIVE_TRAINING_PROGRAMS[player.id] = prog
-        gm = getattr(self.parent, 'game_manager', None)
+        gm = getattr(self.app, 'game_manager', None)
         if gm is not None:
             if not getattr(gm, 'training_programs', None):
                 gm.training_programs = {}
@@ -1046,14 +1053,14 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
                  font=('Segoe UI', 12, 'bold')).pack(anchor='w', pady=(0, 10))
 
         prog = None
-        gm = getattr(self.parent, 'game_manager', None)
+        gm = getattr(self.app, 'game_manager', None)
         if gm is not None and getattr(gm, 'training_programs', None):
             prog = gm.training_programs.get(player.id) if player else None
         if prog is None:
             prog = ACTIVE_TRAINING_PROGRAMS.get(player.id) if player else None
         if prog:
             from datetime import date as _date
-            game_today = getattr(self.parent, 'current_date', None) or _date.today()
+            game_today = getattr(self.app, 'current_date', None) or _date.today()
             assigned = prog.get('assigned')
             if isinstance(assigned, str):
                 try:
@@ -1106,12 +1113,12 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         overview_content = ttk.Frame(overview_frame)
         overview_content.pack(fill='x', padx=15, pady=15)
         
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return
             
-        all_players = (self.parent.user_team.roster + 
-                      self.parent.user_team.ahl_roster + 
-                      self.parent.user_team.prospects)
+        all_players = (self.app.user_team.roster + 
+                      self.app.user_team.ahl_roster + 
+                      self.app.user_team.prospects)
         
         # Calculate analytics
         total_players = len(all_players)
@@ -1150,12 +1157,12 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         pos_content = ttk.Frame(pos_frame)
         pos_content.pack(fill='x', padx=15, pady=15)
         
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return
             
-        all_players = (self.parent.user_team.roster + 
-                      self.parent.user_team.ahl_roster + 
-                      self.parent.user_team.prospects)
+        all_players = (self.app.user_team.roster + 
+                      self.app.user_team.ahl_roster + 
+                      self.app.user_team.prospects)
         
         # Group by position
         pos_groups = {}
@@ -1192,12 +1199,12 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         age_content = ttk.Frame(age_frame)
         age_content.pack(fill='x', padx=15, pady=15)
         
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return
             
-        all_players = (self.parent.user_team.roster + 
-                      self.parent.user_team.ahl_roster + 
-                      self.parent.user_team.prospects)
+        all_players = (self.app.user_team.roster + 
+                      self.app.user_team.ahl_roster + 
+                      self.app.user_team.prospects)
         
         # Age groups
         age_groups = {
@@ -1232,12 +1239,12 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         pipeline_content = ttk.Frame(pipeline_frame)
         pipeline_content.pack(fill='x', padx=15, pady=15)
         
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return
             
-        all_players = (self.parent.user_team.roster + 
-                      self.parent.user_team.ahl_roster + 
-                      self.parent.user_team.prospects)
+        all_players = (self.app.user_team.roster + 
+                      self.app.user_team.ahl_roster + 
+                      self.app.user_team.prospects)
         
         # Pipeline categories
         categories = {
@@ -1300,7 +1307,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
             return
 
         # Full universal player menu + dev-specific training action.
-        PlayerContextMenu(self.parent).show_context_menu(
+        PlayerContextMenu(self.app).show_context_menu(
             event, selected_player,
             additional_options=[
                 ("Assign Training Focus",
@@ -1311,7 +1318,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         """Open player profile window"""
         try:
             from ui_components import PlayerProfileWindow
-            PlayerProfileWindow(self.parent, player)
+            PlayerProfileWindow(self.app, player)
         except ImportError:
             messagebox.showinfo("Player Profile", 
                               f"Viewing profile for {player.full_name}\n\n"
@@ -1346,7 +1353,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         compare_window = InGamePopup(self)
         compare_window.title(f"Compare Players - {player.full_name}")
         compare_window.geometry("600x400")
-        compare_window.configure(bg=self.parent.BG_COLOR)
+        compare_window.configure(bg=self.app.BG_COLOR)
         
         # Header
         header_label = ttk.Label(compare_window, 
@@ -1368,10 +1375,10 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         
         # Get all players for comparison
         all_players = []
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            all_players = (self.parent.user_team.roster + 
-                          self.parent.user_team.ahl_roster + 
-                          self.parent.user_team.prospects)
+        if hasattr(self.app, 'user_team') and self.app.user_team:
+            all_players = (self.app.user_team.roster + 
+                          self.app.user_team.ahl_roster + 
+                          self.app.user_team.prospects)
         
         compare_var = tk.StringVar(master=compare_window)
         compare_combo = ttk.Combobox(compare_frame, textvariable=compare_var, 
@@ -1429,9 +1436,9 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
             # Show advantage
             if isinstance(val1, (int, float)) and isinstance(val2, (int, float)):
                 if val1 > val2:
-                    advantage = ttk.Label(row, text="←", foreground=self.parent.ACCENT_COLOR)
+                    advantage = ttk.Label(row, text="←", foreground=self.app.ACCENT_COLOR)
                 elif val2 > val1:
-                    advantage = ttk.Label(row, text="→", foreground=self.parent.ACCENT_COLOR)
+                    advantage = ttk.Label(row, text="→", foreground=self.app.ACCENT_COLOR)
                 else:
                     advantage = ttk.Label(row, text="=", style='Dark.TLabel')
                 advantage.pack(side='left', padx=10)
@@ -1456,7 +1463,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         history_window = InGamePopup(self)
         history_window.title(f"Development History - {player.full_name}")
         history_window.geometry("500x400")
-        history_window.configure(bg=self.parent.BG_COLOR)
+        history_window.configure(bg=self.app.BG_COLOR)
         
         # Header
         header = ttk.Label(history_window, 
@@ -1492,7 +1499,7 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
         contract_window = InGamePopup(self)
         contract_window.title(f"Contract Details - {player.full_name}")
         contract_window.geometry("400x300")
-        contract_window.configure(bg=self.parent.BG_COLOR)
+        contract_window.configure(bg=self.app.BG_COLOR)
         
         # Header
         header = ttk.Label(contract_window, 
@@ -1530,9 +1537,27 @@ class PlayerDevelopmentWindowProfessional(InGamePopup):
     
     def _show_details_context_menu(self, event, player):
         """Show context menu for player in details panel"""
-        PlayerContextMenu(self.parent).show_context_menu(
+        PlayerContextMenu(self.app).show_context_menu(
             event, player,
             additional_options=[
                 ("Quick Training Assignment",
                  lambda: self._assign_individual_training(player)),
             ])
+
+
+class PlayerDevelopmentWindowProfessional(InGamePopup):
+    """Popup wrapper around PlayerDevelopmentViewProfessional (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Player Development Center")
+        self._view = PlayerDevelopmentViewProfessional(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

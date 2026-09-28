@@ -6,6 +6,7 @@ Features: Player database, scout management, draft prospects, assignments, and r
 
 import tkinter as tk
 from tkinter import ttk
+import customtkinter as ctk
 from popup_system import messagebox, InGamePopup
 from typing import Dict, List, Optional, Any
 import datetime
@@ -16,17 +17,14 @@ from ui_widgets import PillButton
 from player_context_menu import PlayerContextMenu
 
 
-class ProfessionalScoutingWindow(InGamePopup):
+class ProfessionalScoutingView(ctk.CTkFrame):
     """Professional scouting management interface with comprehensive features"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Professional Scouting Center")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("1400x900")
-        self.minsize(1000, 700)
-        self.resizable(True, True)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ProfessionalScoutingWindow wrapper
+        self.configure(fg_color=self.app.BG_COLOR)
         
         # Data containers
         self.game_data = self._initialize_game_data()
@@ -41,16 +39,21 @@ class ProfessionalScoutingWindow(InGamePopup):
         self._load_initial_data()
         
         # Register window (if parent supports it)
-        if hasattr(self.parent, 'open_windows'):
-            self.parent.open_windows['scouting'] = self
-        
-        # Center window on screen
-        self._center_window()
+        if hasattr(self.app, 'open_windows'):
+            self.app.open_windows['scouting'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
         
     def _initialize_game_data(self) -> Dict[str, Any]:
         """Initialize game data structure with proper error handling"""
         try:
-            game_manager = getattr(self.parent, 'game_manager', None)
+            game_manager = getattr(self.app, 'game_manager', None)
             debug_print(f"DEBUG: game_manager exists: {game_manager is not None}")
             if not game_manager:
                 debug_print("DEBUG: Using fallback data (no game_manager)")
@@ -296,22 +299,13 @@ class ProfessionalScoutingWindow(InGamePopup):
     
     def _ensure_tree_maps(self):
         """Ensure tree maps exist for UI management"""
-        if not hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps = {}
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = {}
         
         required_maps = ['players_tree', 'scouts_tree', 'draft_tree', 'assignments_tree', 'reports_tree']
         for map_name in required_maps:
-            if map_name not in self.parent.tree_maps:
-                self.parent.tree_maps[map_name] = {}
-    
-    def _center_window(self):
-        """Center the window on screen"""
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f'{width}x{height}+{x}+{y}')
+            if map_name not in self.app.tree_maps:
+                self.app.tree_maps[map_name] = {}
     
     def _create_interface(self):
         """Create the main scouting interface with professional styling"""
@@ -334,12 +328,12 @@ class ProfessionalScoutingWindow(InGamePopup):
         
     def _create_header(self):
         """Create professional header section"""
-        header_frame = tk.Frame(self, bg=self.parent.TITLE_BAR_COLOR, height=75)
+        header_frame = tk.Frame(self, bg=self.app.TITLE_BAR_COLOR, height=75)
         header_frame.pack(fill='x')
         header_frame.pack_propagate(False)
         
         # Main title and date
-        title_frame = tk.Frame(header_frame, bg=self.parent.TITLE_BAR_COLOR)
+        title_frame = tk.Frame(header_frame, bg=self.app.TITLE_BAR_COLOR)
         title_frame.pack(expand=True)
         
         
@@ -348,20 +342,20 @@ class ProfessionalScoutingWindow(InGamePopup):
         team_name = self.game_data['user_team'].team_name if self.game_data.get('user_team') else "Organization"
         subtitle = f"{team_name} Scouting Operations • {current_date}"
         subtitle_label = tk.Label(title_frame, text=subtitle,
-                                font=(self.parent.FONT_FAMILY, 10),
-                                bg=self.parent.TITLE_BAR_COLOR, fg=self.parent.TEXT_COLOR)
+                                font=(self.app.FONT_FAMILY, 10),
+                                bg=self.app.TITLE_BAR_COLOR, fg=self.app.TEXT_COLOR)
         subtitle_label.pack()
         
     def _create_status_bar(self):
         """Create comprehensive status bar"""
-        status_frame = tk.Frame(self, bg=self.parent.TITLE_BAR_COLOR, height=40)
+        status_frame = tk.Frame(self, bg=self.app.TITLE_BAR_COLOR, height=40)
         status_frame.pack(fill='x', side='bottom')
         status_frame.pack_propagate(False)
         
         # Left side - system status
         self.status_label = tk.Label(status_frame, text="System Ready",
-                                   bg=self.parent.TITLE_BAR_COLOR, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 9))
+                                   bg=self.app.TITLE_BAR_COLOR, fg=self.app.TEXT_COLOR,
+                                   font=(self.app.FONT_FAMILY, 9))
         self.status_label.pack(side='left', padx=15, pady=10)
         
         # Right side - data summary
@@ -380,13 +374,13 @@ class ProfessionalScoutingWindow(InGamePopup):
         else:
             status_frame = self.winfo_children()[-1]  # Get status frame
             self.data_label = tk.Label(status_frame, text=count_text,
-                                     bg=self.parent.TITLE_BAR_COLOR, fg=self.parent.TEXT_COLOR,
-                                     font=(self.parent.FONT_FAMILY, 9))
+                                     bg=self.app.TITLE_BAR_COLOR, fg=self.app.TEXT_COLOR,
+                                     font=(self.app.FONT_FAMILY, 9))
             self.data_label.pack(side='right', padx=15, pady=10)
     
     def _create_player_database_tab(self):
         """Create comprehensive player database interface"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Player Database")
         
         # Advanced filters
@@ -398,8 +392,8 @@ class ProfessionalScoutingWindow(InGamePopup):
     def _create_advanced_player_filters(self, parent):
         """Create comprehensive filtering system"""
         filter_frame = tk.LabelFrame(parent, text="Advanced Player Search & Analysis", \
-                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,\
-                                   font=(self.parent.FONT_FAMILY, 11, "bold"), relief='groove')
+                                   bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,\
+                                   font=(self.app.FONT_FAMILY, 11, "bold"), relief='groove')
         filter_frame.pack(fill='x', padx=15, pady=10)
 
         # Initialize filter variables with broadest settings to show all players
@@ -414,22 +408,22 @@ class ProfessionalScoutingWindow(InGamePopup):
         })
 
         # Top row: name search + team dropdown (dynamic, too many teams for pills) + clear
-        top_row = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
+        top_row = tk.Frame(filter_frame, bg=self.app.CONTENT_BG)
         top_row.pack(fill='x', padx=12, pady=8)
-        tk.Label(top_row, text="Search:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
+        tk.Label(top_row, text="Search:", bg=self.app.CONTENT_BG,
+                fg=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 10)).pack(side='left')
         search_entry = tk.Entry(top_row, textvariable=self.filter_vars['player_search'],
-                              width=22, font=(self.parent.FONT_FAMILY, 10))
+                              width=22, font=(self.app.FONT_FAMILY, 10))
         search_entry.pack(side='left', padx=(5, 20))
         search_entry.bind('<KeyRelease>', lambda e: self._apply_player_filters())
-        tk.Label(top_row, text="Team:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10)).pack(side='left')
+        tk.Label(top_row, text="Team:", bg=self.app.CONTENT_BG,
+                fg=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 10)).pack(side='left')
         self.player_team_combo = ttk.Combobox(top_row, textvariable=self.filter_vars['player_team'],
                                            width=16, state="readonly")
         self.player_team_combo.pack(side='left', padx=(5, 0))
         self.player_team_combo.bind('<<ComboboxSelected>>', lambda e: self._apply_player_filters())
-        clear_btn = PillButton(top_row, text="Clear All", bg=self.parent.CONTENT_BG,
-                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
+        clear_btn = PillButton(top_row, text="Clear All", bg=self.app.CONTENT_BG,
+                               font=(self.app.FONT_FAMILY, 9, 'bold'),
                                padx=12, pady=4, command=self._clear_player_filters)
         clear_btn.pack(side='right')
 
@@ -455,15 +449,15 @@ class ProfessionalScoutingWindow(InGamePopup):
         }
 
         def _scout_pill_row(row_id, label, options):
-            row = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
+            row = tk.Frame(filter_frame, bg=self.app.CONTENT_BG)
             row.pack(fill='x', padx=12, pady=2)
-            tk.Label(row, text=label, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                     font=(self.parent.FONT_FAMILY, 10, 'bold'),
+            tk.Label(row, text=label, bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                     font=(self.app.FONT_FAMILY, 10, 'bold'),
                      width=10, anchor='w').pack(side='left')
             btns = {}
             for value, text in options:
-                b = PillButton(row, text=text, bg=self.parent.CONTENT_BG,
-                               font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                b = PillButton(row, text=text, bg=self.app.CONTENT_BG,
+                               font=(self.app.FONT_FAMILY, 9, 'bold'),
                                padx=11, pady=4,
                                command=lambda v=value: self._scout_set_filter(row_id, v))
                 b.pack(side='left', padx=2)
@@ -503,8 +497,8 @@ class ProfessionalScoutingWindow(InGamePopup):
     def _create_enhanced_player_list(self, parent):
         """Create enhanced player list with sorting and context menus"""
         list_frame = tk.LabelFrame(parent, text="Player Database & Scouting Targets", 
-                                 bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 11, "bold"), relief='groove')
+                                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                 font=(self.app.FONT_FAMILY, 11, "bold"), relief='groove')
         list_frame.pack(fill='both', expand=True, padx=15, pady=(0, 10))
         
         # Enhanced player tree
@@ -545,44 +539,44 @@ class ProfessionalScoutingWindow(InGamePopup):
         
     def _create_player_toolbar(self, parent):
         """Create professional player action toolbar"""
-        toolbar_frame = tk.Frame(parent, bg=self.parent.CONTENT_BG, height=50)
+        toolbar_frame = tk.Frame(parent, bg=self.app.CONTENT_BG, height=50)
         toolbar_frame.grid(row=2, column=0, columnspan=2, sticky='ew', padx=5, pady=5)
         toolbar_frame.grid_propagate(False)
         
         # Primary actions
         scout_btn = tk.Button(toolbar_frame, text="Assign Scout", 
-                            bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
-                            font=(self.parent.FONT_FAMILY, 10, "bold"),
+                            bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
+                            font=(self.app.FONT_FAMILY, 10, "bold"),
                             command=self._assign_scout_to_player)
         scout_btn.pack(side='left', padx=(10, 8))
         
         profile_btn = tk.Button(toolbar_frame, text="View Profile", 
-                               bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                               font=(self.parent.FONT_FAMILY, 10),
+                               bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                               font=(self.app.FONT_FAMILY, 10),
                                command=self._view_player_profile)
         profile_btn.pack(side='left', padx=(0, 8))
         
         watchlist_btn = tk.Button(toolbar_frame, text="Add to Watchlist", 
-                                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                font=(self.parent.FONT_FAMILY, 10),
+                                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                font=(self.app.FONT_FAMILY, 10),
                                 command=self._add_to_watchlist)
         watchlist_btn.pack(side='left', padx=(0, 8))
         
         compare_btn = tk.Button(toolbar_frame, text="Compare Players", 
-                               bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                               font=(self.parent.FONT_FAMILY, 10),
+                               bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                               font=(self.app.FONT_FAMILY, 10),
                                command=self._compare_players)
         compare_btn.pack(side='left', padx=(0, 8))
         
         # Info label on right
         info_label = tk.Label(toolbar_frame, text="Double-click player for detailed analysis",
-                            bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                            font=(self.parent.FONT_FAMILY, 9, "italic"))
+                            bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                            font=(self.app.FONT_FAMILY, 9, "italic"))
         info_label.pack(side='right', padx=10)
     
     def _create_scouting_staff_tab(self):
         """Create scouting staff management interface"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Scouting Staff")
         
         # Staff overview
@@ -593,7 +587,7 @@ class ProfessionalScoutingWindow(InGamePopup):
         
     def _create_draft_center_tab(self):
         """Create dedicated draft analysis center - THE NEW FEATURE"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Draft Center")
         
         # Draft year info
@@ -607,7 +601,7 @@ class ProfessionalScoutingWindow(InGamePopup):
         
     def _create_assignments_tab(self):
         """Create scouting assignments management"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Assignments")
         
         # Assignment management interface
@@ -615,7 +609,7 @@ class ProfessionalScoutingWindow(InGamePopup):
         
     def _create_reports_tab(self):
         """Create scouting reports interface"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Reports")
         
         # Reports interface
@@ -741,9 +735,9 @@ class ProfessionalScoutingWindow(InGamePopup):
                 ))
                 
                 # Store player reference for tree mapping
-                if 'players_tree' not in self.parent.tree_maps:
-                    self.parent.tree_maps['players_tree'] = {}
-                self.parent.tree_maps['players_tree'][item] = player
+                if 'players_tree' not in self.app.tree_maps:
+                    self.app.tree_maps['players_tree'] = {}
+                self.app.tree_maps['players_tree'][item] = player
                 
                 added_count += 1
                 
@@ -1018,9 +1012,9 @@ class ProfessionalScoutingWindow(InGamePopup):
         for old_item_id, values in items:
             new_item_id = self.players_tree.insert('', 'end', values=values)
             # Preserve player reference mapping
-            if old_item_id in self.parent.tree_maps['players_tree']:
-                self.parent.tree_maps['players_tree'][new_item_id] = self.parent.tree_maps['players_tree'][old_item_id]
-                del self.parent.tree_maps['players_tree'][old_item_id]
+            if old_item_id in self.app.tree_maps['players_tree']:
+                self.app.tree_maps['players_tree'][new_item_id] = self.app.tree_maps['players_tree'][old_item_id]
+                del self.app.tree_maps['players_tree'][old_item_id]
         
         # Update status
         sort_direction = "↓" if self._sort_reverse else "↑"
@@ -1042,10 +1036,10 @@ class ProfessionalScoutingWindow(InGamePopup):
         if not item:
             return
         self.players_tree.selection_set(item)
-        player = self.parent.tree_maps.get('players_tree', {}).get(item)
+        player = self.app.tree_maps.get('players_tree', {}).get(item)
         if not player:
             return
-        PlayerContextMenu(self.parent).show_context_menu(
+        PlayerContextMenu(self.app).show_context_menu(
             event, player,
             additional_options=[
                 ("Assign Scout", self._assign_scout_to_player),
@@ -1066,7 +1060,7 @@ class ProfessionalScoutingWindow(InGamePopup):
             messagebox.showwarning("No Scouts", "You need scouts before you can assign scouting tasks.\n\nHire scouts in the Scouting Staff tab.")
             return
         
-        player = self.parent.tree_maps['players_tree'].get(selection[0])
+        player = self.app.tree_maps['players_tree'].get(selection[0])
         if not player:
             messagebox.showerror("Error", "Could not find selected player.")
             return
@@ -1079,7 +1073,7 @@ class ProfessionalScoutingWindow(InGamePopup):
         dialog = InGamePopup(self)
         dialog.title(f"Assign Scout - {player.full_name}")
         dialog.geometry("400x300")
-        dialog.configure(bg=self.parent.CONTENT_BG)
+        dialog.configure(bg=self.app.CONTENT_BG)
         dialog.resizable(False, False)
         
         # Center dialog
@@ -1088,12 +1082,12 @@ class ProfessionalScoutingWindow(InGamePopup):
         
         # Dialog content
         tk.Label(dialog, text=f"Assign Scout to Evaluate {player.full_name}",
-                font=(self.parent.FONT_FAMILY, 12, "bold"),
-                bg=self.parent.CONTENT_BG, fg=self.parent.HEADER_COLOR).pack(pady=15)
+                font=(self.app.FONT_FAMILY, 12, "bold"),
+                bg=self.app.CONTENT_BG, fg=self.app.HEADER_COLOR).pack(pady=15)
         
         # Scout selection
         tk.Label(dialog, text="Available Scouts:",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR).pack(pady=(10, 5))
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR).pack(pady=(10, 5))
         
         scout_var = tk.StringVar()
         scout_listbox = tk.Listbox(dialog, height=6)
@@ -1106,19 +1100,19 @@ class ProfessionalScoutingWindow(InGamePopup):
         
         # Priority selection
         tk.Label(dialog, text="Assignment Priority:",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR).pack(pady=(15, 5))
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR).pack(pady=(15, 5))
         
         priority_var = tk.StringVar(value="Normal")
-        priority_frame = tk.Frame(dialog, bg=self.parent.CONTENT_BG)
+        priority_frame = tk.Frame(dialog, bg=self.app.CONTENT_BG)
         priority_frame.pack(pady=5)
         
         for priority in ["Low", "Normal", "High", "Urgent"]:
             tk.Radiobutton(priority_frame, text=priority, variable=priority_var, value=priority,
-                          bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                          selectcolor=self.parent.ACCENT_COLOR).pack(side='left', padx=10)
+                          bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                          selectcolor=self.app.ACCENT_COLOR).pack(side='left', padx=10)
         
         # Buttons
-        btn_frame = tk.Frame(dialog, bg=self.parent.CONTENT_BG)
+        btn_frame = tk.Frame(dialog, bg=self.app.CONTENT_BG)
         btn_frame.pack(pady=20)
         
         def assign_scout():
@@ -1138,11 +1132,11 @@ class ProfessionalScoutingWindow(InGamePopup):
             dialog.destroy()
         
         tk.Button(btn_frame, text="Assign Scout", command=assign_scout,
-                 bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
-                 font=(self.parent.FONT_FAMILY, 10, "bold")).pack(side='left', padx=(0, 10))
+                 bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
+                 font=(self.app.FONT_FAMILY, 10, "bold")).pack(side='left', padx=(0, 10))
         
         tk.Button(btn_frame, text="Cancel", command=dialog.destroy,
-                 bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR).pack(side='left')
+                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR).pack(side='left')
     
     def _view_player_profile(self):
         """View detailed player profile"""
@@ -1151,7 +1145,7 @@ class ProfessionalScoutingWindow(InGamePopup):
             messagebox.showwarning("No Selection", "Please select a player to view.")
             return
         
-        player = self.parent.tree_maps['players_tree'].get(selection[0])
+        player = self.app.tree_maps['players_tree'].get(selection[0])
         if not player:
             messagebox.showerror("Error", "Could not find selected player.")
             return
@@ -1159,7 +1153,7 @@ class ProfessionalScoutingWindow(InGamePopup):
         # Try to use enhanced player profile if available
         try:
             from ui_components import PlayerProfileWindow
-            PlayerProfileWindow(self.parent, player)
+            PlayerProfileWindow(self.app, player)
         except ImportError:
             # Fallback to basic info dialog
             self._show_basic_player_info(player)
@@ -1202,7 +1196,7 @@ Last Scouted: {self._get_last_scouted(player)}
             messagebox.showwarning("No Selection", "Please select a player to add to watchlist.")
             return
         
-        player = self.parent.tree_maps['players_tree'].get(selection[0])
+        player = self.app.tree_maps['players_tree'].get(selection[0])
         if player:
             messagebox.showinfo("Watchlist", f"{player.full_name} added to your watchlist!")
     
@@ -1222,7 +1216,7 @@ Last Scouted: {self._get_last_scouted(player)}
             messagebox.showwarning("No Selection", "Please select a player for analysis.")
             return
         
-        player = self.parent.tree_maps['players_tree'].get(selection[0])
+        player = self.app.tree_maps['players_tree'].get(selection[0])
         if player:
             messagebox.showinfo("Advanced Analysis", f"Advanced statistical analysis for {player.full_name}\n\nWould show detailed breakdowns, trends, comparisons, etc.")
     
@@ -1230,8 +1224,8 @@ Last Scouted: {self._get_last_scouted(player)}
     def _create_staff_overview(self, parent):
         """Create staff overview section"""
         overview_frame = tk.LabelFrame(parent, text="Scouting Department Overview",
-                                     bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                     font=(self.parent.FONT_FAMILY, 11, "bold"))
+                                     bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                     font=(self.app.FONT_FAMILY, 11, "bold"))
         overview_frame.pack(fill='x', padx=15, pady=10)
         
         info_text = f"""
@@ -1242,14 +1236,14 @@ Budget Remaining: $50,000
         """
         
         tk.Label(overview_frame, text=info_text.strip(),
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 10), justify='left').pack(pady=10)
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 10), justify='left').pack(pady=10)
     
     def _create_staff_list(self, parent):
         """Create scouting staff list"""
         list_frame = tk.LabelFrame(parent, text="Scouting Staff",
-                                 bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 11, "bold"))
+                                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                 font=(self.app.FONT_FAMILY, 11, "bold"))
         list_frame.pack(fill='both', expand=True, padx=15, pady=(0, 10))
         
         # Create treeview for scouts
@@ -1270,8 +1264,8 @@ Budget Remaining: $50,000
     def _create_draft_header(self, parent):
         """Create draft year header information"""
         header_frame = tk.LabelFrame(parent, text="Draft Information",
-                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 11, "bold"))
+                                   bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                   font=(self.app.FONT_FAMILY, 11, "bold"))
         header_frame.pack(fill='x', padx=15, pady=10)
         
         current_year = datetime.datetime.now().year
@@ -1285,26 +1279,26 @@ Months Until Draft: 6
         """
         
         tk.Label(header_frame, text=info_text.strip(),
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 10), justify='left').pack(pady=10)
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 10), justify='left').pack(pady=10)
     
     def _create_draft_filters(self, parent):
         """Create draft prospect filters"""
         # Placeholder for draft filters
         filter_frame = tk.LabelFrame(parent, text="Draft Prospect Filters",
-                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 11, "bold"))
+                                   bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                   font=(self.app.FONT_FAMILY, 11, "bold"))
         filter_frame.pack(fill='x', padx=15, pady=(0, 10))
         
         tk.Label(filter_frame, text="Draft prospect filtering system would be implemented here.",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 10)).pack(pady=20)
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 10)).pack(pady=20)
     
     def _create_draft_rankings(self, parent):
         """Create draft prospect rankings"""
         rankings_frame = tk.LabelFrame(parent, text="Draft Prospect Rankings",
-                                     bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                     font=(self.parent.FONT_FAMILY, 11, "bold"))
+                                     bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                     font=(self.app.FONT_FAMILY, 11, "bold"))
         rankings_frame.pack(fill='both', expand=True, padx=15, pady=(0, 10))
         
         # Create treeview for draft prospects
@@ -1340,36 +1334,36 @@ Months Until Draft: 6
     
     def _create_assignment_interface(self, parent):
         """Create assignment management interface"""
-        main_frame = tk.Frame(parent, bg=self.parent.CONTENT_BG)
+        main_frame = tk.Frame(parent, bg=self.app.CONTENT_BG)
         main_frame.pack(fill='both', expand=True, padx=15, pady=15)
         
         # Header
-        header_frame = tk.Frame(main_frame, bg=self.parent.CONTENT_BG)
+        header_frame = tk.Frame(main_frame, bg=self.app.CONTENT_BG)
         header_frame.pack(fill='x', pady=(0, 15))
         
         title_label = tk.Label(header_frame, text="Scouting Assignments",
-                              font=(self.parent.FONT_FAMILY, 16, "bold"),
-                              bg=self.parent.CONTENT_BG, fg=self.parent.HEADER_COLOR)
+                              font=(self.app.FONT_FAMILY, 16, "bold"),
+                              bg=self.app.CONTENT_BG, fg=self.app.HEADER_COLOR)
         title_label.pack(side='left')
         
         # Action buttons
-        btn_frame = tk.Frame(header_frame, bg=self.parent.CONTENT_BG)
+        btn_frame = tk.Frame(header_frame, bg=self.app.CONTENT_BG)
         btn_frame.pack(side='right')
         
         new_assignment_btn = tk.Button(btn_frame, text="+ New Assignment",
-                                      bg=self.parent.ACCENT_COLOR, fg='white',
-                                      font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                      bg=self.app.ACCENT_COLOR, fg='white',
+                                      font=(self.app.FONT_FAMILY, 10, "bold"),
                                       command=self._create_new_assignment)
         new_assignment_btn.pack(side='left', padx=(0, 10))
         
         # Content area with two columns
-        content_frame = tk.Frame(main_frame, bg=self.parent.CONTENT_BG)
+        content_frame = tk.Frame(main_frame, bg=self.app.CONTENT_BG)
         content_frame.pack(fill='both', expand=True)
         
         # Left: Current assignments
         left_frame = tk.LabelFrame(content_frame, text="Current Assignments",
-                                  bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                  font=(self.parent.FONT_FAMILY, 12, "bold"))
+                                  bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                  font=(self.app.FONT_FAMILY, 12, "bold"))
         left_frame.pack(side='left', fill='both', expand=True, padx=(0, 10))
         
         # Assignment list
@@ -1387,34 +1381,34 @@ Months Until Draft: 6
         
         # Right: Assignment details
         right_frame = tk.LabelFrame(content_frame, text="Assignment Details",
-                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 12, "bold"))
+                                   bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                   font=(self.app.FONT_FAMILY, 12, "bold"))
         right_frame.pack(side='right', fill='y', padx=(10, 0))
         right_frame.configure(width=300)
         right_frame.pack_propagate(False)
         
         # Assignment type options
-        type_frame = tk.Frame(right_frame, bg=self.parent.CONTENT_BG)
+        type_frame = tk.Frame(right_frame, bg=self.app.CONTENT_BG)
         type_frame.pack(fill='x', padx=10, pady=10)
         
         tk.Label(type_frame, text="Assignment Type:",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 10, "bold")).pack(anchor='w')
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 10, "bold")).pack(anchor='w')
         
         assignment_types = ["Player Scouting", "Team Analysis", "League Overview", "Prospect Evaluation"]
         for atype in assignment_types:
             tk.Radiobutton(type_frame, text=atype, value=atype,
-                          bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                          selectcolor=self.parent.CONTENT_BG,
-                          font=(self.parent.FONT_FAMILY, 9)).pack(anchor='w', pady=2)
+                          bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                          selectcolor=self.app.CONTENT_BG,
+                          font=(self.app.FONT_FAMILY, 9)).pack(anchor='w', pady=2)
         
         # Priority selection
-        priority_frame = tk.Frame(right_frame, bg=self.parent.CONTENT_BG)
+        priority_frame = tk.Frame(right_frame, bg=self.app.CONTENT_BG)
         priority_frame.pack(fill='x', padx=10, pady=10)
         
         tk.Label(priority_frame, text="Priority Level:",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 10, "bold")).pack(anchor='w')
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 10, "bold")).pack(anchor='w')
         
         priority_combo = ttk.Combobox(priority_frame, values=["Low", "Medium", "High", "Critical"],
                                      state="readonly", width=25)
@@ -1422,34 +1416,34 @@ Months Until Draft: 6
         priority_combo.set("Medium")
         
         # Deadline
-        deadline_frame = tk.Frame(right_frame, bg=self.parent.CONTENT_BG)
+        deadline_frame = tk.Frame(right_frame, bg=self.app.CONTENT_BG)
         deadline_frame.pack(fill='x', padx=10, pady=10)
         
         tk.Label(deadline_frame, text="Deadline:",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 10, "bold")).pack(anchor='w')
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 10, "bold")).pack(anchor='w')
         
         deadline_entry = tk.Entry(deadline_frame, width=25,
-                                 font=(self.parent.FONT_FAMILY, 9))
+                                 font=(self.app.FONT_FAMILY, 9))
         deadline_entry.pack(anchor='w', pady=5)
         deadline_entry.insert(0, "2024-12-01")
     
     def _create_reports_interface(self, parent):
         """Create reports interface"""
-        main_frame = tk.Frame(parent, bg=self.parent.CONTENT_BG)
+        main_frame = tk.Frame(parent, bg=self.app.CONTENT_BG)
         main_frame.pack(fill='both', expand=True, padx=15, pady=15)
         
         # Header
-        header_frame = tk.Frame(main_frame, bg=self.parent.CONTENT_BG)
+        header_frame = tk.Frame(main_frame, bg=self.app.CONTENT_BG)
         header_frame.pack(fill='x', pady=(0, 15))
         
         title_label = tk.Label(header_frame, text="Scouting Reports",
-                              font=(self.parent.FONT_FAMILY, 16, "bold"),
-                              bg=self.parent.CONTENT_BG, fg=self.parent.HEADER_COLOR)
+                              font=(self.app.FONT_FAMILY, 16, "bold"),
+                              bg=self.app.CONTENT_BG, fg=self.app.HEADER_COLOR)
         title_label.pack(side='left')
         
         # Filter and action buttons
-        btn_frame = tk.Frame(header_frame, bg=self.parent.CONTENT_BG)
+        btn_frame = tk.Frame(header_frame, bg=self.app.CONTENT_BG)
         btn_frame.pack(side='right')
         
         filter_combo = ttk.Combobox(btn_frame, values=["All Reports", "Recent", "High Priority", "My Reports"],
@@ -1458,19 +1452,19 @@ Months Until Draft: 6
         filter_combo.set("All Reports")
         
         new_report_btn = tk.Button(btn_frame, text="+ New Report",
-                                  bg=self.parent.ACCENT_COLOR, fg='white',
-                                  font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                  bg=self.app.ACCENT_COLOR, fg='white',
+                                  font=(self.app.FONT_FAMILY, 10, "bold"),
                                   command=self._create_new_report)
         new_report_btn.pack(side='left')
         
         # Main content area
-        content_frame = tk.Frame(main_frame, bg=self.parent.CONTENT_BG)
+        content_frame = tk.Frame(main_frame, bg=self.app.CONTENT_BG)
         content_frame.pack(fill='both', expand=True)
         
         # Left: Reports list
         left_frame = tk.LabelFrame(content_frame, text="Available Reports",
-                                  bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                  font=(self.parent.FONT_FAMILY, 12, "bold"))
+                                  bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                  font=(self.app.FONT_FAMILY, 12, "bold"))
         left_frame.pack(side='left', fill='both', expand=True, padx=(0, 10))
         
         # Reports treeview
@@ -1491,14 +1485,14 @@ Months Until Draft: 6
         
         # Right: Report details
         right_frame = tk.LabelFrame(content_frame, text="Report Details",
-                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 12, "bold"))
+                                   bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                   font=(self.app.FONT_FAMILY, 12, "bold"))
         right_frame.pack(side='right', fill='y', padx=(10, 0))
         right_frame.configure(width=350)
         right_frame.pack_propagate(False)
         
         # Report content area
-        self.report_details_frame = tk.Frame(right_frame, bg=self.parent.CONTENT_BG)
+        self.report_details_frame = tk.Frame(right_frame, bg=self.app.CONTENT_BG)
         self.report_details_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Default report view
@@ -1510,8 +1504,8 @@ Months Until Draft: 6
             widget.destroy()
         
         tk.Label(self.report_details_frame, text="Select a report to view details",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 11, "italic")).pack(expand=True)
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 11, "italic")).pack(expand=True)
         
     def _on_report_select(self, event):
         """Handle report selection"""
@@ -1535,25 +1529,25 @@ Months Until Draft: 6
         
         # Player info
         tk.Label(self.report_details_frame, text=f"Player: {player_name}",
-                bg=self.parent.CONTENT_BG, fg=self.parent.HEADER_COLOR,
-                font=(self.parent.FONT_FAMILY, 12, "bold")).pack(anchor='w', pady=(0, 5))
+                bg=self.app.CONTENT_BG, fg=self.app.HEADER_COLOR,
+                font=(self.app.FONT_FAMILY, 12, "bold")).pack(anchor='w', pady=(0, 5))
         
         tk.Label(self.report_details_frame, text=f"Scout: {scout_name}",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w')
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 10)).pack(anchor='w')
         
         tk.Label(self.report_details_frame, text=f"Date: {report_date}",
-                bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w')
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=(self.app.FONT_FAMILY, 10)).pack(anchor='w')
         
         tk.Label(self.report_details_frame, text=f"Grade: {report_grade}",
-                bg=self.parent.CONTENT_BG, fg=self.parent.ACCENT_COLOR,
-                font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor='w', pady=(5, 10))
+                bg=self.app.CONTENT_BG, fg=self.app.ACCENT_COLOR,
+                font=(self.app.FONT_FAMILY, 11, "bold")).pack(anchor='w', pady=(5, 10))
         
         # Report content
         report_text = tk.Text(self.report_details_frame, height=12, width=35,
-                             bg=self.parent.BG_COLOR, fg=self.parent.TEXT_COLOR,
-                             font=(self.parent.FONT_FAMILY, 9), wrap='word')
+                             bg=self.app.BG_COLOR, fg=self.app.TEXT_COLOR,
+                             font=(self.app.FONT_FAMILY, 9), wrap='word')
         report_text.pack(fill='both', expand=True)
         
         # Generate dynamic report content based on actual player data
@@ -1906,3 +1900,21 @@ Grade {grade} - Worth monitoring progress."""
                 
         except Exception as e:
             print(f"Error populating reports: {e}")
+
+
+class ProfessionalScoutingWindow(InGamePopup):
+    """Popup wrapper around ProfessionalScoutingView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Professional Scouting Center")
+        self._view = ProfessionalScoutingView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

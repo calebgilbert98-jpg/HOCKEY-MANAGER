@@ -34,7 +34,7 @@ class InboxView(ctk.CTkFrame):
         ("League", "League"),
     ]
 
-    def __init__(self, parent, app=None, show_back=False, on_close=None):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -53,8 +53,8 @@ class InboxView(ctk.CTkFrame):
         init_ctk_theme()
         ctk.CTkFrame.__init__(self, parent, fg_color=BG)
         self.app = app if app is not None else parent
-        self._show_back = show_back
-        self._on_close = on_close
+        # Set by show_screen() (dashboard) or the InboxWindow wrapper (card).
+        self._close_screen = None
 
         # Initialize inbox reference
         self.inbox = self.app.user_team.inbox
@@ -123,11 +123,6 @@ class InboxView(ctk.CTkFrame):
         header = ctk.CTkFrame(main_container, fg_color=ct['CARD'],
                               corner_radius=12)
         header.pack(fill='x', pady=(0, 12))
-        if self._show_back:
-            self._secondary_button(header, text="\u2039 Dashboard",
-                                   command=self.request_close,
-                                   width=130, height=32).pack(
-                side='left', padx=(12, 0), pady=12)
         self._heading(header, "Inbox", size=20).pack(
             side='left', padx=16, pady=12)
         self.stats_label = self._body(header, "", size=12, dim=True)
@@ -1156,8 +1151,13 @@ class InboxView(ctk.CTkFrame):
         """Close the view: refresh the nav badge, then hand off."""
         if hasattr(self.app, 'update_inbox_notification'):
             self.app.update_inbox_notification()
-        if self._on_close is not None:
-            self._on_close()
+        self.close_view()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
         else:
             self.destroy()
 
@@ -1178,7 +1178,8 @@ class InboxWindow(InGamePopup):
         self.title("Inbox")
         # Closing the card must tear down the popup card (manager-owned),
         # not just the inner frame.
-        self._view = InboxView(self, app=parent, on_close=self.destroy)
+        self._view = InboxView(self, app=parent)
+        self._view._close_screen = self.destroy
         self._view.pack(fill="both", expand=True)
         try:
             self.protocol("WM_DELETE_WINDOW", self._view.request_close)

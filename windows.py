@@ -190,14 +190,14 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     return result['ok']
 
 
-class RosterWindow(InGamePopup):
+class RosterView(ctk.CTkFrame):
     """Roster Management (CustomTkinter): dark cards, modern tab bar,
     pill filters, styled stat tables, depth-chart tiles, cap tab."""
 
     # Tab keys in display order
     _TAB_ORDER = ('nhl', 'ahl', 'prospects', 'depth', 'cap')
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -213,12 +213,10 @@ class RosterWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title(f"{parent.user_team.team_name} - Roster Management")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the RosterWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1600x1000")
-        self.minsize(1400, 800)
 
         # State variables (unchanged from the ttk version)
         self.selected_players = {'nhl': set(), 'ahl': set(), 'prospects': set()}
@@ -240,7 +238,7 @@ class RosterWindow(InGamePopup):
         self._tab_names = {}
 
         # Initialize context menu manager
-        self.context_menu_manager = PlayerContextMenu(self.parent)
+        self.context_menu_manager = PlayerContextMenu(self.app)
 
         # Create the interface
         self.create_enhanced_interface()
@@ -248,11 +246,20 @@ class RosterWindow(InGamePopup):
         self.update_views()
 
         # Track window
-        self.parent.open_windows['roster'] = self
+        self.app.open_windows['roster'] = self
 
     # ------------------------------------------------------------------
     # Layout construction
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def create_enhanced_interface(self):
         """Create the comprehensive roster management interface."""
         ct = self._ct
@@ -315,9 +322,9 @@ class RosterWindow(InGamePopup):
         """
         salary_cap = 83500000
         current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000))
-                             for p in self.parent.user_team.roster)
-        season = getattr(getattr(self.parent, 'league', None), 'season_year', 2026)
-        dead_cap = (getattr(self.parent.user_team, 'buyout_cap_hits', {}) or {}).get(season, 0)
+                             for p in self.app.user_team.roster)
+        season = getattr(getattr(self.app, 'league', None), 'season_year', 2026)
+        dead_cap = (getattr(self.app.user_team, 'buyout_cap_hits', {}) or {}).get(season, 0)
         current_salary += dead_cap
         return salary_cap, current_salary, salary_cap - current_salary, dead_cap
 
@@ -330,13 +337,13 @@ class RosterWindow(InGamePopup):
         top = ctk.CTkFrame(header, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=(14, 4))
 
-        self._heading(top, text=f"{self.parent.user_team.team_name.upper()} ROSTER",
+        self._heading(top, text=f"{self.app.user_team.team_name.upper()} ROSTER",
                       size=18).pack(side="left")
 
         # Quick roster stats on the right
-        nhl_count = len(self.parent.user_team.roster)
-        ahl_count = len(self.parent.user_team.ahl_roster)
-        prospects_count = len(self.parent.user_team.prospects)
+        nhl_count = len(self.app.user_team.roster)
+        ahl_count = len(self.app.user_team.ahl_roster)
+        prospects_count = len(self.app.user_team.prospects)
         _, _, cap_space, _ = self._cap_numbers()
         stats_text = (f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | "
                       f"Prospects: {prospects_count} | Cap Space: ${cap_space:,}")
@@ -345,7 +352,7 @@ class RosterWindow(InGamePopup):
 
         # Subtitle with season info
         try:
-            season_year = self.parent.league.season_year
+            season_year = self.app.league.season_year
             season_str = f"{season_year}-{str(season_year + 1)[-2:]}"
         except Exception:
             season_str = "2026-27"
@@ -543,7 +550,7 @@ class RosterWindow(InGamePopup):
             sub_lbl.pack(pady=(0, 6))
 
             def _open(_event, p=player):
-                self.parent.open_player_profile(p)
+                self.app.open_player_profile(p)
 
             def _hover_on(_event, t=tile):
                 t.configure(fg_color=ct['ROW_HOVER'])
@@ -578,7 +585,7 @@ class RosterWindow(InGamePopup):
         body = self._depth_section_card(parent, "FORWARDS")
 
         # Top 12 forwards by overall, dealt onto 4 lines of LW-C-RW
-        forwards = [p for p in self.parent.user_team.roster
+        forwards = [p for p in self.app.user_team.roster
                     if p.primary_position.value in ('C', 'LW', 'RW')]
         forwards.sort(key=lambda p: p.overall_rating(), reverse=True)
 
@@ -596,7 +603,7 @@ class RosterWindow(InGamePopup):
         body = self._depth_section_card(parent, "DEFENSE")
 
         # Top 6 defensemen by overall, dealt onto 3 pairs of LD-RD
-        defensemen = [p for p in self.parent.user_team.roster
+        defensemen = [p for p in self.app.user_team.roster
                       if p.primary_position.value in ('LD', 'RD', 'D')]
         defensemen.sort(key=lambda p: p.overall_rating(), reverse=True)
 
@@ -612,7 +619,7 @@ class RosterWindow(InGamePopup):
         """Create goalies depth chart visualization."""
         body = self._depth_section_card(parent, "GOALIES")
 
-        goalies = [p for p in self.parent.user_team.roster
+        goalies = [p for p in self.app.user_team.roster
                    if p.primary_position.value == 'G']
         goalies.sort(key=lambda p: p.overall_rating(), reverse=True)
 
@@ -735,7 +742,7 @@ class RosterWindow(InGamePopup):
         self.contract_tree.delete(*self.contract_tree.get_children())
 
         # Get all NHL roster players
-        for player in sorted(self.parent.user_team.roster, key=lambda p: p.overall_rating(), reverse=True):
+        for player in sorted(self.app.user_team.roster, key=lambda p: p.overall_rating(), reverse=True):
             # Get contract details
             salary = getattr(player, 'salary', getattr(player.contract, 'salary', 750000))
             years_left = getattr(player, 'contract_years', getattr(player.contract, 'years_remaining', 0))
@@ -771,9 +778,9 @@ class RosterWindow(InGamePopup):
         left = ctk.CTkFrame(footer, fg_color="transparent")
         left.pack(side="left")
         self._secondary_button(left, text="Trade Block",
-                               command=self.parent.open_trade_block_window).pack(side="left", padx=5)
+                               command=self.app.open_trade_block_window).pack(side="left", padx=5)
         self._secondary_button(left, text="Contract Extensions",
-                               command=self.parent.open_contract_extensions_window).pack(side="left", padx=5)
+                               command=self.app.open_contract_extensions_window).pack(side="left", padx=5)
 
         right = ctk.CTkFrame(footer, fg_color="transparent")
         right.pack(side="right")
@@ -782,7 +789,7 @@ class RosterWindow(InGamePopup):
         self._secondary_button(right, text="Refresh",
                                command=self.update_views).pack(side="left", padx=5)
         self._secondary_button(right, text="Close",
-                               command=self.destroy).pack(side="left", padx=5)
+                               command=self.close_view).pack(side="left", padx=5)
 
     def _setup_tree_style(self):
         """Dark, flat styling for the roster tables.
@@ -842,7 +849,7 @@ class RosterWindow(InGamePopup):
         """Row of PillButtons; returns dict value -> button. Caller keeps it
         in a group list so _paint_pill_groups can repaint all copies."""
         return make_pill_group(parent, options, on_select,
-                               font_family=self.parent.FONT_FAMILY)
+                               font_family=self.app.FONT_FAMILY)
 
     def _paint_pill_groups(self):
         for groups_attr, current in (
@@ -1162,7 +1169,7 @@ class RosterWindow(InGamePopup):
         moving (▲ up / ▼ down)."""
         try:
             import prospect_development as _pd
-            team = getattr(self.parent, 'user_team', None)
+            team = getattr(self.app, 'user_team', None)
             score, deltas = _pd.situational_readiness(player, team)
             net = sum(d for _, d in deltas)
             tag = " ▲" if net >= 8 else (" ▼" if net <= -8 else "")
@@ -1217,7 +1224,7 @@ class RosterWindow(InGamePopup):
         item_id = tree.identify_row(event.y)
         if item_id and item_id in self.player_maps[roster_type]:
             player = self.player_maps[roster_type][item_id]
-            self.parent.open_player_profile(player)
+            self.app.open_player_profile(player)
 
     def show_context_menu(self, event, tree, roster_type):
         """Show enhanced context menu for player actions using universal system."""
@@ -1245,11 +1252,11 @@ class RosterWindow(InGamePopup):
 
             # Add contract options
             roster_options.append(("Contract Extension",
-                                 lambda: self.parent.open_contract_negotiation_window(player, True)))
+                                 lambda: self.app.open_contract_negotiation_window(player, True)))
 
             # Use universal context menu
             if not hasattr(self, 'context_menu_manager'):
-                self.context_menu_manager = PlayerContextMenu(self.parent)
+                self.context_menu_manager = PlayerContextMenu(self.app)
 
             self.context_menu_manager.show_context_menu(event, player, roster_options)
 
@@ -1328,18 +1335,18 @@ class RosterWindow(InGamePopup):
     def update_roster_tab(self, roster_type):
         """Update specific roster tab."""
         if roster_type == 'nhl':
-            self.populate_roster_tree(self.nhl_tree, self.parent.user_team.roster, 'nhl')
+            self.populate_roster_tree(self.nhl_tree, self.app.user_team.roster, 'nhl')
         elif roster_type == 'ahl':
-            self.populate_roster_tree(self.ahl_tree, self.parent.user_team.ahl_roster, 'ahl')
+            self.populate_roster_tree(self.ahl_tree, self.app.user_team.ahl_roster, 'ahl')
         elif roster_type == 'prospects':
-            self.populate_roster_tree(self.prospects_tree, self.parent.user_team.prospects, 'prospects')
+            self.populate_roster_tree(self.prospects_tree, self.app.user_team.prospects, 'prospects')
 
         self.update_roster_summary(roster_type)
 
     def update_roster_summary(self, roster_type):
         """Update roster summary information."""
         if roster_type == 'nhl':
-            players = self.parent.user_team.roster
+            players = self.app.user_team.roster
             selected_count = len(self.selected_players['nhl'])
             total_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) for p in players)
             avg_age = sum(p.age for p in players) / len(players) if players else 0
@@ -1349,7 +1356,7 @@ class RosterWindow(InGamePopup):
             self.nhl_summary_label.configure(text=summary)
 
         elif roster_type == 'ahl':
-            players = self.parent.user_team.ahl_roster
+            players = self.app.user_team.ahl_roster
             selected_count = len(self.selected_players['ahl'])
             avg_age = sum(p.age for p in players) / len(players) if players else 0
             avg_overall = sum(to_100_scale(p.overall_rating()) for p in players) / len(players) if players else 0
@@ -1358,7 +1365,7 @@ class RosterWindow(InGamePopup):
             self.ahl_summary_label.configure(text=summary)
 
         elif roster_type == 'prospects':
-            players = self.parent.user_team.prospects
+            players = self.app.user_team.prospects
             selected_count = len(self.selected_players['prospects'])
             avg_age = sum(p.age for p in players) / len(players) if players else 0
             high_potential = len([p for p in players if getattr(p, 'potential_grade', 'C') in ['A+', 'A', 'A-']])
@@ -1369,11 +1376,11 @@ class RosterWindow(InGamePopup):
     def select_all_players(self, roster_type):
         """Select all players in the roster."""
         if roster_type == 'nhl':
-            players = self.parent.user_team.roster
+            players = self.app.user_team.roster
         elif roster_type == 'ahl':
-            players = self.parent.user_team.ahl_roster
+            players = self.app.user_team.ahl_roster
         else:
-            players = self.parent.user_team.prospects
+            players = self.app.user_team.prospects
 
         self.selected_players[roster_type] = {p.id for p in players}
         self.update_roster_tab(roster_type)
@@ -1393,11 +1400,11 @@ class RosterWindow(InGamePopup):
 
         # Get source and destination lists
         if from_roster == 'nhl':
-            source_list = self.parent.user_team.roster
+            source_list = self.app.user_team.roster
         elif from_roster == 'ahl':
-            source_list = self.parent.user_team.ahl_roster
+            source_list = self.app.user_team.ahl_roster
         else:
-            source_list = self.parent.user_team.prospects
+            source_list = self.app.user_team.prospects
 
         # Move players
         players_to_move = [p for p in source_list if p.id in selected_ids]
@@ -1413,30 +1420,30 @@ class RosterWindow(InGamePopup):
         """Move a single player between rosters."""
         # Remove from source
         if from_roster == 'nhl':
-            self.parent.user_team.roster.remove(player)
+            self.app.user_team.roster.remove(player)
         elif from_roster == 'ahl':
-            self.parent.user_team.ahl_roster.remove(player)
+            self.app.user_team.ahl_roster.remove(player)
         else:
-            self.parent.user_team.prospects.remove(player)
+            self.app.user_team.prospects.remove(player)
 
         # Add to destination
         if to_roster == 'nhl':
-            self.parent.user_team.roster.append(player)
+            self.app.user_team.roster.append(player)
         elif to_roster == 'ahl':
-            self.parent.user_team.ahl_roster.append(player)
+            self.app.user_team.ahl_roster.append(player)
         else:
-            self.parent.user_team.prospects.append(player)
+            self.app.user_team.prospects.append(player)
 
         # Update any open windows
-        self.parent.update_all_views()
+        self.app.update_all_views()
 
     def add_to_trade_block(self, player):
         """Add player to trade block."""
-        if not hasattr(self.parent, 'trade_block'):
-            self.parent.trade_block = []
+        if not hasattr(self.app, 'trade_block'):
+            self.app.trade_block = []
 
-        if player not in self.parent.trade_block:
-            self.parent.trade_block.append(player)
+        if player not in self.app.trade_block:
+            self.app.trade_block.append(player)
             messagebox.showinfo("Trade Block", f"{player.full_name} added to trade block.")
         else:
             messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
@@ -1444,7 +1451,7 @@ class RosterWindow(InGamePopup):
     def open_lines_editor(self):
         """Open the live lines editor."""
         try:
-            self.parent.open_edit_lines_window()
+            self.app.open_edit_lines_window()
         except Exception:
             pass
 
@@ -1462,14 +1469,14 @@ class RosterWindow(InGamePopup):
 
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"roster_export_{self.parent.user_team.team_name.replace(' ', '_')}_{timestamp}.csv"
+            filename = f"roster_export_{self.app.user_team.team_name.replace(' ', '_')}_{timestamp}.csv"
             filepath = os.path.join(exports_dir, filename)
 
             # Collect all roster data
             roster_data = []
 
             # Add NHL roster
-            for player in self.parent.user_team.roster:
+            for player in self.app.user_team.roster:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
@@ -1490,7 +1497,7 @@ class RosterWindow(InGamePopup):
                 ])
 
             # Add AHL roster
-            for player in self.parent.user_team.ahl_roster:
+            for player in self.app.user_team.ahl_roster:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
@@ -1511,7 +1518,7 @@ class RosterWindow(InGamePopup):
                 ])
 
             # Add Prospects
-            for player in self.parent.user_team.prospects:
+            for player in self.app.user_team.prospects:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
@@ -1557,9 +1564,9 @@ class RosterWindow(InGamePopup):
         self.update_roster_tab('prospects')
 
         # Update header stats
-        nhl_count = len(self.parent.user_team.roster)
-        ahl_count = len(self.parent.user_team.ahl_roster)
-        prospects_count = len(self.parent.user_team.prospects)
+        nhl_count = len(self.app.user_team.roster)
+        ahl_count = len(self.app.user_team.ahl_roster)
+        prospects_count = len(self.app.user_team.prospects)
 
         # Header cap figures (buyout dead cap included, matching the Salary Cap tab)
         _, _, cap_space, _ = self._cap_numbers()
@@ -1600,11 +1607,29 @@ class RosterWindow(InGamePopup):
         except (AttributeError, tk.TclError):
             pass
 
-class FreeAgencyWindow(InGamePopup):
+
+
+class RosterWindow(InGamePopup):
+    """Popup wrapper around RosterView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title(f"{parent.user_team.team_name} - Roster Management")
+        self._view = RosterView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class FreeAgencyView(ctk.CTkFrame):
     """Free Agency Market (CustomTkinter): dark cards, pill filters,
     styled stat tables, CTk dialogs for contracts/comparison/analysis."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -1621,12 +1646,10 @@ class FreeAgencyWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Free Agency Market")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the FreeAgencyWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1400x900")
-        self.minsize(1200, 700)
 
         # State variables (unchanged from the ttk version)
         self.selected_players = []
@@ -1642,11 +1665,20 @@ class FreeAgencyWindow(InGamePopup):
         self.update_views()
 
         # Track window
-        self.parent.open_windows['free_agency'] = self
+        self.app.open_windows['free_agency'] = self
 
     # ------------------------------------------------------------------
     # Layout construction
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def create_enhanced_interface(self):
         """Create the modern free agency interface."""
         ct = self._ct
@@ -1693,8 +1725,8 @@ class FreeAgencyWindow(InGamePopup):
         self._heading(top, text="FREE AGENCY MARKET", size=18).pack(side="left")
 
         # Quick stats on the right
-        player_count = len(self.parent.game_manager.free_agents)
-        staff_count = len(self.parent.league.free_agent_staff)
+        player_count = len(self.app.game_manager.free_agents)
+        staff_count = len(self.app.league.free_agent_staff)
         self._body(top, text=f"Available: {player_count} Players \u2022 {staff_count} Staff",
                    dim=True, size=12).pack(side="right")
 
@@ -1705,7 +1737,7 @@ class FreeAgencyWindow(InGamePopup):
                    dim=True, size=11).pack(side="left")
 
         # Team cap space on the right
-        user_team = self.parent.game_manager.user_team
+        user_team = self.app.game_manager.user_team
         current_salary = sum(getattr(p, "salary", getattr(p.contract, "salary", 750000)) for p in user_team.roster)
         cap_space = 83500000 - current_salary  # NHL salary cap
         if cap_space > 10000000:
@@ -1938,7 +1970,7 @@ class FreeAgencyWindow(InGamePopup):
         }
         self.fa_player_tree = self._create_fa_treeview(
             player_tab, player_columns, height=22,
-            sort_cmd=self.parent._sort_treeview_generic)
+            sort_cmd=self.app._sort_treeview_generic)
 
         # Bind events
         add_player_context_menu(self.fa_player_tree, self)
@@ -2049,7 +2081,7 @@ class FreeAgencyWindow(InGamePopup):
         }
         self.fa_staff_tree = self._create_fa_treeview(
             staff_tab, staff_columns, height=22,
-            sort_cmd=self.parent._sort_treeview_generic)
+            sort_cmd=self.app._sort_treeview_generic)
 
         # Bind events
         self.fa_staff_tree.bind('<Button-3>', self.show_staff_context_menu)
@@ -2124,7 +2156,7 @@ class FreeAgencyWindow(InGamePopup):
 
     def populate_player_market_stats(self, parent_frame):
         """Populate player market statistics."""
-        free_agents = self.parent.game_manager.free_agents
+        free_agents = self.app.game_manager.free_agents
         if not free_agents:
             self._body(parent_frame, text="No free agents available",
                        dim=True).pack(anchor="w", padx=12, pady=5)
@@ -2158,7 +2190,7 @@ class FreeAgencyWindow(InGamePopup):
 
     def populate_staff_market_stats(self, parent_frame):
         """Populate staff market statistics."""
-        available_staff = self.parent.game_manager.league.free_agent_staff
+        available_staff = self.app.game_manager.league.free_agent_staff
         if not available_staff:
             self._body(parent_frame, text="No staff available",
                        dim=True).pack(anchor="w", padx=12, pady=5)
@@ -2207,7 +2239,7 @@ class FreeAgencyWindow(InGamePopup):
     def populate_top_players_by_position(self, parent_frame, positions):
         """Populate top players for specific positions."""
         ct = self._ct
-        position_players = [p for p in self.parent.game_manager.free_agents
+        position_players = [p for p in self.app.game_manager.free_agents
                             if p.primary_position.value in positions]
         if not position_players:
             self._body(parent_frame, text="No players available",
@@ -2242,9 +2274,9 @@ class FreeAgencyWindow(InGamePopup):
         item_id = tree.identify_row(event.y)
         if item_id:
             player_name = tree.item(item_id, 'values')[0]
-            for player in self.parent.game_manager.free_agents:
+            for player in self.app.game_manager.free_agents:
                 if player.full_name == player_name:
-                    self.parent.open_contract_negotiation_window(player)
+                    self.app.open_contract_negotiation_window(player)
                     break
 
     # ------------------------------------------------------------------
@@ -2267,7 +2299,7 @@ class FreeAgencyWindow(InGamePopup):
         controls = ctk.CTkFrame(footer, fg_color="transparent")
         controls.pack(side="right")
         self._secondary_button(controls, text="Close",
-                               command=self.destroy).pack(side="right", padx=(10, 0))
+                               command=self.close_view).pack(side="right", padx=(10, 0))
         self._secondary_button(controls, text="Help",
                                command=self.show_help).pack(side="right")
 
@@ -2296,7 +2328,7 @@ class FreeAgencyWindow(InGamePopup):
         sort_by = self.player_sort_filter.get()
 
         filtered_players = []
-        for player in self.parent.game_manager.free_agents:
+        for player in self.app.game_manager.free_agents:
             if name_filter and name_filter not in player.full_name.lower():
                 continue
             if position_filter != 'All' and player.primary_position.value != position_filter:
@@ -2395,9 +2427,9 @@ class FreeAgencyWindow(InGamePopup):
             item_id = self.fa_player_tree.insert('', 'end', values=values,
                                                  tags=(tag,) if tag else ())
 
-            if 'fa_players' not in self.parent.tree_maps:
-                self.parent.tree_maps['fa_players'] = {}
-            self.parent.tree_maps['fa_players'][item_id] = player
+            if 'fa_players' not in self.app.tree_maps:
+                self.app.tree_maps['fa_players'] = {}
+            self.app.tree_maps['fa_players'][item_id] = player
 
         self.player_results_label.configure(text=f"Showing {len(filtered_players)} players")
         set_tree_empty_state(self.fa_player_tree, "No players match your filters")
@@ -2415,7 +2447,7 @@ class FreeAgencyWindow(InGamePopup):
         sort_by = self.staff_sort_filter.get()
 
         filtered_staff = []
-        for staff in self.parent.league.free_agent_staff:
+        for staff in self.app.league.free_agent_staff:
             if name_filter and name_filter not in staff.full_name.lower():
                 continue
             if role_filter != 'All' and staff.role.value != role_filter:
@@ -2490,9 +2522,9 @@ class FreeAgencyWindow(InGamePopup):
             item_id = self.fa_staff_tree.insert('', 'end', values=values,
                                                 tags=(tag,) if tag else ())
 
-            if 'fa_staff' not in self.parent.tree_maps:
-                self.parent.tree_maps['fa_staff'] = {}
-            self.parent.tree_maps['fa_staff'][item_id] = staff
+            if 'fa_staff' not in self.app.tree_maps:
+                self.app.tree_maps['fa_staff'] = {}
+            self.app.tree_maps['fa_staff'][item_id] = staff
 
         self.staff_results_label.configure(text=f"Showing {len(filtered_staff)} staff")
         set_tree_empty_state(self.fa_staff_tree, "No staff match your filters")
@@ -2539,9 +2571,9 @@ class FreeAgencyWindow(InGamePopup):
             messagebox.showwarning("No Selection", "Please select a player to sign.")
             return
 
-        player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
+        player = self.app.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
-            self.parent.open_contract_negotiation_window(player)
+            self.app.open_contract_negotiation_window(player)
 
     def hire_selected_staff(self):
         """Hire the selected staff member via a real contract offer."""
@@ -2550,7 +2582,7 @@ class FreeAgencyWindow(InGamePopup):
             messagebox.showwarning("No Selection", "Please select a staff member to hire.")
             return
 
-        staff = self.parent.tree_maps.get('fa_staff', {}).get(selection[0])
+        staff = self.app.tree_maps.get('fa_staff', {}).get(selection[0])
         if staff:
             self._open_staff_contract_dialog(staff)
 
@@ -2569,11 +2601,11 @@ class FreeAgencyWindow(InGamePopup):
             return
 
         self.fa_staff_tree.selection_set(item_id)
-        staff = self.parent.tree_maps.get('fa_staff', {}).get(item_id)
+        staff = self.app.tree_maps.get('fa_staff', {}).get(item_id)
         if not staff:
             return
 
-        menu = tk.Menu(self, tearoff=0, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        menu = tk.Menu(self, tearoff=0, bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR)
         menu.add_command(label=f"Hire {staff.full_name}", command=self.hire_selected_staff)
         menu.add_command(label="View Staff Profile", command=self.view_selected_staff_profile)
 
@@ -2586,9 +2618,9 @@ class FreeAgencyWindow(InGamePopup):
             messagebox.showwarning("No Selection", "Please select a player to view.")
             return
 
-        player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
+        player = self.app.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
-            self.parent.open_player_profile(player)
+            self.app.open_player_profile(player)
 
     def view_selected_staff_profile(self):
         """View the selected staff member's profile."""
@@ -2597,7 +2629,7 @@ class FreeAgencyWindow(InGamePopup):
             messagebox.showwarning("No Selection", "Please select a staff member to view.")
             return
 
-        staff = self.parent.tree_maps.get('fa_staff', {}).get(selection[0])
+        staff = self.app.tree_maps.get('fa_staff', {}).get(selection[0])
         if staff:
             self._open_staff_profile_dialog(staff)
 
@@ -2690,7 +2722,7 @@ class FreeAgencyWindow(InGamePopup):
     def _staff_offer_accept_chance(self, staff, salary_mult):
         """Rough acceptance chance for a staff offer (display only)."""
         rating = to_100_scale(staff.overall_rating)
-        prestige = getattr(self.parent.game_manager.user_team, 'prestige', 50)
+        prestige = getattr(self.app.game_manager.user_team, 'prestige', 50)
         base = 0.45 + (salary_mult - 1.0) * 1.4 + (prestige - 50) / 400 - (rating - 60) / 600
         return max(0.05, min(0.98, base))
 
@@ -2698,7 +2730,7 @@ class FreeAgencyWindow(InGamePopup):
         """Resolve a staff contract offer (original acceptance logic)."""
         chance = self._staff_offer_accept_chance(staff, salary / max(1, staff.salary))
 
-        if self.parent.game_manager.sign_free_agent_staff(staff, salary, years):
+        if self.app.game_manager.sign_free_agent_staff(staff, salary, years):
             import random
             if random.random() < chance:
                 messagebox.showinfo("Offer Accepted",
@@ -2785,7 +2817,7 @@ class FreeAgencyWindow(InGamePopup):
 
         players = []
         for item_id in selection:
-            player = self.parent.tree_maps.get('fa_players', {}).get(item_id)
+            player = self.app.tree_maps.get('fa_players', {}).get(item_id)
             if player:
                 players.append(player)
 
@@ -2933,7 +2965,7 @@ class FreeAgencyWindow(InGamePopup):
 
         staff_list = []
         for item_id in selection:
-            staff = self.parent.tree_maps.get('fa_staff', {}).get(item_id)
+            staff = self.app.tree_maps.get('fa_staff', {}).get(item_id)
             if staff:
                 staff_list.append(staff)
 
@@ -3017,7 +3049,7 @@ class FreeAgencyWindow(InGamePopup):
                                        "Please select a player for market analysis.")
             return
 
-        player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
+        player = self.app.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
             self.create_market_analysis_window(player)
 
@@ -3247,7 +3279,7 @@ class FreeAgencyWindow(InGamePopup):
         target_age = target_player.age
         target_pos = target_player.primary_position.value
 
-        for player in self.parent.game_manager.free_agents:
+        for player in self.app.game_manager.free_agents:
             if player == target_player:
                 continue
 
@@ -3319,7 +3351,7 @@ class FreeAgencyWindow(InGamePopup):
                     writer.writerow(['Type', 'Name', 'Position/Role', 'Age', 'Rating',
                                      'Salary', 'Contract Years', 'Nationality'])
 
-                    for player in self.parent.game_manager.free_agents:
+                    for player in self.app.game_manager.free_agents:
                         salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
                         years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
                         writer.writerow(['Player', player.full_name,
@@ -3327,7 +3359,7 @@ class FreeAgencyWindow(InGamePopup):
                                          to_100_scale(player.overall_rating()),
                                          salary, years, getattr(player, 'nationality', 'Unknown')])
 
-                    for staff in self.parent.league.free_agent_staff:
+                    for staff in self.app.league.free_agent_staff:
                         writer.writerow(['Staff', staff.full_name, staff.role.value,
                                          staff.age, to_100_scale(staff.overall_rating),
                                          staff.salary, staff.contract_years, staff.nationality])
@@ -3373,6 +3405,24 @@ The Market Overview tab provides analytics and top available talent.
 """
         messagebox.showinfo("Free Agency Help", help_text)
 
+
+
+class FreeAgencyWindow(InGamePopup):
+    """Popup wrapper around FreeAgencyView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Free Agency Market")
+        self._view = FreeAgencyView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 class TradeWindow(InGamePopup):
     """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
 
@@ -3801,15 +3851,15 @@ class TradeWindow(InGamePopup):
         self._history_visible = True
 
 
-class ScoutingWindow(InGamePopup):
+class ScoutingView(ctk.CTkFrame):
     """Modern Scouting Department: fog-of-war prospects, regional scouts, draft board."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Scouting Department")
-        self.geometry("1280x780")
-        self.configure(background=parent.BG_COLOR)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ScoutingWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         import scouting as scmod
         self.scmod = scmod
         self._gm = getattr(parent, 'game_manager', parent)
@@ -3822,7 +3872,7 @@ class ScoutingWindow(InGamePopup):
         # ---- Header ----
         header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
         header.pack(fill='x', padx=10, pady=(10, 0))
-        n_prospects = len(getattr(parent.league, 'draft_prospects', []) or [])
+        n_prospects = len(getattr(self.app.league, 'draft_prospects', []) or [])
         ttk.Label(header, text=f"{n_prospects} draft-eligible prospects on the radar",
                   style='Secondary.TLabel').pack(side='left', padx=(12, 0))
 
@@ -3834,8 +3884,8 @@ class ScoutingWindow(InGamePopup):
         main_pane.add(left, weight=1)
 
         ttk.Label(left, text="YOUR SCOUTS", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
-        self.scouts_tree = parent._create_treeview(
+                  font=(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.scouts_tree = self.app._create_treeview(
             left, {'name': ('Name', 120), 'jpa': ('JPA', 36),
                    'jpp': ('JPP', 36), 'region': ('Region', 90)}, height=6)
         self.scouts_tree.pack(fill='x', pady=(0, 4))
@@ -3857,8 +3907,8 @@ class ScoutingWindow(InGamePopup):
                    style='Secondary.TButton').pack(anchor='w', pady=(0, 8))
 
         ttk.Label(left, text="ACTIVE ASSIGNMENTS", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
-        self.assign_tree = parent._create_treeview(
+                  font=(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.assign_tree = self.app._create_treeview(
             left, {'player': ('Player', 110), 'view': ('Views', 44),
                    'acc': ('Acc', 36)}, height=8)
         self.assign_tree.pack(fill='both', expand=True)
@@ -3866,7 +3916,7 @@ class ScoutingWindow(InGamePopup):
                    style='Secondary.TButton').pack(anchor='w', pady=(6, 0))
         ttk.Label(left, text="Regional scouts file reports automatically every few days.",
                   style='Secondary.TLabel', wraplength=260,
-                  font=(parent.FONT_FAMILY, 9)).pack(anchor='w', pady=(6, 0))
+                  font=(self.app.FONT_FAMILY, 9)).pack(anchor='w', pady=(6, 0))
 
         # ============ CENTER: prospects + report ============
         center = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
@@ -3875,20 +3925,20 @@ class ScoutingWindow(InGamePopup):
         top_row = ttk.Frame(center, style='Panel.TFrame')
         top_row.pack(fill='x', pady=(0, 4))
         ttk.Label(top_row, text="PROSPECT POOL", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(side='left')
+                  font=(self.app.FONT_FAMILY, 10, 'bold')).pack(side='left')
         filt_frame = ttk.Frame(top_row, style='Panel.TFrame')
         filt_frame.pack(side='left', padx=(10, 4))
         self._prospect_pills = make_pill_group(
             filt_frame,
             [(o, o) for o in ("All Prospects", "Forwards", "Defensemen",
                               "Goalies", "Top 50", "Not Scouted")],
-            self._set_prospect_filter, parent.FONT_FAMILY)
+            self._set_prospect_filter, self.app.FONT_FAMILY)
         self._paint_prospect_pills()
         ttk.Entry(top_row, textvariable=self.search_var, width=14).pack(side='left', padx=4)
         ttk.Button(top_row, text="Search", command=self._refresh_prospects,
                    style='Secondary.TButton').pack(side='left')
 
-        self.prospects_tree = parent._create_treeview(
+        self.prospects_tree = self.app._create_treeview(
             center, {'rank': ('#', 36), 'name': ('Name', 140), 'pos': ('Pos', 40),
                      'age': ('Age', 36), 'nat': ('Nat', 70), 'pot': ('Pot', 80),
                      'status': ('Status', 90)}, height=11)
@@ -3907,10 +3957,10 @@ class ScoutingWindow(InGamePopup):
         right = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
         main_pane.add(right, weight=1)
         ttk.Label(right, text="MY DRAFT BOARD", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+                  font=(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
         ttk.Label(right, text="Your rankings drive auto-draft on draft night.",
                   style='Secondary.TLabel', wraplength=240,
-                  font=(parent.FONT_FAMILY, 9)).pack(anchor='w', pady=(0, 4))
+                  font=(self.app.FONT_FAMILY, 9)).pack(anchor='w', pady=(0, 4))
         self.board_list = tk.Listbox(right, height=24, activestyle='none',
                                      bg='#232a3a', fg='#ffffff',
                                      selectbackground='#0d2b28', relief='flat',
@@ -3932,17 +3982,26 @@ class ScoutingWindow(InGamePopup):
         self._refresh_all()
 
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _build_report_card(self):
         f = self.report_frame
         self.rep_title = ttk.Label(f, text="Select a prospect",
-                                  font=(self.parent.FONT_FAMILY, 13, 'bold'),
+                                  font=(self.app.FONT_FAMILY, 13, 'bold'),
                                   style='Card.TLabel')
         self.rep_title.pack(anchor='w')
-        self.rep_pot = ttk.Label(f, text="", font=(self.parent.FONT_FAMILY, 12, 'bold'),
+        self.rep_pot = ttk.Label(f, text="", font=(self.app.FONT_FAMILY, 12, 'bold'),
                                 style='Card.TLabel')
         self.rep_pot.pack(anchor='w', pady=(2, 0))
         self.rep_meta = ttk.Label(f, text="", style='Card.TLabel',
-                                 font=(self.parent.FONT_FAMILY, 10))
+                                 font=(self.app.FONT_FAMILY, 10))
         self.rep_meta.pack(anchor='w')
         cols = ttk.Frame(f, style='Card.TFrame')
         cols.pack(fill='x', pady=(6, 0))
@@ -3951,18 +4010,18 @@ class ScoutingWindow(InGamePopup):
         right_c = ttk.Frame(cols, style='Card.TFrame')
         right_c.pack(side='left', fill='x', expand=True)
         ttk.Label(left_c, text="Strengths", style='Card.TLabel',
-                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
         self.rep_strengths = ttk.Label(left_c, text="—", style='Card.TLabel',
                                       wraplength=260, justify='left')
         self.rep_strengths.pack(anchor='w')
         ttk.Label(right_c, text="Weaknesses", style='Card.TLabel',
-                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
         self.rep_weak = ttk.Label(right_c, text="—", style='Card.TLabel',
                                   wraplength=260, justify='left')
         self.rep_weak.pack(anchor='w')
         self.rep_notes = ttk.Label(f, text="", style='Card.TLabel',
                                   wraplength=560, justify='left',
-                                  font=(self.parent.FONT_FAMILY, 10))
+                                  font=(self.app.FONT_FAMILY, 10))
         self.rep_notes.pack(anchor='w', pady=(6, 0))
         brow = ttk.Frame(f, style='Card.TFrame')
         brow.pack(fill='x', pady=(8, 0))
@@ -3984,9 +4043,9 @@ class ScoutingWindow(InGamePopup):
         from game_classes import StaffRole
         tree = self.scouts_tree
         tree.delete(*tree.get_children())
-        scouts = [s for s in self.parent.user_team.staff
+        scouts = [s for s in self.app.user_team.staff
                   if self.scmod.is_scout(s)]
-        tm = self.parent.tree_maps.setdefault(tree, {})
+        tm = self.app.tree_maps.setdefault(tree, {})
         for s in scouts:
             region = self.scmod.get_scout_region(self._gm, s) or "—"
             item = tree.insert('', 'end', values=(
@@ -3998,7 +4057,7 @@ class ScoutingWindow(InGamePopup):
 
     def _on_scout_selected(self, event=None):
         sel = self.scouts_tree.selection()
-        tm = self.parent.tree_maps.get(self.scouts_tree, {})
+        tm = self.app.tree_maps.get(self.scouts_tree, {})
         self.selected_scout = tm.get(sel[0]) if sel else None
         if self.selected_scout:
             self.region_var.set(
@@ -4027,7 +4086,7 @@ class ScoutingWindow(InGamePopup):
                  ("Sofia", "Lindqvist"), ("Petr", "Novak"), ("Dave", "Morrison")]
         fn, ln = _r.choice(names)
         scout = Staff(first_name=fn, last_name=ln, role=StaffRole.AMATEUR_SCOUT)
-        self.parent.user_team.staff.append(scout)
+        self.app.user_team.staff.append(scout)
         messagebox.showinfo("Scout Hired",
                             f"{scout.full_name} joined your scouting department.\n"
                             f"Assign them a region to start filing reports.")
@@ -4036,9 +4095,9 @@ class ScoutingWindow(InGamePopup):
     def _refresh_assignments(self):
         tree = self.assign_tree
         tree.delete(*tree.get_children())
-        tm = self.parent.tree_maps.setdefault(tree, {})
-        for player, scout in getattr(self.parent, 'scouting_assignments', {}).items():
-            report = self.parent.user_team.scouting_reports.get(player.id)
+        tm = self.app.tree_maps.setdefault(tree, {})
+        for player, scout in getattr(self.app, 'scouting_assignments', {}).items():
+            report = self.app.user_team.scouting_reports.get(player.id)
             views = getattr(report, 'viewings', 0) if report else 0
             acc = getattr(report, 'accuracy', '—') if report else '—'
             item = tree.insert('', 'end', values=(
@@ -4048,16 +4107,16 @@ class ScoutingWindow(InGamePopup):
 
     def _remove_assignment(self):
         sel = self.assign_tree.selection()
-        tm = self.parent.tree_maps.get(self.assign_tree, {})
+        tm = self.app.tree_maps.get(self.assign_tree, {})
         player = tm.get(sel[0]) if sel else None
-        if player and player in getattr(self.parent, 'scouting_assignments', {}):
-            del self.parent.scouting_assignments[player]
+        if player and player in getattr(self.app, 'scouting_assignments', {}):
+            del self.app.scouting_assignments[player]
             self._refresh_assignments()
             self._refresh_prospects()
 
     # ------------------------------------------------------------------
     def _filtered_prospects(self):
-        all_p = sorted(getattr(self.parent.league, 'draft_prospects', []) or [],
+        all_p = sorted(getattr(self.app.league, 'draft_prospects', []) or [],
                        key=lambda p: getattr(p, 'draft_ranking', 0), reverse=True)
         ft = self.filter_var.get()
         from game_classes import PlayerPosition
@@ -4075,7 +4134,7 @@ class ScoutingWindow(InGamePopup):
         elif ft == "Top 50":
             all_p = all_p[:50]
         elif ft == "Not Scouted":
-            reports = self.parent.user_team.scouting_reports
+            reports = self.app.user_team.scouting_reports
             all_p = [p for p in all_p if p.id not in reports]
         q = self.search_var.get().lower().strip()
         if q:
@@ -4095,9 +4154,9 @@ class ScoutingWindow(InGamePopup):
     def _refresh_prospects(self):
         tree = self.prospects_tree
         tree.delete(*tree.get_children())
-        tm = self.parent.tree_maps.setdefault(tree, {})
-        reports = self.parent.user_team.scouting_reports
-        assigns = getattr(self.parent, 'scouting_assignments', {})
+        tm = self.app.tree_maps.setdefault(tree, {})
+        reports = self.app.user_team.scouting_reports
+        assigns = getattr(self.app, 'scouting_assignments', {})
         for i, p in enumerate(self._filtered_prospects()[:400]):
             report = reports.get(p.id)
             if report:
@@ -4125,7 +4184,7 @@ class ScoutingWindow(InGamePopup):
 
     def _on_prospect_selected(self, event=None):
         sel = self.prospects_tree.selection()
-        tm = self.parent.tree_maps.get(self.prospects_tree, {})
+        tm = self.app.tree_maps.get(self.prospects_tree, {})
         self.selected_prospect = tm.get(sel[0]) if sel else None
         self._show_report()
 
@@ -4133,7 +4192,7 @@ class ScoutingWindow(InGamePopup):
         p = self.selected_prospect
         if p is None:
             return
-        reports = self.parent.user_team.scouting_reports
+        reports = self.app.user_team.scouting_reports
         report = reports.get(p.id)
         try:
             pos = p.primary_position.value
@@ -4167,7 +4226,7 @@ class ScoutingWindow(InGamePopup):
             top = pot.split("–")[-1].strip()
             self.rep_pot.config(text=f"Potential: {pot}  (consensus — scout for certainty)",
                                 foreground=self.scmod.grade_color(top))
-            assigned = p in getattr(self.parent, 'scouting_assignments', {})
+            assigned = p in getattr(self.app, 'scouting_assignments', {})
             self.rep_meta.config(
                 text="No report yet — " +
                      ("a scout is watching." if assigned else "assign a scout or a region."))
@@ -4183,13 +4242,13 @@ class ScoutingWindow(InGamePopup):
         scout = self.selected_scout
         if scout is None:
             from game_classes import StaffRole
-            scouts = [s for s in self.parent.user_team.staff
+            scouts = [s for s in self.app.user_team.staff
                       if self.scmod.is_scout(s)]
             if not scouts:
                 messagebox.showwarning("No Scouts", "Hire a scout first.")
                 return
             scout = scouts[0]
-        assigns = self.parent.scouting_assignments
+        assigns = self.app.scouting_assignments
         if p in assigns:
             messagebox.showinfo("Already Assigned", "This prospect is already being scouted.")
             return
@@ -4207,12 +4266,12 @@ class ScoutingWindow(InGamePopup):
     def _refresh_board(self):
         lb = self.board_list
         lb.delete(0, tk.END)
-        ids = self.scmod.get_draft_board(self.parent.user_team)
+        ids = self.scmod.get_draft_board(self.app.user_team)
         by_id = {p.id: p for p in
-                 getattr(self.parent.league, 'draft_prospects', []) or []}
+                 getattr(self.app.league, 'draft_prospects', []) or []}
         # prune missing
         ids = [i for i in ids if i in by_id]
-        self.scmod.set_draft_board(self.parent.user_team, ids)
+        self.scmod.set_draft_board(self.app.user_team, ids)
         for n, pid in enumerate(ids, 1):
             p = by_id[pid]
             try:
@@ -4225,10 +4284,10 @@ class ScoutingWindow(InGamePopup):
         p = self.selected_prospect
         if p is None:
             return
-        ids = self.scmod.get_draft_board(self.parent.user_team)
+        ids = self.scmod.get_draft_board(self.app.user_team)
         if p.id not in ids:
             ids.append(p.id)
-            self.scmod.set_draft_board(self.parent.user_team, ids)
+            self.scmod.set_draft_board(self.app.user_team, ids)
             self._refresh_board()
 
     def _move_board(self, direction):
@@ -4238,10 +4297,10 @@ class ScoutingWindow(InGamePopup):
             return
         i = sel[0]
         j = i + direction
-        ids = self.scmod.get_draft_board(self.parent.user_team)
+        ids = self.scmod.get_draft_board(self.app.user_team)
         if 0 <= j < len(ids):
             ids[i], ids[j] = ids[j], ids[i]
-            self.scmod.set_draft_board(self.parent.user_team, ids)
+            self.scmod.set_draft_board(self.app.user_team, ids)
             self._refresh_board()
             lb.select_set(j)
 
@@ -4250,20 +4309,38 @@ class ScoutingWindow(InGamePopup):
         sel = lb.curselection()
         if not sel:
             return
-        ids = self.scmod.get_draft_board(self.parent.user_team)
+        ids = self.scmod.get_draft_board(self.app.user_team)
         del ids[sel[0]]
-        self.scmod.set_draft_board(self.parent.user_team, ids)
+        self.scmod.set_draft_board(self.app.user_team, ids)
         self._refresh_board()
 
     def _reset_board(self):
-        prospects = sorted(getattr(self.parent.league, 'draft_prospects', []) or [],
+        prospects = sorted(getattr(self.app.league, 'draft_prospects', []) or [],
                            key=lambda p: getattr(p, 'draft_ranking', 0),
                            reverse=True)[:50]
-        self.scmod.set_draft_board(self.parent.user_team, [p.id for p in prospects])
+        self.scmod.set_draft_board(self.app.user_team, [p.id for p in prospects])
         self._refresh_board()
 
 
-class DraftWindow(InGamePopup):
+
+
+class ScoutingWindow(InGamePopup):
+    """Popup wrapper around ScoutingView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Scouting Department")
+        self._view = ScoutingView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class DraftView(ctk.CTkFrame):
     """Draft night war room: live board, ticker, shortlist, draft-day trades, grades."""
 
     # Map any potential-grade variant onto a draft_night.grade_color key.
@@ -4271,7 +4348,7 @@ class DraftWindow(InGamePopup):
                    'B-': 'B', 'C+': 'C', 'C': 'C', 'C-': 'C',
                    'D+': 'D', 'D': 'D', 'D-': 'D', 'F': 'F'}
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -4287,10 +4364,9 @@ class DraftWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("NHL Entry Draft")
-        self.geometry("1280x800")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the DraftWindow wrapper
         self.configure(fg_color=BG)
 
         # Slim branded banner strip (decorative; never breaks the window)
@@ -4462,6 +4538,15 @@ class DraftWindow(InGamePopup):
         self.start_draft()
 
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _setup_tree_style(self):
         """Dark, flat styling for the draft board (styled ttk.Treeview, per
         the migration guide -- the board carries sortable columns)."""
@@ -4507,13 +4592,13 @@ class DraftWindow(InGamePopup):
         for col, (text, width) in columns.items():
             tree.heading(col, text=text,
                          command=lambda c=col, t=tree:
-                         self.parent._sort_treeview_generic(t, c))
+                         self.app._sort_treeview_generic(t, c))
             tree.column(col, width=width, anchor='center')
         # Potential-grade row colors (same scale as the other CTk screens)
         for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
             tree.tag_configure(f"pot_{g}",
                                foreground=self.dn.grade_color(g))
-        self.parent._bind_player_context_menu(tree, 'default', False)
+        self.app._bind_player_context_menu(tree, 'default', False)
         v_scroll = ttk.Scrollbar(parent, orient="vertical",
                                  command=tree.yview,
                                  style='Draft.Vertical.TScrollbar')
@@ -4532,13 +4617,13 @@ class DraftWindow(InGamePopup):
     def start_draft(self):
         # Make sure every team owns its picks (idempotent if already done)
         try:
-            self.parent.league.initialize_all_draft_picks()
+            self.app.league.initialize_all_draft_picks()
         except Exception:
             pass
-        current_year = self.parent.league.season_year
+        current_year = self.app.league.season_year
         self.draft_order = []
         try:
-            order = self.parent.league.get_draft_order(current_year)
+            order = self.app.league.get_draft_order(current_year)
         except Exception:
             order = []
         for overall_pick, team, draft_pick in order:
@@ -4548,9 +4633,9 @@ class DraftWindow(InGamePopup):
                 pass
             self.draft_order.append([draft_pick.round, team, draft_pick])
         if not self.draft_order:
-            standings = getattr(self.parent.league, 'standings', None) or {}
+            standings = getattr(self.app.league, 'standings', None) or {}
             sorted_teams = sorted(
-                self.parent.league.teams,
+                self.app.league.teams,
                 key=lambda t: standings.get(t.team_name, {}).get('Points', 0))
             for round_num in range(1, self.total_rounds + 1):
                 for team in sorted_teams:
@@ -4570,13 +4655,13 @@ class DraftWindow(InGamePopup):
             self.ticker.delete(120, tk.END)
 
     def _available_prospects(self):
-        return sorted(self.parent.league.draft_prospects,
+        return sorted(self.app.league.draft_prospects,
                       key=lambda p: getattr(p, 'draft_ranking', 0), reverse=True)
 
     def _board_sorted_available(self):
         """Available prospects ordered by the user's draft board, then consensus."""
         avail = self._available_prospects()
-        rank = self.scmod.board_rank_map(self.parent.user_team)
+        rank = self.scmod.board_rank_map(self.app.user_team)
         if not rank:
             return avail
         return sorted(avail, key=lambda p: rank.get(p.id, 10_000 + getattr(p, 'draft_ranking', 0) * -1))
@@ -4597,7 +4682,7 @@ class DraftWindow(InGamePopup):
         self._shortlist_players = []
         filt = self.pos_filter_var.get()
         from game_classes import PlayerPosition
-        reports = self.parent.user_team.scouting_reports
+        reports = self.app.user_team.scouting_reports
         count = 0
         for p in self._board_sorted_available():
             if filt == "Forwards" and p.primary_position not in (
@@ -4633,7 +4718,7 @@ class DraftWindow(InGamePopup):
             return
         p = self._shortlist_players[sel[0]]
         self.selected_prospect = p
-        reports = self.parent.user_team.scouting_reports
+        reports = self.app.user_team.scouting_reports
         report = reports.get(p.id)
         pot = (self.scmod.report_potential_display(report, p) if report
                else self.scmod.consensus_range(p) + " (consensus)")
@@ -4654,7 +4739,7 @@ class DraftWindow(InGamePopup):
             self.current_round = round_num
         overall = self.current_pick + 1
         pick_in_round = (self.current_pick %
-                         max(1, len(self.parent.league.teams))) + 1
+                         max(1, len(self.app.league.teams))) + 1
 
         self.draft_status_label.configure(
             text=f"Round {round_num} of {self.total_rounds}")
@@ -4662,7 +4747,7 @@ class DraftWindow(InGamePopup):
         self.pick_info_label.configure(
             text=f"Pick #{overall}  (Round {round_num}, #{pick_in_round} in round)")
 
-        is_user = team_on_clock == self.parent.user_team
+        is_user = team_on_clock == self.app.user_team
         state = 'normal' if is_user else 'disabled'
         self.draft_button.configure(state=state)
         self.auto_button.configure(state=state)
@@ -4670,7 +4755,7 @@ class DraftWindow(InGamePopup):
 
         # Your next pick info
         nxt = next((i for i in range(self.current_pick, len(self.draft_order))
-                    if self.draft_order[i][1] == self.parent.user_team), None)
+                    if self.draft_order[i][1] == self.app.user_team), None)
         if nxt is not None:
             r = self.draft_order[nxt][0]
             self.next_pick_label.configure(
@@ -4724,10 +4809,10 @@ class DraftWindow(InGamePopup):
             messagebox.showwarning("No Prospect", "Select a prospect from the shortlist.")
             return
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
-        if team_on_clock != self.parent.user_team:
+        if team_on_clock != self.app.user_team:
             return
         p = self.selected_prospect
-        if p not in self.parent.league.draft_prospects:
+        if p not in self.app.league.draft_prospects:
             messagebox.showwarning("Unavailable", "That prospect was already drafted.")
             self._refresh_shortlist()
             return
@@ -4738,13 +4823,13 @@ class DraftWindow(InGamePopup):
 
     def auto_pick(self):
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
-        if team_on_clock != self.parent.user_team:
+        if team_on_clock != self.app.user_team:
             return
         available = self._board_sorted_available()
         if not available:
             return
         if self.strategy_var.get() == "Need":
-            needs = self.te.team_needs(self.parent.user_team)
+            needs = self.te.team_needs(self.app.user_team)
             pick = None
             for p in available[:8]:
                 try:
@@ -4764,7 +4849,7 @@ class DraftWindow(InGamePopup):
         overall = self.current_pick + 1
         team.add_player(player, "prospects")
         try:
-            self.parent.league.draft_prospects.remove(player)
+            self.app.league.draft_prospects.remove(player)
         except ValueError:
             pass
         try:
@@ -4786,7 +4871,7 @@ class DraftWindow(InGamePopup):
             # Get projected rank from league
             proj_rank = None
             try:
-                proj_map = getattr(self.parent.league, 'prospect_projected_rank', {})
+                proj_map = getattr(self.app.league, 'prospect_projected_rank', {})
                 proj_rank = proj_map.get(id(player))
             except Exception:
                 pass
@@ -4795,14 +4880,14 @@ class DraftWindow(InGamePopup):
                 proj_rank = overall  # no drama if unknown
             # Only fire for notable picks (top 3, or reach/steal)
             if overall <= 3 or reach or steal:
-                # Get app reference (parent is HockeyManagerGUI)
-                app = self.parent
+                # Get app reference
+                app = self.app
                 draft_pick_drama(app, overall, player, team, proj_rank)
         except Exception:
             pass
         try:
-            self.parent.news_log.append({
-                'date': self.parent.current_date, 'type': 'draft',
+            self.app.news_log.append({
+                'date': self.app.current_date, 'type': 'draft',
                 'story': f"With pick #{overall}, the {team.team_name} select "
                          f"{player.full_name} ({pos})."})
         except Exception:
@@ -4824,7 +4909,7 @@ class DraftWindow(InGamePopup):
         if self.current_pick >= len(self.draft_order):
             return
         _r, team_on_clock, user_pick = self.draft_order[self.current_pick]
-        if team_on_clock != self.parent.user_team:
+        if team_on_clock != self.app.user_team:
             messagebox.showinfo("Not Your Pick", "You can only trade your own pick.")
             return
         dlg = InGamePopup(self)
@@ -4838,11 +4923,11 @@ class DraftWindow(InGamePopup):
         self._body(dlg, text="Select a partner and one of their upcoming picks:",
              dim=True).pack(pady=(0, 8))
 
-        teams = sorted(t.team_name for t in self.parent.league.teams
-                       if t != self.parent.user_team)
+        teams = sorted(t.team_name for t in self.app.league.teams
+                       if t != self.app.user_team)
 
         def _partner_picks(name):
-            team = next((t for t in self.parent.league.teams
+            team = next((t for t in self.app.league.teams
                          if t.team_name == name), None)
             out = []
             for i in range(self.current_pick + 1, len(self.draft_order)):
@@ -4902,11 +4987,11 @@ class DraftWindow(InGamePopup):
             if not sel or not dlg._picks:
                 return
             j, partner_pick, _r2 = dlg._picks[sel[0]]
-            partner = next(t for t in self.parent.league.teams
+            partner = next(t for t in self.app.league.teams
                            if t.team_name == combo.get())
             resp = self.te.ai_consider_trade(
                 partner, [user_pick], [partner_pick],
-                user_team=self.parent.user_team)
+                user_team=self.app.user_team)
             if resp.decision == 'reject':
                 messagebox.showerror("Rejected", resp.message)
                 return
@@ -4939,7 +5024,7 @@ class DraftWindow(InGamePopup):
 
     def _execute_pick_swap(self, partner_idx, user_pick, partner_pick,
                            want_added, will_add):
-        user_team = self.parent.user_team
+        user_team = self.app.user_team
         partner_team = self.draft_order[partner_idx][1]
         # Swap the picks
         self._swap_pick_owner(user_pick, partner_team)
@@ -4964,7 +5049,7 @@ class DraftWindow(InGamePopup):
                 except Exception:
                     pass
         # History + news
-        gm = getattr(self.parent, 'game_manager', None)
+        gm = getattr(self.app, 'game_manager', None)
         summary = (f"{user_team.team_name} acquires pick "
                    f"#{partner_idx + 1} from {partner_team.team_name}.")
         if gm is not None:
@@ -4976,7 +5061,7 @@ class DraftWindow(InGamePopup):
                 [self.te.asset_label(user_pick)],
                 [self.te.asset_label(partner_pick)], summary))
         try:
-            self.parent.add_news_story(f"DRAFT TRADE: {summary}")
+            self.app.add_news_story(f"DRAFT TRADE: {summary}")
         except Exception:
             pass
         self._ticker(f"TRADE: {summary}")
@@ -5002,7 +5087,7 @@ class DraftWindow(InGamePopup):
         for team, grade, ratio in grades:
             lb.insert(tk.END, f"  {grade}   {team}")
             lb.itemconfig(tk.END, foreground=self._pot_color(grade))
-            if team == self.parent.user_team.team_name:
+            if team == self.app.user_team.team_name:
                 user_grade = grade
         if user_grade:
             ug = ctk.CTkLabel(dlg, text=f"Your draft grade: {user_grade}",
@@ -5028,12 +5113,30 @@ class DraftWindow(InGamePopup):
         self.show_grades()
 
 
-class ScheduleWindow(InGamePopup):
+
+
+class DraftWindow(InGamePopup):
+    """Popup wrapper around DraftView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("NHL Entry Draft")
+        self._view = DraftView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class ScheduleView(ctk.CTkFrame):
     """League Schedule (CustomTkinter): tabbed My Team / League tables,
     month-filter combo, color-coded game rows (win/loss/today), modern
     action buttons. All schedule logic preserved."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -5050,12 +5153,10 @@ class ScheduleWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("League Schedule")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ScheduleWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1000x750")
-        self.minsize(900, 650)
 
         ct = self._ct
         main_container = ctk.CTkFrame(self, fg_color=ct['BG'], corner_radius=0)
@@ -5137,6 +5238,15 @@ class ScheduleWindow(InGamePopup):
     # ------------------------------------------------------------------
     # CTk styling helpers
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _setup_tree_style(self):
         """Dark, flat styling for the schedule tables (styled ttk.Treeview,
         per the migration guide -- the tables carry 5 sortable columns and
@@ -5199,7 +5309,7 @@ class ScheduleWindow(InGamePopup):
                             height=height)
         for col, (text, width) in columns.items():
             tree.heading(col, text=text,
-                         command=lambda c=col, t=tree: self.parent._sort_treeview_generic(t, c))
+                         command=lambda c=col, t=tree: self.app._sort_treeview_generic(t, c))
             tree.column(col, width=width, anchor='center')
 
         v_scroll = ttk.Scrollbar(table_frame, orient="vertical",
@@ -5333,7 +5443,7 @@ class ScheduleWindow(InGamePopup):
         # engine on day advance (double-counting stats), so they are only
         # offered as a non-committing preview.
         try:
-            is_past_game = game_data['date'] < self.parent.current_date
+            is_past_game = game_data['date'] < self.app.current_date
         except TypeError:
             is_past_game = False
 
@@ -5372,7 +5482,7 @@ class ScheduleWindow(InGamePopup):
             return
 
         try:
-            is_past_game = game_data['date'] < self.parent.current_date
+            is_past_game = game_data['date'] < self.app.current_date
         except TypeError:
             is_past_game = False
 
@@ -5414,7 +5524,7 @@ class ScheduleWindow(InGamePopup):
 
                 # Add to game results if not already there
                 if not self._find_game_result(game_data):
-                    self.parent.game_results.append(game_result)
+                    self.app.game_results.append(game_result)
                     self._update_team_stats_from_game(game_result)
                     self.update_views()
 
@@ -5494,7 +5604,7 @@ class ScheduleWindow(InGamePopup):
             game_result = self._build_game_result(game_data, sim)
 
             # Add to game results
-            self.parent.game_results.append(game_result)
+            self.app.game_results.append(game_result)
 
             # Update team stats
             self._update_team_stats_from_game(game_result)
@@ -5540,7 +5650,7 @@ class ScheduleWindow(InGamePopup):
 
     def _find_game_result(self, game_data):
         """Find the stored result matching the selected game."""
-        for gr in self.parent.game_results:
+        for gr in self.app.game_results:
             gd, grdate = game_data['date'], gr.get('date')
             same_day = (gd == grdate or
                         (hasattr(gd, 'date') and hasattr(grdate, 'date') and
@@ -5563,7 +5673,7 @@ class ScheduleWindow(InGamePopup):
             messagebox.showinfo("No Data",
                                    "This game hasn't been played yet — no stats available.")
             return
-        GameDetailWindow(self.parent, result, initial_tab="stats")
+        GameDetailWindow(self.app, result, initial_tab="stats")
 
     def view_game_recap(self):
         """View game recap and highlights."""
@@ -5577,7 +5687,7 @@ class ScheduleWindow(InGamePopup):
             messagebox.showinfo("No Data",
                                    "This game hasn't been played yet — no recap available.")
             return
-        GameDetailWindow(self.parent, result, initial_tab="recap")
+        GameDetailWindow(self.app, result, initial_tab="recap")
 
     @staticmethod
     def _parse_schedule_entry(game_entry):
@@ -5612,7 +5722,7 @@ class ScheduleWindow(InGamePopup):
         reuse. Rebuilds automatically when the schedule list is replaced
         (new season / load game).
         """
-        src = self.parent.league.schedule
+        src = self.app.league.schedule
         if getattr(self, '_parsed_schedule_src', None) is not src:
             parsed = []
             for game_entry in src:
@@ -5644,14 +5754,14 @@ class ScheduleWindow(InGamePopup):
         game, 'completed' (dimmed) for other past games, 'upcoming' otherwise.
         Returns '' for games not involving the user's team.
         """
-        if self.parent.user_team not in (home, away):
+        if self.app.user_team not in (home, away):
             return ''
         row_tag = 'completed'
         if status == "Final" and "-" in score:
             try:
                 a_s, h_s = (int(x) for x in score.split("-"))
-                mine = h_s if home == self.parent.user_team else a_s
-                theirs = a_s if home == self.parent.user_team else h_s
+                mine = h_s if home == self.app.user_team else a_s
+                theirs = a_s if home == self.app.user_team else h_s
                 row_tag = 'win' if mine > theirs else 'loss'
             except (ValueError, IndexError):
                 row_tag = 'completed'
@@ -5686,17 +5796,17 @@ class ScheduleWindow(InGamePopup):
             status = "Scheduled"
             score = "- : -"
 
-            if game_date < self.parent.current_date:
+            if game_date < self.app.current_date:
                 # O(1) result lookup via the app's matchup index (was a full
                 # scan of game_results per scheduled game: O(games x results))
-                game_result = self.parent.find_game_result(game_date, home, away)
+                game_result = self.app.find_game_result(game_date, home, away)
                 if game_result is not None:
                     score = f"{game_result['away_score']}-{game_result['home_score']}"
                     status = "Final"
                 else:
                     score = "0-0"  # Fallback if no result found
                     status = "Simulated"
-            elif game_date == self.parent.current_date:
+            elif game_date == self.app.current_date:
                 status = "Today"
 
             values = (game_date.strftime("%b %d, %Y"), away.team_name, score, home.team_name, status)
@@ -5718,7 +5828,7 @@ class ScheduleWindow(InGamePopup):
             league_tags = (row_tag,) if row_tag else ()
             item_id = self.league_schedule_tree.insert('', 'end', values=values,
                                                        tags=league_tags)
-            if self.parent.user_team in (home, away):
+            if self.app.user_team in (home, away):
                 my_item_id = self.my_schedule_tree.insert('', 'end', values=values,
                                                            tags=(row_tag,))
                 if self._first_upcoming is None and status in ("Today", "Scheduled"):
@@ -5728,7 +5838,7 @@ class ScheduleWindow(InGamePopup):
             self.my_schedule_tree.see(self._first_upcoming)
             self.my_schedule_tree.selection_set(self._first_upcoming)
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             rec = f"{getattr(team, 'wins', 0)}-{getattr(team, 'losses', 0)}-{getattr(team, 'otl', getattr(team, 'ot_losses', 0))}"
             self.my_sched_header.configure(
                 text=f"{team.team_name}  \u2022  {rec}  \u2022  Green = win, red = loss")
@@ -5738,7 +5848,25 @@ class ScheduleWindow(InGamePopup):
         set_tree_empty_state(self.my_schedule_tree, "No games scheduled for your team")
         set_tree_empty_state(self.league_schedule_tree, "No league games scheduled")
 
-class FinancesWindow(InGamePopup):
+
+
+class ScheduleWindow(InGamePopup):
+    """Popup wrapper around ScheduleView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("League Schedule")
+        self._view = ScheduleView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class FinancesView(ctk.CTkFrame):
     """Comprehensive financial management window with detailed breakdown and projections.
 
     Rebuilt with CustomTkinter (Sept 2026): CTkToplevel shell, CTkTabview
@@ -5748,7 +5876,7 @@ class FinancesWindow(InGamePopup):
     logic is unchanged from the ttk version.
     """
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -5765,12 +5893,10 @@ class FinancesWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title(f"{parent.user_team.team_name} - Financial Management")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the FinancesWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1400x900")
-        self.minsize(1200, 700)
 
         # Initialize data structures
         self.current_season = 2024
@@ -5782,11 +5908,20 @@ class FinancesWindow(InGamePopup):
         self.update_views()
 
         # Track window
-        self.parent.open_windows['finances'] = self
+        self.app.open_windows['finances'] = self
 
     # ------------------------------------------------------------------
     # Layout construction
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def create_interface(self):
         """Create the comprehensive financial interface."""
         ct = self._ct
@@ -5840,7 +5975,7 @@ class FinancesWindow(InGamePopup):
         top.pack(fill="x", padx=20, pady=(14, 4))
 
         # Title
-        self._heading(top, text=f"{self.parent.user_team.team_name.upper()} FINANCIAL MANAGEMENT",
+        self._heading(top, text=f"{self.app.user_team.team_name.upper()} FINANCIAL MANAGEMENT",
                       size=18).pack(side="left")
 
         # Quick stats on the right
@@ -6242,7 +6377,7 @@ class FinancesWindow(InGamePopup):
                             show='headings', style='FIN.Treeview', height=height)
         for col, (text, width) in columns.items():
             tree.heading(col, text=text,
-                         command=lambda c=col, t=tree: self.parent._sort_treeview_generic(t, c))
+                         command=lambda c=col, t=tree: self.app._sort_treeview_generic(t, c))
             tree.column(col, width=width, anchor='w' if col == 'name' else 'center')
 
         # Status tags -- color-code contract situations
@@ -6322,7 +6457,7 @@ class FinancesWindow(InGamePopup):
     def calculate_current_payroll(self):
         """Calculate the current NHL payroll."""
         total = 0
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             if hasattr(player, 'contract') and hasattr(player.contract, 'salary'):
                 total += player.contract.salary
             elif hasattr(player, 'salary'):
@@ -6332,7 +6467,7 @@ class FinancesWindow(InGamePopup):
     def calculate_ahl_payroll(self):
         """Calculate the AHL payroll."""
         total = 0
-        for player in getattr(self.parent.user_team, 'ahl_roster', []):
+        for player in getattr(self.app.user_team, 'ahl_roster', []):
             if hasattr(player, 'contract') and hasattr(player.contract, 'salary'):
                 total += player.contract.salary
             elif hasattr(player, 'salary'):
@@ -6346,7 +6481,7 @@ class FinancesWindow(InGamePopup):
 
     def _salary_cap(self):
         """The team's salary cap (falls back to the default NHL cap)."""
-        return getattr(self.parent.user_team, 'salary_cap', 83_500_000)
+        return getattr(self.app.user_team, 'salary_cap', 83_500_000)
 
     # Update methods
     def update_views(self):
@@ -6392,7 +6527,7 @@ class FinancesWindow(InGamePopup):
                     'Defense': {'count': 0, 'total': 0},
                     'Forwards': {'count': 0, 'total': 0}}
 
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
 
             if hasattr(player, 'primary_position'):
@@ -6436,22 +6571,22 @@ class FinancesWindow(InGamePopup):
         self.contracts_tree.delete(*self.contracts_tree.get_children())
         # Keyed by the treeview widget, matching the app-wide tree_maps
         # convention (see main._create_treeview / _show_player_context_menu).
-        self.parent.tree_maps[self.contracts_tree] = {}
+        self.app.tree_maps[self.contracts_tree] = {}
 
         # Get all players based on roster filter
         roster_filter = self.roster_filter.get()
         players = []
 
         if roster_filter == 'All':
-            players.extend(self.parent.user_team.roster)
-            players.extend(getattr(self.parent.user_team, 'ahl_roster', []))
-            players.extend(getattr(self.parent.user_team, 'prospects', []))
+            players.extend(self.app.user_team.roster)
+            players.extend(getattr(self.app.user_team, 'ahl_roster', []))
+            players.extend(getattr(self.app.user_team, 'prospects', []))
         elif roster_filter == 'NHL':
-            players = self.parent.user_team.roster
+            players = self.app.user_team.roster
         elif roster_filter == 'AHL':
-            players = getattr(self.parent.user_team, 'ahl_roster', [])
+            players = getattr(self.app.user_team, 'ahl_roster', [])
         elif roster_filter == 'Prospects':
-            players = getattr(self.parent.user_team, 'prospects', [])
+            players = getattr(self.app.user_team, 'prospects', [])
 
         # Apply filters and populate tree
         for player in players:
@@ -6502,7 +6637,7 @@ class FinancesWindow(InGamePopup):
 
             item = self.contracts_tree.insert('', 'end', values=values,
                                               tags=(self._STATUS_TAGS.get(status, ''),))
-            self.parent.tree_maps[self.contracts_tree][item] = player
+            self.app.tree_maps[self.contracts_tree][item] = player
 
     def determine_contract_status(self, player, years_remaining):
         """Determine the contract status of a player."""
@@ -6531,7 +6666,7 @@ class FinancesWindow(InGamePopup):
         projected_payroll = 0
         expiring_players = []
 
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
 
@@ -6638,7 +6773,7 @@ Expiring Contracts:   {len(expiring_players)} players
 
         # Contract expiry analysis
         expiring_next_year = []
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             if years_left <= 1:
                 expiring_next_year.append(player)
@@ -6648,7 +6783,7 @@ Expiring Contracts:   {len(expiring_players)} players
 
         # Age demographics
         old_expensive_players = []
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             age = getattr(player, 'age', 22)
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
             if age > 33 and salary > 4_000_000:
@@ -6699,7 +6834,7 @@ Expiring Contracts:   {len(expiring_players)} players
 
         report = f"""
 SALARY BREAKDOWN REPORT
-{self.parent.user_team.team_name} - {self.current_season} Season
+{self.app.user_team.team_name} - {self.current_season} Season
 {'='*60}
 
 SUMMARY
@@ -6714,7 +6849,7 @@ TOP 10 SALARIES
 """
 
         # Sort players by salary
-        sorted_players = sorted(self.parent.user_team.roster,
+        sorted_players = sorted(self.app.user_team.roster,
                               key=lambda p: getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0),
                               reverse=True)
 
@@ -6737,7 +6872,7 @@ TOP 10 SALARIES
         """Generate contract timeline report."""
         report = f"""
 CONTRACT TIMELINE REPORT
-{self.parent.user_team.team_name}
+{self.app.user_team.team_name}
 {'='*50}
 
 CONTRACTS BY EXPIRY YEAR
@@ -6746,7 +6881,7 @@ CONTRACTS BY EXPIRY YEAR
 
         # Group by expiry year
         expiry_groups = {}
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             expiry_year = self.current_season + years_left
 
@@ -6773,7 +6908,7 @@ CONTRACTS BY EXPIRY YEAR
         """Generate position analysis report."""
         report = f"""
 POSITION ANALYSIS REPORT
-{self.parent.user_team.team_name}
+{self.app.user_team.team_name}
 {'='*50}
 
 DETAILED POSITION BREAKDOWN
@@ -6788,7 +6923,7 @@ DETAILED POSITION BREAKDOWN
             'Wingers': []
         }
 
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             if hasattr(player, 'primary_position'):
                 if player.primary_position == PlayerPosition.GOALIE:
                     positions['Goalies'].append(player)
@@ -6826,7 +6961,7 @@ DETAILED POSITION BREAKDOWN
         """Generate age demographics report."""
         report = f"""
 AGE DEMOGRAPHICS REPORT
-{self.parent.user_team.team_name}
+{self.app.user_team.team_name}
 {'='*50}
 
 AGE GROUP BREAKDOWN
@@ -6837,7 +6972,7 @@ AGE GROUP BREAKDOWN
             '18-22': [], '23-26': [], '27-30': [], '31-34': [], '35+': []
         }
 
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             age = getattr(player, 'age', 22)
             if age <= 22:
                 age_groups['18-22'].append(player)
@@ -6873,7 +7008,7 @@ AGE GROUP BREAKDOWN
         """Generate performance vs salary analysis."""
         report = f"""
 PERFORMANCE vs SALARY ANALYSIS
-{self.parent.user_team.team_name}
+{self.app.user_team.team_name}
 {'='*50}
 
 VALUE ANALYSIS
@@ -6883,7 +7018,7 @@ VALUE ANALYSIS
 
         # Calculate value scores
         player_values = []
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
             ovr = player.overall_rating()
 
@@ -6921,7 +7056,7 @@ VALUE ANALYSIS
         if not item_id:
             return
         self.contracts_tree.selection_set(item_id)
-        player = self.parent.tree_maps.get(self.contracts_tree, {}).get(item_id)
+        player = self.app.tree_maps.get(self.contracts_tree, {}).get(item_id)
         if not player:
             return
         PlayerContextMenu(self).show_context_menu(
@@ -6936,46 +7071,47 @@ VALUE ANALYSIS
     def view_contract_player_profile(self):
         """View the selected player's profile."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
-            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
-            self.parent.open_player_profile(player)
+        if selection and selection[0] in self.app.tree_maps.get(self.contracts_tree, {}):
+            player = self.app.tree_maps.get(self.contracts_tree, {})[selection[0]]
+            self.app.open_player_profile(player)
 
     def negotiate_extension(self):
         """Open contract negotiation for selected player."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
-            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
+        if selection and selection[0] in self.app.tree_maps.get(self.contracts_tree, {}):
+            player = self.app.tree_maps.get(self.contracts_tree, {})[selection[0]]
             # Open contract negotiation window
-            if 'contract_negotiation' not in self.parent.open_windows or not self.parent.open_windows['contract_negotiation'].winfo_exists():
-                self.parent.open_windows['contract_negotiation'] = ContractNegotiationWindow(self.parent, player, is_extension=True)
-            self.parent.open_windows['contract_negotiation'].focus_set()
+            if 'contract_negotiation' not in self.app.open_windows or not self.app.open_windows['contract_negotiation'].winfo_exists():
+                self.app.open_windows['contract_negotiation'] = ContractNegotiationWindow(self.app, player, is_extension=True)
+            self.app.open_windows['contract_negotiation'].focus_set()
 
     def trade_player(self):
         """Open trade window for selected player."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
-            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
+        if selection and selection[0] in self.app.tree_maps.get(self.contracts_tree, {}):
+            player = self.app.tree_maps.get(self.contracts_tree, {})[selection[0]]
             # Open trade window with this player pre-selected
-            self.parent.open_trade_window()
+            self.app.open_trade_window()
 
     # Action methods
     def open_contract_extensions(self):
         """Open contract extensions window."""
-        if 'contract_extensions' not in self.parent.open_windows or not self.parent.open_windows['contract_extensions'].winfo_exists():
-            self.parent.open_windows['contract_extensions'] = ContractExtensionsWindow(self.parent)
-        self.parent.open_windows['contract_extensions'].focus_set()
+        if 'contract_extensions' not in self.app.open_windows or not self.app.open_windows['contract_extensions'].winfo_exists():
+            self.app.open_windows['contract_extensions'] = ContractExtensionsWindow(self.app)
+        self.app.open_windows['contract_extensions'].focus_set()
 
     def open_trade_evaluator(self):
         """Open trade evaluator tool (the Trade Center)."""
-        self.parent.open_trade_window()
+        self.app.open_trade_window()
 
     def show_salary_analytics(self):
         """Show advanced salary analytics."""
-        SalaryAnalyticsWindow(self.parent)
+        self.app.show_screen('salary_analytics', 'Salary Analytics',
+                             SalaryAnalyticsView)
 
     def open_buyout_calculator(self):
         """Open buyout calculator."""
-        BuyoutCalculatorWindow(self.parent)
+        BuyoutCalculatorWindow(self.app)
 
     def check_cap_compliance(self):
         """Check salary cap compliance."""
@@ -7002,12 +7138,12 @@ VALUE ANALYSIS
 
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"financial_report_{self.parent.user_team.team_name.replace(' ', '_')}_{timestamp}.txt"
+            filename = f"financial_report_{self.app.user_team.team_name.replace(' ', '_')}_{timestamp}.txt"
             filepath = os.path.join(exports_dir, filename)
 
             # Calculate financial data
             current_payroll = sum(getattr(p.contract, 'salary', getattr(p, 'salary', 750000))
-                                for p in self.parent.user_team.roster
+                                for p in self.app.user_team.roster
                                 if hasattr(p, 'contract') or hasattr(p, 'salary'))
 
             salary_cap = self._salary_cap()
@@ -7016,7 +7152,7 @@ VALUE ANALYSIS
             # Generate detailed report
             report_content = f"""
 DETAILED FINANCIAL REPORT
-{self.parent.user_team.team_name} - {datetime.now().strftime('%Y-%m-%d')}
+{self.app.user_team.team_name} - {datetime.now().strftime('%Y-%m-%d')}
 {'='*70}
 
 SALARY CAP SUMMARY
@@ -7032,7 +7168,7 @@ ROSTER BREAKDOWN
 """
 
             # Sort players by salary for detailed breakdown
-            sorted_players = sorted(self.parent.user_team.roster,
+            sorted_players = sorted(self.app.user_team.roster,
                                   key=lambda p: getattr(p.contract, 'salary', getattr(p, 'salary', 750000)),
                                   reverse=True)
 
@@ -7045,9 +7181,9 @@ ROSTER BREAKDOWN
             # Contract expiry analysis
             report_content += f"\n\nCONTRACT EXPIRY ANALYSIS\n{'-'*25}\n"
 
-            expiring_this_year = [p for p in self.parent.user_team.roster
+            expiring_this_year = [p for p in self.app.user_team.roster
                                 if hasattr(p, 'contract') and getattr(p.contract, 'years_remaining', 0) <= 1]
-            expiring_next_year = [p for p in self.parent.user_team.roster
+            expiring_next_year = [p for p in self.app.user_team.roster
                                 if hasattr(p, 'contract') and getattr(p.contract, 'years_remaining', 0) == 2]
 
             report_content += f"Contracts expiring this season: {len(expiring_this_year)}\n"
@@ -7064,7 +7200,7 @@ ROSTER BREAKDOWN
             report_content += f"\n\nSALARY BY POSITION\n{'-'*18}\n"
 
             position_totals = {}
-            for player in self.parent.user_team.roster:
+            for player in self.app.user_team.roster:
                 pos = str(player.primary_position)
                 salary = getattr(player.contract, 'salary', getattr(player, 'salary', 750000))
 
@@ -7112,7 +7248,25 @@ ROSTER BREAKDOWN
 
 
 
-class NewsWindow(InGamePopup):
+
+
+class FinancesWindow(InGamePopup):
+    """Popup wrapper around FinancesView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title(f"{parent.user_team.team_name} - Financial Management")
+        self._view = FinancesView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class NewsView(ctk.CTkFrame):
     """League news feed — modern CTk rebuild.
 
     Two-pane layout: a scrollable feed of rounded article cards (headline,
@@ -7157,7 +7311,7 @@ class NewsWindow(InGamePopup):
         "Other": "#71717a",
     }
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -7173,12 +7327,10 @@ class NewsWindow(InGamePopup):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("League News")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the NewsWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1200x750")
-        self.minsize(1000, 600)
 
         ct = self._ct
         self._filter = "All"
@@ -7248,6 +7400,15 @@ class NewsWindow(InGamePopup):
     # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     @classmethod
     def _clean_story(cls, story):
         """Strip emoji and tidy whitespace for display."""
@@ -7296,7 +7457,7 @@ class NewsWindow(InGamePopup):
 
     def _load_articles(self):
         """Read the parent's news log into (story, date_str, category) tuples."""
-        news_log = getattr(self.parent, "news_log", None) or []
+        news_log = getattr(self.app, "news_log", None) or []
         articles = []
         for item in reversed(news_log):
             if isinstance(item, dict):
@@ -7429,43 +7590,87 @@ class NewsWindow(InGamePopup):
         self._reader_text.configure(state="disabled")
 
 
-class GMOptionsWindow(InGamePopup):
-    def __init__(self, parent):
+
+
+class NewsWindow(InGamePopup):
+    """Popup wrapper around NewsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
         super().__init__(parent)
-        self.parent = parent
-        self.title("General Manager Options")
-        self.geometry("600x450")
-        self.configure(background=parent.BG_COLOR)
+        self.title("League News")
+        self._view = NewsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class GMOptionsView(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the GMOptionsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
 
         header = ttk.Frame(self, style='Panel.TFrame', padding=(20, 14))
         header.pack(fill='x', padx=10, pady=(10, 0))
         ttk.Label(header, text="GM OPTIONS",
-                  font=(parent.FONT_FAMILY, 16, 'bold'),
+                  font=(self.app.FONT_FAMILY, 16, 'bold'),
                   style='Heading.TLabel').pack(side='left')
 
         # GM Management Options
         management_frame = ttk.LabelFrame(self, text="Team Management", padding=15)
         management_frame.pack(fill='x', padx=20, pady=10)
 
-        ttk.Button(management_frame, text="Manage Trade Block", command=self.parent.open_trade_block_window).pack(pady=5, fill='x')
-        ttk.Button(management_frame, text="Handle Waivers", command=self.parent.open_waivers_window).pack(pady=5, fill='x')
-        ttk.Button(management_frame, text="Set Captains", command=self.parent.open_set_captains_window).pack(pady=5, fill='x')
+        ttk.Button(management_frame, text="Manage Trade Block", command=self.app.open_trade_block_window).pack(pady=5, fill='x')
+        ttk.Button(management_frame, text="Handle Waivers", command=self.app.open_waivers_window).pack(pady=5, fill='x')
+        ttk.Button(management_frame, text="Set Captains", command=self.app.open_set_captains_window).pack(pady=5, fill='x')
         ttk.Button(management_frame, text="Negotiate Extensions", command=self.negotiate_extensions, style='Accent.TButton').pack(pady=5, fill='x')
 
         # Game Settings & Preferences
         settings_frame = ttk.LabelFrame(self, text="Game Settings & Preferences", padding=15)
         settings_frame.pack(fill='x', padx=20, pady=10)
 
-        ttk.Button(settings_frame, text="Settings & Preferences", command=self.parent.open_settings_window).pack(pady=5, fill='x')
+        ttk.Button(settings_frame, text="Settings & Preferences", command=self.app.open_settings_window).pack(pady=5, fill='x')
 
         # Close button
-        ttk.Button(self, text="Close", command=self.destroy).pack(pady=20)
+        ttk.Button(self, text="Close", command=self.close_view).pack(pady=20)
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def negotiate_extensions(self):
-        if 'contract_extensions' not in self.parent.open_windows or not self.parent.open_windows['contract_extensions'].winfo_exists():
-            self.parent.open_windows['contract_extensions'] = ContractExtensionsWindow(self.parent)
-        self.parent.open_windows['contract_extensions'].focus_set()
+        if 'contract_extensions' not in self.app.open_windows or not self.app.open_windows['contract_extensions'].winfo_exists():
+            self.app.open_windows['contract_extensions'] = ContractExtensionsWindow(self.app)
+        self.app.open_windows['contract_extensions'].focus_set()
 
+
+
+class GMOptionsWindow(InGamePopup):
+    """Popup wrapper around GMOptionsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("General Manager Options")
+        self._view = GMOptionsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 class ContractNegotiationWindow(InGamePopup):
     def __init__(self, parent, player, is_extension=False):
         super().__init__(parent)
@@ -8028,13 +8233,13 @@ class TradeBlockWindow(InGamePopup):
         self.interest_tree.delete(selection[0])
         messagebox.showinfo("Interest Declined", "Trade interest has been declined.")
 
-class WaiversWindow(InGamePopup):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Waivers")
-        self.geometry("1000x700")
-        self.configure(background=parent.BG_COLOR)
+class WaiversView(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the WaiversWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         
         # Main frame
         main_frame = ttk.Frame(self, style='Panel.TFrame')
@@ -8044,7 +8249,7 @@ class WaiversWindow(InGamePopup):
         instruction_frame = ttk.Frame(main_frame, style='Panel.TFrame')
         instruction_frame.pack(fill='x', padx=5, pady=5)
         
-        ttk.Label(instruction_frame, text="Waiver Wire Management", font=(parent.FONT_FAMILY, 16, 'bold'), 
+        ttk.Label(instruction_frame, text="Waiver Wire Management", font=(self.app.FONT_FAMILY, 16, 'bold'), 
                  style='Heading.TLabel').pack(anchor='w', padx=10, pady=5)
         
         ttk.Label(instruction_frame, text="Players must clear waivers when being sent down to the AHL if they have played " 
@@ -8068,7 +8273,7 @@ class WaiversWindow(InGamePopup):
                   'ovr': ('OVR', 50), 'games': ('NHL Games', 80), 
                   'salary': ('Salary', 100), 'actions': ('Actions', 150)}
         
-        self.eligible_tree = parent._create_treeview(my_players_frame, columns, 20)
+        self.eligible_tree = self.app._create_treeview(my_players_frame, columns, 20)
         self.eligible_tree.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Create a button frame for my players
@@ -8084,7 +8289,7 @@ class WaiversWindow(InGamePopup):
                        'salary': ('Salary', 100), 'team': ('Current Team', 150),
                        'actions': ('Actions', 150)}
         
-        self.waiver_tree = parent._create_treeview(waiver_wire_frame, wire_columns, 20)
+        self.waiver_tree = self.app._create_treeview(waiver_wire_frame, wire_columns, 20)
         self.waiver_tree.pack(fill='both', expand=True, padx=5, pady=5)
         add_player_context_menu(self.waiver_tree, self)
         
@@ -8098,6 +8303,14 @@ class WaiversWindow(InGamePopup):
         self.populate_eligible_players()
         self.populate_waiver_wire()
         
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def is_waiver_eligible(self, player):
         """Determine if player is waiver-eligible based on age and NHL games played."""
         # Players over 25 or with more than 160 NHL games require waivers
@@ -8109,7 +8322,7 @@ class WaiversWindow(InGamePopup):
         self.eligible_tree.delete(*self.eligible_tree.get_children())
         
         # Get all NHL roster players who would be eligible for waivers
-        eligible_players = [p for p in self.parent.user_team.roster if self.is_waiver_eligible(p)]
+        eligible_players = [p for p in self.app.user_team.roster if self.is_waiver_eligible(p)]
         
         for player in eligible_players:
             player_values = (
@@ -8133,7 +8346,7 @@ class WaiversWindow(InGamePopup):
         """Populate the tree with players currently on the waiver wire."""
         self.waiver_tree.delete(*self.waiver_tree.get_children())
         
-        for player in self.parent.waiver_list:
+        for player in self.app.waiver_list:
             player_values = (
                 player.full_name,
                 player.age,
@@ -8184,7 +8397,7 @@ class WaiversWindow(InGamePopup):
             item = selected[0]
             
         player_id = int(self.eligible_tree.item(item, "tags")[0])
-        player = next((p for p in self.parent.user_team.roster if p.id == player_id), None)
+        player = next((p for p in self.app.user_team.roster if p.id == player_id), None)
         
         if player:
             confirm = qol_confirm(self, "Confirm Waiver",
@@ -8195,10 +8408,10 @@ class WaiversWindow(InGamePopup):
                 # Add to waiver list
                 player.on_waivers = True
                 player.waiver_days = 2  # Players stay on waivers for 2 days
-                self.parent.waiver_list.append(player)
+                self.app.waiver_list.append(player)
                 
                 # Add to news log
-                self.parent.add_news(f"{player.full_name} placed on waivers by {self.parent.user_team.team_name}.")
+                self.app.add_news(f"{player.full_name} placed on waivers by {self.app.user_team.team_name}.")
                 
                 # Update the views
                 self.populate_eligible_players()
@@ -8217,17 +8430,17 @@ class WaiversWindow(InGamePopup):
             item = selected[0]
             
         player_id = int(self.waiver_tree.item(item, "tags")[0])
-        player = next((p for p in self.parent.waiver_list if p.id == player_id), None)
+        player = next((p for p in self.app.waiver_list if p.id == player_id), None)
         
         if player:
             # Check if user's team has roster space
-            if len(self.parent.user_team.roster) >= 23:
+            if len(self.app.user_team.roster) >= 23:
                 messagebox.showerror("Roster Full", 
                                     "Your NHL roster is full. Please release or reassign a player before claiming from waivers.")
                 return
                 
             # Check salary cap compliance
-            if player.contract.salary > self.parent.user_team.cap_space:
+            if player.contract.salary > self.app.user_team.cap_space:
                 messagebox.showerror("Cap Space Issue", 
                                     f"You don't have enough cap space to add this player's ${player.contract.salary:,} salary.")
                 return
@@ -8238,20 +8451,20 @@ class WaiversWindow(InGamePopup):
                                   confirm_text="Claim Player")
             if confirm:
                 # Remove from previous team
-                old_team = next((t for t in self.parent.league.teams if t.team_name == player.team_name), None)
+                old_team = next((t for t in self.app.league.teams if t.team_name == player.team_name), None)
                 if old_team:
                     old_team.remove_player(player)
                 
                 # Remove from waiver list
-                self.parent.waiver_list.remove(player)
+                self.app.waiver_list.remove(player)
                 player.on_waivers = False
                 player.waiver_days = 0
                 
                 # Add to user team
-                self.parent.user_team.add_player(player)
+                self.app.user_team.add_player(player)
                 
                 # Add to news log
-                self.parent.add_news(f"{player.full_name} claimed off waivers by {self.parent.user_team.team_name}.")
+                self.app.add_news(f"{player.full_name} claimed off waivers by {self.app.user_team.team_name}.")
                 
                 # Update views
                 self.populate_waiver_wire()
@@ -8259,9 +8472,27 @@ class WaiversWindow(InGamePopup):
                                    f"{player.full_name} has been claimed from waivers and added to your NHL roster.")
                 
                 # Refresh the main roster view if it's open
-                if 'roster' in self.parent.open_windows and self.parent.open_windows['roster'].winfo_exists():
-                    self.parent.open_windows['roster'].populate_trees()
+                if 'roster' in self.app.open_windows and self.app.open_windows['roster'].winfo_exists():
+                    self.app.open_windows['roster'].populate_trees()
 
+
+
+class WaiversWindow(InGamePopup):
+    """Popup wrapper around WaiversView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Waivers")
+        self._view = WaiversView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 class ContractExtensionsWindow(InGamePopup):
     def __init__(self, parent):
         super().__init__(parent)
@@ -8882,39 +9113,48 @@ class SetCaptainsWindow(InGamePopup):
         self.destroy()
 
 # --- Drag-and-Drop Edit Lines Window ---
-class GMDashboardWindow(InGamePopup):
+class GMDashboardView(ctk.CTkFrame):
     """GM Dashboard: record, cap, contracts, top performers, vitals, staff."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("GM Dashboard")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("860x720")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the GMDashboardWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         self._build()
 
     # ---------- helpers ----------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _card(self, master, title, r, c):
         card = ttk.Frame(master, style='Card.TFrame', padding=12)
         card.grid(row=r, column=c, sticky='nsew', padx=6, pady=6)
         ttk.Label(card, text=title, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
         return card
 
     def _line(self, card, text, secondary=False):
         ttk.Label(card, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                  font=(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
     def _big(self, card, text):
         ttk.Label(card, text=text, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
+                  font=(self.app.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
 
     # ---------- build ----------
     def _build(self):
-        team = self.parent.user_team
-        league = self.parent.league
+        team = self.app.user_team
+        league = self.app.league
         st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
         w, l, otl, pts = st.get("W", 0), st.get("L", 0), st.get("OTL", 0), st.get("Points", 0)
         gp = w + l + otl
@@ -8922,13 +9162,13 @@ class GMDashboardWindow(InGamePopup):
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
         ttk.Label(header, text=f"{team.city} {team.team_name}",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  font=(self.app.FONT_FAMILY, 16, 'bold'),
                   style='TLabel').pack(side=tk.LEFT)
         season = getattr(league, 'season_year', '')
         ttk.Label(header, text=f"  Season {season}" if season else "",
                   style='Secondary.TLabel').pack(side=tk.LEFT)
         PillButton(header, text="Refresh", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   font=(self.app.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
 
         self.grid_host = ttk.Frame(self, style='Panel.TFrame')
@@ -9032,13 +9272,31 @@ class GMDashboardWindow(InGamePopup):
             self._line(card, f"Head Coach: {hc.full_name}")
 
     def _refresh(self):
-        team = self.parent.user_team
-        league = self.parent.league
+        team = self.app.user_team
+        league = self.app.league
         st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
         w, l, otl, pts = st.get("W", 0), st.get("L", 0), st.get("OTL", 0), st.get("Points", 0)
         self._fill_cards(team, league, st, w, l, otl, pts, w + l + otl)
 
 
+
+
+class GMDashboardWindow(InGamePopup):
+    """Popup wrapper around GMDashboardView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("GM Dashboard")
+        self._view = GMDashboardView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 class SeasonGoalsWindow(InGamePopup):
     """Season Goals: board expectation, live progress, milestones, youth watch."""
 
@@ -9204,40 +9462,48 @@ class SeasonGoalsWindow(InGamePopup):
             _mkline(self.mile_lines, f"{mark}  {label}")
 
 
-class TeamAnalyticsWindow(InGamePopup):
+class TeamAnalyticsView(ctk.CTkFrame):
     """Team Analytics: offense, defense, goalies, scoring mix, discipline."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Team Analytics")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("880x640")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the TeamAnalyticsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         self._build()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _card(self, title, r, c):
         card = ttk.Frame(self.grid_host, style='Card.TFrame', padding=12)
         card.grid(row=r, column=c, sticky='nsew', padx=6, pady=6)
         ttk.Label(card, text=title, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
         return card
 
     def _line(self, card, text, secondary=False):
         ttk.Label(card, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                  font=(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
     def _big(self, card, text):
         ttk.Label(card, text=text, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
+                  font=(self.app.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
 
     def _build(self):
-        team = self.parent.user_team
+        team = self.app.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
         PillButton(header, text="Refresh", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   font=(self.app.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
 
         self.grid_host = ttk.Frame(self, style='Panel.TFrame')
@@ -9327,39 +9593,65 @@ class TeamAnalyticsWindow(InGamePopup):
                              f"({ppg:.2f} P/GP)")
 
     def _refresh(self):
-        self._fill(self.parent.user_team)
+        self._fill(self.app.user_team)
 
 
-class SalaryAnalyticsWindow(InGamePopup):
+
+
+class TeamAnalyticsWindow(InGamePopup):
+    """Popup wrapper around TeamAnalyticsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Team Analytics")
+        self._view = TeamAnalyticsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class SalaryAnalyticsView(ctk.CTkFrame):
     """Salary Analytics: payroll mix by position, top cap hits, expiring money."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Salary Analytics")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("720x600")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SalaryAnalyticsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         self._build()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _card(self, title):
         card = ttk.Frame(self, style='Card.TFrame', padding=12)
         card.pack(fill=tk.X, padx=12, pady=6)
         ttk.Label(card, text=title, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
         return card
 
     def _line(self, card, text, secondary=False):
         ttk.Label(card, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                  font=(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
     def _build(self):
-        team = self.parent.user_team
+        team = self.app.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
         PillButton(header, text="Refresh", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   font=(self.app.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
         self.body = ttk.Frame(self, style='Panel.TFrame')
         self.body.pack(fill=tk.BOTH, expand=True)
@@ -9368,7 +9660,7 @@ class SalaryAnalyticsWindow(InGamePopup):
     def _fill(self):
         for child in self.body.winfo_children():
             child.destroy()
-        team = self.parent.user_team
+        team = self.app.user_team
         payroll = team.payroll
         cap = team.salary_cap
 
@@ -9442,6 +9734,24 @@ def buyout_schedule(player):
     return total_cost, annual, buyout_years, rows
 
 
+
+
+class SalaryAnalyticsWindow(InGamePopup):
+    """Popup wrapper around SalaryAnalyticsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Salary Analytics")
+        self._view = SalaryAnalyticsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 class BuyoutCalculatorWindow(InGamePopup):
     """Buyout Calculator: real NHL buyout math with execute."""
 
