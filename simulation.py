@@ -5291,8 +5291,15 @@ class GameSim:
                        faceoff_y=round(fy, 1))
         self._faceoff_formation(winner, self.faceoff_zone, dot=(fx, fy))
 
-        # A trailing coach sends the extra attacker back out for an
-        # offensive-zone draw (goalie returned at the whistle above).
+        # A trailing coach may burn his timeout to set up the 6-on-5, then
+        # keeps the goalie out for an offensive-zone draw (or a neutral-zone
+        # draw for aggressive coaches).
+        try:
+            from goalie_pull import maybe_timeout_before_draw as _to_draw
+            _to_draw(self, self.home_team, fx)
+            _to_draw(self, self.away_team, fx)
+        except Exception:
+            pass
         self._maybe_pull_goalie_for_draw(fx)
 
         # Rule 81.2: the icing no-change restriction ends once the ensuing
@@ -5348,7 +5355,14 @@ class GameSim:
     def _calculate_faceoff_skill(self, player, faceoff_zone, team):
         """Calculate faceoff skill with zone and situation modifiers."""
         base_skill = player.faceoffs * 1.0
-        
+
+        # A fresh timeout steadies the draw unit: one-shot bonus.
+        try:
+            from goalie_pull import timeout_faceoff_boost as _to_boost
+            base_skill += _to_boost(self, team)
+        except Exception:
+            pass
+
         # Fatigue affects faceoff performance
         fatigue_factor = self.player_fatigue.get(player.id, 100) / 100
         base_skill *= fatigue_factor
@@ -7237,9 +7251,10 @@ class GameSim:
         """Can this team pull its goalie right now? Late 3rd, trailing by
         1-2, not shorthanded, not in OT.
 
-        Momentum moves the timing, not the decision: a team that's surging
-        pulls up to 15 seconds earlier, a team on its heels waits up to 15
-        seconds longer. Conversion is untouched -- this is risk, not a boost.
+        Timing comes from goalie_pull.pull_windows: the head coach's style
+        (aggressive/balanced/conservative) sets the base window and the
+        momentum risk reading shifts it +-15s. Conversion is untouched --
+        this is risk, not a boost.
         """
         if getattr(self, "period", 1) != 3:
             return False
@@ -7250,15 +7265,14 @@ class GameSim:
         if diff >= 0:
             return False
         try:
-            from momentum import risk_appetite as _risk
-            _extra = int(round(60.0 * (_risk(self, team) - 1.0)))
-            _extra = max(-15, min(15, _extra))
+            from goalie_pull import pull_windows as _gp_windows
+            _d1, _d2, _style = _gp_windows(self, team)
         except Exception:
-            _extra = 0
+            _d1, _d2 = 120, 60
         deficit = -diff
-        if deficit == 1 and self.clock > 120 + _extra:
+        if deficit == 1 and self.clock > _d1:
             return False
-        if deficit == 2 and self.clock > 60 + _extra:
+        if deficit == 2 and self.clock > _d2:
             return False
         if deficit > 2:
             return False
@@ -7310,13 +7324,34 @@ class GameSim:
                 self._pull_goalie(team)
 
     def _maybe_pull_goalie_for_draw(self, fx):
-        """A trailing coach keeps the goalie out for an offensive-zone draw."""
+        """A trailing coach keeps the goalie out for an offensive-zone draw.
+
+        A coach who just burned his timeout to set up the 6-on-5 also pulls
+        for the neutral-zone draw if his style allows it -- never for a
+        defensive-zone draw.
+        """
         for team in (self.home_team, self.away_team):
             if not self._pull_eligible(team):
                 continue
             adir = 1 if team is self.home_team else -1
-            if (adir == 1 and fx > 125) or (adir == -1 and fx < 75):
+            in_oz = (adir == 1 and fx > 125) or (adir == -1 and fx < 75)
+            in_nz = 75 <= fx <= 125
+            try:
+                from goalie_pull import (
+                    timeout_pending_pull as _tpp,
+                    pull_style as _pstyle,
+                    coach_for as _cfor,
+                )
+            except Exception:
+                _tpp = _pstyle = _cfor = None
+            if in_oz:
+                if _tpp is not None:
+                    _tpp(self, team)  # single-use flag, consumed either way
                 self._pull_goalie(team)
+                continue
+            if in_nz and _tpp is not None:
+                if _pstyle(_cfor(self, team))["nz_draw"] and _tpp(self, team):
+                    self._pull_goalie(team)
 
     def _maybe_empty_net_goal(self, team_with_puck):
         """The other team's net is empty and they just turned it over."""

@@ -300,7 +300,7 @@ DETAIL_SHORT = {"full": "Full", "extended": "Extended",
 _DETAIL_HIGHLIGHT_TYPES = {
     "game_start", "period_start", "period_end", "game_end",
     "goal", "penalty", "fight", "line_brawl", "penalty_shot",
-    "shootout", "shootout_end", "goalie_pulled",
+    "shootout", "shootout_end", "goalie_pulled", "timeout",
 }
 # Event types demoted to feed-only lines in extended mode (routine play).
 _DETAIL_EXTENDED_ROUTINE = {
@@ -2585,6 +2585,10 @@ class PBPVisualSim(InGamePopup):
             self._on_goalie_pulled(ev)
         elif et == "goalie_back":
             self._on_goalie_back(ev)
+        elif et == "timeout":
+            self._feed(f"{ev.get('team', '')} call their timeout -- "
+                       f"{ev.get('reason', 'to set up the late push')}.",
+                       tag="info", ev=ev)
         elif et == "shot":
             self._on_shot(ev)
         elif et in ("goal", "save", "blocked_shot", "missed_shot"):

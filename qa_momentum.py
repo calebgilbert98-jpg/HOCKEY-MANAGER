@@ -140,7 +140,9 @@ for site in ('_mom_observe(self, "goal"',
              '_mom_observe6(self, "big_save"'):
     check(f"wired: {site}", site in sim_src)
 check("pull timing reads risk",
-      "risk_appetite" in sim_src and "120 + _extra" in sim_src)
+      "pull_windows" in sim_src
+      and "risk_appetite" in open(
+          '/home/hatch/workspace/HOCKEY-MANAGER/goalie_pull.py').read())
 
 # --- visualizer wiring present -------------------------------------------------------
 viz_src = open('/home/hatch/workspace/HOCKEY-MANAGER/pbp_visual_sim.py').read()
