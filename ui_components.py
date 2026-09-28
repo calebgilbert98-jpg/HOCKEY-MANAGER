@@ -1550,53 +1550,176 @@ class PlayerProfileView(ctk.CTkFrame):
                 ))
 
     def _create_advanced_stats(self, parent):
-        """Creates advanced statistics section."""
-        advanced_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        """Per-player advanced analytics on the Statistics tab.
+
+        Mirrors the legacy card's deep dive: the same department-lens
+        metrics, the same honest ±CI labeling, the same as-of line.
+        The numbers YOUR club sees come through YOUR analytics
+        department -- modeled metrics carry the department's noise and
+        confidence intervals, observed box-score facts are exact.
+        """
+        import advanced_metrics as am
+        p = self.player
+        try:
+            is_goalie = "GOALIE" in str(p.primary_position).upper()
+        except Exception:
+            is_goalie = False
+
+        lens = None
+        try:
+            team = getattr(self.app, "user_team", None)
+            date_str = str(getattr(self.app, "current_date", "") or "")
+            if team is not None:
+                if is_goalie:
+                    lens = am.display_goalie_metrics(p, team, date_str)
+                else:
+                    lens = am.display_skater_metrics(p, team, date_str)
+        except Exception:
+            lens = None
+
+        def _val(field, fallback):
+            if lens is not None and field in lens.values:
+                return lens.values[field]
+            return fallback
+
+        def _with_ci(field, text, pct100=False):
+            if lens is not None and field in lens.ci:
+                ci = lens.ci[field]
+                if text.rstrip().endswith("%"):
+                    if pct100:
+                        return f"{text} ±{ci:.1f} pts"
+                    return f"{text} ±{ci * 100:.1f} pts"
+                return f"{text} ±{ci:.1f}"
+            return text
+
+        def _glossary_tip(event, text):
+            try:
+                tip = tk.Toplevel()
+                tip.wm_overrideredirect(True)
+                tip.geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
+                tk.Label(tip, text=text, wraplength=280, justify="left",
+                         background="#ffffe0", relief="solid",
+                         borderwidth=1).pack()
+                event.widget.bind("<Leave>", lambda _e: tip.destroy(),
+                                  add="+")
+                tip.after(4000, tip.destroy)
+            except Exception:
+                pass
+
+        advanced_frame = ttk.Frame(parent, style='PlayerPanel.TFrame',
+                                   padding=10)
         advanced_frame.pack(fill='x', padx=5, pady=3)
-        
-        ttk.Label(advanced_frame, text="Advanced Statistics", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 5))
-        
-        # Advanced stats grid - 4 columns
-        advanced_grid = ttk.Frame(advanced_frame, style='PlayerTab.TFrame')
-        advanced_grid.pack(fill='x')
-        
-        if self.player.primary_position == PlayerPosition.GOALIE:
-            advanced_stats = [
-                ("High Danger SV%", "0.000"),
-                ("Medium Danger SV%", "0.000"),
-                ("Low Danger SV%", "0.000"),
-                ("Even Strength SV%", "0.000"),
-                ("Power Play SV%", "0.000"),
-                ("Short Handed SV%", "0.000"),
-                ("Goals Saved Above Avg", "0.0"),
-                ("Quality Start %", "0.0%")
-            ]
-        else:
-            advanced_stats = [
-                ("Corsi For %", "50.0%"),
-                ("Fenwick For %", "50.0%"),
-                ("PDO", "100.0"),
-                ("OZ Start %", "50.0%"),
-                ("TOI/Game", "0:00"),
-                ("Shots/Game", "0.0"),
-                ("Hits/Game", "0.0"),
-                ("Blocks/Game", "0.0")
-            ]
-        
-        # Display in 4-column layout
-        for i, (label, value) in enumerate(advanced_stats):
-            row = i // 4
-            col_base = (i % 4) * 2
-            
-            advanced_grid.grid_columnconfigure(col_base, weight=0)
-            advanced_grid.grid_columnconfigure(col_base+1, weight=1)
-            
-            ttk.Label(advanced_grid, text=f"{label}:", style='PlayerInfo.TLabel').grid(
-                row=row, column=col_base, sticky='w', padx=(2, 1), pady=1
-            )
-            ttk.Label(advanced_grid, text=value, style='PlayerValue.TLabel').grid(
-                row=row, column=col_base+1, sticky='w', padx=(1, 8), pady=1
-            )
+
+        ttk.Label(advanced_frame, text="Advanced Analytics",
+                  style='PlayerSubheader.TLabel').pack(anchor='w',
+                                                       pady=(0, 2))
+        if lens is not None:
+            lag = lens.lag_days
+            ttk.Label(
+                advanced_frame,
+                text=(f"{lens.tier}  •  models as of {lens.as_of} "
+                      f"(rebuilt every {lag} day{'s' if lag != 1 else ''})"),
+                style='PlayerInfo.TLabel').pack(anchor='w', pady=(0, 2))
+        ttk.Label(
+            advanced_frame,
+            text=("Estimates, not tracking data: modeled metrics show your "
+                  "department's confidence interval (±); observed box-score "
+                  "facts are exact. Hover ⓘ on any metric for what it is "
+                  "(and isn't)."),
+            style='PlayerInfo.TLabel',
+            wraplength=900).pack(anchor='w', pady=(0, 8))
+
+        def _section(title, rows):
+            ttk.Label(advanced_frame, text=title,
+                      style='PlayerSubheader.TLabel').pack(anchor='w',
+                                                           pady=(8, 4))
+            for label, value, tip in rows:
+                row = ttk.Frame(advanced_frame, style='PlayerTab.TFrame')
+                row.pack(fill='x', pady=1)
+                ttk.Label(row, text=label, style='PlayerInfo.TLabel',
+                          width=28).pack(side='left')
+                ttk.Label(row, text=value,
+                          style='PlayerValue.TLabel').pack(side='left')
+                if tip:
+                    dot = ttk.Label(row, text="ⓘ",
+                                    style='PlayerInfo.TLabel',
+                                    cursor="hand2")
+                    dot.pack(side='left', padx=6)
+                    dot.bind("<Enter>",
+                             lambda e, t=tip: _glossary_tip(e, t))
+
+        try:
+            if is_goalie:
+                m = am.goalie_advanced(p)
+                _section("Goaltending — Above Expected", [
+                    ("GSAx",
+                     _with_ci("gsax", f"{_val('gsax', m.gsax):+.1f}"),
+                     am.GLOSSARY.get("GSAx")),
+                    ("GSAA", f"{_val('gsaa', m.gsaa):+.1f}",
+                     am.GLOSSARY.get("GSAA")),
+                    ("High-danger SV%",
+                     _with_ci("hdsv_pct",
+                              f"{_val('hdsv_pct', m.hdsv_pct):.3f}"),
+                     am.GLOSSARY.get("HDSV%")),
+                    ("Quality-start %",
+                     _with_ci("qs_pct",
+                              f"{_val('qs_pct', m.qs_pct):.1%}"),
+                     am.GLOSSARY.get("QS%")),
+                ])
+                _section("Workload", [
+                    ("Save %", f"{_val('sv_pct', m.sv_pct):.3f}", None),
+                    ("GAA", f"{_val('gaa', m.gaa):.2f}", None),
+                    ("Shots against / 60",
+                     f"{_val('sa_per60', m.sa_per60):.1f}", None),
+                ])
+            else:
+                m = am.skater_advanced(p)
+                _section("Offense — Finishing & Creation", [
+                    ("Shooting %",
+                     f"{_val('sh_pct', m.sh_pct):.1f}%",
+                     am.GLOSSARY.get("SH%")),
+                    ("Individual xG",
+                     _with_ci("ixg", f"{_val('ixg', m.ixg):.1f}"),
+                     am.GLOSSARY.get("ixG")),
+                    ("Goals / 60",
+                     f"{_val('g_per60', m.g_per60):.2f}", None),
+                    ("Points / 60",
+                     f"{_val('p_per60', m.p_per60):.2f}",
+                     am.GLOSSARY.get("P/60")),
+                    ("Game Score",
+                     f"{_val('game_score', m.game_score):.1f}",
+                     am.GLOSSARY.get("Game Score")),
+                ])
+                _section("Possession — Driving Play", [
+                    ("Corsi %",
+                     _with_ci("cf_pct",
+                              f"{_val('cf_pct', m.cf_pct):.1f}%", True),
+                     am.GLOSSARY.get("CF%")),
+                    ("Fenwick %",
+                     _with_ci("ff_pct",
+                              f"{_val('ff_pct', m.ff_pct):.1f}%", True),
+                     am.GLOSSARY.get("FF%")),
+                    ("Expected-goal share",
+                     _with_ci("xgf_pct",
+                              f"{_val('xgf_pct', m.xgf_pct):.1f}%", True),
+                     am.GLOSSARY.get("xGF%")),
+                    ("Offensive-zone starts",
+                     _with_ci("oz_pct",
+                              f"{_val('oz_pct', m.oz_pct):.1f}%", True),
+                     am.GLOSSARY.get("OZ%")),
+                ])
+                _section("Defense & Luck", [
+                    ("PDO",
+                     _with_ci("pdo", f"{_val('pdo', m.pdo):.3f}"),
+                     am.GLOSSARY.get("PDO")),
+                    ("Hits", str(int(_val("hits", m.hits))), None),
+                    ("Blocked shots", str(int(_val("blocks", m.blocks))),
+                     None),
+                ])
+        except Exception as e:
+            ttk.Label(advanced_frame,
+                      text=f"Analytics unavailable ({e})",
+                      style='PlayerInfo.TLabel').pack(anchor='w')
 
     def _create_performance_trends(self, parent):
         """Creates performance trends and notes section."""

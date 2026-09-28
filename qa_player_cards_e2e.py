@@ -287,6 +287,59 @@ check("allies data resolves without error",
       and all(k in d for k in ("family", "friends", "teammate",
                                "staff", "rivals")))
 
+# -- 9. statistics tab shows real per-player advanced analytics -----------
+# (department lens, honest ±CI on modeled metrics; no placeholders)
+_stats_texts = _tab_texts(tabs.index("Statistics"))
+check("stats tab has advanced analytics header",
+      "Advanced Analytics" in _stats_texts)
+check("stats tab shows department as-of line",
+      any("models as of" in t for t in _stats_texts))
+check("skater advanced metrics are real, not placeholders",
+      "Offense — Finishing & Creation" in _stats_texts
+      and "Possession — Driving Play" in _stats_texts
+      and "Defense & Luck" in _stats_texts
+      and "Corsi %" in _stats_texts
+      and "50.0%" not in _stats_texts
+      and "Individual xG" in _stats_texts
+      and "Game Score" in _stats_texts)
+check("modeled metrics carry the department confidence interval",
+      any("±" in t for t in _stats_texts))
+check("estimates-not-tracking disclaimer present",
+      any("Estimates, not tracking data" in t for t in _stats_texts))
+
+# Goalie card: GSAx / GSAA / HDSV% / QS% through the same lens.
+pg = next(x for x in team.roster
+          if "GOALIE" in str(getattr(x, "primary_position", "")))
+view_g = app.open_player_profile(pg)
+for _ in range(6):
+    app.update_idletasks(); app.update()
+tabs_g = [view_g.notebook.tab(i, "text")
+          for i in range(view_g.notebook.index("end"))]
+view_g.notebook.select(tabs_g.index("Statistics"))
+for _ in range(4):
+    app.update_idletasks(); app.update()
+gtab = view_g.notebook.nametowidget(view_g.notebook.select())
+g_texts, stack = [], [gtab]
+while stack:
+    w = stack.pop()
+    try:
+        stack.extend(w.winfo_children())
+    except Exception:
+        pass
+    try:
+        t = str(w.cget("text") or "").strip()
+    except Exception:
+        t = ""
+    if t:
+        g_texts.append(t)
+check("goalie advanced metrics are real, not placeholders",
+      "Goaltending — Above Expected" in g_texts
+      and "GSAx" in g_texts and "GSAA" in g_texts
+      and "High-danger SV%" in g_texts
+      and "Quality-start %" in g_texts
+      and "Medium Danger SV%" not in g_texts
+      and "Even Strength SV%" not in g_texts)
+
 print(f"\n{len(passed)} passed, {len(failed)} failed")
 app.destroy()
 sys.exit(1 if failed else 0)
