@@ -294,6 +294,11 @@ class DatabaseGenerator:
         self.generated_players = []
         self.generated_teams = []
         self.generated_leagues = []
+        # Fantasy-draft starts are an even playing field: when True, the
+        # day-one cap situations (payroll targets + compliance backstop)
+        # are skipped so the draft pool is unshaped. Set by main.py from
+        # the launcher's fantasy_draft option before generation.
+        self.fantasy_draft_mode = False
         
     def generate_comprehensive_database(self, progress_callback=None) -> League:
         """Generate a complete hockey database based on configuration"""
@@ -367,9 +372,13 @@ class DatabaseGenerator:
         # Day-one cap situations: reshape NHL payrolls toward each club's
         # real 2026-27 posture (cap-strapped contenders tight, cap-flush
         # clubs with room) and guarantee no club starts over the cap.
-        self._apply_day_one_cap_situations([
-            t for t in main_league.teams
-            if getattr(t, 'league_name', '') == "National Hockey League"])
+        # Skipped for fantasy-draft starts -- even playing field, the
+        # draft pool stays unshaped and cap compliance is not enforced
+        # during the draft.
+        if not self.fantasy_draft_mode:
+            self._apply_day_one_cap_situations([
+                t for t in main_league.teams
+                if getattr(t, 'league_name', '') == "National Hockey League"])
         
         update_progress(65, "Generating free agent pool...", f"{players_created:,} team players created")
         
@@ -414,14 +423,30 @@ class DatabaseGenerator:
         
         return main_league
     
-    # Salary shares for a 23-man NHL roster, largest to smallest: a
-    # star-heavy top end, a middle class, and cheap depth. Normalized to
-    # sum to 1.0 at use time.
-    _ROSTER_SALARY_SHARES = (
-        0.115, 0.098, 0.088, 0.080, 0.072, 0.066, 0.060, 0.055,
+    # Two roster salary-share curves for a 23-man NHL roster, largest to
+    # smallest, blended per club by payroll target (see
+    # _generate_cap_targeted_roster):
+    # - _HEAVY_SHARES: star-heavy top end. Capped-out contenders carry
+    #   this shape -- they are capped out BECAUSE they pay $12M+ talent.
+    # - _FLAT_SHARES: flatter distribution. Cap-flush clubs get this --
+    #   a team with $18M in space does not have a McDavid; its best
+    #   player is a very good ~$8M piece, and the money spreads into
+    #   depth. Both normalized to sum to 1.0 at use time.
+    _HEAVY_SHARES = (
+        0.125, 0.098, 0.088, 0.080, 0.072, 0.066, 0.060, 0.055,
         0.050, 0.046, 0.042, 0.038, 0.035, 0.032, 0.030, 0.028,
         0.025, 0.022, 0.020, 0.018, 0.015, 0.012, 0.006,
     )
+    _FLAT_SHARES = (
+        0.095, 0.085, 0.078, 0.072, 0.066, 0.061, 0.056, 0.052,
+        0.048, 0.044, 0.041, 0.038, 0.035, 0.032, 0.030, 0.028,
+        0.026, 0.024, 0.022, 0.020, 0.017, 0.014, 0.010,
+    )
+    # Payroll-target range the blend interpolates across: ~$82M (fully
+    # flat -- the most cap-flush clubs) to ~$103.5M (fully star-heavy --
+    # the capped-out contenders).
+    _BLEND_LO = 82_000_000
+    _BLEND_HI = 103_500_000
 
     _qm_salary_calib = None  # lazily calibrated [(median_salary, qm)]
 
@@ -470,11 +495,18 @@ class DatabaseGenerator:
         the club's real 2026-27 projected room (real_cap_data). Each pick
         aims at its share of the remaining budget, so the roster shape
         mimics a real club (stars up top, cheap depth at the bottom) and
-        the total lands near the target. Contracts come from the same
-        2026-market gates as everywhere else; the loop self-corrects when
-        the dice come in hot or cold. Returns None if no target could be
-        computed (caller falls back to the classic path).
+        the total lands near the target. Star concentration follows the
+        money: high-payroll clubs blend toward the star-heavy curve
+        (that's why they're capped out), low-payroll clubs toward the
+        flat curve (cap space means no $13M superstar on the roster).
+        Contracts come from the same 2026-market gates as everywhere
+        else; the loop self-corrects when the dice come in hot or cold.
+        Returns None if no target could be computed (caller falls back
+        to the classic path), or when the game starts with a fantasy
+        draft (even playing field -- the draft pool stays unshaped).
         """
+        if getattr(self, "fantasy_draft_mode", False):
+            return None
         try:
             import real_cap_data as _rcd
             from salary_cap_system import DEFAULT_CAP as _CAP
@@ -487,7 +519,11 @@ class DatabaseGenerator:
         positions = ([PlayerPosition.CENTER, PlayerPosition.RIGHT_WING,
                       PlayerPosition.LEFT_WING, PlayerPosition.LEFT_DEFENSE,
                       PlayerPosition.RIGHT_DEFENSE, PlayerPosition.GOALIE] * 4)[:23]
-        shares = list(self._ROSTER_SALARY_SHARES[:len(positions)])
+        # Blend flat <-> star-heavy by payroll target.
+        _t = (target - self._BLEND_LO) / (self._BLEND_HI - self._BLEND_LO)
+        _t = max(0.0, min(1.0, _t))
+        shares = [f + _t * (h - f) for f, h in
+                  zip(self._FLAT_SHARES, self._HEAVY_SHARES)][:len(positions)]
         total_share = sum(shares) or 1.0
         shares = [s / total_share for s in shares]
 
@@ -501,19 +537,71 @@ class DatabaseGenerator:
             else:
                 target_sal = budget_left
             target_sal = max(775_000, min(21_000_000, target_sal))
-            # Age follows the money: stars are veterans, depth is young
-            # (and cheap picks can land ELC talent, like real clubs).
+            # Tier-consistent dice: the shared contract gates are tiered
+            # on overall (95+ superstar money, 90+ premium), so one lucky
+            # 95 on an $8M slot would sign for $16M+ and break the club's
+            # shape -- a cap-flush team must never roll a McDavid. Age
+            # follows the money (stars are veterans, depth is young, and
+            # cheap slots can land ELC talent like real clubs); the aim
+            # steers toward the slot and tier-crossers are re-rolled.
+            # A slot paying less than premium money must not roll premium
+            # talent (and premium slots must not roll a superstar): the
+            # tiered gates would pay them far above the slot and hand a
+            # cap-flush club a McDavid. ELC-age slots are exempt -- the
+            # entry-level scale caps their pay whatever they roll.
             if target_sal >= 5_000_000:
-                age = random.randint(26, 33)
+                age_lo, age_hi = 26, 33
             elif target_sal >= 2_000_000:
-                age = random.randint(23, 30)
+                age_lo, age_hi = 23, 30
             else:
-                age = random.randint(18, 24)
-            qm = self._quality_for_salary(target_sal) * random.uniform(0.94, 1.06)
-            qm = max(0.50, min(1.70, qm))
-            player = self._create_enhanced_player(age, pos, qm)
-            players.append(player)
-            committed += int(getattr(getattr(player, "contract", None),
+                age_lo, age_hi = 18, 24
+            if target_sal < 9_000_000:
+                tier_cap = 89
+            elif target_sal < 12_000_000:
+                tier_cap = 94
+            else:
+                tier_cap = 100
+            # Franchise premium: a capped-out club's #1 pick is where the
+            # $15M+ deals live in real life (Makar $20.4M, Celebrini
+            # $18.8M). The fatter slot plus an open superstar tier lets
+            # the dice land a true franchise player; the loop's
+            # self-correction keeps the payroll on target either way.
+            if i == 0 and _t >= 0.85:
+                target_sal *= 1.15
+                tier_cap = 100
+            best, best_miss = None, None
+            qm = self._quality_for_salary(target_sal)
+            for attempt in range(12):
+                age = random.randint(age_lo, age_hi)
+                q = max(0.50, min(1.70, qm * random.uniform(0.96, 1.04)))
+                cand = self._create_enhanced_player(age, pos, q)
+                if age > 22 and cand.overall_rating() > tier_cap:
+                    # Tier-crossing: this quality runs too hot for the
+                    # slot -- cool the aim and re-roll, never sign.
+                    qm *= 0.94
+                    continue
+                sal = int(getattr(getattr(cand, "contract", None),
+                                  "salary", 0) or 0)
+                miss = abs(sal - target_sal)
+                if best is None or miss < best_miss:
+                    best, best_miss = cand, miss
+                if miss <= target_sal * 0.25:
+                    break
+                # Steer the aim toward the slot: hot rolls cool it, cold
+                # rolls warm it. (ELC-age salaries don't move with
+                # quality, so only steer once the entry-level scale no
+                # longer caps the pay.)
+                if age > 22:
+                    if sal > target_sal * 1.10:
+                        qm *= 0.95
+                    elif sal < target_sal * 0.90:
+                        qm *= 1.05
+            if best is None:
+                best = self._create_enhanced_player(
+                    random.randint(age_lo, age_hi), pos,
+                    max(0.50, min(1.70, qm * 0.90)))
+            players.append(best)
+            committed += int(getattr(getattr(best, "contract", None),
                                      "salary", 0) or 0)
         return players
 
@@ -521,14 +609,17 @@ class DatabaseGenerator:
         """Reshape day-one NHL payrolls toward real 2026-27 cap situations.
 
         Each club gets a payroll target (cap - seeded dead cap - real
-        projected room, via real_cap_data). Clubs over target move their
-        most expensive players to clubs under target via same-position
-        swaps, so cap-strapped contenders (Vegas, Toronto, Edmonton...)
-        end up stacked and tight while cap-flush clubs (Detroit, Seattle,
-        Vancouver...) hold room to weaponize. No contract is touched --
-        players (and their deals) just change clubs. A proportional
-        scale-down backstops any club still over the cap afterwards: no
-        team may start in violation.
+        projected room, via real_cap_data), and each roster is generated
+        closed-loop against its own target with a star-concentration
+        shape that follows the money: capped-out contenders (Vegas,
+        Toronto, Edmonton...) are top-heavy because they pay $12M+
+        talent, while cap-flush clubs (Detroit, Seattle, Vancouver...)
+        are flat -- no McDavid on a team with $18M in space -- and hold
+        room to weaponize. Deliberately no cross-team swaps: moving an
+        expensive star to an under-target club would hand flat teams
+        superstars and destroy the shape. A proportional scale-down
+        backstops any club still over the cap afterwards: no team may
+        start in violation.
         """
         try:
             import real_cap_data as _rcd
@@ -538,58 +629,11 @@ class DatabaseGenerator:
         if not nhl_teams:
             return
 
-        target = {}
-        for team in nhl_teams:
-            key = _rcd._team_key(team)
-            target[team.team_name] = (_CAP - _rcd.total_dead_cap(key)
-                                      - _rcd.target_cap_room(key))
-
         def _sal(p) -> int:
             return int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
 
         def _payroll(team) -> int:
             return sum(_sal(p) for p in (getattr(team, "roster", None) or []))
-
-        # Swap phase: push every club toward its target.
-        TOL = 1_500_000
-        for _ in range(400):
-            over_first = sorted(nhl_teams,
-                                key=lambda t: _payroll(t) - target[t.team_name],
-                                reverse=True)
-            team = over_first[0]
-            if _payroll(team) - target[team.team_name] <= TOL:
-                break
-            candidates = sorted((getattr(team, "roster", None) or []),
-                                key=_sal, reverse=True)
-            moved = False
-            for p in candidates:
-                psal = _sal(p)
-                pos = p.primary_position
-                under_first = sorted(
-                    nhl_teams,
-                    key=lambda t: _payroll(t) - target[t.team_name])
-                for other in under_first:
-                    if other is team:
-                        continue
-                    if _payroll(other) - target[other.team_name] >= -TOL:
-                        continue
-                    cheaper = [q for q in (getattr(other, "roster", None) or [])
-                               if q.primary_position == pos and _sal(q) < psal]
-                    if not cheaper:
-                        continue
-                    q = max(cheaper, key=_sal)
-                    team.roster.remove(p)
-                    other.roster.remove(q)
-                    team.roster.append(q)
-                    other.roster.append(p)
-                    p.team_name = other.team_name
-                    q.team_name = team.team_name
-                    moved = True
-                    break
-                if moved:
-                    break
-            if not moved:
-                break
 
         # Hard compliance safety net (same rule as the classic path).
         # Measured on the TRUE cap charge -- active roster + minor-league

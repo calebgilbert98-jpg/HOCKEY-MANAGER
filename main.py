@@ -276,6 +276,11 @@ class GameManager:
                     generator = DatabaseGenerator(db_config)
                 else:
                     generator = DatabaseGenerator(config)
+                # Fantasy-draft starts are an even playing field: the
+                # generator skips the real-life day-one cap situations so
+                # the draft pool is unshaped (cap compliance is also not
+                # enforced during the draft itself).
+                generator.fantasy_draft_mode = settings.get('fantasy_draft', False)
                 debug_print("DEBUG: DatabaseGenerator created, starting generation...")
                 self.league = generator.generate_comprehensive_database(progress_callback)
                 debug_print("DEBUG: Database generation completed")
@@ -304,14 +309,20 @@ class GameManager:
                 # dead-cap penalties (buyouts + retained salary + bonus
                 # overages), unless the user chose "start without cap
                 # penalties". Only for 2026-27 starts -- the research is
-                # season-specific.
+                # season-specific. Fantasy-draft starts skip the seeding
+                # entirely: the draft assumes cap rules (the $104M ceiling
+                # still applies after) but not cap penalties, so every
+                # club begins on an even playing field.
                 try:
                     import real_cap_data
                     season_yr = getattr(self.league, 'season_year', 2026)
                     if settings.get('start_without_cap_penalties', False):
                         real_cap_data.clear_dead_cap(self.league)
                         print("Cap penalties cleared (start without cap penalties).")
-                    elif season_yr == real_cap_data.SEASON:
+                    elif not real_cap_data.should_seed_dead_cap(season_yr, settings):
+                        print("Cap penalties not seeded for this start "
+                              "(fantasy draft: cap rules apply, penalties don't).")
+                    else:
                         n = real_cap_data.seed_real_dead_cap(self.league)
                         print(f"Seeded real-life dead-cap penalties for {n} teams.")
                 except Exception as e:

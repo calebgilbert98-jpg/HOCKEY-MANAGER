@@ -81,5 +81,33 @@ check("two-way deals present on NHL rosters", two_way > 50)
 check("all rosters 21-23 players",
       all(21 <= len(t.roster) <= 23 for t in nhl))
 
+# Star-concentration disparity: cap-flush clubs must not carry a
+# McDavid-level contract while capped-out contenders do. Blend factor
+# t runs 0 (flat payroll) -> 1 (star-heavy payroll) by day-one target.
+def _blend_t(team):
+    key = rcd._team_key(team)
+    tgt = (DEFAULT_CAP
+           - rcd.total_dead_cap(key)
+           - rcd.target_cap_room(key))
+    return max(0.0, min(1.0, (tgt - 82_000_000) / 21_500_000))
+
+top_sal = {}
+for t in nhl:
+    ss = sorted((int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
+                 for p in (t.roster or [])), reverse=True)
+    top_sal[t.team_name] = ss[0] / 1e6 if ss else 0.0
+flat = [t for t in nhl if _blend_t(t) <= 0.25]
+heavy = [t for t in nhl if _blend_t(t) >= 0.85]
+flat_max = max(top_sal[t.team_name] for t in flat)
+heavy_min = min(top_sal[t.team_name] for t in heavy)
+print(f"    flat clubs (t<=0.25) top salary: ${flat_max:.2f}M; "
+      f"heavy clubs (t>=0.85) lowest top salary: ${heavy_min:.2f}M")
+check("cap-flush clubs top out at role-player money (<= $8M)",
+      flat_max <= 8.0)
+check("capped-out clubs carry a star (>= $9.5M top deal)",
+      heavy_min >= 9.5)
+check("disparity ordering: every flat club's best-paid player earns "
+      "less than every heavy club's", flat_max < heavy_min)
+
 print(f"\n{len(passed)} passed, {len(failed)} failed")
 sys.exit(1 if failed else 0)

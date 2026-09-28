@@ -176,6 +176,22 @@ def total_dead_cap(team_name: str) -> int:
     return b + r + o
 
 
+def should_seed_dead_cap(season_year: int, settings) -> bool:
+    """Whether a new game should seed real-life dead-cap penalties.
+
+    Cap rules always apply; cap penalties are skipped when the user chose
+    "start without cap penalties" or starts with a fantasy draft (even
+    playing field -- every club begins at $0 dead cap while the $104M
+    ceiling still governs the league).
+    """
+    settings = settings or {}
+    if settings.get('start_without_cap_penalties', False):
+        return False
+    if settings.get('fantasy_draft', False):
+        return False
+    return season_year == SEASON
+
+
 def seed_real_dead_cap(league, overwrite: bool = False) -> int:
     """Seed 2026-27 real-life dead-cap penalties onto every league team.
 

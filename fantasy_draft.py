@@ -51,7 +51,15 @@ class TeamDraftStrategy:
     
 class FantasyDraftManager:
     """Manages the fantasy draft logic and data"""
-    
+
+    # Cap-awareness model for AI drafting: the first _CAP_CORE_SIZE picks
+    # are the cap-relevant NHL core; the rest is AHL depth. Remaining
+    # unfilled core slots are assumed to cost _DEPTH_FILL_RATE each, so the
+    # AI can project its final payroll and prefer value as the cap fills.
+    # This is a soft nudge only -- the draft never enforces compliance.
+    _CAP_CORE_SIZE = 23
+    _DEPTH_FILL_RATE = 1_500_000
+
     def __init__(self, teams: List[Team], all_players: List[Player], config: Optional[DraftConfiguration] = None):
         self.teams = teams
         self.all_players = all_players
@@ -167,6 +175,47 @@ class FantasyDraftManager:
         """Check if draft is complete"""
         return self.current_pick >= len(self.draft_picks)
     
+    def _team_drafted_players(self, team: Team):
+        """Players this team has already drafted (in pick order)."""
+        return [pick.player for pick in self.draft_picks
+                if pick.team.team_name == team.team_name and pick.player]
+
+    def _committed_cap(self, team: Team) -> float:
+        """Total salary already committed by this team's draft picks."""
+        total = 0.0
+        for player in self._team_drafted_players(team):
+            contract = getattr(player, 'contract', None)
+            if contract is not None:
+                total += float(getattr(contract, 'salary', 0) or 0)
+        return total
+
+    def _cap_pressure_factor(self, team: Team, player: Player) -> float:
+        """Soft cap-awareness for AI drafting.
+
+        Projects the club's final payroll as committed salary + this
+        player's salary + a depth rate for each unfilled core slot. While
+        the projection fits under the cap the factor is 1.0 (draft the
+        best player, period); as the projection pushes over, expensive
+        players are progressively discounted so the AI leans into value
+        deals and roster balance. Never blocks a pick -- the fantasy
+        draft does not enforce cap compliance.
+        """
+        if not getattr(self.config, 'salary_cap_enabled', True):
+            return 1.0
+        contract = getattr(player, 'contract', None)
+        salary = float(getattr(contract, 'salary', 0) or 0)
+        if salary <= 0:
+            return 1.0
+        cap = float(getattr(team, 'salary_cap', 0) or 104_000_000)
+        committed = self._committed_cap(team)
+        picks_made = len(self._team_drafted_players(team))
+        slots_left = max(0, self._CAP_CORE_SIZE - picks_made - 1)
+        projected = committed + salary + self._DEPTH_FILL_RATE * slots_left
+        if projected <= cap:
+            return 1.0
+        over_frac = (projected - cap) / cap
+        return max(0.5, 1.0 - 2.0 * over_frac)
+
     def analyze_team_needs(self, team: Team) -> Dict[str, float]:
         """Analyze team's positional needs based on current draft picks"""
         # Count current picks by position
@@ -176,8 +225,7 @@ class FantasyDraftManager:
         }
         
         # Count drafted players for this team
-        team_picks = [pick.player for pick in self.draft_picks 
-                     if pick.team.team_name == team.team_name and pick.player]
+        team_picks = self._team_drafted_players(team)
         
         for player in team_picks:
             pos = player.primary_position.value
@@ -226,11 +274,17 @@ class FantasyDraftManager:
         if round_num > 5:  # Later rounds
             risk_factor = 1.0 + (strategy.risk_tolerance * 0.2)
             
-        # Contract value factor - NEW strategic element
+        # Contract value factor - strategic element: value per dollar,
+        # term flexibility, clause restrictions
         contract_factor = self.calculate_contract_value(player, round_num)
-            
+
+        # Cap-pressure factor: as the club's projected payroll approaches
+        # the cap, expensive players are softly discounted so the AI
+        # builds a balanced, affordable roster (never a hard block).
+        cap_factor = self._cap_pressure_factor(team, player)
+
         # Combine all factors
-        final_value = (base_value + age_factor) * need_multiplier * pos_weight * risk_factor * contract_factor
+        final_value = (base_value + age_factor) * need_multiplier * pos_weight * risk_factor * contract_factor * cap_factor
         
         return final_value
         
