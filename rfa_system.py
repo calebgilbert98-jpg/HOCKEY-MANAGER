@@ -959,11 +959,17 @@ def execute_offer_sheet(league, offering_team, original_team, player,
     transferred = []
     missing = []
     for rnd in picks:
-        pk = _own_pick(offering_team, year, rnd)
-        if pk is None:
-            # Try the following year — real clubs must have their own picks
-            # available; without them the offer sheet can't be signed.
-            pk = _own_pick(offering_team, year + 1, rnd)
+        pk = None
+        # Walk forward through the signing club's OWN upcoming picks (as
+        # far as picks exist -- seven drafts out). Real compensation is
+        # the club's own picks in the coming drafts, so a near pick
+        # that's already been traded just pushes that piece of the debt
+        # to the next one the club still owns. Only when the club owns
+        # none of the required picks at all is the sheet unsigned.
+        for _yy in range(year, year + 7):
+            pk = _own_pick(offering_team, _yy, rnd)
+            if pk is not None:
+                break
         if pk is None:
             missing.append(rnd)
         else:

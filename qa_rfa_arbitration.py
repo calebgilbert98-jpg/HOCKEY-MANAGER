@@ -559,5 +559,57 @@ a_go, _ = PD.contract_appeal(loyal, rebuilder, 6_000_000, 5,
 check("loyal player prefers staying", a_stay > a_go + 0.05,
       f"{a_stay:.2f} vs {a_go:.2f}")
 
+# ---------------------------------------------------------------- offer-sheet compensation walks forward
+from datetime import date as _date
+
+_off = FakeTeam(name="Offer")
+_orig = FakeTeam(name="Original")
+# Own 1sts 2027..2033, but the 2027 and 2028 1sts were already traded.
+for _yr in range(2027, 2034):
+    _gone = _yr in (2027, 2028)
+    _off.draft_picks[_yr] = [
+        SimpleNamespace(year=_yr, round=rnd,
+                        original_team=_off.team_name,
+                        current_team=("Elsewhere" if _gone and rnd == 1
+                                      else _off.team_name))
+        for rnd in range(1, 8)]
+_rfa = FakePlayer(name="Star RFA", age=24, seasons_played=5, ovr=90,
+                  salary=1_000_000)
+_rfa.contract.years_remaining = 0
+_orig.roster.append(_rfa)
+_lg3 = SimpleNamespace(teams=[_off, _orig], free_agents=[],
+                       season_year=2026, rivalries=[])
+_res = R.execute_offer_sheet(_lg3, _off, _orig, _rfa, aav=12_000_000,
+                             years=7, as_of=_date(2027, 7, 15),
+                             rng=random.Random(3))
+check("offer sheet: four-1sts comp walks past traded near picks",
+      _res.get("ok") is True, str(_res.get("reason")))
+_got = sorted(p.year for p in _res.get("picks", []))
+check("offer sheet: compensation is the next four OWN 1sts",
+      _got == [2029, 2030, 2031, 2032], str(_got))
+check("offer sheet: player moved to the offering club",
+      _rfa in _off.roster and _rfa not in _orig.roster)
+
+# No own 1sts anywhere -> the sheet can't be signed.
+_off2 = FakeTeam(name="Broke")
+for _yr in range(2027, 2034):
+    _off2.draft_picks[_yr] = [
+        SimpleNamespace(year=_yr, round=rnd, original_team=_off2.team_name,
+                        current_team="Elsewhere") for rnd in range(1, 8)]
+_rfa2 = FakePlayer(name="Star RFA 2", age=24, seasons_played=5, ovr=90,
+                   salary=1_000_000)
+_rfa2.contract.years_remaining = 0
+_orig2 = FakeTeam(name="Original 2")
+_orig2.roster.append(_rfa2)
+_lg4 = SimpleNamespace(teams=[_off2, _orig2], free_agents=[],
+                       season_year=2026, rivalries=[])
+_res2 = R.execute_offer_sheet(_lg4, _off2, _orig2, _rfa2, aav=12_000_000,
+                              years=7, as_of=_date(2027, 7, 15),
+                              rng=random.Random(4))
+check("offer sheet: blocked with no own 1sts available",
+      _res2.get("ok") is False
+      and _res2.get("reason") == "missing_own_picks",
+      str(_res2.get("reason")))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -6944,10 +6944,12 @@ class League:
         # The next live draft is always season_year+1 (this season's draft
         # was already held in June). Dealing season_year picks gives every
         # team dead paper -- BUG-016.
-        # Five drafts out: picks that far ahead are tradeable (real clubs
-        # deal that far out), valued with a per-year discount, and the
-        # protection roll-forward reaches as far as picks exist.
-        future_years = [self.season_year + 1 + i for i in range(5)]
+        # Seven drafts out: picks that far ahead are tradeable (real clubs
+        # deal that far out), valued with a per-year discount, and both
+        # the protection roll-forward and offer-sheet compensation
+        # (up to four 1sts, walking forward through the signing club's
+        # own upcoming picks) reach as far as picks exist.
+        future_years = [self.season_year + 1 + i for i in range(7)]
         
         for team in self.teams:
             team.initialize_draft_picks(future_years)
@@ -7023,15 +7025,15 @@ class League:
                     # Find the deferral asset: the original club's own 1st
                     # in year+1 -- and if that's already been traded, the
                     # obligation ROLLS FORWARD (as far as picks exist --
-                    # five drafts out) instead of silently dying. A
+                    # seven drafts out) instead of silently dying. A
                     # protection that voids because the original club
                     # flipped its next 1st is the exploit: real clubs
                     # can't shed the debt by trading the payment away.
                     defer = None
                     defer_year = None
                     if orig is not None and in_zone:
-                        for _dy in (year + 1, year + 2, year + 3,
-                                    year + 4, year + 5):
+                        for _dy in (year + 1, year + 2, year + 3, year + 4,
+                                    year + 5, year + 6, year + 7):
                             for cand in (getattr(orig, "draft_picks", {}) or {}).get(_dy, []):
                                 if (cand.round == 1
                                         and cand.current_team == orig.team_name):
@@ -7040,14 +7042,14 @@ class League:
                                     break
                             if defer is not None:
                                 break
-                    # Last resort: no own 1st available five drafts out.
+                    # Last resort: no own 1st available seven drafts out.
                     # Real-world fallback -- the obligation converts to
                     # the original club's next available 2nd-rounder.
                     second = None
                     second_year = None
                     if orig is not None and in_zone and defer is None:
-                        for _dy in (year, year + 1, year + 2,
-                                    year + 3, year + 4):
+                        for _dy in (year, year + 1, year + 2, year + 3,
+                                    year + 4, year + 5, year + 6):
                             for cand in (getattr(orig, "draft_picks", {}) or {}).get(_dy, []):
                                 if (cand.round == 2
                                         and cand.current_team == orig.team_name):
@@ -7084,18 +7086,18 @@ class League:
                         events.append(
                             f"Pick protection triggered: {orig.team_name} keeps "
                             f"its {year} 1st-rounder (#{pos} overall); with no "
-                            f"1st-rounder available through {year + 5}, the "
+                            f"1st-rounder available through {year + 7}, the "
                             f"obligation converts to {orig.team_name}'s "
                             f"{second_year} 2nd-rounder for {holder}.")
                     elif in_zone:
-                        # Nothing left to convey (no 1st five drafts out,
-                        # no 2nd four drafts out): the club stripped its
+                        # Nothing left to convey (no 1st seven drafts out,
+                        # no 2nd six drafts out): the club stripped its
                         # own cupboard, so the holder keeps this year's
                         # pick and the void is on the record.
                         events.append(
                             f"Pick protection could not be honored: "
                             f"{pick.original_team} holds no 1st or 2nd-round "
-                            f"pick through {year + 5} to defer or convert to, "
+                            f"pick through {year + 7} to defer or convert to, "
                             f"so {holder} keeps the {year} 1st-rounder "
                             f"(#{pos} overall) and the protection is void.")
                     # Outside the zone the pick simply conveys: the holder

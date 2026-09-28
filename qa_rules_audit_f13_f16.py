@@ -186,14 +186,14 @@ try:
           any(str(_wpos) in e for e in _ev) or _pp.protection == "",
           f"lotto #{_wpos}")
 
-    # 5-year horizon: every club holds S+1..S+5, all tradeable, value
+    # 7-year horizon: every club holds S+1..S+7, all tradeable, value
     # discounts with distance.
     _yrs = sorted(_worst.draft_picks.keys())
-    _exp = [_lg.season_year + 1 + i for i in range(5)]
-    check("f15b: picks exist 5 drafts out",
+    _exp = [_lg.season_year + 1 + i for i in range(7)]
+    check("f15b: picks exist 7 drafts out",
           _yrs == _exp, str(_yrs))
-    _far = [p for p in _worst.get_picks_for_year(_exp[4])]
-    check("f15b: year+5 picks are tradeable, not dead paper",
+    _far = [p for p in _worst.get_picks_for_year(_exp[6])]
+    check("f15b: year+7 picks are tradeable, not dead paper",
           len(_far) == 7 and all(p.can_be_traded() and not p.is_expired
                                  for p in _far))
     _other = _nhl[1]  # untouched club: owns its own 1sts
