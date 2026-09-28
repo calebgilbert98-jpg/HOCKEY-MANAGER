@@ -54,22 +54,51 @@ PLAYOFFS" emblem floats above the Final; the champion banner below stays.
 Click behavior is unchanged: cards still open `SeriesDetailPopup` (games,
 splits, storylines, players, road ahead).
 
-## 2. LEAGUE TENSION gauge (`season_intensity.py`)
+## 2. Series intensity in the series-detail popup (`season_intensity.py`)
 
-`season_intensity(ledger, window_days=14)` aggregates ledger `"incident"` events
-with `incident_kind` in `{star_injured, player_injured, controversial_hit,
-brawl}` over the trailing window. Weights come from the ledger event
-(`star_injured` 25, `brawl` 15, etc.); value = `min(100, total_weight × 1.5)`.
-Bands and colors mirror the in-game meter exactly: **BOILING** `#ff6b6b`
-(75–100), **CHIPPY** `#ff9f5c` (50–75), **HEATING** `#ffd166` (25–50),
-**CALM** `#7bc96f` (0–25). Returns the value plus the top-4 driving incidents.
+**2026-09-28 change (Muck's call): the league-wide gauge was REMOVED from the
+PlayoffView header.** Intensity now lives per-series, in the series-detail
+popup (`build_series_detail_content` → `_detail_intensity`), where it reflects
+what the in-game INTENSITY meter will show when those two clubs meet.
 
-The PlayoffView header carries a 210×150 gauge canvas + a driver line
-("Driven by: …"), drawn by `draw_gauge()` (semicircular canvas gauge: four
-band arcs, needle, numeric + mood readout). Refreshed on view open and every
-`refresh_bracket()`. Never raises — all wrapped.
+`series_intensity(ledger, team_a, team_b, window_days=14)` — same incident
+kinds, weights, bands, and colors as the in-game meter, scoped to the pair via
+`ledger.between(a, b, kinds=["incident"])` (falls back to a manual event scan
+when `between` is unavailable). Same formula: `min(100, weight × 1.5)`.
+For an unstarted/projected series it's the hype forecast; for a live series it
+includes what's already happened. No heat → CALM 0. Never raises.
 
-## 3. Bad blood: injury → rivalry → ledger → storyline
+`hype_line(label, a_abbr, b_abbr)` — grudge-week-style hype copy per band:
+BOILING → "🔥 Grudge series — … the building will be sold out and shaking.
+This one matters."; CHIPPY → "bad blood is simmering … Expect fireworks.";
+HEATING → "something's brewing"; CALM → "All business … for now."
+
+The popup section shows a "Series intensity" gold header, a 200×132 gauge
+canvas (`draw_gauge(..., title="SERIES INTENSITY")` — title is now a
+parameter, default `"LEAGUE TENSION"`), the hype line in the band color, and
+a "Driving it: …" line when ≥ 25. It renders on **both** the projected
+(tale-of-the-tape) and live paths.
+
+`season_intensity(ledger, ...)` (league-wide) still exists and is tested, but
+nothing in the UI calls it anymore — it's a utility awaiting a future home.
+
+## 3. Big-moment log in the series-detail popup
+
+`_detail_big_moments()` adds a **"Big moments"** section after Storylines,
+before Players to watch — the series' defining on-ice moments in game order,
+derived from real per-game facts by `_series_big_moments(series)`:
+
+- ⚡ overtime winner (`g["ot"]`)
+- 🧱 shutout (loser scores 0)
+- 💥 statement win (margin ≥ 4; shutout takes precedence)
+- 🧱 `{goalie} stood on his head` (`g["goalie_steal"]`)
+
+No games yet → "No games yet — the moments will write themselves."
+Bad-blood incidents stay in Storylines (narrative); the log is the on-ice
+highlight reel. (The splits table's `BigW` column = biggest win margin,
+unchanged.)
+
+## 4. Bad blood: injury → rivalry → ledger → storyline
 
 `GameSim._apply_hit_injury()` (in `simulation.py`, called from `_record_hit_stats`
 when `HitResult.INJURY_CAUSED`): the victim now gets a **real injury** —
@@ -101,11 +130,17 @@ too. Fallback: rivalry-record incidents when the ledger is empty.
 
 ## QA
 
-`qa_playoff_2k.py` (23/23): builds a real 32-team league through the actual
+`qa_playoff_2k.py` (39/39): builds a real 32-team league through the actual
 `generate_playoff_bracket`/`advance_to_next_round` paths to a live SCF; asserts
 mirrored card placement, navy canvas, ticker text, projection mode (8 R1
-cards); asserts gauge value/mood/drivers from seeded ledger incidents; asserts
-`_apply_hit_injury` sets injury attrs (4–10 games for a dirty hit), creates the
+cards); asserts **no** league gauge on the bracket header; asserts
+`series_intensity` is pair-scoped (60.0 CHIPPY on a seeded feud, unrelated
+pair CALM 0, None ledger safe), `hype_line` copy per band; asserts
+`_series_big_moments` extracts OT/shutout/statement/steal from crafted games
+and is empty for an unplayed series; asserts the real `SeriesDetailPopup`
+renders headless with the Series intensity section, Big moments section, hype
+line, and a drawn gauge canvas; asserts the projected popup carries the
+intensity hype too; asserts `_apply_hit_injury` sets injury attrs (4–10 games for a dirty hit), creates the
 rivalry incident, and bridges to the ledger; asserts the 🩸 storyline
 surfaces. One deliberate note: `_is_eastern_team` keys on **division**
 (`Atlantic`/`Metropolitan`) — fake leagues must use real division names.

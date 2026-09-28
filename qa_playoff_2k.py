@@ -248,16 +248,9 @@ except Exception:
 check("ticker shows a series readout", "vs" in tick and "ROUND" in tick.upper(),
       tick[:80])
 
-# gauge
-gc = getattr(view, "_tension_canvas", None)
-gitems = gc.find_all() if gc is not None else []
-check("gauge canvas drawn", len(gitems) >= 6, str(len(gitems)))
-drv = ""
-try:
-    drv = view._tension_driver.cget("text")
-except Exception:
-    pass
-check("gauge driver line names the incident", "Slugger" in drv, drv[:70])
+# league gauge removed from the bracket screen: intensity lives per-series now
+check("no league gauge on bracket header",
+      getattr(view, "_tension_canvas", None) is None)
 
 # columns: count embedded card windows per column region
 wins = [w for w in items if canvas.type(w) == "window"]
@@ -298,6 +291,123 @@ try:
 except Exception:
     pass
 check("projection ticker flagged", "PROJECTION" in tick2, tick2[:80])
+
+print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+if FAIL:
+    print("FAILED:", FAIL)
+    sys.exit(1)
+
+# ------------------------------------------------- series detail popup QA
+print("\n== series detail: per-series intensity + big moments ==")
+from playoff_system import (SeriesDetailPopup, _series_big_moments)
+from season_intensity import series_intensity, hype_line
+from narrative_ledger import NarrativeLedger as _NL
+
+led2 = _NL(); led2.set_clock(2026, 200)
+led2.record("incident", teams=["X X", "Y Y"], players=[],
+            facts={"incident_kind": "star_injured"}, weight=25, text="s")
+led2.record("incident", teams=["X X", "Y Y"], players=[],
+            facts={"incident_kind": "brawl"}, weight=15, text="b")
+led2.record("incident", teams=["X X", "Z Z"], players=[],
+            facts={"incident_kind": "brawl"}, weight=15, text="other-pair")
+si = series_intensity(led2, "X X", "Y Y")
+check("series intensity pair-scoped 60 CHIPPY",
+      si["value"] == 60.0 and si["label"] == "CHIPPY"
+      and si["incident_count"] == 2,
+      f"{si['value']} {si['label']} n={si['incident_count']}")
+si2 = series_intensity(led2, "X X", "Q Q")
+check("unrelated pair is CALM 0",
+      si2["value"] == 0.0 and si2["incident_count"] == 0)
+check("series intensity needs no ledger",
+      series_intensity(None, "A", "B")["label"] == "CALM")
+check("hype boiling copy", "Grudge series" in hype_line("BOILING", "BUF", "TOR"))
+check("hype chippy copy", "fireworks" in hype_line("CHIPPY", "BUF", "TOR"))
+check("hype calm copy", "All business" in hype_line("CALM", "BOS", "WSH"))
+
+# crafted live series on the feuding pair: OT, shutout, statement, steal
+tA = SimpleNamespace(team_name="Buffalo Sabres", standings_position=2)
+tB = SimpleNamespace(team_name="Toronto Maple Leafs", standings_position=7)
+ms = PlayoffSeries("Wild Card Round", tA, tB)
+_crafted = [(True, 4, 3, True, None),
+            (False, 0, 5, False, None),
+            (True, 6, 2, False, None),
+            (True, 3, 1, False, "Ukko-Pekka Luukkonen")]
+for t1w, s1, s2, ot, steal in _crafted:
+    d = {"team1_won": t1w, "t1_score": s1, "t2_score": s2, "ot": ot, "game": 0}
+    if steal:
+        d["goalie_steal"] = steal
+    ms.add_game_result(t1w, d)
+moments = _series_big_moments(ms)
+kinds = " | ".join(t for _, t in moments)
+check("4 big moments extracted", len(moments) == 4, kinds)
+check("OT moment", any("overtime winner" in t for _, t in moments))
+check("shutout moment", any("shutout" in t for _, t in moments))
+check("statement moment", any("statement win" in t for _, t in moments))
+check("steal moment", any("stood on his head" in t for _, t in moments))
+check("empty series, empty log",
+      _series_big_moments(PlayoffSeries("Wild Card Round", tA, tB)) == [])
+
+# popup renders headless: intensity gauge + big moments sections present
+pop = SeriesDetailPopup(root, app, ms, bracket=None, projected=False)
+root.update_idletasks(); root.update(); time.sleep(0.5); root.update()
+found = set()
+canvases = []
+def _walk(w):
+    try:
+        cls = w.winfo_class()
+    except Exception:
+        return
+    if "Label" in cls:
+        try:
+            found.add(w.cget("text"))
+        except Exception:
+            pass
+    if cls == "Canvas":
+        canvases.append(w)
+    for ch in w.winfo_children():
+        _walk(ch)
+_walk(pop)
+check("popup has Series intensity section", "Series intensity" in found)
+check("popup has Big moments section", "Big moments" in found)
+check("popup has hype line",
+      any("Grudge series" in str(t) or "fireworks" in str(t)
+          or "brewing" in str(t) or "All business" in str(t) for t in found))
+gitems = sum(len(c.find_all()) for c in canvases)
+check("popup gauge canvas drawn", gitems >= 8, str(gitems))
+root.update()
+try:
+    root.lift()
+    root.attributes("-topmost", True)
+    root.update()
+    time.sleep(0.6)
+    root.update()
+except Exception:
+    pass
+ImageGrab.grab().save("/home/hatch/workspace/ahl_shots/series_detail_intensity.png")
+try:
+    root.attributes("-topmost", False)
+except Exception:
+    pass
+print("saved series_detail_intensity.png")
+
+# projected popup: intensity hype present, no games needed
+pop2 = SeriesDetailPopup(root, app, ms, bracket=None, projected=True)
+root.update_idletasks(); root.update(); time.sleep(0.4); root.update()
+found2 = set()
+def _walk2(w):
+    try:
+        if "Label" in w.winfo_class():
+            found2.add(w.cget("text"))
+    except Exception:
+        pass
+    for ch in w.winfo_children():
+        _walk2(ch)
+_walk2(pop2)
+check("projected popup has intensity hype",
+      "Series intensity" in found2
+      and any("Grudge series" in str(t) or "fireworks" in str(t)
+              or "brewing" in str(t) or "All business" in str(t)
+              for t in found2))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

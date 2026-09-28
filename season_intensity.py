@@ -97,14 +97,105 @@ def season_intensity(ledger: Any, window_days: int = WINDOW_DAYS) -> Dict[str, A
     return out
 
 
+def series_intensity(ledger: Any, team_a: str, team_b: str,
+                     window_days: int = WINDOW_DAYS) -> Dict[str, Any]:
+    """Per-series tension 0-100: heat incidents involving BOTH clubs.
+
+    This is what the in-game INTENSITY meter will show when these two meet --
+    same incident kinds, same bands, same scale as season_intensity, scoped to
+    the pair via ledger.between(). For an unstarted series it's the hype
+    forecast (grudge-week style); for a live one it includes what's already
+    happened on the ice. Never raises; no heat -> CALM 0.
+    """
+    out: Dict[str, Any] = {
+        "value": 0.0, "label": "CALM", "color": "#7bc96f",
+        "drivers": [], "window_days": window_days, "incident_count": 0,
+        "teams": [team_a, team_b],
+    }
+    if ledger is None or not team_a or not team_b:
+        return out
+    try:
+        season = getattr(ledger, "season", None)
+        day = getattr(ledger, "day", None)
+        cutoff = (day - window_days) if isinstance(day, (int, float)) else None
+        between = getattr(ledger, "between", None)
+        if callable(between):
+            try:
+                events = between(team_a, team_b, kinds=["incident"]) or []
+            except Exception:
+                events = []
+        else:
+            events = []
+            names = {str(team_a), str(team_b)}
+            for ev in getattr(ledger, "events", None) or []:
+                try:
+                    if ev.get("kind") != "incident":
+                        continue
+                    ev_teams = set(ev.get("teams") or [])
+                    if names <= ev_teams or names == ev_teams:
+                        events.append(ev)
+                except Exception:
+                    continue
+        heat: List[Dict[str, Any]] = []
+        for ev in events:
+            try:
+                facts = ev.get("facts") or {}
+                if facts.get("incident_kind") not in HEAT_INCIDENT_KINDS:
+                    continue
+                if season is not None and ev.get("season") != season:
+                    continue
+                if cutoff is not None and (ev.get("day") or 0) < cutoff:
+                    continue
+                heat.append(ev)
+            except Exception:
+                continue
+        total = sum(float(ev.get("weight", 0) or 0) for ev in heat)
+        value = max(0.0, min(100.0, round(total * VALUE_SCALE, 1)))
+        label, color = mood_and_color(value)
+        heat.sort(key=lambda e: float(e.get("weight", 0) or 0), reverse=True)
+        drivers: List[Dict[str, Any]] = []
+        for ev in heat[:3]:
+            facts = ev.get("facts") or {}
+            txt = (ev.get("text") or facts.get("detail")
+                   or facts.get("incident_kind") or "incident")
+            drivers.append({
+                "label": str(txt),
+                "weight": float(ev.get("weight", 0) or 0),
+                "teams": list(ev.get("teams") or []),
+            })
+        out.update(value=value, label=label, color=color, drivers=drivers,
+                   incident_count=len(heat))
+    except Exception:
+        pass
+    return out
+
+
+def hype_line(label: str, a_abbr: str = "", b_abbr: str = "") -> str:
+    """Grudge-week-style hype copy for a series intensity band."""
+    try:
+        label = str(label or "CALM").upper()
+    except Exception:
+        label = "CALM"
+    matchup = f"{a_abbr} vs {b_abbr}".strip(" vs") if (a_abbr or b_abbr) else "this one"
+    if label == "BOILING":
+        return (f"\U0001F525 Grudge series — {matchup}: the building will be "
+                f"sold out and shaking. This one matters.")
+    if label == "CHIPPY":
+        return (f"Chippy series — bad blood is simmering between these two. "
+                f"Expect fireworks.")
+    if label == "HEATING":
+        return (f"Tensions rising — something's brewing between these two.")
+    return (f"All business between these two — for now.")
+
+
 def draw_gauge(canvas: Any, cx: float, cy: float, radius: float,
-               info: Dict[str, Any], font_family: str = "Arial") -> None:
+               info: Dict[str, Any], font_family: str = "Arial",
+               title: str = "LEAGUE TENSION") -> None:
     """Draw a semicircular tension gauge on a tk.Canvas. Never raises.
 
-    Layout: "LEAGUE TENSION" title above the arc, four colored band
-    segments (green->yellow->orange->red), a needle at the value, and the
-    numeric value + mood below the hub. Caller sizes the canvas at least
-    (2*radius + 30) x (radius + 62).
+    Four colored band segments (green->yellow->orange->red), a needle at the
+    value, and the numeric value + mood below the hub. Caller sizes the
+    canvas at least (2*radius + 30) x (radius + 62).
     """
     try:
         value = max(0.0, min(100.0, float(info.get("value", 0.0))))
@@ -146,7 +237,7 @@ def draw_gauge(canvas: Any, cx: float, cy: float, radius: float,
             pass
         # Title + readout.
         try:
-            canvas.create_text(cx, cy - radius - 20, text="LEAGUE TENSION",
+            canvas.create_text(cx, cy - radius - 20, text=str(title or ""),
                                fill="#AEB6C8", font=(font_family, 10, "bold"))
             canvas.create_text(cx, cy + 20,
                                text=f"{value:.0f} — {label}",

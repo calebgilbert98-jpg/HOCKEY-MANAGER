@@ -750,26 +750,6 @@ class PlayoffView(ctk.CTkFrame):
         ttk.Button(control_frame, text="Refresh Bracket",
                   command=self.refresh_bracket, style='TButton').pack(side='left', padx=(0, 10))
 
-        # Season-long LEAGUE TENSION gauge (the in-game INTENSITY meter's
-        # big brother): the league sees at a glance whether tensions are
-        # high across the season, and which incident is driving it.
-        try:
-            self._tension_frame = ttk.Frame(control_frame,
-                                            style='Content.TFrame')
-            self._tension_frame.pack(side='right', padx=(10, 0))
-            self._tension_canvas = tk.Canvas(
-                self._tension_frame, width=210, height=150,
-                bg=self.app.CONTENT_BG, highlightthickness=0)
-            self._tension_canvas.pack()
-            self._tension_driver = ttk.Label(
-                self._tension_frame, text="", style='Content.TLabel',
-                font=_sfont(self.app.FONT_FAMILY, 9, 'italic'),
-                wraplength=200, justify='center')
-            self._tension_driver.pack(pady=(0, 2))
-        except Exception:
-            self._tension_canvas = None
-            self._tension_driver = None
-        
         # Status frame
         self.status_frame = ttk.LabelFrame(main_frame, text="Playoff Status", style='Card.TLabelframe')
         self.status_frame.pack(fill='x', pady=(0, 8))
@@ -816,7 +796,6 @@ class PlayoffView(ctk.CTkFrame):
             self.ticker_label = None
 
         self.canvas = canvas
-        self._refresh_tension_gauge()
     
     def _check_playoff_eligibility(self):
         """Check if playoffs can be generated"""
@@ -873,36 +852,6 @@ class PlayoffView(ctk.CTkFrame):
             return
         self._update_status_display()
         self._display_bracket()
-        self._refresh_tension_gauge()
-
-    def _refresh_tension_gauge(self):
-        """Redraw the season-long LEAGUE TENSION gauge. Never raises."""
-        c = getattr(self, '_tension_canvas', None)
-        if c is None:
-            return
-        try:
-            c.delete("all")
-        except Exception:
-            return
-        try:
-            from narrative_ledger import active_ledger as _al
-            from season_intensity import season_intensity, draw_gauge
-            info = season_intensity(_al())
-            draw_gauge(c, 105, 88, 52, info,
-                       font_family=getattr(self.app, 'FONT_FAMILY', 'Arial'))
-            drv = self._tension_driver
-            if drv is not None:
-                try:
-                    drivers = info.get("drivers") or []
-                    if drivers and float(info.get("value", 0) or 0) >= 25:
-                        dtxt = str(drivers[0].get("label", "") or "")[:95]
-                        drv.configure(text=f"Driven by: {dtxt}")
-                    else:
-                        drv.configure(text="A calm league \u2014 for now.")
-                except Exception:
-                    pass
-        except Exception:
-            pass
 
     def _on_bracket_game(self, series):
         """Listener: a playoff game just finished (possibly on a worker
@@ -1723,6 +1672,106 @@ def _series_storylines(series):
     return lines
 
 
+def _series_big_moments(series):
+    """Chronological highlight reel for a series.
+
+    Derived from the real per-game facts: overtime winners, shutouts,
+    statement wins (4+ goal margin), and goalie steals. Returns a list of
+    (emoji, text) in game order. Empty when nothing notable happened yet.
+    """
+    moments = []
+    try:
+        games = list(getattr(series, 'game_results', None) or [])
+        a1 = team_abbr(getattr(getattr(series, 'team1', None), 'team_name', ''))
+        a2 = team_abbr(getattr(getattr(series, 'team2', None), 'team_name', ''))
+        for g in games:
+            try:
+                s1, s2 = int(g.get('t1_score', 0)), int(g.get('t2_score', 0))
+            except Exception:
+                continue
+            t1w = bool(g.get('team1_won'))
+            w, l = (a1, a2) if t1w else (a2, a1)
+            ws, ls = (s1, s2) if t1w else (s2, s1)
+            gn = g.get('game', '?')
+            core = f"Game {gn}: {w} {ws}\u2013{ls} {l}"
+            if g.get('ot'):
+                moments.append(("\u26A1", f"{core} \u2014 overtime winner"))
+            if ls == 0 and ws > 0:
+                moments.append(("\U0001F9F1", f"{core} \u2014 shutout"))
+            elif ws - ls >= 4:
+                moments.append(("\U0001F4A5", f"{core} \u2014 statement win"))
+            gs = g.get('goalie_steal')
+            if gs:
+                moments.append(("\U0001F9F1",
+                                f"Game {gn}: {gs} stood on his head ({core})"))
+    except Exception:
+        pass
+    return moments
+
+
+def _detail_intensity(parent, app, series):
+    """Per-series intensity meter: what the in-game meter will show.
+
+    Scoped to the two clubs' ledger heat (same incidents, bands, and colors
+    as the in-game INTENSITY meter), framed as the hype forecast for an
+    unstarted series and the live temperature for one underway.
+    Grudge-week-style hype copy when it's hot.
+    """
+    import tkinter as tk
+    fam = getattr(app, 'FONT_FAMILY', 'Arial')
+    gold, fg, dim = "#C9A227", "#DCE3EB", "#8A94A0"
+    ctk.CTkLabel(parent, text="Series intensity",
+                 font=_cfont(fam, 13, "bold"),
+                 text_color=gold).pack(anchor="w", pady=(8, 2))
+    t1n = getattr(getattr(series, 'team1', None), 'team_name', '')
+    t2n = getattr(getattr(series, 'team2', None), 'team_name', '')
+    try:
+        from narrative_ledger import active_ledger as _al
+        from season_intensity import series_intensity, hype_line, draw_gauge
+        info = series_intensity(_al(), t1n, t2n)
+        canvas = tk.Canvas(parent, width=200, height=132,
+                           bg="#0A1428", highlightthickness=0)
+        canvas.pack(pady=(2, 2))
+        draw_gauge(canvas, 100, 82, 48, info, font_family=fam,
+                   title="SERIES INTENSITY")
+        hype = hype_line(info.get("label"),
+                         team_abbr(t1n), team_abbr(t2n))
+        ctk.CTkLabel(parent, text=hype, font=_cfont(fam, 12, "italic"),
+                     text_color=info.get("color", fg),
+                     anchor="w", wraplength=480,
+                     justify="left").pack(fill="x", padx=4, pady=(2, 0))
+        drivers = info.get("drivers") or []
+        if drivers and float(info.get("value", 0) or 0) >= 25:
+            dtxt = str(drivers[0].get("label", "") or "")[:110]
+            ctk.CTkLabel(parent, text=f"Driving it: {dtxt}",
+                         font=_cfont(fam, 11, "italic"), text_color=dim,
+                         anchor="w", wraplength=480,
+                         justify="left").pack(fill="x", padx=4)
+    except Exception:
+        pass
+
+
+def _detail_big_moments(parent, app, series):
+    """Big-moment log: the series' defining on-ice moments, in order."""
+    fam = getattr(app, 'FONT_FAMILY', 'Arial')
+    gold, fg, dim = "#C9A227", "#DCE3EB", "#8A94A0"
+    ctk.CTkLabel(parent, text="Big moments",
+                 font=_cfont(fam, 13, "bold"),
+                 text_color=gold).pack(anchor="w", pady=(8, 2))
+    moments = _series_big_moments(series)
+    if not moments:
+        ctk.CTkLabel(parent, text="No games yet \u2014 the moments will write "
+                                  "themselves.",
+                     font=_cfont(fam, 12, "italic"),
+                     text_color=dim).pack(anchor="w", padx=4)
+        return
+    for emoji, txt in moments:
+        ctk.CTkLabel(parent, text=f"{emoji}  {txt}",
+                     font=_cfont(fam, 12, ""), text_color=fg,
+                     anchor="w", wraplength=480,
+                     justify="left").pack(fill="x", padx=4, pady=1)
+
+
 def build_series_detail_content(parent, app, series, bracket=None,
                                 projected=False):
     """Fill `parent` with the clicked series' storylines panel."""
@@ -1741,6 +1790,10 @@ def build_series_detail_content(parent, app, series, bracket=None,
                  font=_cfont(fam, 13, "italic"),
                  text_color=gold).pack(pady=(0, 8))
 
+    # Per-series intensity: the hype forecast (or live temperature) for
+    # this matchup -- what the in-game meter will show when they meet.
+    _detail_intensity(parent, app, series)
+
     if projected:
         _detail_tale_of_tape(parent, app, series)
     else:
@@ -1753,6 +1806,7 @@ def build_series_detail_content(parent, app, series, bracket=None,
             ctk.CTkLabel(parent, text="•  " + ln, font=_cfont(fam, 12, ""),
                          text_color=fg, anchor="w", wraplength=480,
                          justify="left").pack(fill="x", padx=4, pady=1)
+        _detail_big_moments(parent, app, series)
         ctk.CTkLabel(parent, text="Players to watch (playoff scoring to date)",
                      font=_cfont(fam, 13, "bold"),
                      text_color=gold).pack(anchor="w", pady=(8, 2))
