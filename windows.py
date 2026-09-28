@@ -1029,7 +1029,7 @@ class RosterView(ctk.CTkFrame):
         elif roster_type == 'ahl':
             self._primary_button(actions, text="Call Up",
                                  command=lambda: self.bulk_move_players('ahl', 'nhl')).pack(side="left", padx=3)
-            self._secondary_button(actions, text="Send to Prospects",
+            self._secondary_button(actions, text="Return to Junior",
                                    command=lambda: self.bulk_move_players('ahl', 'prospects')).pack(side="left", padx=3)
         elif roster_type == 'prospects':
             self._primary_button(actions, text="Promote to AHL",
@@ -1333,11 +1333,40 @@ class RosterView(ctk.CTkFrame):
                     ("Send to AHL", lambda: self.move_player(player, 'nhl', 'ahl')),
                     ("Add to Trade Block", lambda: self.add_to_trade_block(player))
                 ]
+                # Junior-aged signed CHL prospects can go straight back
+                # to junior (new CBA: everyone else stays pro).
+                try:
+                    import game_classes as _gc2
+                    _elig_nhl = (
+                        getattr(player, "contract", None) is not None
+                        and _gc2.junior_track_of(player) == "CHL"
+                        and int(getattr(player, "age", 20) or 20) < 20)
+                except Exception:
+                    _elig_nhl = False
+                if _elig_nhl:
+                    roster_options.insert(
+                        1, ("Return to Junior",
+                            lambda: self.move_player(player, 'nhl', 'prospects')))
             elif roster_type == 'ahl':
+                # Only junior-eligible signed prospects get a junior
+                # option; everyone else stays in the pro system (a
+                # signed veteran can no longer be stashed in the
+                # prospects list to dodge the cap).
+                try:
+                    import game_classes as _gc3
+                    _elig_ahl = (
+                        getattr(player, "contract", None) is not None
+                        and _gc3.junior_track_of(player) == "CHL"
+                        and int(getattr(player, "age", 20) or 20) < 20)
+                except Exception:
+                    _elig_ahl = False
                 roster_options = [
                     ("Call Up to NHL", lambda: self.move_player(player, 'ahl', 'nhl')),
-                    ("Send to Prospects", lambda: self.move_player(player, 'ahl', 'prospects'))
                 ]
+                if _elig_ahl:
+                    roster_options.append(
+                        ("Return to Junior",
+                         lambda: self.move_player(player, 'ahl', 'prospects')))
             elif roster_type == 'prospects':
                 roster_options = [
                     ("Promote to AHL", lambda: self.move_player(player, 'prospects', 'ahl'))
@@ -1502,15 +1531,162 @@ class RosterView(ctk.CTkFrame):
         # Move players
         players_to_move = [p for p in source_list if p.id in selected_ids]
 
+        # Junior return (AHL -> prospects) only applies to signed,
+        # junior-aged CHL prospects. Pre-filter here so a bulk move
+        # doesn't pop one blocking dialog per ineligible player --
+        # move_player still enforces the rule per player.
+        _junior_bulk = (from_roster in ('nhl', 'ahl')
+                        and to_roster not in ('nhl', 'ahl'))
+        _skipped = 0
         for player in players_to_move:
+            if _junior_bulk:
+                try:
+                    import game_classes as _gcb
+                    _ok = (getattr(player, "contract", None) is not None
+                           and _gcb.junior_track_of(player) == "CHL"
+                           and int(getattr(player, "age", 20) or 20) < 20)
+                except Exception:
+                    _ok = False
+                if not _ok:
+                    _skipped += 1
+                    continue
             self.move_player(player, from_roster, to_roster)
+        if _skipped:
+            messagebox.showinfo(
+                "Return to Junior",
+                f"{_skipped} selected player(s) can't go back to junior -- "
+                f"only signed under-20 CHL prospects are eligible.")
 
         # Clear selections and update views
         self.selected_players[from_roster].clear()
         self.update_views()
 
     def move_player(self, player, from_roster, to_roster):
-        """Move a single player between rosters."""
+        """Move a single player between rosters.
+
+        Promotion (prospects -> NHL/AHL): an unsigned prospect can't
+        skate for $0 -- promoting him signs the ELC first through the
+        league's canonical path, which also consumes his draft rights.
+        The CHL-NHL agreement gates AHL assignment for under-20 CHL
+        prospects (new CBA: 19-year-old first-rounders excepted).
+
+        Junior return (NHL/AHL -> prospects): a SIGNED junior-aged
+        (under-20) CHL prospect goes back to his junior club. An
+        ex-college player can never go back to college once he's signed
+        an NHL deal -- minors or NHL only. This also closes the old
+        loophole where a signed veteran could be stashed in the
+        prospects list to dodge the cap.
+        """
+        try:
+            import game_classes as _gc
+        except Exception:
+            _gc = None
+        _is_promotion = (from_roster not in ('nhl', 'ahl')
+                         and to_roster in ('nhl', 'ahl'))
+        _is_junior_return = (from_roster in ('nhl', 'ahl')
+                             and to_roster not in ('nhl', 'ahl'))
+
+        if _is_promotion:
+            # CHL-NHL agreement (new CBA 2026): an under-20 CHL prospect
+            # is not AHL-eligible -- he goes back to junior -- EXCEPT a
+            # 19-year-old drafted in the first round, who may be loaned
+            # to the AHL. Applies signed or unsigned.
+            if to_roster == 'ahl' and _gc is not None and \
+                    not _gc.prospect_ahl_eligible(player):
+                _age = int(getattr(player, "age", 20) or 20)
+                messagebox.showwarning(
+                    "CHL-NHL agreement",
+                    f"{player.full_name} is {_age} and CHL-drafted -- "
+                    f"he isn't eligible for the AHL roster. Under the "
+                    f"new CBA only 19-year-old first-round picks may be "
+                    f"loaned to the AHL. He'll keep developing in junior.")
+                return
+            # 23-man NHL roster limit.
+            if to_roster == 'nhl' and \
+                    len(self.app.user_team.roster) >= 23:
+                messagebox.showerror(
+                    "Roster Full",
+                    "Your NHL roster is full (23). Move someone out "
+                    "first.")
+                return
+            # Signing gate: an unsigned prospect (contract=None) can't
+            # skate for $0. Promoting him signs the ELC first through
+            # the league's canonical path -- which also consumes his
+            # draft rights, so the rights lifecycle actually means
+            # something. No contract, no promotion.
+            if getattr(player, "contract", None) is None:
+                # Backstop: prospects who predate rights stamping
+                # get stamped on the fly so the signing gate has
+                # something to consume.
+                _league = getattr(self.app, 'league', None)
+                _signed = False
+                try:
+                    if _league is not None:
+                        if not getattr(player, "rights_team", ""):
+                            from datetime import date as _date
+                            _yr = getattr(_league, "current_year",
+                                          _date.today().year)
+                            try:
+                                _league.stamp_draft_rights(
+                                    player,
+                                    self.app.user_team.team_name, int(_yr))
+                            except Exception:
+                                pass
+                        _signed = bool(_league.sign_drafted_prospect(
+                            self.app.user_team, player))
+                except Exception:
+                    _signed = False
+                if not _signed:
+                    messagebox.showerror(
+                        "Unsigned prospect",
+                        f"{player.full_name} couldn't be signed to an "
+                        f"entry-level deal -- only signed players can "
+                        f"join a roster.")
+                    return
+                try:
+                    self.app.add_news(
+                        f"{player.full_name} signed an entry-level contract "
+                        f"({int(getattr(getattr(player, 'contract', None), 'salary', 0) or 0):,}/yr) "
+                        f"and joins the {to_roster.upper()} roster.")
+                except Exception:
+                    pass
+            try:
+                player.playing_where = "NHL" if to_roster == 'nhl' \
+                    else "AHL"
+            except Exception:
+                pass
+
+        elif _is_junior_return:
+            # Only signed players get junior-assignment semantics;
+            # unsigned ones just rejoin the unsigned pool.
+            if getattr(player, "contract", None) is not None:
+                _track = _gc.junior_track_of(player) if _gc else "EUROPE"
+                _jage = int(getattr(player, "age", 20) or 20)
+                if not (_track == "CHL" and _jage < 20):
+                    if _track == "NCAA":
+                        _why = (f"{player.full_name} signed an NHL "
+                                f"contract -- that ended his NCAA "
+                                f"eligibility. He can only play in the "
+                                f"NHL or AHL now, never back in college.")
+                    else:
+                        _why = (f"Only junior-aged (under-20) CHL "
+                                f"prospects can be returned to junior. "
+                                f"{player.full_name} stays with the pro "
+                                f"club.")
+                    messagebox.showwarning("Can't return to junior", _why)
+                    return
+                try:
+                    player.playing_where = _gc.junior_assignment_label(
+                        player) if _gc else "Junior"
+                except Exception:
+                    pass
+                try:
+                    self.app.add_news(
+                        f"{player.full_name} was returned to junior "
+                        f"({player.playing_where}).")
+                except Exception:
+                    pass
+
         # Remove from source
         if from_roster == 'nhl':
             self.app.user_team.roster.remove(player)
@@ -4022,9 +4198,15 @@ class TradeWindow(InGamePopup):
         pid = getattr(player, 'id', None)
         if pct > 0:
             # Validate now so the meter never shows an illegal promise.
+            # The game date drives the new-CBA 75-day double-retention
+            # clock, same as execution.
+            _gdate = getattr(self.parent, "current_date", None)
+            _gleague = getattr(self.parent, "league", None)
             ok, note = self.te.apply_retention_dry_run(
                 self.parent.user_team, player, pct,
-                extra={k: v for k, v in self._retention.items() if k != pid})
+                extra={k: v for k, v in self._retention.items() if k != pid},
+                trade_date=_gdate,
+                season_windows=self.te.regular_season_windows(_gleague))
             if not ok:
                 from tkinter import messagebox
                 messagebox.showwarning("Can't retain", note)
@@ -6182,10 +6364,11 @@ class DraftView(ctk.CTkFrame):
             # Defensive: pick paths filter this upstream; never advance.
             return False
         team.add_player(player, "prospects")
-        # Draft rights: stamp immediately at pick time (CHL 2yr / NCAA 4yr /
-        # Europe 4yr from the player's junior league). The season rollover
-        # has a backstop for any prospect that slips through, but the pick
-        # path is the canonical stamper.
+        # Draft rights: stamp immediately at pick time (CHL 4yr/3yr /
+        # NCAA 4yr / Europe 4yr from the player's junior league, new
+        # CBA). The season rollover has a backstop for any prospect
+        # that slips through, but the pick path is the canonical
+        # stamper.
         try:
             _dy = getattr(self.app.league, "draft_prospects_year", None) \
                 or getattr(getattr(self.app, "current_date", None), "year", 2027)
@@ -9279,7 +9462,7 @@ class ContractNegotiationView(ctk.CTkFrame):
         years_row = ttk.Frame(left, style="Card.TFrame")
         years_row.pack(fill=tk.X, pady=4)
         ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
-        max_years = 8 if self.is_extension else 7
+        max_years = 7 if self.is_extension else 6  # new CBA: 7 to re-sign, 6 external
         self.years_var = tk.IntVar(master=self,
                                    value=int(self._session.get("draft_years") or 1))
         ttk.Scale(years_row, from_=1, to=max_years, variable=self.years_var,
@@ -9537,7 +9720,7 @@ class ContractNegotiationView(ctk.CTkFrame):
         if salary <= 0:
             self.banner_var.set("Salary must be greater than $0.")
             return
-        max_years = 8 if self.is_extension else 7
+        max_years = 7 if self.is_extension else 6  # new CBA: 7 to re-sign, 6 external
         if years < 1 or years > max_years:
             self.banner_var.set(
                 f"Contract length must be between 1 and {max_years} years.")
@@ -10478,7 +10661,7 @@ class ContractExtensionsView(ctk.CTkFrame):
 
         # Calculate recommended contract offer
         market_value = self.calculate_market_value(player)
-        max_years = 8  # NHL max extension is 8 years for own players
+        max_years = 7  # new CBA max extension is 7 years for own players
 
         # Full-screen jump; the extensions list is resumable from the navbar.
         self.app.show_screen("extension_negotiation",

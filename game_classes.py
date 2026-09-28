@@ -404,7 +404,7 @@ class Player:
     # Waiver related attributes
     on_waivers: bool = False
     waiver_days: int = 0
-    nhl_games_played: int = field(default_factory=lambda: random.randint(0, 500))
+    nhl_games_played: int = 0  # career NHL GP; seeded at generation, accrued per game played
     # NHL games played in each PRECEDING season (most recent last).
     # Drives Calder eligibility (25-game / 6-game rules). European pro
     # leagues don't count -- only NHL GP is recorded here.
@@ -536,7 +536,7 @@ class Player:
     # Waiver attributes
     on_waivers: bool = False
     waiver_days: int = 0
-    nhl_games_played: int = field(default_factory=lambda: random.randint(0, 500))  # For waiver eligibility
+    nhl_games_played: int = 0  # career NHL GP; seeded at generation, accrued per game played
 
     def __post_init__(self):
         """Adjusts attributes based on position after initialization."""
@@ -2126,6 +2126,29 @@ class EmailGenerator:
             priority=2
         )
 
+# Anchor year for draft-pick future discounting (DraftPick.value). The app
+# sets this from the league's live season so a 2029 pick in a 2029 save
+# isn't discounted as if it were five drafts away; it defaults to the
+# current calendar year. (Previously hardcoded to 2024, which silently
+# deepened the discount every season a save ran.)
+_PICK_VALUE_ANCHOR_YEAR = None
+
+
+def set_pick_value_anchor_year(year):
+    """Pin the future-pick discount anchor to the live season year."""
+    global _PICK_VALUE_ANCHOR_YEAR
+    try:
+        _PICK_VALUE_ANCHOR_YEAR = int(year)
+    except Exception:
+        pass
+
+
+def _pick_value_anchor():
+    if _PICK_VALUE_ANCHOR_YEAR:
+        return _PICK_VALUE_ANCHOR_YEAR
+    return date.today().year
+
+
 @dataclass
 class DraftPick:
     """Represents a draft pick that can be owned and traded."""
@@ -2142,7 +2165,12 @@ class DraftPick:
     protection: str = ""
     traded_from: str = ""  # Team this pick was traded from (if applicable)
     trade_date: str = ""  # When this pick was traded
-    
+    # Standings-implied slot for a 1st whose real draft order isn't set yet
+    # (0 = unknown -> mid-round default). Refreshed as standings move by
+    # trade_engine.project_pick_slots(); the real order always wins.
+    # Valuation prefers this over the blind #16 default.
+    projected_overall: int = 0
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     
     def __post_init__(self):
@@ -2168,8 +2196,10 @@ class DraftPick:
         base_values = {1: 1000, 2: 500, 3: 250, 4: 125, 5: 100, 6: 75, 7: 50}
         base_value = base_values.get(self.round, 25)
         
-        # Decrease value for future years
-        year_penalty = max(0, (self.year - 2024) * 50)
+        # Decrease value for future years (anchored to the live season --
+        # a hardcoded 2024 here deepened the discount every year a save
+        # ran, undervaluing every future pick in long saves).
+        year_penalty = max(0, (self.year - _pick_value_anchor()) * 50)
         
         # Conditional picks are worth less
         conditional_penalty = 200 if self.is_conditional else 0
@@ -2341,7 +2371,15 @@ class Team:
 
     @property
     def cap_space(self) -> int:
-        return self.salary_cap - self.payroll
+        # Central cap accounting: waiver shed, retention, burial, and all
+        # dead cap flow through here, so every reader (AI claims, FA
+        # checks, cap screens, the over-cap blocker) sees the same number
+        # the league office enforces.
+        try:
+            from salary_cap_system import cap_space as _central_cap_space
+            return int(_central_cap_space(self))
+        except Exception:
+            return self.salary_cap - self.payroll
     
     @property
     def team_chemistry(self) -> int:
@@ -2598,6 +2636,62 @@ class Team:
         
         return round_counts
 
+# ---------------------------------------------------------------------------
+# Prospect development tracks (new-CBA junior assignment rules live here so
+# the UI, waivers, and QA all share one rulebook).
+# ---------------------------------------------------------------------------
+_CHL_JUNIOR_LEAGUES = ("OHL", "QMJHL", "WHL")
+
+
+def junior_track_of(player) -> str:
+    """Development track from the player's junior league.
+
+    Returns "CHL" (OHL/QMJHL/WHL), "NCAA", or "EUROPE" (everyone else).
+    Derived from junior_league, which -- unlike rights_type -- survives
+    signing, so this works for signed prospects too.
+    """
+    try:
+        jl = (getattr(player, "junior_league", "") or "").strip().upper()
+    except Exception:
+        jl = ""
+    if jl in _CHL_JUNIOR_LEAGUES:
+        return "CHL"
+    if jl == "NCAA":
+        return "NCAA"
+    return "EUROPE"
+
+
+def prospect_ahl_eligible(player) -> bool:
+    """Can this prospect be assigned to the AHL?
+
+    New CBA (2026): a 19-year-old CHL player drafted in the FIRST ROUND
+    may be loaned to the AHL (no per-team limit). Every other under-20
+    CHL player goes back to junior -- 18-year-olds are never eligible.
+    NCAA, European, and age-20+ players are always eligible.
+    """
+    try:
+        _age = int(getattr(player, "age", 20) or 20)
+    except Exception:
+        _age = 20
+    if junior_track_of(player) == "CHL" and _age < 20:
+        if _age >= 19:
+            try:
+                if int(getattr(player, "draft_round", 0) or 0) == 1:
+                    return True
+            except Exception:
+                pass
+        return False
+    return True
+
+
+def junior_assignment_label(player) -> str:
+    """Where a junior-aged signed prospect plays: his junior league."""
+    try:
+        return (getattr(player, "junior_league", "") or "").strip() or "Junior"
+    except Exception:
+        return "Junior"
+
+
 @dataclass
 class League:
     """Represents the entire league, structured like the NHL."""
@@ -2649,6 +2743,12 @@ class League:
     
     def __post_init__(self):
         self.setup_nhl_teams()
+        # Pin the draft-pick future discount to this save's season so
+        # long-running saves don't undervalue future picks.
+        try:
+            set_pick_value_anchor_year(self.season_year)
+        except Exception:
+            pass
 
     def setup_nhl_teams(self):
         """Initializes the league with all 32 real NHL teams (2024-25 season)."""
@@ -5130,6 +5230,11 @@ class League:
             pass
 
         self.season_year += 1
+        # Keep the draft-pick future discount anchored to the live season.
+        try:
+            set_pick_value_anchor_year(self.season_year)
+        except Exception:
+            pass
 
         # Advance the salary cap for the new season (2-4% growth).
         # Existing contracts are NOT touched; only new demands scale.
@@ -5222,7 +5327,7 @@ class League:
     # year as the current season year. "Unsigned" == rights_team != "";
     # signed prospects have their rights fields cleared and are skipped.
     # ------------------------------------------------------------------
-    _RIGHTS_CHL_LEAGUES = ("OHL", "QMJHL", "WHL")
+    _RIGHTS_CHL_LEAGUES = _CHL_JUNIOR_LEAGUES
     _RIGHTS_JUNIOR_LEAGUES = ("OHL", "WHL", "QMJHL", "USHL", "BCHL", "AJHL",
                               "SJHL", "MJHL", "NOJHL", "OJHL", "CCHL")
     # Where unsigned prospects can land when they age out of junior (a
@@ -5245,13 +5350,19 @@ class League:
         Intended to be called at draft time by the draft UI layer; the
         season rollover backstop also calls this for unstamped prospects
         it finds in team.prospects. rights_type comes from the player's
-        junior league: OHL/QMJHL/WHL -> CHL (2-year rights), NCAA -> NCAA
-        (4-year rights), anything else -> EUROPE (4-year rights).
+        junior league: OHL/QMJHL/WHL -> CHL, NCAA -> NCAA (4-year
+        rights), anything else -> EUROPE (4-year rights).
+
+        New CBA (2026): CHL rights now match the NCAA/European scale --
+        4 years for 18-year-olds, 3 years for 19-year-olds (was a flat
+        2 years). Overagers keep 2.
         """
         try:
             jl = (getattr(player, "junior_league", "") or "").strip().upper()
             if jl in self._RIGHTS_CHL_LEAGUES:
-                rtype, duration = "CHL", 2
+                _dage = int(getattr(player, "age", 18) or 18)
+                _dur = 4 if _dage <= 18 else (3 if _dage == 19 else 2)
+                rtype, duration = "CHL", _dur
             elif jl == "NCAA":
                 rtype, duration = "NCAA", 4
             else:
@@ -5275,7 +5386,10 @@ class League:
         $775k-$975k x 3 years, two-way). No new cap logic: the deal is a
         plain Contract assignment, and cap reads it through the existing
         systems. On success the rights fields are cleared (the prospect is
-        no longer "unsigned") and playing_where moves to the pro side;
+        no longer "unsigned") and playing_where is set by real
+        eligibility: junior-aged CHL prospects return to junior,
+        ex-college players go to the AHL (an NHL deal ends NCAA
+        eligibility -- never back to college), everyone else to the AHL;
         returns True. Returns False when the prospect isn't this team's
         unsigned rights-holder asset.
         """
@@ -5317,8 +5431,19 @@ class League:
             player.rights_type = ""
             player.drafted_year = 0
             player.camp_invite = False
-            player.playing_where = "AHL" if int(getattr(player, "age", 20) or 20) >= 20 \
-                else (getattr(player, "playing_where", "") or "Junior")
+            # Assignment on signing (real life / Eastside): a signed
+            # prospect goes where he's eligible. CHL under-20s go back
+            # to junior (except a 19-year-old first-rounder, who may
+            # stay up in the AHL -- the user can promote him after).
+            # Signing an NHL deal ends NCAA eligibility, so an
+            # ex-college player can only go to the minors or the NHL,
+            # never back to college. Everyone else starts in the AHL.
+            _track = junior_track_of(player)
+            _sage = int(getattr(player, "age", 20) or 20)
+            if _track == "CHL" and _sage < 20:
+                player.playing_where = junior_assignment_label(player)
+            else:
+                player.playing_where = "AHL"
             return True
         except Exception:
             return False
@@ -5473,14 +5598,21 @@ class League:
                 f"years; his draft rights lapse.")
             return
 
-        # CHL: rights last 2 years. Still draft-eligible -> re-enters the next
-        # draft; otherwise becomes an unrestricted free agent. Eligibility is
-        # the exact NHL rule (is_draft_eligible): NA prospects age out at 20,
-        # Europeans at 22 (a 23-year-old never re-enters -- UFA, directly
-        # signable). next_draft is the upcoming draft: on draft day it is the
-        # draft about to be held (so re-entries land in this year's class);
-        # in the end_of_season backstop it is season_year + 1.
-        if rtype == "CHL" and years_unsigned >= 2:
+        # CHL: rights last 4 years (drafted at 18) or 3 years (drafted at
+        # 19) under the new CBA -- the scan keys off the stamped
+        # rights_expiry_year, not a hardcoded 2. Still draft-eligible ->
+        # re-enters the next draft; otherwise becomes an unrestricted
+        # free agent. Eligibility is the exact NHL rule
+        # (is_draft_eligible): NA prospects age out at 20, Europeans at
+        # 22 (a 23-year-old never re-enters -- UFA, directly signable).
+        # With 4-year CHL rights a prospect usually ages out before his
+        # rights lapse, so CHL re-entry is now rare -- as in real life.
+        # next_draft is the upcoming draft: on draft day it is the draft
+        # about to be held (so re-entries land in this year's class); in
+        # the end_of_season backstop it is season_year + 1.
+        _chl_expired = (base_year >= rights_expiry) if rights_expiry > 0 \
+            else (years_unsigned >= 2)
+        if rtype == "CHL" and _chl_expired:
             _eligible = False
             try:
                 from draft_generator import is_draft_eligible as _elig
@@ -5495,6 +5627,11 @@ class League:
                 # Real NHL rule: the club that held (and lost) his rights may
                 # not re-select him in the immediate re-entry draft.
                 player.draft_reentry_from = team_name
+                # The old rights die here: he re-enters as a clean prospect
+                # and gets fresh rights stamped when (and if) he's drafted
+                # again. A stale rights_team would make him an immortal FA
+                # (or double-count the rights holder) in later cycles.
+                _clear_rights()
                 if player in getattr(team, "prospects", []):
                     team.prospects.remove(player)
                 if player not in reentries:
@@ -5643,14 +5780,39 @@ class League:
                     # Protection only bites INSIDE the zone: a top-10
                     # protected pick landing at #15 overall conveys normally.
                     in_zone = pos is not None and int(pos) <= int(zone)
-                    # Find the deferral asset: original club's next-year 1st
-                    # that it still owns.
+                    # Find the deferral asset: the original club's own 1st
+                    # in year+1 -- and if that's already been traded, the
+                    # obligation ROLLS FORWARD (year+2, year+3) instead of
+                    # silently dying. A protection that voids because the
+                    # original club flipped its next 1st is the exploit:
+                    # real clubs can't shed the debt by trading the
+                    # payment away.
                     defer = None
+                    defer_year = None
                     if orig is not None and in_zone:
-                        for cand in (getattr(orig, "draft_picks", {}) or {}).get(year + 1, []):
-                            if (cand.round == 1
-                                    and cand.current_team == orig.team_name):
-                                defer = cand
+                        for _dy in (year + 1, year + 2, year + 3):
+                            for cand in (getattr(orig, "draft_picks", {}) or {}).get(_dy, []):
+                                if (cand.round == 1
+                                        and cand.current_team == orig.team_name):
+                                    defer = cand
+                                    defer_year = _dy
+                                    break
+                            if defer is not None:
+                                break
+                    # Last resort: no own 1st available for three drafts.
+                    # Real-world fallback -- the obligation converts to
+                    # the original club's next available 2nd-rounder.
+                    second = None
+                    second_year = None
+                    if orig is not None and in_zone and defer is None:
+                        for _dy in (year, year + 1, year + 2):
+                            for cand in (getattr(orig, "draft_picks", {}) or {}).get(_dy, []):
+                                if (cand.round == 2
+                                        and cand.current_team == orig.team_name):
+                                    second = cand
+                                    second_year = _dy
+                                    break
+                            if second is not None:
                                 break
                     # Protection is consumed whatever happens.
                     pick.protection = ""
@@ -5665,17 +5827,35 @@ class League:
                         defer.condition = ""
                         zone_label = {"top-3": "top-3", "top-10": "top-10",
                                       "lottery": "lottery"}[prot]
+                        _when = (f"{defer_year} 1st-rounder"
+                                 if defer_year == year + 1
+                                 else f"{defer_year} 1st-rounder (deferred -- "
+                                      f"the {year + 1} 1st had been traded)")
                         events.append(
                             f"Pick protection triggered: {orig.team_name} keeps "
                             f"its {year} 1st-rounder (#{pos} overall, {zone_label} "
                             f"protected); {holder} receives {orig.team_name}'s "
-                            f"{year + 1} 1st-rounder instead.")
+                            f"{_when} instead.")
+                    elif in_zone and second is not None and orig is not None:
+                        pick.current_team = orig.team_name  # reverts this year
+                        second.current_team = holder
+                        events.append(
+                            f"Pick protection triggered: {orig.team_name} keeps "
+                            f"its {year} 1st-rounder (#{pos} overall); with no "
+                            f"1st-rounder available through {year + 3}, the "
+                            f"obligation converts to {orig.team_name}'s "
+                            f"{second_year} 2nd-rounder for {holder}.")
                     elif in_zone:
+                        # Nothing left to convey (no 1st for three drafts,
+                        # no 2nd for three drafts): the club stripped its
+                        # own cupboard, so the holder keeps this year's
+                        # pick and the void is on the record.
                         events.append(
                             f"Pick protection could not be honored: "
-                            f"{pick.original_team} no longer holds its "
-                            f"{year + 1} 1st-rounder, so {holder} keeps the "
-                            f"{year} 1st-rounder (#{pos} overall).")
+                            f"{pick.original_team} holds no 1st or 2nd-round "
+                            f"pick through {year + 3} to defer or convert to, "
+                            f"so {holder} keeps the {year} 1st-rounder "
+                            f"(#{pos} overall) and the protection is void.")
                     # Outside the zone the pick simply conveys: the holder
                     # keeps it and the spent protection is noted for the log.
                     elif pos is not None:

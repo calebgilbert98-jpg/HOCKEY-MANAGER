@@ -664,11 +664,96 @@ def retention_slots_used(team) -> int:
         return 0
 
 
-def _retention_check(retaining_team, player, pct, extra=None):
+def regular_season_windows(league=None, ref_year=None):
+    """Regular-season calendar windows as [(start_date, end_date)].
+
+    True CBA (2026): the 75-day double-retention clock counts calendar days
+    inside the regular-season window -- opening night through the last
+    regular-season game. Off-days, the All-Star break, and the Olympic break
+    all count; playoffs, off-season, and training camp do not.
+
+    Windows are derived from the league schedule (first to last game date)
+    for the current season and year-shifted for adjacent seasons, so the
+    clock spans league years. When no schedule exists (old saves, headless
+    QA), falls back to Oct 1 -> Apr 15 per season.
+    """
+    from datetime import date as _d, timedelta as _td
+    _base = None
+    try:
+        _ds = []
+        for _e in (getattr(league, "schedule", None) or []):
+            if isinstance(_e, dict):
+                _v = _e.get("date")
+                if isinstance(_v, _d):
+                    _ds.append(_v)
+                elif _v:
+                    try:
+                        _ds.append(_d.fromisoformat(str(_v)[:10]))
+                    except Exception:
+                        pass
+        if _ds:
+            _base = (min(_ds), max(_ds))
+    except Exception:
+        _base = None
+    try:
+        _cur = int(getattr(league, "season_year", 0) or 0)
+    except Exception:
+        _cur = 0
+    _wins = []
+    if _base and _cur:
+        for _y in (_cur - 1, _cur, _cur + 1):
+            _shift = _td(days=365 * (_y - _cur))
+            _wins.append((_base[0] + _shift, _base[1] + _shift))
+    else:
+        _ry = ref_year or _cur or _d.today().year
+        for _y in (_ry - 1, _ry, _ry + 1):
+            _wins.append((_d(_y, 10, 1), _d(_y + 1, 4, 15)))
+    return _wins
+
+
+def _regular_season_days_between(start_iso, end_iso, windows=None) -> int:
+    """Regular-season days between two ISO dates (exclusive of start).
+
+    Counts calendar days d with start < d <= end that fall inside a
+    regular-season window. Unparseable dates fail open (0). With no
+    windows, approximates with Oct-Apr months (schedule unavailable).
+    """
+    try:
+        from datetime import date as _d, timedelta as _td
+        _s = _d.fromisoformat(str(start_iso)[:10])
+        _e = _d.fromisoformat(str(end_iso)[:10])
+    except Exception:
+        return 0
+    if _e <= _s:
+        return 0
+    _wins = list(windows) if windows else None
+    _n, _cur = 0, _s
+    if not _wins:
+        while _cur < _e:
+            _cur += _td(days=1)
+            if _cur.month in (10, 11, 12, 1, 2, 3, 4):
+                _n += 1
+        return _n
+    while _cur < _e:
+        _cur += _td(days=1)
+        for _ws, _we in _wins:
+            if _ws <= _cur <= _we:
+                _n += 1
+                break
+    return _n
+
+
+def _retention_check(retaining_team, player, pct, extra=None, trade_date=None,
+                    season_windows=None):
     """Shared retention validation. Returns (ok, amount, reason).
 
     extra: {player_id: pct} other PROPOSED retentions in the same deal --
     they consume slots too, so the UI can validate the whole package.
+    trade_date: ISO date (or date) of the trade being validated.
+    season_windows: regular-season [(start, end)] from
+    regular_season_windows(); without it the 75-day clock falls back to
+    Oct-Apr month counting. Without a trade_date the clock check is
+    skipped (execution always supplies one).
     """
     try:
         pct = float(pct or 0)
@@ -700,8 +785,10 @@ def _retention_check(retaining_team, player, pct, extra=None):
     amount = int(round(effective * pct / 100.0))
     if amount <= 0 or int(getattr(player, "retained_amount", 0) or 0) + amount >= salary:
         return False, 0, "Retention would wipe out the whole cap hit."
-    # Real CBA: one contract can have salary retained by at most TWO clubs
-    # (the classic double-retention: e.g. 50% then 50%-of-remainder).
+    # True CBA: one contract can have salary retained by at most TWO clubs
+    # (the classic double-retention: e.g. 50% then 50%-of-remainder), and
+    # the second retention must come more than 75 regular-season days after
+    # the first -- the same-day broker chains are dead.
     try:
         prior_teams = list(getattr(player, "retained_by", None) or [])
         _first = str(getattr(player, "retained_team_name", "") or "")
@@ -711,6 +798,40 @@ def _retention_check(retaining_team, player, pct, extra=None):
         if _me and _me not in prior_teams and len(prior_teams) >= 2:
             return False, 0, (
                 "A contract can have salary retained by at most two clubs.")
+    except Exception:
+        pass
+    # True CBA (2026), quoted text: "If an SPC is subject to a Retained
+    # Salary Transaction, a second Retained Salary Transaction for such SPC
+    # may not occur within seventy-five (75) Regular Season days of the
+    # first Retained Salary Transaction... For purposes of clarity, days
+    # outside of the Regular Season schedule (i.e., Playoffs, off-season
+    # and training camp) do not count towards the required seventy-five
+    # (75) Regular Season days and therefore such restriction may span
+    # multiple League Years."
+    #
+    # So: calendar days inside the regular-season window (opening night to
+    # the last game -- breaks count, summer does not), and the second
+    # retention is legal only MORE than 75 such days after the first
+    # (day 76+). The same-day broker flip -- the Kane/Domi/Rantanen
+    # three-team chains -- is precisely what this kills: no carve-out.
+    try:
+        _dates = [str(x)[:10] for x in
+                  (getattr(player, "retention_trade_dates", None) or [])
+                  if str(x or "").strip()]
+        _prior_clubs = list(getattr(player, "retained_by", None) or [])
+        _me2 = str(getattr(retaining_team, "team_name", "") or "")
+        if _dates and _prior_clubs and _me2 not in _prior_clubs:
+            _last = _dates[-1]
+            _now = (str(trade_date)[:10] if trade_date else "")
+            if _now:
+                _elapsed = _regular_season_days_between(
+                    _last, _now, season_windows)
+                if _elapsed <= 75:
+                    return False, 0, (
+                        f"{getattr(player, 'full_name', 'This player')} had "
+                        f"salary retained {_elapsed} regular-season days "
+                        f"ago -- the CBA bars a second retention within 75 "
+                        f"regular-season days of the first.")
     except Exception:
         pass
     # One retention transaction per club per SPC: a club already carrying
@@ -748,9 +869,12 @@ def _retention_check(retaining_team, player, pct, extra=None):
     return True, amount, ""
 
 
-def apply_retention_dry_run(retaining_team, player, pct, extra=None):
+def apply_retention_dry_run(retaining_team, player, pct, extra=None,
+                            trade_date=None, season_windows=None):
     """Validate retention terms without recording anything (for UI)."""
-    ok, _amount, reason = _retention_check(retaining_team, player, pct, extra)
+    ok, _amount, reason = _retention_check(retaining_team, player, pct, extra,
+                                           trade_date=trade_date,
+                                           season_windows=season_windows)
     return ok, (reason or "OK")
 
 
@@ -759,31 +883,41 @@ def clear_retention_state(player):
 
     A genuinely new contract -- signing, extension, buyout-to-free-agency --
     starts with no retained salary: the cap discount, the retaining club's
-    name, and the two-club history all belonged to the OLD deal. The
-    retaining club's ledger entry is untouched: that dead cap survives the
-    player's move, per CBA. Idempotent; safe on players that never had
-    retention.
+    name, the two-club history, AND the one-year reacquisition bans all
+    belonged to the OLD deal (real CBA: the ban lifts when the SPC it was
+    attached to expires and the player re-signs). The retaining club's
+    ledger entry is untouched: that dead cap survives the player's move,
+    per CBA. Idempotent; safe on players that never had retention.
     """
     for _attr, _zero in (("retained_amount", 0),
                          ("retained_team_name", ""),
-                         ("retained_by", [])):
+                         ("retained_by", []),
+                         ("retention_bans", []),
+                         ("retention_trade_dates", [])):
         try:
             setattr(player, _attr, _zero)
         except Exception:
             pass
 
 
-def apply_retention(retaining_team, player, pct) -> Tuple[bool, str]:
+def apply_retention(retaining_team, player, pct, trade_date=None,
+                    season_windows=None) -> Tuple[bool, str]:
     """Record a retained-salary transaction when a player is traded.
 
     Real NHL rules: the trading club may keep up to 50% of the player's
     CURRENT effective cap hit; max 3 active retentions per club; the
     retained amount becomes dead cap on the retaining club for the
     remaining term of the contract, and the player's cap hit drops for
-    his new club. Additive -- existing trades without retention are
-    untouched. Returns (True, note) or (False, reason).
+    his new club. True CBA (2026): a second club may not retain on the
+    same contract within 75 regular-season days of the first retention
+    trade -- the second retention is legal only on day 76+ of
+    regular-season time, and the same-day broker flip is prohibited.
+    Additive -- existing trades without retention are untouched. Returns
+    (True, note) or (False, reason).
     """
-    ok, amount, reason = _retention_check(retaining_team, player, pct)
+    ok, amount, reason = _retention_check(retaining_team, player, pct,
+                                          trade_date=trade_date,
+                                          season_windows=season_windows)
     if not ok:
         return False, reason
     contract = getattr(player, "contract", None)
@@ -810,6 +944,16 @@ def apply_retention(retaining_team, player, pct) -> Tuple[bool, str]:
             if _rname and _rname not in _by:
                 _by.append(_rname)
             player.retained_by = _by
+        except Exception:
+            pass
+        # Stamp the retention trade date (true-CBA 75-day double-retention
+        # clock: regular-season days only, may span league years).
+        try:
+            _dl = list(getattr(player, "retention_trade_dates", None) or [])
+            _td = str(trade_date)[:10] if trade_date else ""
+            if _td and _td not in _dl:
+                _dl.append(_td)
+                player.retention_trade_dates = _dl
         except Exception:
             pass
     except Exception as e:
@@ -844,10 +988,25 @@ def player_trade_value(player) -> int:
     elif age >= 33:
         base *= 0.8
 
-    # Contract efficiency: overpaid players are worth less
-    salary = getattr(player, 'salary', 0) or 0
-    # Expected salary mirrors the market-value curve (100-point scale)
-    expected = max(750_000, (ovr - 60) * 250_000)
+    # Contract efficiency: overpaid players are worth less.
+    # NOTE: Player carries no bare `.salary` -- it lives on
+    # ``player.contract.salary``. Reading the bare attribute always
+    # returned 0, which silently disabled both branches below (the
+    # overpaid discount never fired, and the bargain premium fired for
+    # every 70+ OVR player). Fixed to read the real cap hit.
+    try:
+        _contract = getattr(player, "contract", None)
+        salary = int(getattr(_contract, "salary", 0) or 0)
+    except Exception:
+        salary = 0
+    # Expected salary mirrors the market-value curve (100-point scale),
+    # floored at the league minimum from the canonical cap system.
+    try:
+        from salary_cap_system import league_minimum_salary as _min_fn
+        _MIN_SAL = _min_fn()
+    except Exception:
+        _MIN_SAL = 775_000
+    expected = max(_MIN_SAL, (ovr - 60) * 250_000)
     if salary > expected * 1.5:
         base *= 0.85
     elif salary < expected * 0.6 and ovr >= 70:
@@ -871,17 +1030,181 @@ def player_trade_value(player) -> int:
     return max(10, int(base))
 
 
+# ---------------------------------------------------------------------------
+# Trade-deadline freeze
+# ---------------------------------------------------------------------------
+
+def _trade_freeze_active(date_str, league=None):
+    """(frozen, reason). Real NHL rule: the trade freeze runs from the
+    deadline (March 8) until the season ends.
+
+    - On or before March 8: trading is legal (deadline-day deals count).
+    - After March 8: frozen while the season that contained the deadline
+      is still running. The season is over once league.season_year has
+      rolled past the deadline's season (League.end_of_season increments
+      it when the Cup is decided) -- so draft-floor and summer deals are
+      legal, and a slow playoff sim stays frozen correctly.
+    - July-September is unconditionally the offseason: no season runs
+      then, so the freeze can't apply.
+    - Unparseable/missing dates fail OPEN: QA harnesses and legacy
+      callers without a game date aren't blocked by a gate that can't
+      tell what day it is.
+    """
+    try:
+        from datetime import date as _date
+        _gd = _date.fromisoformat(str(date_str or "")[:10])
+    except Exception:
+        return False, ""
+    # The deadline belongs to the season's second half: an Oct 2026 date
+    # faces the Mar 2027 deadline; a Feb 2027 date faces Mar 2027.
+    _dy = _gd.year + (1 if _gd.month >= 10 else 0)
+    try:
+        from datetime import date as _date2
+        _deadline = _date2(_dy, 3, 8)
+    except Exception:
+        return False, ""
+    if _gd <= _deadline:
+        return False, ""
+    if _gd.month in (7, 8, 9):
+        return False, ""
+    # The deadline's season started the previous fall: Mar 2027 belongs
+    # to 2026-27 (season_year 2026). The freeze lifts when the league has
+    # rolled into a later season.
+    _deadline_season = _dy - 1
+    try:
+        _syr = int(getattr(league, "season_year", 0) or 0)
+    except Exception:
+        _syr = 0
+    if _syr and _syr > _deadline_season:
+        return False, ""
+    # Belt and suspenders: a recorded Cup champion also lifts the freeze
+    # (no code path sets league.playoff_bracket today, but a future one
+    # might).
+    try:
+        _br = getattr(league, "playoff_bracket", None)
+        if _br is not None and getattr(_br, "stanley_cup_champion", None):
+            return False, ""
+    except Exception:
+        pass
+    return True, (f"The trade deadline ({_deadline.isoformat()}) has "
+                  f"passed -- the freeze lifts when the season ends.")
+
+
+def trades_allowed(date_str, league=None) -> bool:
+    """Public gate: is trading legal on this game date?"""
+    frozen, _why = _trade_freeze_active(date_str, league)
+    return not frozen
+
+
 def pick_trade_value(pick) -> int:
     """Trade value of a draft pick, refined from DraftPick.value."""
     try:
         base = pick.value
     except Exception:
         base = 100
-    # Known high picks are worth more than the round average
-    overall = getattr(pick, 'overall_pick', 0) or 0
+    # Known high picks are worth more than the round average. A
+    # standings-projected slot (project_pick_slots) counts as knowledge;
+    # the blind mid-round default does not pretend to be.
+    overall = int(getattr(pick, 'projected_overall', 0) or 0) \
+        or (getattr(pick, 'overall_pick', 0) or 0)
     if overall and 1 <= overall <= 10:
         base = int(base * (1.6 - overall * 0.06))  # 1st overall ~= 1.54x
     return max(25, int(base))
+
+
+def project_pick_slots(league) -> int:
+    """Standings-aware slot projection for 1st-round picks whose real
+    draft order isn't set yet.
+
+    An unknown 1st used to value as a blind #16 every time -- free
+    lottery tickets for anyone trading with a basement club. Now the
+    original club's league position implies a slot: lottery expected
+    value for non-playoff clubs, reverse-points order for playoff clubs,
+    regressed 40% toward #16 so nobody books a lottery ticket as a
+    certainty. Stored on pick.projected_overall; cleared automatically
+    once the real order is set (real slots always win in valuation).
+
+    Returns the number of picks projected.
+    """
+    try:
+        teams = list(getattr(league, "teams", None) or [])
+        standings = getattr(league, "standings", None) or {}
+        if not teams or not standings:
+            return 0
+
+        def _pts(t):
+            try:
+                s = standings.get(getattr(t, "team_name", ""), None) or {}
+                return int(s.get("Points", 0) or 0)
+            except Exception:
+                return 0
+
+        ordered = sorted(teams, key=_pts)  # worst -> best
+        worst_rank = {}
+        for _i, _t in enumerate(ordered):
+            worst_rank[getattr(_t, "team_name", "")] = _i + 1  # 1 = worst
+
+        try:
+            _cur_draft_year = int(
+                getattr(league, "draft_prospects_year", 0) or 0)
+        except Exception:
+            _cur_draft_year = 0
+        if not _cur_draft_year:
+            try:
+                _cur_draft_year = int(
+                    getattr(league, "season_year", 0) or 0)
+            except Exception:
+                pass
+
+        def _slot_for(rank):
+            # rank: 1 = worst team. Lottery clubs get lottery EV;
+            # playoff clubs get reverse-points order. Both regressed
+            # 40% toward #16 (uncertainty is honest).
+            if rank <= 16:
+                _ev = float(rank) + (2.0 if rank <= 11 else 0.7)
+            else:
+                _ev = float(rank)
+            _proj = 0.6 * _ev + 0.4 * 16.0
+            return max(1, min(32, int(round(_proj))))
+
+        _order_cache = {}
+        _n = 0
+        for _t in teams:
+            try:
+                _picks_by_year = getattr(_t, "draft_picks", None) or {}
+            except Exception:
+                continue
+            for _yr, _picks in list(_picks_by_year.items()):
+                try:
+                    _yr = int(_yr)
+                except Exception:
+                    continue
+                if _yr in _order_cache:
+                    _known = _order_cache[_yr]
+                else:
+                    try:
+                        _known = bool(league.get_draft_order(_yr))
+                    except Exception:
+                        _known = False
+                    _order_cache[_yr] = _known
+                for _pk in list(_picks or []):
+                    try:
+                        if int(getattr(_pk, "round", 0) or 0) != 1:
+                            continue
+                        if _known:
+                            # Real order exists -- it wins; drop any stale
+                            # projection.
+                            _pk.projected_overall = 0
+                            continue
+                        _orig = getattr(_pk, "original_team", "") or ""
+                        _rank = worst_rank.get(_orig, 16)
+                        _pk.projected_overall = _slot_for(_rank)
+                        _n += 1
+                    except Exception:
+                        continue
+        return _n
+    except Exception:
+        return 0
 
 
 def asset_label(asset) -> str:
@@ -890,7 +1213,14 @@ def asset_label(asset) -> str:
     if isinstance(asset, DraftPick):
         desc = asset.description
         prot = protection_label(getattr(asset, "protection", ""))
-        return f"{desc} ({prot})" if prot else desc
+        label = f"{desc} ({prot})" if prot else desc
+        try:
+            _proj = int(getattr(asset, "projected_overall", 0) or 0)
+        except Exception:
+            _proj = 0
+        if _proj:
+            label += f" [proj. #{_proj}]"
+        return label
     try:
         label = f"{asset.full_name} ({asset.primary_position.value}, {asset.overall_rating()} OVR)"
     except Exception:
@@ -1038,6 +1368,24 @@ def _player_cap_hit(p) -> int:
         return 0
 
 
+def _effective_outgoing_hit(p) -> int:
+    """Cap relief a club actually gets from moving this player.
+
+    A player sitting on the waiver wire already counts $0 against the
+    cap (the waiver shed), so trading him away frees $0 -- not his full
+    salary. Using the full hit here let an over-cap club "shed" phantom
+    dollars: waive an $8M player, trade him for a $6M player, and the
+    check saw a $2M reduction while the real burden ROSE $6M.
+    """
+    try:
+        if bool(getattr(p, "on_waivers", False)) and \
+                int(getattr(p, "waiver_days", 0) or 0) > 0:
+            return 0
+    except Exception:
+        pass
+    return _player_cap_hit(p)
+
+
 def _retention_adjustment(assets, retention) -> int:
     """New dead-cap dollars a side keeps by retaining on outgoing assets.
 
@@ -1082,7 +1430,7 @@ def _cap_ok_after(team, outgoing, incoming, retention=None) -> bool:
         current = int(total_cap_charge(team))
     except Exception:
         return True
-    out_sal = sum(_player_cap_hit(p) for p in outgoing
+    out_sal = sum(_effective_outgoing_hit(p) for p in outgoing
                   if not _is_pick(p))
     in_sal = sum(_player_cap_hit(p) for p in incoming
                  if not _is_pick(p))
@@ -1360,7 +1708,8 @@ def clause_annual_value(player, kind):
     if kind in (None, "none"):
         return 0
     try:
-        base = max(750_000, (player.overall_rating() - 60) * 250_000)
+        from salary_cap_system import league_minimum_salary as _min_fn2
+        base = max(_min_fn2(), (player.overall_rating() - 60) * 250_000)
     except Exception:
         base = 1_000_000
     frac = _CLAUSE_FRAC.get(kind, 0.0)
@@ -1436,11 +1785,26 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     """
     from game_classes import DraftPick
 
+    # True-CBA 75-day double-retention clock: regular-season windows from
+    # the league schedule (opening night -> last game), so the clock
+    # counts real regular-season days and pauses in summer.
+    _season_windows = regular_season_windows(league)
+
     def _blocked(summary):
         return CompletedTrade(
             date=date_str, team_a=user_team.team_name,
             team_b=partner_team.team_name, a_gave=[], b_gave=[],
             summary=f"BLOCKED: {summary} No assets moved.")
+
+    # Trade-deadline freeze (real NHL): no deals after March 8 while the
+    # season that contained the deadline is still running. Deadline-day
+    # deals are legal; once the season rolls (or it's plainly summer),
+    # draft-floor and summer deals are legal. This is the canonical choke
+    # point -- SP, AI, MP, and draft-day paths all execute here, so one
+    # gate covers every one of them.
+    _frozen, _freeze_why = _trade_freeze_active(date_str, league)
+    if _frozen:
+        return _blocked(_freeze_why)
 
     # -- Asset ownership: you can't trade what you don't own.
     for _src_team, _assets in ((user_team, user_assets),
@@ -1498,7 +1862,9 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                     _extra = {k: v for k, v in _mine.items()
                               if k != str(getattr(a, "id", None))}
                     ok, _amt, reason = _retention_check(
-                        _src_team, a, _pct, extra=_extra)
+                        _src_team, a, _pct, extra=_extra,
+                        trade_date=date_str,
+                        season_windows=_season_windows)
                     if not ok:
                         _pname = getattr(a, "full_name", str(a))
                         return _blocked(
@@ -1574,12 +1940,24 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
         if isinstance(a, DraftPick):
             a.current_team = partner_team.team_name
         else:
+            # A traded player leaves the wire: the acquiring club pays his
+            # full hit from today, not the $0 waiver shed of his old club.
+            try:
+                a.on_waivers = False
+                a.waiver_days = 0
+            except Exception:
+                pass
             user_team.remove_player(a)
             partner_team.add_player(a)
     for a in partner_assets:
         if isinstance(a, DraftPick):
             a.current_team = user_team.team_name
         else:
+            try:
+                a.on_waivers = False
+                a.waiver_days = 0
+            except Exception:
+                pass
             partner_team.remove_player(a)
             user_team.add_player(a)
 
@@ -1603,7 +1981,9 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                 except Exception:
                     pct = 0
                 if pct > 0:
-                    ok, note = apply_retention(_src_team, a, pct)
+                    ok, note = apply_retention(_src_team, a, pct,
+                                               trade_date=date_str,
+                                               season_windows=_season_windows)
                     if ok:
                         retention_notes.append(note)
                         # Real CBA: the retaining club may not reacquire

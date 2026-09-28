@@ -103,7 +103,9 @@ t2.roster.append(vet)  # $106M over
 place_on_waivers(vet)
 check("T2 compliant via shed", not scs.is_over_cap(t2))
 clear_waivers_cleared(vet, t2, to_ahl=True)
-burial = 6_000_000 - scs.BURY_EXEMPTION
+# New CBA: burial exemption floats with the league minimum
+# (1.15M + 850k = 2M in 2026-27, up from 1.925M).
+burial = 6_000_000 - scs.burial_exemption()
 check("cleared one-way AHLer counts burial only",
       scs.total_cap_charge(t2) == 100_000_000 + burial)
 check("burial line visible", scs.cap_breakdown(t2)["buried"] == burial)

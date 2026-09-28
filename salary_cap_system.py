@@ -321,6 +321,98 @@ LEAGUE_MINIMUM_SALARY = 775000
 BURY_EXEMPTION = 1150000 + LEAGUE_MINIMUM_SALARY  # $1,925,000
 
 
+# ---------------------------------------------------------------------------
+# 2026 CBA (ratified Sept 2026, effective for the 2026-27 season through
+# 2029-30). Additive: the legacy constants above stay for old callers.
+# ---------------------------------------------------------------------------
+
+# New-CBA league-minimum salary schedule, keyed by season_year
+# (2026 == the 2026-27 season). Source: NHL.com, "What you need to know
+# about the new NHL CBA". Existing contracts are grandfathered -- this
+# schedule gates NEW deals only.
+MINIMUM_SALARY_SCHEDULE = {
+    2026: 850_000,    # 2026-27
+    2027: 900_000,    # 2027-28
+    2028: 950_000,    # 2028-29
+    2029: 1_000_000,  # 2029-30
+}
+
+# New-CBA entry-level maximum, defined PER CONTRACT YEAR (not a flat
+# number): $1.025M in year 1, $1.075M in year 2, $1.125M in year 3 --
+# $3.225M total base for a 3-year deal. TSN/Chris Johnston and Field
+# Level Media, July 2026 (McKenna's max ELC). Schedule A bonuses (up to
+# $1M) and Schedule B (up to $2.5M) per season are NOT modeled -- the
+# game has no performance-bonus system.
+ELC_MAX_BY_CONTRACT_YEAR = (1_025_000, 1_075_000, 1_125_000)
+
+# New-CBA maximum contract term: 7 years re-signing with the same club,
+# 6 years signing elsewhere as a free agent (was 8/7). Existing deals are
+# grandfathered; these gate NEW contracts only.
+MAX_TERM_RESIGN = 7
+MAX_TERM_EXTERNAL = 6
+
+# New-CBA AHL rule: a 19-year-old CHL player drafted in the FIRST ROUND
+# may be loaned to the AHL. 18-year-olds and later-round picks still go
+# back to junior. No per-team limit.
+AHL_CHL_MIN_AGE = 19
+AHL_CHL_FIRST_ROUND_ONLY = True
+
+
+def _season_year_or_current(season_year=None) -> int:
+    """Normalize a season_year; None infers from today's date."""
+    if season_year is not None:
+        try:
+            return int(season_year)
+        except (TypeError, ValueError):
+            pass
+    from datetime import date as _date
+    _today = _date.today()
+    # The NHL season turns over in September.
+    return _today.year if _today.month >= 9 else _today.year - 1
+
+
+def league_minimum_salary(season_year=None) -> int:
+    """New-CBA league minimum for a season_year (2026 == 2026-27).
+
+    Seasons before 2026 use the old $775k; seasons past the CBA window
+    hold at $1M. Existing contracts are grandfathered -- callers must
+    only apply this to NEW deals.
+    """
+    sy = _season_year_or_current(season_year)
+    if sy < 2026:
+        return LEAGUE_MINIMUM_SALARY
+    if sy > 2029:
+        return 1_000_000
+    return MINIMUM_SALARY_SCHEDULE.get(sy, 1_000_000)
+
+
+def elc_max_total(contract_years=3) -> int:
+    """Max total base compensation for an ELC of the given length."""
+    yrs = max(1, min(3, int(contract_years or 3)))
+    return sum(ELC_MAX_BY_CONTRACT_YEAR[:yrs])
+
+
+def elc_max_salary(contract_years=3) -> int:
+    """Max flat-salary equivalent (AAV) for an ELC of the given length.
+
+    The game models one salary for every year of a contract, so the
+    faithful ceiling is the deal's max total base divided by its length:
+    $1.075M for a 3-year ELC, $1.05M for a 2-year ELC.
+    """
+    yrs = max(1, min(3, int(contract_years or 3)))
+    return elc_max_total(yrs) // yrs
+
+
+def burial_exemption(season_year=None) -> int:
+    """Burial exemption ($1.15M + league minimum) for a season."""
+    return 1_150_000 + league_minimum_salary(season_year)
+
+
+def max_contract_term(is_extension: bool) -> int:
+    """New-CBA maximum term: 7 years to re-sign, 6 years externally."""
+    return MAX_TERM_RESIGN if is_extension else MAX_TERM_EXTERNAL
+
+
 def _on_waiver_wire(p) -> bool:
     """True while a player sits on the waiver wire awaiting clearing."""
     try:
@@ -368,7 +460,13 @@ def minor_league_cap_charge(p) -> int:
             return 0
         hit = int(getattr(contract, "salary", 0) or 0)
         hit -= int(getattr(p, "retained_amount", 0) or 0)
-        return max(0, hit - BURY_EXEMPTION)
+        # New CBA: the burial exemption floats with the league minimum
+        # ($1.15M + minimum => $2.0M in 2026-27, up from $1.925M).
+        try:
+            _bury = burial_exemption()
+        except Exception:
+            _bury = BURY_EXEMPTION
+        return max(0, hit - _bury)
     except Exception:
         return 0
 
@@ -379,7 +477,8 @@ def roster_cap_charge(team) -> int:
     Only the NHL active roster counts at full salary. Prospects never
     count. Players under NHL contract in the minors follow the burial
     rule: two-way deals are fully exempt, one-way deals count salary
-    minus the $1.925M burial exemption.
+    minus the burial exemption ($1.15M + league minimum, $2.0M in
+    2026-27).
 
     Retained salary lowers the charge: a player carrying retained_amount
     (kept by his former club) counts salary - retained here, while the

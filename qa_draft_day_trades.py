@@ -297,7 +297,9 @@ lg2, nhl2 = make_league()
 _a2, _b2 = nhl2[0], nhl2[1]
 _pa = next(p for p in _a2.get_picks_for_year(2027)
            if p.round == 1 and p.current_team == _a2.team_name)
-te.execute_trade(_a2, _b2, [_pa], [], date_str="2027-06-01")
+te.execute_trade(_a2, _b2, [_pa], [], date_str="2027-06-01", league=lg2)
+check("draft-floor trade executes post-season (freeze lifted by rolled season_year)",
+      _pa.current_team == _b2.team_name)
 ddt._sync_pick_lists(_a2, _b2, [_pa], [])
 _o2 = lg2.get_draft_order(2027)
 _row = next(r for r in _o2 if r[2] is _pa)
