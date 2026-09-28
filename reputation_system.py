@@ -1873,6 +1873,241 @@ def set_line_control(team: Any, who: str,
                 "strong_affected": n_strong}
     _shift_happiness(roster, 3, lambda p: (getattr(p, "happiness", 70) or 70) < 55)
     _shift_happiness(roster, -2, lambda p: (getattr(p, "age", 27) or 27) >= 32)
+
+
+# ---------------------------------------------------------------------------
+# Tactics control: who owns the whiteboard
+# ---------------------------------------------------------------------------
+# Mirrors the line-control flow: the coach owns tactics by default. The GM
+# can SUGGEST (the coach may say no), ENFORCE (overrule -- he won't forget),
+# or TAKE OVER the whiteboard outright. Every response runs through the
+# same personality factors: control_need, gm_trust, adaptability, form,
+# and whether he's a rookie you believed in.
+
+_TACTICS_CAT_LABEL = {"offense": "Offense", "defense": "Defense",
+                      "pp": "Power play", "pk": "Penalty kill",
+                      "philosophy": "Philosophy"}
+
+
+def _tactics_coach(team: Any) -> Any:
+    try:
+        for stf in getattr(team, "staff", []) or []:
+            if "Head Coach" in str(getattr(getattr(stf, "role", None), "value", "")):
+                return stf
+    except Exception:
+        pass
+    return None
+
+
+def _changes_summary(changes: Dict[str, str]) -> str:
+    bits = [_TACTICS_CAT_LABEL.get(c, c) for c in changes]
+    if len(bits) == 1:
+        return bits[0]
+    return ", ".join(bits[:-1]) + " and " + bits[-1]
+
+
+def preview_tactics_discussion(coach: Any, changes: Dict[str, str],
+                               team_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The GM floats tactical changes past the coach BEFORE committing.
+
+    Returns his likely response: tone, text, trust_delta, accept_p.
+    Same factors as the line-control discussion, plus how drastic the
+    overhaul is -- ripping up the whole whiteboard scares any coach.
+    """
+    ensure_reputation_fields(coach)
+    ctx = team_context or {}
+    cn = getattr(coach, "control_need", 50) or 50
+    trust = getattr(coach, "gm_trust", 70) or 70
+    adapt = getattr(coach, "adaptability", 50) or 50
+    dry = _dry_spell(ctx)
+    rookie = bool(getattr(coach, "first_nhl_chair", False)) and \
+        (getattr(coach, "years_with_team", 0) or 0) <= 2
+    cname = getattr(coach, "full_name", "Coach").split()[0]
+    n = max(1, len(changes))
+    phil = "philosophy" in changes
+    summ = _changes_summary(changes)
+
+    # Likelihood he says yes -- personality is the major factor.
+    p = 0.55
+    p -= 0.006 * max(0, cn - 50)      # control freaks hate interference
+    p += 0.006 * max(0, 50 - cn)      # collaborators welcome input
+    p += 0.005 * max(0, trust - 70)   # trust buys latitude
+    p -= 0.005 * max(0, 70 - trust)
+    p += 0.004 * max(0, adapt - 50)   # flexible minds bend
+    if dry:
+        p += 0.15                      # losing forces hands
+    if rookie:
+        p += 0.20                      # he owes you
+    p -= 0.07 * (n - 1)                # wholesale overhauls scare coaches
+    if phil:
+        p -= 0.10                      # philosophy is identity
+    p = max(0.05, min(0.95, p))
+
+    if rookie:
+        return {"tone": "welcomes", "trust_delta": 3, "accept_p": p,
+                "text": f"{cname} welcomes it -- you gave him his first chair. "
+                        f"He'll run the {summ} changes tonight."}
+    if cn <= 35:
+        if dry:
+            return {"tone": "accepts", "trust_delta": 2, "accept_p": p,
+                    "text": f"{cname} gets it -- dry spell, and the {summ} tweak "
+                            f"is worth a look. No hard feelings."}
+        return {"tone": "accepts", "trust_delta": 0, "accept_p": p,
+                "text": f"{cname} is a little surprised, but he trusts you. "
+                        f"He'll try the {summ} change."}
+    if cn < 70:
+        if dry:
+            return {"tone": "wary", "trust_delta": -2, "accept_p": p,
+                    "text": f"{cname} is wary -- it's his system -- but the "
+                            f"results force his hand on the {summ}."}
+        return {"tone": "wary", "trust_delta": -4, "accept_p": p,
+                "text": f"{cname} doesn't love being second-guessed on the "
+                        f"{summ} while things are working."}
+    if dry:
+        return {"tone": "bristles", "trust_delta": -6, "accept_p": p,
+                "text": f"{cname} bristles. Even asked nicely, he hears: "
+                        f"you don't trust his {summ}."}
+    return {"tone": "furious", "trust_delta": -10, "accept_p": p,
+            "text": f"{cname} is furious. His {summ} is his authority -- "
+                    f"question it and he'll remember."}
+
+
+def _apply_tactic_changes(team: Any, changes: Dict[str, str],
+                          mid_game: bool = False) -> int:
+    n = 0
+    try:
+        import tactics as _tx
+        for cat, key in changes.items():
+            if _tx.set_team_system(team, cat, key, mid_game=mid_game):
+                n += 1
+    except Exception:
+        pass
+    return n
+
+
+def _bump_trust(coach: Any, delta: int) -> None:
+    try:
+        coach.gm_trust = max(0, min(100, (getattr(coach, "gm_trust", 70) or 70) + delta))
+    except Exception:
+        pass
+
+
+def suggest_tactics_to_coach(team: Any, changes: Dict[str, str],
+                             team_context: Optional[Dict[str, Any]] = None,
+                             mid_game: bool = False) -> Dict[str, Any]:
+    """Float changes past the coach. He may accept (applies them) or refuse.
+
+    Personality drives the likelihood -- see preview_tactics_discussion.
+    """
+    coach = _tactics_coach(team)
+    if coach is None:
+        n = _apply_tactic_changes(team, changes, mid_game=mid_game)
+        return {"applied": True, "accepted": True, "n": n,
+                "text": "No head coach in place -- changes applied directly."}
+    prev = preview_tactics_discussion(coach, changes, team_context)
+    accepted = random.random() < prev["accept_p"]
+    summ = _changes_summary(changes)
+    cname = getattr(coach, "full_name", "Coach").split()[0]
+    if accepted:
+        n = _apply_tactic_changes(team, changes, mid_game=mid_game)
+        _bump_trust(coach, 3)
+        text = (f"{cname} bought in -- the {summ} change is in. "
+                f"He appreciates being asked first.")
+        record_team_event(team, "tactics", text, morale_delta=1, tone="up")
+        return {"applied": True, "accepted": True, "n": n, "tone": prev["tone"],
+                "text": text}
+    _bump_trust(coach, -2)
+    text = (f"{cname} said no to the {summ} change. {prev['text']} "
+            f"The whiteboard stays as it was.")
+    record_team_event(team, "tactics", text, morale_delta=-1, tone="down")
+    return {"applied": False, "accepted": False, "n": 0, "tone": prev["tone"],
+            "text": text}
+
+
+def enforce_tactics(team: Any, changes: Dict[str, str],
+                    team_context: Optional[Dict[str, Any]] = None,
+                    mid_game: bool = False) -> Dict[str, Any]:
+    """The GM overrules the coach. It works -- and he won't forget it."""
+    coach = _tactics_coach(team)
+    n = _apply_tactic_changes(team, changes, mid_game=mid_game)
+    summ = _changes_summary(changes)
+    if coach is None:
+        return {"applied": True, "n": n,
+                "text": "Changes enforced -- no head coach in place."}
+    ensure_reputation_fields(coach)
+    cn = getattr(coach, "control_need", 50) or 50
+    ctx = team_context or {}
+    win_pct = max(0.0, min(1.0, ctx.get("win_pct", 0.5)))
+    cname = getattr(coach, "full_name", "Coach").split()[0]
+    hit = int(round(4 + cn / 25.0))  # ~5 collaborators, ~8 authoritarians
+    extra = ""
+    if win_pct >= 0.58 and cn >= 70:
+        hit += 2
+        extra = " On a winning team, no less -- he'll remember this."
+    _bump_trust(coach, -hit)
+    text = (f"GM enforced the {summ} change over {cname}'s objections.{extra}")
+    record_team_event(team, "tactics", text, morale_delta=-3, tone="down")
+    return {"applied": True, "n": n, "trust_delta": -hit, "text": text}
+
+
+def take_over_tactics(team: Any, team_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The GM takes the whiteboard. The coach reacts as his makeup dictates."""
+    coach = _tactics_coach(team)
+    try:
+        import tactics as _tx
+        _tx.set_tactics_control(team, "gm")
+    except Exception:
+        pass
+    if coach is None:
+        return {"changed": True, "text": "You own the whiteboard -- no head coach in place."}
+    ensure_reputation_fields(coach)
+    cn = getattr(coach, "control_need", 50) or 50
+    ctx = team_context or {}
+    dry = _dry_spell(ctx)
+    rookie = bool(getattr(coach, "first_nhl_chair", False)) and \
+        (getattr(coach, "years_with_team", 0) or 0) <= 2
+    cname = getattr(coach, "full_name", "Coach").split()[0]
+    if rookie:
+        _bump_trust(coach, 3)
+        text = (f"{cname} hands over the whiteboard -- you believed in him, "
+                f"and he'll learn watching you work it.")
+        record_team_event(team, "tactics", text, morale_delta=1, tone="neutral")
+        return {"changed": True, "trust_delta": 3, "text": text}
+    if cn <= 35:
+        _bump_trust(coach, 1 if dry else 0)
+        text = (f"{cname} shrugs -- collaboration is his game. "
+                f"The whiteboard is yours{' while the slump lasts' if dry else ''}.")
+        record_team_event(team, "tactics", text, morale_delta=0, tone="neutral")
+        return {"changed": True, "trust_delta": 1 if dry else 0, "text": text}
+    if cn < 70:
+        _bump_trust(coach, -6)
+        text = (f"{cname} is stung. He'll coach your systems, but being "
+                f"handed the whiteboard like an assistant smarts.")
+        record_team_event(team, "tactics", text, morale_delta=-3, tone="down")
+        return {"changed": True, "trust_delta": -6, "text": text}
+    _bump_trust(coach, -10)
+    text = (f"{cname} is livid. Taking his whiteboard is taking his job "
+            f"in slow motion -- don't expect warmth at practice.")
+    record_team_event(team, "tactics", text, morale_delta=-5, tone="down")
+    return {"changed": True, "trust_delta": -10, "text": text}
+
+
+def hand_back_tactics(team: Any) -> Dict[str, Any]:
+    """Return the whiteboard to the coach. Systems stay; trust is repaired."""
+    coach = _tactics_coach(team)
+    try:
+        import tactics as _tx
+        _tx.set_tactics_control(team, "coach")
+    except Exception:
+        pass
+    if coach is None:
+        return {"changed": True, "text": "Whiteboard returned -- no head coach in place."}
+    _bump_trust(coach, 4)
+    cname = getattr(coach, "full_name", "Coach").split()[0]
+    text = (f"{cname} has the whiteboard back. The systems stay as you left "
+            f"them -- he's grateful for the trust.")
+    record_team_event(team, "tactics", text, morale_delta=2, tone="up")
+    return {"changed": True, "trust_delta": 4, "text": text}
     text = (f"GM took over the lines ({win_pct:.0%} record). Struggling players welcome the shake-up; "
             f"veterans are wary.")
     record_team_event(team, "line_control", text, morale_delta=1, tone="neutral")
@@ -1947,6 +2182,16 @@ def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]
         name_value=getattr(player, "career_reputation", 0) or 0)
     last = getattr(player, "last_team_name", "") or getattr(player, "team_name", "")
     attrs["connections"] = [last] if last else []
+    # Franchise icon: a star retiring in your sweater is YOUR legend.
+    # (Coffey in Edmonton.) Only real stars qualify -- icons are earned.
+    try:
+        _rep = float(getattr(player, "career_reputation", 0) or 0)
+        _gp = float(getattr(player, "career_games", 0) or 0)
+        if last and _rep >= 65 and _gp >= 400:
+            attrs["icon_team"] = last
+            attrs["icon_level"] = "icon" if (_rep >= 80 and _gp >= 600) else "star"
+    except Exception:
+        pass
     return attrs
 
 

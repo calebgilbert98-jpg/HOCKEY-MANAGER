@@ -1085,6 +1085,11 @@ class Staff:
     gm_trust: int = 70  # 0-100 GM-coach trust; evolves as advice is taken/ignored
     ambition: str = "climb"  # stanley_cup | climb | developer | hometown | lifer
     favorite_team: str = ""  # Boyhood team (Suzuki wants the Habs)
+    icon_team: str = ""  # Franchise where he is a legend as a PLAYER (""/team).
+    # The Coffey effect: hiring YOUR icon behind the bench moves the room.
+    icon_level: str = ""  # "" | "star" | "icon" (stamped at retirement)
+    assistant_effect: Optional[float] = None  # current effectiveness 0-100;
+    # None seeds from prowess on first tick, then drifts with results/mesh
     control_need: int = 50  # 0-100: Babcock 95 (authoritarian) ... Cooper 25 (collaborative)
     first_nhl_chair: bool = False  # Rookie NHL head coach promoted from AHL: defers to the GM who believed in him
     # Reputation system (0-100 career standing; visible attitude/volatility 0-100)

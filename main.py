@@ -62,6 +62,7 @@ from player_development_system import PlayerDevelopmentEngine, initialize_player
 from media_system import MediaSystem
 from media_center_window import MediaCenterWindow
 from morale_window import MoraleWindow
+from tactics_window import TacticsWindow
 
 # Import Football Manager-style career systems
 import manager_career
@@ -1229,6 +1230,22 @@ NHL League Office""",
         
         notable = []
         for team in self.league.teams:
+            # Assistant coaches: effectiveness drifts with results, mesh and
+            # shelf life (icons exempt -- legacy cemented); the room feels it
+            # through morale. See assistant_coaches.
+            try:
+                import assistant_coaches as _ac
+                _st = (getattr(self.league, "standings", None) or {}).get(
+                    getattr(team, "team_name", ""), {}) or {}
+                _g = ((_st.get("W", 0) or 0) + (_st.get("L", 0) or 0)
+                      + (_st.get("OTL", 0) or 0))
+                _wp = (((_st.get("W", 0) or 0)
+                        + 0.5 * (_st.get("OTL", 0) or 0)) / _g) if _g else None
+                for _line in _ac.assistants_monthly_tick(team, win_pct=_wp):
+                    if team == self.user_team:
+                        notable.append("\U0001f4cb " + _line)
+            except Exception:
+                pass
             for roster_name in ('roster', 'prospects'):
                 for player in getattr(team, roster_name, []) or []:
                     changes = self._dev_engine.process_monthly_development(
@@ -4257,6 +4274,11 @@ class HockeyManagerGUI(tk.Tk):
         self._create_nav_pill(right_menu_frame, "Morale",
                               self.open_morale_window, side="right",
                               tooltip="Morale: team chemistry, hierarchy, and player attitudes")
+
+        # Tactics button (systems, familiarity, fit -- the whiteboard)
+        self._create_nav_pill(right_menu_frame, "Tactics",
+                              self.open_tactics_window, side="right",
+                              tooltip="Tactics: systems, familiarity, roster/coach fit")
 
         # Stats & Standings button
         self._create_nav_pill(right_menu_frame, "Stats",
@@ -9555,7 +9577,8 @@ class HockeyManagerGUI(tk.Tk):
 
         win = open_pbp_window(self, home_team, away_team, on_complete=_on_done,
                               rivalries=getattr(getattr(self, "league", None),
-                                                "rivalries", []))
+                                                "rivalries", []),
+                              user_team=getattr(self, "user_team", None))
         win_ref['win'] = win
         # Prevent closing before the sim finishes: the result is needed below.
         # (Re-enabled by _on_done when game_end plays.)
@@ -10494,6 +10517,12 @@ class HockeyManagerGUI(tk.Tk):
         if 'morale' not in self.open_windows or not self.open_windows['morale'].winfo_exists():
             self.open_windows['morale'] = MoraleWindow(self)
         self.open_windows['morale'].focus_set()
+
+    def open_tactics_window(self):
+        """Open the Team Tactics screen (systems, familiarity, fit)."""
+        if 'tactics' not in self.open_windows or not self.open_windows['tactics'].winfo_exists():
+            self.open_windows['tactics'] = TacticsWindow(self)
+        self.open_windows['tactics'].focus_set()
         
     def open_stats_standings_window(self, focus_tab=None):
         """Open the comprehensive Stats and Standings window with optional tab focus."""

@@ -502,6 +502,10 @@ class GameSim:
             import tactics as _tx
             _tx.ensure_team_tactics(home_team)
             _tx.ensure_team_tactics(away_team)
+            # New voice behind either bench? He installs his systems
+            # (AI teams get customized tactics too).
+            _tx.maybe_install_coach_systems(home_team)
+            _tx.maybe_install_coach_systems(away_team)
         except Exception:
             pass
         self.series_game = series_game
@@ -523,6 +527,7 @@ class GameSim:
         self._punishment_orders = {}   # team_name -> order_punishment() dict
         self._home_coach = None
         self._away_coach = None
+        self._tactics_tweaks = set()  # team names that already adjusted tonight
         try:
             from reputation_system import game_tension_breakdown
             bd = game_tension_breakdown(home_team, away_team,
@@ -2076,6 +2081,9 @@ class GameSim:
             self._simulate_period()
             self._log_event(f"End of Period {self.period}. Score: {self.home_score}-{self.away_score}", "PERIOD_END")
             self._emit_pbp("period_end", period=p)
+            if p in (1, 2):
+                # Coaches who own the whiteboard adjust between periods.
+                self._ai_tactics_intermission()
 
         if self.home_score == self.away_score:
             self._handle_overtime()
@@ -2214,6 +2222,37 @@ class GameSim:
         except Exception:
             pass
     
+    def _ai_tactics_intermission(self):
+        """Between periods, a coach in control may tweak his systems.
+
+        Personality-gated (adaptability, style, score state), once per team
+        per game. Changes apply mid-game with a soft familiarity hit and
+        are announced on the broadcast feed.
+        """
+        try:
+            import tactics as _tx
+            pairs = ((self.home_team, self.home_score - self.away_score),
+                     (self.away_team, self.away_score - self.home_score))
+            for team, diff in pairs:
+                tname = getattr(team, "team_name", "")
+                if tname in self._tactics_tweaks:
+                    continue
+                tw = _tx.ai_intermission_adjustment(team, diff)
+                if not tw:
+                    continue
+                self._tactics_tweaks.add(tname)
+                _tx.set_team_system(team, tw["category"], tw["new_key"],
+                                    mid_game=True)
+                line = tw.get("line", "")
+                if line:
+                    self._log_event(line, "TACTICS")
+                    try:
+                        self._emit_pbp("tactics_change", team=tname, text=line)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def simulate_game(self):
         """Compatibility wrapper for playoff_system.py.
         
