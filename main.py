@@ -10735,14 +10735,8 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_league_history_window(self):
         """Open the League History window (champions, awards, leaders, HOF)."""
-        if 'league_history' not in self.open_windows or not self.open_windows['league_history'].winfo_exists():
-            self.open_windows['league_history'] = LeagueHistoryWindow(self, self)
-        window = self.open_windows['league_history']
-        try:
-            window.focus_set()
-            window.lift()
-        except Exception:
-            pass
+        self.show_screen("league_history", "League History", LeagueHistoryView,
+                         self)
 
     def open_shot_chart_viewer(self, game_id=None, team_name=None, player_id=None):
         """Open the shot chart viewer for a game, team, or player."""
@@ -10777,13 +10771,9 @@ class HockeyManagerGUI(tk.Tk):
                               "Watch a game live to capture its shot chart.")
             return
 
-        win = ShotChartViewerWindow(self, self, shots, title=title,
-                                    home_name=home_name, away_name=away_name)
-        try:
-            win.focus_set()
-            win.lift()
-        except Exception:
-            pass
+        self.show_screen("shot_chart", title, ShotChartViewerView,
+                         self, shots, title=title,
+                         home_name=home_name, away_name=away_name)
 
     def open_records_window(self):
         """Open the NHL Records in the Stats window."""
@@ -16009,17 +15999,26 @@ def _launch_with_wizard():
         return False
 
 
-class LeagueHistoryWindow(InGamePopup):
+class LeagueHistoryView(ctk.CTkFrame):
     """League History: Champions, Awards, Career Leaders, Hall of Fame.
 
     Reads from the career's LeagueHistory archive (populated at season end
     via _record_season_to_history). Non-modal card.
     """
 
-    def __init__(self, parent, game_manager):
+    def __init__(self, parent, game_manager, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
         self.game_manager = game_manager
-        super().__init__(parent, title="League History", width=900, height=650)
+        self._close_screen = None  # set by show_screen() or wrapper
         self._build()
+
+    def close_view(self):
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _history(self):
         from league_history import LeagueHistory
@@ -16246,20 +16245,29 @@ class LeagueHistoryWindow(InGamePopup):
                           font=('Arial', 9)).pack(anchor='w', padx=10, pady=(0, 8))
 
 
-class ShotChartViewerWindow(InGamePopup):
+class ShotChartViewerView(ctk.CTkFrame):
     """View a saved shot chart: rink with shot locations by result.
 
     Can show a single game, a team's last-N aggregate, or a player's shots.
     """
 
     def __init__(self, parent, game_manager, shots, title="Shot Chart",
-                 home_name="", away_name=""):
+                 home_name="", away_name="", app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
         self.game_manager = game_manager
         self.shots = shots or []
         self.home_name = home_name
         self.away_name = away_name
-        super().__init__(parent, title=title, width=800, height=600)
+        self._close_screen = None  # set by show_screen() or wrapper
         self._build()
+
+    def close_view(self):
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _build(self):
         import tkinter as tk
@@ -16328,6 +16336,31 @@ class ShotChartViewerWindow(InGamePopup):
 
 
 # --- Main execution
+# ---------------------------------------------------------------------------
+# Legacy popup wrappers for converted views (backward compatibility)
+# ---------------------------------------------------------------------------
+
+class LeagueHistoryWindow(InGamePopup):
+    """Popup wrapper around LeagueHistoryView."""
+    def __init__(self, parent, game_manager):
+        InGamePopup.__init__(self, parent, title="League History", width=900, height=650)
+        self._view = LeagueHistoryView(self, game_manager, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+
+
+class ShotChartViewerWindow(InGamePopup):
+    """Popup wrapper around ShotChartViewerView."""
+    def __init__(self, parent, game_manager, shots, title="Shot Chart",
+                 home_name="", away_name=""):
+        InGamePopup.__init__(self, parent, title=title, width=800, height=600)
+        self._view = ShotChartViewerView(self, game_manager, shots, title=title,
+                                         home_name=home_name, away_name=away_name,
+                                         app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+
+
 if __name__ == "__main__":
     import sys
 
