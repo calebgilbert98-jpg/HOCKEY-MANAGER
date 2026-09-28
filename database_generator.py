@@ -388,6 +388,10 @@ class DatabaseGenerator:
         
         # Generate staff for teams
         self._generate_team_staff(main_league.teams)
+
+        # Link family members across the league (rare shared surnames)
+        # and seed their relationships warm -- brothers start close.
+        self._link_family_members(main_league)
         
         # Generate league schedule if needed
         if hasattr(main_league, 'generate_schedule'):
@@ -403,6 +407,50 @@ class DatabaseGenerator:
         
         return main_league
     
+    def _link_family_members(self, league):
+        """Link family members across the league.
+
+        Players sharing a RARE surname (2-4 league-wide, so no 'Smith
+        brothers' false positives from common names) are family in the
+        game world -- the Staals/Hughes treatment. Links are mutual and
+        their relationships start warm; the monthly relationship engine
+        takes it from there.
+        """
+        try:
+            pool = []
+            for team in getattr(league, 'teams', []) or []:
+                pool.extend(getattr(team, 'roster', []) or [])
+            pool.extend(getattr(league, 'free_agents', []) or [])
+
+            by_surname = {}
+            for p in pool:
+                sn = (getattr(p, 'last_name', '') or '').strip()
+                if sn:
+                    by_surname.setdefault(sn, []).append(p)
+
+            for surname, members in by_surname.items():
+                if not 2 <= len(members) <= 4:
+                    continue
+                if any(len(getattr(m, 'family_ids', None) or []) >= 2 for m in members):
+                    continue  # already spoken for -- keep families small
+                ids = [m.id for m in members]
+                for m in members:
+                    fam = getattr(m, 'family_ids', None)
+                    if fam is None:
+                        m.family_ids = fam = []
+                    for oid in ids:
+                        if oid != m.id and oid not in fam:
+                            fam.append(oid)
+                    # Brothers start close.
+                    rels = getattr(m, 'relationships', None)
+                    if rels is None:
+                        m.relationships = rels = {}
+                    for oid in ids:
+                        if oid != m.id:
+                            rels[oid] = max(rels.get(oid, 0), 80)
+        except Exception:
+            pass  # family linking is flavor -- never break generation
+
     def _generate_team_staff(self, teams):
         """Generate coaching staff and management for all teams."""
         from game_classes import Staff, StaffRole

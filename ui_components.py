@@ -53,6 +53,7 @@ class PlayerProfileView(ctk.CTkFrame):
         # Create tabs
         self._create_overview_tab()
         self._create_attributes_tab()
+        self._create_personality_tab()
         self._create_stats_tab()
         self._create_contract_tab()
         self._create_development_tab()
@@ -181,7 +182,7 @@ class PlayerProfileView(ctk.CTkFrame):
         left_column = ttk.Frame(main_container, style='PlayerTab.TFrame')
         left_column.grid(row=1, column=0, sticky='nsew', padx=(0, 1))
         left_column.grid_columnconfigure(0, weight=1)
-        for i in range(4):
+        for i in range(3):
             left_column.grid_rowconfigure(i, weight=1)
         
         center_column = ttk.Frame(main_container, style='PlayerTab.TFrame') 
@@ -196,11 +197,11 @@ class PlayerProfileView(ctk.CTkFrame):
         for i in range(7):  # Increased for additional content
             right_column.grid_rowconfigure(i, weight=1)
         
-        # Left column content - Personal & Bio info
-        self._create_enhanced_basic_info(left_column, 0)
-        self._create_injury_history(left_column, 1)
-        self._create_career_progression(left_column, 2)
-        self._create_team_chemistry(left_column, 3)
+        # Left column content - Health, career & room
+        # (Personal details moved to the Personality tab.)
+        self._create_injury_history(left_column, 0)
+        self._create_career_progression(left_column, 1)
+        self._create_team_chemistry(left_column, 2)
         
         # Center column content - Player Attributes (all attributes bucketed together)
         self._create_enhanced_key_attributes(center_column, 0)
@@ -724,20 +725,32 @@ class PlayerProfileView(ctk.CTkFrame):
         bar_w = max(3, int(w * value / 100))
         canvas.create_rectangle(0, 5, bar_w, h - 5, fill=color, outline="")
 
-    def _create_traits_banner(self, parent):
-        """Display player traits as pills at the top of the attributes tab."""
+    def _create_traits_banner(self, parent, kind="talent"):
+        """Display player traits as pills.
+
+        kind='talent': on-ice traits (offense/defense/physical/skating/
+        goalie) -- shown on the Attributes tab.
+        kind='personality': mental traits (e.g. Clutch) -- shown on the
+        Personality tab alongside personal details and allies.
+        """
         try:
             from player_traits import get_player_traits
             traits = get_player_traits(self.player)
         except Exception:
             traits = []
+        if kind == "talent":
+            traits = [t for t in traits if getattr(t, "category", "") != "mental"]
+            title = "Talent Traits"
+        else:
+            traits = [t for t in traits if getattr(t, "category", "") == "mental"]
+            title = "Personality Traits"
         if not traits:
             return
 
         banner = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
         banner.pack(fill='x', padx=8, pady=(8, 4))
 
-        ttk.Label(banner, text="Traits", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 6))
+        ttk.Label(banner, text=title, style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 6))
 
         pills_frame = ttk.Frame(banner, style='PlayerTab.TFrame')
         pills_frame.pack(fill='x')
@@ -780,6 +793,284 @@ class PlayerProfileView(ctk.CTkFrame):
 
         widget.bind("<Enter>", show)
         widget.bind("<Leave>", hide)
+
+    def _new_scrollable_tab(self, title):
+        """Creates a scrollable notebook tab; returns the scrollable frame."""
+        tab_frame = ttk.Frame(self.notebook, style='PlayerTab.TFrame')
+        self.notebook.add(tab_frame, text=title)
+
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        def _configure_scroll_region(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(window_id, width=event.width)
+
+        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.bind("<Configure>", _configure_scroll_region)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        return scrollable_frame
+
+    def _get_league(self):
+        """Best-effort league accessor for the card's social-circle lookups."""
+        lg = getattr(self.app, 'league', None)
+        if lg is None:
+            gm = getattr(self.app, 'game_manager', None)
+            lg = getattr(gm, 'league', None) if gm is not None else None
+        return lg
+
+    def _get_player_team(self, league):
+        if league is None:
+            return None
+        tname = getattr(self.player, 'team_name', '')
+        for t in getattr(league, 'teams', []) or []:
+            if getattr(t, 'team_name', '') == tname:
+                return t
+        return None
+
+    def _create_personality_tab(self):
+        """Personality, personal details, and the player's social circle."""
+        is_goalie = self.player.primary_position == PlayerPosition.GOALIE
+        scrollable_frame = self._new_scrollable_tab('Personality')
+
+        # Personality traits (mental-category pills, e.g. Clutch)
+        self._create_traits_banner(scrollable_frame, kind="personality")
+
+        # Personal details live here now, beside personality
+        self._create_personal_details_section(scrollable_frame)
+
+        # Reputation / standing (moved off the Attributes tab)
+        self._create_personality_sections(scrollable_frame, is_goalie=is_goalie)
+
+        # Social circle: family, friends, favourite teammate/staff, rivals
+        self._create_close_allies_section(scrollable_frame)
+
+    def _personal_details_items(self):
+        """Personal-detail rows shared by the Personality tab."""
+        return [
+            ("Full Name:", self.player.full_name),
+            ("Date of Birth:", f"{getattr(self.player, 'birth_date', 'Unknown')}"),
+            ("Birthplace:", f"{getattr(self.player, 'birthplace', 'Canada')}"),
+            ("Nationality:", f"{getattr(self.player, 'nationality', 'Canadian')}"),
+            ("Height:", f"{getattr(self.player, 'height', '6ft 0in')}"),
+            ("Weight:", f"{getattr(self.player, 'weight', '180')} lbs"),
+            ("Shoots/Catches:", f"{getattr(self.player, 'handedness', 'Right')}"),
+            ("Draft Year:", f"{getattr(self.player, 'draft_year', 'Undrafted')}"),
+            ("Draft Position:", f"{getattr(self.player, 'draft_position', 'N/A')}"),
+            ("Years Pro:", f"{max(0, self.player.age - 18)} years"),
+        ]
+
+    def _create_personal_details_section(self, parent):
+        section = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        section.pack(fill='x', padx=8, pady=4)
+
+        ttk.Label(section, text="Personal Details", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        grid = ttk.Frame(section, style='PlayerTab.TFrame')
+        grid.pack(fill='x')
+        for c in range(4):
+            grid.grid_columnconfigure(c, weight=1 if c % 2 else 0)
+
+        items = self._personal_details_items()
+        try:
+            import reputation_system as rs
+            items.append(("Social Group:", rs.player_social_group(self.player)))
+        except Exception:
+            pass
+
+        for i, (label, value) in enumerate(items):
+            r, c = divmod(i, 2)
+            ttk.Label(grid, text=label, style='PlayerInfo.TLabel').grid(
+                row=r, column=c * 2, sticky='w', padx=(0, 10), pady=3)
+            ttk.Label(grid, text=str(value), style='PlayerValue.TLabel').grid(
+                row=r, column=c * 2 + 1, sticky='w', padx=(0, 18), pady=3)
+
+    @staticmethod
+    def _bond_label(score):
+        if score >= 70:
+            return "Close friend"
+        if score >= 50:
+            return "Good friend"
+        return "Friend"
+
+    @staticmethod
+    def _rival_label(score):
+        if score <= -70:
+            return "Bitter rival"
+        if score <= -50:
+            return "Rival"
+        return "Frosty"
+
+    @staticmethod
+    def _fit_label(fit):
+        if fit >= 0.5:
+            return "Tight bond"
+        if fit >= 0.2:
+            return "Good rapport"
+        if fit >= -0.2:
+            return "Professional"
+        return "Friction"
+
+    def _favourite_staff(self, team):
+        """Coach on the player's team with the best player-coach fit."""
+        if team is None:
+            return None
+        try:
+            import reputation_system as rs
+            from game_classes import StaffRole
+            coaching_roles = {
+                StaffRole.HEAD_COACH, StaffRole.ASSISTANT_COACH,
+                StaffRole.ASSOCIATE_COACH, StaffRole.GOALIE_COACH,
+                StaffRole.POWER_PLAY_COACH, StaffRole.PENALTY_KILL_COACH,
+                StaffRole.SKILLS_COACH,
+            }
+            best, best_fit = None, -2.0
+            for s in getattr(team, 'staff', []) or []:
+                if getattr(s, 'role', None) not in coaching_roles:
+                    continue
+                try:
+                    fit = rs.coach_player_fit(s, self.player)
+                except Exception:
+                    continue
+                if fit > best_fit:
+                    best, best_fit = s, fit
+            if best is None:
+                return None
+            return {"staff": best, "fit": best_fit}
+        except Exception:
+            return None
+
+    def _allies_data(self):
+        """Gather family, friends, favourite teammate/staff, and rivals."""
+        data = {"family": [], "friends": [], "teammate": None,
+                "staff": None, "rivals": []}
+        try:
+            import reputation_system as rs
+        except Exception:
+            return data
+
+        league = self._get_league()
+        team = self._get_player_team(league)
+        roster = list(getattr(team, 'roster', []) or []) if team else []
+        all_players = []
+        if league is not None:
+            for t in getattr(league, 'teams', []) or []:
+                all_players.extend(getattr(t, 'roster', []) or [])
+        by_id = {p.id: p for p in all_players}
+
+        family_ids = set(getattr(self.player, 'family_ids', []) or [])
+        for fid in family_ids:
+            fp = by_id.get(fid)
+            if fp is not None:
+                data["family"].append(fp)
+
+        try:
+            friends = rs.get_friends(self.player, all_players, n=5)
+            data["friends"] = [f for f in friends
+                               if f["player"].id not in family_ids][:3]
+        except Exception:
+            pass
+
+        try:
+            tm = rs.get_friends(self.player, roster, n=1)
+            data["teammate"] = tm[0] if tm else None
+        except Exception:
+            pass
+
+        data["staff"] = self._favourite_staff(team)
+
+        try:
+            data["rivals"] = rs.get_rivals(self.player, roster, league, n=3)
+        except Exception:
+            pass
+        return data
+
+    def _create_close_allies_section(self, parent):
+        """Family, best friends, favourite teammate/staff, and rivals."""
+        data = self._allies_data()
+
+        section = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        section.pack(fill='x', padx=8, pady=4)
+
+        ttk.Label(section, text="Close Allies", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 4))
+
+        def _subsection(title):
+            ttk.Label(section, text=title, style='PlayerInfo.TLabel',
+                      font=(self.app.FONT_FAMILY, 12, 'bold')).pack(anchor='w', pady=(8, 2))
+
+        def _row(name, detail, descriptor):
+            row = ttk.Frame(section, style='PlayerTab.TFrame')
+            row.pack(fill='x', pady=2)
+            ttk.Label(row, text=name, style='PlayerValue.TLabel', width=26).pack(side='left')
+            ttk.Label(row, text=detail, style='PlayerInfo.TLabel').pack(side='left', padx=(8, 0))
+            if descriptor:
+                ttk.Label(row, text=f"\u2022 {descriptor}",
+                          style='PlayerInfo.TLabel').pack(side='left', padx=(8, 0))
+
+        def _empty(text):
+            ttk.Label(section, text=text, style='PlayerInfo.TLabel').pack(anchor='w', pady=2)
+
+        # Family
+        _subsection("Family")
+        if data["family"]:
+            for fp in data["family"]:
+                pos = getattr(getattr(fp, 'primary_position', ''), 'value', '')
+                _row(fp.full_name,
+                     f"{getattr(fp, 'team_name', '')} {('\u2022 ' + pos) if pos else ''}".strip(),
+                     "Family")
+        else:
+            _empty("No family in the league.")
+
+        # Best friends in the league
+        _subsection("Best Friends in the League")
+        if data["friends"]:
+            for f in data["friends"]:
+                p, s = f["player"], f["score"]
+                _row(p.full_name, getattr(p, 'team_name', ''),
+                     self._bond_label(s))
+        else:
+            _empty("No close friendships yet \u2014 bonds form as the season unfolds.")
+
+        # Favourite teammate
+        _subsection("Favourite Teammate")
+        if data["teammate"]:
+            p, s = data["teammate"]["player"], data["teammate"]["score"]
+            pos = getattr(getattr(p, 'primary_position', ''), 'value', '')
+            _row(p.full_name, pos, self._bond_label(s))
+        else:
+            _empty("No standout bond on the roster yet.")
+
+        # Favourite staff
+        _subsection("Favourite Staff")
+        if data["staff"]:
+            s, fit = data["staff"]["staff"], data["staff"]["fit"]
+            role = getattr(getattr(s, 'role', ''), 'value', '')
+            _row(s.full_name, role, self._fit_label(fit))
+        else:
+            _empty("No coaching staff found.")
+
+        # Rivals
+        _subsection("Rivals")
+        if data["rivals"]:
+            for r in data["rivals"]:
+                _row(r.get("name", "?"), r.get("origin", ""),
+                     self._rival_label(r.get("score", 0)))
+        else:
+            _empty("No bad blood on record.")
 
     def _create_attribute_section(self, parent, title, attributes, row_start=0):
         """Creates a clean section of attributes with progress bars.
@@ -896,7 +1187,11 @@ class PlayerProfileView(ctk.CTkFrame):
 
     def _create_ecosystem_attribute_sections(self, parent, is_goalie=False):
         """Puck Dynasty-exclusive attribute sections, appended after the
-        EHM-style groups on the Attributes tab."""
+        EHM-style groups on the Attributes tab.
+
+        Personality-flavored sections (reputation, standing) live on the
+        Personality tab instead -- see _create_personality_sections.
+        """
         # Development: coachability drives the assistant-coach dev bumps,
         # the arc shapes each career's trajectory, the grade is the scout's read.
         self._create_attribute_section(parent, "Development", [
@@ -907,6 +1202,12 @@ class PlayerProfileView(ctk.CTkFrame):
         self._create_text_attribute_section(
             parent, "Development Path", self._ecosystem_development_rows())
 
+        # Form & Chemistry: the perfect-mesh form tracker and chemistry reads.
+        self._create_text_attribute_section(
+            parent, "Form & Chemistry", self._ecosystem_form_rows())
+
+    def _create_personality_sections(self, parent, is_goalie=False):
+        """Reputation/personality sections shared by the Personality tab."""
         # Reputation & Personality: the reputation ratchet, visible
         # controversy (hotheads cost less in trades), happiness at the club.
         self._create_attribute_section(parent, "Reputation & Personality", [
@@ -916,10 +1217,6 @@ class PlayerProfileView(ctk.CTkFrame):
         ])
         self._create_text_attribute_section(
             parent, "Standing", self._ecosystem_reputation_rows(is_goalie))
-
-        # Form & Chemistry: the perfect-mesh form tracker and chemistry reads.
-        self._create_text_attribute_section(
-            parent, "Form & Chemistry", self._ecosystem_form_rows())
 
     def _create_skater_attributes(self, parent):
         """Creates attribute sections for skaters (non-goalies)."""
@@ -1921,41 +2218,9 @@ class PlayerProfileView(ctk.CTkFrame):
         tips_text.insert('1.0', tips)
         tips_text.config(state='disabled')
 
-    # Enhanced content methods for the new three-column layout
-    def _create_enhanced_basic_info(self, parent, row=0):
-        """Creates enhanced basic player information section."""
-        info_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
-        info_frame.grid(row=row, column=0, sticky='nsew', pady=(0, 5))
-        
-        ttk.Label(info_frame, text="Personal Information", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
-        
-        # Create grid for organized information display
-        info_grid = ttk.Frame(info_frame, style='PlayerTab.TFrame')
-        info_grid.pack(fill='both', expand=True)
-        info_grid.grid_columnconfigure(0, weight=0)
-        info_grid.grid_columnconfigure(1, weight=1)
-        
-        # Personal details with better spacing
-        personal_info = [
-            ("Full Name:", self.player.full_name),
-            ("Date of Birth:", f"{getattr(self.player, 'birth_date', 'Unknown')}"),
-            ("Birthplace:", f"{getattr(self.player, 'birthplace', 'Canada')}"),
-            ("Nationality:", f"{getattr(self.player, 'nationality', 'Canadian')}"),
-            ("Height:", f"{getattr(self.player, 'height', '6ft 0in')}"),
-            ("Weight:", f"{getattr(self.player, 'weight', '180')} lbs"),
-            ("Shoots/Catches:", f"{getattr(self.player, 'handedness', 'Right')}"),
-            ("Draft Year:", f"{getattr(self.player, 'draft_year', 'Undrafted')}"),
-            ("Draft Position:", f"{getattr(self.player, 'draft_position', 'N/A')}"),
-            ("Years Pro:", f"{max(0, self.player.age - 18)} years"),
-        ]
-        
-        for i, (label, value) in enumerate(personal_info):
-            ttk.Label(info_grid, text=label, style='PlayerInfo.TLabel', anchor='w').grid(
-                row=i, column=0, sticky='w', padx=(0, 10), pady=3
-            )
-            ttk.Label(info_grid, text=str(value), style='PlayerInfo.TLabel', anchor='w').grid(
-                row=i, column=1, sticky='w', pady=3
-            )
+    # NOTE: _create_enhanced_basic_info was removed -- personal details now
+    # live on the Personality tab via _personal_details_items() /
+    # _create_personal_details_section().
 
     def _create_physical_attributes(self, parent, row=1):
         """Creates physical attributes section."""

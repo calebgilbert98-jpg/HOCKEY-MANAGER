@@ -269,6 +269,10 @@ class Player:
     reputation: int = 0
     controversy: int = 0
     relationships: Dict[int, int] = field(default_factory=dict)  # other player id -> -100..100 (friend..rival)
+    # Family in the hockey world: linked at generation by rare shared
+    # surname (the Staals/Hughes treatment). List of other player ids.
+    # Old-save safe: read via getattr(player, 'family_ids', []).
+    family_ids: list = field(default_factory=list)
     reputation_history: list = field(default_factory=list)
     controversy_history: list = field(default_factory=list)
     squad_status: str = "Rotation"  # Star Player / Key Player / Regular Starter / Rotation / Prospect / Surplus

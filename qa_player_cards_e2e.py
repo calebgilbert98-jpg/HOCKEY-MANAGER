@@ -209,6 +209,84 @@ except Exception:
     traceback.print_exc()
     check("open_player_profile never raises to caller", False)
 
+# -- 8. personality screen tab ---------------------------------------------
+# Talent traits stay on Attributes; personality traits, personal details,
+# reputation and the social circle live on the new Personality tab.
+p2 = next(x for x in team.roster
+          if "GOALIE" not in str(getattr(x, "primary_position", "")))
+p2.traits = ["sniper", "clutch"]  # offense talent + mental personality
+view = app.open_player_profile(p2)
+for _ in range(6):
+    app.update_idletasks(); app.update()
+tabs = [view.notebook.tab(i, "text")
+        for i in range(view.notebook.index("end"))]
+check("personality tab exists right after attributes",
+      "Personality" in tabs
+      and tabs.index("Personality") == tabs.index("Attributes") + 1)
+
+def _tab_texts(idx):
+    view.notebook.select(idx)
+    for _ in range(4):
+        app.update_idletasks(); app.update()
+    tab = view.notebook.nametowidget(view.notebook.select())
+    out, stack = [], [tab]
+    while stack:
+        w = stack.pop()
+        try:
+            stack.extend(w.winfo_children())
+        except Exception:
+            pass
+        try:
+            t = str(w.cget("text") or "").strip()
+        except Exception:
+            t = ""
+        if t:
+            out.append(t)
+    return out
+
+attr_texts = _tab_texts(tabs.index("Attributes"))
+pers_texts = _tab_texts(tabs.index("Personality"))
+ov_texts = _tab_texts(tabs.index("Overview"))
+check("talent traits stay on attributes tab",
+      "Talent Traits" in attr_texts and "Sniper" in attr_texts
+      and "Clutch" not in attr_texts)
+check("personality traits move to personality tab",
+      "Personality Traits" in pers_texts and "Clutch" in pers_texts
+      and "Sniper" not in pers_texts)
+check("personal details live on personality tab, not overview",
+      "Personal Details" in pers_texts
+      and "Personal Details" not in ov_texts
+      and "Personal Information" not in ov_texts)
+check("reputation section moved to personality tab",
+      "Reputation & Personality" in pers_texts
+      and "Reputation & Personality" not in attr_texts)
+check("close allies sections render",
+      all(s in pers_texts for s in ("Close Allies", "Family",
+                                    "Best Friends in the League",
+                                    "Favourite Teammate",
+                                    "Favourite Staff", "Rivals")))
+
+# Family links dealt at generation are mutual and resolvable.
+by_id = {}
+for t in league.teams:
+    for pl in t.roster:
+        by_id[pl.id] = pl
+for pl in league.free_agents:
+    by_id[pl.id] = pl
+fam_ok = True
+for t in league.teams:
+    for pl in t.roster:
+        for fid in getattr(pl, "family_ids", []) or []:
+            fp = by_id.get(fid)
+            if fp is None or pl.id not in (getattr(fp, "family_ids", []) or []):
+                fam_ok = False
+check("generated family links are mutual", fam_ok)
+d = view._allies_data()
+check("allies data resolves without error",
+      isinstance(d, dict)
+      and all(k in d for k in ("family", "friends", "teammate",
+                               "staff", "rivals")))
+
 print(f"\n{len(passed)} passed, {len(failed)} failed")
 app.destroy()
 sys.exit(1 if failed else 0)
