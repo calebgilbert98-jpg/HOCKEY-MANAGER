@@ -11,6 +11,10 @@ from collections import deque
 import math
 from enum import Enum
 from game_classes import Team, Player, PlayerPosition
+try:
+    from dressing_room import DressingRoom
+except ImportError:
+    DressingRoom = None
 from player_archetypes import (
     get_archetype, complementarity, matchup_multiplier, get_tendency,
     ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
@@ -483,6 +487,12 @@ class GameSim:
     def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False):
         self.home_team = home_team
         self.away_team = away_team
+        # F3 dressing-room dynamics: each team gets a people-sim.
+        if DressingRoom is not None:
+            self.home_room = DressingRoom(home_team)
+            self.away_room = DressingRoom(away_team)
+        else:
+            self.home_room = self.away_room = None
         self.is_playoff = is_playoff
         self.home_score = 0
         self.away_score = 0
@@ -6960,6 +6970,36 @@ class GameSim:
     def _return_all_goalies(self):
         self._return_goalie(self.home_team)
         self._return_goalie(self.away_team)
+
+    def give_team_talk(self, team, tone, phase='pregame'):
+        """F3: deliver a team talk; nudges momentum for the phase.
+
+        tone: one of dressing_room.TONES. phase: 'pregame' or 'intermission'.
+        Returns the momentum modifier applied.
+        """
+        room = (self.home_room if team == self.home_team else self.away_room)
+        if room is None:
+            return 0.0
+        mod = room.team_talk(tone, phase)
+        # Convert modifier to momentum steps (0.1 mod ~= 1 step)
+        steps = int(round(mod * 10))
+        if steps != 0:
+            order = [GameMomentum.HEAVILY_FAVORING_AWAY,
+                     GameMomentum.FAVORING_AWAY,
+                     GameMomentum.SLIGHTLY_FAVORING_AWAY,
+                     GameMomentum.NEUTRAL,
+                     GameMomentum.SLIGHTLY_FAVORING_HOME,
+                     GameMomentum.FAVORING_HOME,
+                     GameMomentum.HEAVILY_FAVORING_HOME]
+            cur = order.index(self.momentum)
+            # Positive mod favors the talking team
+            direction = 1 if team == self.home_team else -1
+            new_idx = max(0, min(6, cur + steps * direction))
+            self.momentum = order[new_idx]
+            self._log_event(
+                f"{team.team_name} team talk ({tone}): momentum shifts.",
+                "TEAM_TALK")
+        return mod
 
     def _maybe_pull_goalies(self):
         """Once-per-tick: trailing teams pull on the fly with OZ possession."""
