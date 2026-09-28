@@ -2268,6 +2268,7 @@ class GameSim:
         try:
             import dressing_room as _dr
             _dr.apply_pregame_talks(self)
+            _dr.apply_practice_edge(self)
         except Exception:
             pass
 

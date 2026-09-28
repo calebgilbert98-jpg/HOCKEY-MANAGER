@@ -102,6 +102,11 @@ class GameSaveManager:
                     self.game_manager.shot_chart_store.to_dict()
                     if getattr(self.game_manager, 'shot_chart_store', None) else {}
                 ),
+
+                # Coaching carousel: fired/available coaches (module 03).
+                # Entries hold live coach objects, pickled like
+                # coaching_staff below. Missing key = old save -> empty.
+                'coach_carousel': self._serialize_coach_carousel(),
             }
 
             # FM-style career state (board, training, reputation, press history)
@@ -320,6 +325,27 @@ class GameSaveManager:
             print(f"Error serializing free agents: {e}")
             return []
     
+    def _serialize_coach_carousel(self) -> list:
+        """Serialize the coaching carousel (module 03, Wave 2).
+
+        Entries hold live coach objects; pickle carries them the same way
+        it carries team coaching_staff. Old saves simply lack the key.
+        """
+        try:
+            import dressing_room as _dr
+            return [dict(e) for e in (getattr(_dr, "COACH_CAROUSEL", []) or [])]
+        except Exception as e:
+            print(f"Error serializing coach carousel: {e}")
+            return []
+
+    def _restore_coach_carousel(self, entries) -> None:
+        """Restore the coaching carousel into the live module list."""
+        try:
+            import dressing_room as _dr
+            _dr.COACH_CAROUSEL[:] = list(entries or [])
+        except Exception as e:
+            print(f"coach carousel restore failed (non-fatal): {e}")
+
     def _get_current_settings(self) -> Dict[str, Any]:
         """Get current game settings"""
         try:
@@ -612,6 +638,12 @@ class GameSaveManager:
                     self.game_manager.deadline_clock = dict(dc)
                 except Exception as _dce:
                     print(f"deadline clock restore failed (non-fatal): {_dce}")
+
+            # Coaching carousel (module 03): old saves lack the key and
+            # come back with an empty carousel. Always restore (even when
+            # the key is missing) so a previously loaded game's carousel
+            # can never leak into this one.
+            self._restore_coach_carousel(save_data.get('coach_carousel', []))
 
             # League Memory: season archive + Hall of Fame
             if 'league_history' in save_data:
@@ -968,6 +1000,16 @@ class GameSaveManager:
                 for team in self.game_manager.league.teams:
                     if team.team_name == user_team_name:
                         self.game_manager.user_team = team
+                        # Stamp the flag: weekly ticks branch on it, and old
+                        # saves predate the flag entirely. Clear every team
+                        # first so a stale flag can never leave two user
+                        # clubs behind.
+                        try:
+                            for t in self.game_manager.league.teams:
+                                t.is_user_team = False
+                            team.is_user_team = True
+                        except Exception:
+                            pass
                         break
         except Exception as e:
             print(f"Error restoring user team: {e}")

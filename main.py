@@ -8004,7 +8004,7 @@ class HockeyManagerGUI(tk.Tk):
                 pass
             for team in teams:
                 try:
-                    if bool(getattr(team, "is_user_team", False)):
+                    if _dr.is_user_team(team, getattr(self, "game_manager", self)):
                         _dr.user_room_politics_tick(
                             team, date_str=date_str, league=league)
                     else:
@@ -15907,13 +15907,25 @@ class TacticsView(tk.Frame):
                     date_str = app.current_date.isoformat()
                 except Exception:
                     pass
-            rec = _dr.run_weekly_practice(
-                self.team, focus=focus, intensity=intensity, bag_skate=bag,
-                approved_by="GM", date_str=date_str)
-            eff = rec.get("effectiveness", 0)
-            self._plan_status.configure(
-                text=f"Week set: {rec.get('focus')} / {rec.get('intensity')} "
-                     f"(effectiveness {eff}). Repeats Sundays until changed.")
+            if _dr._practice_already_ran(self.team, date_str):
+                # This week's session already ran (button or Sunday tick):
+                # store the selection for future Sundays without piling a
+                # second session onto the room.
+                _dr.ensure_dressing_room_fields(self.team)[
+                    "practice_plan"] = {"focus": focus,
+                                       "intensity": intensity,
+                                       "bag_skate": bag}
+                self._plan_status.configure(
+                    text="Plan saved for the next session. This week's "
+                         "practice already ran.")
+            else:
+                rec = _dr.run_weekly_practice(
+                    self.team, focus=focus, intensity=intensity, bag_skate=bag,
+                    approved_by="GM", date_str=date_str)
+                eff = rec.get("effectiveness", 0)
+                self._plan_status.configure(
+                    text=f"Week set: {rec.get('focus')} / {rec.get('intensity')} "
+                         f"(effectiveness {eff}). Repeats Sundays until changed.")
         except Exception as e:
             self._plan_status.configure(text=f"Couldn't set plan: {e}")
         self._refresh_practice_tab()
