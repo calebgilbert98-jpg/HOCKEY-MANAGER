@@ -39,26 +39,36 @@ AGE_DISTRIBUTIONS = {
 }
 
 # Contract value ranges based on skill tier and age.
-# Caleb's original tier structure, rescaled to the 2026-27 economy:
-# league minimum $775k, ELC max $975k, and a top end inflated by
-# above-market mega-deals (Draisaitl $14M, MacKinnon $12.6M, McDavid
-# $12.5M set the ceiling everyone else negotiates against).
+# Caleb's original tier structure, rescaled to the 2026-27 economy after
+# the biggest spending summer in NHL history. Cap trend: $88M (2024-25) ->
+# $95.5M (2025-26) -> $104M (2026-27) -> $113.5M (2027-28), ~9%/yr, and the
+# 2026 summer reset the top of the market: Celebrini 5x$94M ($18.8M AAV,
+# richest ever), Kaprizov 8x$136M ($17M), Draisaitl $14M, Eichel 8x$108M
+# ($13.5M), Matthews $13.25M, K. Connor 8x$96M ($12M). Agents negotiate in
+# cap percentage now: 15% of the $104M cap is $15.6M, so the superstar
+# gate runs $14M-$19M with record deals pushing past it.
 CONTRACT_VALUES = {
     "ENTRY_LEVEL": {"min": 775000, "max": 975000, "years": [3]},
-    "BRIDGE": {"min": 1000000, "max": 4500000, "years": [2, 3]},
-    "STANDARD": {"min": 900000, "max": 5500000, "years": [3, 4, 5, 6]},
-    "PREMIUM": {"min": 5500000, "max": 10000000, "years": [5, 6, 7, 8]},
-    "SUPERSTAR": {"min": 10000000, "max": 14500000, "years": [6, 7, 8]},
-    "VETERAN": {"min": 775000, "max": 3250000, "years": [1, 2]},
-    "AHL": {"min": 80000, "max": 175000, "years": [1, 2]}
+    "BRIDGE": {"min": 1200000, "max": 5000000, "years": [2, 3]},
+    "STANDARD": {"min": 1000000, "max": 6500000, "years": [3, 4, 5, 6]},
+    "PREMIUM": {"min": 9000000, "max": 13500000, "years": [5, 6, 7, 8]},
+    "SUPERSTAR": {"min": 14000000, "max": 19000000, "years": [6, 7, 8]},
+    "VETERAN": {"min": 775000, "max": 3750000, "years": [1, 2]},
+    "AHL": {"min": 85000, "max": 200000, "years": [1, 2]}
 }
 
 # Above-market inflation: the share of premium/superstar deals that get
 # pushed past the gate by a bidding war, and how far past it they go.
-# This is the league-wide inflation from guys taking above market value.
-ABOVE_MARKET_SHARE = 0.20
+# Summer 2026 proved the ceiling is aspirational: Kaprizov's $17M (16.35%
+# of the cap) and Celebrini's $18.8M reset what a franchise player costs.
+ABOVE_MARKET_SHARE = 0.22
 ABOVE_MARKET_BUMP = (1.05, 1.12)
-ABOVE_MARKET_CEILING = 15000000
+# Superstars get a wider war range: the record deals (Makar $20.4M,
+# Celebrini $18.8M, Carlsson $18M, Kaprizov $17M) all came from bidding
+# wars pushing 10-25% past the top of the gate.
+ABOVE_MARKET_BUMP_STAR = (1.08, 1.28)
+# Just under the CBA max (20% of the $104M cap = $20.8M).
+ABOVE_MARKET_CEILING = 20500000
 
 # Teams for different leagues
 NHL_TEAMS = [
@@ -270,14 +280,16 @@ class PlayerGenerator:
 
         # Determine contract category (overall on the native 100-point scale).
         # Caleb's tier structure, with star thresholds calibrated to the
-        # generated curve (median 78): 92+ is a franchise player, 87+ a
-        # first-liner. Kids sign entry-level deals regardless of rating --
-        # a 21-year-old stud is still on his ELC in real life.
+        # generated curve (median 78) and the 2026 summer market: 95+ is a
+        # franchise player (the Kaprizov/Celebrini/McDavid tier -- 22 in
+        # the league), 90+ a first-line star (the Draisaitl/Matthews/
+        # MacKinnon/Eichel tier). Kids sign entry-level deals regardless
+        # of rating -- a 21-year-old stud is still on his ELC in real life.
         if age <= 22:
             contract_type = "ENTRY_LEVEL"
-        elif overall >= 92:
+        elif overall >= 95:
             contract_type = "SUPERSTAR"
-        elif overall >= 87:
+        elif overall >= 90:
             contract_type = "PREMIUM"
         elif age <= 25 and overall < 80:
             contract_type = "BRIDGE"
@@ -290,11 +302,18 @@ class PlayerGenerator:
 
         contract_info = CONTRACT_VALUES[contract_type]
 
-        # Calculate salary based on overall rating
-        salary_range = contract_info["max"] - contract_info["min"]
-        salary_factor = (overall - 62) / 28  # Normalize to 0-1 range
+        # Calculate salary based on overall rating. Star tiers normalize
+        # within their own overall band so franchise players spread across
+        # the gate instead of all pinning at the max.
+        if contract_type == "SUPERSTAR":
+            salary_factor = (overall - 94) / 6
+        elif contract_type == "PREMIUM":
+            salary_factor = (overall - 89) / 6
+        else:
+            salary_factor = (overall - 62) / 28  # Normalize to 0-1 range
         salary_factor = max(0, min(1, salary_factor))
 
+        salary_range = contract_info["max"] - contract_info["min"]
         base_salary = contract_info["min"] + (salary_range * salary_factor)
 
         # Add some randomness
@@ -304,7 +323,9 @@ class PlayerGenerator:
         # Above-market inflation: bidding wars push a share of star deals
         # past the gate, the way real mega-deals inflate the whole market.
         if contract_type in ("PREMIUM", "SUPERSTAR") and random.random() < ABOVE_MARKET_SHARE:
-            bump = random.uniform(*ABOVE_MARKET_BUMP)
+            bump_range = (ABOVE_MARKET_BUMP_STAR if contract_type == "SUPERSTAR"
+                          else ABOVE_MARKET_BUMP)
+            bump = random.uniform(*bump_range)
             final_salary = int(final_salary * bump)
 
         # Ensure within bounds

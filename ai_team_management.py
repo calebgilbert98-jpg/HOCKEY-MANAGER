@@ -408,6 +408,15 @@ class AITeamManager:
             should_extend = self._should_extend_player(player, strategy)
             
             if should_extend:
+                # Young stars get top extension priority: sign them a year
+                # early at today's market rather than risking next year's
+                # ask after another cap jump (the Carlsson lesson).
+                try:
+                    from game_classes import to_100_scale
+                    _ovr100 = int(to_100_scale(player.overall_rating()))
+                except Exception:
+                    _ovr100 = 75
+                _young_star = player.age <= 24 and _ovr100 >= 90
                 decision = AIDecision(
                     team_name=team.team_name,
                     decision_type="contract_extension",
@@ -416,8 +425,10 @@ class AITeamManager:
                         "salary": self._estimate_player_salary(player),
                         "term": self._determine_contract_length(player, strategy)
                     },
-                    priority_score=0.8,
-                    reasoning=f"Key player fitting strategy",
+                    priority_score=0.95 if _young_star else 0.8,
+                    reasoning=("Lock up young star early before the "
+                                "market moves" if _young_star
+                                else "Key player fitting strategy"),
                     timestamp=current_date
                 )
                 decisions.append(decision)
@@ -428,54 +439,83 @@ class AITeamManager:
                                 overall: Optional[float] = None) -> int:
         """Estimate fair market salary for a player.
 
-        Demands are expressed as a % of the salary cap, so they scale
-        automatically as the cap grows. Market-setter premiums apply.
+        Mirrors the generation gates (player_generator CONTRACT_VALUES)
+        so AI offers match the market the league was built on -- the
+        2026 summer reset (Makar $20.4M, Celebrini $18.8M, Carlsson $18M
+        at 21, Kaprizov $17M). Young stars are valued at star money, not
+        bridged: waiting only raises their ask as the cap climbs, so the
+        market pays them upfront. Demands flow through demand_for, so
+        market-setter premiums still apply on top.
         """
         cap_sys = self._cap_system
         cap = cap_sys.current_cap if cap_sys else DEFAULT_CAP
 
         # overall_rating() is ~30 lines of arithmetic: callers in hot loops
         # (e.g. _evaluate_free_agency over 32 teams x FAs) pass it in.
-        ovr = overall if overall is not None else player.overall_rating()  # internal ~50 scale
-        # Convert to 1-100 display scale for market logic
+        ovr = overall if overall is not None else player.overall_rating()
+        # overall_rating() is native 1-100; to_100_scale is a passthrough.
         try:
             from game_classes import to_100_scale
             ovr100 = int(to_100_scale(ovr))
         except Exception:
-            ovr100 = int(ovr * 2)
+            ovr100 = int(ovr)
+        age = player.age
 
-        # Base demand as % of cap: ~100k per OVR point at the modern cap
-        # = ovr * 100_000 / DEFAULT_CAP (scales with the modern cap)
-        base_cap_pct = (ovr * 100_000) / DEFAULT_CAP
+        # Category mirrors PlayerGenerator.determine_contract_info, except
+        # stars are priced as stars at any age -- a 21-year-old franchise
+        # player coming off his ELC asks for $16M+, not another ELC.
+        if ovr100 >= 95:
+            lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
+        elif ovr100 >= 90:
+            lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
+        elif age <= 22:
+            lo, hi, f = 775_000, 975_000, (ovr100 - 62) / 28
+        elif age <= 25 and ovr100 < 80:
+            lo, hi, f = 1_200_000, 5_000_000, (ovr100 - 62) / 28
+        elif age >= 33 and ovr100 < 84:
+            lo, hi, f = 775_000, 3_750_000, (ovr100 - 62) / 28
+        else:
+            lo, hi, f = 1_000_000, 6_500_000, (ovr100 - 62) / 28
+        f = max(0.0, min(1.0, f))
+        base_salary = lo + (hi - lo) * f
 
-        # Age adjustments (multiplicative on the cap %)
-        if player.age < 25:
-            base_cap_pct *= 0.8
-        elif player.age > 32:
-            base_cap_pct *= 0.6
-
-        # Position adjustments
+        # Position adjustments (kept small: generation is position-blind)
         pos = player.primary_position
-        pos_name = pos.value if hasattr(pos, "value") else str(pos)
         if pos == PlayerPosition.GOALIE:
-            base_cap_pct *= 1.2
+            base_salary *= 1.1
         elif pos == PlayerPosition.CENTER:
-            base_cap_pct *= 1.1
+            base_salary *= 1.05
 
-        # Convert to dollars at CURRENT cap, apply market premium
+        # Convert to cap % so demands scale with the cap, then apply any
+        # market-setter premium through the single choke point.
+        base_cap_pct = base_salary / cap
+        pos_name = pos.value if hasattr(pos, "value") else str(pos)
         if cap_sys:
             league = getattr(self, "_league_ref", None)
             season = getattr(league, "season_year", 0) if league else 0
             salary = cap_sys.demand_for(base_cap_pct, ovr100, pos_name,
-                                        player.age, season)
+                                        age, season)
         else:
-            salary = int(base_cap_pct * cap)
+            salary = int(base_salary)
 
         # Clamp: league min to 20% of cap (NHL max)
         return max(min(int(salary), int(cap * 0.20)), 750_000)
     
     def _determine_contract_length(self, player: Player, strategy: TeamStrategy) -> int:
-        """Determine appropriate contract length"""
+        """Determine appropriate contract length.
+
+        Young stars get max term up front -- the 2026 market pays for
+        prime years early (Cooley 8x$80M at 21, Carlsson offered 8x$84M
+        at 21, Gauthier 6x$13.5M) because waiting a year only raises the
+        ask as the cap climbs.
+        """
+        try:
+            from game_classes import to_100_scale
+            ovr100 = int(to_100_scale(player.overall_rating()))
+        except Exception:
+            ovr100 = 75
+        if player.age <= 24 and ovr100 >= 90:
+            return random.randint(6, 8)  # Lock up the young star now
         if player.age < 26:
             return random.randint(2, 5)  # Bridge or long-term for youth
         elif player.age < 30:
