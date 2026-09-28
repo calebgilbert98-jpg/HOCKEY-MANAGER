@@ -311,7 +311,8 @@ def main():
                            inbox=[])
     league = SimpleNamespace(teams=[team], free_agents=[])
     app = SimpleNamespace(league=league, user_team=team, open_windows={},
-                          BG_COLOR="#1a1a2e")
+                          BG_COLOR="#1a1a2e", CONTENT_BG="#0e0e11",
+                          TEXT_COLOR="#ffffff", FONT_FAMILY="Helvetica")
 
     # ---------------- player card ----------------
     from modern_profile import PlayerProfile
