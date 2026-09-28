@@ -7127,14 +7127,35 @@ class FinancesView(ctk.CTkFrame):
 
     # Calculation methods
     def calculate_current_payroll(self):
-        """Calculate the current NHL payroll."""
+        """Calculate the current cap charge (the number that matters).
+
+        Uses the canonical cap_breakdown(): active-roster hits + buried
+        one-way money in the minors + all dead cap (buyouts, seeded
+        penalties, retained), minus any cap dollars temporarily shed by
+        players sitting on the waiver wire. This is the same charge the
+        Next Day compliance check and trade validation enforce, so the
+        finance screens can never disagree with them.
+        """
+        try:
+            from salary_cap_system import cap_breakdown
+            return max(0, int(cap_breakdown(self.app.user_team)["total"]))
+        except Exception:
+            pass
         total = 0
         for player in self.app.user_team.roster:
             if hasattr(player, 'contract') and hasattr(player.contract, 'salary'):
                 total += player.contract.salary
             elif hasattr(player, 'salary'):
                 total += player.salary
-        return total
+        # Waiver shed: players on the wire temporarily don't count, so an
+        # over-cap club sees its real cap space here (matches the Next Day
+        # compliance check and trade validation).
+        try:
+            from salary_cap_system import waiver_shed_charge
+            total -= waiver_shed_charge(self.app.user_team)
+        except Exception:
+            pass
+        return max(0, total)
 
     def calculate_ahl_payroll(self):
         """Calculate the AHL payroll."""
@@ -9476,9 +9497,11 @@ class WaiversView(ctk.CTkFrame):
                 # Update the views
                 self.populate_eligible_players()
                 self.populate_waiver_wire()
-                messagebox.showinfo("Player on Waivers", 
+                messagebox.showinfo("Player on Waivers",
                                    f"{player.full_name} has been placed on waivers. "
-                                   "They will remain on waivers for 2 days, during which time other teams may claim them.")
+                                   "They will remain on waivers for 2 days, during which time other teams may claim them. "
+                                   f"Their cap hit is temporarily shed until waivers clear -- "
+                                   f"this can bring an over-cap roster back into compliance.")
     
     def claim_from_waivers(self, item=None):
         """Claim a player from the waiver wire."""

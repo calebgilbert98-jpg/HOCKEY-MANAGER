@@ -73,25 +73,74 @@ class DatabaseManager:
             if need > have:
                 print(f"  topped up {need - have} {position.value}")
 
-        # Re-sort after top-ups so the snake draft still deals best-first
-        nhl_players.sort(key=lambda p: p.overall_rating(), reverse=True)
+        # Generate NHL contracts BEFORE the draft: the draft below is
+        # cap-budget-aware, so every player needs a real salary first.
+        # (Players who end up in the AHL get their deals regenerated as
+        # AHL_VETERAN contracts after the draft, exactly as before.)
+        contract_gen = PlayerGenerator()
+        for player in nhl_players:
+            ovr = player.overall_rating()
+            if ovr >= 49:
+                tier = "NHL_ELITE"
+            elif ovr >= 44:
+                tier = "NHL_STARTER"
+            else:
+                tier = "NHL_DEPTH"
+            salary, years, two_way, ahl_salary = contract_gen.determine_contract_info(player, tier)
+            player.contract.salary = salary
+            player.contract.years_remaining = years
+            player.contract.two_way = two_way
+            player.contract.ahl_salary = ahl_salary
+
+        # Day-one cap situations mirror real 2026-27: each club gets a
+        # payroll target (cap - seeded dead cap - real projected room).
+        # The draft deals the most expensive remaining player at each
+        # position to the club with the most budget left, so cap-strapped
+        # contenders start stacked and tight (Vegas, Toronto, Edmonton...)
+        # while cap-flush clubs start with room to weaponize (Detroit,
+        # Seattle, Vancouver...). The tilt is gentle -- every club still
+        # fills a full 20-man roster from across the talent curve.
+        try:
+            import real_cap_data as _rcd
+            from salary_cap_system import DEFAULT_CAP as _CAP
+        except Exception:
+            _rcd = None
+            _CAP = 104_000_000
+        target_payroll = {}
+        dead_by_team = {}
+        for team in teams:
+            if _rcd is not None:
+                _key = _rcd._team_key(team)
+                _dead = _rcd.total_dead_cap(_key)
+                _room = _rcd.target_cap_room(_key)
+            else:
+                _dead, _room = 0, 1_000_000
+            dead_by_team[team.team_name] = _dead
+            target_payroll[team.team_name] = _CAP - _dead - _room
+        committed = {team.team_name: 0 for team in teams}
 
         # Track assignments
         team_index = 0
         position_assignments = {team.team_name: {pos: 0 for pos in PlayerPosition} for team in teams}
-        
-        # First pass: snake-draft each position so talent is spread evenly
-        # (round 1 goes team 1..32, round 2 goes 32..1, etc.)
+
+        # First pass: budget-aware draft, per position. Each round, the
+        # club with the most payroll budget remaining picks first and
+        # takes the most expensive available player at that position.
         for position, required_count in roster_requirements.items():
             position_players = [p for p in nhl_players if p.primary_position == position and p.team_name == "Free Agent"]
+            position_players.sort(key=lambda p: p.contract.salary, reverse=True)
 
             for pick_round in range(required_count):
-                order = teams if pick_round % 2 == 0 else list(reversed(teams))
+                order = sorted(
+                    teams,
+                    key=lambda t: target_payroll[t.team_name] - committed[t.team_name],
+                    reverse=True)
                 for team in order:
                     if position_players:
                         player = position_players.pop(0)
                         player.team_name = team.team_name
                         team.add_player(player, "roster")
+                        committed[team.team_name] += player.contract.salary
                         position_assignments[team.team_name][position] += 1
         
         # Second pass: Distribute remaining players
@@ -142,23 +191,11 @@ class DatabaseManager:
                 prospect.team_name = team.team_name
                 team.add_player(prospect, "prospects")
         
-        # Generate contracts now that players are on NHL teams
+        # AHL assignments get minor-league deals: regenerate them as
+        # AHL_VETERAN contracts (they held placeholder NHL deals from the
+        # pre-draft pass above). NHL-roster deals are already set.
         contract_gen = PlayerGenerator()
         for team in teams:
-            for player in list(team.roster):
-                # Everyone on an NHL roster gets an NHL deal, even depth players
-                ovr = player.overall_rating()
-                if ovr >= 49:
-                    tier = "NHL_ELITE"
-                elif ovr >= 44:
-                    tier = "NHL_STARTER"
-                else:
-                    tier = "NHL_DEPTH"
-                salary, years, two_way, ahl_salary = contract_gen.determine_contract_info(player, tier)
-                player.contract.salary = salary
-                player.contract.years_remaining = years
-                player.contract.two_way = two_way
-                player.contract.ahl_salary = ahl_salary
             for player in list(team.ahl_roster):
                 salary, years, two_way, ahl_salary = contract_gen.determine_contract_info(player, "AHL_VETERAN")
                 player.contract.salary = salary
@@ -166,23 +203,16 @@ class DatabaseManager:
                 player.contract.two_way = two_way
                 player.contract.ahl_salary = ahl_salary
 
-        # Cap compliance: no team starts over the salary cap. Scale deals
-        # proportionally so payroll + that club's seeded 2026-27 dead cap
-        # fits under the cap with a $1M operating cushion (mimics real
-        # cap management). Relative pay structure is preserved: stars
-        # still earn the most, depth still earns the least.
-        # (The old 20%-per-player trim could only ever cut 20% of payroll,
-        # so teams generating at 2x the cap stayed over it -- Next Day was
-        # hard-blocked league-wide on day one.)
-        try:
-            import real_cap_data as _rcd
-            _dead_cap = dict(_rcd.DEAD_CAP_2026_27)
-        except Exception:
-            _dead_cap = {}
-        salary_cap = 104_000_000  # 2026-27 NHL cap (modern day)
+        # Cap compliance safety net: the budget-aware draft aims each club
+        # at its real 2026-27 situation, but randomness can still leave a
+        # club over the cap -- no team may start in violation. Scale deals
+        # proportionally so payroll + that club's seeded dead cap fits
+        # under the cap with a $500K cushion. Relative pay structure is
+        # preserved: stars still earn the most, depth still earns the least.
+        salary_cap = _CAP
         for team in teams:
-            dead = sum(_dead_cap.get(team.team_name, (0, 0, 0)))
-            target = salary_cap - dead - 1_000_000
+            dead = dead_by_team.get(team.team_name, 0)
+            target = salary_cap - dead - 500_000
             roster = list(team.roster)
             # Iterate: the $775k league-minimum floor can nudge payroll back
             # over target, so rescale the non-floored deals until it fits.

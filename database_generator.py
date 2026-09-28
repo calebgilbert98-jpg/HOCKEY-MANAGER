@@ -364,6 +364,13 @@ class DatabaseGenerator:
             team_players = self._generate_team_roster(team, players_per_team)
             players_created += len(team_players)
         
+        # Day-one cap situations: reshape NHL payrolls toward each club's
+        # real 2026-27 posture (cap-strapped contenders tight, cap-flush
+        # clubs with room) and guarantee no club starts over the cap.
+        self._apply_day_one_cap_situations([
+            t for t in main_league.teams
+            if getattr(t, 'league_name', '') == "National Hockey League"])
+        
         update_progress(65, "Generating free agent pool...", f"{players_created:,} team players created")
         
         # Generate free agents pool
@@ -407,6 +414,207 @@ class DatabaseGenerator:
         
         return main_league
     
+    # Salary shares for a 23-man NHL roster, largest to smallest: a
+    # star-heavy top end, a middle class, and cheap depth. Normalized to
+    # sum to 1.0 at use time.
+    _ROSTER_SALARY_SHARES = (
+        0.115, 0.098, 0.088, 0.080, 0.072, 0.066, 0.060, 0.055,
+        0.050, 0.046, 0.042, 0.038, 0.035, 0.032, 0.030, 0.028,
+        0.025, 0.022, 0.020, 0.018, 0.015, 0.012, 0.006,
+    )
+
+    _qm_salary_calib = None  # lazily calibrated [(median_salary, qm)]
+
+    def _calibrate_quality(self):
+        """Measure the median salary each quality_modifier produces.
+
+        Maps quality -> pay so roster generation can aim players at salary
+        targets. Calibrated once per generator with veteran-age players
+        (no ELC distortion); piecewise-linear inversion at use time.
+        """
+        pts = []
+        for qm in (0.55, 0.75, 0.95, 1.15, 1.35, 1.55):
+            sals = []
+            for _ in range(24):
+                p = self._create_enhanced_player(random.randint(26, 31),
+                                                 PlayerPosition.CENTER, qm)
+                sals.append(int(getattr(getattr(p, "contract", None),
+                                        "salary", 0) or 0))
+            sals.sort()
+            if sals:
+                pts.append((sals[len(sals) // 2], qm))
+        pts.sort()
+        return pts
+
+    def _quality_for_salary(self, salary: float) -> float:
+        """quality_modifier expected to produce ~salary, by calibration."""
+        if self._qm_salary_calib is None:
+            self._qm_salary_calib = self._calibrate_quality()
+        pts = self._qm_salary_calib or []
+        if not pts:
+            return 1.0
+        if salary <= pts[0][0]:
+            return 0.55
+        if salary >= pts[-1][0]:
+            return 1.70
+        for (s0, q0), (s1, q1) in zip(pts, pts[1:]):
+            if s0 <= salary <= s1:
+                f = (salary - s0) / (s1 - s0) if s1 > s0 else 0.0
+                return q0 + f * (q1 - q0)
+        return 1.0
+
+    def _generate_cap_targeted_roster(self, team: Team):
+        """Generate a 23-man NHL roster tracking the club's payroll target.
+
+        Day-one cap situations: the target is cap - seeded dead cap -
+        the club's real 2026-27 projected room (real_cap_data). Each pick
+        aims at its share of the remaining budget, so the roster shape
+        mimics a real club (stars up top, cheap depth at the bottom) and
+        the total lands near the target. Contracts come from the same
+        2026-market gates as everywhere else; the loop self-corrects when
+        the dice come in hot or cold. Returns None if no target could be
+        computed (caller falls back to the classic path).
+        """
+        try:
+            import real_cap_data as _rcd
+            from salary_cap_system import DEFAULT_CAP as _CAP
+            key = _rcd._team_key(team)
+            target = (_CAP - _rcd.total_dead_cap(key)
+                      - _rcd.target_cap_room(key))
+        except Exception:
+            return None
+
+        positions = ([PlayerPosition.CENTER, PlayerPosition.RIGHT_WING,
+                      PlayerPosition.LEFT_WING, PlayerPosition.LEFT_DEFENSE,
+                      PlayerPosition.RIGHT_DEFENSE, PlayerPosition.GOALIE] * 4)[:23]
+        shares = list(self._ROSTER_SALARY_SHARES[:len(positions)])
+        total_share = sum(shares) or 1.0
+        shares = [s / total_share for s in shares]
+
+        players = []
+        committed = 0
+        for i, pos in enumerate(positions):
+            share_left = sum(shares[i:])
+            budget_left = target - committed
+            if share_left > 0:
+                target_sal = shares[i] / share_left * budget_left
+            else:
+                target_sal = budget_left
+            target_sal = max(775_000, min(21_000_000, target_sal))
+            # Age follows the money: stars are veterans, depth is young
+            # (and cheap picks can land ELC talent, like real clubs).
+            if target_sal >= 5_000_000:
+                age = random.randint(26, 33)
+            elif target_sal >= 2_000_000:
+                age = random.randint(23, 30)
+            else:
+                age = random.randint(18, 24)
+            qm = self._quality_for_salary(target_sal) * random.uniform(0.94, 1.06)
+            qm = max(0.50, min(1.70, qm))
+            player = self._create_enhanced_player(age, pos, qm)
+            players.append(player)
+            committed += int(getattr(getattr(player, "contract", None),
+                                     "salary", 0) or 0)
+        return players
+
+    def _apply_day_one_cap_situations(self, nhl_teams: List[Team]) -> None:
+        """Reshape day-one NHL payrolls toward real 2026-27 cap situations.
+
+        Each club gets a payroll target (cap - seeded dead cap - real
+        projected room, via real_cap_data). Clubs over target move their
+        most expensive players to clubs under target via same-position
+        swaps, so cap-strapped contenders (Vegas, Toronto, Edmonton...)
+        end up stacked and tight while cap-flush clubs (Detroit, Seattle,
+        Vancouver...) hold room to weaponize. No contract is touched --
+        players (and their deals) just change clubs. A proportional
+        scale-down backstops any club still over the cap afterwards: no
+        team may start in violation.
+        """
+        try:
+            import real_cap_data as _rcd
+            from salary_cap_system import DEFAULT_CAP as _CAP
+        except Exception:
+            return
+        if not nhl_teams:
+            return
+
+        target = {}
+        for team in nhl_teams:
+            key = _rcd._team_key(team)
+            target[team.team_name] = (_CAP - _rcd.total_dead_cap(key)
+                                      - _rcd.target_cap_room(key))
+
+        def _sal(p) -> int:
+            return int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
+
+        def _payroll(team) -> int:
+            return sum(_sal(p) for p in (getattr(team, "roster", None) or []))
+
+        # Swap phase: push every club toward its target.
+        TOL = 1_500_000
+        for _ in range(400):
+            over_first = sorted(nhl_teams,
+                                key=lambda t: _payroll(t) - target[t.team_name],
+                                reverse=True)
+            team = over_first[0]
+            if _payroll(team) - target[team.team_name] <= TOL:
+                break
+            candidates = sorted((getattr(team, "roster", None) or []),
+                                key=_sal, reverse=True)
+            moved = False
+            for p in candidates:
+                psal = _sal(p)
+                pos = p.primary_position
+                under_first = sorted(
+                    nhl_teams,
+                    key=lambda t: _payroll(t) - target[t.team_name])
+                for other in under_first:
+                    if other is team:
+                        continue
+                    if _payroll(other) - target[other.team_name] >= -TOL:
+                        continue
+                    cheaper = [q for q in (getattr(other, "roster", None) or [])
+                               if q.primary_position == pos and _sal(q) < psal]
+                    if not cheaper:
+                        continue
+                    q = max(cheaper, key=_sal)
+                    team.roster.remove(p)
+                    other.roster.remove(q)
+                    team.roster.append(q)
+                    other.roster.append(p)
+                    p.team_name = other.team_name
+                    q.team_name = team.team_name
+                    moved = True
+                    break
+                if moved:
+                    break
+            if not moved:
+                break
+
+        # Hard compliance safety net (same rule as the classic path).
+        # Measured on the TRUE cap charge -- active roster + minor-league
+        # burial + real seeded dead cap -- so a club can't slip over via
+        # buried one-way money in the minors.
+        try:
+            from salary_cap_system import roster_cap_charge as _rcc
+        except Exception:
+            _rcc = None
+        for team in nhl_teams:
+            key = _rcd._team_key(team)
+            dead = _rcd.total_dead_cap(key)
+            cap_target = _CAP - 500_000  # max allowed total charge
+            roster = list(getattr(team, "roster", None) or [])
+            for _ in range(10):
+                pay = ((_rcc(team) if _rcc else _payroll(team)) + dead)
+                if pay <= cap_target or cap_target <= 0:
+                    break
+                scale = (cap_target - dead) / max(1, pay - dead)
+                for p in roster:
+                    c = getattr(p, "contract", None)
+                    if c is not None:
+                        c.salary = max(775_000,
+                                       int(c.salary * scale // 25000 * 25000))
+
     def _link_family_members(self, league):
         """Link family members across the league.
 
@@ -652,20 +860,44 @@ class DatabaseGenerator:
         if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
             nhl_roster_size = 23
             ahl_prospects_size = actual_target - nhl_roster_size
-            
-            # Generate NHL roster first
-            nhl_players = self._generate_players_by_position(nhl_roster_size, quality_modifier * 1.1, team)
+
+            # Generate NHL roster first -- against this club's real 2026-27
+            # payroll target so day-one cap situations mirror real life
+            # (falls back to the classic path if no target is available).
+            nhl_players = self._generate_cap_targeted_roster(team)
+            if nhl_players is None:
+                nhl_players = self._generate_players_by_position(nhl_roster_size, quality_modifier * 1.1, team)
             for player in nhl_players:
                 team.add_player(player, "roster")
                 players.append(player)
             
             # Generate AHL/prospects
             ahl_prospects = self._generate_players_by_position(ahl_prospects_size, quality_modifier * 0.8, team)
+            from player_generator import PlayerGenerator as _PG
+            _pg = _PG()
             for i, player in enumerate(ahl_prospects):
                 # Split between AHL and prospects
                 roster_type = "ahl" if i < ahl_prospects_size * 0.7 else "prospects"
                 team.add_player(player, roster_type)
                 players.append(player)
+                if roster_type == "ahl":
+                    # Minor-league deals (two-way), mirroring the classic
+                    # population path: one-way NHL money in the minors
+                    # would pile up unrealistic burial charges on day one.
+                    c = getattr(player, "contract", None)
+                    if c is not None:
+                        (sal, yrs, tw, ahl_sal) = _pg.determine_contract_info(
+                            player, "AHL_VETERAN")
+                        c.salary = sal
+                        c.years_remaining = yrs
+                        c.two_way = tw
+                        c.ahl_salary = ahl_sal
+                        # Minor-leaguers don't carry NHL clauses.
+                        c.no_trade_clause = False
+                        c.no_movement_clause = False
+                        c.modified_ntc_teams = 0
+                        c.modified_ntc_approved = False
+                        c.ntc_waiver_for = ""
         else:
             # Non-NHL teams get all players in main roster
             all_players = self._generate_players_by_position(actual_target, quality_modifier, team)
@@ -946,39 +1178,32 @@ class DatabaseGenerator:
         player.potential_grade = random.choices(potential_grades, weights=weights)[0]
     
     def _generate_contract(self, player: Player, age: int) -> Contract:
-        """Generate a realistic contract for a player"""
-        
-        # Contract length based on age and quality
-        if age < 25:
-            years = random.choice([1, 2, 3])  # Entry level or short term
-        elif age < 30:
-            years = random.choice([2, 3, 4, 5])  # Prime years
-        else:
-            years = random.choice([1, 2, 3])  # Veteran contracts
-        
-        # Salary based on overall rating and age
+        """Generate a realistic contract for a player.
+
+        Delegates to PlayerGenerator.determine_contract_info -- the single
+        source of truth for the 2026 summer market (same gates the classic
+        population path uses: 95+ superstar / 90+ premium, ELCs for kids,
+        two-way structure, above-market bidding wars). The old inline
+        bands below were written for the 1-50 attribute scale; on the
+        native 1-100 scale every skater cleared the top band and landed at
+        $7-12M, putting all 32 clubs ~$150M+ over the cap on day one.
+        """
+        from player_generator import PlayerGenerator as _PG
+        _gen = _PG()
         overall = player.overall_rating()
-        
-        if overall >= 47:
-            salary = random.randint(7000000, 12000000)  # Elite players
+        if overall >= 49:
+            tier = "NHL_ELITE"
         elif overall >= 44:
-            salary = random.randint(4000000, 8000000)   # Top players
-        elif overall >= 40:
-            salary = random.randint(2000000, 5000000)   # Good players
-        elif overall >= 37:
-            salary = random.randint(900000, 2500000)    # Role players
+            tier = "NHL_STARTER"
         else:
-            salary = random.randint(750000, 1200000)    # Depth players
-        
-        # Age adjustments
-        if age < 23:
-            salary = min(salary, 3000000)  # Entry level cap considerations
-        elif age > 35:
-            salary = int(salary * 0.7)  # Veteran discounts
-        
+            tier = "NHL_DEPTH"
+        salary, years, two_way, ahl_salary = _gen.determine_contract_info(player, tier)
+
         contract = Contract(
             salary=salary,
             years_remaining=years,
+            two_way=two_way,
+            ahl_salary=ahl_salary,
         )
         # Trade protection: the same demand model the user negotiates
         # against (trade_engine.clause_demand_score) -- stars with leverage
