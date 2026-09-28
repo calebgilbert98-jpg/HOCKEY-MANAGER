@@ -292,12 +292,13 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                      text_color=c['TEAL'], anchor='w').pack(anchor='w', padx=8, pady=(4, 2))
         self._grid_table(
             body,
-            headers=["Player", "Pos", "G", "A", "P", "SOG", "Hits", "Blk", "FO"],
-            widths=[220, 52, 40, 40, 40, 52, 52, 52, 64],
+            headers=["Player", "Pos", "G", "A", "P", "+/-", "SOG", "Hits", "Blk", "FO"],
+            widths=[200, 52, 40, 40, 40, 44, 52, 52, 52, 64],
             rows=[[getattr(p, 'full_name', '?'),
                    self._pos_short(p),
                    gs.get('g', 0), gs.get('a', 0),
                    gs.get('g', 0) + gs.get('a', 0),
+                   gs.get('plus_minus', 0),
                    gs.get('shots_on_goal', 0), gs.get('hits', 0),
                    gs.get('blocked_shots', gs.get('blocked_shots_by', 0)),
                    f"{gs.get('faceoffs_won', 0)}-{gs.get('faceoffs_lost', 0)}"]
