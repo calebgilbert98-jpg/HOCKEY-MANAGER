@@ -96,11 +96,12 @@ class GameSaveManager:
                     if getattr(self.game_manager, 'league_history', None) else {}
                 ),
 
-                # Narrative ledger: rivalry + series memory (normalized events)
-                'narrative_ledger': (
-                    self.game_manager.narrative_ledger.to_dict()
-                    if getattr(self.game_manager, 'narrative_ledger', None) else {}
-                ),
+                # Narrative ledger: rivalry + series memory (normalized events).
+                # Resolve the canonical ledger -- it is lazily attached to
+                # the GUI app via get_ledger(app), while this manager wraps
+                # the inner GameManager; reading only the wrapped manager
+                # silently saved {} and wiped history on load.
+                'narrative_ledger': self._canonical_ledger_dict(),
 
                 # Shot charts: replayable evidence (last 50 games)
                 'shot_charts': (
@@ -131,6 +132,56 @@ class GameSaveManager:
             print(f"Error creating save data: {e}")
             raise
     
+    def _canonical_ledger(self):
+        """Return the live narrative ledger, wherever it is attached.
+
+        The ledger is lazily attached to the GUI app via get_ledger(app),
+        but the save manager wraps the inner GameManager -- so resolve in
+        order: app-attached (the live one during play), the module-global
+        active ledger, then the wrapped manager's attribute.
+        """
+        gm = self.game_manager
+        try:
+            app = getattr(gm, 'app', None)
+            led = getattr(app, 'narrative_ledger', None)
+            if led is not None:
+                return led
+        except Exception:
+            pass
+        try:
+            from narrative_ledger import active_ledger
+            led = active_ledger()
+            if led is not None:
+                return led
+        except Exception:
+            pass
+        return getattr(gm, 'narrative_ledger', None)
+
+    def _canonical_ledger_dict(self):
+        try:
+            led = self._canonical_ledger()
+            return led.to_dict() if led is not None else {}
+        except Exception:
+            return {}
+
+    def _restore_canonical_ledger(self, ledger):
+        """Stamp a restored ledger everywhere the game reads it from."""
+        try:
+            from narrative_ledger import set_active_ledger
+            set_active_ledger(ledger)
+        except Exception:
+            pass
+        try:
+            self.game_manager.narrative_ledger = ledger
+        except Exception:
+            pass
+        try:
+            app = getattr(self.game_manager, 'app', None)
+            if app is not None:
+                app.narrative_ledger = ledger
+        except Exception:
+            pass
+
     def _serialize_league(self) -> Dict[str, Any]:
         """Serialize league data including all teams and players"""
         if not hasattr(self.game_manager, 'league') or not self.game_manager.league:
@@ -145,6 +196,11 @@ class GameSaveManager:
             'schedule_generated': getattr(league, 'schedule_generated', False),
             # Legacy events: permanent outdoor-game memory (plain dicts).
             'outdoor_history': list(getattr(league, 'outdoor_history', []) or []),
+            # Rivalries & bad blood (plain dicts): brawl heat, playoff feuds,
+            # declared rivalries -- "so bad blood follows people". Was never
+            # serialized; every save wiped it. Missing key = old save.
+            'rivalries': [dict(r) for r in
+                          (getattr(league, 'rivalries', None) or [])],
             'lottery_results': {int(k): [dict(r) for r in v]
                                 for k, v in
                                 (getattr(league, 'lottery_results', None) or {}).items()},
@@ -703,19 +759,25 @@ class GameSaveManager:
                     self.game_manager.league_history = None
 
             # Narrative ledger: rivalry + series memory (old saves backfill
-            # empty — history is never invented, per the integrity rules)
+            # empty — history is never invented, per the integrity rules).
+            # Restored onto every owner: the wrapped manager, the GUI app
+            # (the live ledger during play), and the module-global active
+            # ledger -- otherwise the app kept reading its own stale object.
             if 'narrative_ledger' in save_data:
                 try:
                     from narrative_ledger import NarrativeLedger
                     nl_data = save_data['narrative_ledger'] or {}
                     if nl_data:
-                        self.game_manager.narrative_ledger = \
-                            NarrativeLedger.from_dict(nl_data)
+                        restored = NarrativeLedger.from_dict(nl_data)
                     else:
-                        self.game_manager.narrative_ledger = NarrativeLedger()
+                        restored = NarrativeLedger()
+                    self._restore_canonical_ledger(restored)
                 except Exception as _nle:
                     print(f"narrative ledger restore failed (non-fatal): {_nle}")
-                    self.game_manager.narrative_ledger = NarrativeLedger()
+                    try:
+                        self._restore_canonical_ledger(NarrativeLedger())
+                    except Exception:
+                        pass
 
             # Shot charts: replayable evidence
             if 'shot_charts' in save_data:
@@ -808,6 +870,8 @@ class GameSaveManager:
             league.standings = league_data.get('standings', {})
             league.schedule_generated = league_data.get('schedule_generated', False)
             league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
+            league.rivalries = [dict(r) for r in
+                                (league_data.get('rivalries', None) or [])]
             try:
                 league.lottery_results = {
                     int(k): [dict(r) for r in v]
