@@ -1160,9 +1160,9 @@ class RosterWindow(ctk.CTkToplevel):
 
     def calculate_eta(self, player):
         """Calculate estimated time of arrival for prospects."""
-        if player.overall_rating() >= 40:
+        if player.overall_rating() >= 70:
             return "Ready"
-        elif player.overall_rating() >= 37:
+        elif player.overall_rating() >= 65:
             return "1-2 years"
         elif player.overall_rating() >= 34:
             return "2-3 years"
@@ -8645,7 +8645,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             position_modifier = 1.1
         elif player.primary_position == PlayerPosition.GOALIE:
             # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 47 else 0.9
+            position_modifier = 1.0 if player.overall_rating() >= 82 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0

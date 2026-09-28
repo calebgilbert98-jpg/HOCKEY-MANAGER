@@ -4862,13 +4862,13 @@ class HockeyManagerGUI(tk.Tk):
                 agent_names = ["Mike Johnson", "Sarah Williams", "John Anderson", "Lisa Thompson"]
                 
                 # Generate realistic contract demands based on player rating
-                if player.overall_rating() >= 48:
+                if player.overall_rating() >= 85:
                     demand_range = "$8-12M per year"
                     years = "8 years"
-                elif player.overall_rating() >= 44:
+                elif player.overall_rating() >= 78:
                     demand_range = "$5-8M per year" 
                     years = "6 years"
-                elif player.overall_rating() >= 40:
+                elif player.overall_rating() >= 70:
                     demand_range = "$3-5M per year"
                     years = "4 years"
                 else:
@@ -8944,9 +8944,9 @@ class HockeyManagerGUI(tk.Tk):
                 contract_factor = 0.8
                 
             # Longer contracts for good players add value, for poor players reduce value
-            if player.overall_rating() >= 47 and player.contract.years_remaining >= 3:
+            if player.overall_rating() >= 85 and player.contract.years_remaining >= 3:
                 contract_factor *= 1.2
-            elif player.overall_rating() < 44 and player.contract.years_remaining >= 3:
+            elif player.overall_rating() < 75 and player.contract.years_remaining >= 3:
                 contract_factor *= 0.8
         else:
             # Unsigned players are worth less in trades
@@ -9020,7 +9020,7 @@ class HockeyManagerGUI(tk.Tk):
         team_players = sorted(team.roster, key=self.calculate_player_value, reverse=True)
         
         # Don't offer top 3 players unless getting a superstar
-        if player_wanted.overall_rating() < 48:
+        if player_wanted.overall_rating() < 85:
             team_players = team_players[3:]
             
         # Don't offer more than 3 players
@@ -12795,7 +12795,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             position_modifier = 1.1
         elif player.primary_position == PlayerPosition.GOALIE:
             # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 50 else 0.9
+            position_modifier = 1.0 if player.overall_rating() >= 80 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0
@@ -13199,10 +13199,10 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         rating_value.grid(row=0, column=1, sticky=tk.W, pady=5, padx=10)
         rating_value.pack_propagate(False)
         
-        ovr_bg_color = "#1A9B00" if player.overall_rating() >= 50 else \
-                      "#4CAF50" if player.overall_rating() >= 47 else \
-                      "#8BC34A" if player.overall_rating() >= 44 else \
-                      "#d29922" if player.overall_rating() >= 40 else "#FF9800"
+        ovr_bg_color = "#1A9B00" if player.overall_rating() >= 80 else \
+                      "#4CAF50" if player.overall_rating() >= 78 else \
+                      "#8BC34A" if player.overall_rating() >= 74 else \
+                      "#d29922" if player.overall_rating() >= 70 else "#FF9800"
         
         rating_label = ttk.Label(
             rating_value,
@@ -13533,7 +13533,7 @@ class ExtensionNegotiationWindow(tk.Toplevel):
             position_modifier = 1.1
         elif player.primary_position.name == 'G':
             # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 50 else 0.9
+            position_modifier = 1.0 if player.overall_rating() >= 80 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0
