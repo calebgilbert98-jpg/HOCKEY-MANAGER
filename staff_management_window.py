@@ -940,8 +940,18 @@ class StaffManagementWindow(InGamePopup):
                 results.append(f"{staff.full_name}: no agreement")
 
         if results:
-            msg = "Contract Negotiation Results:\n" + "\n".join(results)
-            messagebox.showinfo("Negotiation Results", msg)
+            # One inbox digest instead of a popup (FM24/EHM style).
+            try:
+                from game_classes import EmailMessage
+                from datetime import date
+                self.parent.send_email_to_user(EmailMessage(
+                    sender="System", sender_type="System",
+                    date_sent=date.today(), category="Contracts", priority=2,
+                    subject="Staff Negotiation Results",
+                    content="Contract negotiations complete:\n" + "\n".join(
+                        f"• {r}" for r in results)))
+            except Exception:
+                pass
 
         self.update_current_staff_view()
 
@@ -1032,7 +1042,9 @@ class StaffManagementWindow(InGamePopup):
             anchor="w", pady=(0, 2))
         ctk.CTkLabel(main_frame, text=f"{staff.role.value}  •  Rating {staff.overall_rating}",
                      font=(self._ff, 11), text_color=ct['TEAL']).pack(
-                         anchor="w", pady=(0, 12))
+                         anchor="w", pady=(0, 4))
+        # FM24-style identity line: coaching style, ambition, boyhood team
+        self._staff_identity_line(main_frame, staff, ct)
 
         # Basic info
         info_inner = self._dialog_card(main_frame, "Basic Information")
@@ -1047,15 +1059,13 @@ class StaffManagementWindow(InGamePopup):
         self._info_label(contract_inner, f"Salary: ${staff.salary:,}")
         self._info_label(contract_inner, f"Contract Length: {staff.contract_years} years")
 
-        # Attributes
+        # Attributes -- FM24-style grouped bars (1-20 EHM scale)
         attr_inner = self._dialog_card(main_frame, "Attributes")
-        attr_text = ctk.CTkTextbox(
-            attr_inner, font=(self._ff, 9), wrap="word", height=220,
-            fg_color=ct['BG'], text_color=ct['TEXT'],
-            border_color=ct['BORDER'], border_width=1, corner_radius=8)
-        attr_text.pack(fill="both", expand=True, padx=4, pady=4)
-        attr_text.insert("1.0", self.format_staff_attributes(staff))
-        attr_text.configure(state="disabled")
+        self._staff_attribute_groups(attr_inner, staff, ct)
+
+        # Standing -- room status, trust, control, assistant effectiveness
+        standing_inner = self._dialog_card(main_frame, "Standing")
+        self._staff_standing_lines(standing_inner, staff, ct)
 
         # On-Ice Impact - what this staffer's attributes verifiably affect
         impact_inner = self._dialog_card(main_frame, "On-Ice Impact")
@@ -1094,10 +1104,151 @@ class StaffManagementWindow(InGamePopup):
                                command=details_window.destroy,
                                width=110, height=36).pack(side="right", padx=5)
 
+    # ------------------------------------------------------------------
+    # FM24-style staff card sections
+    # ------------------------------------------------------------------
+    _STAFF_ATTR_GROUPS = [
+        ("Coaching", ["coaching_forwards", "coaching_defensemen",
+                      "coaching_goalies", "attacking_coaching",
+                      "defensive_coaching", "technical_coaching",
+                      "mental_coaching"]),
+        ("Tactical", ["tactical_knowledge", "game_preparation",
+                      "match_preparation"]),
+        ("Development", ["working_with_youngsters", "player_development",
+                         "judging_player_ability", "judging_player_potential"]),
+        ("Management", ["man_management", "motivating", "discipline",
+                        "level_of_discipline", "media_handling"]),
+        ("Personality", ["leadership", "determination", "adaptability"]),
+    ]
+
+    def _staff_identity_line(self, parent, staff, ct):
+        """FM24-style identity line: coaching style, ambition, boyhood team."""
+        import reputation_system as rs
+        bits = []
+        try:
+            if "COACH" in str(getattr(getattr(staff, "role", None), "name", "")):
+                style = rs.coach_style(staff)
+                label = style.get("label") if isinstance(style, dict) else None
+                if label:
+                    bits.append(label)
+        except Exception:
+            pass
+        amb = getattr(staff, "ambition", None)
+        if amb:
+            bits.append(str(amb).replace("_", " ").title())
+        fav = getattr(staff, "favorite_team", None)
+        if fav:
+            bits.append(f"Boyhood: {fav}")
+        cn = getattr(staff, "control_need", None)
+        if cn is not None:
+            try:
+                cn = float(cn)
+                bits.append("Authoritarian" if cn >= 70 else
+                            "Collaborative" if cn <= 35 else "Balanced control")
+            except Exception:
+                pass
+        ctk.CTkLabel(parent,
+                     text="   •   ".join(bits) if bits else "",
+                     font=(self._ff, 10), text_color=ct['TEXT_DIM'],
+                     anchor="w").pack(anchor="w", pady=(0, 12))
+
+    def _attr_bar_ctk(self, parent, label, value, max_val=20):
+        """Single 1-20 attribute bar (ctk)."""
+        ct = self._ct
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        ctk.CTkLabel(row, text=label, font=(self._ff, 10),
+                     text_color=ct['TEXT_DIM'], width=150,
+                     anchor="w").pack(side="left")
+        bar = ctk.CTkProgressBar(row, width=150, height=8,
+                                 progress_color=ct['TEAL'])
+        bar.pack(side="left", padx=(4, 8))
+        try:
+            bar.set(max(0.0, min(1.0, float(value) / max_val)))
+            vtext = str(int(value))
+        except Exception:
+            bar.set(0.0)
+            vtext = "?"
+        ctk.CTkLabel(row, text=vtext, font=(self._ff, 10, "bold"),
+                     text_color=ct['TEXT'], width=28,
+                     anchor="e").pack(side="left")
+
+    def _staff_attribute_groups(self, parent, staff, ct):
+        """FM24-style grouped attribute bars (1-20 EHM scale)."""
+        grid = ctk.CTkFrame(parent, fg_color="transparent")
+        grid.pack(fill="x")
+        for gi, (gname, fields) in enumerate(self._STAFF_ATTR_GROUPS):
+            col = ctk.CTkFrame(grid, fg_color="transparent")
+            col.grid(row=gi // 2, column=gi % 2, sticky="nsew", padx=(0, 18),
+                     pady=(0, 10))
+            ctk.CTkLabel(col, text=gname, font=(self._ff, 10, "bold"),
+                         text_color=ct['TEAL'], anchor="w").pack(anchor="w",
+                                                                 pady=(0, 4))
+            for f in fields:
+                if not hasattr(staff, f):
+                    continue
+                self._attr_bar_ctk(col, f.replace("_", " ").title(),
+                                   getattr(staff, f), 20)
+        grid.grid_columnconfigure(0, weight=1)
+        grid.grid_columnconfigure(1, weight=1)
+
+    def _staff_standing_lines(self, parent, staff, ct):
+        """Room standing, GM trust, control, assistant effectiveness."""
+        import reputation_system as rs
+        lines = []
+        try:
+            st = rs.room_status(staff)
+            if isinstance(st, dict):
+                level = st.get("level", "Secure")
+                risk = float(st.get("risk", 0.0) or 0.0)
+                kind = "warn" if risk >= 0.45 else "info"
+                lines.append((f"Room standing: {level} "
+                              f"({risk:.0%} losing-the-room risk)", kind))
+        except Exception:
+            pass
+        try:
+            if str(getattr(getattr(staff, "role", None), "name", "")) == "HEAD_COACH":
+                lines.append((f"GM trust: {getattr(staff, 'gm_trust', 70)}/100",
+                              "info"))
+        except Exception:
+            pass
+        try:
+            eff = getattr(staff, "assistant_effect", None)
+            if eff:
+                lines.append((f"Assistant effectiveness: {float(eff):.0f}",
+                              "ok"))
+        except Exception:
+            pass
+        try:
+            cn = getattr(staff, "control_need", None)
+            if cn is not None:
+                lines.append((f"Control need: {float(cn):.0f}/100", "info"))
+        except Exception:
+            pass
+        if not lines:
+            lines.append(("No standing data recorded.", "info"))
+        for text, kind in lines:
+            fg = {"ok": ct["GREEN"], "warn": ct["GOLD"],
+                  "info": ct["TEXT_FAINT"]}.get(kind, ct["TEXT_FAINT"])
+            ctk.CTkLabel(parent, text=f"•  {text}", font=(self._ff, 10),
+                         text_color=fg, wraplength=560, justify="left",
+                         anchor="w").pack(anchor="w", padx=8, pady=2)
+
     def _negotiate_current_staff(self, staff: Staff, details_window):
         """Negotiate with a current staffer from the details window (modal, honest result)."""
         if self.open_contract_negotiation(staff, is_hiring=False):
-            messagebox.showinfo("Success", f"Contract renegotiated with {staff.full_name}!")
+            # Result lands in the inbox (FM24/EHM style), not a popup.
+            try:
+                from game_classes import EmailMessage
+                from datetime import date
+                self.parent.send_email_to_user(EmailMessage(
+                    sender="System", sender_type="System",
+                    date_sent=date.today(), category="Contracts", priority=2,
+                    subject=f"Staff re-signed: {staff.full_name}",
+                    content=(f"Contract renegotiated with {staff.full_name} "
+                             f"({staff.role.value}).")))
+            except Exception:
+                pass
             details_window.destroy()
             self.update_views()
 
