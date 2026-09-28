@@ -707,6 +707,8 @@ class InboxWindow(InGamePopup):
             self._render_postmatch_presser(message)
         elif message.action_type in ("trade_offer", "trade_counter"):
             self._render_trade_negotiation(message)
+        elif message.action_type == "contract_counter":
+            self._render_contract_counter(message)
 
     def _hide_interactive_action(self):
         """Restore the plain text content view."""
@@ -963,6 +965,61 @@ class InboxWindow(InGamePopup):
             tn.decline_negotiation(self.parent, neg.id)
         except Exception as e:
             print(f"trade decline failed: {e}")
+        message.action_done = True
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    # -- contract counter-offers (FM24/EHM style agent replies) -------------
+    def _render_contract_counter(self, message):
+        data = message.action_data or {}
+        name = data.get("player_name", "The player")
+        asking = data.get("asking_price", 0)
+        years = data.get("years", 1)
+
+        self._iwrap("CONTRACT COUNTER-OFFER", size=15, bold=True,
+                    padx=10, pady=(10, 2))
+        if message.action_done:
+            self._iwrap("This negotiation is closed.", size=11, dim=True,
+                        padx=10)
+            return
+        self._iwrap(f"{name} rejected your offer but will sign for "
+                    f"${asking:,} per year over {years} year(s).",
+                    size=11, padx=10, pady=(4, 2))
+        self._action_section("YOUR MOVE")
+        btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
+        btn_row.pack(anchor='w', padx=10, pady=6)
+        self._primary_button(
+            btn_row, text=f"Accept ${asking:,}/yr",
+            command=lambda m=message: self._on_contract_counter_accept(m)
+        ).pack(side='left', padx=(0, 8))
+        self._secondary_button(
+            btn_row, text="New Offer",
+            command=lambda m=message: self._on_contract_counter_new_offer(m)
+        ).pack(side='left', padx=(0, 8))
+        self._secondary_button(
+            btn_row, text="Walk Away",
+            command=lambda m=message: self._on_contract_counter_walkaway(m)
+        ).pack(side='left')
+        self._iwrap("Close this inbox any time -- the offer waits for you.",
+                    size=10, dim=True, padx=10, pady=(6, 0))
+
+    def _on_contract_counter_accept(self, message):
+        try:
+            self.parent.accept_contract_counter(message)
+        except Exception as e:
+            print(f"contract counter accept failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    def _on_contract_counter_new_offer(self, message):
+        try:
+            self.parent.reopen_contract_negotiation(message)
+        except Exception as e:
+            print(f"contract counter new offer failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    def _on_contract_counter_walkaway(self, message):
         message.action_done = True
         self._refresh_inbox()
         self._display_message_preview(message)

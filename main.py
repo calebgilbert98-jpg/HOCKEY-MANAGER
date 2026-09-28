@@ -11881,8 +11881,11 @@ class HockeyManagerGUI(tk.Tk):
             self.open_windows['contract'] = ContractNegotiationWindow(self, player, is_extension)
         self.open_windows['contract'].focus_set()
 
-    def handle_contract_offer(self, person, extension=False):
+    def handle_contract_offer(self, person, extension=False, notify="popup"):
         # NHL contract rules (cap-relative: uses the live league cap):
+        # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style
+        # inbox message; counter-offers become interactive), "quiet" (no
+        # notification -- bulk callers send one digest themselves).
         min_salary = 750_000
         _cap_sys = getattr(getattr(self, 'league', None),
                            'salary_cap_system', None)
@@ -11927,6 +11930,9 @@ class HockeyManagerGUI(tk.Tk):
                 if hasattr(person, "contract"):
                     person.contract.salary = salary
                     person.contract.years_remaining = 2
+            self._notify_contract_result("accepted" if accepted else "rejected",
+                                         person, salary, 2, salary, extension,
+                                         notify)
             return accepted
 
         # Cap-relative asking price: base demand as % of cap, scaled by
@@ -11950,55 +11956,210 @@ class HockeyManagerGUI(tk.Tk):
         asking_price = max(asking_price, 750_000)
         
         if person.salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
-            messagebox.showinfo("Contract Accepted", f"{person.full_name} has accepted your contract offer!")
-            person.contract.salary = person.salary
-            person.contract.years_remaining = person.contract_years
-            # Track market-setting contracts (star + top-5 AAV)
-            _set_market = False
-            try:
-                if _cap_sys is not None:
-                    _season = getattr(getattr(self, 'league', None),
-                                      'season_year', 0)
-                    _set_market = _cap_sys.register_signing(
-                        person.full_name, person.salary, _ovr100,
-                        _pos_name, getattr(person, "age", 27), _season)
-                    if _set_market:
-                        self.news_log.append({
-                            'date': self.current_date,
-                            'story': (f"{person.full_name}'s "
-                                      f"${person.salary:,} deal sets the market "
-                                      f"-- comparable stars will demand more.")})
-            except Exception:
-                pass
-            # Contract-decision fallout: overpay verdict, fan beef, GM rep,
-            # and GM-GM heat when the deal resets the market. The salary
-            # engine itself (SalaryCapSystem) is untouched.
-            try:
-                from reputation_system import evaluate_contract_decision
-                _cd = evaluate_contract_decision(
-                    person, person.salary, asking_price,
-                    team=self.user_team, league=self.league,
-                    market_setter=bool(_set_market))
-                if _cd.get("story"):
-                    self.news_log.append({'date': self.current_date,
-                                          'story': _cd["story"]})
-            except Exception:
-                pass
-            if not extension:
-                self.league.free_agents.remove(person)
-                self.user_team.add_player(person, "roster")
-            self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {person.contract_years}-year contract."})
-            
-            # Generate media event for signing (if media system enabled)
-            if hasattr(self, 'media_system') and self.media_system:
-                contract_type = 'extension' if extension else 'signing'
-                self.media_system.process_signing(person, self.user_team, contract_type, person.salary, person.contract_years)
-            
-            self.update_all_views()
+            self._finalize_contract_signing(person, person.salary,
+                                            person.contract_years,
+                                            asking_price, extension)
+            self._notify_contract_result("accepted", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify)
+            return True
         elif person.salary >= asking_price * 0.7: # Counter-offers if between 70-90%
-            messagebox.showinfo("Counter Offer", f"{person.full_name} has rejected your offer, but is willing to sign for ${asking_price:,} per year.")
+            self._notify_contract_result("counter", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify)
+            return False
         else: # Rejects if below 70%
-            messagebox.showerror("Contract Rejected", f"{person.full_name} has rejected your contract offer.")
+            self._notify_contract_result("rejected", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify)
+            return False
+
+    def _finalize_contract_signing(self, person, salary, years, asking_price,
+                                   extension):
+        """Apply an agreed contract: cap records, market tracking, news,
+        media, roster moves. Shared by the negotiation window and the
+        inbox counter-offer accept button."""
+        person.salary = salary
+        person.contract_years = years
+        _contract = getattr(person, "contract", None)
+        if _contract is not None:
+            _contract.salary = salary
+            _contract.years_remaining = years
+        _cap_sys = getattr(getattr(self, 'league', None),
+                           'salary_cap_system', None)
+        # Track market-setting contracts (star + top-5 AAV)
+        _set_market = False
+        try:
+            _ovr = person.overall_rating()
+            try:
+                from game_classes import to_100_scale
+                _ovr100 = int(to_100_scale(_ovr))
+            except Exception:
+                _ovr100 = int(_ovr * 2)
+            _pos = getattr(person, "primary_position", "")
+            _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
+            if _cap_sys is not None:
+                _season = getattr(getattr(self, 'league', None), 'season_year', 0)
+                _set_market = _cap_sys.register_signing(
+                    person.full_name, salary, _ovr100,
+                    _pos_name, getattr(person, "age", 27), _season)
+                if _set_market:
+                    self.news_log.append({
+                        'date': self.current_date,
+                        'story': (f"{person.full_name}'s "
+                                  f"${salary:,} deal sets the market "
+                                  f"-- comparable stars will demand more.")})
+        except Exception:
+            pass
+        # Contract-decision fallout: overpay verdict, fan beef, GM rep,
+        # and GM-GM heat when the deal resets the market. The salary
+        # engine itself (SalaryCapSystem) is untouched.
+        try:
+            from reputation_system import evaluate_contract_decision
+            _cd = evaluate_contract_decision(
+                person, salary, asking_price,
+                team=self.user_team, league=self.league,
+                market_setter=bool(_set_market))
+            if _cd.get("story"):
+                self.news_log.append({'date': self.current_date,
+                                      'story': _cd["story"]})
+        except Exception:
+            pass
+        if not extension:
+            try:
+                self.league.free_agents.remove(person)
+            except Exception:
+                pass
+            self.user_team.add_player(person, "roster")
+        self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})
+
+        # Generate media event for signing (if media system enabled)
+        if hasattr(self, 'media_system') and self.media_system:
+            contract_type = 'extension' if extension else 'signing'
+            self.media_system.process_signing(person, self.user_team, contract_type, salary, years)
+
+        self.update_all_views()
+
+    def _notify_contract_result(self, kind, person, salary, years,
+                                asking_price, extension, notify="popup"):
+        """Route a contract result to a legacy popup, the inbox, or nowhere.
+
+        kind: "accepted" | "counter" | "rejected".
+        """
+        name = getattr(person, "full_name",
+                       getattr(person, "name", "The player"))
+        if notify == "quiet":
+            return
+        if notify == "inbox":
+            self._inbox_contract_result(kind, person, name, salary, years,
+                                        asking_price, extension)
+            return
+        # legacy popup behaviour
+        if kind == "accepted":
+            messagebox.showinfo("Contract Accepted",
+                                f"{name} has accepted your contract offer!")
+        elif kind == "counter":
+            messagebox.showinfo("Counter Offer",
+                                f"{name} has rejected your offer, but is willing "
+                                f"to sign for ${asking_price:,} per year.")
+        else:
+            messagebox.showerror("Contract Rejected",
+                                 f"{name} has rejected your contract offer.")
+
+    def _inbox_contract_result(self, kind, person, name, salary, years,
+                               asking_price, extension):
+        """FM24/EHM-style: contract news lands in the inbox. Counter-offers
+        arrive as interactive messages (accept / new offer / walk away)."""
+        from game_classes import EmailMessage
+        pid = getattr(person, "id", None)
+        base = dict(sender="Agent", sender_type="Agent",
+                    date_sent=date.today(), category="Contracts",
+                    related_player_id=pid, priority=3, is_important=True)
+        if kind == "accepted":
+            term = "extension" if extension else "contract"
+            msg = EmailMessage(
+                subject=f"Signed: {name}",
+                content=(f"{name} has agreed to terms: "
+                         f"${salary:,} per year over {years} year(s).\n\n"
+                         f"The {term} is finalized and the paperwork is filed "
+                         f"with the league office."),
+                **base)
+        elif kind == "rejected":
+            msg = EmailMessage(
+                subject=f"Talks break down: {name}",
+                content=(f"{name} has rejected your offer of "
+                         f"${salary:,} per year outright and is not "
+                         f"countering at this time.\n\n"
+                         f"His camp feels the number needs to be "
+                         f"significantly higher before talks resume."),
+                **base)
+        else:  # counter -- interactive
+            msg = EmailMessage(
+                subject=f"Counter-offer: {name}",
+                content=(f"{name}'s camp has rejected your offer of "
+                         f"${salary:,} per year, but they are willing to "
+                         f"sign for ${asking_price:,} per year over "
+                         f"{years} year(s).\n\n"
+                         f"Respond below -- the offer waits for you."),
+                requires_response=True,
+                action_type="contract_counter",
+                action_data={"player_id": pid, "player_name": name,
+                             "asking_price": int(asking_price),
+                             "years": int(years),
+                             "is_extension": bool(extension)},
+                **base)
+        self.send_email_to_user(msg)
+
+    def _find_inbox_player(self, data):
+        """Locate a player referenced by an inbox action (id, then name)."""
+        pid = (data or {}).get("player_id")
+        name = (data or {}).get("player_name")
+        league = getattr(self, "league", None)
+        pools = []
+        try:
+            for t in (getattr(league, "teams", []) or []):
+                pools.append(list(getattr(t, "roster", []) or []))
+            pools.append(list(getattr(league, "free_agents", []) or []))
+        except Exception:
+            pass
+        for pool in pools:
+            for p in pool:
+                if pid and getattr(p, "id", None) == pid:
+                    return p
+        if name:
+            for pool in pools:
+                for p in pool:
+                    if getattr(p, "full_name", "") == name:
+                        return p
+        return None
+
+    def accept_contract_counter(self, message):
+        """Inbox action: accept the agent's counter-offer as-is."""
+        data = message.action_data or {}
+        person = self._find_inbox_player(data)
+        if person is None:
+            message.action_done = True
+            return False
+        asking = data.get("asking_price", 0)
+        years = data.get("years", 1)
+        extension = data.get("is_extension", False)
+        self._finalize_contract_signing(person, asking, years, asking,
+                                        extension)
+        self._inbox_contract_result("accepted", person,
+                                    getattr(person, "full_name", "The player"),
+                                    asking, years, asking, extension)
+        message.action_done = True
+        return True
+
+    def reopen_contract_negotiation(self, message):
+        """Inbox action: open a fresh negotiation window for the player."""
+        data = message.action_data or {}
+        person = self._find_inbox_player(data)
+        message.action_done = True
+        if person is None:
+            return
+        self.open_contract_negotiation_window(
+            person, is_extension=bool(data.get("is_extension", False)))
 
     def assign_jersey_number(self, player):
         new_number = simpledialog.askinteger("Assign Jersey Number", f"Enter a new jersey number for {player.full_name}:", initialvalue=player.jersey_number)
@@ -15054,12 +15215,17 @@ class ContractExtensionsWindow(InGamePopup):
                 player.contract_years = 2  # Default offer for extension
                 
                 # Negotiate
-                accepted = self.parent.handle_contract_offer(player, extension=True)
+                accepted = self.parent.handle_contract_offer(player, extension=True, notify="quiet")
                 results.append(f"{player.full_name}: {'Accepted' if accepted else 'Rejected'}")
         
-        # Show results
-        msg = "Extension Results:\n" + "\n".join(results)
-        messagebox.showinfo("Negotiation Results", msg)
+        # One inbox digest instead of a popup per player (FM24 style)
+        from game_classes import EmailMessage
+        self.parent.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Extension Results",
+            content="Extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
         
         # Refresh the view after negotiations
         self.eligible_players = self.get_eligible_players()
@@ -15079,12 +15245,17 @@ class ContractExtensionsWindow(InGamePopup):
             player.contract_years = 2  # Default offer for extension
             
             # Negotiate
-            accepted = self.parent.handle_contract_offer(player, extension=True)
+            accepted = self.parent.handle_contract_offer(player, extension=True, notify="quiet")
             results.append(f"{player.full_name}: {'Accepted' if accepted else 'Rejected'}")
         
-        # Show results
-        msg = "Extension Results:\n" + "\n".join(results)
-        messagebox.showinfo("Negotiation Results", msg)
+        # One inbox digest instead of a popup per player (FM24 style)
+        from game_classes import EmailMessage
+        self.parent.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Extension Results",
+            content="Extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
         
         # Refresh the view after negotiations
         self.eligible_players = self.get_eligible_players()
@@ -15926,11 +16097,17 @@ class GMOptionsWindow(InGamePopup):
                 years = getattr(person, "contract_years", 1)
             person.salary = salary
             person.contract_years = years
-            accepted = self.parent.handle_contract_offer(person, extension=True)
+            accepted = self.parent.handle_contract_offer(person, extension=True, notify="quiet")
             results.append(f"{getattr(person, 'full_name', getattr(person, 'name', 'Unknown'))}: {'Accepted' if accepted else 'Rejected'}")
 
-        msg = "Auto-Negotiation Results:\n" + "\n".join(results)
-        messagebox.showinfo("Extension Results", msg)
+        # One inbox digest instead of a popup (FM24 style)
+        from game_classes import EmailMessage
+        self.parent.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Auto-Negotiation Results",
+            content="Automatic extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
 
 def test_enhanced_simulation():
     """Test the enhanced simulation and game viewer integration"""
