@@ -20,9 +20,9 @@ POTENTIAL_BONUS = {'A': 220, 'B': 130, 'C': 50, 'D': 10, 'F': 0}
 def player_trade_value(player) -> int:
     """Trade value of a player in 'pick points' (a 1st-round pick ~= 1000)."""
     ovr = player.overall_rating()
-    # 50-point scale: 36 OVR depth -> 300, 42 OVR starter -> 600,
-    # 51 OVR elite -> 1050 (before age/potential multipliers)
-    base = max(0, (ovr - 30) * 50)
+    # 1-100 scale: 65 OVR depth -> ~210, 78 OVR starter -> ~665,
+    # 90 OVR elite -> ~1085 (before age/potential multipliers)
+    base = max(0, (ovr - 59) * 35)
 
     # Potential premium (matters most for young players)
     age = getattr(player, 'age', 27)
@@ -44,17 +44,17 @@ def player_trade_value(player) -> int:
 
     # Contract efficiency: overpaid players are worth less
     salary = getattr(player, 'salary', 0) or 0
-    # Expected salary mirrors contract generation tiers on the 50-point scale
-    expected = max(750_000, (ovr - 38) * 750_000)
+    # Expected salary mirrors contract generation tiers on the 1-100 scale
+    expected = max(750_000, (ovr - 62) * 400_000)
     if salary > expected * 1.5:
         base *= 0.85
-    elif salary < expected * 0.6 and ovr >= 50:
+    elif salary < expected * 0.6 and ovr >= 78:
         base *= 1.1  # bargain deal
 
     # Goalies: fewer roster spots, slight premium for starters
     try:
         from game_classes import PlayerPosition
-        if player.primary_position == PlayerPosition.GOALIE and ovr >= 48:
+        if player.primary_position == PlayerPosition.GOALIE and ovr >= 82:
             base *= 1.15
     except Exception:
         pass
