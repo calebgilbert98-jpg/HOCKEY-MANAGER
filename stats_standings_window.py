@@ -739,7 +739,7 @@ class StatsStandingsView(ctk.CTkFrame):
                            "stanley_cup_final"]
             round_names = {"wild_card": "Round 1",
                            "division_semifinals": "Round 2",
-                           "division_finals": "Round 3",
+                           "division_finals": "Conf. Final",
                            "conference_finals": "Conf. Final",
                            "stanley_cup_final": "Cup Final"}
             for key in round_order:

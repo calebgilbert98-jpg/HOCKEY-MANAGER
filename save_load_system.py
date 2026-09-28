@@ -215,6 +215,9 @@ class GameSaveManager:
             # Missing key = old save -> defaults to the modern $104M cap.
             'salary_cap_system': getattr(league, 'salary_cap_system', None).to_dict()
                 if getattr(league, 'salary_cap_system', None) else {},
+            # Live playoff bracket (mid-tournament saves keep every game).
+            # Missing key = old save -> no bracket, projections shown.
+            'playoff_bracket': self._serialize_playoff_bracket(league),
         }
         
         # Serialize all teams
@@ -928,9 +931,101 @@ class GameSaveManager:
                 team = self._restore_team(team_data)
                 if team:
                     league.teams.append(team)
+
+            # Restore a live playoff bracket (mid-tournament save). Teams
+            # now exist again, so series can re-point at them by name.
+            try:
+                self._restore_playoff_bracket(
+                    league, league_data.get('playoff_bracket'))
+            except Exception:
+                pass
             
         except Exception as e:
             print(f"Error restoring league: {e}")
+
+    def _serialize_playoff_bracket(self, league):
+        """Serialize the live playoff bracket (plain dicts; None when idle)."""
+        try:
+            b = getattr(league, 'playoff_bracket', None)
+            if b is None or not getattr(b, 'playoff_series', None):
+                return None
+            if not any(b.playoff_series.get(r)
+                       for r in ('wild_card', 'division_semifinals',
+                                 'division_finals', 'conference_finals',
+                                 'stanley_cup_final')):
+                return None
+            champ = getattr(b, 'stanley_cup_champion', None)
+            return {
+                'current_round': getattr(b, 'current_round', 'wild_card'),
+                'is_projection': bool(getattr(b, 'is_projection', False)),
+                'champion': getattr(champ, 'team_name', None),
+                'eastern': [getattr(t, 'team_name', '')
+                            for t in getattr(b, 'eastern_teams', None) or []],
+                'western': [getattr(t, 'team_name', '')
+                            for t in getattr(b, 'western_teams', None) or []],
+                'series': [
+                    {'round': rkey,
+                     'round_name': getattr(s, 'round_name', ''),
+                     'team1': getattr(s.team1, 'team_name', ''),
+                     'team2': getattr(s.team2, 'team_name', ''),
+                     't1_wins': int(getattr(s, 'team1_wins', 0) or 0),
+                     't2_wins': int(getattr(s, 'team2_wins', 0) or 0),
+                     'games_played': int(getattr(s, 'games_played', 0) or 0),
+                     'is_complete': bool(getattr(s, 'is_complete', False)),
+                     'winner': getattr(getattr(s, 'winner', None),
+                                       'team_name', None),
+                     'game_results': [dict(g) for g in
+                                      getattr(s, 'game_results', None) or []]}
+                    for rkey, slist in b.playoff_series.items()
+                    for s in slist or []
+                ],
+            }
+        except Exception:
+            return None
+
+    def _restore_playoff_bracket(self, league, data):
+        """Rebuild the live playoff bracket from plain dicts."""
+        if not data:
+            return
+        try:
+            from playoff_system import PlayoffBracket, PlayoffSeries
+            by_name = {getattr(t, 'team_name', ''): t
+                       for t in getattr(league, 'teams', None) or []}
+            b = PlayoffBracket(league)
+            b.current_round = data.get('current_round', 'wild_card')
+            b.is_projection = bool(data.get('is_projection', False))
+            for name in data.get('eastern', None) or []:
+                if name in by_name:
+                    b.eastern_teams.append(by_name[name])
+            for name in data.get('western', None) or []:
+                if name in by_name:
+                    b.western_teams.append(by_name[name])
+            for i, t in enumerate(b.eastern_teams):
+                t.standings_position = i + 1
+            for i, t in enumerate(b.western_teams):
+                t.standings_position = i + 1
+            for sd in data.get('series', None) or []:
+                t1 = by_name.get(sd.get('team1', ''))
+                t2 = by_name.get(sd.get('team2', ''))
+                if t1 is None or t2 is None:
+                    continue
+                s = PlayoffSeries(sd.get('round_name', ''), t1, t2)
+                s.team1_wins = int(sd.get('t1_wins', 0) or 0)
+                s.team2_wins = int(sd.get('t2_wins', 0) or 0)
+                s.games_played = int(sd.get('games_played', 0) or 0)
+                s.is_complete = bool(sd.get('is_complete', False))
+                wname = sd.get('winner')
+                s.winner = by_name.get(wname) if wname else None
+                s.game_results = [dict(g) for g in
+                                  sd.get('game_results', None) or []]
+                rkey = sd.get('round', '')
+                if rkey in b.playoff_series:
+                    b.playoff_series[rkey].append(s)
+            cname = data.get('champion')
+            b.stanley_cup_champion = by_name.get(cname) if cname else None
+            league.playoff_bracket = b
+        except Exception:
+            pass
     
     def _restore_team(self, team_data: Dict[str, Any]):
         """Restore a team from save data"""
