@@ -55,6 +55,8 @@ class TacticsView(ctk.CTkFrame):
         self._key_of_name = {}      # per-category display name -> key
         self._response_text = ""
         self._mp_locked = getattr(self.app, "mp_client", None) is not None
+        self._section = "whiteboard"  # or "intel"
+        self._footer_hidden = False
 
         self._create_interface()
         self.refresh()
@@ -122,6 +124,15 @@ class TacticsView(ctk.CTkFrame):
         self._header_title.pack(anchor='w', padx=14, pady=(10, 0))
         self._header_sub = self._body(self._header, text="", size=11)
         self._header_sub.pack(anchor='w', padx=14)
+        secrow = ctk.CTkFrame(self._header, fg_color="transparent")
+        secrow.pack(fill='x', padx=14, pady=(4, 2))
+        self._section_seg = ctk.CTkSegmentedButton(
+            secrow, values=["Whiteboard", "League Intel"],
+            command=self._on_section,
+            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'], unselected_hover_color=ct['ROW_HOVER'])
+        self._section_seg.pack(side='left')
+        self._section_seg.set("Whiteboard")
         famrow = ctk.CTkFrame(self._header, fg_color="transparent")
         famrow.pack(fill='x', padx=14, pady=(6, 4))
         self._body(famrow, text="System familiarity", size=11).pack(side='left')
@@ -180,6 +191,23 @@ class TacticsView(ctk.CTkFrame):
         self._response_label.pack(anchor='w', padx=14, pady=(0, 10))
 
     # ------------------------------------------------------------------
+    # Sections: Whiteboard vs League Intel
+    # ------------------------------------------------------------------
+    def _on_section(self, value):
+        self._section = "intel" if value == "League Intel" else "whiteboard"
+        self.refresh()
+
+    def _set_footer_visible(self, visible):
+        if visible == (not self._footer_hidden):
+            return
+        if visible:
+            self._footer.pack(fill='x', padx=14, pady=(8, 14))
+            self._footer_hidden = False
+        else:
+            self._footer.pack_forget()
+            self._footer_hidden = True
+
+    # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
     def refresh(self):
@@ -215,6 +243,13 @@ class TacticsView(ctk.CTkFrame):
                 text="Whiteboard: YOU (GM) -- changes apply immediately. "
                      "The coach works with your systems.",
                 text_color=ct['GOLD'])
+
+        # League Intel is its own clean section: no whiteboard cards, no footer.
+        if self._section == "intel":
+            self._set_footer_visible(False)
+            self._build_intel()
+            return
+        self._set_footer_visible(True)
 
         # Fit snapshot for the installed systems.
         try:
@@ -272,6 +307,118 @@ class TacticsView(ctk.CTkFrame):
                 text="Multiplayer client: tactics are set by the host.",
                 text_color=ct['TEXT_DIM'])
         self._response_label.configure(text=self._response_text or "")
+
+    # ------------------------------------------------------------------
+    # League Intel view
+    # ------------------------------------------------------------------
+    def _intel_card(self, lines):
+        """One clean intel card: bold title line + wrapped dim detail lines."""
+        ct = self._ct
+        card = ctk.CTkFrame(self._cards, fg_color=ct['CARD'], corner_radius=8)
+        card.pack(fill='x', padx=6, pady=4)
+        first = True
+        for text, dim in lines:
+            w = self._body(card, text=text, size=11 if dim else 12, dim=dim)
+            w.configure(wraplength=640, justify='left')
+            w.pack(anchor='w', padx=10, pady=(8, 0) if first else (0, 0))
+            first = False
+        card.winfo_children()[-1].pack_configure(pady=(0, 8))
+        return card
+
+    def _build_intel(self):
+        """League Intel section: the book on your systems + the chessboard."""
+        ct = self._ct
+        for w in self._cards.winfo_children():
+            w.destroy()
+        team = self._team()
+        if team is None:
+            return
+        try:
+            tx.ensure_team_tactics(team)
+            user_tk = tx.team_tactics(team)
+        except Exception:
+            user_tk = {}
+        cat_labels = {c: l for c, l, _a in self.CATS}
+
+        # -- Section 1: the book on you ---------------------------------
+        self._heading(self._cards, text="THE BOOK ON YOU", size=14).pack(
+            anchor='w', padx=6, pady=(6, 0))
+        sub = self._body(
+            self._cards,
+            text="Teams whose scouts have a real read on your systems -- "
+                 "and the answer they'd install against you tonight.",
+            size=11, dim=True)
+        sub.configure(wraplength=640, justify='left')
+        sub.pack(anchor='w', padx=6, pady=(0, 2))
+
+        found = False
+        try:
+            league_teams = getattr(getattr(self.app, "league", None), "teams", []) or []
+            uname = getattr(team, "team_name", "")
+            for opp in league_teams:
+                if opp is team or getattr(opp, "team_name", None) == uname:
+                    continue
+                for cat, sys_key, heat in tx.damaging_user_systems(opp, team)[:2]:
+                    counter = tx.TACTICAL_COUNTERS.get(sys_key)
+                    if not counter:
+                        continue
+                    found = True
+                    ccat, answer, why = counter
+                    sys_label = (tx.CATALOGS.get(cat, {}).get(sys_key, {})
+                                 .get("name", sys_key))
+                    ans_label = (tx.CATALOGS.get(ccat, {}).get(answer, {})
+                                 .get("name", answer))
+                    self._intel_card([
+                        (getattr(opp, "team_name", "?"), False),
+                        (f"Your {sys_label} is running {heat:.1f}x the answer "
+                         f"threshold vs them.", True),
+                        (f"Expect: {ans_label} -- {why}.", True),
+                    ])
+        except Exception:
+            pass
+        if not found:
+            sub2 = self._body(
+                self._cards,
+                text="No team has a real book on your systems yet. "
+                     "Keep winning -- they will.",
+                size=11, dim=True)
+            sub2.configure(wraplength=640, justify='left')
+            sub2.pack(anchor='w', padx=6, pady=4)
+
+        # -- Section 2: the chessboard -----------------------------------
+        self._heading(self._cards, text="THE CHESSBOARD", size=14).pack(
+            anchor='w', padx=6, pady=(14, 0))
+        sub3 = self._body(
+            self._cards,
+            text="Every system has a hockey answer. This is what the league "
+                 "throws at yours.",
+            size=11, dim=True)
+        sub3.configure(wraplength=640, justify='left')
+        sub3.pack(anchor='w', padx=6, pady=(0, 2))
+        shown = 0
+        for cat, label, _attr in self.CATS:
+            sys_key = user_tk.get(cat)
+            counter = tx.TACTICAL_COUNTERS.get(sys_key)
+            if not counter:
+                continue
+            shown += 1
+            ccat, answer, why = counter
+            sys_label = (tx.CATALOGS.get(cat, {}).get(sys_key, {})
+                         .get("name", sys_key))
+            ans_label = (tx.CATALOGS.get(ccat, {}).get(answer, {})
+                         .get("name", answer))
+            ans_cat = cat_labels.get(ccat, ccat)
+            self._intel_card([
+                (f"YOUR {label.upper()}: {sys_label}", False),
+                (f"THEIR ANSWER: {ans_label} ({ans_cat})", True),
+                (f"{why}.", True),
+            ])
+        if not shown:
+            sub4 = self._body(self._cards,
+                              text="No counters mapped for your current systems.",
+                              size=11, dim=True)
+            sub4.configure(wraplength=640, justify='left')
+            sub4.pack(anchor='w', padx=6, pady=4)
 
     def _build_card(self, cat, label, catalog, current_key, coach,
                     coach_pref_key, fit_txt):

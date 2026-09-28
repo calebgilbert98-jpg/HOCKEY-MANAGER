@@ -19,6 +19,13 @@ club identity presets. Shot volume is now **team-by-team, driven by tactics**.
 - **`tactics_window.py`** — 7 module cards + Identity preset buttons
   (Chaos & Pressure / Stranglehold / Hybrid Transition) that stage all seven
   modules as pending changes through the normal coach suggest/enforce flow.
+  Header segmented switcher: **Whiteboard | League Intel**. The Intel
+  section is a separate clean view (footer hidden): **THE BOOK ON YOU**
+  (per-opponent cards from `damaging_user_systems` — which of your systems
+  is hot vs whom, heat vs the answer threshold, and the exact answer from
+  `TACTICAL_COUNTERS` they'd install tonight) and **THE CHESSBOARD**
+  (your 7 current systems → their hockey answers). New
+  `qa_tactics_intel_ui.py` (9 checks) covers the section.
 - **`pbp_visual_sim.py`** — tactics tab rebuilt for the 7 modules
   (opponent read-out included).
 - **`reputation_system.py`** — `_TACTICS_CAT_LABEL` updated to the new
