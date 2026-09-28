@@ -1820,7 +1820,12 @@ class Team:
     tactic_pk: str = "tight_box"
     # Faceoff: 'basic', 'overload', 'drop_pass', 'point_shot'
     tactic_faceoff: str = "basic"
-    
+
+    # F5 board confidence (0-100). Stored as float; BoardConfidence class
+    # in board_confidence.py provides the update logic.
+    board_confidence: float = 70.0
+    board_expectation: str = "bubble_team"
+
     # Draft picks owned by this team
     draft_picks: Dict[int, List[DraftPick]] = field(default_factory=dict)  # Year -> List of picks
     
