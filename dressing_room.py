@@ -1066,7 +1066,7 @@ def _group_name(members: List[Any], idx: int) -> tuple:
 
     Returns (name, kind, nationality). Names use real dressing-room
     language: the goalies' union, the young Swedes, the Swedish Mafia,
-    the Flying Finns, the Yanks, the Euro Corner, the Toronto mans,
+    the Flying Finns, the Yanks, the Euro Corner, the Toronto Mans,
     the kids, the old guard -- and hidden Easter eggs for groups with
     no dominant trait at all."""
     nats: Dict[str, int] = {}
@@ -1122,7 +1122,7 @@ def _group_name(members: List[Any], idx: int) -> tuple:
         return f"The {plural}", "nationality", noun
     if city_share >= 0.6:
         cname = top_city[:1].upper() + top_city[1:]
-        return f"The {cname} mans", "hometown", noun
+        return f"The {cname} Mans", "hometown", noun
     euro_share = sum(c for nn, c in nats.items() if nn in _EURO_NATS) / n
     if euro_share >= 0.6:
         return "The Euro Corner", "europe", noun

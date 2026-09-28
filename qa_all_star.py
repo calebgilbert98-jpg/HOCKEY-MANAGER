@@ -1,7 +1,8 @@
 """QA for All-Star roster selection (true to real criteria).
 
-Covers: 4 division teams; fan-vote captain per division; 9 skaters + 2
-goalies on first-half merit; EVERY team represented; >=2 defensemen per
+Covers: 4 division teams; fan-vote captain per division; 9 skaters
+(captain included) + 2 goalies on first-half merit -- 11 per division,
+44 league-wide; EVERY team represented; >=2 defensemen per
 division; accolades stamped once (idempotent); save-safe ID persistence
 + resolve_rosters; all_star_game_date lookup; exhibition result and
 skills winners are presentation-only (no stat mutation).
@@ -103,7 +104,8 @@ for div in DIVS:
         check(f"{div} present", False)
         continue
     check(f"{div}: captain is a skater", not AS._is_goalie(r["captain"]))
-    check(f"{div}: 9 skaters", len(r["skaters"]) == 9, str(len(r["skaters"])))
+    check(f"{div}: 8 skaters + captain = 9 total",
+          len(r["skaters"]) == 8, str(len(r["skaters"])))
     check(f"{div}: 2 goalies", len(r["goalies"]) == 2, str(len(r["goalies"])))
     dmen = [p for p in [r["captain"]] + r["skaters"] if AS._is_dman(p)]
     check(f"{div}: >=2 defensemen", len(dmen) >= 2, str(len(dmen)))
@@ -150,6 +152,7 @@ n_picks = sum(1 + len(r["skaters"]) + len(r["goalies"])
               for r in rosters.values())
 check("accolade per pick, none duplicated", n_acc == n_picks,
       f"{n_acc} vs {n_picks}")
+check("44 selections league-wide (11 x 4)", n_picks == 44, str(n_picks))
 
 # The player card renders the trophy case via group_accolades.
 import accolades as _accmod

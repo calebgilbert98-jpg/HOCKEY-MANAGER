@@ -281,4 +281,27 @@ ok, why = te.will_waive_ntc(c, home_team, no_tax, lg8,
 check("reason cites the pull",
       "income tax" in why or "home" in why, why)
 
+# --- 9. July-1 resubmission: learned entries go stale -------------------------------
+print("9. season rollover clears learned M-NTC entries")
+lg9 = make_league()
+a = mkplayer(30, pid=3001)          # M-NTC, learned entries on file
+a.contract.no_trade_list.extend(["Dallas Stars", "Tampa Bay Lightning"])
+b = mkplayer(30, pid=3002)          # M-NTC, nothing learned
+c = mkplayer(30, pid=3003, list_size=0)  # no clause at all
+c.contract.no_trade_clause = False
+c.contract.no_trade_list.append("Dallas Stars")  # not an M-NTC list: untouched
+d = mkplayer(30, pid=3004)          # full NTC, learned entry present
+d.contract.modified_ntc_teams = 0
+d.contract.no_trade_clause = True
+d.contract.no_trade_list.append("Dallas Stars")
+lg9.get_all_players = lambda: [a, b, c, d]
+n = te.refresh_mntc_lists(lg9)
+check("one list refreshed", n == 1, str(n))
+check("learned entries cleared", a.contract.no_trade_list == [])
+check("clean list untouched", b.contract.no_trade_list == [])
+check("non-clause player untouched",
+      c.contract.no_trade_list == ["Dallas Stars"])
+check("full-NTC player untouched",
+      d.contract.no_trade_list == ["Dallas Stars"])
+
 print(f"\nALL {len(passed)} M-NTC LIST QA CHECKS PASSED")

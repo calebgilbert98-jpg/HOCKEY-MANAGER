@@ -16,8 +16,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import game_classes as gc
 from game_classes import (
     League, Staff, StaffRole, Team,
-    _STAFF_DEVELOP_ATTRS, _staff_season_score, roll_staff_breakthrough,
-    roll_staff_breakthroughs, staff_is_icon,
+    _STAFF_DEVELOP_ATTRS, _coach_breakthrough_story, _staff_season_score,
+    roll_staff_breakthrough, roll_staff_breakthroughs, staff_is_icon,
 )
 
 PASS, FAIL = [], []
@@ -234,6 +234,41 @@ check("breakthrough news recorded",
       f"news={getattr(league2, 'staff_breakthrough_news', [])}")
 check("stories computed", isinstance(getattr(league2, "_staff_stories", None), dict)
       and "Testers" in league2._staff_stories)
+
+# --- 10. scout-voiced breakthrough news --------------------------------------------------
+random.seed(41)
+_sg = mkcoach(StaffRole.GOALIE_COACH, age=45, rep=80, assignment="nhl")
+_sg.first_name, _sg.last_name = "Goalie", "Guru"
+_stories10 = {"Testers": {"nhl": {"weight": 6.0, "goalie_weight": 6.0,
+                                  "headline": ("Kid Keeper", 5, 74, True)},
+                          "ahl": {"weight": 0.0, "goalie_weight": 0.0,
+                                  "headline": None}}}
+_cup10 = {"Testers": {"w": 52, "l": 22, "otl": 8, "win_pct": 0.634,
+                      "playoff": "Won Stanley Cup", "champ": True,
+                      "adams_id": None}}
+_s10 = _coach_breakthrough_story(_sg, "Testers", _stories10, _cup10)
+check("scout voice present", "Scouts are buzzing" in _s10, _s10)
+check("names the story player", "Kid Keeper" in _s10 and "74 to 79" in _s10,
+      _s10)
+check("cites the Cup", "Stanley Cup" in _s10, _s10)
+check("goalie quote used",
+      any(q in _s10 for q in gc._SCOUT_COACH_QUOTES["goalie"]), _s10)
+
+_sh = mkcoach(StaffRole.HEAD_COACH, age=55, rep=85, assignment="nhl")
+_sh.first_name, _sh.last_name = "Bench", "Boss"
+_adams10 = {"Testers": {"w": 48, "l": 26, "otl": 8, "win_pct": 0.585,
+                        "playoff": "Lost Round 2", "champ": False,
+                        "adams_id": _sh.id}}
+_s10b = _coach_breakthrough_story(_sh, "Testers", {}, _adams10)
+check("cites the Jack Adams", "Jack Adams" in _s10b, _s10b)
+check("head-coach quote used",
+      any(q in _s10b for q in gc._SCOUT_COACH_QUOTES["head"]), _s10b)
+
+_s10c = _coach_breakthrough_story(_sh, "Testers", {}, {})
+check("no-evidence story still valid",
+      "Scouts are buzzing" in _s10c and " after " not in _s10c, _s10c)
+check("no mechanical rep readout", "rep " not in _s10c.lower()
+      or "reputation" not in _s10c.lower(), _s10c)
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

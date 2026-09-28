@@ -269,7 +269,7 @@ mans = [make_player(f"TO{i}", nat=n, age=26 + i, tenure="2 years",
         for i, n in enumerate(["Canada", "United States", "Sweden"])]
 team_m = make_team(mans)
 gm = dr.form_cliques(team_m)
-check("the Toronto mans", any(g["name"] == "The Toronto mans"
+check("the Toronto Mans", any(g["name"] == "The Toronto Mans"
                               for g in gm))
 
 # 39-46: personality-scaled affinity -----------------------------------

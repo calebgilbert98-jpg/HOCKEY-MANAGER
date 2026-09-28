@@ -98,6 +98,37 @@ def _season_year(league) -> int:
         return 0
 
 
+def refresh_mntc_lists(league) -> int:
+    """July-1 resubmission: every M-NTC holder files a fresh no-trade
+    list, so last season's learned entries go stale. Returns the number
+    of players whose learned list was cleared.
+
+    The new season's membership then comes from the season-keyed
+    deterministic engine (_mntc_blocks), which already re-keys on
+    season_year -- so a team that was blocked last year can be open
+    this year and vice versa, like a real resubmitted list. Full
+    NTC/NMC players never use no_trade_list and are untouched.
+    """
+    refreshed = 0
+    try:
+        players = league.get_all_players()
+    except Exception:
+        return 0
+    for p in players or []:
+        try:
+            c = getattr(p, "contract", None)
+            if c is None:
+                continue
+            if int(getattr(c, "modified_ntc_teams", 0) or 0) <= 0:
+                continue
+            if getattr(c, "no_trade_list", None):
+                c.no_trade_list = []
+                refreshed += 1
+        except Exception:
+            continue
+    return refreshed
+
+
 # ---------------------------------------------------------------------------
 # Dynamic M-NTC list engine: what puts a team on a player's no-trade list.
 #

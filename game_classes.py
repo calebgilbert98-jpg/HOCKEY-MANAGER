@@ -1690,6 +1690,86 @@ def roll_staff_breakthrough(staff, team_name, stories=None, results=None):
     return False, score, chance
 
 
+# Scout-voiced coach breakthrough stories: the player riser stories in
+# draft_stories.py speak through scouts ("scouts say his second half
+# forced its way into every first-round conversation"), so coaching
+# breakthroughs get the same treatment -- a scout quote plus the actual
+# evidence (the development story, the results), not a mechanical
+# rep/stock readout.
+_SCOUT_COACH_QUOTES = {
+    "goalie": [
+        "His goalies come out NHL-ready -- that's the hardest thing to teach.",
+        "Technique, tracking, composure -- his guys have all three.",
+    ],
+    "head": [
+        "He squeezes more out of a roster than anyone in the league.",
+        "Players run through walls for him, and the details never slip.",
+    ],
+    "assistant": [
+        "The details guy -- players swear by him.",
+        "Ask around the room: he's the coach they all credit.",
+    ],
+    "default": [
+        "Everybody in the business knows the name now.",
+        "He's the next big thing behind a bench -- it's just a matter of when.",
+    ],
+}
+
+
+def _coach_breakthrough_story(staff, team_name, stories=None, results=None):
+    """Scout-voiced breakthrough copy for one coach. Returns the story
+    string, or "" if there is nothing to say."""
+    try:
+        nm = (f"{getattr(staff, 'first_name', '')} "
+              f"{getattr(staff, 'last_name', '')}").strip() or "A coach"
+        role = getattr(getattr(staff, "role", None), "value", "coach")
+        role_l = str(role).lower()
+        if "goalie" in role_l:
+            quotes = _SCOUT_COACH_QUOTES["goalie"]
+        elif "head coach" in role_l:
+            quotes = _SCOUT_COACH_QUOTES["head"]
+        elif "coach" in role_l:
+            quotes = _SCOUT_COACH_QUOTES["assistant"]
+        else:
+            quotes = _SCOUT_COACH_QUOTES["default"]
+        quote = random.choice(quotes)
+
+        seg = "ahl" if (getattr(staff, "assignment", "nhl") or "nhl") == "ahl" \
+            else "nhl"
+        st = (stories or {}).get(team_name) or {}
+        head = (st.get(seg) or {}).get("headline")
+        evidence = []
+        if head:
+            try:
+                _pn, _d, _b, _g = head
+                evidence.append(
+                    f"took {_pn} from {_b} to {_b + _d} overall")
+            except Exception:
+                pass
+        r = (results or {}).get(team_name) or {}
+        if r:
+            if r.get("champ"):
+                evidence.append("a Stanley Cup")
+            elif "Lost Stanley Cup Final" in str(r.get("playoff", "")):
+                evidence.append("a run to the Final")
+            if (r.get("adams_id") is not None
+                    and r.get("adams_id") == getattr(staff, "id", None)):
+                evidence.append("the Jack Adams")
+            try:
+                _wp = float(r.get("win_pct", 0) or 0)
+                if _wp >= 0.600 and not r.get("champ"):
+                    evidence.append(
+                        f"a {r.get('w', 0)}-{r.get('l', 0)}-"
+                        f"{r.get('otl', 0)} season")
+            except Exception:
+                pass
+        ev = (" after " + "; ".join(evidence)) if evidence else ""
+        return (f'\U0001f4f0 "{quote}" Scouts are buzzing about {nm}, '
+                f"the {team_name} {role}{ev}.")
+    except Exception:
+        return ""
+
+
 def roll_staff_breakthroughs(league):
     """Season-rollover breakthrough pass over every club's coaching staff.
 
@@ -1726,20 +1806,10 @@ def roll_staff_breakthroughs(league):
                     pass
                 if broke and (score >= 5.0
                               or int(getattr(s, "reputation", 0) or 0) >= 75):
-                    try:
-                        nm = (f"{getattr(s, 'first_name', '')} "
-                              f"{getattr(s, 'last_name', '')}").strip()
-                        if not nm:
-                            nm = "A coach"
-                        role = getattr(getattr(s, "role", None),
-                                       "value", "coach")
-                        news.append(
-                            f"{nm} ({role}, {tname}) is on the rise after "
-                            f"a breakthrough season (rep "
-                            f"{getattr(s, 'reputation', '?')}, stock "
-                            f"{int(getattr(s, 'stock', 0) or 0):+d}).")
-                    except Exception:
-                        pass
+                    _story = _coach_breakthrough_story(s, tname, stories,
+                                                       results)
+                    if _story:
+                        news.append(_story)
         # Unemployment fades the glow: out of the game, out of mind.
         for s in list(getattr(league, "free_agent_staff", None) or []):
             try:
@@ -6163,6 +6233,7 @@ class League:
                         ("ahl", list(getattr(_t, "ahl_roster", []) or []))):
                     _tw = 0.0
                     _gw = 0.0
+                    _best = None  # headline story: biggest single leap
                     for _p in _plist:
                         try:
                             _before = _overall_before.get(
@@ -6186,9 +6257,16 @@ class League:
                             _tw += _w
                             if _is_g:
                                 _gw += _w
+                            if _best is None or _delta > _best[1]:
+                                _pname = (
+                                    f"{getattr(_p, 'first_name', '')} "
+                                    f"{getattr(_p, 'last_name', '')}").strip()
+                                _best = (_pname or "a young player",
+                                         _delta, int(_before), _is_g)
                         except Exception:
                             pass
-                    _segs[_seg] = {"weight": _tw, "goalie_weight": _gw}
+                    _segs[_seg] = {"weight": _tw, "goalie_weight": _gw,
+                                   "headline": _best}
                 _stories[_tn] = _segs
             self._staff_stories = _stories
         except Exception:
@@ -6423,6 +6501,16 @@ class League:
         try:
             import waiver_logic as _wl
             _wl.snapshot_final_standings(self)
+        except Exception:
+            pass
+
+        # M-NTC lists are resubmitted every July 1 in real life: last
+        # year's learned entries go stale via trade_engine, and the new
+        # season's membership comes from the season-keyed deterministic
+        # list engine (_mntc_blocks).
+        try:
+            import trade_engine as _te_mntc
+            _te_mntc.refresh_mntc_lists(self)
         except Exception:
             pass
 

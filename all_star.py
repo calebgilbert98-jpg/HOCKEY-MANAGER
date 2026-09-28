@@ -4,7 +4,8 @@ The real format (3v3 era):
 - Four teams, one per division (Atlantic, Metropolitan, Central, Pacific).
 - Fan vote elects one captain per division.
 - NHL Hockey Operations selects the rest: 11 players per division --
-  9 skaters + 2 goalies -- based on first-half performance.
+  9 skaters (the captain counts among them) + 2 goalies -- based on
+  first-half performance.
 - Every NHL club must have at least one representative.
 
 What this module does, once per season:
@@ -193,7 +194,8 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
                             ) -> Dict[str, Dict[str, List[Any]]]:
     """Run the fan vote + hockey-ops selection for one season.
 
-    Returns {division: {"captain": p, "skaters": [...9], "goalies": [...2]}}.
+    Returns {division: {"captain": p, "skaters": [...8], "goalies": [...2]}}.
+    9 total skaters including the captain -- the real format.
     Empty dict if already selected this season (idempotent) or if there is
     no usable player pool.
     """
@@ -260,6 +262,9 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
             return any(_team_name(team_of(p)) == tn for p in chosen)
 
         # 2) Hockey ops: every club gets at least one representative.
+        # When the division is short on blue-liners, a club's guaranteed
+        # rep goes to its best defenseman -- hockey ops balances the
+        # lineup through the club-rep picks, the way the real room does.
         for t in teams:
             tn = _team_name(t)
             if represented(tn):
@@ -269,7 +274,9 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
                      and _team_name(team_of(p)) == tn]
             if not cands:
                 continue
-            best = max(cands, key=_skater_score)
+            need_d = sum(1 for p in chosen if _is_dman(p)) < 2
+            d_cands = [p for p in cands if _is_dman(p)] if need_d else []
+            best = max(d_cands if d_cands else cands, key=_skater_score)
             chosen.append(best)
             chosen_ids.add(id(best))
 
@@ -281,19 +288,20 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
                  if id(p) not in chosen_ids and _is_dman(p)),
                 key=_skater_score, reverse=True)
             for d in d_pool[: 2 - len(dmen)]:
-                if len(chosen) < SKATERS_PER_TEAM + 1:  # captain + 9 max
+                if len(chosen) < SKATERS_PER_TEAM:  # 9 skaters max, captain included
                     chosen.append(d)
                     chosen_ids.add(id(d))
 
-        # 4) Hockey ops: fill to 9 skaters on merit (captain + 9 max).
+        # 4) Hockey ops: fill to 9 total skaters on merit (captain included).
         rest = sorted((p for p in skaters if id(p) not in chosen_ids),
                       key=_skater_score, reverse=True)
         for p in rest:
-            if len(chosen) >= SKATERS_PER_TEAM + 1:
+            if len(chosen) >= SKATERS_PER_TEAM:
                 break
             chosen.append(p)
             chosen_ids.add(id(p))
-        skater_lineup = [p for p in chosen if p is not captain][:SKATERS_PER_TEAM]
+        skater_lineup = [p for p in chosen
+                         if p is not captain][:SKATERS_PER_TEAM - 1]
 
         # 5) Two goalies on merit (save% then wins).
         goalie_lineup = sorted(goalies, key=_goalie_score,
@@ -319,7 +327,7 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
             if not cands:
                 continue
             add = max(cands, key=_skater_score)
-            if len(skater_lineup) < SKATERS_PER_TEAM:
+            if len(skater_lineup) < SKATERS_PER_TEAM - 1:
                 skater_lineup.append(add)
             else:
                 bumpable = [p for p in skater_lineup if id(p) not in protected]
@@ -441,7 +449,7 @@ def play_all_star_game(rosters: Dict[str, Dict[str, List[Any]]],
     def strength(div: str) -> float:
         r = rosters[div]
         return sum(float(getattr(p, "overall", 75) or 75)
-                   for p in ([r["captain"]] + r["skaters"])) / 10.0
+                   for p in ([r["captain"]] + r["skaters"])) / 9.0
     weights = [strength(d) for d in divs]
     # Semi-finals: 1v4, 2v3 by strength, then a final.
     order = sorted(range(len(divs)), key=lambda i: weights[i], reverse=True)
@@ -472,7 +480,7 @@ def announcement_copy(rosters: Dict[str, Dict[str, List[Any]]],
         if not r:
             continue
         cap = _pname(r["captain"])
-        n = len(r["skaters"]) + len(r["goalies"])
+        n = 1 + len(r["skaters"]) + len(r["goalies"])
         bits.append(f"{div} ({cap} wearing the C, {n} total)")
         coach = r.get("coach_name") or (
             _coach_display_name(r["coach"]) if r.get("coach") else None)
