@@ -469,6 +469,7 @@ class DatabaseGenerator:
             StaffRole.PROFESSIONAL_SCOUT,
             StaffRole.AMATEUR_SCOUT,
             StaffRole.EUROPEAN_SCOUT,
+            StaffRole.ANALYTICS_DIRECTOR,
             StaffRole.SKILLS_COACH,
             StaffRole.CONDITIONING_COACH
         ]

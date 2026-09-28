@@ -4974,13 +4974,15 @@ def apply_fresh_start(player: Any, old_team: Any, new_team: Any,
     return result
 
 
-def watch_steal_candidate(player: Any, team: Any, tip: dict) -> None:
+def watch_steal_candidate(player: Any, team: Any, tip: dict,
+                          date_str: str = "") -> None:
     """Open a steal watch when a scout-tipped player is acquired via trade.
 
     A tip is not success; the player's later performance is. This
     snapshots his pre-trade pace so check_steal_watch() can validate
     the scout's call against what actually happens in the new uniform.
     Idempotent: re-watching the same player refreshes the snapshot.
+    date_str is the simulation trade date (never wall clock).
     """
     try:
         from game_classes import PlayerPosition
@@ -4994,8 +4996,10 @@ def watch_steal_candidate(player: Any, team: Any, tip: dict) -> None:
         if watch is None:
             team.steal_watch = watch = {}
         entry = {
-            "date": str(__import__("datetime").datetime.now().date()),
+            "date": str(date_str or __import__("datetime").date.today().isoformat()),
             "scout": tip.get("scout", "?"),
+            "scout_id": tip.get("scout_id", ""),
+            "selling_team": tip.get("selling_team", ""),
             "jpa": tip.get("jpa", 10),
             "value_score": tip.get("value_score", 0.0),
             "signals": list(tip.get("signals", []) or []),
@@ -5013,7 +5017,71 @@ def watch_steal_candidate(player: Any, team: Any, tip: dict) -> None:
         pass
 
 
-def check_steal_watch(team: Any) -> List[Dict[str, Any]]:
+def watch_sell_candidate(player: Any, selling_team: Any, buying_team: Any,
+                         tip: dict, date_str: str = "") -> None:
+    """Open a sell watch when a sell-tipped player is traded away.
+
+    The mirror of watch_steal_candidate: the scout said this player's
+    surface production was a mirage. If he regresses in the new uniform,
+    the selling scout and GM called the peak; if he thrives, the read
+    failed and the doubt lands on them. Snapshots pre-trade pace.
+    Idempotent per player. date_str is the simulation trade date.
+    """
+    try:
+        from game_classes import PlayerPosition
+        is_goalie = (getattr(player, "primary_position", None)
+                     == PlayerPosition.GOALIE)
+    except Exception:
+        is_goalie = False
+    try:
+        pid = getattr(player, "id", id(player))
+        watch = getattr(selling_team, "sell_watch", None)
+        if watch is None:
+            selling_team.sell_watch = watch = {}
+        entry = {
+            "date": str(date_str or __import__("datetime").date.today().isoformat()),
+            "scout": tip.get("scout", "?"),
+            "scout_id": tip.get("scout_id", ""),
+            "buying_team": getattr(buying_team, "team_name", ""),
+            "jpa": tip.get("jpa", 10),
+            "signals": list(tip.get("signals", []) or []),
+            "is_goalie": bool(is_goalie),
+            "pre_gp": int(getattr(player, "games_played", 0) or 0),
+        }
+        if is_goalie:
+            entry["pre_saves"] = int(getattr(player, "saves", 0) or 0)
+            entry["pre_sa"] = int(getattr(player, "shots_against", 0) or 0)
+        else:
+            entry["pre_points"] = int((getattr(player, "goals", 0) or 0)
+                                      + (getattr(player, "assists", 0) or 0))
+        watch[pid] = entry
+    except Exception:
+        pass
+
+
+def _grade_watch_scout(team: Any, scout_id: str, result: str,
+                       player_name: str, kind: str, date_str: str) -> None:
+    """Grade the scout behind a watch. Lazy import: no cycle."""
+    try:
+        import analytics_scouting as _as
+        scout = _as.find_scout_by_id(team, scout_id)
+        if scout is not None:
+            _as.grade_scout_call(scout, result, player_name, kind,
+                                 date_str)
+    except Exception:
+        pass
+
+
+def _nudge_philosophy(team: Any, delta: float) -> None:
+    try:
+        import analytics_scouting as _as
+        _as.nudge_philosophy(team, delta)
+    except Exception:
+        pass
+
+
+def check_steal_watch(team: Any, league: Any = None,
+                      date_str: str = "") -> List[Dict[str, Any]]:
     """Validate pending steal watches against post-trade production.
 
     Called monthly. For each watched player with 15+ games since the
@@ -5021,21 +5089,31 @@ def check_steal_watch(team: Any) -> List[Dict[str, Any]]:
     - Skaters: VALIDATED if post-trade P/GP beats pre-trade pace by
       0.30+ or reaches star pace (0.85+). The scout saw it coming.
     - Goalies: VALIDATED if post-trade SV% beats pre-trade by .015+.
-    Watches expire quietly after 50 games without validation -- the
-    scout was wrong; no reward, no story, no penalty. The tip alone
-    never triggers note_analytics_steal(); only the breakout does.
-    Returns the list of validated steals.
+    Watches expire after 50 games without validation -- the scout was
+    wrong. Expiry is NOT silent: it grades a miss on the scout's record
+    and plants doubt in the room. The tip alone never triggers the
+    payoff; only the performance window does.
+
+    date_str is the simulation date used for grading stamps.
+    Returns event dicts; each may carry "news" (str) for the feed and
+    "kind" in {"steal_validated", "steal_failed"}.
     """
-    validated: List[Dict[str, Any]] = []
+    from datetime import date as _date
+    events: List[Dict[str, Any]] = []
     try:
         watch = getattr(team, "steal_watch", None) or {}
         if not watch:
-            return validated
+            return events
+        today = str(date_str or _date.today().isoformat())
+        tname = getattr(team, "team_name", "?")
         roster = list(getattr(team, "roster", []) or [])
         by_id = {getattr(p, "id", id(p)): p for p in roster}
         for pid in list(watch.keys()):
             entry = watch[pid]
             player = by_id.get(pid)
+            pname = getattr(player, "full_name",
+                            getattr(player, "name", "?")) \
+                if player is not None else "?"
             if player is None:
                 # Player moved on; watch dies with the tenure.
                 del watch[pid]
@@ -5072,43 +5150,290 @@ def check_steal_watch(team: Any) -> List[Dict[str, Any]]:
                     pre_gp = int(entry.get("pre_gp", 0) or 0)
                     pre_ppg = (int(entry.get("pre_points", 0) or 0) / pre_gp) if pre_gp > 0 else 0.0
                     hit = (post_ppg - pre_ppg) >= 0.30 or post_ppg >= 0.85
+            scout_name = entry.get("scout", "?")
             if hit:
-                note_analytics_steal(player, team,
-                                     float(entry.get("value_score", 0.0) or 0.0),
-                                     list(entry.get("signals", []) or []))
-                validated.append({"player": player, "team": team,
-                                  "scout": entry.get("scout"),
-                                  "post_gp": post_gp})
+                _grade_watch_scout(team, entry.get("scout_id", ""),
+                                   "hit", pname, "buy", today)
+                _nudge_philosophy(team, +4.0)
+                # Resolve the selling club to its team object so the
+                # payoff can criticize the actual counterparty.
+                _cp_team = None
+                _cp_name = str(entry.get("selling_team", "") or "")
+                if _cp_name:
+                    for _t in _league_teams(league):
+                        if getattr(_t, "team_name", "") == _cp_name:
+                            _cp_team = _t
+                            break
+                note_tip_payoff(
+                    "buy_validated", player, team,
+                    counterparty_name=_cp_name,
+                    counterparty_team=_cp_team,
+                    scout_name=scout_name, league=league,
+                    signals=list(entry.get("signals", []) or []))
+                events.append({"kind": "steal_validated",
+                               "player": player, "team": team,
+                               "scout": scout_name, "post_gp": post_gp,
+                               "news": (
+                                   f"VALIDATED READ -- {scout_name}'s call on "
+                                   f"{pname} paid off: producing since the "
+                                   f"move to {tname}. The pro scouts earned "
+                                   f"their paychecks.")})
                 del watch[pid]
             elif post_gp >= 50:
-                # Quiet expiry: the scout was wrong. No story.
+                # Failed bet: doubt, not silence. The scout's record takes
+                # the miss; the room notices the read didn't pan out.
+                _grade_watch_scout(team, entry.get("scout_id", ""),
+                                   "miss", pname, "buy", today)
+                _nudge_philosophy(team, -3.0)
+                try:
+                    record_team_event(
+                        team, "analytics_flop",
+                        f"{scout_name}'s read on {pname} hasn't panned out "
+                        f"({post_gp} games since the move). The room is "
+                        f"wondering about that pro-scouting department.",
+                        morale_delta=-1, tone="down")
+                except Exception:
+                    pass
+                try:
+                    _bump_gm_respect(league, team, team, -2)
+                except Exception:
+                    pass
+                events.append({"kind": "steal_failed",
+                               "player": player, "team": team,
+                               "scout": scout_name, "post_gp": post_gp})
                 del watch[pid]
     except Exception:
         pass
-    return validated
+    return events
+
+
+def check_sell_watch(team: Any, teams: List[Any],
+                     league: Any = None,
+                     date_str: str = "") -> List[Dict[str, Any]]:
+    """Validate pending sell watches against post-trade regression.
+
+    Called monthly on the SELLING team. The watched player now skates
+    elsewhere, so he is resolved across all rosters.
+    - VALIDATED (15+ post-trade GP, P/GP <= 70% of pre-trade pace):
+      the scout called the peak. Selling GM banks credit; the buyer
+      takes market criticism.
+    - EXPIRED (50+ GP without regression): the read failed -- doubt,
+      not silence.
+    Returns event dicts with kinds "sell_validated" / "sell_failed".
+    date_str is the simulation date used for grading stamps.
+    """
+    from datetime import date as _date
+    events: List[Dict[str, Any]] = []
+    try:
+        watch = getattr(team, "sell_watch", None) or {}
+        if not watch:
+            return events
+        today = str(date_str or _date.today().isoformat())
+        tname = getattr(team, "team_name", "?")
+        # Authoritative roster map: player id -> player AND the team
+        # object currently rostering him. No name-matching.
+        by_id: Dict[Any, Any] = {}
+        team_of: Dict[Any, Any] = {}
+        for t in teams or []:
+            for p in list(getattr(t, "roster", []) or []):
+                _pid = getattr(p, "id", id(p))
+                by_id[_pid] = p
+                team_of[_pid] = t
+        buying_team = None
+        for pid in list(watch.keys()):
+            entry = watch[pid]
+            player = by_id.get(pid)
+            pname = getattr(player, "full_name",
+                            getattr(player, "name", "?")) \
+                if player is not None else "?"
+            if player is None:
+                del watch[pid]
+                continue
+            buying_team = team_of.get(pid)
+            gp_now = int(getattr(player, "games_played", 0) or 0)
+            post_gp = gp_now - int(entry.get("pre_gp", 0) or 0)
+            if post_gp < 0:
+                entry["pre_gp"] = gp_now
+                if entry.get("is_goalie"):
+                    entry["pre_saves"] = int(getattr(player, "saves", 0) or 0)
+                    entry["pre_sa"] = int(getattr(player, "shots_against", 0) or 0)
+                else:
+                    entry["pre_points"] = int((getattr(player, "goals", 0) or 0)
+                                              + (getattr(player, "assists", 0) or 0))
+                continue
+            hit = False
+            if entry.get("is_goalie"):
+                if post_gp >= 10:
+                    sa = int(getattr(player, "shots_against", 0) or 0) - int(entry.get("pre_sa", 0) or 0)
+                    sv = int(getattr(player, "saves", 0) or 0) - int(entry.get("pre_saves", 0) or 0)
+                    if sa > 0:
+                        post_sv = sv / sa
+                        pre_sa = int(entry.get("pre_sa", 0) or 0)
+                        pre_sv_n = int(entry.get("pre_saves", 0) or 0)
+                        pre_sv = (pre_sv_n / pre_sa) if pre_sa > 0 else 0.900
+                        hit = (pre_sv - post_sv) >= 0.015
+            else:
+                if post_gp >= 15:
+                    pts_now = int((getattr(player, "goals", 0) or 0)
+                                  + (getattr(player, "assists", 0) or 0))
+                    post_pts = pts_now - int(entry.get("pre_points", 0) or 0)
+                    post_ppg = post_pts / post_gp
+                    pre_gp = int(entry.get("pre_gp", 0) or 0)
+                    pre_ppg = (int(entry.get("pre_points", 0) or 0) / pre_gp) if pre_gp > 0 else 0.0
+                    hit = (pre_ppg > 0.15) and (post_ppg <= pre_ppg * 0.70)
+            scout_name = entry.get("scout", "?")
+            bname = (getattr(buying_team, "team_name", "?")
+                     if buying_team is not None
+                     else entry.get("buying_team", "?"))
+            if hit:
+                _grade_watch_scout(team, entry.get("scout_id", ""),
+                                   "hit", pname, "sell", today)
+                _nudge_philosophy(team, +3.0)
+                note_tip_payoff(
+                    "sell_validated", player, team,
+                    counterparty_name=bname, scout_name=scout_name,
+                    league=league,
+                    signals=list(entry.get("signals", []) or []),
+                    counterparty_team=buying_team)
+                events.append({"kind": "sell_validated",
+                               "player": player, "team": team,
+                               "scout": scout_name, "post_gp": post_gp,
+                               "news": (
+                                   f"CALLED THE PEAK -- {scout_name} flagged "
+                                   f"{pname}'s decline before {tname} moved "
+                                   f"him, and the numbers have collapsed "
+                                   f"since. {bname} bought high.")})
+                del watch[pid]
+            elif post_gp >= 50:
+                _grade_watch_scout(team, entry.get("scout_id", ""),
+                                   "miss", pname, "sell", today)
+                try:
+                    record_team_event(
+                        team, "sell_flop",
+                        f"{scout_name} said {pname}'s best hockey was behind "
+                        f"him -- {post_gp} games later he's thriving "
+                        f"elsewhere. That one stings in the front office.",
+                        morale_delta=-1, tone="down")
+                except Exception:
+                    pass
+                events.append({"kind": "sell_failed",
+                               "player": player, "team": team,
+                               "scout": scout_name, "post_gp": post_gp})
+                del watch[pid]
+    except Exception:
+        pass
+    return events
+
+
+def note_tip_payoff(kind: str, player: Any, team: Any,
+                    counterparty_name: str = "", scout_name: str = "?",
+                    league: Any = None, signals: List[str] = None,
+                    counterparty_team: Any = None) -> None:
+    """One event feeds several systems (regression payoff narratives).
+
+    kind "buy_validated": the tipped player genuinely broke out after
+    the acquiring team bet on the scout's read. The payoff lands in
+    every system the roadmap names:
+      - the acquiring scout's record (graded by the caller),
+      - the acquiring GM's reputation (eye for talent),
+      - player confidence (vindicated: morale/happiness lift),
+      - fan-favourite acceleration (standing bump + buzz),
+      - media framing (dynamics event naming the scout + department),
+      - the seller's market criticism (respect nick + "sold low" note).
+    kind "sell_validated": the sold player's production collapsed as the
+    scout predicted. The selling GM banks "called the peak" credit; the
+    BUYER takes the market criticism for buying high.
+    """
+    signals = signals or []
+    try:
+        ensure_reputation_fields(player)
+        pname = getattr(player, "full_name", getattr(player, "name", "?"))
+        tname = getattr(team, "team_name", "?") if team is not None else "?"
+        sig = f" ({'; '.join(signals[:2])})" if signals else ""
+
+        if kind == "buy_validated":
+            story = (f"The analytics department called it: {pname} is "
+                     f"producing like a star at {tname}{sig}. "
+                     f"{scout_name} saw it first -- the pro scouts earned "
+                     f"their paychecks, and the fans are buzzing.")
+            try:
+                record_team_event(team, "analytics_steal", story,
+                                  morale_delta=2, tone="up")
+            except Exception:
+                pass
+            # Player confidence: vindicated.
+            try:
+                player.morale = min(100, int(getattr(player, "morale", 50) or 50) + 4)
+                player.happiness = min(100, int(getattr(player, "happiness", 50) or 50) + 4)
+            except Exception:
+                pass
+            # Fan-favourite acceleration: validated breakouts bank standing.
+            try:
+                player.reputation = min(
+                    100, (getattr(player, "reputation", 0) or 0) + 4)
+            except Exception:
+                pass
+            # Acquiring GM: eye for talent. Seller: market criticism.
+            if league is not None and counterparty_team is not None:
+                try:
+                    _bump_gm_respect(league, team, counterparty_team, +6)
+                    _bump_gm_respect(league, counterparty_team, team, -6)
+                except Exception:
+                    pass
+            if counterparty_name:
+                try:
+                    record_team_event(
+                        counterparty_team, "sold_low",
+                        f"Sold low on {pname} -- he's breaking out at "
+                        f"{tname}{sig}. The market noticed.",
+                        morale_delta=-1, tone="down")
+                except Exception:
+                    pass
+        elif kind == "sell_validated":
+            story = (f"{scout_name} called the peak: {pname}'s production "
+                     f"has collapsed since {tname} moved him{sig}. Selling "
+                     f"before the decline -- that's pro scouting.")
+            try:
+                record_team_event(team, "called_the_peak", story,
+                                  morale_delta=2, tone="up")
+            except Exception:
+                pass
+            try:
+                player.reputation = max(
+                    0, (getattr(player, "reputation", 0) or 0) - 3)
+            except Exception:
+                pass
+            if league is not None and counterparty_team is not None:
+                try:
+                    _bump_gm_respect(league, team, counterparty_team, +6)
+                    _bump_gm_respect(league, counterparty_team, team, -6)
+                except Exception:
+                    pass
+                try:
+                    record_team_event(
+                        counterparty_team, "bought_high",
+                        f"Bought high on {pname} -- his production has "
+                        f"fallen off since the move{sig}. The market "
+                        f"noticed.",
+                        morale_delta=-1, tone="down")
+                except Exception:
+                    pass
+            elif counterparty_name:
+                pass  # buyer unknown; credit stands without criticism
+    except Exception:
+        pass
 
 
 def note_analytics_steal(player: Any, team: Any, value_score: float,
                          signals: List[str]) -> None:
-    """The room and the press notice when the analytics find pays off.
+    """Legacy entry point -- kept for save/call compatibility.
 
-    Call when a buy-low candidate identified by analytics_scouting starts
-    producing after the move -- it banks reputation for the player and a
-    little GM credibility narrative.
+    Routes into the full payoff chain as a buy-side validation without
+    counterparty attribution.
     """
-    ensure_reputation_fields(player)
-    pname = getattr(player, "full_name", getattr(player, "name", "?"))
-    tname = getattr(team, "team_name", "?") if team is not None else "?"
-    story = (f"The analytics department called it: {pname} is producing "
-             f"like a star at {tname} ({'; '.join(signals[:2])}). "
-             f"Somebody's pro scouts earned their paychecks.")
     try:
-        record_team_event(team, "analytics_steal", story,
-                          morale_delta=2, tone="up")
-    except Exception:
-        pass
-    # A validated breakout banks real standing.
-    try:
-        player.reputation = min(100, (getattr(player, "reputation", 0) or 0) + 4)
+        note_tip_payoff("buy_validated", player, team,
+                        counterparty_name="", scout_name="The pro scouts",
+                        league=None, signals=signals or [])
     except Exception:
         pass

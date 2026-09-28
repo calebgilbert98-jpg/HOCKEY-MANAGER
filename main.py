@@ -958,7 +958,8 @@ NHL League Office""",
             StaffRole.PHYSIOTHERAPIST,
             StaffRole.EQUIPMENT_MANAGER,
             StaffRole.SKATING_COACH,
-            StaffRole.VIDEO_COACH
+            StaffRole.VIDEO_COACH,
+            StaffRole.ANALYTICS_DIRECTOR,
         ]
         
         # Create exact number needed for unique roles (one per team + extras)
@@ -1175,7 +1176,61 @@ NHL League Office""",
             breakdown_parts.append(f"{other_count} others")
         
         return ", ".join(breakdown_parts)
-    
+
+    def sign_free_agent_staff(self, staff, salary, years):
+        """Hire a free-agent staffer onto the user's team.
+
+        (Previously missing -- the staff contract dialog called this and
+        crashed. Now implemented.) Firing/hiring an Analytics Director
+        refreshes the club's analytics department quality via
+        refresh_analytics_quality(); hiring a pro scout gives the user a
+        new eye with a blank track record to build.
+        """
+        try:
+            team = getattr(self, "user_team", None)
+            league = getattr(self, "league", None)
+            if team is None or staff is None:
+                return False
+            pool = getattr(league, "free_agent_staff", None)
+            if pool is not None and staff in pool:
+                pool.remove(staff)
+            try:
+                staff.salary = int(salary)
+                staff.contract_years = int(years)
+            except Exception:
+                pass
+            if staff not in list(getattr(team, "staff", []) or []):
+                team.staff.append(staff)
+            try:
+                import analytics_scouting as _as
+                _as.refresh_analytics_quality(team)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def release_staff(self, staff):
+        """Release a staffer from the user's team back to the free-agent pool."""
+        try:
+            team = getattr(self, "user_team", None)
+            league = getattr(self, "league", None)
+            if team is None or staff is None:
+                return False
+            if staff in list(getattr(team, "staff", []) or []):
+                team.staff.remove(staff)
+            pool = getattr(league, "free_agent_staff", None)
+            if pool is not None and staff not in pool:
+                pool.append(staff)
+            try:
+                import analytics_scouting as _as
+                _as.refresh_analytics_quality(team)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     def _assign_captaincy(self, team):
         """Assigns captain and alternate captains based on leadership attributes."""
         if not team.roster:
@@ -7520,14 +7575,48 @@ class HockeyManagerGUI(tk.Tk):
         # feel like real pro-scouting work, not a daily cheat sheet.
         if self.current_date.day == 1:
             self._dispatch_scout_value_tips()
-            # Steal watch: only post-trade production validates a scout's
-            # tip. The tip alone never pays off -- the breakout does.
+            # Wave 1 monthly settlement:
+            # - Grade old ledger tips against what happened (scout records).
+            # - Steal/sell watches: only post-trade production validates a
+            #   scout's tip. The tip alone never pays off -- the breakout
+            #   (or the collapse) does. Validated events publish news.
+            # - Market ecology: philosophy drift + leadership-change regress.
             try:
                 import reputation_system as _rs
-                for _t in self.league.teams:
-                    _rs.check_steal_watch(_t)
+                import analytics_scouting as _as
+                _teams = list(self.league.teams)
+                _date_str = str(self.current_date)
+                _as.grade_tip_ledger(_teams, _date_str)
+                _as.tick_analytics_philosophy(self.league)
+                for _t in _teams:
+                    for _ev in _rs.check_steal_watch(_t, self.league,
+                                                     _date_str):
+                        _news = _ev.get("news")
+                        if _news:
+                            try:
+                                self.add_news(_news)
+                            except Exception:
+                                pass
+                    for _ev in _rs.check_sell_watch(_t, _teams,
+                                                    self.league,
+                                                    _date_str):
+                        _news = _ev.get("news")
+                        if _news:
+                            try:
+                                self.add_news(_news)
+                            except Exception:
+                                pass
             except Exception:
                 pass
+            # AI arms race: clubs evaluate, renew and poach scouting staff
+            # twice a season. Reads improve only when the people improve.
+            if self.current_date.month in (1, 7):
+                try:
+                    import analytics_scouting as _as2
+                    _as2.ai_scout_staff_review(
+                        self.league, str(self.current_date))
+                except Exception:
+                    pass
         # Analytics storylines: mid-month (15th), season-aware, deduped,
         # significance-gated. The press reads the same numbers the
         # analytics department does -- but only the loud ones.
@@ -10254,16 +10343,24 @@ class HockeyManagerGUI(tk.Tk):
             pass
 
     def _dispatch_scout_value_tips(self):
-        """Monthly pro-scout value tips -- for the USER and every AI GM.
+        """Monthly pro-scout value reads -- for the USER and every AI GM.
 
         Even playing field: every team's Head Scout / Professional Scouts
-        file their reads on the 1st. The user gets tips in the news feed;
+        file their reads on the 1st. The user gets reads in the news feed;
         AI teams store theirs on the team object where their trade logic
         reads them (see trade_engine.scout_adjusted_value).
 
-        Whether a tip is RIGHT depends directly on that scout's
+        Whether a read is RIGHT depends directly on that scout's
         judging_player_ability -- elite scouts spot real value, bad scouts
         chase ghosts. Same rules for silicon and flesh.
+
+        Wave 1 (information asymmetry):
+        - Every read is filed in the team's tip ledger via
+          record_tip_call() and graded later against what actually
+          happened -- the scout's track record, not hidden JPA, is what
+          the user sees.
+        - Design law: reads show evidence, uncertainty, provenance and
+          the person responsible. Never "buy low" / "sell high".
         """
         try:
             import analytics_scouting as scout_mod
@@ -10287,21 +10384,25 @@ class HockeyManagerGUI(tk.Tk):
                 return
             user_team = getattr(self, "user_team", None)
             user_name = getattr(user_team, "team_name", "") if user_team else ""
+            date_str = str(getattr(self, "current_date",
+                                   __import__("datetime").date.today()))
             for team in teams:
                 tname = getattr(team, "team_name", "")
+                scout_mod.ensure_analytics_fields(team)
                 staff = list(getattr(team, "staff", []) or [])
                 scouts = [s for s in staff
                           if getattr(s, "role", None) in pro_roles] if pro_roles else []
                 if not scouts:
                     continue
                 is_user = (tname == user_name)
-                # Fresh sheet each month; stale tips don't linger.
-                if not is_user:
-                    team.scout_buy_tips = {}
-                    team.scout_sell_tips = {}
+                # Fresh sheet each month; stale reads don't linger.
+                team.scout_buy_tips = {}
+                team.scout_sell_tips = {}
                 for s in scouts:
-                    jpa = getattr(s, "judging_player_ability", 10) or 10
-                    tip_chance = 0.20 + 0.50 * (min(20, max(1, jpa)) - 1) / 19.0
+                    scout_mod.ensure_analytics_fields(s)
+                    # Tip cadence scales with the scout's eye (1-20 scale).
+                    jpa20 = scout_mod._scout_jpa(s)
+                    tip_chance = 0.20 + 0.50 * (jpa20 - 1) / 19.0
                     if _r.random() > tip_chance:
                         continue
                     buy_tips = scout_mod.scout_value_tips(
@@ -10309,14 +10410,56 @@ class HockeyManagerGUI(tk.Tk):
                         user_team=team, limit=2)
                     sell_tips = scout_mod.scout_sell_high_tips(
                         s, team, limit=2)
+                    # File every read in the ledger: the scout's call is
+                    # graded against what happens later. This is what
+                    # builds (or exposes) track records.
+                    for tip in buy_tips:
+                        try:
+                            scout_mod.record_tip_call(
+                                s, team, "buy", tip["player"], date_str,
+                                reason=tip.get("reason", ""))
+                        except Exception:
+                            pass
+                    for tip in sell_tips:
+                        try:
+                            scout_mod.record_tip_call(
+                                s, team, "sell", tip["player"], date_str,
+                                reason=tip.get("reason", ""))
+                        except Exception:
+                            pass
+                    # File the reads where the trade engine reads them --
+                    # for EVERY club, user included. AI GMs consume these
+                    # mechanically in scout_adjusted_value(); the user reads
+                    # the same reads in the news feed and adjusts by hand.
+                    # Same capability, different interface: user parity.
+                    bt = getattr(team, "scout_buy_tips", None)
+                    if bt is None:
+                        team.scout_buy_tips = bt = {}
+                    st = getattr(team, "scout_sell_tips", None)
+                    if st is None:
+                        team.scout_sell_tips = st = {}
+                    for tip in buy_tips:
+                        p = tip["player"]
+                        pid = getattr(p, "id", id(p))
+                        bt[pid] = {"jpa": tip["scout_jpa"],
+                                   "correct": tip["correct"],
+                                   "scout": tip["scout"],
+                                   "scout_id": getattr(s, "id", "")}
+                    for tip in sell_tips:
+                        p = tip["player"]
+                        pid = getattr(p, "id", id(p))
+                        st[pid] = {"jpa": tip["scout_jpa"],
+                                   "correct": tip["correct"],
+                                   "scout": tip["scout"],
+                                   "scout_id": getattr(s, "id", "")}
                     if is_user:
                         for tip in buy_tips:
-                            tier = scout_mod.scout_ability_label(tip["scout_jpa"])
+                            record = scout_mod.scout_record_line(s)
                             story = (
-                                f"SCOUT TIP ({tier} -- {tip['scout']}): "
-                                f"take a look at {tip['name']} ({tip['team']}). "
-                                f"{tip['reason']} "
-                                f"[{tip['confidence']} confidence]")
+                                f"SCOUT READ -- {tip['scout']} ({record}): "
+                                f"{tip['name']} ({tip['team']}). "
+                                f"Evidence: {tip['reason']} "
+                                f"Uncertainty: {tip['confidence']} confidence.")
                             if tip["risks"]:
                                 story += f" Risk: {'; '.join(tip['risks'])}"
                             try:
@@ -10324,38 +10467,19 @@ class HockeyManagerGUI(tk.Tk):
                             except Exception:
                                 pass
                         for tip in sell_tips:
-                            tier = scout_mod.scout_ability_label(tip["scout_jpa"])
+                            record = scout_mod.scout_record_line(s)
                             story = (
-                                f"SCOUT TIP ({tier} -- {tip['scout']}): "
-                                f"consider moving {tip['name']} while his value "
-                                f"is high. {tip['reason']} "
-                                f"[{tip['confidence']} confidence]")
+                                f"SCOUT READ -- {tip['scout']} ({record}): "
+                                f"{tip['name']} -- regression signs. "
+                                f"Evidence: {tip['reason']} "
+                                f"Uncertainty: {tip['confidence']} confidence.")
                             try:
                                 self.add_news(story)
                             except Exception:
                                 pass
-                    else:
-                        # AI: file the tips where the trade engine reads them.
-                        bt = getattr(team, "scout_buy_tips", None)
-                        if bt is None:
-                            team.scout_buy_tips = bt = {}
-                        st = getattr(team, "scout_sell_tips", None)
-                        if st is None:
-                            team.scout_sell_tips = st = {}
-                        for tip in buy_tips:
-                            p = tip["player"]
-                            pid = getattr(p, "id", id(p))
-                            bt[pid] = {"jpa": tip["scout_jpa"],
-                                       "correct": tip["correct"],
-                                       "scout": tip["scout"]}
-                        for tip in sell_tips:
-                            p = tip["player"]
-                            pid = getattr(p, "id", id(p))
-                            st[pid] = {"jpa": tip["scout_jpa"],
-                                       "correct": tip["correct"],
-                                       "scout": tip["scout"]}
         except Exception:
             pass
+
 
     def process_trade_block_offers(self):
         """Process trade offers for players on the trade block."""

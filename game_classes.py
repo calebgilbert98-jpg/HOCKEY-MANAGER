@@ -165,6 +165,7 @@ class StaffRole(Enum):
     HEAD_SCOUT = "Head Scout"
     PROFESSIONAL_SCOUT = "Professional Scout"
     AMATEUR_SCOUT = "Amateur Scout"
+    ANALYTICS_DIRECTOR = "Analytics Director"
     EUROPEAN_SCOUT = "European Scout"
     ADVANCE_SCOUT = "Advance Scout"
     
@@ -1186,7 +1187,14 @@ class Staff:
     reputation_history: list = field(default_factory=list)
     controversy_history: list = field(default_factory=list)
     connections: list = field(default_factory=list)  # allies who vouch for him: team names where his guys are
-    
+    # Pro-scout track record (analytics wave 1: trust from evidence, not
+    # hidden JPA). tip_record: {"calls": n, "hits": n}; tip_history: last
+    # 12 graded calls [{"player", "kind" ("buy"/"sell"), "result"
+    # ("hit"/"miss"), "date"}]. Graded by analytics_scouting.grade_tip_ledger
+    # and the steal/sell watches -- never set by hand.
+    tip_record: dict = field(default_factory=lambda: {"calls": 0, "hits": 0})
+    tip_history: list = field(default_factory=list)
+
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}"
@@ -1217,6 +1225,12 @@ class Staff:
                 self.determination * 0.15 +
                 self.adaptability * 0.15
             ))
+        elif self.role == StaffRole.ANALYTICS_DIRECTOR:
+            # Same mean as analytics_scouting.analytics_director_quality
+            # so the card rating and the department quality agree.
+            return int(round((self.judging_player_ability +
+                              self.tactical_knowledge +
+                              self.adaptability) / 3.0))
         elif self.role == StaffRole.GENERAL_MANAGER:
             return int((
                 self.judging_player_ability * 0.20 +
@@ -1246,6 +1260,7 @@ class Staff:
             StaffRole.PROFESSIONAL_SCOUT: "Scouts professional leagues for trade targets and free agents.",
             StaffRole.AMATEUR_SCOUT: "Evaluates amateur players for the NHL draft.",
             StaffRole.EUROPEAN_SCOUT: "Focuses on European leagues and international talent.",
+            StaffRole.ANALYTICS_DIRECTOR: "Runs the analytics department: sharper models, fresher numbers, tighter confidence intervals in everything you see.",
             StaffRole.SKILLS_COACH: "Develops individual player skills and techniques.",
             StaffRole.CONDITIONING_COACH: "Manages player fitness and physical conditioning.",
         }
@@ -2118,6 +2133,26 @@ class Team:
     scout_buy_tips: Dict[int, dict] = field(default_factory=dict)
     scout_sell_tips: Dict[int, dict] = field(default_factory=dict)
     steal_watch: Dict[int, dict] = field(default_factory=dict)
+    # Analytics wave 1 (information asymmetry):
+    # - tip_ledger: every filed pro-scout tip awaiting grading, keyed
+    #   f"{kind}:{player_id}:{date}". Graded monthly by
+    #   analytics_scouting.grade_tip_ledger; feeds each scout's track record.
+    # - sell_watch: {player_id: {...}} tracking sell-tipped players the team
+    #   actually traded away, until regression validates (or expiry doubts)
+    #   the call. Mirror of steal_watch.
+    # - analytics_quality (0-100): the analytics department's quality. Drives
+    #   ONLY what the user sees -- confidence intervals, data lag, noise in
+    #   displayed metrics -- never player outcomes or ground-truth analysis.
+    # - analytics_philosophy (0-100): how much the trade AI trusts process
+    #   metrics. Drifts slowly with evidence, regresses on leadership change;
+    #   each club keeps its own formula (never league-wide convergence).
+    tip_ledger: Dict[str, dict] = field(default_factory=dict)
+    sell_watch: Dict[int, dict] = field(default_factory=dict)
+    analytics_quality: int = 35
+    analytics_philosophy: float = 30.0
+    philosophy_baseline: float = 30.0
+    _prev_gm_name: str = ""
+    _analytics_snapshot: dict = field(default_factory=dict)
     line_control: str = "coach"  # 'coach' | 'gm'
     # Roster continuity for the situations factor: offseason snapshot of NHL
     # roster names + measured summer turnover (0-1). High churn = gelling
@@ -2462,6 +2497,13 @@ class League:
                 team = Team(name, city, division, conference)
                 team.league_name = "National Hockey League"  # Mark as NHL team
                 self.teams.append(team)
+        # Wave 1: each club gets its own analytics identity (department
+        # quality + trade-AI philosophy vary club to club).
+        try:
+            import analytics_scouting as _as
+            _as.seed_analytics_identities(self.teams)
+        except Exception:
+            pass
         self.initialize_standings()
 
     def initialize_standings(self):

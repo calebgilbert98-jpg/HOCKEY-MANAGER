@@ -2841,23 +2841,27 @@ class FreeAgencyView(ctk.CTkFrame):
         return max(0.05, min(0.98, base))
 
     def _resolve_staff_offer(self, staff, years, salary, dlg):
-        """Resolve a staff contract offer (original acceptance logic)."""
-        chance = self._staff_offer_accept_chance(staff, salary / max(1, staff.salary))
+        """Resolve a staff contract offer (original acceptance logic).
 
-        if self.app.game_manager.sign_free_agent_staff(staff, salary, years):
-            import random
-            if random.random() < chance:
+        The acceptance roll happens FIRST; the roster is only mutated
+        on acceptance. (Signing before the roll hired staffers who had
+        just declined the offer.)
+        """
+        import random
+        chance = self._staff_offer_accept_chance(staff, salary / max(1, staff.salary))
+        if random.random() < chance:
+            if self.app.game_manager.sign_free_agent_staff(staff, salary, years):
                 messagebox.showinfo("Offer Accepted",
                                        f"{staff.full_name} has accepted your offer!")
                 self.populate_filtered_staff()
                 self.refresh_market_overview_data()
                 dlg.destroy()
             else:
-                messagebox.showinfo("Offer Declined",
-                                       f"{staff.full_name} has declined your offer. "
-                                       f"Consider offering a better salary.")
+                messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
         else:
-            messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
+            messagebox.showinfo("Offer Declined",
+                                   f"{staff.full_name} has declined your offer. "
+                                   f"Consider offering a better salary.")
 
     def _open_staff_profile_dialog(self, staff):
         """View a free-agent staff member's profile (CTk)."""
@@ -2887,6 +2891,8 @@ class FreeAgencyView(ctk.CTkFrame):
         for attr_name, attr_value in attrs.items():
             self._fa_attr_row(scroll, attr_name, attr_value)
 
+        self._staff_track_record_section(scroll, staff)
+
         ctk.CTkFrame(scroll, fg_color=ct['BORDER'], height=1).pack(fill="x", pady=10)
 
         exp = max(0, staff.age - 25)
@@ -2901,6 +2907,67 @@ class FreeAgencyView(ctk.CTkFrame):
                              command=lambda: (dlg.destroy(),
                                               self._open_staff_contract_dialog(staff))
                              ).pack(anchor="w", pady=(14, 0))
+
+    def _staff_track_record_section(self, scroll, staff):
+        """Track-record card for scouts: graded calls, hit rate, and how
+        their finds ripple through the club's reputation.
+
+        The record -- not hidden ability -- is what a GM should judge a
+        scout by. Every filed read is graded against what happened next:
+        validated breakouts bank GM respect, player confidence and fan
+        buzz; misses plant doubt and can cost the scout his job.
+        """
+        try:
+            from game_classes import StaffRole
+            scout_roles = {StaffRole.HEAD_SCOUT,
+                           StaffRole.PROFESSIONAL_SCOUT,
+                           StaffRole.AMATEUR_SCOUT}
+            is_scout = getattr(staff, "role", None) in scout_roles
+        except Exception:
+            is_scout = False
+        if not is_scout:
+            return
+        ct = self._ct
+        try:
+            import analytics_scouting as _as
+            record_line = _as.scout_record_line(staff)
+            history = list(getattr(staff, "tip_history", []) or [])
+        except Exception:
+            record_line = "no graded calls yet"
+            history = []
+        box = ctk.CTkFrame(scroll, fg_color=ct['CARD'], corner_radius=8)
+        box.pack(fill="x", pady=(10, 4))
+        self._heading(box, text="Scout Track Record", size=12).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        self._body(box, text=f"Graded calls: {record_line}", size=11).pack(
+            anchor="w", padx=12, pady=(0, 2))
+        self._body(box,
+                   text=("Every read this scout files is graded against what "
+                         "happens next. A validated breakout banks the club: "
+                         "+GM respect, player confidence, fan buzz. A miss "
+                         "plants doubt -- and clubs fire scouts under 40%."),
+                   dim=True, size=10).pack(anchor="w", padx=12, pady=(0, 6))
+        if history:
+            for h in list(reversed(history[-8:])):
+                try:
+                    kind = h.get("kind", "")
+                    res = h.get("result", "?")
+                    pname = h.get("player_name", h.get("player", "?"))
+                    date = h.get("date", "")
+                    mark = "✓" if res == "hit" else "✗" if res == "miss" else "·"
+                    color = (ct['GREEN'] if res == "hit"
+                             else ct['RED'] if res == "miss" else ct['TEXT_DIM'])
+                    row = ctk.CTkFrame(box, fg_color="transparent")
+                    row.pack(fill="x", padx=12, pady=1)
+                    ctk.CTkLabel(row, text=mark,
+                                 font=("Segoe UI", 10, "bold"),
+                                 text_color=color, width=18).pack(side="left")
+                    self._body(row,
+                               text=f"{pname} — {kind} read, {date}",
+                               size=10).pack(side="left")
+                except Exception:
+                    pass
+            ctk.CTkFrame(box, fg_color="transparent", height=6).pack()
 
     def _fa_attr_row(self, parent, name, value):
         """One attribute row with a meter (used by staff profiles)."""

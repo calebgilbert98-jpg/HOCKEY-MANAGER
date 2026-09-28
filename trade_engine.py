@@ -151,23 +151,34 @@ def scout_adjusted_value(player, team) -> int:
     The edge scales with the scout's JPA -- an elite scout's read moves
     the needle more than a guess from a bad one. Bad scouts' ghost tips
     can mislead the AI exactly like they mislead a trusting human GM.
+
+    Market ecology (wave 1): the edge is then scaled by the club's
+    analytics_philosophy (0-100). An analytics-heavy front office
+    prices process metrics aggressively; an old-school room mostly
+    trusts the surface numbers. Each club keeps its own formula --
+    the league never converges.
     """
     base = player_trade_value(player)
     try:
         pid = getattr(player, "id", id(player))
         buy_tips = getattr(team, "scout_buy_tips", None) or {}
         sell_tips = getattr(team, "scout_sell_tips", None) or {}
+        # Organizational philosophy: how much this front office trusts
+        # process metrics. 0.05 (old-school) .. 0.95 (analytics-heavy).
+        philo = max(0.05, min(0.95,
+                              float(getattr(team, "analytics_philosophy",
+                                            30.0) or 30.0) / 100.0))
         tip = buy_tips.get(pid)
         if tip is not None:
             jpa = tip.get("jpa", 10)
             # Elite eye: +25%; good: +15%; average: +8%; poor: +4%
             edge = 0.04 + 0.21 * (min(20, max(1, jpa)) - 1) / 19.0
-            return int(base * (1.0 + edge))
+            return int(base * (1.0 + edge * philo))
         tip = sell_tips.get(pid)
         if tip is not None:
             jpa = tip.get("jpa", 10)
             edge = 0.04 + 0.16 * (min(20, max(1, jpa)) - 1) / 19.0
-            return int(base * (1.0 - edge))
+            return int(base * (1.0 - edge * philo))
     except Exception:
         pass
     return base
@@ -450,6 +461,37 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
                 enriched = dict(tip)
                 enriched.setdefault("signals", [])
                 enriched.setdefault("value_score", 0.0)
-                _rs.watch_steal_candidate(player, new_team, enriched)
+                enriched["selling_team"] = getattr(
+                    old_team, "team_name", "")
+                _rs.watch_steal_candidate(player, new_team, enriched,
+                                          date_str)
+                # The watch owns this call now: mark the ledger read
+                # acted-on so the monthly grader never grades it twice.
+                try:
+                    import analytics_scouting as _as
+                    _as.mark_tip_acted_on(new_team, "buy", pid,
+                                          date_str)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Sell watch: did the SELLING team's scout flag this player as a
+        # regression candidate? If his production collapses in the new
+        # uniform, the scout called the peak.
+        try:
+            pid = getattr(player, "id", id(player))
+            stips = getattr(old_team, "scout_sell_tips", None) or {}
+            stip = stips.get(pid)
+            if stip is not None:
+                senriched = dict(stip)
+                senriched.setdefault("signals", [])
+                _rs.watch_sell_candidate(player, old_team, new_team,
+                                         senriched, date_str)
+                try:
+                    import analytics_scouting as _as
+                    _as.mark_tip_acted_on(old_team, "sell", pid,
+                                          date_str)
+                except Exception:
+                    pass
         except Exception:
             pass

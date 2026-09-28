@@ -87,8 +87,8 @@ all_p = finds + filler + [fair]
 bad.roster = finds
 good.roster = filler + [fair]
 
-elite = mkscout("Elite Eye", 19)
-poor = mkscout("Poor Eye", 3)
+elite = mkscout("Elite Eye", 95)  # native 1-100 JPA
+poor = mkscout("Poor Eye", 15)  # native 1-100 JPA
 
 # Single-week recall: in one tip sheet, how many of the 6 true finds
 # does each scout spot? (This is what the user experiences each Monday.)

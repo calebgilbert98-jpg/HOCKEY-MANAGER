@@ -1133,13 +1133,39 @@ class StaffManagementView(ctk.CTkFrame):
         self._staff_personality_tab(personality_page, staff, ct)
         tab_pages["Personality"] = personality_page
 
-        for tname in ("Overview", "Attributes", "Standing", "Personality"):
+        # -- Track Record page (scouts): the ledger, not the resume -----
+        # -- Analytics page (directors): what the department behind the
+        #    numbers actually does for the club.
+        try:
+            from game_classes import StaffRole as _SR
+            _scout_roles = {_SR.HEAD_SCOUT, _SR.PROFESSIONAL_SCOUT,
+                            _SR.AMATEUR_SCOUT, _SR.EUROPEAN_SCOUT}
+            _is_scout = staff.role in _scout_roles
+            _is_director = staff.role == _SR.ANALYTICS_DIRECTOR
+        except Exception:
+            _is_scout = _is_director = False
+        if _is_scout:
+            track_page = ctk.CTkFrame(pages_frame, fg_color="transparent")
+            self._staff_track_record_tab(track_page, staff, ct)
+            tab_pages["Track Record"] = track_page
+        if _is_director:
+            analytics_page = ctk.CTkFrame(pages_frame,
+                                          fg_color="transparent")
+            self._staff_analytics_tab(analytics_page, staff, ct,
+                                      is_current)
+            tab_pages["Analytics"] = analytics_page
+
+        _tab_widths = {"Overview": 89, "Attributes": 97, "Standing": 85,
+                       "Personality": 104, "Track Record": 115,
+                       "Analytics": 88}
+        for tname in tab_pages:
             btn = ctk.CTkButton(
                 tabbar, text=tname, fg_color="transparent",
                 text_color=ct['TEXT_DIM'], hover_color=ct['CARD'],
-                font=self._sfont(12, 'bold'), corner_radius=8,
+                font=self._sfont(11, 'bold'), corner_radius=8,
+                width=_tab_widths.get(tname, 100),
                 command=lambda n=tname: switch_tab(n))
-            btn.pack(side="left", padx=(0, 4))
+            btn.pack(side="left", padx=(0, 2))
             tab_buttons[tname] = btn
         switch_tab("Overview")
 
@@ -1162,6 +1188,108 @@ class StaffManagementView(ctk.CTkFrame):
         self._secondary_button(button_frame, text="Close",
                                command=details_window.destroy,
                                width=110, height=36).pack(side="right", padx=5)
+
+    def _staff_track_record_tab(self, parent, staff, ct):
+        """Track Record page: graded calls, hit rate, recent history, and
+        how a scout's validated finds (and misses) ripple through the
+        club -- GM respect, player confidence, fan buzz, and the scout's
+        own job security. The record is what you judge a scout by;
+        hidden ability never appears.
+        """
+        import analytics_scouting as _as
+        try:
+            _as.ensure_analytics_fields(staff)
+            record_line = _as.scout_record_line(staff)
+            history = list(getattr(staff, "tip_history", []) or [])
+        except Exception:
+            record_line = "no graded calls yet"
+            history = []
+        inner = self._dialog_card(parent, "Scout Track Record")
+        ctk.CTkLabel(inner, text=f"Graded calls: {record_line}",
+                     font=self._sfont(12, 'bold'), text_color=ct['TEXT'],
+                     anchor="w").pack(anchor="w", padx=8, pady=(4, 2))
+        ctk.CTkLabel(
+            inner,
+            text=("Every read this scout files is graded against what happens "
+                  "next. A validated breakout banks the club: GM respect up, "
+                  "the player's confidence up, fan buzz, and the scout's name "
+                  "in lights. A miss plants doubt -- and clubs fire scouts "
+                  "under 40% on 10+ graded calls."),
+            font=self._sfont(10), text_color=ct['TEXT_DIM'],
+            wraplength=560, justify="left", anchor="w").pack(
+                anchor="w", padx=8, pady=(0, 6))
+        if history:
+            hist_inner = self._dialog_card(parent, "Recent Reads")
+            for h in list(reversed(history[-8:])):
+                try:
+                    kind = h.get("kind", "")
+                    res = h.get("result", "?")
+                    pname = h.get("player_name", h.get("player", "?"))
+                    hdate = h.get("date", "")
+                    mark = ("✓" if res == "hit" else "✗"
+                            if res == "miss" else "·")
+                    color = (ct['GREEN'] if res == "hit"
+                             else ct['RED'] if res == "miss"
+                             else ct['TEXT_DIM'])
+                    row = ctk.CTkFrame(hist_inner, fg_color="transparent")
+                    row.pack(fill="x", padx=8, pady=1)
+                    ctk.CTkLabel(row, text=mark,
+                                 font=self._sfont(10, 'bold'),
+                                 text_color=color, width=18).pack(side="left")
+                    ctk.CTkLabel(row,
+                                 text=f"{pname} — {kind} read, {hdate}",
+                                 font=self._sfont(10),
+                                 text_color=ct['TEXT'],
+                                 anchor="w").pack(side="left")
+                except Exception:
+                    pass
+        else:
+            ctk.CTkLabel(inner, text="No graded reads yet -- a blank ledger.",
+                         font=self._sfont(10), text_color=ct['TEXT_DIM'],
+                         anchor="w").pack(anchor="w", padx=8, pady=(0, 4))
+
+    def _staff_analytics_tab(self, parent, staff, ct, is_current):
+        """Analytics page: what this director's department does for the
+        club's numbers -- sharper models, fresher data, tighter
+        confidence intervals. Display only; never player outcomes.
+        """
+        import analytics_scouting as _as
+        import advanced_metrics as _am
+        try:
+            personal = _as.analytics_director_quality(staff)
+            tier = _as.department_tier_label(personal)
+        except Exception:
+            personal, tier = 35, "Thin analytics department"
+        inner = self._dialog_card(parent, "Analytics Department")
+        if is_current:
+            try:
+                team = getattr(getattr(self, "app", None),
+                               "game_manager", None)
+                team = getattr(team, "user_team", None)
+                club_q = int(getattr(team, "analytics_quality",
+                                     personal) or personal)
+            except Exception:
+                club_q = personal
+            line = (f"Club department quality: {club_q}/100 -- {tier}. "
+                    f"Models rebuild every "
+                    f"{_am.department_refresh_days(club_q)} days.")
+        else:
+            line = (f"Would run your department at {personal}/100 -- {tier}.")
+        ctk.CTkLabel(inner, text=line,
+                     font=self._sfont(12, 'bold'), text_color=ct['TEAL'],
+                     wraplength=560, justify="left", anchor="w").pack(
+                         anchor="w", padx=8, pady=(4, 2))
+        ctk.CTkLabel(
+            inner,
+            text=("A better department sharpens the picture, never the "
+                  "players: tighter confidence intervals on modeled metrics, "
+                  "fresher model snapshots, less visible noise. Box-score "
+                  "facts stay exact at every tier; awards, sim outcomes and "
+                  "development never touch this. Hire the director, upgrade "
+                  "the lens."),
+            font=self._sfont(10), text_color=ct['TEXT_DIM'],
+            wraplength=560, justify="left", anchor="w").pack(
+                anchor="w", padx=8, pady=(0, 6))
 
     def _staff_personality_tab(self, parent, staff, ct):
         """Personality page: coaching style writeup, ambition, control style,

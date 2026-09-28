@@ -657,11 +657,19 @@ def publish_analytics_storylines(media_system: Any, players: List[Any],
 # ---------------------------------------------------------------------------
 
 def _scout_jpa(scout) -> int:
-    """Pro-scouting eye: judging current ability (1-20 EHM scale)."""
+    """Pro-scouting eye on the canonical 1-20 EHM scale.
+
+    Staff attributes are native 1-100; the tip/detection math below
+    was tuned on the 1-20 scale (16-20 ~ elite, 1-5 ~ guesswork),
+    so normalize once, here: 80/100 -> 16/20, 50 -> 10, 5 -> 1.
+    Every consumer of this function gets the tuned scale.
+    """
     try:
-        return max(1, min(20, int(getattr(scout, "judging_player_ability", 10) or 10)))
+        raw = int(getattr(scout, "judging_player_ability", 50) or 50)
     except (TypeError, ValueError):
-        return 10
+        raw = 50
+    raw = max(1, min(100, raw))
+    return max(1, min(20, int(round(raw / 5.0))))
 
 
 def _detect_chance(jpa: int, value_score: float) -> float:
@@ -830,3 +838,668 @@ def scout_sell_high_tips(scout: Any, team: Any,
                 "confidence": "Low",
             })
     return tips[:limit]
+
+
+# ======================================================================
+# WAVE 1 -- INFORMATION ASYMMETRY
+# "Analytics should create a puzzle, not solve it."
+#
+# Four systems, one pipeline:
+#   Scout tip -> User hypothesis -> Trade bet -> Performance window
+#   -> Reputation + story
+#
+# 1. Scout track records: every past tip is graded against what happened
+#    later. Users see samples and hit rates -- never hidden JPA.
+# 2. Analytics department: department quality controls confidence
+#    intervals, data lag and noise in the numbers the user SEES. It
+#    never touches player outcomes or ground-truth analysis.
+# 3. AI arms race: AI clubs evaluate, renew and poach scouting staff.
+#    Their reads improve only when their people improve.
+# 4. Market ecology: trade AI adopts process metrics by organizational
+#    philosophy and staff quality, then regresses on leadership change.
+#    The league never converges on one formula.
+#
+# Design law: never show "buy low" / "sell high". Show evidence,
+# uncertainty, provenance, and the people responsible for the read.
+# ======================================================================
+
+TIP_GRADE_WINDOW_DAYS = 40
+TIP_GRADE_MIN_GP_SKATER = 15
+TIP_GRADE_MIN_GP_GOALIE = 10
+
+_PRO_SCOUT_ROLES = None
+
+
+def _pro_roles():
+    global _PRO_SCOUT_ROLES
+    if _PRO_SCOUT_ROLES is None:
+        try:
+            from game_classes import StaffRole
+            _PRO_SCOUT_ROLES = {StaffRole.HEAD_SCOUT,
+                                StaffRole.PROFESSIONAL_SCOUT}
+        except Exception:
+            _PRO_SCOUT_ROLES = set()
+    return _PRO_SCOUT_ROLES
+
+
+def ensure_analytics_fields(entity: Any) -> None:
+    """Backfill wave-1 fields on entities loaded from old saves.
+
+    Old pickles predate these fields; without this, attribute access
+    raises AttributeError. Safe to call on every load / every tick.
+    """
+    try:
+        if hasattr(entity, "role") or hasattr(
+                entity, "judging_player_ability"):  # Staff / scout-like
+            if not hasattr(entity, "tip_record"):
+                entity.tip_record = {"calls": 0, "hits": 0}
+            if not hasattr(entity, "tip_history"):
+                entity.tip_history = []
+        if hasattr(entity, "roster"):  # Team
+            if not hasattr(entity, "tip_ledger"):
+                entity.tip_ledger = {}
+            if not hasattr(entity, "sell_watch"):
+                entity.sell_watch = {}
+            if not hasattr(entity, "analytics_quality"):
+                entity.analytics_quality = 35
+            if not hasattr(entity, "analytics_philosophy"):
+                entity.analytics_philosophy = 30.0
+            if not hasattr(entity, "philosophy_baseline"):
+                entity.philosophy_baseline = float(
+                    getattr(entity, "analytics_philosophy", 30.0) or 30.0)
+            if not hasattr(entity, "_prev_gm_name"):
+                entity._prev_gm_name = ""
+            if not hasattr(entity, "_analytics_snapshot"):
+                entity._analytics_snapshot = {}
+    except Exception:
+        pass
+
+
+def seed_analytics_identities(teams: List[Any], rng=None) -> None:
+    """Give each club its own analytics identity at league creation.
+
+    Quality and philosophy vary club to club -- old-school organizations
+    and analytics-heavy ones both exist on day one, and neither is the
+    league default. Called once per new league.
+    """
+    import random as _r
+    rng = rng or _r
+    for t in teams:
+        try:
+            ensure_analytics_fields(t)
+            t.analytics_quality = int(rng.randint(20, 70))
+            philo = float(rng.uniform(15, 60))
+            t.analytics_philosophy = philo
+            t.philosophy_baseline = philo
+            t._prev_gm_name = getattr(t, "gm_name", "") or ""
+        except Exception:
+            pass
+
+
+def find_scout_by_id(team: Any, scout_id: str) -> Optional[Any]:
+    """Resolve a scout id back to the Staff object on a team."""
+    try:
+        for s in list(getattr(team, "staff", []) or []):
+            if getattr(s, "id", None) == scout_id:
+                return s
+    except Exception:
+        pass
+    return None
+
+
+# ----------------------------------------------------------------------
+# 1. Scout track records
+# ----------------------------------------------------------------------
+
+def record_tip_call(scout: Any, team: Any, kind: str, player: Any,
+                    date_str: str, reason: str = "") -> Optional[str]:
+    """File a tip in the team's ledger and credit the scout with a call.
+
+    kind: "buy" | "sell". Snapshots the player's pre-tip pace so the
+    call can be graded against what happens later. Returns the ledger
+    key, or None if it could not be filed.
+    """
+    try:
+        ensure_analytics_fields(scout)
+        ensure_analytics_fields(team)
+        pid = getattr(player, "id", id(player))
+        key = f"{kind}:{pid}:{date_str}"
+        ledger = team.tip_ledger
+        if key in ledger:
+            return key
+        try:
+            from game_classes import PlayerPosition
+            is_goalie = (getattr(player, "primary_position", None)
+                         == PlayerPosition.GOALIE)
+        except Exception:
+            is_goalie = False
+        gp = int(getattr(player, "games_played", 0) or 0)
+        if is_goalie:
+            sa = int(getattr(player, "shots_against", 0) or 0)
+            sv = int(getattr(player, "saves", 0) or 0)
+            pre_sv = (sv / sa) if sa > 0 else None
+            pre_pgp = 0.0
+        else:
+            pts = int(getattr(player, "goals", 0) or 0) + int(
+                getattr(player, "assists", 0) or 0)
+            pre_pgp = (pts / gp) if gp > 0 else 0.0
+            pre_sv = None
+        pname = getattr(player, "full_name", getattr(player, "name", "?"))
+        ledger[key] = {
+            "scout_id": getattr(scout, "id", ""),
+            "scout_name": getattr(scout, "full_name",
+                                  getattr(scout, "name", "?")),
+            "player_id": pid,
+            "player_name": pname,
+            "kind": kind,
+            "date": date_str,
+            "reason": str(reason or ""),
+            "is_goalie": bool(is_goalie),
+            "pre_gp": gp,
+            "pre_pgp": float(pre_pgp),
+            "pre_sv": pre_sv,
+        }
+        rec = scout.tip_record
+        rec["calls"] = int(rec.get("calls", 0) or 0) + 1
+        return key
+    except Exception:
+        return None
+
+
+def grade_scout_call(scout: Any, result: str, player_name: str,
+                     kind: str, date_str: str) -> None:
+    """Grade one of a scout's calls: result is "hit" or "miss".
+
+    Hits build the record; misses are recorded too -- a famous veteran
+    gets exposed by the same ledger that builds a young scout's name.
+    """
+    try:
+        ensure_analytics_fields(scout)
+        rec = scout.tip_record
+        if result == "hit":
+            rec["hits"] = int(rec.get("hits", 0) or 0) + 1
+        hist = scout.tip_history
+        hist.append({"player_name": player_name, "kind": kind,
+                     "result": result, "date": date_str})
+        del hist[:-12]
+    except Exception:
+        pass
+
+
+def scout_record_line(scout: Any) -> str:
+    """User-facing track record. Samples and hit rates -- never JPA."""
+    try:
+        ensure_analytics_fields(scout)
+        rec = getattr(scout, "tip_record", None) or {}
+        calls = int(rec.get("calls", 0) or 0)
+        hits = int(rec.get("hits", 0) or 0)
+        if calls <= 0:
+            return "no graded calls yet"
+        pct = int(round(100.0 * hits / calls))
+        return f"{hits} hits in {calls} graded calls ({pct}%)"
+    except Exception:
+        return "no graded calls yet"
+
+
+def _player_pace(player: Any, is_goalie: bool):
+    """Current (gp, ppg, sv%) triple for grading."""
+    gp = int(getattr(player, "games_played", 0) or 0)
+    if is_goalie:
+        sa = int(getattr(player, "shots_against", 0) or 0)
+        sv = int(getattr(player, "saves", 0) or 0)
+        return gp, 0.0, (sv / sa) if sa > 0 else None
+    pts = int(getattr(player, "goals", 0) or 0) + int(
+        getattr(player, "assists", 0) or 0)
+    return gp, (pts / gp) if gp > 0 else 0.0, None
+
+
+def mark_tip_acted_on(team: Any, kind: str, player_id: Any,
+                      date_str: str) -> None:
+    """Mark a team's open ledger reads on a player as acted on.
+
+    Called when a trade consumes a tip (buy-tip acquisition, sell-tip
+    move). The steal/sell watch grades that call against the post-trade
+    window -- grade_tip_ledger() must skip it so the scout isn't graded
+    twice for the same call. Idempotent.
+    """
+    try:
+        ensure_analytics_fields(team)
+        ledger = team.tip_ledger
+        for e in list(ledger.values()):
+            try:
+                if (str(e.get("kind", "")) == str(kind)
+                        and e.get("player_id") == player_id
+                        and not e.get("acted_on")):
+                    e["acted_on"] = str(date_str)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
+def grade_tip_ledger(teams: List[Any], date_str: str) -> Dict[str, int]:
+    """Grade every ledger tip old enough to judge. Called monthly.
+
+    Tips acted on (acquired buy-tips, traded sell-tips) are graded by
+    the steal/sell watches instead -- this handles the rest: reads the
+    GM never bet on, judged purely on whether production moved the way
+    the scout said it would. Returns {"hits": n, "misses": n}.
+    """
+    from datetime import date as _date
+    out = {"hits": 0, "misses": 0}
+    try:
+        as_of = _date.fromisoformat(date_str)
+    except Exception:
+        return out
+    # Player lookup across every roster (players change teams).
+    by_id: Dict[Any, Any] = {}
+    for t in teams or []:
+        for p in list(getattr(t, "roster", []) or []):
+            by_id[getattr(p, "id", id(p))] = p
+    for team in teams or []:
+        try:
+            ensure_analytics_fields(team)
+            ledger = team.tip_ledger
+            for key in list(ledger.keys()):
+                e = ledger[key]
+                try:
+                    filed = _date.fromisoformat(str(e.get("date", date_str)))
+                except Exception:
+                    del ledger[key]
+                    continue
+                if (as_of - filed).days < TIP_GRADE_WINDOW_DAYS:
+                    continue
+                if e.get("acted_on"):
+                    # The GM bet on this read -- the steal/sell watch
+                    # owns the grade, so the ledger never grades it
+                    # twice. Retire the entry once mature; the watch
+                    # entry itself is independent of the ledger.
+                    if (as_of - filed).days >= TIP_GRADE_WINDOW_DAYS:
+                        del ledger[key]
+                    continue
+                player = by_id.get(e.get("player_id"))
+                if player is None:
+                    # Can't observe him -- drop, don't punish the scout.
+                    del ledger[key]
+                    continue
+                is_goalie = bool(e.get("is_goalie"))
+                gp_now, ppg_now, sv_now = _player_pace(player, is_goalie)
+                gp_then = int(e.get("pre_gp", 0) or 0)
+                window_gp = gp_now - gp_then
+                if window_gp < 0:
+                    # Season rollover: re-baseline, keep watching.
+                    e["pre_gp"] = gp_now
+                    e["pre_pgp"] = ppg_now
+                    e["pre_sv"] = sv_now
+                    e["date"] = date_str
+                    continue
+                min_gp = (TIP_GRADE_MIN_GP_GOALIE if is_goalie
+                          else TIP_GRADE_MIN_GP_SKATER)
+                if window_gp < min_gp:
+                    continue  # not enough evidence yet; keep the tip open
+                kind = e.get("kind", "buy")
+                hit = False
+                if is_goalie:
+                    pre_sv = e.get("pre_sv")
+                    if pre_sv is not None and sv_now is not None:
+                        d = sv_now - pre_sv
+                        hit = d >= 0.010 if kind == "buy" else d <= -0.010
+                else:
+                    pre = float(e.get("pre_pgp", 0.0) or 0.0)
+                    if kind == "buy":
+                        hit = ((ppg_now - pre) >= 0.25) or (ppg_now >= 0.80)
+                    else:
+                        hit = (pre > 0.15) and (ppg_now <= pre * 0.75)
+                scout = find_scout_by_id(team, e.get("scout_id", ""))
+                if scout is not None:
+                    grade_scout_call(
+                        scout, "hit" if hit else "miss",
+                        str(e.get("player_name", "?")), kind, date_str)
+                out["hits" if hit else "misses"] += 1
+                del ledger[key]
+        except Exception:
+            pass
+    return out
+
+
+# ----------------------------------------------------------------------
+# 2. Analytics department (display-only lens)
+# ----------------------------------------------------------------------
+
+def analytics_director_quality(staff: Any) -> int:
+    """Department quality implied by one analytics director's attributes.
+
+    0-100 from the attributes that actually drive the work: reading
+    players, tactical understanding, adaptability. All 1-100 scales.
+    """
+    try:
+        jpa = float(getattr(staff, "judging_player_ability", 50) or 50)
+        tk = float(getattr(staff, "tactical_knowledge", 50) or 50)
+        ad = float(getattr(staff, "adaptability", 50) or 50)
+        return int(max(5, min(99, round((jpa + tk + ad) / 3.0))))
+    except Exception:
+        return 35
+
+
+def refresh_analytics_quality(team: Any) -> int:
+    """Recompute a club's department quality from its analytics staff.
+
+    Hiring a real analytics director upgrades the lens; losing him
+    drops the club back toward a bare-bones baseline. Never touches
+    player outcomes -- only what the user sees.
+    """
+    try:
+        ensure_analytics_fields(team)
+        try:
+            from game_classes import StaffRole
+            want = StaffRole.ANALYTICS_DIRECTOR
+        except Exception:
+            want = None
+        best = 0
+        if want is not None:
+            for s in list(getattr(team, "staff", []) or []):
+                if getattr(s, "role", None) == want:
+                    best = max(best, analytics_director_quality(s))
+        team.analytics_quality = int(best if best > 0 else 25)
+        # New lens, stale snapshot: force a rebuild on next view.
+        team._analytics_snapshot = {}
+        return int(team.analytics_quality)
+    except Exception:
+        return 35
+
+
+def department_tier_label(quality: int) -> str:
+    """Honest label for the department behind the numbers."""
+    try:
+        q = int(quality)
+    except Exception:
+        q = 35
+    if q >= 75:
+        return "Elite analytics department"
+    if q >= 50:
+        return "Solid analytics department"
+    if q >= 30:
+        return "Thin analytics department"
+    return "Bare-bones analytics operation"
+
+
+# ----------------------------------------------------------------------
+# 4. Market ecology -- philosophy drift, leadership regress
+# ----------------------------------------------------------------------
+
+def nudge_philosophy(team: Any, delta: float) -> float:
+    """Event-driven philosophy shift, clamped and anti-convergent.
+
+    Evidence moves a club's formula, but slowly and never past the
+    guardrails -- the league must never converge on one formula.
+    """
+    try:
+        ensure_analytics_fields(team)
+        p = float(getattr(team, "analytics_philosophy", 30.0) or 30.0)
+        p = max(5.0, min(95.0, p + float(delta)))
+        team.analytics_philosophy = p
+        return p
+    except Exception:
+        return 30.0
+
+
+def tick_analytics_philosophy(league: Any) -> None:
+    """Monthly market-ecology tick. Called on the 1st.
+
+    - Slow drift back toward each club's organizational baseline
+      (the anti-convergence spring).
+    - Leadership change regress: a new GM brings his own formula, so
+      the club's philosophy jumps partway to a fresh draw.
+    """
+    import random as _r
+    try:
+        teams = list(getattr(league, "teams", []) or [])
+    except Exception:
+        return
+    for team in teams:
+        try:
+            ensure_analytics_fields(team)
+            gm = getattr(team, "gm_name", "") or ""
+            prev = getattr(team, "_prev_gm_name", "") or ""
+            if prev and gm and gm != prev:
+                fresh = _r.uniform(15, 70)
+                cur = float(team.analytics_philosophy or 30.0)
+                team.analytics_philosophy = max(
+                    5.0, min(95.0, 0.5 * cur + 0.5 * fresh))
+                team.philosophy_baseline = fresh
+            team._prev_gm_name = gm
+            base = float(team.philosophy_baseline or 30.0)
+            cur = float(team.analytics_philosophy or 30.0)
+            team.analytics_philosophy = cur + (base - cur) * 0.05
+        except Exception:
+            pass
+
+
+# ----------------------------------------------------------------------
+# 3. AI arms race -- evaluate, renew, poach
+# ----------------------------------------------------------------------
+
+_SCOUT_FIRST = ("Adam", "Barry", "Cam", "Doug", "Eddie", "Frank", "Gord",
+                "Howie", "Ian", "Jack", "Ken", "Lorne", "Murray", "Norm",
+                "Pete", "Rick", "Steve", "Terry", "Vic", "Walt")
+_SCOUT_LAST = ("Button", "Clarke", "Dineen", "Esposito", "Ferguson",
+               "Gadsby", "Harvey", "Imlach", "Keon", "Lindsay", "Mikita",
+               "Neely", "Orr", "Park", "Quinn", "Ratelle", "Sittler",
+               "Trottier", "Ullman", "Watson")
+
+
+def _make_scout(rng, role, jpa_lo=25, jpa_hi=85):
+    """A fresh scout off the street: ability drawn, record clean.
+
+    jpa bounds are native 1-100 staff scale (25/85 ~= 5/17 on the
+    1-20 eye scale used by the tip math). A young scout builds his
+    name from a blank ledger -- exactly what the track-record
+    system is for.
+    """
+    try:
+        from game_classes import Staff
+    except Exception:
+        return None
+    try:
+        s = Staff(first_name=rng.choice(_SCOUT_FIRST),
+                  last_name=rng.choice(_SCOUT_LAST),
+                  role=role)
+        s.judging_player_ability = int(rng.randint(jpa_lo, jpa_hi))
+        s.judging_player_potential = int(rng.randint(jpa_lo, jpa_hi))
+        s.experience = int(rng.randint(1, 12))
+        s.age = int(rng.randint(28, 55))
+        s.salary = int(rng.randint(90000, 400000))
+        s.contract_years = int(rng.randint(1, 4))
+        ensure_analytics_fields(s)
+        return s
+    except Exception:
+        return None
+
+
+def ai_scout_staff_review(league: Any, date_str: str, rng=None) -> Dict[str, int]:
+    """AI clubs evaluate, renew and poach scouting staff. Twice a season.
+
+    - Scouts with 10+ graded calls under a 40% hit rate get fired; the
+      club hires a replacement (or pulls one from the free-agent pool).
+    - Scouts with 15+ calls at 65%+ become poaching targets: a rival
+      whose own best eye is worse may lure them away for more money.
+    - Reads improve only when the people improve: JPA never drifts on
+      its own. An elite scout is labor-market value, not a difficulty
+      slider.
+    Returns {"fired": n, "hired": n, "poached": n}.
+    """
+    import random as _r
+    rng = rng or _r
+    out = {"fired": 0, "hired": 0, "poached": 0}
+    try:
+        teams = [t for t in list(getattr(league, "teams", []) or [])
+                 if not getattr(t, "is_user_team", False)]
+    except Exception:
+        return out
+    roles = _pro_roles()
+    if not roles:
+        return out
+
+    def _record(s):
+        ensure_analytics_fields(s)
+        rec = getattr(s, "tip_record", None) or {}
+        return int(rec.get("calls", 0) or 0), int(rec.get("hits", 0) or 0)
+
+    def _best_jpa(team):
+        best = 0
+        for s in list(getattr(team, "staff", []) or []):
+            if getattr(s, "role", None) in roles:
+                best = max(best, int(getattr(s, "judging_player_ability",
+                                             0) or 0))
+        return best
+
+    # 1. Evaluate + renew.
+    for team in teams:
+        try:
+            ensure_analytics_fields(team)
+            staff = list(getattr(team, "staff", []) or [])
+            for s in staff:
+                if getattr(s, "role", None) not in roles:
+                    continue
+                calls, hits = _record(s)
+                if calls >= 10 and (hits / calls) < 0.40:
+                    # Exposed by the ledger: the famous veteran can fail.
+                    try:
+                        team.staff.remove(s)
+                    except Exception:
+                        pass
+                    try:
+                        pool = getattr(league, "free_agent_staff", None)
+                        if pool is None:
+                            league.free_agent_staff = pool = []
+                        pool.append(s)
+                    except Exception:
+                        pass
+                    out["fired"] += 1
+                    # Renew: best available scout eye, else a fresh face.
+                    hired = None
+                    try:
+                        cands = [c for c in pool
+                                 if getattr(c, "role", None) in roles]
+                        if cands:
+                            cands.sort(key=lambda c: int(
+                                getattr(c, "judging_player_ability",
+                                        0) or 0), reverse=True)
+                            hired = cands[0]
+                            pool.remove(hired)
+                    except Exception:
+                        hired = None
+                    if hired is None:
+                        hired = _make_scout(rng, getattr(
+                            s, "role", next(iter(roles))))
+                    if hired is not None:
+                        try:
+                            team.staff.append(hired)
+                            out["hired"] += 1
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    # 2. Poach: elite eyes are labor-market value.
+    try:
+        targets = []  # (scout, team)
+        for team in teams:
+            for s in list(getattr(team, "staff", []) or []):
+                if getattr(s, "role", None) not in roles:
+                    continue
+                calls, hits = _record(s)
+                if calls >= 15 and (hits / calls) >= 0.65:
+                    targets.append((s, team))
+        for scout, home in targets:
+            if rng.random() > 0.25:
+                continue
+            seekers = [t for t in teams
+                       if t is not home and _best_jpa(t) < int(
+                           getattr(scout, "judging_player_ability",
+                                   0) or 0)]
+            if not seekers:
+                continue
+            dest = rng.choice(seekers)
+            try:
+                home.staff.remove(scout)
+                scout.salary = int((getattr(scout, "salary", 150000)
+                                    or 150000) * 1.35)
+                scout.contract_years = 3
+                dest.staff.append(scout)
+                out["poached"] += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3. Analytics arms race: clubs without a director may hire one.
+    # Analytics-heavy philosophies invest first; old-school rooms hold
+    # out. A hired director upgrades the club's lens via
+    # refresh_analytics_quality(). Directors are never fired on scout
+    # track records -- their output is the lens, not calls.
+    try:
+        from game_classes import StaffRole as _SR
+        _want = _SR.ANALYTICS_DIRECTOR
+    except Exception:
+        _want = None
+    if _want is not None:
+        try:
+            pool = list(getattr(league, "free_agent_staff", None) or [])
+        except Exception:
+            pool = []
+        for team in teams:
+            try:
+                ensure_analytics_fields(team)
+                has = any(getattr(s, "role", None) == _want
+                          for s in list(getattr(team, "staff", []) or []))
+                if has:
+                    continue
+                philo = float(getattr(team, "analytics_philosophy",
+                                      30.0) or 30.0)
+                # ~10% per review for analytics-heavy, ~2% old-school.
+                if rng.random() > 0.02 + 0.08 * (philo / 100.0):
+                    continue
+                cands = [c for c in pool
+                         if getattr(c, "role", None) == _want]
+                hired = None
+                if cands:
+                    cands.sort(key=lambda c: analytics_director_quality(c),
+                               reverse=True)
+                    hired = cands[0]
+                    try:
+                        pool.remove(hired)
+                        league.free_agent_staff.remove(hired)
+                    except Exception:
+                        pass
+                else:
+                    hired = _make_director(rng)
+                if hired is not None:
+                    team.staff.append(hired)
+                    refresh_analytics_quality(team)
+                    out["hired"] += 1
+            except Exception:
+                pass
+    return out
+
+
+def _make_director(rng) -> Any:
+    """A fresh analytics director: strong model-reading attributes."""
+    try:
+        from game_classes import Staff, StaffRole
+    except Exception:
+        return None
+    try:
+        s = Staff(first_name=rng.choice(_SCOUT_FIRST),
+                  last_name=rng.choice(_SCOUT_LAST),
+                  role=StaffRole.ANALYTICS_DIRECTOR,
+                  age=rng.randint(28, 55))
+        s.judging_player_ability = int(rng.randint(55, 95))
+        s.tactical_knowledge = int(rng.randint(55, 95))
+        s.adaptability = int(rng.randint(55, 95))
+        s.salary = int(rng.randint(120000, 300000))
+        s.contract_years = int(rng.randint(2, 4))
+        ensure_analytics_fields(s)
+        return s
+    except Exception:
+        return None
