@@ -1918,6 +1918,7 @@ def build_series_detail_content(parent, app, series, bracket=None,
     if projected:
         _detail_tale_of_tape(parent, app, series)
     else:
+        _detail_playoff_tape(parent, app, series, bracket)
         _detail_games(parent, app, series)
         _detail_splits(parent, app, series)
         ctk.CTkLabel(parent, text="Storylines",
@@ -1972,6 +1973,144 @@ def _detail_tale_of_tape(parent, app, series):
             anchor="w").pack(fill="x", padx=4)
     ctk.CTkLabel(parent,
                  text="Projection only — the real series starts at 0-0.",
+                 font=_cfont(fam, 11, "italic"),
+                 text_color=dim).pack(anchor="w", pady=(6, 0))
+
+
+def _playoff_team_line(bracket, team):
+    """Aggregate a team's playoff numbers by walking the whole bracket.
+
+    Returns GP/W/L/GF/GA/OTL summed over every series the team has played.
+    Never raises; unknown teams come back all zeros.
+    """
+    name = getattr(team, 'team_name', '')
+    gp = w = l = gf = ga = otl = 0
+    try:
+        rounds = getattr(bracket, 'playoff_series', {}) or {}
+        for _rnd, series_list in rounds.items():
+            for s in series_list or []:
+                t1n = getattr(getattr(s, 'team1', None), 'team_name', '')
+                t2n = getattr(getattr(s, 'team2', None), 'team_name', '')
+                if name not in (t1n, t2n):
+                    continue
+                mine = 0 if name == t1n else 1
+                for gm in list(getattr(s, 'game_results', None) or []):
+                    try:
+                        s1 = int(gm.get('t1_score', 0))
+                        s2 = int(gm.get('t2_score', 0))
+                    except Exception:
+                        continue
+                    ms, ts = (s1, s2) if mine == 0 else (s2, s1)
+                    gp += 1
+                    gf += ms
+                    ga += ts
+                    if ms > ts:
+                        w += 1
+                    else:
+                        l += 1
+                        if gm.get('ot'):
+                            otl += 1
+    except Exception:
+        pass
+    return {'gp': gp, 'w': w, 'l': l, 'gf': gf, 'ga': ga, 'otl': otl}
+
+
+def _playoff_goalie_line(team):
+    """(last_name, sv%, shutouts) for the team's most-used playoff goalie.
+
+    Reads the same per-player playoff_stats the Conn Smythe race uses.
+    Returns None when nobody has tended net yet.
+    """
+    best, best_gp = None, -1
+    for p in getattr(team, 'roster', None) or []:
+        ps = getattr(p, 'playoff_stats', None) or {}
+        try:
+            saves = int(ps.get('saves', 0) or 0)
+        except Exception:
+            saves = 0
+        if saves <= 0:
+            continue
+        try:
+            gp = int(ps.get('GP', ps.get('gp', 0)) or 0)
+        except Exception:
+            gp = 0
+        if gp > best_gp:
+            best, best_gp = p, gp
+    if best is None:
+        return None
+    ps = getattr(best, 'playoff_stats', None) or {}
+    try:
+        sv = float(ps.get('saves', 0) or 0) / float(ps.get('shots_against', 0) or 1)
+    except Exception:
+        sv = 0.0
+    try:
+        so = int(ps.get('shutouts', 0) or 0)
+    except Exception:
+        so = 0
+    name = getattr(best, 'full_name', None) or getattr(best, 'name', 'Unknown')
+    return str(name).split()[-1], sv, so
+
+
+def _detail_playoff_tape(parent, app, series, bracket):
+    """Tale of the tape for a live series: both clubs' playoff runs so far,
+    side by side. Regular season built the seeding; this is the form that
+    actually matters now."""
+    fam = getattr(app, 'FONT_FAMILY', 'Arial')
+    gold, fg, dim = "#C9A227", "#DCE3EB", "#8A94A0"
+    ctk.CTkLabel(parent, text="Tale of the tape (playoffs to date)",
+                 font=_cfont(fam, 13, "bold"),
+                 text_color=gold).pack(anchor="w", pady=(8, 2))
+    t1, t2 = series.team1, series.team2
+    a1 = team_abbr(getattr(t1, 'team_name', ''))
+    a2 = team_abbr(getattr(t2, 'team_name', ''))
+    L = [_playoff_team_line(bracket, t1), _playoff_team_line(bracket, t2)]
+    G = [_playoff_goalie_line(t1), _playoff_goalie_line(t2)]
+    S = [_top_playoff_scorers(t, n=1) for t in (t1, t2)]
+
+    def _per(line, key):
+        gp = line['gp']
+        return f"{line[key] / gp:.2f}" if gp else "--"
+
+    def _fmt_goalie(gl):
+        if gl is None:
+            return "--"
+        last, sv, so = gl
+        return f"{last} {sv:.3f}".replace("0.", ".") + f"  ({so} SO)"
+
+    def _fmt_scorer(sc):
+        if not sc:
+            return "--"
+        pts, name, gg, aa = sc[0]
+        return f"{str(name).split()[-1]} {pts} pts ({gg}G)"
+
+    rows = [
+        ("Record", f"{L[0]['w']}-{L[0]['l']}", f"{L[1]['w']}-{L[1]['l']}"),
+        ("Goals / game", _per(L[0], 'gf'), _per(L[1], 'gf')),
+        ("Allowed / game", _per(L[0], 'ga'), _per(L[1], 'ga')),
+        ("OT losses", str(L[0]['otl']), str(L[1]['otl'])),
+        ("Goalie (SV%)", _fmt_goalie(G[0]), _fmt_goalie(G[1])),
+        ("Top scorer", _fmt_scorer(S[0]), _fmt_scorer(S[1])),
+    ]
+    frame = ctk.CTkFrame(parent, fg_color="transparent")
+    frame.pack(fill="x", padx=4)
+    ctk.CTkLabel(frame, text=a1, font=_cfont(fam, 12, "bold"),
+                 text_color=gold).grid(row=0, column=1, padx=10, sticky="e")
+    ctk.CTkLabel(frame, text=a2, font=_cfont(fam, 12, "bold"),
+                 text_color=gold).grid(row=0, column=2, padx=10, sticky="e")
+    for r, (label, v1, v2) in enumerate(rows, start=1):
+        ctk.CTkLabel(frame, text=label, font=_cfont(fam, 12, ""),
+                     text_color=dim).grid(row=r, column=0, sticky="w",
+                                          padx=(0, 8), pady=1)
+        ctk.CTkLabel(frame, text=v1, font=("Courier", 12, "bold"),
+                     text_color=fg).grid(row=r, column=1, sticky="e",
+                                         padx=10, pady=1)
+        ctk.CTkLabel(frame, text=v2, font=("Courier", 12, "bold"),
+                     text_color=fg).grid(row=r, column=2, sticky="e",
+                                         padx=10, pady=1)
+    frame.grid_columnconfigure(0, weight=1)
+    ctk.CTkLabel(parent,
+                 text="Playoff numbers only — the regular season built the "
+                      "seeding, not the story.",
                  font=_cfont(fam, 11, "italic"),
                  text_color=dim).pack(anchor="w", pady=(6, 0))
 

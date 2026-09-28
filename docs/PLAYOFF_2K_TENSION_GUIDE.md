@@ -186,3 +186,23 @@ accents -> black text, TOR navy -> gold); asserts the click journey
 the series); resizes to 1920x1080, waits out the debounce, asserts the scale
 grows (0.633 -> 0.763) with still no overflow. Screenshots:
 `~/workspace/ahl_shots/bracket_fit_{1600,popup,1920}.png`.
+
+## 7. Playoff tale of the tape (2026-09-28)
+
+Muck: the series popup needed a tale of the tape based on the teams'
+**playoff** runs so far (the old tape was regular-season only, and only on
+projected series). New `_detail_playoff_tape` sits in the live path right
+after Series intensity: a side-by-side table — Record, Goals/game,
+Allowed/game, OT losses, Goalie (SV% + shutouts), Top scorer — computed by
+`_playoff_team_line` walking every series in the bracket (real game_results),
+goalie from per-player `playoff_stats` (most-used: saves/shots_against/
+shutouts), skater from `_top_playoff_scorers`. Bracket=None degrades to
+dashes, never raises.
+
+`qa_series_popup.py` (24/24): full SCF at 2-2 with crafted games (OT winner,
+shutout + goalie steal, statement win) and ledger heat (brawl +
+controversial_hit -> 82 BOILING); asserts all eight sections present, tape
+rows carry real numbers (records, SV%, shutouts, top scorer), all four big-
+moment kinds fire, bad-blood storyline + grudge hype line render, players-to-
+watch rows populate. Screenshot: `~/workspace/ahl_shots/series_popup_full.png`
+(full stitched popup, header through Road ahead).
