@@ -9223,6 +9223,14 @@ class HockeyManagerGUI(tk.Tk):
         # Open stats window focused on records tab instead of separate window
         self.open_stats_standings_window(focus_tab='records')
         
+    def open_tactics_window(self):
+        """Open the tactics screen (E1)."""
+        try:
+            from tactics_screen import open_tactics
+            open_tactics(self, self.user_team)
+        except Exception as e:
+            print(f"Tactics window failed: {e}")
+
     def open_inbox_window(self):
         """Open the Email Inbox window."""
         if 'inbox' not in self.open_windows or not self.open_windows['inbox'].winfo_exists():
