@@ -5109,6 +5109,14 @@ class GameSim:
         
         # Apply shot skill bonus to save probability
         adjusted_save_prob = save_probability * (1.0 - (shot_skill_bonus / 200))  # Slight reduction for good passes
+        # F3: morale (1-10, initialized 4-7) affects finishing. Subtle: +/-3%.
+        try:
+            morale = getattr(shooter, 'morale', 5)
+            if 1 <= morale <= 10:
+                morale_edge = (morale - 5) * 0.006
+                adjusted_save_prob *= (1.0 - morale_edge)
+        except Exception:
+            pass
         # E6: poise matters in clutch moments (late/close games, playoffs).
         # High-poise shooters are less likely to be denied when it counts.
         try:

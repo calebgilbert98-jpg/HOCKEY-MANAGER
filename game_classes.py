@@ -216,7 +216,8 @@ class Player:
     
     consistency: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     important_matches: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
-    morale: int = 10
+    # Morale 1-10: start 4-7 (neutral-ish), dressing room dynamics move it.
+    morale: int = field(default_factory=lambda: random.randint(4, 7))
 
     # Football Manager-style career fields (happiness, squad status, chats)
     happiness: int = 70  # 0-100, how happy the player is at the club
