@@ -8,8 +8,13 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
 from enum import Enum
 from datetime import date, timedelta
-from game_classes import Player, Team, PlayerPosition, Contract, is_human_managed
+from game_classes import Player, Team, PlayerPosition, Contract, StaffRole, is_human_managed
 from salary_cap_system import SalaryCapSystem, DEFAULT_CAP
+
+from ai_gm_identity import (
+    GMIdentity, GMJobSecurity, gm_identity_from_staff, update_job_security,
+    compute_risk_appetite, signing_urgency, expectation_from_strength,
+)
 
 
 class ManagementPriority(Enum):
@@ -74,6 +79,12 @@ class AITeamManager:
         self._cap_system: Optional[SalaryCapSystem] = None
         self.trade_offers: List[Dict] = []
         self.free_agency_targets: Dict[str, List[Player]] = {}
+
+        # GM identity layer: who runs each AI club, and how safe his job is.
+        # Strategies are derived from these, not rolled randomly.
+        self.gm_identities: Dict[str, GMIdentity] = {}
+        self.gm_security: Dict[str, GMJobSecurity] = {}
+        self._sec_flags: Dict[str, Tuple[bool, bool, bool]] = {}  # team -> (hot_seat, tenured_winner, owner_warning)
         
         # Decision-making parameters
         self.decision_frequency = 7  # Check every 7 days
@@ -89,66 +100,150 @@ class AITeamManager:
         self._cap_system = cap_system
         self._league_ref = league
 
+    def _team_gm(self, team: Team):
+        """Return the team's General Manager staff member, if any."""
+        try:
+            for s in getattr(team, "staff", []) or []:
+                if getattr(s, "role", None) == StaffRole.GENERAL_MANAGER:
+                    return s
+        except Exception:
+            pass
+        return None
+
     def initialize_team_strategies(self, teams: List[Team]):
         """Initialize AI strategies for all CPU teams"""
         for team in teams:
             if is_human_managed(team):  # Skip human clubs (local + MP clients)
                 continue
 
-            strategy = self._generate_team_strategy(team)
+            # Identity first: the strategy describes THIS GM, not a random one.
+            identity = gm_identity_from_staff(team.team_name, self._team_gm(team))
+            self.gm_identities[team.team_name] = identity
+            roster_analysis = self._analyze_roster(team)
+            sec = GMJobSecurity(
+                team_name=team.team_name,
+                expectation=expectation_from_strength(roster_analysis["avg_overall"]),
+            )
+            self.gm_security[team.team_name] = sec
+            self._sec_flags[team.team_name] = (sec.hot_seat, sec.tenured_winner,
+                                               sec.owner_warning)
+
+            strategy = self._generate_team_strategy(team, identity, sec,
+                                                    roster_analysis)
             self.team_strategies[team.team_name] = strategy
-            
+
             print(f"AI Strategy for {team.team_name}:")
+            print(f"  GM: {identity.describe()}")
+            print(f"  Board: {sec.describe()}")
             print(f"  Priority: {strategy.priority.value}")
             print(f"  Trade Preference: {strategy.trade_preference.value}")
             print(f"  Position Needs: {[pos.value for pos in strategy.position_needs]}")
             print(f"  Prefer Youth: {strategy.prefer_youth}")
             print()
-    
-    def _generate_team_strategy(self, team: Team) -> TeamStrategy:
-        """Generate appropriate strategy based on team composition"""
-        # Analyze current roster
-        roster_analysis = self._analyze_roster(team)
-        
+
+    def _generate_team_strategy(self, team: Team, identity: Optional[GMIdentity] = None,
+                                sec: Optional[GMJobSecurity] = None,
+                                roster_analysis: Optional[Dict] = None) -> TeamStrategy:
+        """Generate a strategy that reflects the club's actual GM.
+
+        Roster composition sets the baseline; the GM's personality, job
+        security, and recent success move it. A GM on the hot seat chases
+        wins now instead of rebuilding; a tenured Cup winner stays patient.
+        """
+        if roster_analysis is None:
+            roster_analysis = self._analyze_roster(team)
+        if identity is None:
+            identity = gm_identity_from_staff(team.team_name, self._team_gm(team))
+        if sec is None:
+            sec = self.gm_security.get(team.team_name) or GMJobSecurity(
+                team_name=team.team_name,
+                expectation=expectation_from_strength(roster_analysis["avg_overall"]))
+
+        risk = compute_risk_appetite(identity, sec)
+
         # Determine management priority
         if roster_analysis['avg_age'] > 30 and roster_analysis['avg_overall'] < 75:
             priority = ManagementPriority.REBUILD
-            trade_pref = TradePreference.AGGRESSIVE
             prefer_youth = True
             prefer_experience = False
         elif roster_analysis['avg_overall'] > 80:
             priority = ManagementPriority.CONTEND
-            trade_pref = TradePreference.MODERATE
             prefer_youth = False
             prefer_experience = True
         elif roster_analysis['avg_age'] < 25:
             priority = ManagementPriority.DEVELOP
-            trade_pref = TradePreference.CONSERVATIVE
             prefer_youth = True
             prefer_experience = False
         else:
             priority = ManagementPriority.MAINTAIN
-            trade_pref = TradePreference.MODERATE
-            prefer_youth = random.choice([True, False])
+            # Personality breaks the tie: patient GMs develop, aggressive ones buy.
+            prefer_youth = identity.patience >= 0.5
             prefer_experience = not prefer_youth
-        
+
+        # Job security overrides: a GM fighting for his job does not trade
+        # veterans for picks, and a tenured winner does not panic-buy.
+        # But the hot seat does not turn every GM into Chiarelli: only a GM
+        # wired to bend under pressure (pressure_response >= 0.5) flips a
+        # rebuild into win-now. A patient builder trusts his vision and
+        # keeps building -- that's who he is.
+        if (sec.hot_seat and not sec.owner_warning
+                and identity.pressure_response >= 0.5
+                and priority in (ManagementPriority.REBUILD,
+                                 ManagementPriority.DEVELOP)):
+            priority = ManagementPriority.CONTEND
+            prefer_youth = False
+            prefer_experience = True
+        if sec.tenured_winner and priority == ManagementPriority.CONTEND:
+            # stays contending, but patient about it (trade pref below)
+
+            pass
+
+        # Trade preference from the GM's aggression, nudged by job security.
+        # The hot-seat nudge scales with how THIS gm handles pressure; a
+        # a GM under owner warning gets reined in by the board instead of going brash.
+        agg = identity.aggression \
+            + (0.15 * identity.pressure_response if sec.hot_seat else 0.0) \
+            - (0.15 if sec.tenured_winner else 0.0) \
+            - (0.15 if sec.owner_warning else 0.0)
+        if agg >= 0.65:
+            trade_pref = TradePreference.AGGRESSIVE
+        elif agg >= 0.45:
+            trade_pref = TradePreference.MODERATE
+        elif agg >= 0.30:
+            trade_pref = TradePreference.CONSERVATIVE
+        else:
+            trade_pref = TradePreference.INACTIVE
+
         # Identify position needs
         position_needs = self._identify_position_needs(team)
-        
+
+        # Budget: aggressive / hot-seat GMs spend closer to the cap.
+        cap = self._cap_system.current_cap if self._cap_system else DEFAULT_CAP
+        budget_limit = int(cap * (0.82 + 0.16 * risk))
+
         return TeamStrategy(
             priority=priority,
             trade_preference=trade_pref,
-            budget_limit=random.randint(60_000_000, 85_000_000),
+            budget_limit=budget_limit,
             min_roster_age=18 if prefer_youth else 23,
             max_roster_age=30 if prefer_youth else 37,
             position_needs=position_needs,
-            salary_cap_tolerance=random.uniform(0.8, 0.95),
+            salary_cap_tolerance=0.80 + 0.15 * risk,
             prefer_youth=prefer_youth,
             prefer_experience=prefer_experience,
-            risk_tolerance=random.uniform(0.2, 0.8),
-            will_trade_picks=priority != ManagementPriority.REBUILD,
-            will_trade_prospects=priority == ManagementPriority.CONTEND,
-            rebuilding_timeline=random.randint(2, 5) if priority == ManagementPriority.REBUILD else 0
+            risk_tolerance=risk,
+            # A GM under owner warning doesn't get to mortgage anything: the board
+            # vetoes pick and prospect deals on his way out.
+            will_trade_picks=(priority != ManagementPriority.REBUILD
+                              and not sec.owner_warning),
+            # Prospects move for a contender, or for a hot-seat GM who is
+            # wired to panic -- never while the owner's warning has him leashed.
+            will_trade_prospects=(
+                not sec.owner_warning and (
+                    priority == ManagementPriority.CONTEND
+                    or (sec.hot_seat and identity.pressure_response >= 0.5))),
+            rebuilding_timeline=(max(2, min(5, int(round(5 - 3 * identity.patience))))
+                               if priority == ManagementPriority.REBUILD else 0),
         )
     
     def _analyze_roster(self, team: Team) -> Dict:
@@ -251,32 +346,94 @@ class AITeamManager:
             strategy = self.team_strategies.get(team.team_name)
             if not strategy:
                 continue
-            
+
+            # Weekly board review: the GM's job security moves with results,
+            # and a change in seat status rewrites his strategy.
+            self._weekly_board_review(team, current_date)
+            strategy = self.team_strategies.get(team.team_name, strategy)
+            identity = self.gm_identities.get(team.team_name)
+            sec = self.gm_security.get(team.team_name)
+
             # Check for various decision types
             team_decisions = []
-            
+
             # 1. Free agency decisions
             fa_decisions = self._evaluate_free_agency(team, strategy, free_agents, current_date)
             team_decisions.extend(fa_decisions)
-            
+
             # 2. Trade decisions
             trade_decisions = self._evaluate_trades(team, strategy, teams, current_date)
             team_decisions.extend(trade_decisions)
-            
+
             # 3. Roster management
             roster_decisions = self._evaluate_roster_moves(team, strategy, current_date)
             team_decisions.extend(roster_decisions)
-            
+
             # 4. Contract extensions
             contract_decisions = self._evaluate_contract_extensions(team, strategy, current_date)
             team_decisions.extend(contract_decisions)
-            
+
+            # 5. Prospect signings: lock up drafted rookies to ELCs when they
+            # deserve it (top talent / NHL-ready) or need it (rights expiring,
+            # roster hole). A user signs his picks; the AI does too.
+            if identity is not None and sec is not None:
+                sign_decisions = self._evaluate_prospect_signings(
+                    team, strategy, identity, sec, current_date)
+                team_decisions.extend(sign_decisions)
+
+            # Execute the decisions this manager owns end-to-end (signings,
+            # gated promotions). Trade/FA/extension offers remain proposals.
+            self._execute_decisions(team, team_decisions)
+
             decisions.extend(team_decisions)
-        
+
         self.last_decision_date = current_date
         self.decision_history.extend(decisions)
-        
+
         return decisions
+
+    def _weekly_board_review(self, team: Team, current_date: date):
+        """Update the AI GM's job security from results; refresh his
+        strategy if his seat status changed (hot seat <-> stable)."""
+        sec = self.gm_security.get(team.team_name)
+        identity = self.gm_identities.get(team.team_name)
+        if sec is None or identity is None:
+            return
+        league = getattr(self, "_league_ref", None)
+        champ = getattr(league, "_last_cup_champ", None) if league else None
+        season_year = getattr(league, "season_year", current_date.year) if league else current_date.year
+        try:
+            season_year = int(season_year)
+        except (TypeError, ValueError):
+            season_year = current_date.year
+        update_job_security(sec, identity, team, champ, season_year)
+
+        if sec.gm_fired:
+            # The owner carried out the threat: the old GM is gone, an
+            # interim runs the club, and the seat resets to a honeymoon.
+            # (The Staff member stays on the roster; the AI just stops
+            # listening to him.)
+            identity = gm_identity_from_staff(team.team_name, None)
+            self.gm_identities[team.team_name] = identity
+            sec.gm_fired = False
+            sec.owner_warning = False
+            sec.confidence = 55.0
+            sec.hot_seat = False
+            sec.tenured_winner = False
+            self.team_strategies[team.team_name] = self._generate_team_strategy(
+                team, identity, sec)
+            self._sec_flags[team.team_name] = (sec.hot_seat,
+                                               sec.tenured_winner,
+                                               sec.owner_warning)
+            return
+
+        flags = (sec.hot_seat, sec.tenured_winner, sec.owner_warning)
+        if self._sec_flags.get(team.team_name) != flags:
+            self._sec_flags[team.team_name] = flags
+            # The man managing the club changed his posture: rebuild the
+            # strategy around who he is now.
+            self.team_strategies[team.team_name] = self._generate_team_strategy(
+                team, identity, sec)
     
     def _evaluate_free_agency(self, team: Team, strategy: TeamStrategy,
                              free_agents: List[Player], current_date: date) -> List[AIDecision]:
@@ -315,11 +472,28 @@ class AITeamManager:
         # Sort by priority (overall rating vs cost)
         suitable_fas.sort(key=lambda x: x[2] / (x[1] / 1_000_000), reverse=True)
 
+        # Interest threshold moves with the GM's seat: a hot-seat GM chases
+        # more targets -- but only as far as his personality bends under
+        # pressure. A patient builder on the hot seat barely lowers his
+        # standards; a GM under owner warning stops spending entirely (the board won't
+        # approve splurges); a tenured winner waits for the right one.
+        sec = self.gm_security.get(team.team_name)
+        interest_threshold = 0.6
+        if sec is not None:
+            _ident = self.gm_identities.get(team.team_name)
+            _pr = _ident.pressure_response if _ident is not None else 0.5
+            if sec.owner_warning:
+                interest_threshold = 0.75
+            elif sec.hot_seat:
+                interest_threshold = 0.6 - 0.15 * _pr
+            elif sec.tenured_winner:
+                interest_threshold = 0.72
+
         # Make offers to top candidates
         for fa, estimated_salary, ovr in suitable_fas[:3]:  # Top 3 candidates
             priority_score = self._calculate_fa_priority(fa, strategy, team, ovr)
 
-            if priority_score > 0.6:  # High interest threshold
+            if priority_score > interest_threshold:
                 decision = AIDecision(
                     team_name=team.team_name,
                     decision_type="free_agent_offer",
@@ -390,6 +564,138 @@ class AITeamManager:
         
         return decisions
     
+    # Potential-grade -> signing desirability (0..1). A user signs his
+    # blue-chips early; the AI reads the same grades.
+    _GRADE_SIGNING_DESIRE = {
+        "A+": 0.95, "A": 0.90, "A-": 0.80,
+        "B+": 0.62, "B": 0.55, "B-": 0.45,
+        "C": 0.30, "D": 0.15, "F": 0.10,
+    }
+
+    def _evaluate_prospect_signings(self, team: Team, strategy: TeamStrategy,
+                                    identity: GMIdentity, sec: GMJobSecurity,
+                                    current_date: date) -> List[AIDecision]:
+        """Decide which drafted rookies deserve an ELC right now.
+
+        A prospect gets signed when he deserves it -- top grades, NHL-ready
+        production, fills a real roster hole -- or when he needs it: his
+        rights expire within a season and the club would lose the asset for
+        nothing. Signing urgency comes from the GM's identity: patient
+        developers lock up talent early, hot-seat GMs rush help, tenured
+        winners can afford to wait.
+        """
+        decisions = []
+        league = getattr(self, "_league_ref", None)
+        if league is None:
+            return decisions
+        prospects = getattr(team, "prospects", None) or []
+        if not prospects:
+            return decisions
+        try:
+            season_year = int(getattr(league, "season_year", current_date.year))
+        except (TypeError, ValueError):
+            season_year = current_date.year
+
+        urgency = signing_urgency(identity, sec)
+        # Urgent GMs sign at 0.40, patient-at-rest GMs need 0.75.
+        threshold = 0.75 - 0.35 * urgency
+
+        for p in prospects:
+            try:
+                if getattr(p, "contract", None) is not None:
+                    continue  # already signed
+                if getattr(p, "rights_team", "") != team.team_name:
+                    continue  # not our rights
+                if getattr(p, "retired", False):
+                    continue
+
+                grade = str(getattr(p, "potential_grade", "C") or "C").strip()
+                deserve = self._GRADE_SIGNING_DESIRE.get(grade, 0.30)
+                try:
+                    ovr = float(p.overall_rating())
+                except Exception:
+                    ovr = 60.0
+                age = int(getattr(p, "age", 20) or 20)
+                # NHL-ready now: a user burns the ELC year for real help.
+                if ovr >= 75 and age >= 20:
+                    deserve = min(1.0, deserve + 0.20)
+                elif ovr >= 70 and age >= 20:
+                    deserve = min(1.0, deserve + 0.10)
+                # Fills a positional hole on the big club.
+                if p.primary_position in strategy.position_needs and ovr >= 68:
+                    deserve = min(1.0, deserve + 0.15)
+
+                # Rights clock: losing a prospect for nothing is malpractice.
+                expiry = getattr(p, "rights_expiry_year", 0) or 0
+                years_left = (expiry - season_year) if expiry else 99
+                need = 1.0 if years_left <= 1 else (0.45 if years_left == 2 else 0.0)
+
+                score = max(deserve, need)
+                if score < threshold:
+                    continue
+
+                reason = ("Rights expire soon -- sign or lose the asset"
+                          if need >= score and need >= 0.9
+                          else f"Top prospect ({grade}) ready to turn pro")
+                decisions.append(AIDecision(
+                    team_name=team.team_name,
+                    decision_type="sign_prospect",
+                    target_player=p,
+                    offer_details={"elc": True, "score": round(score, 2),
+                                   "rights_years_left": years_left},
+                    priority_score=round(score, 2),
+                    reasoning=f"{identity.gm_name}: {reason}",
+                    timestamp=current_date,
+                ))
+                if len(decisions) >= 2:  # at most two signings per week
+                    break
+            except Exception:
+                continue
+
+        return decisions
+
+    def _execute_decisions(self, team: Team, decisions: List[AIDecision]):
+        """Execute the decisions this manager owns end-to-end.
+
+        Signings go through the league's real signing path (same ELC rules
+        the user gets). Promotions are gated: unsigned prospects cannot be
+        promoted, and signed prospects who are not AHL-eligible stay on the
+        junior track instead of being parked in the minors.
+        """
+        league = getattr(self, "_league_ref", None)
+        if league is None:
+            return
+        for d in decisions:
+            try:
+                p = d.target_player
+                if p is None:
+                    continue
+                if d.decision_type == "sign_prospect":
+                    if getattr(p, "contract", None) is not None:
+                        continue
+                    if hasattr(league, "sign_drafted_prospect"):
+                        league.sign_drafted_prospect(team, p)
+                elif d.decision_type == "promote_prospect":
+                    prospects = getattr(team, "prospects", None)
+                    ahl = getattr(team, "ahl_roster", None)
+                    if prospects is None or ahl is None or p not in prospects:
+                        continue
+                    # Unsigned prospects have no SPC: sign first, promote later.
+                    if getattr(p, "contract", None) is None:
+                        continue
+                    # Junior-track prospects stay in the prospects pool (their
+                    # junior club), never the AHL.
+                    try:
+                        from game_classes import prospect_ahl_eligible
+                        if not prospect_ahl_eligible(p):
+                            continue
+                    except Exception:
+                        pass
+                    prospects.remove(p)
+                    ahl.append(p)
+            except Exception:
+                continue
+
     def _evaluate_contract_extensions(self, team: Team, strategy: TeamStrategy,
                                     current_date: date) -> List[AIDecision]:
         """Evaluate contract extension opportunities"""
@@ -417,6 +723,17 @@ class AITeamManager:
                 except Exception:
                     _ovr100 = 75
                 _young_star = player.age <= 24 and _ovr100 >= 90
+                # A GM on the hot seat pushes extensions through faster --
+                # losing a star for nothing is a firing offense -- but only
+                # as far as his personality bends. A builder who trusts his
+                # vision doesn't panic; a warned GM can't get big money
+                # approved anyway.
+                _sec = self.gm_security.get(team.team_name)
+                _urgency = 0.95 if _young_star else 0.8
+                if _sec is not None and _sec.hot_seat and not _sec.owner_warning:
+                    _ident2 = self.gm_identities.get(team.team_name)
+                    _pr2 = _ident2.pressure_response if _ident2 is not None else 0.5
+                    _urgency = min(1.0, _urgency + 0.1 * _pr2)
                 decision = AIDecision(
                     team_name=team.team_name,
                     decision_type="contract_extension",
@@ -425,7 +742,7 @@ class AITeamManager:
                         "salary": self._estimate_player_salary(player),
                         "term": self._determine_contract_length(player, strategy)
                     },
-                    priority_score=0.95 if _young_star else 0.8,
+                    priority_score=_urgency,
                     reasoning=("Lock up young star early before the "
                                 "market moves" if _young_star
                                 else "Key player fitting strategy"),
@@ -469,11 +786,25 @@ class AITeamManager:
         elif ovr100 >= 90:
             lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
         elif age <= 22:
-            lo, hi, f = 775_000, 975_000, (ovr100 - 62) / 28
+            # New-CBA ELC band: floor = signing-season league minimum,
+            # ceiling = max flat-salary equivalent (AAV) for the deal
+            # length (3 years at <=21, 2 years at 22).
+            try:
+                from salary_cap_system import league_minimum_salary as _lms3
+                from salary_cap_system import elc_max_salary as _elc3
+                lo, hi = int(_lms3()), int(_elc3(3 if age <= 21 else 2))
+            except Exception:
+                lo, hi = 775_000, 975_000
+            f = (ovr100 - 62) / 28
         elif age <= 25 and ovr100 < 80:
             lo, hi, f = 1_200_000, 5_000_000, (ovr100 - 62) / 28
         elif age >= 33 and ovr100 < 84:
-            lo, hi, f = 775_000, 3_750_000, (ovr100 - 62) / 28
+            try:
+                from salary_cap_system import league_minimum_salary as _lms4
+                _vlo = int(_lms4())
+            except Exception:
+                _vlo = 775_000
+            lo, hi, f = _vlo, 3_750_000, (ovr100 - 62) / 28
         else:
             lo, hi, f = 1_000_000, 6_500_000, (ovr100 - 62) / 28
         f = max(0.0, min(1.0, f))
