@@ -8990,6 +8990,26 @@ class HockeyManagerGUI(tk.Tk):
                     held.add(year)
                     league.draft_held_years = sorted(held)
 
+        # Draft lottery: televised reveal on May 8, once per year. Runs the
+        # real-odds lottery, delivers the inbox card (with a watch-the-reveal
+        # action), and applies fan/room reactions for the user's team.
+        try:
+            from draft_lottery import LOTTERY_DAY_MONTH, LOTTERY_DAY_DAY
+            if (today.month, today.day) == (LOTTERY_DAY_MONTH, LOTTERY_DAY_DAY):
+                lotto_held = set(getattr(league, 'lottery_held_years', None) or [])
+                if year not in lotto_held:
+                    try:
+                        self._hold_draft_lottery(year)
+                    except Exception:
+                        debug_print("Draft lottery failed (non-fatal):")
+                        import traceback
+                        traceback.print_exc()
+                    else:
+                        lotto_held.add(year)
+                        league.lottery_held_years = sorted(lotto_held)
+        except Exception:
+            pass
+
         # Hub prompt: once per (event, year)
         try:
             event = get_todays_event(today)
@@ -9054,6 +9074,54 @@ class HockeyManagerGUI(tk.Tk):
         # NOTE: no UI is opened here. The draft-day hub prompt (Draft Day
         # Central) follows immediately and its buttons open the draft board,
         # so draft day has a single entry point instead of two popups.
+
+    def _hold_draft_lottery(self, year):
+        """Televised draft lottery (May 8). Real weighted odds, inbox card
+        with a watch-the-reveal action, fan/room reactions for the user."""
+        from draft_lottery import (run_lottery, lottery_reveal_text,
+                                   apply_user_reactions)
+        league = self.league
+        league.initialize_all_draft_picks()
+        rows = run_lottery(league, year)
+        if not rows:
+            return
+        # Stash for the inbox "watch the reveal" action (the inbox reads it
+        # off game_manager).
+        _gm = getattr(self, "game_manager", None) or self
+        _gm._pending_lottery_reveal = {
+            "year": year, "rows": rows, "app": self,
+        }
+        summary = lottery_reveal_text(rows, year)
+        try:
+            from headlines import make_headline, deliver
+            msg = make_headline("lottery_results", self.current_date, year=year,
+                                summary=summary)
+            if msg is not None:
+                deliver(self, msg)
+        except Exception:
+            try:
+                self.add_news(summary)
+            except Exception:
+                pass
+        apply_user_reactions(self, rows)
+        # Ledger memory: the lottery is a league event worth remembering.
+        try:
+            from narrative_ledger import active_ledger
+            led = active_ledger()
+            if led is not None:
+                winner = rows[0]["team"]
+                _dup = any(e.get("kind") == "draft_lottery"
+                           and e.get("facts", {}).get("year") == year
+                           for e in led.events)
+                if not _dup:
+                    led.record(
+                        "draft_lottery", teams=[winner], weight=40,
+                        facts={"year": year, "winner": winner,
+                               "second": rows[1]["team"] if len(rows) > 1 else ""},
+                        text=(f"{winner} won the {year} draft lottery "
+                              f"(#1 overall)."))
+        except Exception:
+            pass
 
     def conduct_fantasy_draft(self):
         """Conduct a fantasy draft by redistributing all players among NHL teams"""

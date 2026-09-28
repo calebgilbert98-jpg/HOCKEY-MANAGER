@@ -56,6 +56,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "grudge_callback": _grudge_callback_headline,
         "outdoor_pregame": _outdoor_pregame_headline,
         "milestone_hit": _milestone_headline,
+        "lottery_results": _lottery_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -364,6 +365,25 @@ def _outdoor_pregame_headline(game_date, event="", host="", away="",
         content="\n\n".join(parts),
         category="Spectacle",
         priority=2,
+        is_important=True,
+    )
+
+
+def _lottery_headline(game_date, year=0, summary="", watch_hint=True, **kw):
+    """Draft lottery results card. Subject carries the 🎰 DRAFT LOTTERY
+    marker so the inbox can offer the watch-the-reveal action."""
+    from game_classes import EmailMessage
+    content = summary
+    if watch_hint:
+        content += ("\n\nSelect this message and hit WATCH THE REVEAL for the "
+                    "full televised countdown, 16 to 1.")
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🎰 DRAFT LOTTERY {year}: results are in",
+        content=content,
+        category="League",
+        priority=3,
         is_important=True,
     )
 

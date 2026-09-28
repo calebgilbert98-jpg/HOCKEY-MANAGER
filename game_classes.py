@@ -2448,6 +2448,11 @@ class League:
     # held, and (event, year) pairs the user was already prompted about.
     draft_held_years: List[int] = field(default_factory=list)
     event_day_prompted: List[List] = field(default_factory=list)
+    # Draft lottery state (persisted in saves): televised reveal rows per
+    # year ({pick, team, original_team, odds_pct, movement}) and the years
+    # the May 8 lottery was already held.
+    lottery_results: Dict[int, List[Dict]] = field(default_factory=dict)
+    lottery_held_years: List[int] = field(default_factory=list)
     # League-wide bad blood: coach-coach, GM-coach, player-player, team-team
     rivalries: List[dict] = field(default_factory=list)
     # Dynamic salary cap system: growth, history, market-setting contracts.
@@ -4919,7 +4924,29 @@ class League:
         # Sort teams by points (worst to best for each round)
         sorted_teams = sorted(self.teams, 
                             key=lambda t: self.standings.get(t.team_name, {}).get('Points', 0))
-        
+
+        # Draft lottery: round 1 follows the televised lottery order.
+        # lottery_results[year] rows key on the ORIGINAL team (a traded pick
+        # keeps its original slot); teams outside the top 16 keep their
+        # reverse-standings slot after pick 16.
+        lotto_pos = {}
+        try:
+            _lr = getattr(self, "lottery_results", None) or {}
+            for _k, _rows in _lr.items():
+                if int(_k) == int(year):
+                    for _r in (_rows or []):
+                        lotto_pos[_r.get("original_team")] = _r.get("pick")
+                    break
+        except Exception:
+            lotto_pos = {}
+
+        def _orig_name(pick):
+            try:
+                return next(t for t in self.teams
+                            if t.team_name == pick.original_team).team_name
+            except StopIteration:
+                return getattr(pick, "original_team", "")
+
         for round_num in range(1, 8):  # 7 rounds
             round_picks = []
             
@@ -4940,9 +4967,22 @@ class League:
                         round_picks.append((current_owner, pick))
             
             # Sort by original team's standing (traded picks keep original position)
-            round_picks.sort(key=lambda x: sorted_teams.index(
-                next(t for t in self.teams if t.team_name == x[1].original_team)
-            ))
+            if round_num == 1 and lotto_pos:
+                def _lotto_key(x):
+                    orig = _orig_name(x[1])
+                    if orig in lotto_pos:
+                        return lotto_pos[orig]
+                    try:
+                        return 16 + sorted_teams.index(
+                            next(t for t in self.teams
+                                 if t.team_name == x[1].original_team))
+                    except (StopIteration, ValueError):
+                        return 48
+                round_picks.sort(key=_lotto_key)
+            else:
+                round_picks.sort(key=lambda x: sorted_teams.index(
+                    next(t for t in self.teams if t.team_name == x[1].original_team)
+                ))
             
             # Assign overall pick numbers
             for i, (current_owner, pick) in enumerate(round_picks):
@@ -4953,41 +4993,19 @@ class League:
         return draft_order
 
     def simulate_draft_lottery(self, year: int):
-        """Simulate draft lottery for first round picks (if applicable)."""
-        # This is a simplified lottery - in reality it's more complex
-        first_round_picks = []
-        
-        # Get all first round picks for the year
-        for team in self.teams:
-            team_picks = [pick for pick in team.get_picks_for_year(year) 
-                         if pick.round == 1]
-            for pick in team_picks:
-                first_round_picks.append(pick)
-        
-        # Sort by original team standings (worst to best)
-        sorted_teams = sorted(self.teams, 
-                            key=lambda t: self.standings.get(t.team_name, {}).get('Points', 0))
-        
-        first_round_picks.sort(key=lambda pick: sorted_teams.index(
-            next(t for t in self.teams if t.team_name == pick.original_team)
-        ))
-        
-        # Simple lottery simulation - top 3 picks have some randomization
-        if len(first_round_picks) >= 3:
-            import random
-            
-            # Small chance for teams 4-8 to jump into top 3
-            lottery_teams = first_round_picks[:8]  # Bottom 8 teams eligible
-            
-            # 20% chance for a team to jump to #1
-            if random.random() < 0.2 and len(lottery_teams) > 3:
-                winner_idx = random.randint(3, min(7, len(lottery_teams) - 1))
-                # Move the lottery winner to first position
-                winner_pick = lottery_teams.pop(winner_idx)
-                lottery_teams.insert(0, winner_pick)
-                
-                # Update the first round picks list
-                first_round_picks = lottery_teams + first_round_picks[8:]
+        """Simulate draft lottery for first round picks (if applicable).
+
+        Real NHL odds via draft_lottery.py (bottom 11, two draws for #1/#2).
+        Idempotent: a no-op when this year's televised lottery already ran.
+        """
+        try:
+            from draft_lottery import run_lottery
+            stored = getattr(self, "lottery_results", None) or {}
+            if year in stored and stored[year]:
+                return
+            run_lottery(self, year)
+        except Exception:
+            pass
 
     def trade_draft_pick(self, pick: DraftPick, from_team: Team, to_team: Team, trade_details: str = ""):
         """Execute a draft pick trade between two teams."""

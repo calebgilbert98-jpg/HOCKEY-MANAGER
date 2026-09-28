@@ -135,6 +135,10 @@ class GameSaveManager:
             'schedule_generated': getattr(league, 'schedule_generated', False),
             # Legacy events: permanent outdoor-game memory (plain dicts).
             'outdoor_history': list(getattr(league, 'outdoor_history', []) or []),
+            'lottery_results': {int(k): [dict(r) for r in v]
+                                for k, v in
+                                (getattr(league, 'lottery_results', None) or {}).items()},
+            'lottery_held_years': sorted(getattr(league, 'lottery_held_years', None) or []),
             'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
             'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
             # Dynamic salary cap system (growth history + market comps).
@@ -716,6 +720,15 @@ class GameSaveManager:
             league.standings = league_data.get('standings', {})
             league.schedule_generated = league_data.get('schedule_generated', False)
             league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
+            try:
+                league.lottery_results = {
+                    int(k): [dict(r) for r in v]
+                    for k, v in (league_data.get('lottery_results', None) or {}).items()
+                }
+            except Exception:
+                league.lottery_results = {}
+            league.lottery_held_years = sorted(
+                league_data.get('lottery_held_years', None) or [])
             # Tentpole event state (years the entry draft was held, event
             # prompts already shown). Defaults keep old saves working.
             league.draft_held_years = list(league_data.get('draft_held_years', []) or [])

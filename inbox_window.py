@@ -713,6 +713,9 @@ class InboxView(ctk.CTkFrame):
         # Handle fantasy draft special button
         self._handle_fantasy_draft_button(message)
 
+        # Handle draft-lottery reveal special button
+        self._handle_lottery_reveal_button(message)
+
     def _toggle_save_current(self):
         """Pin/unpin the selected message ("save for later").
 
@@ -763,6 +766,43 @@ class InboxView(ctk.CTkFrame):
         else:
             # Hide the special button if it's not needed
             self.special_action_btn.pack_forget()
+
+    def _handle_lottery_reveal_button(self, message):
+        """Show WATCH THE REVEAL for the draft-lottery results card.
+
+        Only ever shows; never hides -- the fantasy-draft handler owns the
+        hide path so the two don't fight over the shared button.
+        """
+        pending = getattr(self.app.game_manager, '_pending_lottery_reveal', None)
+        if ("DRAFT LOTTERY" in (message.subject or "").upper() and
+                message.sender_type == "Media" and pending):
+            self.special_action_btn.configure(
+                text="WATCH THE REVEAL",
+                command=self._watch_lottery_reveal,
+            )
+            self.special_action_btn.pack(side='right', padx=5)
+
+    def _watch_lottery_reveal(self):
+        """Open the televised lottery countdown from the inbox."""
+        pending = getattr(self.app.game_manager, '_pending_lottery_reveal', None)
+        if not pending:
+            return
+        try:
+            from draft_lottery import LotteryRevealWindow
+            app = pending.get("app") or self.app
+
+            def _clear(_p=pending):
+                try:
+                    if getattr(self.app.game_manager,
+                               '_pending_lottery_reveal', None) is _p:
+                        delattr(self.app.game_manager, '_pending_lottery_reveal')
+                except Exception:
+                    pass
+
+            LotteryRevealWindow(self.app, app, pending["year"],
+                                pending["rows"], on_done=_clear)
+        except Exception:
+            pass
 
     def _start_fantasy_draft(self):
         """Launch the fantasy draft from the inbox."""
