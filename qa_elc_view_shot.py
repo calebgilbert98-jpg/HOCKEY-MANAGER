@@ -26,6 +26,10 @@ def check(name, cond, extra=""):
 random.seed(7)
 p = Player("Connor", "Bedard", 19, PlayerPosition.CENTER)
 p.contract = None
+# The Player dataclass defaults birth_date to a random 1995-2006 date,
+# independent of the age argument -- pin one consistent with age 19 so
+# the Sept-15 signing-age math (which the view uses) agrees with p.age.
+p.birth_date = "2008-04-22"
 p.overall_pick = 1
 p.draft_round = 1
 p.selfishness = 60

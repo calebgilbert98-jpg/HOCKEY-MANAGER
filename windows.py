@@ -3065,128 +3065,18 @@ class FreeAgencyView(ctk.CTkFrame):
             self._open_staff_profile_dialog(staff)
 
     # ------------------------------------------------------------------
-    # Staff contract dialog (CTk rebuild of the old ttk dialog)
+    # Staff contract negotiation (full-screen jump)
     # ------------------------------------------------------------------
     def _open_staff_contract_dialog(self, staff):
-        """Negotiate a real contract offer with a free-agent staff member."""
-        ct = self._ct
-        dlg = InGamePopup(self)
-        dlg.title(f"Contract Offer - {staff.full_name}")
-        dlg.configure(fg_color=ct['BG'])
-        dlg.geometry("480x420")
-        dlg.resizable(False, False)
-        dlg.transient(self)
-        dlg.grab_set()
+        """Negotiate a real contract offer with a free-agent staff member.
 
-        card = ctk.CTkFrame(dlg, fg_color=ct['PANEL'], corner_radius=12)
-        card.pack(fill="both", expand=True, padx=16, pady=16)
-
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=20, pady=16)
-
-        self._heading(body, text=f"{staff.full_name}", size=15).pack(anchor="w")
-        self._body(body, text=f"{staff.role.value} \u2022 {staff.nationality} \u2022 Age {staff.age}",
-                   dim=True, size=11).pack(anchor="w", pady=(2, 10))
-
-        # Asking terms banner
-        asking = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
-        asking.pack(fill="x", pady=(0, 12))
-        self._body(asking, text=f"Asking: ${staff.salary:,} / year  \u2022  {staff.contract_years} years",
-                   size=12).pack(anchor="w", padx=12, pady=10)
-
-        offer_info = {'years': 2, 'salary_mult': 1.0}
-
-        self._body(body, text="Contract length:", dim=True, size=11).pack(anchor="w", pady=(0, 4))
-        years_seg = ctk.CTkSegmentedButton(
-            body, values=["1", "2", "3", "4", "5"],
-            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
-            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        years_seg.set("2")
-        years_seg.pack(anchor="w", pady=(0, 10))
-
-        self._body(body, text="Salary offer:", dim=True, size=11).pack(anchor="w", pady=(0, 4))
-        sal_seg = ctk.CTkSegmentedButton(
-            body, values=["80%", "Asking", "120%"],
-            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
-            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        sal_seg.set("Asking")
-        sal_seg.pack(anchor="w", pady=(0, 12))
-
-        offer_label = self._body(body, text="", size=12)
-        offer_label.pack(anchor="w", pady=(0, 2))
-        chance_label = self._body(body, text="", size=11)
-        chance_label.pack(anchor="w", pady=(0, 12))
-
-        mult_map = {"80%": 0.8, "Asking": 1.0, "120%": 1.2}
-
-        def _paint():
-            offer_info['years'] = int(years_seg.get())
-            offer_info['salary_mult'] = mult_map[sal_seg.get()]
-            salary = int(staff.salary * offer_info['salary_mult'])
-            offer_label.configure(
-                text=f"Your offer: ${salary:,} / year  x  {offer_info['years']} "
-                     f"year{'s' if offer_info['years'] > 1 else ''}")
-            chance = self._staff_offer_accept_chance(staff, offer_info['salary_mult'])
-            if chance >= 0.75:
-                color = ct['GREEN']
-            elif chance >= 0.45:
-                color = ct['GOLD']
-            else:
-                color = ct['RED']
-            chance_label.configure(text=f"Estimated acceptance chance: {chance:.0%}",
-                                   text_color=color)
-
-        _paint()
-
-        btns = ctk.CTkFrame(body, fg_color="transparent")
-        btns.pack(fill="x", pady=(4, 0))
-        self._secondary_button(btns, text="Cancel",
-                               command=dlg.destroy).pack(side="right", padx=(10, 0))
-        self._primary_button(btns, text="Make Offer",
-                             command=lambda: self._resolve_staff_offer(
-                                 staff, offer_info['years'],
-                                 int(staff.salary * offer_info['salary_mult']),
-                                 dlg)).pack(side="right")
-
-    def _staff_offer_accept_chance(self, staff, salary_mult):
-        """Rough acceptance chance for a staff offer (display only)."""
-        rating = to_100_scale(staff.overall_rating)
-        prestige = getattr(self.app.game_manager.user_team, 'prestige', 50)
-        base = 0.45 + (salary_mult - 1.0) * 1.4 + (prestige - 50) / 400 - (rating - 60) / 600
-        # GM stature: top coaches want to work for a GM the league
-        # respects. Additive, bounded +/-0.08.
-        try:
-            import reputation_system as _rs
-            base += _rs.gm_staff_accept_delta(
-                self.app.game_manager.user_team)
-        except Exception:
-            pass
-        return max(0.05, min(0.98, base))
-
-    def _resolve_staff_offer(self, staff, years, salary, dlg):
-        """Resolve a staff contract offer (original acceptance logic).
-
-        The acceptance roll happens FIRST; the roster is only mutated
-        on acceptance. (Signing before the roll hired staffers who had
-        just declined the offer.)
+        Full-screen jump via show_screen() (was: 480x420 InGamePopup).
+        fresh=True: each negotiation builds for its own staffer.
         """
-        import random
-        chance = self._staff_offer_accept_chance(staff, salary / max(1, staff.salary))
-        if random.random() < chance:
-            if self.app.game_manager.sign_free_agent_staff(staff, salary, years):
-                messagebox.showinfo("Offer Accepted",
-                                       f"{staff.full_name} has accepted your offer!")
-                self.populate_filtered_staff()
-                self.refresh_market_overview_data()
-                dlg.destroy()
-            else:
-                messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
-        else:
-            messagebox.showinfo("Offer Declined",
-                                   f"{staff.full_name} has declined your offer. "
-                                   f"Consider offering a better salary.")
+        self.app.show_screen("staff_contract",
+                             f"Contract Offer - {staff.full_name}",
+                             StaffContractView, staff, fresh=True)
+
 
     def _open_staff_profile_dialog(self, staff):
         """View a free-agent staff member's profile (CTk)."""
@@ -11699,6 +11589,191 @@ class ExtensionNegotiationWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
+
+class StaffContractView(ctk.CTkFrame):
+    """Full-screen staff contract negotiation.
+
+    Jumped to via HockeyManagerGUI.show_screen() (was: a 480x420
+    InGamePopup from FreeAgencyView._open_staff_contract_dialog). The
+    negotiation itself is unchanged: segmented length/salary offer,
+    live acceptance-chance readout, roll-first resolution through
+    game_manager.sign_free_agent_staff().
+    """
+
+    def __init__(self, parent, staff=None, app=None):
+        super().__init__(parent, fg_color="transparent")
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_HOVER, ROW_SELECTED,
+        )
+        init_ctk_theme()
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN, RED=RED,
+                        BLUE=BLUE, ROW_HOVER=ROW_HOVER,
+                        ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        self.app = app
+        self.staff = staff
+        self._close_screen = None  # set by show_screen()
+        self._build()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _build(self):
+        ct = self._ct
+        staff = self.staff
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        card = ctk.CTkFrame(scroll, fg_color=ct['PANEL'], corner_radius=12,
+                            width=560)
+        card.pack(pady=18)
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=20)
+
+        if staff is None:
+            self._body(body, text="No staff member selected.",
+                       dim=True).pack(anchor="w", pady=12)
+            self._secondary_button(body, text="Back",
+                                   command=self.close_view).pack(anchor="w",
+                                                                pady=(8, 0))
+            return
+
+        self._heading(body, text=f"{staff.full_name}",
+                      size=16).pack(anchor="w")
+        try:
+            _role = staff.role.value
+        except Exception:
+            _role = getattr(staff, "role", "")
+        self._body(body,
+                   text=f"{_role} \u2022 {getattr(staff, 'nationality', '')} "
+                        f"\u2022 Age {getattr(staff, 'age', '?')}",
+                   dim=True, size=11).pack(anchor="w", pady=(2, 10))
+
+        # Asking terms banner
+        asking = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        asking.pack(fill="x", pady=(0, 12))
+        self._body(asking,
+                   text=f"Asking: ${getattr(staff, 'salary', 0):,} / year  "
+                        f"\u2022  {getattr(staff, 'contract_years', '?')} years",
+                   size=12).pack(anchor="w", padx=12, pady=10)
+
+        offer_info = {'years': 2, 'salary_mult': 1.0}
+
+        self._body(body, text="Contract length:", dim=True,
+                   size=11).pack(anchor="w", pady=(0, 4))
+        years_seg = ctk.CTkSegmentedButton(
+            body, values=["1", "2", "3", "4", "5"],
+            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
+            command=lambda _v: _paint())
+        years_seg.set("2")
+        years_seg.pack(anchor="w", pady=(0, 10))
+
+        self._body(body, text="Salary offer:", dim=True,
+                   size=11).pack(anchor="w", pady=(0, 4))
+        sal_seg = ctk.CTkSegmentedButton(
+            body, values=["80%", "Asking", "120%"],
+            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
+            command=lambda _v: _paint())
+        sal_seg.set("Asking")
+        sal_seg.pack(anchor="w", pady=(0, 12))
+
+        offer_label = self._body(body, text="", size=12)
+        offer_label.pack(anchor="w", pady=(0, 2))
+        chance_label = self._body(body, text="", size=11)
+        chance_label.pack(anchor="w", pady=(0, 12))
+
+        mult_map = {"80%": 0.8, "Asking": 1.0, "120%": 1.2}
+
+        def _paint():
+            offer_info['years'] = int(years_seg.get())
+            offer_info['salary_mult'] = mult_map[sal_seg.get()]
+            salary = int((getattr(staff, 'salary', 0) or 0)
+                         * offer_info['salary_mult'])
+            offer_label.configure(
+                text=f"Your offer: ${salary:,} / year  x  {offer_info['years']} "
+                     f"year{'s' if offer_info['years'] > 1 else ''}")
+            chance = self._staff_offer_accept_chance(staff,
+                                                    offer_info['salary_mult'])
+            if chance >= 0.75:
+                color = ct['GREEN']
+            elif chance >= 0.45:
+                color = ct['GOLD']
+            else:
+                color = ct['RED']
+            chance_label.configure(text=f"Estimated acceptance chance: {chance:.0%}",
+                                   text_color=color)
+
+        _paint()
+
+        btns = ctk.CTkFrame(body, fg_color="transparent")
+        btns.pack(fill="x", pady=(4, 0))
+        self._secondary_button(btns, text="Back",
+                               command=self.close_view).pack(side="right",
+                                                            padx=(10, 0))
+        self._primary_button(btns, text="Make Offer",
+                             command=lambda: self._resolve_staff_offer(
+                                 staff, offer_info['years'],
+                                 int((getattr(staff, 'salary', 0) or 0)
+                                     * offer_info['salary_mult']))).pack(side="right")
+
+    def _staff_offer_accept_chance(self, staff, salary_mult):
+        """Rough acceptance chance for a staff offer (display only)."""
+        rating = to_100_scale(staff.overall_rating)
+        try:
+            prestige = getattr(self.app.game_manager.user_team, 'prestige', 50)
+        except Exception:
+            prestige = 50
+        base = 0.45 + (salary_mult - 1.0) * 1.4 + (prestige - 50) / 400 - (rating - 60) / 600
+        # GM stature: top coaches want to work for a GM the league
+        # respects. Additive, bounded +/-0.08.
+        try:
+            import reputation_system as _rs
+            base += _rs.gm_staff_accept_delta(
+                self.app.game_manager.user_team)
+        except Exception:
+            pass
+        return max(0.05, min(0.98, base))
+
+    def _resolve_staff_offer(self, staff, years, salary):
+        """Resolve a staff contract offer (original acceptance logic).
+
+        The acceptance roll happens FIRST; the roster is only mutated
+        on acceptance. (Signing before the roll hired staffers who had
+        just declined the offer.)
+        """
+        import random
+        base_salary = getattr(staff, 'salary', 0) or 0
+        chance = self._staff_offer_accept_chance(staff,
+                                                salary / max(1, base_salary))
+        if random.random() < chance:
+            if self.app.game_manager.sign_free_agent_staff(staff, salary, years):
+                messagebox.showinfo("Offer Accepted",
+                                    f"{staff.full_name} has accepted your offer!")
+                try:
+                    self.app.update_all_views()
+                except Exception:
+                    pass
+                self.close_view()
+            else:
+                messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
+        else:
+            messagebox.showinfo("Offer Declined",
+                                f"{staff.full_name} has declined your offer. "
+                                f"Consider offering a better salary.")
 
 class SetCaptainsView(ctk.CTkFrame):
     def __init__(self, parent, app=None):

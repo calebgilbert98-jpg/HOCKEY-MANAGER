@@ -144,7 +144,12 @@ def build_app():
     app.refresh_screen_navbar = lambda: None
     app.negotiation_sessions = {}
     app.get_live_cap = lambda: 95_500_000
+    staffer = g.Staff(first_name="Test", last_name="Coach", age=50,
+                      role=g.StaffRole.HEAD_COACH, nationality="CAN")
+    staffer.salary = 2_500_000
+    staffer.contract_years = 3
     app._qa_player = player
+    app._qa_staff = staffer
     return app
 
 
@@ -180,6 +185,7 @@ VIEWS = [
     ("windows", "ContractNegotiationView", ()),
     ("windows", "ContractExtensionsView", ()),
     ("windows", "ExtensionNegotiationView", ()),
+    ("windows", "StaffContractView", ()),
     ("windows", "BuyoutCalculatorView", ()),
 ]
 
@@ -211,6 +217,8 @@ def main():
                     extra = (app._qa_player, False)
                 elif cls_name == "ExtensionNegotiationView":
                     extra = (app._qa_player, 6_000_000, 8)
+                elif cls_name == "StaffContractView":
+                    extra = (app._qa_staff,)
                 view = cls(holder, app=app, *extra)
                 root.update()
                 check(f"{cls_name} builds",
