@@ -10661,15 +10661,13 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_draft_day_central(self):
         """Open Draft Day Central - the draft-day event hub"""
-        if 'draft_central' not in self.open_windows or not self.open_windows['draft_central'].winfo_exists():
-            self.open_windows['draft_central'] = DraftDayCentral(self, self.game_manager)
-        self.open_windows['draft_central'].focus_set()
+        self.show_screen("draft_central", "Draft Day Central", DraftDayCentral,
+                         self.game_manager)
 
     def open_free_agency_frenzy(self):
         """Open Free Agent Frenzy - the July 1 event hub"""
-        if 'fa_frenzy' not in self.open_windows or not self.open_windows['fa_frenzy'].winfo_exists():
-            self.open_windows['fa_frenzy'] = FreeAgencyFrenzy(self, self.game_manager)
-        self.open_windows['fa_frenzy'].focus_set()
+        self.show_screen("fa_frenzy", "Free Agent Frenzy", FreeAgencyFrenzy,
+                         self.game_manager)
 
     def open_fantasy_draft_window(self):
         """Open the Fantasy Draft window."""

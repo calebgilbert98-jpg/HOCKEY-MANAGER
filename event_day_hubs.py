@@ -8,6 +8,7 @@ Each hub is a full-screen, broadcast-style page with a live wire feed,
 done-deals tracker, and quick actions into the relevant management windows.
 """
 import tkinter as tk
+import customtkinter as ctk
 from popup_system import InGamePopup
 from tkinter import ttk
 from datetime import date
@@ -66,7 +67,7 @@ def days_until_event(d=None):
 # ----------------------------------------------------------------------------
 # Base hub
 # ----------------------------------------------------------------------------
-class EventDayHub(InGamePopup):
+class EventDayHubView(ctk.CTkFrame):
     """Shared immersive shell: header, 3-column content, scrolling wire ticker."""
 
     BG = '#0e0e11'
@@ -84,17 +85,12 @@ class EventDayHub(InGamePopup):
     EVENT_TAGLINE = ""
     EVENT_EMOJI = ""
 
-    def __init__(self, parent, game_manager):
-        super().__init__(parent)
-        self.parent = parent
+    def __init__(self, parent, game_manager, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
         self.gm = game_manager
-        self.configure(bg=self.BG)
-        self.title(self.EVENT_TITLE)
-        try:
-            self.state('zoomed')
-        except Exception:
-            self.geometry("1600x950")
-        self.minsize(1200, 750)
+        self.configure(fg_color=self.BG)
+        self._close_screen = None  # set by show_screen() or wrapper
 
         self._ticker_text = ""
         self._ticker_x = 0
@@ -103,7 +99,14 @@ class EventDayHub(InGamePopup):
         self._build_columns()   # subclass fills left/center/right
         self._build_ticker()
         self._animate_ticker()
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # -- shell -------------------------------------------------------------
     def _build_shell(self):
@@ -252,7 +255,7 @@ class EventDayHub(InGamePopup):
 # ----------------------------------------------------------------------------
 # Draft Day Central
 # ----------------------------------------------------------------------------
-class DraftDayCentral(EventDayHub):
+class DraftDayCentral(EventDayHubView):
     EVENT_TITLE = "DRAFT DAY CENTRAL"
     EVENT_TAGLINE = "Seven rounds. 224 picks. One future. Follow every selection live."
 
@@ -413,7 +416,7 @@ class DraftDayCentral(EventDayHub):
     def _on_the_clock(self):
         # If the live draft window is open, mirror it; otherwise show user's next pick
         try:
-            dw = self.parent.open_windows.get('draft')
+            dw = self.app.open_windows.get('draft')
             if dw is not None and dw.winfo_exists():
                 clock = getattr(dw, 'clock_label', None)
                 info = getattr(dw, 'pick_info_label', None)
@@ -433,7 +436,7 @@ class DraftDayCentral(EventDayHub):
     def _wire_lines(self):
         lines = []
         try:
-            dw = self.parent.open_windows.get('draft')
+            dw = self.app.open_windows.get('draft')
             picks = getattr(dw, 'picks_made', []) if dw is not None and dw.winfo_exists() else []
             for team_name, overall, player in picks[-30:]:
                 pname = getattr(player, 'full_name', str(player))
@@ -474,19 +477,19 @@ class DraftDayCentral(EventDayHub):
     # -- actions ---------------------------------------------------------------
     def _open_draft(self):
         try:
-            self.parent.open_draft_window()
+            self.app.open_draft_window()
         except Exception:
             pass
 
     def _open_trade(self):
         try:
-            self.parent.open_trade_window()
+            self.app.open_trade_window()
         except Exception:
             pass
 
     def _open_scouting(self):
         try:
-            self.parent.open_scouting_window()
+            self.app.open_scouting_window()
         except Exception:
             pass
 
@@ -494,7 +497,7 @@ class DraftDayCentral(EventDayHub):
 # ----------------------------------------------------------------------------
 # Free Agent Frenzy
 # ----------------------------------------------------------------------------
-class FreeAgencyFrenzy(EventDayHub):
+class FreeAgencyFrenzy(EventDayHubView):
     EVENT_TITLE = "FREE AGENT FRENZY"
     EVENT_TAGLINE = "The market is open. Every contender is on the phone. Don't get left behind."
 
@@ -656,19 +659,19 @@ class FreeAgencyFrenzy(EventDayHub):
     # -- actions ---------------------------------------------------------------
     def _open_fa(self):
         try:
-            self.parent.open_free_agency_window()
+            self.app.open_free_agency_window()
         except Exception:
             pass
 
     def _open_finances(self):
         try:
-            self.parent.open_finances_window()
+            self.app.open_finances_window()
         except Exception:
             pass
 
     def _open_trade(self):
         try:
-            self.parent.open_trade_window()
+            self.app.open_trade_window()
         except Exception:
             pass
 
@@ -692,11 +695,66 @@ def prompt_event_day(parent, game_manager, event):
         return
     try:
         if event == 'draft':
-            DraftDayCentral(parent, game_manager)
+            DraftDayCentralWindow(parent, game_manager)
         elif event == 'deadline':
             from trade_deadline_center import TradeDeadlineCenter
             TradeDeadlineCenter(parent)
         elif event == 'free_agency':
-            FreeAgencyFrenzy(parent, game_manager)
+            FreeAgencyFrenzyWindow(parent, game_manager)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Legacy popup wrappers (backward compatibility)
+# ---------------------------------------------------------------------------
+
+class EventDayHub(InGamePopup):
+    """Popup wrapper around EventDayHubView."""
+    def __init__(self, parent, game_manager):
+        InGamePopup.__init__(self, parent)
+        self.title(self.EVENT_TITLE)
+        try:
+            self.state('zoomed')
+        except Exception:
+            self.geometry("1600x950")
+        self.minsize(1200, 750)
+        self._view = EventDayHubView(self, game_manager, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+
+class DraftDayCentralWindow(EventDayHub):
+    """Popup wrapper for Draft Day Central."""
+    def __init__(self, parent, game_manager):
+        InGamePopup.__init__(self, parent)
+        self.title("Draft Day Central")
+        try:
+            self.state('zoomed')
+        except Exception:
+            self.geometry("1600x950")
+        self._view = DraftDayCentral(self, game_manager, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+
+class FreeAgencyFrenzyWindow(EventDayHub):
+    """Popup wrapper for Free Agency Frenzy."""
+    def __init__(self, parent, game_manager):
+        InGamePopup.__init__(self, parent)
+        self.title("Free Agency Frenzy")
+        try:
+            self.state('zoomed')
+        except Exception:
+            self.geometry("1600x950")
+        self._view = FreeAgencyFrenzy(self, game_manager, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+
+# Keep original names working as popup wrappers for existing callers
+DraftDayCentralPopup = DraftDayCentralWindow
+FreeAgencyFrenzyPopup = FreeAgencyFrenzyWindow
