@@ -465,13 +465,12 @@ class AITeamManager:
                     continue
 
                 ovr = fa.overall_rating()
-                # Estimate salary demand
+                # Estimate salary demand. No artificial ceiling on any
+                # UFA -- Euro imports included: the AI may offer anything
+                # from the minimum to its full cap room. Whether the
+                # player ACCEPTS is decided realistically at execution
+                # time, against the same asking machinery the user faces.
                 estimated_salary = self._estimate_player_salary(fa, ovr)
-                # Euro imports are gambles: the AI treats every one as a
-                # league-min/ELC flier, never a mid-cap bet (their estimate
-                # curve was built for established NHLers, not KHL stars).
-                if getattr(fa, "is_euro_import", False):
-                    estimated_salary = min(estimated_salary, 1_000_000)
                 if estimated_salary <= available_budget:
                     suitable_fas.append((fa, estimated_salary, ovr))
 
@@ -667,12 +666,16 @@ class AITeamManager:
         Same rulebook as the user/MP paths: draft lock, 23-man roster
         limit, league-minimum salary, a live budget re-check (not the
         evaluation-time number), and the 6-year external max from the new
-        CBA. The player accepts: the AI offers its estimated market value
-        -- the same estimator the market is built on -- so there is no
-        haggling. Selectivity lives in WHICH players get offers (priority
-        threshold, needs, budget), not in the handshake. The rivalry
-        transfer hooks fire so the ledger can't go stale: his personal
-        beefs follow him to the new room.
+        CBA. The handshake is realistic: the player weighs the offer
+        against the SAME asking machinery the user faces (cap-relative
+        base demand plus any market-setter premium, floored at $750k).
+        At 90%+ of his ask he signs; at 70-90% the AI meets the ask when
+        the budget allows, otherwise the player walks; below 70% he walks
+        outright. The AI may offer anything from the minimum to its full
+        cap room -- selectivity lives in WHICH players get offers
+        (priority threshold, needs, budget), not in an artificial
+        ceiling. The rivalry transfer hooks fire so the ledger can't go
+        stale: his personal beefs follow him to the new room.
         Returns True when a signing completed.
         """
         p = getattr(decision, "target_player", None)
@@ -700,9 +703,53 @@ class AITeamManager:
                     getattr(p, "primary_position", None) not in \
                     (strategy.position_needs or []):
                 return False
-            # Terms: league minimum floor, 6-year external max.
-            salary = int(details.get("salary", 0) or 0)
+            # Terms: 6-year external max (new CBA). The offer itself may be
+            # anything from the minimum to the full cap room.
+            offered = int(details.get("salary", 0) or 0)
             years = max(1, min(6, int(details.get("term", 1) or 1)))
+            # The handshake: what would he take? The SAME asking
+            # machinery the user faces -- base demand as % of cap scaled
+            # by the live cap plus any market-setter premium, floored at
+            # $750k (mirrors handle_contract_offer exactly, so the AI and
+            # the user negotiate against the same player).
+            try:
+                from game_classes import to_100_scale as _t100
+                _ovr100 = int(_t100(p.overall_rating()))
+            except Exception:
+                try:
+                    _ovr100 = int(p.overall_rating())
+                except Exception:
+                    _ovr100 = 75
+            _pos = getattr(p, "primary_position", "")
+            _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
+            _age = int(getattr(p, "age", 27) or 27)
+            _season = int(getattr(league, "season_year", 0) or 0)
+            _cap_sys = self._cap_system
+            try:
+                _cap = _cap_sys.current_cap if _cap_sys is not None \
+                    else DEFAULT_CAP
+            except Exception:
+                _cap = DEFAULT_CAP
+            _base_pct = (_ovr100 * 100_000) / 104_000_000
+            try:
+                if _cap_sys is not None:
+                    _ask = _cap_sys.demand_for(_base_pct, _ovr100, _pos_name,
+                                               _age, _season)
+                else:
+                    _ask = int(_base_pct * _cap)
+            except Exception:
+                _ask = int(_base_pct * _cap)
+            _ask = max(_ask, 750_000)
+            # The user's rulebook, without a counter loop: 90%+ of ask
+            # signs on the spot; 70-90% is the counter zone, where the AI
+            # meets the ask when the budget allows and walks otherwise;
+            # below 70% the player is insulted and walks outright.
+            if offered >= 0.9 * _ask:
+                salary = offered
+            elif offered >= 0.7 * _ask:
+                salary = _ask
+            else:
+                return False
             try:
                 from salary_cap_system import league_minimum_salary as _min_fn
                 _floor = _min_fn(getattr(league, "season_year", None))

@@ -389,9 +389,15 @@ def _mkfa(pid, name, pos, ovr=80, salary=0, euro=False):
         salary=salary, contract_years=0,
         contract=SimpleNamespace(salary=salary, years_remaining=0,
                                  no_trade_clause=False),
-        is_euro_import=euro, team_name="",
+        is_euro_import=euro, team_name="", ovr=ovr,
         overall_rating=lambda _o=ovr: _o)
     return p
+
+
+def _ask(ovr):
+    """The player's true ask: the same machinery the user faces
+    (ovr x $100k at the $104M cap, floored at $750k)."""
+    return max(int((ovr * 100_000 / 104_000_000) * 104_000_000), 750_000)
 
 
 def _mkstrategy(needs, budget=95_000_000):
@@ -412,7 +418,10 @@ def _mkmgr(league, team, strategy):
     return mgr
 
 
-def _mkdecision(p, salary=2_500_000, term=3):
+def _mkdecision(p, salary=None, term=3):
+    # Default: a realistic offer -- exactly the player's ask.
+    if salary is None:
+        salary = _ask(getattr(p, "ovr", 80))
     return SimpleNamespace(
         decision_type="free_agent_offer", target_player=p,
         offer_details={"salary": salary, "term": term,
@@ -432,7 +441,7 @@ m1 = _mkmgr(lg_fa, t1, _mkstrategy([PlayerPosition.CENTER]))
 ok = m1._execute_free_agent_signing(t1, _mkdecision(fa1), lg_fa)
 check("ai fa: hole + need + budget -> signed",
       ok and fa1 not in lg_fa.free_agents and fa1 in t1.roster
-      and fa1.team_name == "AI Club" and fa1.salary == 2_500_000
+      and fa1.team_name == "AI Club" and fa1.salary == _ask(82)
       and fa1.contract_years == 3,
       f"ok={ok} roster={len(t1.roster)}")
 check("ai fa: transfer hook fired on signing",
@@ -484,10 +493,44 @@ m6 = _mkmgr(lg6, t6, _mkstrategy([PlayerPosition.CENTER], budget=95_000_000))
 decisions = m6._evaluate_free_agency(
     t6, m6.team_strategies["Euro Club"], lg6.free_agents, date(2026, 7, 2))
 _euro_offers = [d for d in decisions if d.target_player is euro]
-check("ai fa: euro import offer capped at $1M",
+check("ai fa: euro import gets a real market offer (never capped)",
       len(_euro_offers) == 1
-      and _euro_offers[0].offer_details["salary"] <= 1_000_000,
+      and _euro_offers[0].offer_details["salary"] > 1_000_000,
       f"offer={_euro_offers[0].offer_details['salary'] if _euro_offers else None}")
+
+# -- handshake realism: the player weighs the offer against his ask ---------
+_ask80 = _ask(80)
+_hand0 = _mkfa(110, "Proud", PlayerPosition.CENTER, ovr=80)
+_hand1 = _mkfa(111, "Prouder", PlayerPosition.CENTER, ovr=80)
+_t7 = _FakeTeam("Handshake Club", [])
+_lg7 = SimpleNamespace(free_agents=[_hand0, _hand1],
+                       rivalries=[], season_year=2026)
+_m7 = _mkmgr(_lg7, _t7, _mkstrategy([PlayerPosition.CENTER]))
+check("ai fa: insult offer (<70% of ask) walks",
+      not _m7._execute_free_agent_signing(
+          _t7, _mkdecision(_hand0, salary=1_000_000), _lg7)
+      and len(_lg7.free_agents) == 2 and len(_t7.roster) == 0)
+check("ai fa: counter-zone offer (85%) meets the ask when affordable",
+      _m7._execute_free_agent_signing(
+          _t7, _mkdecision(_hand0, salary=int(0.85 * _ask80)), _lg7)
+      and _hand0.salary == _ask80 and _hand0 in _t7.roster,
+      f"salary={_hand0.salary} ask={_ask80}")
+check("ai fa: full offer signs at the offered salary",
+      _m7._execute_free_agent_signing(
+          _t7, _mkdecision(_hand1, salary=_ask80), _lg7)
+      and _hand1.salary == _ask80 and _hand1 in _t7.roster)
+# Counter-zone but the ask breaks the budget -> walks.
+_t8 = _FakeTeam("Broke Club", [])
+_lg8 = SimpleNamespace(
+    free_agents=[_mkfa(112, "Pricy", PlayerPosition.CENTER, ovr=80)],
+    rivalries=[], season_year=2026)
+_m8 = _mkmgr(_lg8, _t8, _mkstrategy([PlayerPosition.CENTER],
+                                   budget=7_000_000))
+check("ai fa: counter-zone offer walks when the ask breaks the budget",
+      not _m8._execute_free_agent_signing(
+          _t8, _mkdecision(_lg8.free_agents[0],
+                           salary=int(0.85 * _ask80)), _lg8)
+      and len(_lg8.free_agents) == 1 and len(_t8.roster) == 0)
 
 # Waiver claims call the transfer hook on both paths.
 _pw_src = _method_src("main.py", "process_waivers")
