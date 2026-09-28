@@ -6501,6 +6501,15 @@ class HockeyManagerGUI(tk.Tk):
         player = self._mp_find_free_agent(params.get("player_id", ""))
         if player is None:
             return False, "That player is no longer a free agent."
+        # Draft lock: draft-eligible players can't be signed as free agents
+        # (shared rule with single-player -- no sidestepping the draft).
+        try:
+            from draft_generator import player_locked_by_draft as _locked
+            if _locked(player):
+                return False, (f"{player.full_name} is draft-eligible and "
+                               f"can't be signed as a free agent.")
+        except Exception:
+            pass
         try:
             salary = int(params.get("salary", 0))
             years = int(params.get("years", 0))
@@ -9670,24 +9679,20 @@ class HockeyManagerGUI(tk.Tk):
             from draft_generator import generate_draft_class
             draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
             # Undrafted re-entry (real NHL rule): undrafted prospects are
-            # automatically eligible again while 20 or younger on Sept 15 of
-            # the new draft year (NA and European alike). Older undrafted
-            # players -- including 21+ Europeans -- become free agents rather
-            # than re-entering the draft pool.
+            # automatically eligible again while still draft-eligible for
+            # the new draft year (NA 18-20, Europeans 18-22 on Sept 15).
+            # Aged-out undrafted players become free agents instead of
+            # re-entering the draft pool.
             _undrafted = list(getattr(self.league, "undrafted_pool", None) or [])
             self.league.undrafted_pool = []
             if _undrafted:
                 try:
-                    from draft_generator import (is_draft_eligible as _elig,
-                                                 age_on_sept15 as _age15)
+                    from draft_generator import is_draft_eligible as _elig
                     _fa = getattr(self.league, "free_agents", None)
                     for _up in _undrafted:
                         try:
-                            _a = _age15(getattr(_up, "birth_date", ""),
-                                        year)
-                            if (_a is not None and _a <= 20 and _elig(
-                                    getattr(_up, "birth_date", ""),
-                                    getattr(_up, "nationality", ""), year)):
+                            if _elig(getattr(_up, "birth_date", ""),
+                                     getattr(_up, "nationality", ""), year):
                                 _re = getattr(self.league, "draft_reentries",
                                               None)
                                 if not isinstance(_re, list):
@@ -14248,6 +14253,23 @@ class HockeyManagerGUI(tk.Tk):
         if self.user_team.payroll + salary > PLAYER_BUDGET:
             messagebox.showerror("Error", "This contract would exceed the player budget.")
             return False
+
+        # Draft lock: a draft-eligible player can't be signed as a free
+        # agent -- that would sidestep the draft. Extensions (already under
+        # club control) are unaffected.
+        if not extension:
+            try:
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(person):
+                    messagebox.showerror(
+                        "Draft-Eligible Player",
+                        f"{getattr(person, 'full_name', 'This player')} is "
+                        f"eligible for the upcoming NHL Entry Draft and "
+                        f"can't be signed as a free agent. Draft him -- "
+                        f"don't sidestep the rules.")
+                    return False
+            except Exception:
+                pass
 
         # Trade protection on the table: a clause the player wants is worth
         # money to him, so the *effective* offer is salary + clause value.

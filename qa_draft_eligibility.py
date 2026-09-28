@@ -36,16 +36,21 @@ check("NA 21 on Sept 15 INELIGIBLE (ages out -> UFA)",
 check("USA 21 on Sept 15 INELIGIBLE",
       not is_draft_eligible("2002-06-01", "USA", 2024))
 
-# --- is_draft_eligible: Europeans no max ---
-check("Euro age 24 eligible", is_draft_eligible("2000-01-01", "Sweden", 2024))
-check("Euro age 28 eligible", is_draft_eligible("1996-05-05", "Russia", 2024))
-check("Euro age 30 eligible", is_draft_eligible("1994-03-03", "Finland", 2024))
+# --- is_draft_eligible: Europeans age out at 22 ---
+check("Euro age 22 on Sept 15 eligible",
+      is_draft_eligible("2001-09-16", "Sweden", 2024))
+check("Euro turns 22 ON Sept 15 eligible",
+      is_draft_eligible("2002-09-15", "Sweden", 2024))
+check("Euro age 23 on Sept 15 INELIGIBLE (loses eligibility -> signable FA)",
+      not is_draft_eligible("2001-09-15", "Sweden", 2024))
+check("Euro age 24 INELIGIBLE", not is_draft_eligible("2000-01-01", "Sweden", 2024))
+check("Euro age 28 INELIGIBLE", not is_draft_eligible("1996-05-05", "Russia", 2024))
+check("Euro age 30 INELIGIBLE",
+      not is_draft_eligible("1994-03-03", "Finland", 2024))
 
-# --- re-entry age rule: undrafted re-enters iff <= 20 on Sept 15 ---
+# --- re-entry age rule: undrafted re-enters iff still draft-eligible ---
 def would_reenter(birthdate, nationality, draft_year):
-    a = age_on_sept15(birthdate, draft_year)
-    return (a is not None and a <= 20
-            and is_draft_eligible(birthdate, nationality, draft_year))
+    return is_draft_eligible(birthdate, nationality, draft_year)
 
 check("undrafted NA 19 re-enters", would_reenter("2005-04-01", "Canada", 2024))
 check("undrafted NA 20 re-enters (last kick)",
@@ -54,8 +59,32 @@ check("undrafted NA 21 -> UFA, no re-entry",
       not would_reenter("2003-01-01", "Canada", 2024))
 check("undrafted Euro 19 re-enters",
       would_reenter("2005-04-01", "Sweden", 2024))
-check("undrafted Euro 23 -> FA, no re-entry (pool rule)",
+check("undrafted Euro 22 re-enters (last kick)",
+      would_reenter("2002-06-01", "Sweden", 2024))
+check("undrafted Euro 23 -> FA, no re-entry",
       not would_reenter("2001-04-01", "Sweden", 2024))
+
+# --- draft lock: eligible prospects can't be signed as free agents ---
+from draft_generator import player_locked_by_draft
+_elig_prospect = SimpleNamespace(birth_date="2006-04-01",
+                                 nationality="Canada")   # 18 in 2024 draft
+_aged_out = SimpleNamespace(birth_date="2003-01-01",
+                            nationality="Canada")          # 21 -> UFA
+_euro22 = SimpleNamespace(birth_date="2002-06-01",
+                          nationality="Sweden")            # 22, still eligible
+_euro23 = SimpleNamespace(birth_date="2001-04-01",
+                          nationality="Sweden")            # 23 -> signable FA
+_broken = SimpleNamespace(birth_date="nonsense", nationality="Canada")
+check("lock: draft-eligible prospect locked",
+      player_locked_by_draft(_elig_prospect, 2024) is True)
+check("lock: aged-out NA not locked",
+      player_locked_by_draft(_aged_out, 2024) is False)
+check("lock: Euro 22 locked (still eligible)",
+      player_locked_by_draft(_euro22, 2024) is True)
+check("lock: Euro 23 NOT locked (directly signable)",
+      player_locked_by_draft(_euro23, 2024) is False)
+check("lock: malformed data never locks",
+      player_locked_by_draft(_broken, 2024) is False)
 
 # --- original-team re-draft ban logic (DraftView._redraft_banned) ---
 from windows import DraftView
@@ -92,7 +121,11 @@ check("every generated prospect eligible", not inelig)
 euros_old = [p for p in cls
              if p.nationality not in ("Canada", "USA")
              and (age_on_sept15(p.birth_date, 2027) or 0) >= 21]
-check("European overagers present (no max age)", len(euros_old) >= 1)
+check("European overagers present (21-22, the max)", len(euros_old) >= 1)
+euros_too_old = [p for p in cls
+                 if p.nationality not in ("Canada", "USA")
+                 and (age_on_sept15(p.birth_date, 2027) or 0) >= 23]
+check("no European 23+ in generated class", not euros_too_old)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

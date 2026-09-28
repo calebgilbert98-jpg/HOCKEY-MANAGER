@@ -318,7 +318,8 @@ def generate_euro_free_agents(league, year: int,
     for _ in range(batch_size):
         nation = rng.choice(EURO_NATIONS)
         position = _roll_position(rng)
-        age = rng.randint(22, 28)
+        # 23+: past Euro draft eligibility (22 max) -- directly signable.
+        age = rng.randint(23, 28)
         tier = _roll_tier(rng)
         player = _make_player(nation, position, age, tier, year, rng)
         if player.id in existing_ids:  # never collide with a prospect
@@ -465,9 +466,8 @@ def rng_seed_default(league, year: int) -> Optional[int]:
 #   into process_daily_decisions). No nationality/origin/source_league
 #   filter exists anywhere in the FA path -- Euro FAs are evaluated
 #   identically to existing free agents.
-# - Age filters: prefer_youth teams skip age>30 (no effect -- we're 22-28);
-#   prefer_experience teams skip age<23 (only age-22 Euro FAs skipped by
-#   those teams; existing behavior, no change needed).
+# - Age filters: prefer_youth teams skip age>30 (no effect -- we're 23-28);
+#   prefer_experience teams skip age<23 (no effect -- our youngest is 23).
 # - CONTRACT-LEVEL CAVEAT (report only, no edit made): AI signing decisions
 #   are currently DECISION-ONLY -- I found no executor that consumes
 #   free_agent_offer AIDecisions (main.py:5779 only logs them), so AI

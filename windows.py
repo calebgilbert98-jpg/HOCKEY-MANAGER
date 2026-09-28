@@ -2472,6 +2472,14 @@ class FreeAgencyView(ctk.CTkFrame):
 
         filtered_players = []
         for player in self.app.game_manager.free_agents:
+            # Draft lock: draft-eligible players never appear as signable
+            # free agents (they can only change clubs via the draft).
+            try:
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(player):
+                    continue
+            except Exception:
+                pass
             if name_filter and name_filter not in player.full_name.lower():
                 continue
             if position_filter != 'All' and player.primary_position.value != position_filter:

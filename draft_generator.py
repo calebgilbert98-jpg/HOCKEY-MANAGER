@@ -581,7 +581,7 @@ def calculate_draft_ranking(player: Player) -> float:
 # --- Draft eligibility (real NHL rules) ---
 
 def is_draft_eligible(birthdate, nationality, draft_year) -> bool:
-    """Real NHL draft eligibility.
+    """Real NHL draft eligibility (with the game's Euro overager tweak).
 
     birthdate: "YYYY-MM-DD" string. draft_year: the June draft year (int).
     - Eligible iff the player turns 18 on/before Sept 15 of draft_year
@@ -589,7 +589,9 @@ def is_draft_eligible(birthdate, nationality, draft_year) -> bool:
     - North Americans (Canada, USA) age out at 20: must be born on/after
       Sept 16 of (draft_year - 21). A 21-year-old NA is NOT eligible
       (becomes a UFA; never draft-eligible again).
-    - Europeans (everyone else): no upper age limit.
+    - Europeans age out at 22: must be born on/after Sept 16 of
+      (draft_year - 23). A 23+ Euro loses draft eligibility and becomes
+      directly signable as a free agent (the undrafted-import path).
     Malformed input -> False (defensive).
     """
     try:
@@ -606,11 +608,34 @@ def is_draft_eligible(birthdate, nationality, draft_year) -> bool:
     # i.e. born on/before Sept 15 eighteen years earlier.
     if born > date(draft_year - 18, 9, 15):
         return False
-    # Older edge (NA only): born on/after Sept 16 of draft_year - 21.
+    # Older edge: NA born on/after Sept 16 of draft_year - 21 (20 max);
+    # Europeans born on/after Sept 16 of draft_year - 23 (22 max).
     if (nationality or "") in _NA_NATIONALITIES:
         if born < date(draft_year - 21, 9, 16):
             return False
+    else:
+        if born < date(draft_year - 23, 9, 16):
+            return False
     return True
+
+
+def player_locked_by_draft(player, draft_year=None) -> bool:
+    """True if signing this player as a free agent would sidestep the draft.
+
+    Draft-eligible players are locked: they can only change clubs via the
+    draft, never via direct free-agent signing. draft_year defaults to the
+    upcoming June draft. Malformed/missing data -> False (never lock on a
+    guess).
+    """
+    try:
+        if draft_year is None:
+            draft_year = _default_draft_year()
+        return bool(is_draft_eligible(
+            getattr(player, "birth_date", ""),
+            getattr(player, "nationality", ""),
+            draft_year))
+    except Exception:
+        return False
 
 
 def age_on_sept15(birthdate, draft_year) -> Optional[int]:
@@ -642,9 +667,13 @@ def _random_birthdate_for_age(age: int, nationality: str, draft_year: int) -> st
     """Random "YYYY-MM-DD" birthdate making the player exactly `age` on
     Sept 15 of draft_year, inside the is_draft_eligible window. age 21+ is
     only valid for non-North-American nationalities (NA players age out
-    at 20); a ValueError is raised otherwise."""
+    at 20); age 23+ is invalid for everyone (Europeans age out at 22);
+    a ValueError is raised otherwise."""
     if age >= 21 and (nationality or "") in _NA_NATIONALITIES:
         raise ValueError(f"NA prospect cannot be {age} in the {draft_year} draft")
+    if age >= 23:
+        raise ValueError(f"Prospect cannot be {age} in the {draft_year} draft"
+                         " (Europeans age out at 22)")
     start = date(draft_year - age - 1, 9, 16)
     end = date(draft_year - age, 9, 15)
     # Defensive clamp to the NA upper bound in case of rounding drift.
@@ -657,7 +686,7 @@ def _random_birthdate_for_age(age: int, nationality: str, draft_year: int) -> st
 
 
 def _roll_prospect_age() -> int:
-    """Draft-class age mix: mostly 18, some 19, a few 20, rare 21-24
+    """Draft-class age mix: mostly 18, some 19, a few 20, rare 21-22
     European overagers (handled by the caller forcing a non-NA nationality)."""
     r = random.random()
     if r < 0.72:
@@ -666,7 +695,7 @@ def _roll_prospect_age() -> int:
         return 19
     if r < 0.97:
         return 20
-    return random.randint(21, 24)
+    return random.randint(21, 22)
 
 
 def _random_european_nationality() -> str:

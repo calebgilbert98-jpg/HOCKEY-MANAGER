@@ -36,10 +36,15 @@ check("elig na-lower-bound",
       and not is_draft_eligible("2006-09-15", "Canada", 2027))
 check("elig na-21yo-out",
       not is_draft_eligible("2005-09-15", "Canada", 2027))
-check("elig euro-older", is_draft_eligible("2000-01-01", "Sweden", 2027))
+check("elig euro-22yo-in",
+      is_draft_eligible("2004-09-16", "Sweden", 2027))
+check("elig euro-23yo-out",
+      not is_draft_eligible("2004-09-15", "Sweden", 2027))
 check("elig usa-is-na",
       not is_draft_eligible("2006-09-15", "USA", 2027))
-check("elig russia-is-euro", is_draft_eligible("1998-06-01", "Russia", 2027))
+check("elig russia-is-euro",
+      is_draft_eligible("2005-06-01", "Russia", 2027)
+      and not is_draft_eligible("2003-06-01", "Russia", 2027))
 
 # ---------------------------------------------------------------- B: class composition
 classes = [generate_draft_class(num_prospects=224, quality="Normal")

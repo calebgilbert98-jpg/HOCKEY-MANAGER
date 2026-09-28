@@ -718,6 +718,12 @@ class FreeAgencyFrenzy(EventDayHubView):
     def _top_ufa_players(self, n=10):
         """Top free agents as player objects, sorted by OVR."""
         fas = self._ufa_list()
+        # Draft lock: draft-eligible players aren't signable free agents.
+        try:
+            from draft_generator import player_locked_by_draft as _locked
+            fas = [p for p in fas if not _locked(p)]
+        except Exception:
+            pass
         def key(p):
             try:
                 return p.overall_rating()

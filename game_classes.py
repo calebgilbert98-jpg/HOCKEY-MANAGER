@@ -5434,9 +5434,9 @@ class League:
 
         # CHL: rights last 2 years. Still draft-eligible -> re-enters the next
         # draft; otherwise becomes an unrestricted free agent. Eligibility is
-        # the exact NHL rule (is_draft_eligible): NA prospects age out at 20
-        # (a 21-year-old never re-enters -- UFA), Europeans have no upper
-        # age cap. next_draft is the upcoming draft: on draft day it is the
+        # the exact NHL rule (is_draft_eligible): NA prospects age out at 20,
+        # Europeans at 22 (a 23-year-old never re-enters -- UFA, directly
+        # signable). next_draft is the upcoming draft: on draft day it is the
         # draft about to be held (so re-entries land in this year's class);
         # in the end_of_season backstop it is season_year + 1.
         if rtype == "CHL" and years_unsigned >= 2:
