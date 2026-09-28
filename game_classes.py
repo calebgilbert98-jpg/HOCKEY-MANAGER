@@ -2728,24 +2728,45 @@ class DraftPick:
             return f"{self.year} {r}{suffix} Round Pick (from {self.original_team})"
     
     @property
+    def is_expired(self) -> bool:
+        """True once the pick's draft year has passed. An expired pick is
+        dead paper: the draft it belonged to already happened. BUG-016 --
+        the draft never consumed/pruned picks, so expired picks stayed
+        tradeable at full value forever (the AI even asked for them)."""
+        try:
+            # <= : during season S (season_year=S) the S draft was already
+            # held in June, so S picks are dead. The next live draft is
+            # always season_year+1.
+            return int(self.year) <= int(_pick_value_anchor())
+        except Exception:
+            return False
+
+    @property
     def value(self) -> int:
         """Calculate the trade value of this draft pick."""
+        # Expired picks are worthless (BUG-016). Nominal 1, not 0, so
+        # ratio math never divides by zero.
+        if self.is_expired:
+            return 1
         # Base value decreases with later rounds and later years
         base_values = {1: 1000, 2: 500, 3: 250, 4: 125, 5: 100, 6: 75, 7: 50}
         base_value = base_values.get(self.round, 25)
-        
+
         # Decrease value for future years (anchored to the live season --
         # a hardcoded 2024 here deepened the discount every year a save
         # ran, undervaluing every future pick in long saves).
         year_penalty = max(0, (self.year - _pick_value_anchor()) * 50)
-        
+
         # Conditional picks are worth less
         conditional_penalty = 200 if self.is_conditional else 0
-        
+
         return max(25, base_value - year_penalty - conditional_penalty)
-    
+
     def can_be_traded(self) -> bool:
         """Check if this pick can be traded (some leagues have rules)."""
+        # Expired picks are dead paper (BUG-016).
+        if self.is_expired:
+            return False
         # Basic rule: can't trade conditional picks that haven't been fulfilled
         if self.is_conditional and self.condition:
             return False
@@ -5996,6 +6017,29 @@ class League:
             pass
 
         self.season_year += 1
+        # BUG-016: the entry draft for season_year was held in June, so
+        # picks stamped with that year or earlier are dead paper. The
+        # draft never consumed them and initialize_draft_picks() only ever
+        # adds, so without this they accumulated forever -- tradeable at
+        # full value (the AI even asked for expired 1sts). Sweep every
+        # club's lists by identity (a traded pick's object can sit in the
+        # original club's list per BUG-013).
+        try:
+            for _t in getattr(self, "teams", None) or []:
+                _dp = getattr(_t, "draft_picks", None)
+                if not isinstance(_dp, dict):
+                    continue
+                for _yr in list(_dp.keys()):
+                    _before = list(_dp[_yr] or [])
+                    _kept = [p for p in _before
+                             if int(getattr(p, "year", _yr) or 0) > self.season_year]
+                    if len(_kept) != len(_before):
+                        if _kept:
+                            _dp[_yr] = _kept
+                        else:
+                            del _dp[_yr]
+        except Exception:
+            pass
         # Iconic games: only starred entries stay past the season that
         # produced them. Unstarred memories fade as the new season
         # begins; the user's curation is the franchise's permanent
@@ -6610,7 +6654,10 @@ class League:
 
     def initialize_all_draft_picks(self):
         """Initialize draft picks for all teams for the next few years."""
-        future_years = [self.season_year + i for i in range(3)]  # Next 3 years
+        # The next live draft is always season_year+1 (this season's draft
+        # was already held in June). Dealing season_year picks gives every
+        # team dead paper -- BUG-016.
+        future_years = [self.season_year + 1 + i for i in range(3)]
         
         for team in self.teams:
             team.initialize_draft_picks(future_years)

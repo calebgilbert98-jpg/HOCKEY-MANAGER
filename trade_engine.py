@@ -1828,6 +1828,18 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                         f"{_sname} doesn't own the "
                         f"{getattr(a, 'year', '?')} {getattr(a, 'round', '?')}"
                         f" round pick it offered.")
+                # BUG-016: expired picks are dead paper -- the draft they
+                # belonged to already happened. Block them outright (the
+                # value guard alone wouldn't stop a hand-typed deal).
+                try:
+                    _expired = bool(a.is_expired)
+                except Exception:
+                    _expired = False
+                if _expired:
+                    return _blocked(
+                        f"The {getattr(a, 'year', '?')} "
+                        f"{getattr(a, 'round', '?')} round pick is expired "
+                        f"-- that draft already happened. No assets moved.")
             elif _roster is not None and a not in _roster:
                 _pname = getattr(a, "full_name", str(a))
                 return _blocked(

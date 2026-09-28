@@ -4551,6 +4551,12 @@ class TradeWindow(InGamePopup):
         for yr in sorted(getattr(team, 'draft_picks', {}).keys()):
             for pk in team.draft_picks[yr]:
                 if getattr(pk, 'current_team', '') == team.team_name:
+                    # BUG-016: expired picks are dead paper, not assets.
+                    try:
+                        if not pk.can_be_traded():
+                            continue
+                    except Exception:
+                        pass
                     picks.append(pk)
         return picks
 
