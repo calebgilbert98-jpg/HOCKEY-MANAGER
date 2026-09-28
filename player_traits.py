@@ -155,7 +155,7 @@ SKATER_TRAITS = [
         name="Clutch",
         description="Elevates when the game is on the line.",
         category="mental",
-        requirements=[("pressure_player", 86), ("composure", 74)],
+        requirements=[("pressure_player", 73), ("composure", 71)],  # ~p80 of generated goalies
         sim_effects={
             "overtime_mult": 1.08,
             "shootout_mult": 1.10,
@@ -196,7 +196,7 @@ GOALIE_TRAITS = [
         name="Wall",
         description="Nearly impossible to beat cleanly; squares to every shot.",
         category="goalie",
-        requirements=[("positioning", 86)],
+        requirements=[("positioning", 76)],  # p90 of generated goalies: true elites only
         sim_effects={
             "save_chance_mult": 1.04,
         },
@@ -206,7 +206,7 @@ GOALIE_TRAITS = [
         name="Puck Handler",
         description="Acts as a third defenseman; starts breakouts with crisp passes.",
         category="goalie",
-        requirements=[("puck_handling", 86)],
+        requirements=[("puck_handling", 74)],  # p85 of generated goalies
         sim_effects={
             "breakout_pass_mult": 1.12,
             "dump_in_negation": 0.10,
@@ -222,6 +222,31 @@ GOALIE_TRAITS = [
             "overtime_mult": 1.06,
             "shootout_mult": 1.08,
             "playoff_mult": 1.05,
+        },
+    ),
+    Trait(
+        id="battler",
+        name="Battler",
+        description="Feeds on chaos and bounces back after getting scored on -- but can unravel when shelled.",
+        category="goalie",
+        requirements=[("determination", 71), ("aggressiveness", 68)],  # the battlers
+        sim_effects={
+            # Core behavior lives in goalie_personality.py (bounce-back,
+            # traffic bonus, tilt risk); this flat kicker is the trait's
+            # always-on edge in the old save-prob path.
+            "save_chance_mult": 1.015,
+        },
+    ),
+    Trait(
+        id="technician",
+        name="Technician",
+        description="Positional mastery; never beats himself on the soft ones.",
+        category="goalie",
+        requirements=[("positioning", 73), ("anticipation", 71)],  # the technicians
+        sim_effects={
+            # Core behavior lives in goalie_personality.py (soft-goal
+            # suppression); this flat kicker is the always-on edge.
+            "save_chance_mult": 1.015,
         },
     ),
 ]

@@ -135,9 +135,17 @@ class PlayerDevelopmentEngine:
         - late_bloomer: +2 years (peaks at 28-30 instead of 26-27)
         - early_peak: -2 years (peaks at 24-25 instead of 26-27)
         - standard: no shift
+
+        Goalies develop differently than skaters: they need more seasoning
+        (rarely NHL-ready before 23), peak later (28-32), and play longer.
+        Their whole curve is shifted +2 years. Generational goalie prospects
+        (see goalie_personality.py) are the exception -- they arrive on the
+        early-peak timetable but keep the long goalie prime (fate, not arc).
         """
         age = player.age
         arc = getattr(player, 'development_arc', 'standard')
+        is_goalie = player.primary_position == PlayerPosition.GOALIE
+        generational = bool(getattr(player, 'generational_goalie', False))
 
         # Arc shifts thresholds
         shift = 0
@@ -145,6 +153,15 @@ class PlayerDevelopmentEngine:
             shift = 2
         elif arc == "early_peak":
             shift = -2
+
+        if is_goalie:
+            # Goalie curve: +2 years everywhere vs skaters...
+            shift += 2
+            if generational:
+                # ...except the generational fast-track: arrives 2 years
+                # early (back to the skater timetable) but keeps the
+                # longer goalie prime -- no early decline.
+                shift -= 2
 
         if age <= 19 + shift:
             return DevelopmentStage.JUNIOR
@@ -168,22 +185,50 @@ class PlayerDevelopmentEngine:
         - standard: 1.0x (unchanged)
         """
         stage = self.get_development_stage(player)
-        
-        # Base rates by development stage
-        stage_rates = {
-            DevelopmentStage.JUNIOR: 0.8,      # High development
-            DevelopmentStage.RISING: 0.6,      # Good development
-            DevelopmentStage.PRIME_EARLY: 0.3, # Slow improvement
-            DevelopmentStage.PRIME: 0.1,       # Maintenance
-            DevelopmentStage.VETERAN: -0.2,    # Slight decline
-            DevelopmentStage.AGING: -0.5       # Noticeable decline
-        }
-        
+
+        is_goalie = player.primary_position == PlayerPosition.GOALIE
+        generational = bool(getattr(player, 'generational_goalie', False))
+
+        # Base rates by development stage.
+        # Goalies develop differently than skaters: slower early (they need
+        # seasoning -- few are NHL-ready before 23), a stronger late prime
+        # (the goalie bloom at 28-32), and a gentler decline (goalies play
+        # longer).
+        if is_goalie:
+            stage_rates = {
+                DevelopmentStage.JUNIOR: 0.6,       # Raw; needs games
+                DevelopmentStage.RISING: 0.55,      # Finding it
+                DevelopmentStage.PRIME_EARLY: 0.45, # The late bloom
+                DevelopmentStage.PRIME: 0.15,      # Established
+                DevelopmentStage.VETERAN: -0.1,    # Gentle decline
+                DevelopmentStage.AGING: -0.3       # Slower fall than skaters
+            }
+        else:
+            stage_rates = {
+                DevelopmentStage.JUNIOR: 0.8,      # High development
+                DevelopmentStage.RISING: 0.6,      # Good development
+                DevelopmentStage.PRIME_EARLY: 0.3, # Slow improvement
+                DevelopmentStage.PRIME: 0.1,       # Maintenance
+                DevelopmentStage.VETERAN: -0.2,    # Slight decline
+                DevelopmentStage.AGING: -0.5       # Noticeable decline
+            }
+
         base_rate = stage_rates[stage]
 
         # Apply development arc multiplier (additive to engine, not override)
         arc = getattr(player, 'development_arc', 'standard')
-        if arc == "late_bloomer":
+        if generational and is_goalie:
+            # The fate roll: generational goalies arrive early but never pay
+            # the early-peak decline tax -- they become great young and stay
+            # great through the long goalie prime.
+            if arc == "late_bloomer":
+                if stage in (DevelopmentStage.JUNIOR, DevelopmentStage.RISING):
+                    base_rate *= 0.7
+                elif stage in (DevelopmentStage.PRIME_EARLY, DevelopmentStage.PRIME):
+                    base_rate *= 1.3
+                elif stage == DevelopmentStage.VETERAN:
+                    base_rate *= 0.7
+        elif arc == "late_bloomer":
             if stage in (DevelopmentStage.JUNIOR, DevelopmentStage.RISING):
                 base_rate *= 0.7  # Slower early
             elif stage in (DevelopmentStage.PRIME_EARLY, DevelopmentStage.PRIME):

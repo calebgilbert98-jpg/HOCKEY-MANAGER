@@ -556,6 +556,10 @@ def callup_readiness(player: Any) -> float:
     if _is_goalie(player) and len(hist) >= 1:
         sv = float(hist[-1].get("sv_pct", 0) or 0)
         score += max(-6, min(10, (sv - 0.900) * 250))
+    if _is_goalie(player) and bool(getattr(player, "generational_goalie", False)):
+        # The fate roll: a generational goalie prospect jumps the queue.
+        # The Price/Fleury path -- the organization clears a lane for him.
+        score += 15
     return round(max(0.0, min(100.0, score)), 1)
 
 

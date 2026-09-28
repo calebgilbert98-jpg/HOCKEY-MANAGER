@@ -605,6 +605,11 @@ class GameSim:
         # Stage 5: Goaltending systems
         self.goaltender_fatigue = {}  # Track goalie fatigue
         self.goaltender_positioning = {}  # Track goalie positioning
+        # Goalie personality: per-goalie, per-game state (bounce-back clock,
+        # tilt, unorthodox swing) + remaining puck-handling turnovers.
+        # See goalie_personality.py.
+        self.goalie_personality_state = {}
+        self.goalie_turnovers_left = {}
         self.expected_goals = {}  # team_name -> xG; track expected goals for GSAx calculation
         self.save_quality_tracking = {}  # Track save difficulty and quality
         
@@ -806,6 +811,14 @@ class GameSim:
             if player.primary_position == PlayerPosition.GOALIE:
                 self.goaltender_fatigue[player.id] = 100  # Start at 100% energy
                 self.goaltender_positioning[player.id] = GoaltenderPosition.IN_NET
+                # Goalie personality: fresh per-game state + puck-handling
+                # turnover budget (bad puck-handlers gift high-danger chances).
+                try:
+                    import goalie_personality as _gp0
+                    self.goalie_personality_state[player.id] = _gp0.new_game_state()
+                    self.goalie_turnovers_left[player.id] = _gp0.roll_turnovers(player)
+                except Exception:
+                    pass
                 self.save_quality_tracking[player.id] = {
                     'total_expected_goals_against': 0.0,
                     'actual_goals_against': 0,
@@ -4593,6 +4606,19 @@ class GameSim:
         # power forwards feast on soft defensive pairs, etc.
         quality = self._apply_archetype_matchup(
             quality, attacking_team, defending_team)
+
+        # Goalie personality: a puck-handling turnover behind the net turns
+        # this rush into a high-danger chance against the offending goalie.
+        # (Upgrades quality BEFORE xG is computed so the chance is real;
+        # quality is the "high"/"medium"/"low" string this engine uses.)
+        try:
+            if self.goalie_turnovers_left.get(goalie.id, 0) > 0:
+                self.goalie_turnovers_left[goalie.id] -= 1
+                quality = "high"
+                shot_type = ShotType.REBOUND
+        except Exception:
+            pass
+
         expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance)
 
         # Team tactics shape finishing: systems and special-teams approach
@@ -4781,6 +4807,27 @@ class GameSim:
             # Save made
             shot_power = random.randint(1, 10)  # Shot power factor
             rebound_control = self._determine_rebound_control(goalie, save_type, shot_type, shot_power)
+
+            # Goalie personality: temperament shapes rebound control --
+            # athletic scramblers kick out more second chances, technicians
+            # swallow pucks. Shifts the outcome one rung up/down the ladder.
+            try:
+                import goalie_personality as _gp3
+                _rshift = _gp3.rebound_shift(goalie)
+                if _rshift > 0 and random.random() < _rshift:
+                    _up = {ReboundControl.ABSORBED: ReboundControl.WEAK_REBOUND,
+                           ReboundControl.CONTROLLED: ReboundControl.WEAK_REBOUND,
+                           ReboundControl.DEFLECTED_AWAY: ReboundControl.WEAK_REBOUND,
+                           ReboundControl.KICKED_OUT: ReboundControl.WEAK_REBOUND,
+                           ReboundControl.WEAK_REBOUND: ReboundControl.DANGEROUS_REBOUND}
+                    rebound_control = _up.get(rebound_control, rebound_control)
+                elif _rshift < 0 and random.random() < -_rshift:
+                    _down = {ReboundControl.DANGEROUS_REBOUND: ReboundControl.WEAK_REBOUND,
+                             ReboundControl.WEAK_REBOUND: ReboundControl.CONTROLLED,
+                             ReboundControl.KICKED_OUT: ReboundControl.CONTROLLED}
+                    rebound_control = _down.get(rebound_control, rebound_control)
+            except Exception:
+                pass
             
             # Record the save
             self._record_goaltender_stats(goalie, 'save', save_type, expected_goal, quality)
@@ -6120,6 +6167,26 @@ class GameSim:
         if empty_net:
             self.game_stats[shooter.id]['empty_net_goals'] = \
                 self.game_stats[shooter.id].get('empty_net_goals', 0) + 1
+
+        # Goalie personality: charge the goal to the beaten goalie --
+        # bounce-back clock starts, tilt check for shelled battlers.
+        try:
+            import goalie_personality as _gp2
+            _defending = (self.away_team if scoring_team is self.home_team
+                          else self.home_team)
+            _beaten = self._selected_goalie(_defending)
+            if _beaten is not None and not empty_net:
+                _st2 = self.goalie_personality_state.get(_beaten.id)
+                if _st2 is None:
+                    _st2 = _gp2.new_game_state()
+                    self.goalie_personality_state[_beaten.id] = _st2
+                if _st2.get("period") != getattr(self, "period", 1):
+                    _st2["period"] = getattr(self, "period", 1)
+                    _st2["goals_this_period"] = 0
+                _gp2.record_goal_allowed(_st2)
+                _gp2.check_tilt(_beaten, _st2)
+        except Exception:
+            pass
         
         # Check if it's a special teams goal
         current_situation = self._get_current_situation()
@@ -7993,6 +8060,55 @@ class GameSim:
                 save_probability *= _trait_bonus(goaltender, "playoff_mult")
             if getattr(self, 'period', 1) >= 4:
                 save_probability *= _trait_bonus(goaltender, "overtime_mult")
+        except Exception:
+            pass
+
+        # Goalie personality (additive): temperament x traffic, battler
+        # bounce-back/tilt, technician soft-goal suppression, the screen
+        # tax on low-exposure goalies, youth tax, playoff elevator.
+        # See goalie_personality.py -- shared math with AdvancedGameSim.
+        try:
+            import goalie_personality as _gp
+            _st = self.goalie_personality_state.get(goaltender.id)
+            if _st is None:
+                _st = _gp.new_game_state()
+                self.goalie_personality_state[goaltender.id] = _st
+            # ~90s of game time per shot faced; drives the bounce-back clock.
+            _st["seconds_since_goal"] = _st.get("seconds_since_goal", 9999.0) + 90.0
+            # shot_quality is the "high"/"medium"/"low" string in this engine.
+            _qv = shot_quality
+            if isinstance(_qv, str):
+                _qv = {"high": 0.85, "medium": 0.45, "low": 0.15}.get(_qv, 0.45)
+            try:
+                _qv = float(_qv)
+            except (TypeError, ValueError):
+                _qv = 0.45
+            _traffic = shot_type in (ShotType.TIP_IN, ShotType.DEFLECTION,
+                                     ShotType.REBOUND) or _qv >= 0.75
+            # Net-front slot shots through bodies are traffic too, even at
+            # medium quality -- the screen is the weapon, not the shot.
+            try:
+                if (not _traffic and _qv >= 0.40 and shot_location in
+                        (ShotLocation.CREASE, ShotLocation.LOW_SLOT,
+                         ShotLocation.HIGH_SLOT)):
+                    _traffic = True
+            except Exception:
+                pass
+            _soft = _qv <= 0.25 and (distance or 0) > 40
+            try:
+                _cgp = int(getattr(getattr(goaltender, "stats", None),
+                                   "career_games", 0) or 0)
+            except Exception:
+                _cgp = 0
+            _gp_mult = _gp.save_prob_mult(
+                goaltender,
+                {"traffic": _traffic, "soft": _soft},
+                state=_st,
+                is_playoff=bool(getattr(self, "is_playoff", False)),
+                career_gp=_cgp,
+            )
+            if _gp_mult != 1.0:
+                save_probability *= _gp_mult
         except Exception:
             pass
         

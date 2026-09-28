@@ -300,6 +300,13 @@ class Player:
     # Traits: exceptional abilities (e.g. 'big_hitter', 'speedster') inferred
     # from attributes. See player_traits.py. Stored as trait ID strings.
     traits: list = field(default_factory=list)
+    # Goalie personality (see goalie_personality.py): 'fiery' | 'calm' |
+    # 'unorthodox'. Assigned at generation; skaters leave it "".
+    goalie_temperament: str = ""
+    # Generational goalie prospect: the rare Price/Fleury fast-track -- a
+    # small chance at generation for elite-potential goalies to jump into an
+    # NHL role by fate instead of the usual slow goalie curve.
+    generational_goalie: bool = False
     line_chemistry: int = field(default_factory=lambda: random.randint(10, 20))
 
     # Perfect-mesh form tracker (-1.0 cold .. 1.0 hot) and heater counter.

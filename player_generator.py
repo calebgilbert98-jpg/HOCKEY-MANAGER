@@ -371,6 +371,31 @@ class PlayerGenerator:
             player.traits = infer_traits(player)
         except Exception:
             player.traits = []
+
+        # Goalie personality: temperament + the rare generational fast-track.
+        # Goalies develop differently than skaters (see
+        # player_development_system), but a small chance of a generational
+        # prospect can jump into an NHL role by fate.
+        try:
+            if player.primary_position == PlayerPosition.GOALIE:
+                from goalie_personality import assign_goalie_temperament
+                assign_goalie_temperament(player)
+                # The fate roll: a small chance for an elite-potential goalie
+                # prospect to be generational -- the Price/Fleury fast-track
+                # that jumps into an NHL role instead of the slow goalie curve.
+                _pot = str(getattr(player, "potential_grade",
+                                   getattr(player, "true_potential_grade", "")) or "")
+                _tier = _pot[:2].strip() if len(_pot) >= 2 else _pot[:1]
+                if _tier in ("A+", "A", "A-"):
+                    _fate_roll = 0.08
+                elif _tier in ("B+", "B", "B-"):
+                    _fate_roll = 0.03
+                else:
+                    _fate_roll = 0.0
+                if _fate_roll and random.random() < _fate_roll:
+                    player.generational_goalie = True
+        except Exception:
+            pass
         
         # Set contract info if not free agent
         if team_name != "Free Agent":

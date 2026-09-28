@@ -2377,6 +2377,38 @@ class AdvancedGameSim:
         # Get the shooting team's tactics
         shooting_team = self.home_team if puck_team_name == self.home_team.team_name else self.away_team
         defending_team = self.away_team if puck_team_name == self.home_team.team_name else self.home_team
+
+        # -- Goalie personality (additive): temperament x traffic, coach
+        # trust, room fit, youth tax, playoff elevator. Same shared math as
+        # GameSim (goalie_personality.py) so the engines stay converged;
+        # applied as a save-side divisor like the impact-tier hook above.
+        # Point shots (slap shot) go through traffic; one-timers catch the
+        # goalie moving laterally -- both count as traffic looks here.
+        try:
+            import goalie_personality as _agp
+            try:
+                _gcoach = getattr(defending_team, "head_coach",
+                                  getattr(defending_team, "coach", None))
+            except Exception:
+                _gcoach = None
+            try:
+                _gcgp = int(getattr(getattr(goalie, "stats", None),
+                                    "career_games", 0) or 0)
+            except Exception:
+                _gcgp = 0
+            _gplayoff = bool(getattr(self, "is_playoff", False))
+            _gmult = _agp.goalie_mesh_factor(
+                goalie, team=defending_team, coach=_gcoach,
+                is_playoff=False, career_gp=_gcgp)
+            _gmult *= _agp.save_prob_mult(
+                goalie,
+                {"traffic": shot_type in ("slap shot", "one-timer"),
+                 "soft": False},
+                state=None, is_playoff=_gplayoff, career_gp=_gcgp)
+            if _gmult != 1.0:
+                shot_chance = min(0.45, max(0.005, shot_chance / _gmult))
+        except Exception:
+            pass
         
         if self.pp_team:
             # Power play tactics
