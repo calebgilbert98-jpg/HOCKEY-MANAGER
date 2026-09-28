@@ -5,7 +5,7 @@ Next step in Phase 2 implementation - Intelligent CPU team behaviors
 
 import random
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from enum import Enum
 from datetime import date, timedelta
 from game_classes import Player, Team, PlayerPosition, Contract, StaffRole, is_human_managed
@@ -98,6 +98,12 @@ class AITeamManager:
         # Market analysis cache
         self.player_values: Dict[str, int] = {}
         self.position_demand: Dict[PlayerPosition, float] = {}
+
+        # Extension forward books, rebuilt per team each decision pass:
+        # team_name -> ai_extension_planning.ExtensionPlan. Shared by the
+        # extension queue and the UFA market so reserved core money is
+        # never spent twice.
+        self._ext_plans: Dict[str, Any] = {}
 
     def set_cap_system(self, cap_system: Optional[SalaryCapSystem],
                        league=None):
@@ -369,6 +375,16 @@ class AITeamManager:
             identity = self.gm_identities.get(team.team_name)
             sec = self.gm_security.get(team.team_name)
 
+            # Extension forward book: which pieces are due, what their
+            # raises cost, what's safe to spend on everything else. Built
+            # fresh each pass; the extension queue and the UFA market both
+            # read it so reserved core money is never spent twice.
+            try:
+                self._ext_plans[team.team_name] = self._build_extension_plan(
+                    team, identity, strategy, current_date)
+            except Exception:
+                pass
+
             # Check for various decision types
             team_decisions = []
 
@@ -579,6 +595,13 @@ class AITeamManager:
         # Calculate available budget
         current_salary = sum(getattr(p, 'salary', 750000) for p in team.roster)
         available_budget = strategy.budget_limit - current_salary
+        # Forward book: money reserved for the franchise core's upcoming
+        # raises is not UFA money. In a cap crunch there is no shopping.
+        _fplan = self._ext_plans.get(team.team_name)
+        if _fplan is not None:
+            if _fplan.crunch:
+                return decisions
+            available_budget -= int(_fplan.reserved)
         
         if available_budget < 1_000_000:  # Need at least 1M available
             return decisions
@@ -998,8 +1021,16 @@ class AITeamManager:
             _contract = getattr(p, "contract", None)
             if _contract is None:
                 return False
-            if int(getattr(_contract, "years_remaining", 0) or 0) != 1:
-                return False
+            # Same rulebook as the user and the evaluator above: the
+            # extension window in transaction_windows, not a local copy.
+            try:
+                import transaction_windows as _twx
+                _xok, _xwhy = _twx.check_window(
+                    "extension", None, ctx={"player": p})
+                if not _xok:
+                    return False
+            except Exception:
+                pass
             try:
                 from player_decision import wants_out as _wo
                 if _wo(p):
@@ -1208,6 +1239,42 @@ class AITeamManager:
             except Exception:
                 continue
 
+    def _build_extension_plan(self, team: Team, identity, strategy,
+                              current_date: date):
+        """One club's forward book for this pass (ai_extension_planning).
+
+        Who the GM considers franchise pieces (stars AND the young future
+        core), what their next deals project to, and how much of today's
+        money is already spoken for.
+        """
+        import ai_extension_planning as _aep
+        try:
+            from salary_cap_system import total_cap_charge as _tcc
+        except Exception:
+            _tcc = None
+        try:
+            from salary_cap_system import league_minimum_salary as _lms
+            _lmin = int(_lms())
+        except Exception:
+            _lmin = 775_000
+        _cap_sys = getattr(self, "_cap_system", None)
+        _ceiling = int(_cap_sys.current_cap) if _cap_sys is not None \
+            else 104_000_000
+        try:
+            _charge = int(_tcc(team)) if _tcc is not None else 0
+        except Exception:
+            _charge = 0
+        if _charge <= 0:
+            _charge = sum(int(getattr(getattr(p, "contract", None),
+                                      "salary", 0) or 0)
+                          for p in (getattr(team, "roster", None) or []))
+        _lg = getattr(self, "_league_ref", None)
+        _ask = lambda p: self._player_ask(p, league=_lg)
+        return _aep.plan(team, identity=identity, strategy=strategy,
+                         ask_fn=_ask, cap_ceiling=_ceiling,
+                         current_charge=_charge, current_date=current_date,
+                         league_min=_lmin)
+
     def _evaluate_contract_extensions(self, team: Team, strategy: TeamStrategy,
                                     current_date: date) -> List[AIDecision]:
         """Evaluate contract extension opportunities.
@@ -1223,13 +1290,25 @@ class AITeamManager:
             from player_decision import wants_out as _wants_out
         except Exception:
             _wants_out = None
+        # Eligibility is the SHARED rulebook -- the exact function gating
+        # the user's extension path (transaction_windows.check_window).
+        # Final year of the deal, including the June exclusive re-sign
+        # window after age_one_year decrements years_remaining to 0.
+        # No parity gap in either direction: the AI gets exactly the
+        # window the user gets.
+        try:
+            import transaction_windows as _tw
+            _tw_ok = lambda p: _tw.check_window(
+                "extension", current_date, ctx={"player": p})[0]
+        except Exception:
+            _tw_ok = lambda p: True
         expiring_players = []
         for player in team.roster:
             try:
                 _c = getattr(player, 'contract', None)
                 if _c is None:
                     continue
-                if int(getattr(_c, 'years_remaining', 0) or 0) != 1:
+                if not _tw_ok(player):
                     continue
                 if _wants_out is not None and _wants_out(player):
                     continue
@@ -1237,6 +1316,17 @@ class AITeamManager:
             except Exception:
                 continue
         
+        # The forward book orders the table: franchise pieces negotiate
+        # first, and non-pieces spend only from the discretionary remainder.
+        # When the plan says next summer's $15M man owns the money, the
+        # questionable piece waits.
+        _plan0 = self._ext_plans.get(team.team_name)
+        _plan_remaining = int(_plan0.discretionary) if _plan0 is not None \
+            else 10 ** 12
+        if _plan0 is not None:
+            _order = {id(q["player"]): i for i, q in enumerate(_plan0.queue)}
+            expiring_players.sort(key=lambda p: _order.get(id(p), 10 ** 6))
+
         for player in expiring_players:
             # Decide whether to extend based on strategy. A player coming
             # off his ELC is always an extension candidate -- he's your
@@ -1303,6 +1393,16 @@ class AITeamManager:
                 if _offer_e > max(0, _room_e):
                     # Can't afford the ask: skip rather than insult him.
                     continue
+                _is_piece_e = False
+                if _plan0 is not None:
+                    _is_piece_e = any(q["player"] is player and q["is_piece"]
+                                      for q in _plan0.queue)
+                if not _is_piece_e and _offer_e > max(0, _plan_remaining):
+                    # The forward book has this money earmarked for the
+                    # core's upcoming raises -- not for depth today.
+                    continue
+                if not _is_piece_e:
+                    _plan_remaining -= _offer_e
                 decision = AIDecision(
                     team_name=team.team_name,
                     decision_type="contract_extension",
