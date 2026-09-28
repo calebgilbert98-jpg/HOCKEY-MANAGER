@@ -45,6 +45,56 @@ def make_gm():
     t._pending_ceremony = {"kind": "jersey_retirement",
                            "info": {"player": "Gordie Howe II",
                                     "number": 9}}
+    # Sweep batch 2: every other lore/story/earned-state attribute the
+    # serializer was dropping.
+    league.steal_retro_posted = {501, 502}
+    league._last_cup_champ = "Testers"
+    league._last_champ_core = frozenset({"2-1-2", "Overload"})
+    league._blueprint_dynasties = {"Testers": 2}
+    from media_engine import Narrative, CoachMediaBeef
+    _n = Narrative("hot_seat", "Testers", "Seat getting warm",
+                   subjects=["Coach K"], heat=70.0)
+    league.media_narratives = [_n]
+    _b = CoachMediaBeef("Coach K", "Testers|Stirrer Sam", "Stirrer Sam",
+                        "Testers")
+    _b.level = 2
+    league.coach_media_beefs = [_b]
+    league.media_fines = [{"date": "2028-03-01", "name": "Player P",
+                           "amount": 5000}]
+    league.draft_day_deals = ["Testers acquire pick #7 from Rivals"]
+    t.dynamics_log = [{"date": "2028-03-01", "type": "win_streak",
+                       "text": "Won 5 straight", "morale_delta": 5,
+                       "tone": "up"}]
+    t.dressing_room = {"mood_log": ["Room is buzzing"],
+                       "pregame": {"text": "Let's go"},
+                       "intermission": None,
+                       "arrivals": {11: {"gp_at_arrival": 40}}}
+    t.steal_watch = {701: {"name": "Sleeper S", "round": 5}}
+    t.sell_watch = {702: {"name": "Bust B"}}
+    t.scout_buy_tips = {703: {"tip": "buy"}}
+    t.scout_sell_tips = {704: {"tip": "sell"}}
+    t.tip_ledger = {"tip-1": {"player_id": 701, "verdict": None}}
+    t.line_control = "gm"
+    t.tactic_even_strength = "Aggressive"
+    t.tactic_power_play = "Umbrella"
+    t.tactic_penalty_kill = "Passive"
+    t.tactic_line_matching = "Heavy"
+    t.tactic_forecheck = "1-2-2"
+    t.tactic_offense = "Overload"
+    t.tactics_familiarity = 62.5
+    t.tactics_installed_by = "coach-1"
+    t.preferred_tactics = {"forecheck": "1-2-2"}
+    t._parity_state = {"form": 1.5, "streak": 3, "winless": 0,
+                       "coach_key": "ck", "new_coach_games": 5}
+    t.analytics_quality = 80
+    t.analytics_philosophy = 75.0
+    t.philosophy_baseline = 30.0
+    t._prev_gm_name = "Old GM"
+    t.analytics_games = [{"date": "2028-03-01", "home": "Testers",
+                          "score": (4, 2)}]
+    t.gm_name = "New GM"
+    from game_classes import GMProfile
+    t.gm_profile = GMProfile(name="New GM", age=50)
     gm = SimpleNamespace(league=league, league_history=None,
                          narrative_ledger=None)
     return gm
@@ -86,14 +136,94 @@ check("pending ceremony survives",
       isinstance(pc, dict) and pc.get("kind") == "jersey_retirement"
       and (pc.get("info") or {}).get("number") == 9, str(pc))
 
+# --- Sweep batch 2 round-trips ---
+srp = getattr(lg2, "steal_retro_posted", None)
+check("steal-retro idempotency set survives",
+      isinstance(srp, set) and srp == {501, 502}, str(srp))
+check("defending-champ tracking survives",
+      getattr(lg2, "_last_cup_champ", None) == "Testers"
+      and getattr(lg2, "_last_champ_core", None) == frozenset({"2-1-2", "Overload"})
+      and getattr(lg2, "_blueprint_dynasties", None) == {"Testers": 2},
+      str((getattr(lg2, "_last_cup_champ", None),
+           getattr(lg2, "_last_champ_core", None),
+           getattr(lg2, "_blueprint_dynasties", None))))
+from media_engine import Narrative as _Narr, CoachMediaBeef as _Beef
+mn = getattr(lg2, "media_narratives", None) or []
+check("media narratives survive as Narrative objects",
+      len(mn) == 1 and isinstance(mn[0], _Narr)
+      and mn[0].kind == "hot_seat" and abs(mn[0].heat - 70.0) < 1e-6,
+      str([getattr(n, "__dict__", n) for n in mn]))
+cb = getattr(lg2, "coach_media_beefs", None) or []
+check("coach-media beefs survive as CoachMediaBeef objects",
+      len(cb) == 1 and isinstance(cb[0], _Beef) and cb[0].level == 2
+      and cb[0].coach_name == "Coach K",
+      str([getattr(b, "__dict__", b) for b in cb]))
+mf = getattr(lg2, "media_fines", None) or []
+check("media fines survive",
+      len(mf) == 1 and mf[0].get("amount") == 5000, str(mf))
+ddd = getattr(lg2, "draft_day_deals", None) or []
+check("draft-day deals feed survives",
+      len(ddd) == 1 and "pick #7" in ddd[0], str(ddd))
+
+dl = getattr(t2, "dynamics_log", None) or []
+check("dynamics log survives",
+      len(dl) == 1 and dl[0].get("text") == "Won 5 straight"
+      and dl[0].get("tone") == "up", str(dl))
+dr = getattr(t2, "dressing_room", None) or {}
+check("dressing-room state survives",
+      (dr.get("mood_log") or [""])[0] == "Room is buzzing"
+      and (dr.get("arrivals") or {}).get(11, {}).get("gp_at_arrival") == 40,
+      str(dr))
+check("scout watches survive",
+      (getattr(t2, "steal_watch", None) or {}).get(701, {}).get("round") == 5
+      and (getattr(t2, "sell_watch", None) or {}).get(702, {}).get("name") == "Bust B"
+      and (getattr(t2, "scout_buy_tips", None) or {}).get(703, {}).get("tip") == "buy"
+      and (getattr(t2, "scout_sell_tips", None) or {}).get(704, {}).get("tip") == "sell"
+      and (getattr(t2, "tip_ledger", None) or {}).get("tip-1", {}).get("player_id") == 701,
+      str((getattr(t2, "steal_watch", None), getattr(t2, "tip_ledger", None))))
+check("line control survives",
+      getattr(t2, "line_control", None) == "gm", str(getattr(t2, "line_control", None)))
+check("tactics bundle survives",
+      getattr(t2, "tactic_forecheck", None) == "1-2-2"
+      and getattr(t2, "tactic_offense", None) == "Overload"
+      and abs(float(getattr(t2, "tactics_familiarity", 0) or 0) - 62.5) < 1e-6
+      and getattr(t2, "tactics_installed_by", None) == "coach-1"
+      and (getattr(t2, "preferred_tactics", None) or {}).get("forecheck") == "1-2-2",
+      str((getattr(t2, "tactic_forecheck", None),
+           getattr(t2, "tactics_familiarity", None))))
+ps = getattr(t2, "_parity_state", None) or {}
+check("parity state survives",
+      ps.get("streak") == 3 and ps.get("new_coach_games") == 5, str(ps))
+check("analytics identity survives",
+      getattr(t2, "analytics_quality", None) == 80
+      and abs(float(getattr(t2, "analytics_philosophy", 0) or 0) - 75.0) < 1e-6
+      and getattr(t2, "_prev_gm_name", None) == "Old GM",
+      str((getattr(t2, "analytics_quality", None),
+           getattr(t2, "analytics_philosophy", None))))
+ag = getattr(t2, "analytics_games", None) or []
+check("analytics snapshots survive",
+      len(ag) == 1 and ag[0].get("home") == "Testers", str(ag))
+check("gm name + profile survive",
+      getattr(t2, "gm_name", None) == "New GM"
+      and getattr(getattr(t2, "gm_profile", None), "name", None) == "New GM"
+      and getattr(getattr(t2, "gm_profile", None), "age", None) == 50,
+      str((getattr(t2, "gm_name", None),
+           getattr(getattr(t2, "gm_profile", None), "__dict__", None))))
+
 # Old-save tolerance: keys absent -> graceful defaults, no crash.
 gm3 = make_gm()
 s3 = SaveLoadSystem(gm3)
 data = s3._serialize_league()
 tdata = data["teams"][0]
-for k in ("retired_players", "_milestone_celebrated"):
+for k in ("retired_players", "_milestone_celebrated", "steal_retro_posted",
+            "_last_cup_champ", "_last_champ_core", "_blueprint_dynasties",
+            "media_narratives", "coach_media_beefs", "media_fines",
+            "draft_day_deals"):
     data.pop(k, None)
-for k in ("retired_numbers", "_pending_ceremony"):
+for k in ("retired_numbers", "_pending_ceremony", "dynamics_log",
+            "dressing_room", "scout_watches", "line_control", "tactics",
+            "_parity_state", "analytics_identity", "analytics_games",
+            "gm_name", "gm_profile"):
     tdata.pop(k, None)
 gm4 = SimpleNamespace(league=None, league_history=None,
                       narrative_ledger=None)
@@ -113,6 +243,38 @@ try:
           getattr(t4, "retired_numbers", None) == [])
     check("old save: pending ceremony defaults to None",
           getattr(t4, "_pending_ceremony", "X") is None)
+    check("old save: steal-retro set defaults to empty",
+          getattr(lg4, "steal_retro_posted", None) == set())
+    check("old save: dynasty tracking defaults to fresh",
+          getattr(lg4, "_last_cup_champ", "X") is None
+          and getattr(lg4, "_last_champ_core", None) == frozenset()
+          and getattr(lg4, "_blueprint_dynasties", None) == {})
+    check("old save: media state defaults to empty",
+          getattr(lg4, "media_narratives", None) == []
+          and getattr(lg4, "coach_media_beefs", None) == []
+          and getattr(lg4, "media_fines", None) == []
+          and getattr(lg4, "draft_day_deals", None) == [])
+    check("old save: dynamics log + dressing room default to empty",
+          getattr(t4, "dynamics_log", None) == []
+          and getattr(t4, "dressing_room", None) == {})
+    check("old save: scout watches default to empty",
+          all(getattr(t4, w, None) == {}
+              for w in ("steal_watch", "sell_watch", "scout_buy_tips",
+                        "scout_sell_tips", "tip_ledger")))
+    check("old save: line control defaults to coach",
+          getattr(t4, "line_control", None) == "coach")
+    check("old save: tactics default to fresh-club values",
+          getattr(t4, "tactic_forecheck", None) == "2-1-2"
+          and float(getattr(t4, "tactics_familiarity", 0) or 0) == 85.0
+          and getattr(t4, "preferred_tactics", None) == {})
+    check("old save: parity + analytics default",
+          getattr(t4, "_parity_state", None) == {}
+          and getattr(t4, "analytics_quality", None) == 35
+          and getattr(t4, "analytics_games", None) == []
+          and getattr(t4, "_prev_gm_name", None) == "")
+    check("old save: gm name + profile default",
+          getattr(t4, "gm_name", None) == "General Manager"
+          and getattr(getattr(t4, "gm_profile", None), "name", None) is not None)
 except Exception as e:  # noqa: BLE001
     check("old save restores without new keys", False, str(e))
 
