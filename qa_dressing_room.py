@@ -256,5 +256,89 @@ sim3 = SimpleNamespace(home_team=home, away_team=away,
 dr.apply_pregame_talks(sim3)
 check("negative boost safe", True)
 
+# 20-27: hardening -------------------------------------------------------
+# 20: departure cascade identifies the clique AFTER roster removal
+clique_players = [make_player(f"Swede{i}", nat="Sweden", tenure="4+ years")
+                  for i in range(4)]
+others = [make_player(f"Other{i}", nat="Canada", tenure="4+ years")
+          for i in range(4)]
+departed = clique_players[0]
+team20 = make_team(clique_players + others, name="Club20")
+team20.roster.remove(departed)  # trade_engine moves bodies before the hook
+lines20 = dr.cascade_on_trade(team20, traded=departed, date_str="2026-09-28")
+check("departure cascade names the lost clique after roster removal",
+      any("sweden" in ln.lower() for ln in lines20))
+clique_mates = [p for p in clique_players[1:]]
+non_clique = [p for p in others]
+check("clique mates hit harder than the room",
+      max(p.morale for p in clique_mates) < min(p.morale for p in non_clique))
+
+# 21: press cascade reads a MediaEvent OBJECT (details dict, 'player')
+tgt21 = make_player("Target One")
+team21 = make_team([tgt21, make_player("Mate")], name="Club21")
+ev_obj = SimpleNamespace(details={"player": "Target One", "type": "signing"})
+before = tgt21.morale
+dr.cascade_on_press(team21, ev_obj, "critical")
+check("press cascade hits target from MediaEvent object",
+      tgt21.morale < before)
+
+# 22: press cascade reads trade details lists ('traded_players')
+tgt22 = make_player("Dealt Star")
+team22 = make_team([tgt22, make_player("Mate2")], name="Club22")
+ev_trade = SimpleNamespace(
+    details={"traded_players": ["Dealt Star"], "type": "trade"})
+before22 = tgt22.morale
+dr.cascade_on_press(team22, ev_trade, "supportive")
+check("press cascade hits target from trade details list",
+      tgt22.morale > before22)
+
+# 23: plain-dict 'player_name' key still works (no regression)
+tgt23 = make_player("Old Key")
+team23 = make_team([tgt23], name="Club23")
+before23 = tgt23.morale
+dr.cascade_on_press(team23, {"player_name": "Old Key"}, "critical")
+check("press cascade keeps dict player_name key", tgt23.morale < before23)
+
+# 24-26: AdvancedGameSim consumes dressing-room talks (both rooms)
+import main as _main
+AGS = _main.AdvancedGameSim
+h24 = make_team([make_player("UH1")], name="UserClub")
+a24 = make_team([make_player("AH1")], name="AICLub")
+dr.ensure_dressing_room_fields(h24)
+dr.ensure_dressing_room_fields(a24)
+h24.dressing_room["pregame"] = {"tone": "fired-up", "outcome": "landed",
+                                "boost": 2, "note": "x", "speaker": "coach",
+                                "speaker_name": "c", "context": {}}
+sim24 = AGS.__new__(AGS)
+sim24.home_team, sim24.away_team = h24, a24
+sim24.dressing_boost = {h24.team_name: 1.0, a24.team_name: 1.0}
+sim24._apply_dressing_room_pregame()
+check("AdvancedGameSim consumes user pregame talk",
+      abs(sim24.dressing_boost[h24.team_name] - 1.02) < 1e-9
+      and h24.dressing_room["pregame"] is None)
+check("AdvancedGameSim auto-talks the AI room (parity)",
+      a24.dressing_room["pregame"] is None
+      and any("gave a" in str(ln) and "talk" in str(ln)
+              for ln in a24.dressing_room.get("mood_log", [])))
+
+# 26: intermission hook moves the third-period needle
+h24.dressing_room["intermission"] = {
+    "tone": "calm", "outcome": "backfired", "boost": -1, "note": "x",
+    "speaker": "coach", "speaker_name": "c", "context": {}}
+sim24.score = {h24.team_name: 0, a24.team_name: 2}
+sim24._apply_dressing_room_intermission()
+check("AdvancedGameSim intermission talk applies",
+      abs(sim24.dressing_boost[h24.team_name] - 1.01) < 1e-9
+      and h24.dressing_room["intermission"] is None)
+
+# 27: dressing channel stays capped
+for _ in range(10):
+    h24.dressing_room["pregame"] = {"tone": "fired-up", "outcome": "landed",
+                                    "boost": 2, "note": "x", "speaker": "coach",
+                                    "speaker_name": "c", "context": {}}
+    sim24._apply_dressing_room_pregame()
+check("dressing boost capped at 1.04",
+      sim24.dressing_boost[h24.team_name] <= 1.04)
+
 print(f"\n{len(passed)} passed, {len(failed)} failed")
 sys.exit(1 if failed else 0)

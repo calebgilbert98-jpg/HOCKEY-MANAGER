@@ -1655,6 +1655,13 @@ class AdvancedGameSim:
         # FM team-talk boost: team_name -> multiplier (default 1.0)
         self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
 
+        # Dressing-room talks (module 03): each side's pre-game words move
+        # finishing a touch. Own channel -- never shares the legacy
+        # team_boost key, so the career team-talk system can't overwrite it.
+        self.dressing_boost = {
+            home_team.team_name: 1.0, away_team.team_name: 1.0}
+        self._apply_dressing_room_pregame()
+
         # Situations factor: pre-game room/bench/hunger edge per side,
         # computed once here (the per-shot loop only reads the multiplier).
         self._init_situations()
@@ -1724,6 +1731,46 @@ class AdvancedGameSim:
     def set_team_talk_boost(self, team_name: str, multiplier: float):
         """FM-style: apply a team-talk/morale multiplier to a team's scoring."""
         self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
+
+    def _apply_dressing_room_pregame(self):
+        """Module 03: pre-game talks move the opening needle (both rooms).
+
+        Each side's pending talk is consumed; AI clubs get an automatic
+        coach talk through the same consume path the user's talks use, so
+        user and AI share the mechanic. +/-1% finishing per talk point,
+        capped at +/-4% -- a nudge, not a rewrite.
+        """
+        try:
+            import dressing_room as _dr
+            for team in (self.home_team, self.away_team):
+                boost = _dr.consume_pregame_boost(team)
+                if boost:
+                    name = team.team_name
+                    self.dressing_boost[name] = max(
+                        0.96, min(1.04,
+                                  self.dressing_boost.get(name, 1.0)
+                                  + 0.01 * int(boost)))
+        except Exception:
+            pass
+
+    def _apply_dressing_room_intermission(self):
+        """Module 03: second-intermission words move the third-period needle."""
+        try:
+            import dressing_room as _dr
+            diff = (self.score.get(self.home_team.team_name, 0)
+                    - self.score.get(self.away_team.team_name, 0))
+            for team, is_home in ((self.home_team, True),
+                                  (self.away_team, False)):
+                boost = _dr.consume_intermission_boost(
+                    team, score_diff=diff if is_home else -diff)
+                if boost:
+                    name = team.team_name
+                    self.dressing_boost[name] = max(
+                        0.96, min(1.04,
+                                  self.dressing_boost.get(name, 1.0)
+                                  + 0.01 * int(boost)))
+        except Exception:
+            pass
 
     def _init_situations(self):
         """Per-team pre-game situational finishing edge (own channel).
@@ -1808,7 +1855,15 @@ class AdvancedGameSim:
     def _advance_time(self, seconds):
         self.time += seconds
         if self.time >= 1200 * self.period:
+            old_period = self.period
             self.period += 1
+            if old_period == 2 and self.period == 3:
+                # Second intermission: dressing-room words move the
+                # third-period needle (module 03).
+                try:
+                    self._apply_dressing_room_intermission()
+                except Exception:
+                    pass
             if self.period > 3 and self.score[self.home_team.team_name] == self.score[self.away_team.team_name]:
                 self.period = 4
                 self.time = 3600
@@ -2535,6 +2590,10 @@ class AdvancedGameSim:
 
         # FM team-talk / morale boost (set via set_team_talk_boost)
         shot_chance *= self.team_boost.get(puck_team_name, 1.0)
+
+        # Dressing-room talks (module 03): pre-game and intermission words
+        # move finishing a touch. Own channel, capped +/-4%.
+        shot_chance *= self.dressing_boost.get(puck_team_name, 1.0)
 
         # Situations channel: the room, the bench, and the kids move
         # finishing a few percent either way. Own channel, like the
