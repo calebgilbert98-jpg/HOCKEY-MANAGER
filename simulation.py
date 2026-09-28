@@ -551,7 +551,20 @@ class GameSim:
         
         # Stage 2: Fatigue tracking
         self.player_fatigue = {}
-        self.line_change_timer = 0
+
+        # Phase 1 shift engine (EHM-style per-unit shifts): each team's
+        # forward lines, D pairs, and special-teams units run their own
+        # shift clocks instead of sharing one global clock grid.
+        # _shift[team_name] = {'F': {'line': int, 'start': float},
+        #                      'D': {'pair': int, 'start': float},
+        #                      'PP': {'unit': int, 'start': float},
+        #                      'PK': {'unit': int, 'start': float}}
+        # 'start' is in cumulative game seconds (self._game_elapsed).
+        self._shift = {}
+        self._game_elapsed = 0.0
+        self.shift_log = []       # completed-shift records (TOI accounting)
+        self.player_toi = {}      # player_id -> seconds on ice this game
+        self.player_shifts = {}   # player_id -> shifts taken this game
         
         # Stage 3: Special situations and faceoffs
         self.current_situation = SpecialSituation.EVEN_STRENGTH
@@ -1968,6 +1981,11 @@ class GameSim:
         """Runs the entire game simulation from period 1 through OT/shootout if necessary."""
         self._ppos_ensure()
         self.goalie_pulled = set()  # no carryover between games
+        self._game_elapsed = 0.0  # shift clocks run on cumulative game time
+        self._shift = {}
+        self.shift_log = []
+        self.player_toi = {}
+        self.player_shifts = {}
         self._ot_4v4_until_whistle = False
         self._delayed_penalty = None
         self._log_event("Game Start!", "PERIOD_START")
@@ -2157,6 +2175,7 @@ class GameSim:
         """
         Stage 2 Enhancement: Simulates a single 20-minute period with zone-based gameplay.
         """
+        self._reset_shift_clocks()
         self._select_starting_lines()
         possession_team = self._resolve_faceoff(reason="period_start")
         self.possession_team = possession_team
@@ -2168,6 +2187,7 @@ class GameSim:
             time_elapsed = random.randint(8, 20)  # Slightly faster pace
             tick_start_clock = self.clock
             self.clock -= time_elapsed
+            self._game_elapsed += time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
             # Tick-local log indices: used below to spread this tick's
@@ -2232,11 +2252,10 @@ class GameSim:
             # offensive-zone possession.
             self._maybe_pull_goalies()
 
-            # Refresh lines before publishing positions, so the emitted
-            # on-ice units always match the carrier's unit
-            if self._should_change_lines():
-                self._select_starting_lines()
-                self.line_change_timer = 0
+            # Phase 1 shift engine: each team's units change on their own
+            # stamina-gated shift clocks, before positions publish, so the
+            # emitted on-ice units always match the carrier's unit.
+            self._check_unit_changes()
 
             # Positional safety net: flush any un-emitted movement (throttled)
             try:
@@ -2498,51 +2517,227 @@ class GameSim:
     def _update_fatigue(self, time_elapsed):
         """
         Stage 2: Update player fatigue based on ice time and intensity.
+        Phase 1 shift engine: benched skaters recover; TOI accumulates.
         """
+        on_ice_ids = set()
         for player in self.home_on_ice + self.away_on_ice:
-            if player.id in self.player_fatigue:
-                # Base fatigue rate (higher for more intense situations)
-                fatigue_rate = 0.8  # Base rate per second
-                
+            on_ice_ids.add(player.id)
+            is_goalie = (player.primary_position == PlayerPosition.GOALIE)
+            if player.id in self.player_fatigue and not is_goalie:
+                # Base fatigue rate per second (higher for intense situations).
+                # A hard even-strength shift costs ~25-30 energy; the bench
+                # gives it back (see recovery below).
+                fatigue_rate = 0.55
+
                 # Increase fatigue in offensive/defensive zones
                 if self.current_zone != Zone.NEUTRAL_ZONE:
                     fatigue_rate *= 1.3
-                
-                # Penalty kill increases fatigue significantly
+
+                # Penalty kill is the most taxing hockey there is; the power
+                # play is perimeter work, less taxing than even strength.
                 if self._is_on_penalty_kill(player):
-                    fatigue_rate *= 2.0
-                
-                # Power play slightly increases fatigue
+                    fatigue_rate *= 1.7
+
+                # Power play less taxing than even strength
                 elif self._is_on_power_play(player):
-                    fatigue_rate *= 1.2
-                
+                    fatigue_rate *= 0.7
+
                 # Apply fatigue
-                fatigue_loss = fatigue_rate * time_elapsed / 60  # Convert to per-minute rate
+                fatigue_loss = fatigue_rate * time_elapsed
                 self.player_fatigue[player.id] = max(0, self.player_fatigue[player.id] - fatigue_loss)
+            # TOI accounting (G4)
+            self.player_toi[player.id] = self.player_toi.get(player.id, 0) + time_elapsed
+            if player.id in self.game_stats:
+                self.game_stats[player.id]['time_on_ice'] = \
+                    self.game_stats[player.id].get('time_on_ice', 0) + time_elapsed
 
-    def _should_change_lines(self):
-        """Determine if lines should be changed based on fatigue and time."""
-        self.line_change_timer += 1
+        # Bench recovery (G3): benched skaters regain energy; goalies exempt.
+        for team in (self.home_team, self.away_team):
+            for p in team.roster:
+                if p.id in on_ice_ids:
+                    continue
+                if p.primary_position == PlayerPosition.GOALIE:
+                    continue
+                cur = self.player_fatigue.get(p.id, 100)
+                if cur < 100:
+                    self.player_fatigue[p.id] = min(100, cur + 0.45 * time_elapsed)
 
-        # Rotation phase flip: keep the stored units in lockstep with the
-        # clock-phase rotation that game logic (and the visualizer) uses.
-        phase = (self.clock // 45, self.clock // 60)
-        if phase != getattr(self, "_line_phase", None):
-            self._line_phase = phase
-            return True
+    # ------------------------------------------------------------------
+    # Phase 1 shift engine: per-unit shift clocks, stamina-gated changes,
+    # bench recovery, and shift/TOI accounting.
+    # ------------------------------------------------------------------
+    def _ensure_shift_state(self, team):
+        """Lazily create per-unit shift clocks for a team."""
+        st = self._shift.get(team.team_name)
+        if st is None:
+            st = {
+                'F':  {'line': 1, 'start': 0.0},
+                'D':  {'pair': 1, 'start': 0.0},
+                'PP': {'unit': 1, 'start': 0.0},
+                'PK': {'unit': 1, 'start': 0.0},
+            }
+            self._shift[team.team_name] = st
+        return st
 
-        # Force change every 45-60 seconds
-        if self.line_change_timer > random.randint(45, 60):
-            return True
-        
-        # Change if key players are too fatigued
-        avg_fatigue = sum(self.player_fatigue.get(p.id, 100) for p in self.home_on_ice + self.away_on_ice) / len(self.home_on_ice + self.away_on_ice)
-        
-        if avg_fatigue < 70:  # 70% fatigue threshold
-            return True
-        
-        # Change during stoppages (faceoffs, goals, etc.)
-        return False
+    def _reset_shift_clocks(self):
+        """Fresh units at period start + intermission recovery."""
+        for team in (self.home_team, self.away_team):
+            st = self._ensure_shift_state(team)
+            for group in ('F', 'D', 'PP', 'PK'):
+                key = 'line' if group == 'F' else ('pair' if group == 'D'
+                                                   else 'unit')
+                st[group][key] = 1
+                st[group]['start'] = self._game_elapsed
+        # Intermission: everyone regains 40% of missing energy.
+        for team in (self.home_team, self.away_team):
+            for p in team.roster:
+                cur = self.player_fatigue.get(p.id, 100)
+                self.player_fatigue[p.id] = min(100, cur + (100 - cur) * 0.4)
+
+    def _shift_target(self, group):
+        """Target shift length in seconds (EHM guide: 20-40s ES, ~60s PP)."""
+        return {'F': 38.0, 'D': 50.0, 'PP': 60.0, 'PK': 30.0}[group]
+
+    def _shift_unit_players(self, team, group):
+        """Skaters currently assigned to a unit group."""
+        st = self._ensure_shift_state(team)[group]
+        players = []
+        if group == 'F':
+            for pos in ('LW', 'C', 'RW'):
+                p = self._lineup_player(team, f"F{st['line']}_{pos}")
+                if p:
+                    players.append(p)
+        elif group == 'D':
+            for pos in ('L', 'R'):
+                p = self._lineup_player(team, f"D{st['pair']}_{pos}")
+                if p:
+                    players.append(p)
+        else:  # PP / PK
+            unit = ((getattr(team, 'lineup', None) or {})
+                    .get(f"{group}{st['unit']}") or {})
+            for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
+                if p:
+                    players.append(p)
+        return players
+
+    def _special_unit_active(self, team, group):
+        """Is this team's PP (or PK) unit currently on the ice?"""
+        pen = (self.home_penalties if team == self.home_team
+               else self.away_penalties)
+        opp = self.away_team if team == self.home_team else self.home_team
+        opp_pen = (self.home_penalties if opp == self.home_team
+                   else self.away_penalties)
+        my_loss = sum(1 for p in pen if p.get('manpower_loss', True))
+        opp_loss = sum(1 for p in opp_pen if p.get('manpower_loss', True))
+        if group == 'PP':
+            return opp_loss > my_loss
+        return my_loss > opp_loss
+
+    def _unit_should_change(self, team, group):
+        """Stamina-gated change decision for one unit (EHM coach logic)."""
+        st = self._ensure_shift_state(team)[group]
+        # Even-strength units don't skate during special teams: park their
+        # clocks so the shift log never records phantom shifts.
+        if group in ('F', 'D'):
+            if (self._special_unit_active(team, 'PP')
+                    or self._special_unit_active(team, 'PK')):
+                st['start'] = self._game_elapsed
+                return False
+        # Special-teams clocks only run while the unit is active; park the
+        # clock otherwise so the next PP/PK starts fresh.
+        if group in ('PP', 'PK'):
+            if not self._special_unit_active(team, group):
+                st['start'] = self._game_elapsed
+                return False
+        shift_len = self._game_elapsed - st['start']
+        target = self._shift_target(group)
+        players = self._shift_unit_players(team, group)
+        avg_energy = (sum(self.player_fatigue.get(p.id, 100) for p in players)
+                      / len(players)) if players else 100.0
+        # The power play is about rhythm, not freshness: coaches ride a
+        # humming PP unit deeper into tired legs than an ES unit.
+        gassed_at = 55.0 if group == 'PP' else 62.0
+        overdue = shift_len > target * 1.6
+        # Gassed trigger only fires once the unit has actually worked this
+        # shift -- units that step on already tired (shared PP/PK personnel)
+        # still get a real shift; the clock target governs them.
+        gassed = avg_energy < gassed_at and shift_len >= target * 0.5
+        at_target = shift_len >= target
+        if not (overdue or gassed or at_target):
+            return False
+        # Don't pull a unit mid-attack unless it's overdue or gassed --
+        # changing during your own pressure kills the rhythm (EHM PP logic).
+        if not overdue and not gassed:
+            if (self.possession_team == team
+                    and self.current_zone == Zone.OFFENSIVE_ZONE
+                    and self.possession_time < 12):
+                return False
+        st['_pending_reason'] = ('overdue' if overdue
+                                 else 'gassed' if gassed else 'target')
+        return True
+
+    def _change_unit(self, team, group, log_shift=True):
+        """Rotate one unit off, log the completed shift, dress the next."""
+        tn = team.team_name
+        st = self._ensure_shift_state(team)[group]
+        key = 'line' if group == 'F' else ('pair' if group == 'D'
+                                           else 'unit')
+        old_idx = st[key]
+        shift_len = self._game_elapsed - st['start']
+        # Sub-5s clock artifacts (parked clocks, post-whistle churn) are not
+        # real shifts -- keep them out of the TOI accounting.
+        if log_shift and shift_len >= 5.0:
+            self.shift_log.append({
+                'team': tn, 'group': group, 'index': old_idx,
+                'start': st['start'], 'end': self._game_elapsed,
+                'duration': shift_len, 'period': self.period,
+                'reason': st.pop('_pending_reason', 'target'),
+            })
+        else:
+            st.pop('_pending_reason', None)
+        # Phase 1: simple rotation (conditional deployment = Phase 2).
+        slots = {'F': 4, 'D': 3, 'PP': 2, 'PK': 2}[group]
+        st[key] = old_idx % slots + 1
+        st['start'] = self._game_elapsed
+        for p in self._shift_unit_players(team, group):
+            self.player_shifts[p.id] = self.player_shifts.get(p.id, 0) + 1
+        # Refresh on-ice for both teams; possession handoff handled inside.
+        self._select_starting_lines()
+        label = {'F': 'forward line', 'D': 'defense pair',
+                 'PP': 'power-play unit', 'PK': 'penalty-kill unit'}[group]
+        self._log_event(f"{tn} line change: {label} {st[key]} on",
+                        "LINE_CHANGE")
+
+    def _check_unit_changes(self):
+        """Per-team, per-unit shift decisions each tick."""
+        for team in (self.home_team, self.away_team):
+            # Icing freeze: the offending team's tired skaters stay out.
+            if getattr(self, '_no_line_change_team', None) is team:
+                continue
+            st = self._ensure_shift_state(team)
+            # Coming out of special teams, real teams put fresh ES units
+            # over the boards -- don't resume a parked, half-remembered shift.
+            spec_now = (self._special_unit_active(team, 'PP')
+                        or self._special_unit_active(team, 'PK'))
+            if st.get('_spec_prev', False) and not spec_now:
+                for group in ('F', 'D'):
+                    self._change_unit(team, group, log_shift=False)
+            st['_spec_prev'] = spec_now
+            for group in ('F', 'D', 'PP', 'PK'):
+                try:
+                    if self._unit_should_change(team, group):
+                        self._change_unit(team, group)
+                except Exception:
+                    continue
+
+    def get_shift_report(self):
+        """Per-game TOI summary: {team_name: {'F': {line: toi}, 'D': ...}}."""
+        report = {}
+        for rec in self.shift_log:
+            team = report.setdefault(rec['team'], {})
+            grp = team.setdefault(rec['group'], {})
+            grp[rec['index']] = grp.get(rec['index'], 0.0) + rec['duration']
+        return report
 
     def _successful_zone_entry(self, player, team, entry_type):
         """Handle a successful zone entry."""
@@ -2635,8 +2830,10 @@ class GameSim:
         self._emit_pbp("icing", player=icer, team=offending_team.team_name)
         # Freeze current lines BEFORE the faceoff clears the flag; the faceoff
         # itself is the whistle, then the freeze applies until the next whistle.
-        self._frozen_line = (self.clock // 45) % 4 + 1
-        self._frozen_d_pair = (self.clock // 60) % 3 + 1
+        # (Phase 1 shift engine: freeze reads the per-unit shift clocks.)
+        _st = self._ensure_shift_state(offending_team)
+        self._frozen_line = _st['F']['line']
+        self._frozen_d_pair = _st['D']['pair']
         self._forced_faceoff_team = offending_team
         # Freeze starts at the icing whistle: the offending team's tired
         # skaters take the draw and can't change until the next stoppage.
@@ -6056,15 +6253,19 @@ class GameSim:
         else:
             num_skaters = max(3, 5 - len(penalized_skaters))
         
-        # Simple line rotation logic
-        current_line = (self.clock // 45) % 4 + 1 # Change lines every 45 seconds
-        current_d_pair = (self.clock // 60) % 3 + 1
+        # Phase 1 shift engine: units come from this team's per-unit shift
+        # clocks, not a global clock grid.
+        st = self._ensure_shift_state(team)
+        current_line = st['F']['line']
+        current_d_pair = st['D']['pair']
         # Icing: offending team cannot change lines (tired skaters stay out)
         if getattr(self, '_no_line_change_team', None) is team:
             current_line = getattr(self, '_frozen_line', current_line)
             current_d_pair = getattr(self, '_frozen_d_pair', current_d_pair)
 
-        # Line matching: aggressive home-ice deployment reacts to score state
+        # Line matching: aggressive home-ice deployment reacts to score state.
+        # The override syncs back to the shift clock so energy accounting
+        # tracks the unit actually on the ice.
         if team == self.home_team and getattr(team, 'tactic_line_matching', 'Standard') == 'Aggressive':
             goal_diff = self.home_score - self.away_score
             rotation = (self.clock // 45) % 2
@@ -6072,6 +6273,7 @@ class GameSim:
                 current_line = 1 if rotation == 0 else 2  # chase the game: top six
             elif goal_diff >= 2:
                 current_line = 3 if rotation == 0 else 4  # protect the lead: bottom six
+            st['F']['line'] = current_line
 
         on_ice = []
 
@@ -6079,9 +6281,9 @@ class GameSim:
         special_unit = None
         if self.period != 4:
             if len(penalized_skaters) < len(opp_mp_skaters):
-                special_unit = f"PP{(self.clock // 45) % 2 + 1}"
+                special_unit = f"PP{st['PP']['unit']}"
             elif len(penalized_skaters) > len(opp_mp_skaters):
-                special_unit = f"PK{(self.clock // 45) % 2 + 1}"
+                special_unit = f"PK{st['PK']['unit']}"
         if special_unit:
             unit = (getattr(team, 'lineup', None) or {}).get(special_unit) or {}
             for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
@@ -8611,11 +8813,14 @@ class GameSim:
         # Implement timeout logic (simplified for now)
         self.team_stats[self.home_team.team_name]['intelligent_timeout_usage'] += 1
         
-        # Timeout effects: momentum reset, fatigue recovery
+        # Timeout effects: momentum reset, fatigue recovery (both teams --
+        # a timeout is a rest for everyone on the benches).
         self.momentum = GameMomentum.NEUTRAL
-        
-        # Restore some fatigue for home team
-        for player in self.home_team.roster:
+
+        # Restore some fatigue for both teams
+        for player in self.home_team.roster + self.away_team.roster:
+            if player.primary_position == PlayerPosition.GOALIE:
+                continue
             current_fatigue = self.player_fatigue.get(player.id, 80)
             self.player_fatigue[player.id] = min(100, current_fatigue + (strength * 15))
 
