@@ -3451,6 +3451,7 @@ class TradeWindow(InGamePopup):
         self.geometry("1280x780")
         self.configure(fg_color=BG)
         self.trade_offers = {'user': [], 'partner': []}
+        self._asset_levels = {'user': {}, 'partner': {}}  # id(player) -> NHL/AHL/Prospects
         self._history_visible = False
         self._preset = preset or {}
         self._negotiation_id = self._preset.get("negotiation_id")
@@ -3483,8 +3484,14 @@ class TradeWindow(InGamePopup):
         partner_row = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
         partner_row.pack(fill='x', padx=10, pady=(8, 0))
         body(partner_row, "Trade partner:").pack(side='left', padx=(14, 0), pady=8)
+        # Realistic: trade partners are NHL franchises only --
+        # never standalone AHL clubs.
+        def _is_nhl(t):
+            ln = str(getattr(t, 'league_name', '') or '')
+            return (t != parent.user_team and
+                    ('National Hockey League' in ln or 'NHL' in ln or not ln))
         partner_teams = sorted(t.team_name for t in parent.league.teams
-                               if t != parent.user_team)
+                               if _is_nhl(t))
         self.partner_combo = ctk.CTkComboBox(
             partner_row, values=partner_teams, width=260,
             command=lambda _v: self.update_trade_partner_roster())
@@ -3510,6 +3517,13 @@ class TradeWindow(InGamePopup):
         user_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         heading(user_frame, parent.user_team.team_name, size=13).pack(
             anchor='w', padx=12, pady=(10, 4))
+        # Realistic logic: trade assets by level (NHL/AHL/Prospects).
+        # Trades are between NHL franchises; AHL/prospects are org assets.
+        self._user_level = ctk.StringVar(value="NHL")
+        _ulvl = ctk.CTkSegmentedButton(user_frame, values=["NHL", "AHL", "Prospects"],
+                                       variable=self._user_level,
+                                       command=lambda _v: self._refresh_user_list())
+        _ulvl.pack(fill='x', padx=8, pady=(0, 4))
         self.user_list = CTkPlayerList(user_frame)
         self.user_list.pack(fill='both', expand=True, padx=8, pady=4)
         btn_row = ctk.CTkFrame(user_frame, fg_color="transparent")
@@ -3560,6 +3574,11 @@ class TradeWindow(InGamePopup):
         partner_frame.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
         self.partner_title = heading(partner_frame, "Trade Partner", size=13)
         self.partner_title.pack(anchor='w', padx=12, pady=(10, 4))
+        self._partner_level = ctk.StringVar(value="NHL")
+        _plvl = ctk.CTkSegmentedButton(partner_frame, values=["NHL", "AHL", "Prospects"],
+                                       variable=self._partner_level,
+                                       command=lambda _v: self.update_trade_partner_roster())
+        _plvl.pack(fill='x', padx=8, pady=(0, 4))
         self.partner_list = CTkPlayerList(partner_frame)
         self.partner_list.pack(fill='both', expand=True, padx=8, pady=4)
         pbtn_row = ctk.CTkFrame(partner_frame, fg_color="transparent")
@@ -3621,10 +3640,22 @@ class TradeWindow(InGamePopup):
     # ------------------------------------------------------------------
     # Views
     # ------------------------------------------------------------------
+    def _level_roster(self, team, level):
+        """Get a team's roster at the given level (NHL/AHL/Prospects)."""
+        if level == "AHL":
+            players = getattr(team, 'ahl_roster', [])
+        elif level == "Prospects":
+            players = getattr(team, 'prospects', [])
+        else:
+            players = getattr(team, 'roster', [])
+        return sorted(players, key=lambda p: p.overall_rating(), reverse=True)
+
+    def _refresh_user_list(self):
+        self.user_list.set_players(
+            self._level_roster(self.parent.user_team, self._user_level.get()))
+
     def update_views(self):
-        roster = sorted(self.parent.user_team.roster,
-                        key=lambda p: p.overall_rating(), reverse=True)
-        self.user_list.set_players(roster)
+        self._refresh_user_list()
         self.update_trade_partner_roster()
         self._refresh_offer_lists()
         self._update_meter()
@@ -3634,21 +3665,25 @@ class TradeWindow(InGamePopup):
         team = next((t for t in self.parent.league.teams
                      if t.team_name == name), None)
         if team:
-            self.partner_title.configure(text=team.team_name)
-            roster = sorted(team.roster, key=lambda p: p.overall_rating(), reverse=True)
-            self.partner_list.set_players(roster)
+            lvl = self._partner_level.get() if hasattr(self, '_partner_level') else "NHL"
+            self.partner_title.configure(text=f"{team.team_name} ({lvl})")
+            self.partner_list.set_players(self._level_roster(team, lvl))
             needs = self.te.team_needs(team)[:3]
             self.needs_label.configure(text="  ".join(needs) if needs else "—")
         # Partner changed -> clear their side of the deal
         self.trade_offers['partner'] = []
+        self._asset_levels['partner'] = {}
         self._refresh_offer_lists()
         self._update_meter()
 
     def _refresh_offer_lists(self):
         for side, lst in (('user', self.user_offer_list),
                           ('partner', self.partner_offer_list)):
-            labels = [f"{self.te.asset_label(a)}  [{self.te.asset_value(a)}]"
-                      for a in self.trade_offers[side]]
+            labels = []
+            for a in self.trade_offers[side]:
+                lvl = self._asset_levels[side].get(id(a), "NHL")
+                tag = "" if lvl == "NHL" else f" ({lvl})"
+                labels.append(f"{self.te.asset_label(a)}{tag}  [{self.te.asset_value(a)}]")
             lst.set_items(labels)
 
     # ------------------------------------------------------------------
@@ -3727,6 +3762,9 @@ class TradeWindow(InGamePopup):
         player = lst.get_selected()
         if player and player not in self.trade_offers[side]:
             self.trade_offers[side].append(player)
+            lvl = (self._user_level.get() if side == 'user'
+                   else self._partner_level.get())
+            self._asset_levels[side][id(player)] = lvl
             self._refresh_offer_lists()
             self._update_meter()
 
