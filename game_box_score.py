@@ -17,7 +17,7 @@ import customtkinter as ctk
 
 
 class GameBoxScoreWindow(ctk.CTkToplevel):
-    TABS = ("Scoring Summary", "Player Stats", "Team Stats")
+    TABS = ("Scoring Summary", "Player Stats", "Team Stats", "Shot Chart")
 
     def __init__(self, parent, game_result, initial_tab="Scoring Summary"):
         super().__init__(parent)
@@ -147,6 +147,7 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
         self._fill_scoring(self.tabs.tab("Scoring Summary"))
         self._fill_players(self.tabs.tab("Player Stats"))
         self._fill_teams(self.tabs.tab("Team Stats"))
+        self._fill_shot_chart(self.tabs.tab("Shot Chart"))
         if initial_tab in self.TABS:
             try:
                 self.tabs.set(initial_tab)
@@ -449,3 +450,72 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                          fg_color=bg, corner_radius=4).grid(
                              row=ri, column=2, padx=6, pady=2)
         frame.grid_columnconfigure(0, weight=1)
+
+    def _fill_shot_chart(self, tab):
+        """E4: shot chart with click-to-replay."""
+        import tkinter as tk
+        c = self._c
+        body = ctk.CTkFrame(tab, fg_color='transparent')
+        body.pack(fill='both', expand=True, padx=6, pady=6)
+
+        ctk.CTkLabel(body, text="Shot Chart (click a shot to replay)",
+                     font=('Segoe UI', 12, 'bold'),
+                     text_color=c['TEXT']).pack(pady=(0, 6))
+
+        # Canvas: simplified rink (200x85 ft, scaled)
+        W, H = 600, 260
+        canvas = tk.Canvas(body, width=W, height=H, bg='#0d1b2a',
+                          highlightthickness=0)
+        canvas.pack(pady=6)
+
+        # Rink outline
+        canvas.create_rectangle(10, 10, W-10, H-10, outline='#1e3a5f', width=2)
+        # Center line
+        canvas.create_line(W//2, 10, W//2, H-10, fill='#1e3a5f', width=1)
+        # Goals (simplified)
+        canvas.create_rectangle(5, H//2-15, 12, H//2+15, fill='#ff4444', outline='')
+        canvas.create_rectangle(W-12, H//2-15, W-5, H//2+15, fill='#ff4444', outline='')
+
+        # Plot shots from PBP
+        pbp = self.result.get('pbp_events') or []
+        shots = [e for e in pbp if e.get('event') == 'shot']
+        # Scale: rink 200x85 -> canvas 580x240
+        sx = (W - 20) / 200
+        sy = (H - 20) / 85
+
+        colors = {'goal': '#00ff88', 'save': '#4488ff',
+                  'miss': '#ff4444', 'block': '#888888'}
+        for shot in shots:
+            pos = shot.get('shooter_pos') or (100, 42.5)
+            x = 10 + pos[0] * sx
+            y = 10 + pos[1] * sy
+            outcome = 'save'
+            if shot.get('goal'):
+                outcome = 'goal'
+            elif shot.get('missed'):
+                outcome = 'miss'
+            elif shot.get('blocked'):
+                outcome = 'block'
+            color = colors.get(outcome, '#4488ff')
+            r = 4
+            oid = canvas.create_oval(x-r, y-r, x+r, y+r,
+                                    fill=color, outline='white', width=1)
+            # Click to replay
+            ts = shot.get('timestamp', 0)
+            canvas.tag_bind(oid, '<Button-1>',
+                           lambda e, t=ts: self._replay_moment(t))
+
+        # Legend
+        legend = ctk.CTkFrame(body, fg_color='transparent')
+        legend.pack(pady=4)
+        for label, color in [('Goal', '#00ff88'), ('Save', '#4488ff'),
+                             ('Miss', '#ff4444'), ('Block', '#888888')]:
+            ctk.CTkLabel(legend, text=f"● {label}",
+                         text_color=color,
+                         font=('Segoe UI', 10)).pack(side='left', padx=10)
+
+    def _replay_moment(self, timestamp):
+        """E4: jump the viewer to a timestamp."""
+        # This hooks into the game viewer if available
+        if hasattr(self, '_viewer') and self._viewer:
+            self._viewer.seek_to(timestamp)
