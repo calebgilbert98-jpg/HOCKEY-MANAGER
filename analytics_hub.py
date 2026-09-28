@@ -169,6 +169,32 @@ def rolling_line_trends(team, n=5):
     return dict(trends)
 
 
+def assist_pair_rows(recs, name_lookup=None, limit=12):
+    """Line-combination effectiveness from the assist-pairs ledger.
+
+    recs: analytics game records (each may carry 'assist_pairs' as
+    [(passer_id, scorer_id, team_name), ...]). Returns the top `limit`
+    (passer, scorer, goals) combos sorted by goals, names resolved via
+    name_lookup (id -> name) when given, else raw ids.
+    """
+    counts = Counter()
+    for rec in recs or []:
+        try:
+            pairs = rec.get("assist_pairs") or []
+        except Exception:
+            continue
+        for t in pairs:
+            try:
+                counts[(t[0], t[1])] += 1
+            except Exception:
+                continue
+    nl = name_lookup or {}
+    rows = [{"passer": nl.get(pid, pid), "scorer": nl.get(sid, sid),
+             "goals": n}
+            for (pid, sid), n in counts.most_common(limit)]
+    return rows
+
+
 def entry_breakdown(entries):
     counts = Counter(e.get("type", "?") for e in entries)
     total = sum(counts.values())

@@ -473,3 +473,22 @@ def line_chemistry_score(players) -> float:
     """Total chemistry delta for a line/pair (convenience wrapper)."""
     total, _ = line_chemistry_report(players)
     return total
+
+
+# ---------------------------------------------------------------------------
+# Shooter-choice weighting -- ONE decision, two fidelities (divergence #14).
+# Both engines weight "who takes the team's shot" with this function so the
+# shot chart is a single shared number: archetype shoot tendency (snipers
+# lead, playmakers defer) x the Sniper-ish shot_frequency_mult trait,
+# flattened (sqrt) so a sniper leads the chart without owning it.
+# ---------------------------------------------------------------------------
+
+def shooter_choice_weight(player) -> float:
+    """Relative likelihood this skater takes his team's shot. >= 0.05."""
+    try:
+        from player_traits import get_sim_bonus as _bonus
+        _t = get_tendency(player, "shoot")
+        _w = max(0.05, float(_t)) * float(_bonus(player, "shot_frequency_mult"))
+        return max(0.05, _w) ** 0.5
+    except Exception:
+        return 1.0

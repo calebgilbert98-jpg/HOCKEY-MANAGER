@@ -322,3 +322,29 @@ def get_sim_bonus(player, effect_key: str, default: float = 1.0) -> float:
         for trait in traits:
             result += trait.sim_effects.get(effect_key, 0.0)
         return result if result != 0.0 else default
+
+
+# ---------------------------------------------------------------------------
+# Shootout attempt resolution -- ONE decision, two fidelities.
+# Both engines (GameSim and AdvancedGameSim) resolve every shootout attempt
+# through this function so shootout conversion is a single shared number.
+# League-average conversion is ~35-40% (NHL-like); elite shooters convert
+# more, elite goalies stop more. Never 0% or 100%.
+# ---------------------------------------------------------------------------
+
+def resolve_shootout_attempt(shooter, goalie) -> bool:
+    """True if the shooter scores. Pure probability -- no logging."""
+    import random as _rng
+    _bonus = get_sim_bonus
+    shot_roll = ((getattr(shooter, "shooting", 50)
+                  + getattr(shooter, "deking", 50)) / 4
+                 + _rng.randint(1, 20))
+    # Traits: clutch shooters elevate, danglers deke better.
+    shot_roll *= _bonus(shooter, "shootout_mult")
+    shot_roll *= _bonus(shooter, "deke_success_mult")
+    save_roll = (getattr(goalie, "goaltending", 50) * 0.45
+                 + _rng.randint(1, 20))
+    # Traits: wall goalies stop more, big-game goalies elevate in shootouts.
+    save_roll *= _bonus(goalie, "save_chance_mult")
+    save_roll *= _bonus(goalie, "shootout_mult")
+    return shot_roll > save_roll

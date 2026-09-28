@@ -19,6 +19,14 @@ from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
 import threading
+# Part B: line-combination effectiveness reader -- the assist-pairs
+# ledger lives on the analytics game records (analytics_hub); re-exported
+# here so both analytics surfaces share the one reader.
+try:
+    from analytics_hub import assist_pair_rows
+except Exception:  # pragma: no cover - analytics_hub unavailable
+    def assist_pair_rows(recs, name_lookup=None, limit=12):
+        return []
 from datetime import datetime, timedelta
 
 # --- Core Analytics Data Structures ---

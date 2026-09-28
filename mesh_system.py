@@ -57,9 +57,11 @@ _BREAKOUT_MORALE_BUMP = 8    # coach trust made tangible (morale floor lift)
 # The shot formula was designed for a 1-20 attribute scale ("Elite 18 vs weak
 # 8") but both skills resolve on the 1-100 scale, with goalies systematically
 # ~15 points above shooters. Recentering restores the designed 9% base for an
-# average shot. Measured 2026-09-27 across generated league talent; re-measure
-# if the player generator's attribute distributions change.
-SKILL_DIFF_BASELINE = -14.8
+# average shot. Measured 2026-09-27 across generated league talent; re-measured
+# 2026-09-28 in live games (s2_deadline save, n=834 shots): the in-game
+# adjusted differential averages -26.7 (starters + danger/shot-type
+# adjustments), not -14.8. Re-measure if rosters or adjustments change.
+SKILL_DIFF_BASELINE = -26.7
 SHOT_BASE_CHANCE = 0.09
 SHOT_SKILL_SENSITIVITY = 0.008
 
@@ -203,6 +205,127 @@ def recalibrated_shot_chance(skill_diff: float) -> float:
     """
     return SHOT_BASE_CHANCE + ((skill_diff - SKILL_DIFF_BASELINE)
                                * SHOT_SKILL_SENSITIVITY)
+
+
+# ---------------------------------------------------------------------------
+# Talent composites -- ONE decision, two fidelities (divergences #2 and #5).
+# Both engines resolve shooter and goalie talent through these functions so
+# attribute weighting is a single shared number. Weights are the
+# quick-sim's live ones (the richer, considered model); GameSim's side was
+# dead code (shooter) or an equal-split (goalie).
+# ---------------------------------------------------------------------------
+
+def shooter_skill_composite(shooter, shooting_base=None) -> float:
+    """Shooter talent on the native 1-100 scale.
+
+    Weights: shot-attr 0.30 + shooting_accuracy 0.25 + off_the_puck 0.20 +
+    composure 0.15 + vision 0.10. shooting_base is the shot-type-specific
+    base (wristshot/slapshot/one_timer/backhand); each engine picks it from
+    position/shot type the way it always has, then shares this weighting.
+    Never raises.
+    """
+    try:
+        if shooting_base is None:
+            shooting_base = getattr(shooter, "wristshot", 10)
+        return (float(shooting_base) * 0.30
+                + float(getattr(shooter, "shooting_accuracy", 10)) * 0.25
+                + float(getattr(shooter, "off_the_puck", 10)) * 0.20
+                + float(getattr(shooter, "composure", 10)) * 0.15
+                + float(getattr(shooter, "vision", 10)) * 0.10)
+    except Exception:
+        return 50.0
+
+
+def goalie_skill_composite(goalie) -> float:
+    """Goalie talent on the native 1-100 scale.
+
+    Weights: goaltending 0.40 + reflexes 0.25 + positioning 0.20 +
+    rebound_control 0.10 + composure 0.05. Never raises.
+    """
+    try:
+        if goalie is None:
+            return 67.5
+        return (float(getattr(goalie, "goaltending", 10)) * 0.40
+                + float(getattr(goalie, "reflexes", 10)) * 0.25
+                + float(getattr(goalie, "positioning", 10)) * 0.20
+                + float(getattr(goalie, "rebound_control", 10)) * 0.10
+                + float(getattr(goalie, "composure", 10)) * 0.05)
+    except Exception:
+        return 67.5
+
+
+# ---------------------------------------------------------------------------
+# Assist logic -- ONE decision, two fidelities (Part B).
+#
+# Talent sits at the heart of every assist: playmaking attributes carry
+# 70-80% of the decision weight, and dynamics (relationship closeness x
+# line chemistry) are a capped x0.85-1.3 amplifier -- a grinder never
+# out-assists elite vision, but linemates who read each other get the
+# extra look. Both engines select passers, receivers, and secondary
+# assists through these functions.
+# ---------------------------------------------------------------------------
+
+def playmaking_score(player) -> float:
+    """Raw playmaking talent on the 1-100 scale.
+
+    passing .45 + vision .35 + offensive_awareness .20. Never raises.
+    """
+    try:
+        return (float(getattr(player, "passing", 10)) * 0.45
+                + float(getattr(player, "vision", 10)) * 0.35
+                + float(getattr(player, "offensive_awareness", 10)) * 0.20)
+    except Exception:
+        return 30.0
+
+
+def relationship_mult(a, b) -> float:
+    """Dynamics amplifier from pairwise closeness: 1.0 + 0.15 * rel/100.
+
+    rel is Player.relationships (other id -> -100..100, friend..rival).
+    Capped 0.85..1.15. Never raises.
+    """
+    try:
+        _rels = getattr(a, "relationships", None) or {}
+        _rel = _rels.get(getattr(b, "id", None), 0)
+        _rel = max(-100, min(100, int(_rel)))
+        return max(0.85, min(1.15, 1.0 + 0.15 * (_rel / 100.0)))
+    except Exception:
+        return 1.0
+
+
+def assist_weight(candidate, scorer, team=None, is_playoff=False) -> float:
+    """Assist-credit weight for `candidate` on `scorer`'s goal.
+
+    Playmaking attributes dominate; relationship closeness x line
+    chemistry (mesh_chance_factor) combine into one capped x0.85-1.3
+    dynamics amplifier. Never raises.
+    """
+    try:
+        _pm = max(5.0, playmaking_score(candidate))
+        try:
+            _chem = mesh_chance_factor(candidate, [scorer], team,
+                                       is_playoff=is_playoff)
+        except Exception:
+            _chem = 1.0
+        _dyn = max(0.85, min(1.3, relationship_mult(candidate, scorer)
+                             * _chem))
+        return _pm * _dyn
+    except Exception:
+        return 30.0
+
+
+def record_assist_pair(ledger, passer, scorer, team_name):
+    """Append (passer_id, scorer_id, team_name) to a bounded assist-pairs
+    ledger (a collections.deque with a maxlen, owned by the engine).
+    Feeds the analytics_hub / advanced_stats_analytics line-combination
+    views. Never raises.
+    """
+    try:
+        if ledger is not None and passer is not None and scorer is not None:
+            ledger.append((getattr(passer, "id", None),
+                           getattr(scorer, "id", None), team_name))
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

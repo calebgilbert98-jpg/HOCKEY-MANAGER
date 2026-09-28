@@ -391,15 +391,15 @@ def _draw_infraction(fight_mult: float = 1.0, scrum_mult: float = 1.0,
     return name, minutes, detail
 
 # ---------------------------------------------------------------------------
-# Scoring level (user setting): Low = current tuning (~5.5 gpg),
-# Medium = NHL baseline (~6.0 gpg), High = arcade (~7+ gpg).
-# Applied as a multiplier on per-shot goal probability.
+# Scoring level (user setting): Low = current tuning, Medium = NHL baseline,
+# High = arcade. Applied as a multiplier on per-shot goal probability.
+#
+# Recalibrated after the tactics rework (team-by-team shot volume), which
+# re-anchored scoring to the 2.70-3.60 GPG design band: a 128-game GameSim
+# sample measured 29.3 SOG/team and 3.36 GPG at multiplier 1.00
+# (docs/TACTICS_REWORK_GUIDE.md). The old paired-batch figures
+# (1.00 -> 4.92 gpg etc.) predated that rework and are obsolete.
 # ---------------------------------------------------------------------------
-
-# Calibrated multipliers (goal probability scale). Paired 50-game batches
-# (identical random streams): 1.00 -> 4.92 gpg, 1.09 -> 5.58 (+13%),
-# 1.30 -> 6.72 (+37%). Against the real-league ~5.5 gpg baseline that is
-# ~5.5 / ~6.2 / ~7.5 gpg: NHL baseline and 7+ arcade.
 _SCORING_MULTIPLIERS = {
     "low": 1.00,
     "medium": 1.09,
@@ -461,6 +461,11 @@ class GameSim:
         self.home_team = home_team
         self.away_team = away_team
         self.is_playoff = is_playoff
+        # Part B: bounded assist-pairs ledger (passer_id, scorer_id,
+        # team_name) for the analytics_hub / advanced_stats_analytics
+        # line-combination views. Attached to the analytics game record
+        # at game end.
+        self.assist_pairs = deque(maxlen=4000)
         self.rivalries = rivalries if rivalries is not None else []
         # Installed NHL systems: every team skates an identity.
         try:
@@ -480,6 +485,11 @@ class GameSim:
         # through the impact-tier ctx. Live: goals swing it in _handle_goal.
         self._crowd_energy = 50.0
         self._crowd_mood = 30.0        # home perspective
+        # Crowd finishing edge (divergence #9): the same crowd_effects
+        # decision quick-sim applies on shot_chance -- clamped [0.97, 1.03],
+        # a factor, never the game. Applied on xG in _resolve_shot_on_goal.
+        self._crowd_home_mult = 1.0
+        self._crowd_away_mult = 1.0
         # Readable momentum (momentum.py): rolling event log; read-only for
         # the visualizer, risk-only for AI decisions. Never touches conversion.
         self._momentum_events = []
@@ -489,6 +499,11 @@ class GameSim:
             if isinstance(atmosphere, dict):
                 self._crowd_energy = float(atmosphere.get("energy", 50.0))
                 self._crowd_mood = float(atmosphere.get("mood", 30.0))
+            from arena_atmosphere import crowd_effects as _ce, roster_avg_age as _raa
+            _hm, _am = _ce(self._crowd_energy, self._crowd_mood,
+                           away_avg_age=_raa(self.away_team))
+            self._crowd_home_mult = _hm
+            self._crowd_away_mult = _am
         except Exception:
             pass
         # --- Tension / punishment / brawl state (additive; inert when unused) ---
@@ -4531,8 +4546,12 @@ class GameSim:
         
         miss_chance = base_miss + distance_penalty
         miss_chance *= quality_modifier
-        miss_chance *= (20 - accuracy) / 20  # Better accuracy = lower miss chance
-        
+        # Accuracy is on the 1-100 scale: rescale the original 1-20 intent
+        # (factor = 1 - accuracy_20/20) so better shooters miss less.
+        # At 75 accuracy the factor is 0.25; floored so elites still
+        # rarely (not never) miss. League-wide miss rate lands ~10%.
+        miss_chance *= max(0.05, 1.0 - accuracy / 100.0)
+
         return random.random() < miss_chance
 
     def _weighted_random_choice(self, weights_dict):
@@ -4584,14 +4603,20 @@ class GameSim:
                 if tendency_key == "shoot" else ()
             weights = []
             for p in pool:
-                w = max(0.05, get_tendency(p, tendency_key))
-                if freq_key:
-                    w *= _trait_bonus(p, freq_key)
+                # ONE decision (divergence #14): the shared shooter-choice
+                # weight -- archetype shoot tendency x shot_frequency_mult,
+                # flattened. Both engines use this; only the recency
+                # penalty below is GameSim-side texture.
                 if tendency_key == "shoot":
-                    # flatten: a sniper should lead, not own, the shot chart
-                    w = w ** 0.5
-                if recent and getattr(p, "id", None) in recent:
-                    w *= 0.35  # you just shot; the puck moves on
+                    from player_archetypes import shooter_choice_weight as _scw
+                    w = _scw(p)
+                else:
+                    w = max(0.05, get_tendency(p, tendency_key))
+                    if freq_key:
+                        w *= _trait_bonus(p, freq_key)
+                if tendency_key == "shoot":
+                    if recent and getattr(p, "id", None) in recent:
+                        w *= 0.35  # you just shot; the puck moves on
                 weights.append(w)
             pick = random.choices(pool, weights=weights, k=1)[0]
             if tendency_key == "shoot" and recent is not None:
@@ -4729,43 +4754,150 @@ class GameSim:
             x = 200.0 - x
         return x, y
 
+    def _award_assists(self, shooter, attacking_team, passer=None):
+        """Part B: build the assist list for a goal via the ONE shared decision.
+
+        Primary: the pass-branch passer when given; otherwise the setup
+        man is SELECTED by playmaking x relationship-with-scorer x line
+        chemistry (rebound/scramble goals still come off a teammate's
+        work -- the brief's passer selection, attributes 70-80% of the
+        weight). Secondary: rolled at the tuned rate, selection is
+        attribute-weighted via the shared assist_weight, not a dice roll.
+        Every awarded pair is ledgered for line-combination analytics.
+        Returns the list of assisting player objects.
+        """
+        from mesh_system import (playmaking_score as _pms,
+                                 relationship_mult as _relm,
+                                 mesh_chance_factor as _mcf,
+                                 assist_weight as _aw,
+                                 record_assist_pair as _rap)
+        assists = []
+        _iso = bool(getattr(self, "is_playoff", False))
+        _on_ice = [p for p in self._get_on_ice(attacking_team)
+                   if p.primary_position != PlayerPosition.GOALIE]
+        _team_name = getattr(attacking_team, "team_name", "")
+
+        # Primary: given passer, else select the setup man.
+        _primary = passer
+        if _primary is None:
+            _pool = [p for p in _on_ice if p != shooter]
+            if _pool and random.random() < 0.75:
+                try:
+                    _pw = []
+                    for _pp in _pool:
+                        _w = _pms(_pp) * _relm(_pp, shooter)
+                        try:
+                            _w *= _mcf(_pp, [shooter], attacking_team,
+                                        is_playoff=_iso)
+                        except Exception:
+                            pass
+                        _pw.append(max(1.0, _w))
+                    _primary = random.choices(_pool, weights=_pw, k=1)[0]
+                except Exception:
+                    _primary = None
+        if _primary is not None:
+            assists.append(_primary)
+            try:
+                _rap(self.assist_pairs, _primary, shooter, _team_name)
+            except Exception:
+                pass
+
+        # Secondary: tuned rate, attribute-weighted selection.
+        # Part B tuning: base 0.78 targets assists/goal ~1.6 with the
+        # reworked primary rate (~0.8) across the main and rebound paths.
+        secondary_chance = 0.78
+        for p in _on_ice:
+            if p != shooter and p != _primary:
+                secondary_chance *= _trait_bonus(p, "assist_chance_mult")
+                break  # Only apply once (highest bonus)
+        if random.random() < min(0.92, secondary_chance):
+            _cands = [p for p in _on_ice
+                      if p != shooter and p != _primary]
+            if _cands:
+                _sw = [max(0.05, _aw(p, shooter, attacking_team,
+                                      is_playoff=_iso)
+                            * _trait_bonus(p, "assist_chance_mult"))
+                       for p in _cands]
+                assists.append(random.choices(_cands, weights=_sw, k=1)[0])
+        return assists
+
     def _resolve_shot_on_goal(self, shooter, attacking_team, defending_team, shot_type, location, quality, distance):
         """
         Stage 5: Enhanced shot resolution with advanced goaltending excellence.
         """
         goalie = self._selected_goalie(defending_team)
         
-        # Handle passing play possibility
+        # Handle passing play possibility -- Part B rework.
+        # The SETUP MAN is chosen first: weighted by playmaking attributes
+        # (passing, vision, offensive awareness) x relationship closeness
+        # with the puck carrier x line chemistry -- playmakers run the
+        # narrative, and linemates are preferred. The thread probability
+        # is kept low (~0.15-0.20) because the scoring pass bonus below
+        # (passer.passing x 0.3) doubles goal probability when it fires;
+        # the primary assist RATE is handled separately by
+        # _award_assists' setup-man selection (not tied to this roll).
         passer = None
-        # Archetype tendency: snipers shoot first, playmakers look pass first.
-        # shoot_pass_tendency is SHOOT tendency (high = shooter), so the pass
-        # branch scales with (100 - tendency) and inversely with shoot_bias.
-        shoot_bias = get_tendency(shooter, "shoot_bias")
-        pass_bias = 1.0 / shoot_bias if shoot_bias else 1.0
-        pass_chance = min(100.0, (100 - shooter.shoot_pass_tendency) * pass_bias)
-        if random.random() * 100 < pass_chance \
-                and shot_type not in [ShotType.REBOUND, ShotType.TIP_IN]:
-            teammates = [p for p in self._get_on_ice(attacking_team) if p != shooter and p.primary_position != PlayerPosition.GOALIE]
-            _pass_look = 0.3
-            try:
-                from mesh_system import mesh_chance_factor as _mcf2
-                _pm = [pl for pl in teammates if pl is not shooter]
-                _pass_look *= _mcf2(shooter, _pm, attacking_team,
-                                    is_playoff=bool(getattr(self, "is_playoff", False)))
-            except Exception:
-                pass
-            if teammates and random.random() < _pass_look:  # ~30% chance of pass play
-                passer = shooter
-                shooter = random.choice(teammates)
-                # The one-timer man arrives at the same spot and takes it;
-                # place him so his position is honest too.
-                _sx, _sy = self._shot_spot_coords(location, attacking_team)
-                self._ppos_place(shooter, _sx, _sy, jitter=2.0)
-                self.possession_player = shooter
-                self.possession_team = attacking_team
-                self.puck_pos = self._clamp_boards(_sx, _sy)
-                self._emit_skate()
-                self._log_event(f"Pass from {passer.full_name} to {shooter.full_name}...", "PASS")
+        if shot_type not in [ShotType.REBOUND, ShotType.TIP_IN]:
+            _setup_pool = [p for p in self._get_on_ice(attacking_team)
+                           if p is not shooter
+                           and p.primary_position != PlayerPosition.GOALIE]
+            if _setup_pool:
+                _passer, _thread = None, 0.0
+                try:
+                    from mesh_system import (playmaking_score as _pms,
+                                             relationship_mult as _relm3,
+                                             mesh_chance_factor as _mcf2)
+                    _iso2 = bool(getattr(self, "is_playoff", False))
+                    _sw = []
+                    for _sp in _setup_pool:
+                        _w = _pms(_sp) * _relm3(shooter, _sp)
+                        try:
+                            _w *= _mcf2(_sp, [shooter], attacking_team,
+                                        is_playoff=_iso2)
+                        except Exception:
+                            pass
+                        _sw.append(max(1.0, _w))
+                    _passer = random.choices(_setup_pool, weights=_sw, k=1)[0]
+                    # Thread rate targets ~0.15 (the old calibrated pass-branch
+                    # rate): the scoring pass bonus (passer.passing x 0.3
+                    # below) DOUBLES goal probability when it fires, so this
+                    # must stay low. The primary assist rate is handled
+                    # separately by _award_assists' setup-man selection.
+                    _thread = (0.08 + 0.14 * (_pms(_passer) / 100.0))
+                    try:
+                        _thread *= _mcf2(_passer, [shooter], attacking_team,
+                                         is_playoff=_iso2)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                if _passer is not None and random.random() < _thread:
+                    passer = _passer
+                    # The setup man finds the FINISHER -- weight the
+                    # receiver by finishing (the shared
+                    # shooter_choice_weight) x relationship closeness
+                    # with the passer. Snipers get the one-timer, not
+                    # grinders. (Give-and-go allowed: the original
+                    # carrier can be the receiver.)
+                    _rcv_pool = [p for p in self._get_on_ice(attacking_team)
+                                 if p is not passer
+                                 and p.primary_position != PlayerPosition.GOALIE]
+                    try:
+                        from player_archetypes import shooter_choice_weight as _scw4
+                        _rw = [max(0.05, _scw4(_tm) * _relm3(passer, _tm))
+                               for _tm in _rcv_pool]
+                        shooter = random.choices(_rcv_pool, weights=_rw, k=1)[0]
+                    except Exception:
+                        shooter = random.choice(_rcv_pool)
+                    # The one-timer man arrives at the same spot and takes it;
+                    # place him so his position is honest too.
+                    _sx, _sy = self._shot_spot_coords(location, attacking_team)
+                    self._ppos_place(shooter, _sx, _sy, jitter=2.0)
+                    self.possession_player = shooter
+                    self.possession_team = attacking_team
+                    self.puck_pos = self._clamp_boards(_sx, _sy)
+                    self._emit_skate()
+                    self._log_event(f"Pass from {passer.full_name} to {shooter.full_name}...", "PASS")
         
         # Calculate expected goal value (xG)
         # Archetype matchup effects: shutdown defenders smother snipers,
@@ -4786,6 +4918,27 @@ class GameSim:
             pass
 
         expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance)
+
+        # Shooter talent (divergence #2): the shooter's attributes move
+        # finishing -- the ONE shared shooter_skill_composite with the same
+        # 0.30/0.25/0.20/0.15/0.10 weights quick-sim uses. Mean-preserving
+        # around the measured league average (65.3, n=2220, 2026-09-28):
+        # an average shooter is 1.0x; each point moves xG 0.8% (the same
+        # talent sensitivity as quick-sim's skill-diff model). Elite
+        # (~70) finishes ~1.04x, depth (~62) ~0.97x -- additive on top of
+        # the volume edge snipers already get from shooter_choice_weight.
+        try:
+            from mesh_system import shooter_skill_composite as _ssc2
+            _sbase = {
+                ShotType.ONE_TIMER: getattr(shooter, "one_timer", 10),
+                ShotType.SLAP_SHOT: getattr(shooter, "slapshot", 10),
+                ShotType.BACKHAND: getattr(shooter, "backhand", 10),
+            }.get(shot_type, getattr(shooter, "wristshot", 10))
+            _ss = _ssc2(shooter, _sbase)
+            _sf = min(1.25, max(0.80, 1.0 + (_ss - 65.3) * 0.008))
+            expected_goal = min(0.95, expected_goal * _sf)
+        except Exception:
+            pass
 
         # Team tactics shape finishing: systems and special-teams approach
         # move xG up/down for both sides.
@@ -4842,6 +4995,18 @@ class GameSim:
         except Exception:
             pass
 
+        # Crowd finishing edge (divergence #9): the building's mood moves
+        # finishing +/-3% -- the same crowd_effects decision quick-sim
+        # applies on shot_chance. Own channel, never overrides the above.
+        try:
+            _cm = (self._crowd_home_mult
+                   if attacking_team is self.home_team
+                   else self._crowd_away_mult)
+            if _cm != 1.0:
+                expected_goal = min(0.95, expected_goal * _cm)
+        except Exception:
+            pass
+
         # Update expected goals tracking
         self.expected_goals[attacking_team.team_name] = \
             self.expected_goals.get(attacking_team.team_name, 0.0) + expected_goal
@@ -4882,7 +5047,8 @@ class GameSim:
         
         # Calculate save probability with advanced goaltending model
         save_probability = self._calculate_save_probability(
-            goalie, location, shot_type, quality, distance, expected_goal
+            goalie, location, shot_type, quality, distance, expected_goal,
+            defending_team=defending_team,
         )
         
         # Add passing bonus to shot skill
@@ -4948,24 +5114,8 @@ class GameSim:
                 self._record_goaltender_stats(goalie, 'goal', save_type, expected_goal, quality)
                 self._analytics_tag_shot("goal")
             
-                # Handle assists
-                assists = []
-                if passer:
-                    assists.append(passer)
-                # Trait: Playmakers earn more secondary assists
-                secondary_chance = 0.4
-                # Boost if any on-ice teammate is a playmaker (they're more likely to get the secondary)
-                for p in self._get_on_ice(attacking_team):
-                    if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE:
-                        secondary_chance *= _trait_bonus(p, "assist_chance_mult")
-                        break  # Only apply once (highest bonus)
-                if random.random() < min(0.8, secondary_chance):  # Secondary assist chance
-                    second_assist_candidates = [p for p in self._get_on_ice(attacking_team) 
-                                              if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE]
-                    if second_assist_candidates:
-                        # Weight by playmaker trait for secondary assist selection
-                        weights = [_trait_bonus(p, "assist_chance_mult") for p in second_assist_candidates]
-                        assists.append(random.choices(second_assist_candidates, weights=weights, k=1)[0])
+                # Handle assists -- Part B: the ONE shared decision.
+                assists = self._award_assists(shooter, attacking_team, passer)
             
                 self._handle_goal(attacking_team, shooter, assists, shot_type, location)
             
@@ -5058,32 +5208,20 @@ class GameSim:
             })
 
     def _calculate_shooter_skill(self, shooter, shot_type, quality, distance):
-        """Calculate the shooter's skill for this specific shot."""
-        base_skill = (
-            shooter.shooting_accuracy * 0.3 +
-            shooter.shooting_power * 0.2 +
-            shooter.composure * 0.15 +
-            shooter.offensive_awareness * 0.15 +
-            shooter.hockey_iq * 0.1 +
-            shooter.flair * 0.1
-        )
-        
-        # Shot type modifiers
-        type_bonus = {
-            ShotType.WRIST_SHOT: shooter.shooting_accuracy * 0.1,
-            ShotType.SLAP_SHOT: shooter.shooting_power * 0.15,
-            ShotType.SNAP_SHOT: (shooter.shooting_accuracy + shooter.shooting_power) * 0.05,
-            ShotType.TIP_IN: shooter.anticipation * 0.2,
-            ShotType.REBOUND: shooter.anticipation * 0.15,
-            ShotType.DEFLECTION: shooter.anticipation * 0.1,
-            ShotType.BACKHAND: shooter.deking * 0.1,
-            ShotType.WRAPAROUND: shooter.deking * 0.15
-        }.get(shot_type, 0)
-        
-        # Quality bonus
-        quality_bonus = {"high": 5, "medium": 2, "low": 0}[quality]
-        
-        return base_skill + type_bonus + quality_bonus
+        """Calculate the shooter's skill for this specific shot.
+
+        Revived (divergence #2): delegates to the ONE shared
+        shooter_skill_composite -- the same 0.30/0.25/0.20/0.15/0.10
+        weights both engines use. Kept as a method so any external
+        callers keep working.
+        """
+        from mesh_system import shooter_skill_composite as _ssc3
+        _sbase = {
+            ShotType.ONE_TIMER: getattr(shooter, "one_timer", 10),
+            ShotType.SLAP_SHOT: getattr(shooter, "slapshot", 10),
+            ShotType.BACKHAND: getattr(shooter, "backhand", 10),
+        }.get(shot_type, getattr(shooter, "wristshot", 10))
+        return _ssc3(shooter, _sbase)
 
     def _calculate_goalie_skill(self, goalie, shot_type, location, quality):
         """Calculate goalie's skill for stopping this specific shot (legacy method for compatibility)."""
@@ -5174,7 +5312,10 @@ class GameSim:
                 self._update_shot_stats(best_attacker, attacking_team, defending_team,
                                         'high', 8.0, ShotType.REBOUND)
                 self._record_goaltender_stats(goalie, 'goal', SaveType.PAD_SAVE, 0.22, 'high')
-                self._handle_goal(attacking_team, best_attacker, [], ShotType.REBOUND, ShotLocation.CREASE)
+                # Part B: rebound goals earn assists too -- the setup man is
+                # selected by the shared decision (no pass branch ran here).
+                _reb_assists = self._award_assists(best_attacker, attacking_team)
+                self._handle_goal(attacking_team, best_attacker, _reb_assists, ShotType.REBOUND, ShotLocation.CREASE)
                 return True
             else:
                 self._update_shot_stats(best_attacker, attacking_team, defending_team,
@@ -5638,42 +5779,55 @@ class GameSim:
         """
         home_penalty_count = len(self._manpower_penalties(self.home_team))
         away_penalty_count = len(self._manpower_penalties(self.away_team))
-        
-        home_skaters = 6 - home_penalty_count
-        away_skaters = 6 - away_penalty_count
-        
+
+        # Regular-season overtime is 3v3: base manpower is 4 (3 skaters +
+        # goalie), not 6. Without this the OT period read EVEN_STRENGTH and
+        # the intended 3v3 1.25x open-ice volume boost never fired.
+        # Playoff OT is 5v5 sudden death -- base stays 6.
+        _ot_3v3 = (getattr(self, "_ot_sudden_death", False)
+                   and not getattr(self, "is_playoff", False))
+        _base = 4 if _ot_3v3 else 6
+
+        home_skaters = _base - home_penalty_count
+        away_skaters = _base - away_penalty_count
+
         # Ensure minimum of 3 skaters per team
         home_skaters = max(3, home_skaters)
         away_skaters = max(3, away_skaters)
-        
+
         if home_skaters == away_skaters:
-            if home_skaters == 6:
-                return SpecialSituation.EVEN_STRENGTH
-            elif home_skaters == 5:
+            if home_skaters == _base:
+                return (SpecialSituation.THREE_ON_THREE if _ot_3v3
+                        else SpecialSituation.EVEN_STRENGTH)
+            elif home_skaters == _base - 1:
                 return SpecialSituation.FOUR_ON_FOUR
-            elif home_skaters == 4:
+            elif home_skaters == _base - 2:
                 return SpecialSituation.THREE_ON_THREE
             else:
                 return SpecialSituation.EVEN_STRENGTH  # Fallback
         elif home_skaters > away_skaters:
-            if home_skaters == 6 and away_skaters == 5:
+            if home_skaters == _base and away_skaters == _base - 1:
                 return SpecialSituation.POWER_PLAY  # Home team power play
-            elif home_skaters == 6 and away_skaters == 4:
-                return SpecialSituation.SIX_ON_FIVE if away_skaters == 4 else SpecialSituation.POWER_PLAY
-            elif home_skaters == 5 and away_skaters == 4:
+            elif home_skaters == _base and away_skaters == _base - 2:
+                # 5v3 (two minor penalties): a power play, not 6v5. The old
+                # SIX_ON_FIVE label starved the 5v3 xG branch (3.0x) because
+                # _man_advantage_xg_factor only fires on POWER_PLAY.
                 return SpecialSituation.POWER_PLAY
-            elif home_skaters == 5 and away_skaters == 3:
+            elif home_skaters == _base - 1 and away_skaters == _base - 2:
+                return SpecialSituation.POWER_PLAY
+            elif home_skaters == _base - 1 and away_skaters == _base - 3:
                 return SpecialSituation.FOUR_ON_THREE
             else:
                 return SpecialSituation.POWER_PLAY
         else:  # away_skaters > home_skaters
-            if away_skaters == 6 and home_skaters == 5:
+            if away_skaters == _base and home_skaters == _base - 1:
                 return SpecialSituation.PENALTY_KILL  # Home team penalty kill
-            elif away_skaters == 6 and home_skaters == 4:
-                return SpecialSituation.FIVE_ON_SIX if home_skaters == 4 else SpecialSituation.PENALTY_KILL
-            elif away_skaters == 5 and home_skaters == 4:
+            elif away_skaters == _base and home_skaters == _base - 2:
+                # 3v5 (two minors against): a penalty kill. See note above.
                 return SpecialSituation.PENALTY_KILL
-            elif away_skaters == 5 and home_skaters == 3:
+            elif away_skaters == _base - 1 and home_skaters == _base - 2:
+                return SpecialSituation.PENALTY_KILL
+            elif away_skaters == _base - 1 and home_skaters == _base - 3:
                 return SpecialSituation.THREE_ON_FOUR
             else:
                 return SpecialSituation.PENALTY_KILL
@@ -6511,6 +6665,8 @@ class GameSim:
 
         # Crowd: the building swings on every goal (live mood/energy feeds
         # the impact-tier ctx and the tension channel from here on).
+        # The finishing mults swing with it -- same live decision as
+        # quick-sim's _crowd_on_goal.
         try:
             from arena_atmosphere import live_crowd_update
             _st = {"energy": self._crowd_energy, "mood": self._crowd_mood}
@@ -6519,6 +6675,12 @@ class GameSim:
                               int(getattr(self, "period", 1) or 1))
             self._crowd_energy = _st["energy"]
             self._crowd_mood = _st["mood"]
+            from arena_atmosphere import (crowd_effects as _ce2,
+                                          roster_avg_age as _raa2)
+            _hm2, _am2 = _ce2(self._crowd_energy, self._crowd_mood,
+                              away_avg_age=_raa2(self.away_team))
+            self._crowd_home_mult = _hm2
+            self._crowd_away_mult = _am2
         except Exception:
             pass
         # Momentum: goals are the heaviest event.
@@ -6785,6 +6947,10 @@ class GameSim:
                 "momentum": momentum,
                 "entries": [dict(e) for e in entries],
                 "lines": lines,
+                # Part B: bounded assist-pairs ledger for line-combination
+                # effectiveness views (analytics_hub / advanced_stats).
+                "assist_pairs": [list(t) for t in
+                                 getattr(self, "assist_pairs", [])],
             }
             for team in (home, away):
                 try:
@@ -7100,6 +7266,17 @@ class GameSim:
             else:
                 shot_chance *= 1.0 - iq_factor * 0.8
             shot_chance = max(0.2, min(0.85, shot_chance))
+        # 6-on-5 (divergence #13): the pulled-goalie extra attacker. The
+        # canonical 2.2x lived in the dead _apply_special_situation_modifiers
+        # (zero callers); revived here on the live volume gate, AFTER the
+        # 0.85 clamp so the boost survives it. Gated on the ATTACKING team --
+        # when the other side has the puck it's an empty-net situation for
+        # them, not a 6v5.
+        try:
+            if attacking_team.team_name in getattr(self, "goalie_pulled", set()):
+                shot_chance *= 2.2
+        except Exception:
+            pass
         # Proportional split: the 0.85 clamp used to push shot+turnover
         # past 1.0, silently killing the cycle/maintain branches (and any
         # follow-up attached to them). Now the non-shot outcomes split
@@ -7333,18 +7510,12 @@ class GameSim:
     def _resolve_shootout_attempt(self, shooter, goalie):
         """Resolves a single shootout attempt.
 
-        League-average conversion is ~35-40% (NHL-like); elite shooters
-        convert more, elite goalies stop more. Never 0% or 100%.
+        The probability core is the ONE shared decision
+        (player_traits.resolve_shootout_attempt) -- this method only adds
+        the GameSim logging/pbp around it.
         """
-        shot_roll = (shooter.shooting + shooter.deking) / 4 + random.randint(1, 20)
-        # Traits: clutch shooters elevate, danglers deke better
-        shot_roll *= _trait_bonus(shooter, "shootout_mult")
-        shot_roll *= _trait_bonus(shooter, "deke_success_mult")
-        save_roll = goalie.goaltending * 0.45 + random.randint(1, 20)
-        # Traits: wall goalies stop more, big-game goalies elevate in shootouts
-        save_roll *= _trait_bonus(goalie, "save_chance_mult")
-        save_roll *= _trait_bonus(goalie, "shootout_mult")
-        is_goal = shot_roll > save_roll
+        from player_traits import resolve_shootout_attempt as _shared_so
+        is_goal = _shared_so(shooter, goalie)
         result = "scores" if is_goal else "is stopped"
         self._log_event(f"Shootout: {shooter.full_name} {result} against {goalie.full_name}!", "SHOOTOUT_ATTEMPT")
         self._emit_pbp("shootout_attempt", shooter=shooter, goalie=goalie,
@@ -8684,18 +8855,23 @@ class GameSim:
         """
         Stage 5: Determine goaltender's playing style based on attributes.
         """
-        # Analyze goalie attributes to determine style
+        # Analyze goalie attributes to determine style.
+        # Thresholds are on the live 1-100 attribute scale (the old 16/18/17
+        # assumed a 1-20 scale, which parked every goalie as POSITIONAL and
+        # left the other branches dead). Mapping is x5 of the original
+        # intent: elite positioning -> positional, elite reflexes ->
+        # reactionary, elite flexibility -> butterfly.
         positioning_score = (goaltender.positioning + goaltender.anticipation) / 2
         reflexes_score = goaltender.reflexes
-        flexibility = getattr(goaltender, 'flexibility', 15)  # Default if not defined
-        
-        if positioning_score >= 16:
+        flexibility = getattr(goaltender, 'flexibility', 75)  # Default if not defined
+
+        if positioning_score >= 80:
             return GoaltenderStyle.POSITIONAL
-        elif reflexes_score >= 18:
+        elif reflexes_score >= 90:
             return GoaltenderStyle.REACTIONARY
-        elif flexibility >= 17:
+        elif flexibility >= 85:
             return GoaltenderStyle.BUTTERFLY
-        elif positioning_score >= 14 and reflexes_score >= 15:
+        elif positioning_score >= 70 and reflexes_score >= 75:
             return GoaltenderStyle.HYBRID
         else:
             return GoaltenderStyle.STAND_UP
@@ -8773,27 +8949,27 @@ class GameSim:
         
         return SaveType.PAD_SAVE  # Default fallback
 
-    def _calculate_save_probability(self, goaltender, shot_location, shot_type, shot_quality, distance, expected_goal):
+    def _calculate_save_probability(self, goaltender, shot_location, shot_type, shot_quality, distance, expected_goal,
+                                    defending_team=None):
         """
         Stage 5: Calculate the probability of a save based on goaltender skills and shot characteristics.
         """
-        # Goaltender skill factors
-        positioning_skill = (goaltender.positioning + goaltender.anticipation) / 2
-        reaction_skill = (goaltender.reflexes + goaltender.agility) / 2
-        technique_skill = (goaltender.goaltending + goaltender.rebound_control) / 2
-        
-        # Overall goaltender skill
-        goalie_skill = (positioning_skill + reaction_skill + technique_skill) / 3
-        
+        # Goaltender skill factors -- the ONE shared goalie_skill_composite
+        # (divergence #5): goaltending .40 / reflexes .25 / positioning .20 /
+        # rebound_control .10 / composure .05, the same weights quick-sim
+        # uses. (The old equal-split of three pair-averages is retired.)
+        from mesh_system import goalie_skill_composite as _gsc2
+        goalie_skill = _gsc2(goaltender)
+
         # Skill edge: good goalies reduce xG, bad goalies increase it.
-        # Recalibrated for the live 1-100 scale: generated goalies average
-        # ~67.5 (n=400, stdev 2.8, range 60-75). The old 35.0 assumed a
-        # 50-scale, which parked every starter at the 0.70 clamp and killed
-        # all differentiation between goalies. Anchor-preserving: the average
-        # goalie keeps the historically calibrated 0.70x; each point of skill
-        # moves xG by 2% around that anchor, so the game's scoring balance is
-        # unchanged. Best generated (75): 0.595x. Worst (60): 0.805x.
-        LEAGUE_AVG_GOALIE_SKILL = 67.5
+        # Recalibrated 2026-09-28 on live rosters: the weighted composite
+        # averages 69.3 (n=253, sd 11.8) -- up from the old 67.5 anchor,
+        # and with wider spread than the old equal-split (sd 8.9), so
+        # goalies differentiate more. Anchor-preserving: the average
+        # goalie keeps the historically calibrated 0.70x; each point of
+        # skill moves xG by 2% around that anchor, so the game's scoring
+        # balance is unchanged.
+        LEAGUE_AVG_GOALIE_SKILL = 69.3
         skill_diff = goalie_skill - LEAGUE_AVG_GOALIE_SKILL
         # scoring_balance.BASE_SAVE_TUNE: the shared "slight" SV% nudge
         # toward .900 both engines apply. The average goalie keeps the
@@ -8896,10 +9072,35 @@ class GameSim:
                 save_probability *= _gp_mult
         except Exception:
             pass
-        
+
+        # Coach trust / room fit (divergence #11): the same
+        # goalie_mesh_factor decision quick-sim applies -- a save-side
+        # multiplier (0.985-1.02 coach, 0.99-1.015 room). Own channel.
+        try:
+            import goalie_personality as _gp3
+            _dt = defending_team
+            try:
+                _gcoach3 = getattr(_dt, "head_coach",
+                                   getattr(_dt, "coach", None))
+            except Exception:
+                _gcoach3 = None
+            try:
+                _gcgp3 = int(getattr(getattr(goaltender, "stats", None),
+                                     "career_games", 0) or 0)
+            except Exception:
+                _gcgp3 = 0
+            _mesh3 = _gp3.goalie_mesh_factor(
+                goaltender, team=_dt, coach=_gcoach3,
+                is_playoff=bool(getattr(self, "is_playoff", False)),
+                career_gp=_gcgp3)
+            if _mesh3 != 1.0:
+                save_probability *= _mesh3
+        except Exception:
+            pass
+
         # Global calibration: NHL average SV% is ~.905.
         # (Removed - formula now naturally calibrates via xG reduction)
-        
+
         return min(max(save_probability, 0.05), 0.94)  # Clamp between 5% and 94% (NHL elite ~.930)
 
     def _determine_rebound_control(self, goaltender, save_type, shot_type, shot_power):
