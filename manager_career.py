@@ -469,7 +469,7 @@ PREMATCH_QUESTIONS = [
         "ask": "Will we see any young players given a chance soon?",
         "answers": [
             ("If they're good enough, they'll play", "confident", 1, 1, 2,
-             "The academy prospects are buzzing."),
+             "The drafted prospects are buzzing."),
             ("They need to earn it in practice", "calm", 0, 1, 0,
              "Sensible. Nobody is upset."),
             ("We're not a development charity", "defensive", -2, 0, -2,
@@ -891,49 +891,6 @@ class TrainingSystem:
                 t.schedule[u] = (sched[u][0], sched[u][1])
         t.preset_name = (data or {}).get("preset_name", "Balanced Week")
         return t
-
-
-# ---------------------------------------------------------------------------
-# Youth intake
-# ---------------------------------------------------------------------------
-
-def generate_youth_intake(team_name: str, count: int = 4) -> List[dict]:
-    """Generate raw prospect data for the annual youth intake.
-
-    Returns plain dicts; the GUI converts them to Player objects.
-    """
-    first_names = ["Liam", "Noah", "Lucas", "Ethan", "Mason", "Logan", "Owen",
-                   "Nathan", "Gabriel", "Félix", "Alexis", "Thomas", "Jake",
-                   "Cole", "Brady", "Dylan", "Ryan", "Kyle", "Tyler", "Zach"]
-    last_names = ["Tremblay", "Gagnon", "Roy", "Côté", "Bouchard", "Gauthier",
-                  "Morin", "Lavoie", "Fortin", "Leblanc", "Bergeron", "Pelletier",
-                  "Smith", "Johnson", "Brown", "Wilson", "Clark", "Miller",
-                  "Novak", "Lindqvist", "Virtanen", "Kuznetsov", "Dube", "Stützle"]
-    positions = ["C", "LW", "RW", "LW", "RW", "C", "D", "D", "D", "G"]
-    prospects = []
-    for _ in range(count):
-        age = random.randint(17, 19)
-        potential = random.randint(12, 19)
-        overall = max(5, potential - random.randint(4, 8))
-        pos = random.choice(positions)
-        prospects.append({
-            "first_name": random.choice(first_names),
-            "last_name": random.choice(last_names),
-            "age": age,
-            "position": pos,
-            "overall": overall,
-            "potential": potential,
-            "personality": random.choice(PERSONALITIES),
-            "scout_note": random.choice([
-                "Silky hands and great vision.",
-                "A relentless forechecker.",
-                "Big shot from the point.",
-                "Calm beyond his years in net.",
-                "Elite skating, raw offensively.",
-                "High hockey IQ, needs strength.",
-            ]),
-        })
-    return prospects
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Manager Hub UI: Football Manager-style career screens for Puck Dynasty.
 
-Tabs: Board, Squad, Training, Youth, Press, Profile.
+Tabs: Board, Squad, Training, Prospects, Press, Profile.
 Dialogs: TeamTalkDialog, PressConferenceDialog, OppositionReportDialog.
 """
 
@@ -35,7 +35,7 @@ class ManagerHubWindow(InGamePopup):
         self._build_board_tab(notebook)
         self._build_squad_tab(notebook)
         self._build_training_tab(notebook)
-        self._build_youth_tab(notebook)
+        self._build_prospects_tab(notebook)
         self._build_press_tab(notebook)
         self._build_profile_tab(notebook)
 
@@ -374,35 +374,51 @@ class ManagerHubWindow(InGamePopup):
         self.training_effects.config(text="\n".join("• " + l for l in lines))
 
     # ------------------------------------------------------------------
-    def _build_youth_tab(self, notebook):
+    def _build_prospects_tab(self, notebook):
         frame = ttk.Frame(notebook, padding=15)
-        notebook.add(frame, text="  Youth  ")
-        ttk.Label(frame, text="Academy Intake",
+        notebook.add(frame, text="  Prospects  ")
+        ttk.Label(frame, text="Prospect Pool",
                   font=("Helvetica", 14, "bold")).pack(anchor="w")
         ttk.Label(frame, wraplength=600, justify="left",
-                  text="Each July, your academy graduates a new class of prospects. "
-                       "Top prospects can be signed straight to your roster.",
+                  text="Unsigned players your club has drafted and holds the rights to. "
+                       "They develop in juniors, college, or the minors — sign the best "
+                       "ones to your roster when they're ready.",
                   font=("Helvetica", 10)).pack(anchor="w", pady=5)
-        self.youth_list = tk.Text(frame, height=18, width=80, wrap="word",
-                                  font=("Helvetica", 10))
-        self.youth_list.pack(fill="both", expand=True, pady=5)
-        self._refresh_youth()
+        self.prospect_list = tk.Text(frame, height=18, width=80, wrap="word",
+                                     font=("Helvetica", 10))
+        self.prospect_list.pack(fill="both", expand=True, pady=5)
+        self._refresh_prospects()
 
-    def _refresh_youth(self):
-        self.youth_list.delete("1.0", "end")
-        history = self.career.youth_history
-        if not history:
-            self.youth_list.insert("end", "No intakes yet. The next academy class graduates in July.")
-            return
-        for intake in reversed(history):
-            self.youth_list.insert("end",
-                f"=== {intake.get('year')} intake ({len(intake.get('prospects', []))} prospects) ===\n")
-            for pr in intake.get("prospects", []):
-                self.youth_list.insert(
-                    "end",
-                    f"• {pr['first_name']} {pr['last_name']}, {pr['age']} — {pr['position']} "
-                    f"(OVR {pr['overall']}, POT {pr['potential']}) — {pr['scout_note']}\n")
-            self.youth_list.insert("end", "\n")
+    def _refresh_prospects(self):
+        """List the user club's drafted (unsigned) prospects, best first."""
+        box = self.prospect_list
+        box.config(state="normal")
+        box.delete("1.0", "end")
+        prospects = list(getattr(self.parent.user_team, "prospects", []) or [])
+        if not prospects:
+            box.insert("end", "No unsigned prospects yet. Build your pipeline "
+                              "at the NHL Entry Draft each June.")
+        else:
+            def _ovr(p):
+                try:
+                    return int(p.overall_rating())
+                except Exception:
+                    return 0
+            for p in sorted(prospects, key=_ovr, reverse=True):
+                try:
+                    pos = p.primary_position.value
+                except Exception:
+                    pos = getattr(p, "position", "?")
+                grade = getattr(p, "potential_grade", "?") or "?"
+                age = getattr(p, "age", "?")
+                try:
+                    name = p.full_name
+                except Exception:
+                    name = "Unknown"
+                box.insert("end",
+                           f"• {name}, {age} — {pos} "
+                           f"(OVR {_ovr(p)}, POT {grade})\n")
+        box.config(state="disabled")
 
     # ------------------------------------------------------------------
     def _build_press_tab(self, notebook):

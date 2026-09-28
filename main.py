@@ -10600,8 +10600,6 @@ class HockeyManagerGUI(tk.Tk):
             # 3. Monthly board review (first Monday of month)
             if self.current_date.weekday() == 0 and self.current_date.day <= 7:
                 self._career_board_review()
-            # 4. Youth intake cycle
-            self._career_youth_check()
             # 5. Matchday: scout report + pre-match presser
             self._career_matchday_pre()
         except Exception as e:
@@ -10758,54 +10756,6 @@ class HockeyManagerGUI(tk.Tk):
             "from the main menu.")
         # Disable further prompts; user can keep browsing but career is over
         self.career.prompts_enabled = False
-
-    def _career_youth_check(self):
-        """April preview + July 1 academy intake."""
-        from game_classes import EmailMessage, Player, PlayerPosition
-        career = self.career
-        year = self.current_date.year
-        # Preview in April
-        if self.current_date.month == 4 and self.current_date.day == 1 \
-                and career.intake_preview_sent != year:
-            career.intake_preview_sent = year
-            self.send_email_to_user(EmailMessage(
-                sender="Head of Academy", sender_type="Staff",
-                subject="Youth intake preview",
-                content=("Our scouts are excited about this summer's academy class. "
-                         "Expect 3-6 graduates in July — a couple could push for "
-                         "first-team minutes within a year."),
-                date_sent=self.current_date, category="Scouting"))
-        # Intake on July 1
-        if self.current_date.month == 7 and self.current_date.day == 1 \
-                and career.last_intake_year != year:
-            career.last_intake_year = year
-            import random as _r
-            prospects = manager_career.generate_youth_intake(
-                self.user_team.team_name, _r.randint(3, 6))
-            pos_map = {"C": PlayerPosition.CENTER, "LW": PlayerPosition.LEFT_WING,
-                       "RW": PlayerPosition.RIGHT_WING, "D": PlayerPosition.DEFENSE,
-                       "G": PlayerPosition.GOALIE}
-            added = []
-            if not hasattr(self.user_team, "prospects") or self.user_team.prospects is None:
-                self.user_team.prospects = []
-            for pr in prospects:
-                p = Player(pr["first_name"], pr["last_name"], pr["age"],
-                           pos_map.get(pr["position"], PlayerPosition.CENTER))
-                p.potential = pr["potential"]
-                p.squad_status = "Prospect"
-                p.happiness = 80
-                self.user_team.prospects.append(p)
-                added.append(f"{pr['first_name']} {pr['last_name']} ({pr['position']}, POT {pr['potential']})")
-            career.youth_history.append({"year": year, "prospects": prospects})
-            self.send_email_to_user(EmailMessage(
-                sender="Head of Academy", sender_type="Staff",
-                subject=f"Academy intake {year}: {len(added)} graduates",
-                content=("The new academy class has graduated:\n\n" +
-                         "\n".join("• " + a for a in added) +
-                         "\n\nThey've been added to your prospects list."),
-                date_sent=self.current_date, category="Scouting",
-                is_important=True))
-            self.add_news(f"🌱 Academy intake: {len(added)} prospects graduate.")
 
     def _career_user_game_today(self):
         """Return (home_team, away_team) if the user plays today, else None."""
