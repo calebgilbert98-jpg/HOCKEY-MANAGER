@@ -187,11 +187,13 @@ def record_milestone_hit(app: Any, hit: Dict[str, Any],
                  "at_home": team == home_team_name}
         try:
             led = get_ledger(app)
-            led.add(kind="milestone", weight=70,
-                    teams=(team, away_team_name or home_team_name),
-                    player=name,
-                    summary=f"{name} reaches {label}",
-                    facts=facts)
+            # record(): the ledger's append API (a previous led.add() call
+            # silently no-oped, so milestone entries never landed).
+            led.record(kind="milestone", weight=70,
+                       teams=[team, away_team_name or home_team_name],
+                       players=[name],
+                       text=f"{name} reaches {label}",
+                       facts=facts)
         except Exception:
             pass
         game_date = getattr(app, "current_date", None)

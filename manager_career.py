@@ -578,6 +578,13 @@ class BoardSystem:
                 b.owner = OwnerProfile.from_dict(v)
             elif hasattr(b, k):
                 setattr(b, k, v)
+        # Migration: a sack issued under the pre-retune model must not stand
+        # into a year-1 career -- under the new honeymoon rule a bumpy first
+        # season (no disaster) floors confidence at 1 instead of ending the
+        # career. Clear the stale flag so old saves continue correctly.
+        if b.season_number == 1 and not b._disaster and b.sacked:
+            b.sacked = False
+            b.confidence = max(1, b.confidence)
         return b
 
 

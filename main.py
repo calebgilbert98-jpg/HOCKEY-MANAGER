@@ -12499,6 +12499,16 @@ class HockeyManagerGUI(tk.Tk):
             self._record_season_to_history()
         except Exception:
             pass
+        # Board season review (manager_career.BoardSystem.season_review):
+        # the year-end reckoning -- expectation vs reality, confidence
+        # delta, and the season rollover (honeymoon decay, patience
+        # erosion, counter resets). Must run before league.end_of_season()
+        # wipes the standings and stats it reads. Previously this method
+        # had no caller, so every season played as "year 1" forever.
+        try:
+            self._offseason_board_review()
+        except Exception:
+            pass
         # Immortality (immortality.py): retirements, HOF ballot, retired
         # numbers, era arguments. Runs on recorded career totals, before
         # league.end_of_season() wipes the stats. Purely additive.
@@ -12677,6 +12687,72 @@ class HockeyManagerGUI(tk.Tk):
                            "• Free agency is now open")
         
         self.update_all_views()
+
+    def _user_playoff_result(self):
+        """(made_playoffs, rounds_won, won_cup) for the user's club.
+
+        Walks the playoff bracket the same way _record_season_to_history
+        does. Defensive: any missing piece -> (False, 0, False).
+        """
+        try:
+            user = getattr(getattr(self, 'user_team', None), 'team_name', None)
+            if not user:
+                return False, 0, False
+            pw = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            bracket = None
+            if pw is not None and hasattr(pw, 'winfo_exists') \
+                    and pw.winfo_exists():
+                bracket = getattr(pw, 'playoff_bracket', None)
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None),
+                                  'playoff_bracket', None)
+            if bracket is None:
+                return False, 0, False
+            made, rounds = False, 0
+            for series_list in (getattr(bracket, 'playoff_series', {})
+                                or {}).values():
+                for s in series_list or []:
+                    t1 = getattr(getattr(s, 'team1', None), 'team_name', None)
+                    t2 = getattr(getattr(s, 'team2', None), 'team_name', None)
+                    if user not in (t1, t2):
+                        continue
+                    made = True
+                    if getattr(getattr(s, 'winner', None),
+                               'team_name', None) == user:
+                        rounds += 1
+            champ = getattr(bracket, 'stanley_cup_champion', None)
+            won_cup = getattr(champ, 'team_name', None) == user
+            return made, rounds, won_cup
+        except Exception:
+            return False, 0, False
+
+    def _offseason_board_review(self):
+        """Year-end board reckoning + season rollover (BUG-011 fix).
+
+        Gives BoardSystem.season_review() the first real caller it has
+        ever had, then stashes the facts on the app for the season-review
+        inbox card (season_review.py builds the full story: big moments,
+        standouts, prospects, the four-corner season score).
+        """
+        career = getattr(self, 'career', None)
+        board = getattr(career, 'board', None)
+        if board is None or not hasattr(board, 'season_review'):
+            return
+        made, rounds, cup = self._user_playoff_result()
+        headline, body, delta = board.season_review(made, rounds, cup)
+        self._season_review_board = {
+            "headline": headline, "body": body, "delta": delta,
+            "made_playoffs": made, "playoff_rounds_won": rounds,
+            "won_cup": cup,
+            "expectation": getattr(board, 'expectation', None),
+            "confidence": getattr(board, 'confidence', None),
+            "season_number": getattr(board, 'season_number', None),
+        }
+        try:
+            self.add_news(f"Board season review: {headline} "
+                          f"(confidence {board.confidence}/100).")
+        except Exception:
+            pass
 
     def _record_season_to_history(self):
         """Record the completed season to League Memory.
@@ -13731,7 +13807,11 @@ class HockeyManagerGUI(tk.Tk):
                              f"The board reviews progress monthly — it judges trends, "
                              f"not single games. If things go badly, you can request "
                              f"a meeting with the owner from the Manager Hub to ask "
-                             f"for patience. If confidence hits zero, you're gone."),
+                             f"for patience. In your first season the board won't "
+                             f"pull the plug over a bumpy year -- barring a genuine "
+                             f"disaster, confidence floors at 1 and you'll get an "
+                             f"owner meeting instead. From year two on, if "
+                             f"confidence hits zero, you're gone."),
                     date_sent=self.current_date, category="General",
                     is_important=True))
             # 2. Weekly update: happiness, concerns, training effects

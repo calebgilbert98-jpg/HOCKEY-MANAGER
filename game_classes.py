@@ -2380,6 +2380,10 @@ class Team:
     ties: int = 0
     ot_losses: int = 0
     games_played: int = 0
+    # Streak tracking (season_review.py builds the year-end story from
+    # these; archived to franchise_records at the season review).
+    win_streak: int = 0          # current consecutive wins
+    longest_win_streak: int = 0  # season best
 
     @property
     def payroll(self) -> int:
@@ -2514,18 +2518,28 @@ class Team:
         return True
     
     def update_record(self, result: str, overtime: bool = False):
-        """Update team record based on game result"""
+        """Update team record based on game result.
+
+        Also tracks the current/longest win streak -- the season-review
+        builder and the franchise record book read these. Only regulation
+        + OT/SO wins extend a win streak; anything else snaps it.
+        """
         self.games_played += 1
-        
+
         if result.upper() == "WIN":
             self.wins += 1
+            self.win_streak += 1
+            if self.win_streak > self.longest_win_streak:
+                self.longest_win_streak = self.win_streak
         elif result.upper() == "LOSS":
             if overtime:
                 self.ot_losses += 1
             else:
                 self.losses += 1
+            self.win_streak = 0
         elif result.upper() == "TIE":
             self.ties += 1
+            self.win_streak = 0
     
     def reset_season_record(self):
         """Reset team record for new season"""
@@ -2534,6 +2548,8 @@ class Team:
         self.ties = 0
         self.ot_losses = 0
         self.games_played = 0
+        self.win_streak = 0
+        self.longest_win_streak = 0
     
     def generate_sample_season_record(self, games_played: int = 25):
         """Generate a realistic sample season record for demonstration purposes"""
@@ -5389,6 +5405,14 @@ class League:
         self.initialize_all_draft_picks()
         
         self.initialize_standings()
+        # Team-level records must reset too (initialize_standings only
+        # zeroes the standings dict; without this team.wins/losses
+        # accumulate across seasons in a continuing career).
+        for _t in self.teams:
+            try:
+                _t.reset_season_record()
+            except Exception:
+                pass
         self.generate_schedule(season_year=self.season_year)
 
         # Part 5: drafted-prospect rights lifecycle (unsigned rights expiry,
