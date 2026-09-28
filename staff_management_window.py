@@ -1059,7 +1059,7 @@ class StaffManagementWindow(InGamePopup):
         self._info_label(contract_inner, f"Salary: ${staff.salary:,}")
         self._info_label(contract_inner, f"Contract Length: {staff.contract_years} years")
 
-        # Attributes -- FM24-style grouped bars (1-20 EHM scale)
+        # Attributes -- FM24-style grouped bars (native 1-100 scale)
         attr_inner = self._dialog_card(main_frame, "Attributes")
         self._staff_attribute_groups(attr_inner, staff, ct)
 
@@ -1152,8 +1152,8 @@ class StaffManagementWindow(InGamePopup):
                      font=(self._ff, 10), text_color=ct['TEXT_DIM'],
                      anchor="w").pack(anchor="w", pady=(0, 12))
 
-    def _attr_bar_ctk(self, parent, label, value, max_val=20):
-        """Single 1-20 attribute bar (ctk)."""
+    def _attr_bar_ctk(self, parent, label, value, max_val=100):
+        """Single attribute bar on the native 1-100 scale."""
         ct = self._ct
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", pady=2)
@@ -1174,7 +1174,7 @@ class StaffManagementWindow(InGamePopup):
                      anchor="e").pack(side="left")
 
     def _staff_attribute_groups(self, parent, staff, ct):
-        """FM24-style grouped attribute bars (1-20 EHM scale)."""
+        """FM24-style grouped attribute bars (native 1-100 scale)."""
         grid = ctk.CTkFrame(parent, fg_color="transparent")
         grid.pack(fill="x")
         for gi, (gname, fields) in enumerate(self._STAFF_ATTR_GROUPS):
@@ -1188,7 +1188,7 @@ class StaffManagementWindow(InGamePopup):
                 if not hasattr(staff, f):
                     continue
                 self._attr_bar_ctk(col, f.replace("_", " ").title(),
-                                   getattr(staff, f), 20)
+                                   getattr(staff, f), 100)
         grid.grid_columnconfigure(0, weight=1)
         grid.grid_columnconfigure(1, weight=1)
 
