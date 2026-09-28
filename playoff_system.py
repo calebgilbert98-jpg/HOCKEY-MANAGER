@@ -511,14 +511,17 @@ class PlayoffView(ctk.CTkFrame):
                               f"wins the Stanley Cup!")
     
     def _simulate_all_playoffs(self):
-        """Simulate the entire playoff tournament"""
+        """Simulate the entire playoff tournament.
+
+        Interactive path: the sim runs in a worker thread behind a
+        cancelable progress dialog, so the UI stays responsive (the old
+        ~69s main-thread freeze is gone). Cancel keeps every game already
+        played. Headless/bulk path: synchronous, unchanged.
+        """
         if not self.playoff_bracket:
             messagebox.showwarning("Warning", "Please generate playoff bracket first")
             return
-        
-        # Heavy sim: warn, fallback-save, then show live progress.
-        # (Also driven headless by season bulk-sim; the dialog degrades
-        # gracefully if no display is available.)
+
         import sim_progress
         try:
             _headless = bool(getattr(self.app, '_bulk_simming', False))
@@ -530,38 +533,61 @@ class PlayoffView(ctk.CTkFrame):
                 "the Stanley Cup Final."):
             return
         sim_progress.create_fallback_save(self.app, "playoffs_all")
-        dlg = None
-        if not _headless:
-            try:
-                dlg = sim_progress.SimProgressDialog(
-                    self, title="Simulating Stanley Cup Playoffs")
-            except Exception:
-                dlg = None
 
+        bracket = self.playoff_bracket
         round_order = PlayoffBracket.ROUND_ORDER
-        games_done = 0
-        try:
+
+        def _run_games(cancel_event, progress):
+            """Worker body: pure sim, no widgets. Runs off the UI thread."""
+            games_done = 0
             for round_name in round_order:
-                self.playoff_bracket.current_round = round_name
-                current_series = self.playoff_bracket.playoff_series[round_name]
+                bracket.current_round = round_name
+                current_series = bracket.playoff_series[round_name]
 
                 # Simulate all series in this round
                 for si, series in enumerate(current_series):
                     while not series.is_complete:
-                        self.playoff_bracket.simulate_playoff_game(series)
+                        if cancel_event is not None and cancel_event.is_set():
+                            return
+                        bracket.simulate_playoff_game(series)
                         games_done += 1
-                        if dlg is not None:
-                            dlg.update(games_done / 105.0,
-                                       f"{str(round_name).replace('_', ' ').title()}: "
-                                       f"series {si + 1}/{len(current_series)} "
-                                       f"-- game {games_done} simulated")
+                        if progress is not None:
+                            progress(games_done / 105.0,
+                                     f"{str(round_name).replace('_', ' ').title()}: "
+                                     f"series {si + 1}/{len(current_series)} "
+                                     f"-- game {games_done} simulated")
 
                 # Advance winners to next round
-                self.playoff_bracket.advance_to_next_round(round_name)
-        finally:
-            if dlg is not None:
-                dlg.close()
+                bracket.advance_to_next_round(round_name)
+                if cancel_event is not None and cancel_event.is_set():
+                    return
 
+        if _headless:
+            # Bulk sim: synchronous, no dialog (driven by main.py, which
+            # checks _playoffs_complete() immediately after).
+            _run_games(None, None)
+            self._finish_all_playoffs(cancelled=False)
+            return
+
+        def _on_done(cancelled, error):
+            if error is not None:
+                try:
+                    from popup_system import messagebox as _mb
+                    _mb.showerror("Playoff sim failed",
+                                  f"The playoff sim hit an error and stopped:\n{error}\n\n"
+                                  "Your fallback save was created before the sim started.",
+                                  parent=self)
+                except Exception:
+                    pass
+            self._finish_all_playoffs(cancelled=cancelled or error is not None)
+
+        sim_progress.run_threaded(
+            self, "Simulating Stanley Cup Playoffs",
+            _run_games, _on_done)
+
+    def _finish_all_playoffs(self, cancelled=False):
+        """UI-thread wrap-up after Sim All: lore drain, bracket refresh,
+        champion (or partial-progress) notice."""
         # Lore: deliver any headlines stashed during the tournament.
         try:
             import headlines
@@ -571,11 +597,15 @@ class PlayoffView(ctk.CTkFrame):
 
         self._update_status_display()
         self._display_bracket()
-        
+
         if self.playoff_bracket.stanley_cup_champion:
-            messagebox.showinfo("Playoffs Complete!", 
-                              f"🏆 {self.playoff_bracket.stanley_cup_champion.team_name} "
+            messagebox.showinfo("Playoffs Complete!",
+                              f"\U0001f3c6 {self.playoff_bracket.stanley_cup_champion.team_name} "
                               f"are your Stanley Cup Champions!")
+        elif cancelled:
+            messagebox.showinfo("Playoff sim cancelled",
+                                "The sim was cancelled. The bracket keeps every "
+                                "game already played -- Sim All again to continue.")
     
     def _update_status_display(self):
         """Update the status display"""
