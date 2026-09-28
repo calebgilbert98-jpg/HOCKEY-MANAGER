@@ -4566,23 +4566,23 @@ def gm_trade_greed_mult(league: Any, user_team: Any,
     mult, notes = 1.0, []
     try:
         rep = gm_stature(user_team)
+        # Flat through the middle: only the extremes move the needle.
+        # A respected GM gets a token of goodwill; a GM running a muck
+        # gets quietly squeezed. Everyone is still here to win.
         if rep >= 75:
-            mult *= 0.95
+            mult *= 0.97
             notes.append("respected around the league")
-        elif rep < 20:
-            mult *= 1.12
-            notes.append("the league thinks you're a mark")
-        elif rep < 40:
-            mult *= 1.06
-            notes.append("rival GMs smell blood")
+        elif rep < 25:
+            mult *= 1.05
+            notes.append("word gets around")
         heat = gm_gm_heat(league, user_team, partner_team)
         if heat >= 70:
-            mult *= 1.25
+            mult *= 1.15
             notes.append("won't do business with you")
         elif heat >= 40:
-            mult *= 1.12
+            mult *= 1.06
             notes.append("bad blood with this GM")
-        mult = max(0.85, min(1.35, mult))
+        mult = max(0.90, min(1.20, mult))
     except Exception:
         pass
     return round(mult, 3), notes
@@ -4592,7 +4592,7 @@ def gm_fa_accept_delta(team: Any, player: Any) -> float:
     """Acceptance-chance delta for a free agent offer. Never raises.
 
     Stars can afford to be picky about who they play for; depth players just
-    want a contract. Bounded to +/-0.10.
+    want a contract. A whisper either way -- bounded to +/-0.05.
     """
     try:
         rep = gm_stature(team)
@@ -4602,9 +4602,9 @@ def gm_fa_accept_delta(team: Any, player: Any) -> float:
             star = False
         scale = 1.0 if star else 0.4
         if rep >= 75:
-            return round(0.08 * scale, 3)
-        if rep <= 35:
-            return round(-0.10 * scale, 3)
+            return round(0.05 * scale, 3)
+        if rep <= 25:
+            return round(-0.05 * scale, 3)
     except Exception:
         pass
     return 0.0
@@ -4613,12 +4613,12 @@ def gm_fa_accept_delta(team: Any, player: Any) -> float:
 def gm_ask_premium(team: Any) -> float:
     """Dysfunction premium on a player's salary ask. Never raises.
 
-    A GM the league doesn't respect pays up to 15% over market to get a
-    signature. Respected GMs pay sticker.
+    Only bites when you're genuinely running a muck (rep under 30): up to
+    6% over market to get a signature. Everyone else pays sticker.
     """
     try:
         rep = gm_stature(team)
-        return round(1.0 + max(0.0, (45 - rep) / 45.0) * 0.15, 3)
+        return round(1.0 + max(0.0, (30 - rep) / 30.0) * 0.06, 3)
     except Exception:
         return 1.0
 
@@ -4626,15 +4626,15 @@ def gm_ask_premium(team: Any) -> float:
 def gm_staff_accept_delta(team: Any) -> float:
     """Acceptance-chance delta for a staff/coach offer. Never raises.
 
-    Top coaches want to work for winners -- or at least for GMs the league
-    respects. Bounded to +/-0.08.
+    Top coaches mildly prefer a GM the league respects. Bounded to
+    +/-0.05 -- money and prestige still decide.
     """
     try:
         rep = gm_stature(team)
         if rep >= 70:
-            return 0.08
+            return 0.05
         if rep <= 30:
-            return -0.08
+            return -0.05
     except Exception:
         pass
     return 0.0
@@ -4662,12 +4662,12 @@ def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
                 store = _rivalry_store(league) if league is not None else []
                 r = add_rivalry(
                     store, gm_persona(team_b), gm_persona(team_a), "gm_gm",
-                    55, "trade_fleece",
+                    40, "trade_fleece",
                     f"{_ename(gm_persona(team_b))} got worked by "
                     f"{_ename(gm_persona(team_a))} in a lopsided deal.",
-                    grudge=60)
+                    grudge=50)
                 if r:
-                    out["heat"] = 55
+                    out["heat"] = 40
             except Exception:
                 pass
             out["notes"].append("the league saw the fleece")
@@ -4699,14 +4699,14 @@ def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
 def gm_board_drift(board: Any, team: Any) -> int:
     """Monthly board-confidence drift toward GM stature. Never raises.
 
-    A respected GM gets a longer leash from the board; a GM the league
-    laughs at gets a shorter one. +/-2 per month max -- results still
-    dominate. Respects the can_be_sacked toggle (drift applies, the sack
+    A respected GM gets a slightly longer leash; a GM running a muck gets
+    a slightly shorter one. +/-1 per month max -- results dominate, as
+    they should. Respects the can_be_sacked toggle (drift applies, the sack
     check itself honors the toggle as before).
     """
     try:
         rep = gm_stature(team)
-        delta = int(round((rep - 50) / 50.0 * 2))
+        delta = int(round((rep - 50) / 50.0))
         if delta:
             board.confidence = max(0, min(100, board.confidence + delta))
             try:
