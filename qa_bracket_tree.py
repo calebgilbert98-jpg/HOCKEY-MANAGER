@@ -214,8 +214,9 @@ check("scrollregion set", bool(view.canvas.cget("scrollregion")))
 # headers present
 texts = [view.canvas.itemcget(i, "text") for i in items
          if view.canvas.type(i) == "text"]
-check("round headers drawn",
-      any("ROUND 1" in t for t in texts) and any("STANLEY CUP FINAL" in t for t in texts),
+check("no round headers (2K reference has none); Cup emblem drawn",
+      not any("ROUND 1" in t or "STANLEY CUP FINAL" in t for t in texts)
+      and any("STANLEY CUP" in t for t in texts),
       str(texts[:4]))
 
 print("== G. projection rendering ==")

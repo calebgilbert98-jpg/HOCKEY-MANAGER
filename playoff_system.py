@@ -749,6 +749,26 @@ class PlayoffView(ctk.CTkFrame):
         
         ttk.Button(control_frame, text="Refresh Bracket",
                   command=self.refresh_bracket, style='TButton').pack(side='left', padx=(0, 10))
+
+        # Season-long LEAGUE TENSION gauge (the in-game INTENSITY meter's
+        # big brother): the league sees at a glance whether tensions are
+        # high across the season, and which incident is driving it.
+        try:
+            self._tension_frame = ttk.Frame(control_frame,
+                                            style='Content.TFrame')
+            self._tension_frame.pack(side='right', padx=(10, 0))
+            self._tension_canvas = tk.Canvas(
+                self._tension_frame, width=210, height=150,
+                bg=self.app.CONTENT_BG, highlightthickness=0)
+            self._tension_canvas.pack()
+            self._tension_driver = ttk.Label(
+                self._tension_frame, text="", style='Content.TLabel',
+                font=_sfont(self.app.FONT_FAMILY, 9, 'italic'),
+                wraplength=200, justify='center')
+            self._tension_driver.pack(pady=(0, 2))
+        except Exception:
+            self._tension_canvas = None
+            self._tension_driver = None
         
         # Status frame
         self.status_frame = ttk.LabelFrame(main_frame, text="Playoff Status", style='Card.TLabelframe')
@@ -784,8 +804,19 @@ class PlayoffView(ctk.CTkFrame):
         hscroll.grid(row=1, column=0, sticky="ew")
         bracket_container.grid_rowconfigure(0, weight=1)
         bracket_container.grid_columnconfigure(0, weight=1)
-        
+
+        # Bottom ticker: 2K-style selected-series readout bar.
+        try:
+            self.ticker_label = tk.Label(
+                main_frame, text="", anchor="center", justify="center",
+                bg=self.BRACKET_TICKER_BG, fg="#E8EDF2",
+                font=_sfont(self.app.FONT_FAMILY, 12, "bold"))
+            self.ticker_label.pack(fill="x", ipady=8, pady=(8, 0))
+        except Exception:
+            self.ticker_label = None
+
         self.canvas = canvas
+        self._refresh_tension_gauge()
     
     def _check_playoff_eligibility(self):
         """Check if playoffs can be generated"""
@@ -842,6 +873,36 @@ class PlayoffView(ctk.CTkFrame):
             return
         self._update_status_display()
         self._display_bracket()
+        self._refresh_tension_gauge()
+
+    def _refresh_tension_gauge(self):
+        """Redraw the season-long LEAGUE TENSION gauge. Never raises."""
+        c = getattr(self, '_tension_canvas', None)
+        if c is None:
+            return
+        try:
+            c.delete("all")
+        except Exception:
+            return
+        try:
+            from narrative_ledger import active_ledger as _al
+            from season_intensity import season_intensity, draw_gauge
+            info = season_intensity(_al())
+            draw_gauge(c, 105, 88, 52, info,
+                       font_family=getattr(self.app, 'FONT_FAMILY', 'Arial'))
+            drv = self._tension_driver
+            if drv is not None:
+                try:
+                    drivers = info.get("drivers") or []
+                    if drivers and float(info.get("value", 0) or 0) >= 25:
+                        dtxt = str(drivers[0].get("label", "") or "")[:95]
+                        drv.configure(text=f"Driven by: {dtxt}")
+                    else:
+                        drv.configure(text="A calm league \u2014 for now.")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _on_bracket_game(self, series):
         """Listener: a playoff game just finished (possibly on a worker
@@ -1042,13 +1103,51 @@ class PlayoffView(ctk.CTkFrame):
         self.status_label.config(text=status_text)
     
     # ------------------------------------------------------------------
-    # Bracket tree
+    # Bracket tree (2K-style mirrored layout)
     # ------------------------------------------------------------------
     BRACKET_CARD_W = 264
-    BRACKET_GAP_X = 110
+    BRACKET_GAP_X = 96
     BRACKET_PAD = 24
-    BRACKET_HEADER_H = 44
     BRACKET_GAP_Y = 26
+    BRACKET_NAVY = "#0A1428"
+    BRACKET_TICKER_BG = "#0E1930"
+
+    # Column definitions: (round_key, conference). West advances left->in,
+    # East advances right->in, the Cup is decided in the middle -- the
+    # mirrored conference bracket from the reference.
+    BRACKET_COLUMNS = (
+        ("wild_card", "Western"),
+        ("division_semifinals", "Western"),
+        ("division_finals", "Western"),
+        ("stanley_cup_final", None),
+        ("division_finals", "Eastern"),
+        ("division_semifinals", "Eastern"),
+        ("wild_card", "Eastern"),
+    )
+    # Column indices positioned after both Round 1 columns, so every
+    # card's feeders are already placed when it is centered on them.
+    BRACKET_LAYOUT_ORDER = (0, 6, 1, 5, 2, 4, 3)
+
+    @staticmethod
+    def _series_conference(series):
+        """Conference of a series (both clubs share one until the Final)."""
+        for t in (getattr(series, 'team1', None),
+                  getattr(series, 'team2', None)):
+            c = getattr(t, 'conference', '') or ''
+            if c in ("Eastern", "Western"):
+                return c
+        return "Western"  # unknown -> left side, keeps the tree balanced
+
+    @staticmethod
+    def _r1_sort_key(s):
+        """Round 1 top-to-bottom: 1v8, 4v5, 3v6, 2v7 by top seed."""
+        def _seed(t):
+            try:
+                return int(getattr(t, 'standings_position', 99) or 99)
+            except Exception:
+                return 99
+        t1, t2 = getattr(s, 'team1', None), getattr(s, 'team2', None)
+        return min(_seed(t1), _seed(t2))
 
     def _tree_bracket(self):
         """Return (bracket, projected_bool) for the tree.
@@ -1094,10 +1193,15 @@ class PlayoffView(ctk.CTkFrame):
             pass
 
     def _display_bracket(self):
-        """Draw the playoff bracket as a real tree: one column per round,
-        series cards linked by connector lines, per-game results on every
-        card. Before the playoffs kick off, Round 1 shows as a projection
-        from the current standings."""
+        """Draw the playoff bracket as a 2K-style mirrored tree.
+
+        West rounds run down the left edge inward, East rounds down the
+        right edge inward, the Stanley Cup Final sits in the middle under
+        a Cup emblem. Series cards wear team colors with the series-wins
+        badge at the outer edge; white elbow connectors link rounds; the
+        bottom ticker reads out the selected series. Before the playoffs
+        kick off, Round 1 shows as a projection from the standings.
+        """
         canvas = getattr(self, 'canvas', None)
         if canvas is None:
             return
@@ -1105,8 +1209,14 @@ class PlayoffView(ctk.CTkFrame):
             canvas.delete("all")
         except Exception:
             return
+        try:
+            canvas.configure(bg=self.BRACKET_NAVY)
+        except Exception:
+            pass
 
         bracket, projected = self._tree_bracket()
+        self._tree_bracket_obj = bracket
+        self._tree_projected = projected
         self._set_projection_banner(projected, bracket)
         if bracket is None:
             try:
@@ -1120,18 +1230,31 @@ class PlayoffView(ctk.CTkFrame):
                 pass
             return
 
-        rounds = [r for r in PlayoffBracket.ROUND_ORDER
-                  if bracket.playoff_series.get(r)]
-        if not rounds:
+        # --- series per column ---
+        col_series = []
+        for rkey, conf in self.BRACKET_COLUMNS:
+            ss = list((getattr(bracket, 'playoff_series', None) or {}).get(rkey) or [])
+            if conf is not None:
+                ss = [s for s in ss if self._series_conference(s) == conf]
+            if rkey == "wild_card":
+                try:
+                    ss.sort(key=self._r1_sort_key)
+                except Exception:
+                    pass
+            col_series.append(ss)
+        if not any(col_series):
             return
 
         # --- create the series cards (provisional positions) ---
-        cards = {}  # id(series) -> dict(wid, widget, x, y, series, round, ri)
-        for ri, rkey in enumerate(rounds):
-            x = self.BRACKET_PAD + ri * (self.BRACKET_CARD_W + self.BRACKET_GAP_X)
-            for s in bracket.playoff_series[rkey]:
+        cards = {}  # id(series) -> dict(wid, widget, x, y, series, round, ci, conf)
+        for ci, ss in enumerate(col_series):
+            rkey, conf = self.BRACKET_COLUMNS[ci]
+            mirror = (conf == "Eastern")
+            x = self.BRACKET_PAD + ci * (self.BRACKET_CARD_W + self.BRACKET_GAP_X)
+            for s in ss:
                 try:
-                    card = self._series_card(s, projected=projected)
+                    card = self._series_card(s, projected=projected,
+                                             mirror=mirror)
                 except Exception:
                     continue
                 try:
@@ -1139,7 +1262,8 @@ class PlayoffView(ctk.CTkFrame):
                 except Exception:
                     continue
                 cards[id(s)] = {"wid": wid, "widget": card, "x": x, "y": 0,
-                                "series": s, "round": rkey, "ri": ri}
+                                "series": s, "round": rkey, "ci": ci,
+                                "conf": conf}
         if not cards:
             return
         try:
@@ -1157,104 +1281,188 @@ class PlayoffView(ctk.CTkFrame):
         targets = {}  # id(series) -> id(target series)
         for key, c in cards.items():
             _nxt, tgt = series_target(bracket, c["series"])
-            if tgt is not None:
+            if tgt is not None and id(tgt) in cards:
                 targets[key] = id(tgt)
         feeders_of = {}
         for key, tkey in targets.items():
             feeders_of.setdefault(tkey, []).append(key)
 
-        # --- vertical layout: R1 stacked; later rounds centered on feeders ---
-        for ri, rkey in enumerate(rounds):
-            keys = [k for k, c in cards.items() if c["ri"] == ri]
-            if ri == 0:
-                y = self.BRACKET_PAD + self.BRACKET_HEADER_H
+        # --- vertical layout: both Round 1 columns stack; every other
+        # --- column centers on its feeders (feeders always placed first
+        # --- thanks to BRACKET_LAYOUT_ORDER) ---
+        y0 = self.BRACKET_PAD + 10
+        for ci in self.BRACKET_LAYOUT_ORDER:
+            keys = [id(s) for s in col_series[ci] if id(s) in cards]
+            if ci in (0, 6):
+                y = y0
                 for k in keys:
                     cards[k]["y"] = y
                     y += heights[k] + self.BRACKET_GAP_Y
-            else:
-                def _feed_y(k):
-                    fl = feeders_of.get(k, [])
-                    if not fl:
-                        return 1e9
-                    return sum(cards[f]["y"] + heights[f] / 2 for f in fl) / len(fl)
-                keys.sort(key=_feed_y)
-                y = self.BRACKET_PAD + self.BRACKET_HEADER_H
-                for k in keys:
-                    fl = feeders_of.get(k, [])
-                    if fl:
-                        cy = (sum(cards[f]["y"] + heights[f] / 2 for f in fl)
-                              / len(fl))
-                        yy = max(cy - heights[k] / 2, y)
-                    else:
-                        yy = y
-                    cards[k]["y"] = yy
-                    y = yy + heights[k] + self.BRACKET_GAP_Y
+                continue
 
-        # --- place cards, draw round headers + connector lines ---
-        line_color = "#5A6B7C"
+            def _feed_y(k):
+                fl = [f for f in feeders_of.get(k, []) if f in cards]
+                if not fl:
+                    return 1e9
+                return (sum(cards[f]["y"] + heights[f] / 2 for f in fl)
+                        / len(fl))
+            try:
+                keys.sort(key=_feed_y)
+            except Exception:
+                pass
+            y = y0
+            for k in keys:
+                fl = [f for f in feeders_of.get(k, []) if f in cards]
+                if fl:
+                    cy = (sum(cards[f]["y"] + heights[f] / 2 for f in fl)
+                          / len(fl))
+                    yy = max(cy - heights[k] / 2, y)
+                else:
+                    yy = y
+                cards[k]["y"] = yy
+                y = yy + heights[k] + self.BRACKET_GAP_Y
+
+        # --- place cards ---
         for k, c in cards.items():
             try:
                 canvas.coords(c["wid"], c["x"], c["y"])
             except Exception:
                 pass
-        for ri, rkey in enumerate(rounds):
-            x = self.BRACKET_PAD + ri * (self.BRACKET_CARD_W + self.BRACKET_GAP_X)
-            try:
-                canvas.create_text(
-                    x + 2, self.BRACKET_PAD + 14, anchor="w",
-                    text=ROUND_DISPLAY_NAMES.get(rkey, rkey).upper(),
-                    fill="#C9A227",
-                    font=_cfont(self.app.FONT_FAMILY, 12, "bold"))
-            except Exception:
-                pass
+
+        # --- white elbow connectors (West flows left->right, East right->left) ---
         for k, tkey in targets.items():
             if tkey not in cards:
                 continue
             c, t = cards[k], cards[tkey]
             try:
-                x1 = c["x"] + self.BRACKET_CARD_W
+                if c["ci"] < t["ci"]:
+                    x1 = c["x"] + self.BRACKET_CARD_W
+                    x2 = t["x"]
+                else:
+                    x1 = c["x"]
+                    x2 = t["x"] + self.BRACKET_CARD_W
                 y1 = c["y"] + heights[k] / 2
-                x2 = t["x"]
                 y2 = t["y"] + heights[tkey] / 2
                 mx = (x1 + x2) / 2
                 canvas.create_line(x1, y1, mx, y1, mx, y2, x2, y2,
-                                   fill=line_color, width=2, smooth=False)
+                                   fill="#DCE3EB", width=2, smooth=False)
             except Exception:
                 pass
-        # champion marker under the final card
+
+        # --- Stanley Cup emblem above the Final ---
+        try:
+            fam = self.app.FONT_FAMILY
+            for k, c in cards.items():
+                if c["round"] != "stanley_cup_final":
+                    continue
+                ex = c["x"] + self.BRACKET_CARD_W / 2
+                ey = max(c["y"] - 8, 96)
+                canvas.create_text(ex, ey - 44, text="\U0001F3C6",
+                                   font=_cfont(fam, 30, ""), anchor="s")
+                canvas.create_text(ex, ey - 40, text="STANLEY CUP",
+                                   fill="#C9A227",
+                                   font=_cfont(fam, 13, "bold"), anchor="n")
+                canvas.create_text(ex, ey - 20, text="PLAYOFFS",
+                                   fill="#F2F2F2",
+                                   font=_cfont(fam, 11, ""), anchor="n")
+                break
+        except Exception:
+            pass
+
+        # --- champion marker under the Final card ---
         try:
             champ = getattr(bracket, 'stanley_cup_champion', None)
             if champ is not None and not projected:
                 for k, c in cards.items():
-                    if c["round"] == rounds[-1]:
+                    if c["round"] == "stanley_cup_final":
                         canvas.create_text(
                             c["x"] + self.BRACKET_CARD_W / 2,
-                            c["y"] + heights[k] + 14, anchor="n",
-                            text=f"🏆 {champ.team_name} — Stanley Cup Champions",
+                            c["y"] + heights[k] + 16, anchor="n",
+                            text=f"\U0001F3C6 {champ.team_name} — Stanley Cup Champions",
                             fill="#C9A227",
                             font=_cfont(self.app.FONT_FAMILY, 12, "bold"))
                         break
         except Exception:
             pass
+
         try:
             canvas.configure(scrollregion=canvas.bbox("all"))
         except Exception:
             pass
 
-    def _series_card(self, series, projected=False):
-        """One bracket-tree series card. Click opens the series detail."""
+        # --- ticker defaults to the top West Round 1 series ---
+        try:
+            first = (col_series[0] or [None])[0]
+            if first is None:
+                for ss in col_series:
+                    if ss:
+                        first = ss[0]
+                        break
+            if first is not None:
+                self._update_ticker(first, projected)
+        except Exception:
+            pass
+
+    def _update_ticker(self, series, projected=False):
+        """2K-style bottom ticker readout for the selected series."""
+        lbl = getattr(self, 'ticker_label', None)
+        if lbl is None or series is None:
+            return
+        try:
+            bracket = getattr(self, '_tree_bracket_obj', None)
+            rkey = None
+            if bracket is not None:
+                for r in PlayoffBracket.ROUND_ORDER:
+                    try:
+                        if any(s is series
+                               for s in (bracket.playoff_series.get(r) or [])):
+                            rkey = r
+                            break
+                    except Exception:
+                        continue
+            rname = ROUND_DISPLAY_NAMES.get(rkey, "Playoffs").upper()
+            t1n = getattr(getattr(series, 'team1', None), 'team_name', '')
+            t2n = getattr(getattr(series, 'team2', None), 'team_name', '')
+            status, _dec = series_status_text(series)
+            prefix = "\U0001F52E PROJECTION \u2014 " if projected else ""
+            lbl.configure(
+                text=f"{prefix}{rname}: {t1n} vs {t2n} \u2014 {status}")
+        except Exception:
+            pass
+
+    def _series_card(self, series, projected=False, mirror=False):
+        """One 2K-style series card: two team-colored rows, the series-wins
+        badge at the outer edge (left for West, right for East). Higher
+        seed on top. Click opens the series detail."""
+        try:
+            import team_identity_system as _tid
+        except Exception:
+            _tid = None
         t1, t2 = series.team1, series.team2
         w1 = int(getattr(series, 'team1_wins', 0) or 0)
         w2 = int(getattr(series, 'team2_wins', 0) or 0)
         decided = bool(getattr(series, 'is_complete', False))
         winner_name = getattr(getattr(series, 'winner', None), 'team_name', None)
         gold = "#C9A227"
+
+        def _seed(t):
+            try:
+                return int(getattr(t, 'standings_position', 99) or 99)
+            except Exception:
+                return 99
+
+        order = [(t1, w1), (t2, w2)]
+        try:
+            order.sort(key=lambda tw: _seed(tw[0]))
+        except Exception:
+            pass
+
         try:
             card = ctk.CTkFrame(self.canvas, width=self.BRACKET_CARD_W,
-                                corner_radius=10,
+                                corner_radius=8,
                                 border_width=2 if decided else 1,
-                                border_color=gold if decided else "#3E4A56",
-                                fg_color="#1B2430")
+                                border_color=gold if decided else "#2A3A52",
+                                fg_color="#0E1930")
         except Exception:
             card = ctk.CTkFrame(self.canvas, width=self.BRACKET_CARD_W)
         try:
@@ -1262,62 +1470,56 @@ class PlayoffView(ctk.CTkFrame):
         except Exception:
             pass
 
-        status, _dec = series_status_text(series)
-
-        for team, wins in ((t1, w1), (t2, w2)):
+        for idx, (team, wins) in enumerate(order):
             tname = getattr(team, 'team_name', '')
-            row = ctk.CTkFrame(card, fg_color="transparent")
-            row.pack(fill="x", padx=10, pady=(8, 0))
-            seed = getattr(team, 'standings_position', '')
-            seed_txt = f"{seed} " if seed else ""
-            abbr = team_abbr(tname)
             is_winner = decided and winner_name == tname
-            name_color = (gold if is_winner
-                          else ("#F2F2F2" if not decided else "#8A94A0"))
-            left = ctk.CTkLabel(row, text=f"{seed_txt}{abbr}", anchor="w",
-                                font=_cfont(self.app.FONT_FAMILY, 15, "bold"),
-                                text_color=name_color)
-            left.pack(side="left")
-            wl = ctk.CTkLabel(row, text=str(wins), anchor="e",
-                              font=_cfont(self.app.FONT_FAMILY, 20, "bold"),
-                              text_color=gold if is_winner else "#F2F2F2")
-            wl.pack(side="right")
-            sub = ctk.CTkLabel(card, text=tname, anchor="w",
-                               font=_cfont(self.app.FONT_FAMILY, 11, ""),
-                               text_color="#8A94A0")
-            sub.pack(fill="x", padx=12, pady=(0, 2))
-
-        if not projected:
-            games = list(getattr(series, 'game_results', None) or [])
-            if games:
+            is_loser = decided and not is_winner
+            accent, hover, on_accent = "#1B3A5C", "#14293F", "#F2F2F2"
+            if _tid is not None:
                 try:
-                    div = ctk.CTkFrame(card, height=1, fg_color="#3E4A56")
-                    div.pack(fill="x", padx=10, pady=(6, 4))
+                    accent, hover, on_accent = _tid.accent_for_team(tname)
                 except Exception:
                     pass
-                for g in games:
-                    try:
-                        gn = g.get('game', '?')
-                        t1w = g.get('team1_won')
-                        s1, s2 = g.get('t1_score', 0), g.get('t2_score', 0)
-                        if t1w:
-                            txt = f"G{gn}  {team_abbr(t1.team_name)} {s1}-{s2}"
-                        else:
-                            txt = f"G{gn}  {team_abbr(t2.team_name)} {s2}-{s1}"
-                        if g.get('ot'):
-                            txt += "  OT"
-                        gl = ctk.CTkLabel(card, text=txt, anchor="w",
-                                          font=_cfont(self.app.FONT_FAMILY, 11, ""),
-                                          text_color="#C7D0DA")
-                        gl.pack(fill="x", padx=12, pady=0)
-                    except Exception:
-                        continue
-
-        st = ctk.CTkLabel(card, text=status if status else "Not started",
-                          anchor="w",
-                          font=_cfont(self.app.FONT_FAMILY, 11, "italic"),
-                          text_color=gold if decided else "#9E9E9C")
-        st.pack(fill="x", padx=10, pady=(6, 10))
+            row_bg = hover if is_loser else accent
+            try:
+                row = ctk.CTkFrame(card, fg_color=row_bg, corner_radius=6,
+                                   height=40)
+            except Exception:
+                row = ctk.CTkFrame(card, height=40)
+            pad_bottom = 6 if idx == len(order) - 1 else 0
+            try:
+                row.pack(fill="x", padx=6, pady=(6, pad_bottom))
+            except Exception:
+                row.pack(fill="x")
+            try:
+                row.pack_propagate(False)
+            except Exception:
+                pass
+            seed = getattr(team, 'standings_position', '')
+            seed_txt = f"({seed}) " if seed else ""
+            abbr = team_abbr(tname)
+            try:
+                wins_lbl = ctk.CTkLabel(
+                    row, text=str(wins), anchor="center",
+                    font=_cfont(self.app.FONT_FAMILY, 22, "bold"),
+                    text_color=gold if is_winner else on_accent)
+                name_lbl = ctk.CTkLabel(
+                    row, text=f"{seed_txt}{abbr}", anchor="w",
+                    font=_cfont(self.app.FONT_FAMILY, 15, "bold"),
+                    text_color=gold if is_winner else on_accent)
+            except Exception:
+                continue
+            try:
+                if not mirror:
+                    # West: wins badge at the left (outer) edge.
+                    wins_lbl.pack(side="left", padx=(8, 2))
+                    name_lbl.pack(side="left", padx=(4, 0))
+                else:
+                    # East: wins badge at the right (outer) edge.
+                    wins_lbl.pack(side="right", padx=(2, 8))
+                    name_lbl.pack(side="left", padx=(10, 0))
+            except Exception:
+                pass
 
         try:
             card.configure(cursor="hand2")
@@ -1340,6 +1542,7 @@ class PlayoffView(ctk.CTkFrame):
 
     def _open_series_detail(self, series, projected=False):
         """Click a bracket series -> its storylines panel."""
+        self._update_ticker(series, projected)
         try:
             bracket = (self.playoff_bracket if not projected
                        else self._build_projection_bracket())
@@ -1432,7 +1635,39 @@ def _series_storylines(series):
         w1 = int(getattr(series, 'team1_wins', 0) or 0)
         w2 = int(getattr(series, 'team2_wins', 0) or 0)
         games = list(getattr(series, 'game_results', None) or [])
+        # -- Bad blood (additive): an injury-causing hit or controversial
+        # incident between these clubs drives the series before a puck
+        # drops, so it leads the storylines even for projected matchups.
+        try:
+            from narrative_ledger import active_ledger as _al
+            _led = _al()
+            if _led is not None:
+                _n1 = getattr(series.team1, 'team_name', '')
+                _n2 = getattr(series.team2, 'team_name', '')
+                _seen = 0
+                for _ev in _led.between(_n1, _n2, kinds=["incident"]):
+                    _facts = _ev.get("facts") or {}
+                    if _facts.get("incident_kind") not in (
+                            "star_injured", "player_injured",
+                            "controversial_hit"):
+                        continue
+                    _detail = (_ev.get("text") or _facts.get("detail")
+                               or "").strip()
+                    if _detail:
+                        lines.append(f"\U0001FA78 Bad blood: {_detail} "
+                                     f"\u2014 expect this series to have an edge.")
+                    else:
+                        lines.append("\U0001FA78 Bad blood between these clubs "
+                                     "\u2014 expect this series to have an edge.")
+                    _seen += 1
+                    if _seen >= 2:
+                        break
+        except Exception:
+            pass
         if not games:
+            if lines:
+                lines.append("First game of the series is still to come.")
+                return lines
             return ["First game of the series is still to come."]
         last_t1 = bool(games[-1].get('team1_won'))
         streak = 0

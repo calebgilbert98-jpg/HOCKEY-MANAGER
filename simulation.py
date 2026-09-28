@@ -8147,6 +8147,78 @@ class GameSim:
                            result=result.value,
                            impact=impact_name)
 
+        # -- Bad blood (additive): a hit that injures an opponent is real --
+        # the victim misses games, and both clubs remember who did it. The
+        # rivalry log carries it into future in-game tension meters; the
+        # narrative-ledger bridge carries it into headlines and series
+        # storylines. Nothing else about the hit changes.
+        if result == HitResult.INJURY_CAUSED:
+            self._apply_hit_injury(target_player, hitting_player,
+                                   hitting_team, target_team,
+                                   hit_type, impact)
+
+    def _apply_hit_injury(self, victim, hitter, hitting_team, target_team,
+                          hit_type, impact):
+        """Sideline the victim of an injury-causing hit and log the feud.
+
+        Games missed scale with the hit: dirty hits (charging/boarding)
+        cost weeks, big-impact hits cost days, routine ones cost a game or
+        two. Uses the same injury attributes as the quick sim
+        (is_injured / injury_type / games_remaining_injured / last_injury /
+        injured_today) so lineups, the AHL confidence pass, and recovery
+        all treat it identically.
+        """
+        injury_type = ""
+        try:
+            dirty = hit_type in (HitType.CHARGING, HitType.BOARDING)
+            big = impact == 2
+            if dirty:
+                lo, hi = 4, 10
+            elif big:
+                lo, hi = 2, 6
+            else:
+                lo, hi = 1, 4
+            games_missed = random.randint(lo, hi)
+            if games_missed >= 8:
+                injury_type = random.choice(
+                    ['Separated shoulder', 'Concussion', 'Broken jaw'])
+            elif games_missed >= 4:
+                injury_type = random.choice(
+                    ['Sprained knee', 'Shoulder strain', 'High ankle sprain'])
+            else:
+                injury_type = random.choice(
+                    ['Bruised ribs', 'Charley horse', 'Cut needing stitches'])
+            victim.is_injured = True
+            victim.injury_type = injury_type
+            victim.games_remaining_injured = games_missed
+            victim.last_injury = injury_type
+            victim.injured_today = True
+            try:
+                self._log_event(
+                    f"{victim.full_name} injured ({injury_type}, "
+                    f"~{games_missed} games) on the {hit_type.value} by "
+                    f"{hitter.full_name}", "INJURY")
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # Both clubs remember: star hurt = 25 heat, anyone else = 12.
+        try:
+            from reputation_system import record_game_incident as _rgi
+            hname = getattr(hitter, 'full_name', 'An opponent')
+            vname = getattr(victim, 'full_name', 'a player')
+            try:
+                star = float(getattr(victim, 'overall', 0) or 0) >= 85
+            except Exception:
+                star = False
+            kind = "star_injured" if star else "player_injured"
+            detail = (f"{hname} injured {vname}"
+                      + (f" ({injury_type})" if injury_type else "")
+                      + f" with a {hit_type.value} hit")
+            _rgi(self.rivalries, hitting_team, target_team, kind, detail)
+        except Exception:
+            pass
+
     def _resolve_turnover(self, player_losing_puck, player_gaining_puck, turnover_type):
         """
         Stage 4: Handle detailed turnover tracking and resolution.
