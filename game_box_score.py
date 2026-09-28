@@ -476,9 +476,11 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
         canvas.create_rectangle(5, H//2-15, 12, H//2+15, fill='#ff4444', outline='')
         canvas.create_rectangle(W-12, H//2-15, W-5, H//2+15, fill='#ff4444', outline='')
 
-        # Plot shots from PBP
-        pbp = self.result.get('pbp_events') or []
-        shots = [e for e in pbp if e.get('event') == 'shot']
+        # Plot shots from the sim's event log
+        events = self.result.get('event_log') or []
+        shots = [e for e in events
+                 if 'GOAL' in str(e.get('type', '')) or
+                    'SAVE' in str(e.get('type', ''))]
         # Scale: rink 200x85 -> canvas 580x240
         sx = (W - 20) / 200
         sy = (H - 20) / 85
@@ -486,16 +488,12 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
         colors = {'goal': '#00ff88', 'save': '#4488ff',
                   'miss': '#ff4444', 'block': '#888888'}
         for shot in shots:
-            pos = shot.get('shooter_pos') or (100, 42.5)
+            details = shot.get('details', {}) or {}
+            # Shooter position from details, or estimate from shot quality
+            pos = details.get('shooter_pos') or (100, 42.5)
             x = 10 + pos[0] * sx
             y = 10 + pos[1] * sy
-            outcome = 'save'
-            if shot.get('goal'):
-                outcome = 'goal'
-            elif shot.get('missed'):
-                outcome = 'miss'
-            elif shot.get('blocked'):
-                outcome = 'block'
+            outcome = 'goal' if 'GOAL' in str(shot.get('type', '')) else 'save'
             color = colors.get(outcome, '#4488ff')
             r = 4
             oid = canvas.create_oval(x-r, y-r, x+r, y+r,

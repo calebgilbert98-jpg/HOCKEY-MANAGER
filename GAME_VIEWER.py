@@ -353,15 +353,14 @@ class RebuiltNHLGameViewer:
 
     def _is_highlight(self, event):
         """E5: is this event highlight-worthy?"""
-        et = str(event.get('type', '')).lower()
-        if 'goal' in et:
+        et = str(event.get('type', '')).upper()
+        details = event.get('details', {}) or {}
+        if 'GOAL' in et:
             return True
-        if 'save' in et and event.get('danger', '').lower() == 'high':
-            return True
-        if 'penalty' in et and event.get('minutes', 0) >= 5:
-            return True
-        if 'fight' in str(event.get('desc', '')).lower():
-            return True
+        if 'SAVE' in et:
+            return str(details.get('shot_quality', '')).lower() == 'high'
+        if 'PENALTY' in et:
+            return details.get('minutes', 0) >= 5
         return False
 
     def _show_text_mode(self):

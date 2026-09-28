@@ -7028,21 +7028,23 @@ class GameSim:
         """
         highlights = []
         for e in getattr(self, 'event_log', []):
-            et = e.get('type', '')
+            et = str(e.get('type', '')).upper()
+            details = e.get('details', {}) or {}
             # Goals are always highlights
-            if et in ('goal', 'GOAL', EventType.GOAL.value):
+            if 'GOAL' in et:
                 highlights.append(e)
-            # Big saves (high-danger)
-            elif et in ('save', 'SAVE', EventType.SAVE.value):
-                if e.get('danger', '') in ('high', 'HIGH'):
+            # High-danger saves
+            elif 'SAVE' in et:
+                quality = str(details.get('shot_quality', '')).lower()
+                if quality in ('high',):
                     highlights.append(e)
             # Major penalties and fights
-            elif et in ('penalty', 'PENALTY', EventType.PENALTY.value):
-                if e.get('minutes', 0) >= 5 or 'fight' in str(e.get('desc', '')).lower():
+            elif 'PENALTY' in et:
+                if details.get('minutes', 0) >= 5:
                     highlights.append(e)
             # Big hits
-            elif et in ('hit', 'HIT', EventType.HIT.value):
-                if e.get('big', False):
+            elif 'HIT' in et:
+                if details.get('big', False):
                     highlights.append(e)
         return highlights
 
