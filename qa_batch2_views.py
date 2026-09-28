@@ -122,8 +122,7 @@ def main():
         (ShortlistWindow, AddPlayerDialog, EditNotesDialog, ChangePriorityDialog)))
 
     # --- scouting profile views ------------------------------------------
-    from scouting_profile_dialog import (ScoutingProfileView, ProfileEditorView,
-                                         ScoutingProfileDialog, ProfileEditorDialog)
+    from scouting_profile_dialog import (ScoutingProfileView, ProfileEditorView)
     sp = ScoutingProfileView(app.root, app=app)
     ok("ScoutingProfileView constructs", isinstance(sp, ctk.CTkFrame))
     pe = ProfileEditorView(app.root, app=app)
@@ -136,7 +135,7 @@ def main():
     ok("close_view fallback destroys", not sp.winfo_exists())
 
     # --- save/load views --------------------------------------------------
-    from save_load_system import SaveLoadView, SaveLoadWindow
+    from save_load_system import SaveLoadView
     app3 = StubApp()
     app3.save_manager = type("SM", (), {"save_directory": tmpdir})()
     payloads = []

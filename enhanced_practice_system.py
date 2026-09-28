@@ -8,11 +8,10 @@ from tkinter import ttk
 from popup_system import messagebox, InGamePopup
 import customtkinter as ctk
 from typing import Dict, List, Optional, Tuple
-from datetime import date, timedelta
+from datetime import date
 from dataclasses import dataclass, field
 from enum import Enum
 import random
-import json
 
 
 def _sfont(family, size, weight=""):

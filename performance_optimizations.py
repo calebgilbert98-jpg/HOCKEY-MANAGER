@@ -4,9 +4,8 @@ Implements caching, fast simulation, and batch processing for better performance
 """
 
 import random
-from game_classes import debug_print
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import (Dict, Tuple)
 from dataclasses import dataclass
 
 

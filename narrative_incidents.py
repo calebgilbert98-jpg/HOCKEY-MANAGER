@@ -24,7 +24,7 @@ game. Called once per finished game, never in a hot loop.
 """
 
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from typing import (Any, Dict, List, Optional)
 
 # ---------------------------------------------------------------------------
 # Tuning: realistic yet quiet. A full 82-game season per club, 1,312 games

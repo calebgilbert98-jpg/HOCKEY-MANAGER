@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
 from datetime import date
-from typing import List, Optional
+from typing import List
 
 import customtkinter as ctk
 

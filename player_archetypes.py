@@ -18,7 +18,6 @@ Pure logic, no GUI.
 
 from __future__ import annotations
 
-import random
 from typing import Dict, List, Tuple
 
 # ---------------------------------------------------------------------------

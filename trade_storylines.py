@@ -8,7 +8,6 @@ evaluation -- the ratio/needs/greed logic is untouched. Neutral default
 absent or unavailable.
 """
 
-import random
 
 # Tuning (conservative: storylines whisper, they don't shout)
 _BUYER_MULT = 0.92        # contender: will overpay a little to win now

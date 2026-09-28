@@ -33,7 +33,7 @@ def check(name, cond, detail=""):
         FAILURES.append(f"{name} {detail}")
 
 
-from game_classes import League, Team, Player  # noqa: E402
+from game_classes import (League, Team)
 
 
 def make_team(i):
@@ -89,9 +89,7 @@ def make_app(league, teams):
 # ---------------------------------------------------------------------------
 # Item 4: shared conductor
 # ---------------------------------------------------------------------------
-from draft_night import (conduct_entry_draft, ai_select_prospect,  # noqa: E402
-                         ticker_line, stable_draft_seed,
-                         persist_draft_grades, mark_draft_conducted)
+from draft_night import (conduct_entry_draft, ai_select_prospect, ticker_line, stable_draft_seed)
 
 league, teams, order = make_draft_league()
 app = make_app(league, teams)
@@ -531,7 +529,6 @@ check("rumor: labeled RUMOR, never a completed deal",
       and not any("TRADE:" in _n and "RUMOR" not in _n for _n in _rnews))
 
 # Failed negotiation -> rumor (not silence, not a fake deal).
-import random as _random
 _nleague, _nteams, _ = make_draft_league(n_teams=4, n_prospects=0, seed=5)
 _nleague.draft_prospects = []
 _napp = SimpleNamespace(league=_nleague, ai_manager=None,

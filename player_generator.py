@@ -3,16 +3,10 @@
 # Handles both rookie/prospect generation and main player database creation
 
 import random
-import math
 import itertools
-from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
 from game_classes import Player, PlayerPosition, GameBalance
-from draft_generator import (
-    FIRST_NAMES, LAST_NAMES, BIRTHPLACES, COUNTRY_DISTRIBUTION, 
-    get_random_nationality, get_random_name, get_random_birthplace,
-    get_random_position, ARCHETYPES, get_archetype_for_position
-)
+from draft_generator import (get_random_nationality, get_random_name, get_random_birthplace, get_random_position, get_archetype_for_position)
 
 # --- Enhanced Player Generation Constants ---
 

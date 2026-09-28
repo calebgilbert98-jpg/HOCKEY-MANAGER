@@ -4,7 +4,6 @@
 import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
-import threading
 import time
 
 class ProgressWindow:

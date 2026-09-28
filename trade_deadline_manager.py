@@ -5,8 +5,7 @@ Handles deadline detection, trade validation, and deadline-specific trading rule
 
 import random
 from datetime import datetime, time, timedelta
-from typing import Dict, List, Optional, Tuple, Any
-import json
+from typing import (Dict, List, Tuple, Any)
 
 
 class TradeDeadlineManager:

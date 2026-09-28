@@ -20,8 +20,7 @@ from game_classes import PlayerPosition
 import trade_engine as te
 import draft_day_trades as ddt
 from ai_team_management import ManagementPriority
-from qa_draft_common import (make_league, StubStrategy, StubAIMgr, StubApp,
-                             mkprospect, boost)
+from qa_draft_common import (make_league, StubApp, mkprospect, boost)
 
 PASS = 0
 FAIL = 0

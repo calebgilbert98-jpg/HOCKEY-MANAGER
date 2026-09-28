@@ -12,7 +12,7 @@ All defensive: unknown stats/positions/teams simply don't produce watches.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import (Any, Dict, List, Set, Tuple)
 
 
 # kind -> (label, career stat attr, target, watch window, goalie-only?)

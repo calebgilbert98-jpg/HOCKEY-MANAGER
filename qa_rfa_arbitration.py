@@ -266,7 +266,6 @@ league = make_league()
 league.teams[0].inbox = FakeInbox()
 app = FakeApp(league)
 app.user_team = league.teams[0]
-from game_classes import is_human_managed  # noqa - ensure importable
 summary = R.process_rfa_offseason(league, app=app, rng=random.Random(42))
 check("pass returns summary", summary["rfas"] > 0 and summary["ufas"] > 0,
       str({k: v for k, v in summary.items() if k != "arbitration_awards"}))

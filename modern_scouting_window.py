@@ -8,10 +8,9 @@ import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
 from popup_system import messagebox, InGamePopup
-from typing import Dict, List, Optional, Any
+from typing import (Dict, Any)
 import datetime
-import random
-from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
+from game_classes import (Player, Staff, to_100_scale)
 from scouting_profiles import displayed_overall, displayed_attribute
 from player_context_menu import PlayerContextMenu
 

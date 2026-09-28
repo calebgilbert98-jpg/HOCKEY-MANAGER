@@ -9,7 +9,6 @@ Headless: DISPLAY=:99. Run: python3 qa_playoff_mpguard.py
 """
 import os
 import sys
-import time
 from types import SimpleNamespace
 from datetime import date
 

@@ -20,7 +20,6 @@ from the daily advance in main.py. Idempotent per date.
 """
 
 import random
-from datetime import date as _date
 
 CAMP_START = (9, 12)
 CAMP_END = (9, 30)

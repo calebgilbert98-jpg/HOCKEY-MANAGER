@@ -16,7 +16,7 @@ from player_context_menu import PlayerContextMenu
 import customtkinter as ctk
 from ctk_theme import BG, CARD
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import (List, Optional)
 from datetime import datetime
 import json
 import os

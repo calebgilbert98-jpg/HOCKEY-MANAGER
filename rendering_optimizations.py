@@ -6,9 +6,7 @@ from tkinter import ttk
 import time
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
-import threading
 from collections import defaultdict
-import weakref
 
 @dataclass
 class RenderState:

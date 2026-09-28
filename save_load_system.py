@@ -4,7 +4,6 @@ Handles saving and loading complete game states including players, teams, league
 """
 
 import pickle
-import json
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -16,7 +15,6 @@ from typing import Dict, Any, Optional
 import gzip
 import threading
 from dataclasses import asdict
-import sys
 
 
 def _safe_asdict(obj: Any) -> Dict[str, Any]:

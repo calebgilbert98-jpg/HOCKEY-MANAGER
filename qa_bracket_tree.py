@@ -14,7 +14,6 @@ sys.path.insert(0, "/home/hatch/workspace/HOCKEY-MANAGER")
 os.chdir("/home/hatch/workspace/HOCKEY-MANAGER")
 
 import tkinter as tk
-from unittest.mock import patch
 
 PASS, FAIL = 0, 0
 def check(name, cond, detail=""):
@@ -36,11 +35,7 @@ try:
 except Exception:
     pass
 
-from playoff_system import (PlayoffBracket, PlayoffSeries, PlayoffView,
-                            series_status_text, series_target, team_abbr,
-                            _series_storylines, _top_playoff_scorers,
-                            build_series_detail_content, SeriesDetailPopup,
-                            ROUND_DISPLAY_NAMES)
+from playoff_system import (PlayoffBracket, PlayoffSeries, PlayoffView, series_status_text, series_target, team_abbr, _series_storylines, _top_playoff_scorers, build_series_detail_content, SeriesDetailPopup)
 
 # ---------------------------------------------------------------- fake world
 EAST = [("Boston Bruins", "Atlantic"), ("Toronto Maple Leafs", "Atlantic"),

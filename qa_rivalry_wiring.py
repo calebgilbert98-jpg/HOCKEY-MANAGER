@@ -42,11 +42,7 @@ def check(name, cond, detail=""):
 
 
 import reputation_system as rs
-from reputation_system import (
-    add_rivalry, decay_rivalries, on_player_transfer, record_award_race,
-    record_major_injury, review_rivalries, rivalry_between,
-    seed_regional_rivalries,
-)
+from reputation_system import (decay_rivalries, on_player_transfer, record_award_race, record_major_injury, review_rivalries, rivalry_between, seed_regional_rivalries)
 from game_classes import League, Team
 
 
@@ -156,7 +152,6 @@ check("end_of_season: no review off-cycle",
 
 # ------------------------------------------------------- trade transfer
 import trade_engine as te
-from game_classes import DraftPick  # noqa: F401  (ensures import path)
 
 ta = _mkteam("Trade A", "A"); tb = _mkteam("Trade B", "B")
 pleague = SimpleNamespace(teams=[ta, tb], rivalries=[])

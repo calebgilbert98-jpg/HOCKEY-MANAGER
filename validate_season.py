@@ -15,12 +15,12 @@ _update_standings_fast does. Validates structural invariants:
 
 import sys
 import random
-from datetime import date, timedelta
+from datetime import date
 from collections import defaultdict
 
 sys.path.insert(0, '/home/hatch/workspace/hockey-manager')
 
-from game_classes import League, Team, PlayerPosition
+from game_classes import (League, PlayerPosition)
 from player_generator import PlayerGenerator
 from simulation import GameSim
 

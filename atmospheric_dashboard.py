@@ -4,16 +4,15 @@
 import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
-from datetime import date, timedelta, datetime
-from typing import Dict, List, Optional
+from datetime import date
+from typing import (Dict, List)
 import random
 from visual_identity_system import (
     HockeyAtmosphereSystem, VisualHierarchyManager, 
     AnimationManager, ContextualElementsManager, 
     StorytellingDataPresentation
 )
-from modern_widgets import (RoundedButton, SegmentedControl, IconTile,
-                              FormStreak, draw_mini_icon)
+from modern_widgets import (RoundedButton, IconTile, FormStreak, draw_mini_icon)
 
 class AtmosphericDashboard:
     """Immersive dashboard that makes you feel like a real GM"""

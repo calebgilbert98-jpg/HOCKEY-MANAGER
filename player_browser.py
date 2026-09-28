@@ -8,7 +8,7 @@ from tkinter import ttk
 from popup_system import messagebox, InGamePopup
 from typing import List, Optional
 import customtkinter as ctk
-from game_classes import Player, PlayerPosition, to_100_scale
+from game_classes import (Player, to_100_scale)
 from game_classes import debug_print
 from scouting_profiles import displayed_overall
 

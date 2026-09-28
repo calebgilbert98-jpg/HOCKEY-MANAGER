@@ -22,8 +22,6 @@ os.environ.setdefault("DISPLAY", ":99")
 sys.path.insert(0, "/home/hatch/workspace/HOCKEY-MANAGER")
 os.chdir("/home/hatch/workspace/HOCKEY-MANAGER")
 
-import tkinter as tk
-from tkinter import ttk
 
 import tkinter.messagebox as _mb
 _mb.showinfo = _mb.showwarning = _mb.showerror = _mb.askyesno = lambda *a, **k: None
@@ -36,10 +34,8 @@ except Exception:
 
 import customtkinter as ctk
 
-from playoff_system import (PlayoffBracket, PlayoffView, PlayoffSeries,
-                            series_target, _series_storylines)
-from narrative_ledger import (NarrativeLedger, set_active_ledger,
-                              active_ledger)
+from playoff_system import (PlayoffBracket, PlayoffView, PlayoffSeries, _series_storylines)
+from narrative_ledger import (NarrativeLedger, set_active_ledger)
 from season_intensity import season_intensity
 
 PASS, FAIL = [], []
@@ -190,7 +186,7 @@ check("bad-blood storyline surfaces for feuding pair",
       str(lines[:2]) if lines else "no feud series found")
 
 # ------------------------------------------------------- hit-injury hook
-from simulation import GameSim, HitType, HitResult
+from simulation import (GameSim, HitType)
 
 sim = GameSim.__new__(GameSim)
 sim.rivalries = []

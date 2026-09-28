@@ -6,68 +6,35 @@ import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup, simpledialog
 import customtkinter as ctk
-from ctk_theme import (
-    init_ctk_theme, primary_button, secondary_button, heading,
-    CTkPlayerList,
-    TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT,
-    GOLD, GREEN, RED,
-)
+from ctk_theme import (init_ctk_theme, primary_button, secondary_button, heading, TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM)
 from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from game_classes import debug_print
-from windows import (
-    TradeWindow,
-    GMOptionsWindow,
-    ContractNegotiationWindow,
-    ContractNegotiationView,
-    ContractExtensionsView,
-    ExtensionNegotiationView,
-    BuyoutCalculatorView,
-    ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow,
-    TradeBlockWindow,
-    WaiversWindow,
-    SetCaptainsWindow,
-    RosterView,
-    FreeAgencyView,
-    ScoutingView,
-    DraftView,
-    ScheduleView,
-    FinancesView,
-    NewsView,
-    GMOptionsView,
-    WaiversView,
-    GMDashboardView,
-    TeamAnalyticsView,
-    SalaryAnalyticsView,
-)
-from ui_components import PlayerProfileWindow
+from windows import (TradeWindow, GMOptionsWindow, ContractNegotiationWindow, ContractNegotiationView, ContractExtensionsView, ExtensionNegotiationView, ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow, TradeBlockWindow, SetCaptainsWindow, RosterView, FreeAgencyView, ScoutingView, DraftView, ScheduleView, FinancesView, NewsView, GMOptionsView, WaiversView, GMDashboardView, TeamAnalyticsView)
 from ui_widgets import PillButton
-from inbox_window import InboxWindow
 # Quick-sim engine + shared lineup helpers (extracted from main.py 2026-09-28;
 # re-exported here so `from main import best_lines` etc. keeps working)
 from quick_sim import AdvancedGameSim, best_lines, flatten_lineup, roll_game_injury
 # Professional Calendar System (Phase 4) - replaces old calendar_window
-from calendar_window import CalendarWindow, CalendarView
-from schedule_engine import ScheduleEngine, ScheduleConfiguration, ScheduleGenerationMode
-from staff_management_window import StaffManagementWindow, StaffManagementView
-from professional_scouting_window import ProfessionalScoutingWindow, ProfessionalScoutingView
-from modern_scouting_window import ModernScoutingWindow, ModernScoutingView
-from stats_standings_window import StatsStandingsWindow, StatsStandingsView
+from calendar_window import CalendarView
+from staff_management_window import StaffManagementView
+from professional_scouting_window import ProfessionalScoutingView
+from modern_scouting_window import ModernScoutingView
+from stats_standings_window import StatsStandingsView
 from ahl_stats_window import AHLStatsView
 from GAME_VIEWER import launch_game_viewer
 from draft_generator import generate_draft_class
 from draft_generator import age_on_sept15 as _age_on_sept15
 from database_manager import initialize_game_database
-from database_generator import generate_database, get_database_options
+from database_generator import generate_database
 from save_load_system import GameSaveManager
 # Import will be done dynamically in open_player_profile to avoid circular imports
 import threading
 from PIL import Image, ImageTk  # For icons/logos
 
 # Import new modern UI systems
-from ui_theme_system import create_modern_theme, ModernUITheme, ProfessionalWidgets
-from typography_system import TypographySystem, TextStyles
-from team_identity_system import nhl_identity
+from ui_theme_system import (create_modern_theme, ProfessionalWidgets)
+from typography_system import TypographySystem
 
 # Import Trade Deadline Center
 from trade_deadline_center import TradeDeadlineCenter, is_trade_deadline_day
@@ -75,19 +42,17 @@ from event_day_hubs import (DraftDayCentral, FreeAgencyFrenzy, is_draft_day,
                             is_free_agency_day, prompt_event_day)
 
 # Import Phase 1 systems
-from save_load_system import SaveLoadWindow, GameSaveManager
-from playoff_system import PlayoffWindow, PlayoffView
+from save_load_system import GameSaveManager
+from playoff_system import PlayoffView
 from atmospheric_dashboard import AtmosphericDashboard
-from visual_identity_system import HockeyAtmosphereSystem
-from smart_data_widgets import PlayerStatsCard, TeamStandingsWidget
 
 # Import Player Development System
 from player_development_system import PlayerDevelopmentEngine, initialize_player_potential
 
 # Import optional Media System
 from media_system import MediaSystem
-from media_center_window import MediaCenterWindow, MediaCenterView
-from morale_window import MoraleWindow, MoraleView
+from media_center_window import MediaCenterView
+from morale_window import MoraleView
 from tactics_window import TacticsWindow
 from manager_hub_window import ManagerHubView
 
@@ -1497,7 +1462,7 @@ def launch_game_viewer_with_sim(home_team, away_team):
     Run a full AdvancedGameSim and launch the professional GameViewer with real data
     """
     import tkinter as tk
-    from GAME_VIEWER import RebuiltNHLGameViewer, launch_game_viewer
+    from GAME_VIEWER import launch_game_viewer
     
     print("Starting enhanced hockey simulation...")
     
@@ -9921,7 +9886,7 @@ class HockeyManagerGUI(tk.Tk):
             # Identify starting goalies for save tracking
             def get_starting_goalie(team):
                 goalies = [p for p in team.roster
-                          if getattr(p, 'primary_position', None) and p.primary_position.name == "G"]
+                          if getattr(p, 'primary_position', None) and p.primary_position.name == "GOALIE"]
                 return goalies[0] if goalies else None
         
             home_goalie = get_starting_goalie(home_team)
@@ -9958,6 +9923,7 @@ class HockeyManagerGUI(tk.Tk):
                     opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
                     if opp_goalie:
                         opp_goalie.stats.shots_against += 1
+                        opp_goalie.stats.goals_against += 1
             
                 elif event_type == 'Shootout Goal':
                     # NHL rule: shootout goals don't count in player stats
@@ -9993,7 +9959,7 @@ class HockeyManagerGUI(tk.Tk):
                     for player in team.roster:
                         try:
                             if getattr(getattr(player, "primary_position",
-                                               None), "name", "") == "G":
+                                               None), "name", "") == "GOALIE":
                                 continue
                             _h, _t, _b = _rdg(player)
                             player.stats.hits += _h
@@ -10001,6 +9967,29 @@ class HockeyManagerGUI(tk.Tk):
                             player.stats.blocked_shots += _b
                         except Exception:
                             continue
+            except Exception:
+                pass
+            # Goalie saves: quick-sim notable_events carry goals only
+            # ('Shot' save events never make the notable list), so derive
+            # saves from the engine's full event log, whose SHOT entries
+            # carry a result. Shootout attempts never log SHOT entries,
+            # so no shootout contamination by construction.
+            try:
+                for _le in getattr(sim_engine, 'event_log', []) or []:
+                    if not isinstance(_le, dict) or _le.get('type') != 'SHOT':
+                        continue
+                    _det = _le.get('details') or {}
+                    if _det.get('result') != 'SAVE':
+                        continue
+                    _shooter = home_roster.get(_det.get('shooter_id'))
+                    _opp = away_goalie if _shooter is not None else home_goalie
+                    if _shooter is None:
+                        _shooter = away_roster.get(_det.get('shooter_id'))
+                        _opp = home_goalie
+                    if _shooter is None or _opp is None:
+                        continue
+                    _opp.stats.saves += 1
+                    _opp.stats.shots_against += 1
             except Exception:
                 pass
         
@@ -11607,6 +11596,7 @@ class HockeyManagerGUI(tk.Tk):
             
             starting_goalie.stats.saves += saves
             starting_goalie.stats.shots_against += shots_against
+            starting_goalie.stats.goals_against += opp_goals
             starting_goalie.stats.games_played += 1
             # Note: wins/losses/shutouts tracked elsewhere or via add_game_stats if available
             if hasattr(starting_goalie.stats, 'wins'):
@@ -11940,7 +11930,6 @@ class HockeyManagerGUI(tk.Tk):
                     if not getattr(self, 'shot_chart_store', None):
                         self.shot_chart_store = ShotChartStore()
                     # Build game dict
-                    import datetime as _dt
                     gid = f"{home_team.team_name}_{away_team.team_name}_{self.current_date.isoformat()}"
                     game_dict = {
                         "game_id": gid,

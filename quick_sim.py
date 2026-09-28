@@ -1176,7 +1176,7 @@ class AdvancedGameSim:
             if goalies and goalies[0]:
                 return goalies[0]
             # Fallback: pick a random goalie from roster
-            candidates = [p for p in team.roster if getattr(p, 'primary_position', None) and p.primary_position.name == "G"]
+            candidates = [p for p in team.roster if getattr(p, 'primary_position', None) and p.primary_position.name == "GOALIE"]
             return candidates[0] if candidates else None
 
         home_goalie = get_goalie(self.home_team, self.lineups[self.home_team.team_name])

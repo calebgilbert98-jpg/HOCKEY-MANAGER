@@ -1,6 +1,6 @@
 """Playtest-driven QA: BUG-013 (traded-pick ownership at draft time),
 BUG-014 (league_name save/load round-trip)."""
-import os, sys, random
+import os, sys
 os.environ.setdefault("DISPLAY", ":99")
 sys.path.insert(0, "/home/hatch/workspace/HOCKEY-MANAGER")
 from collections import Counter
@@ -35,7 +35,7 @@ assert c1 == {"National Hockey League": 32, "American Hockey League": 30}, c1
 print("BUG-014 round-trip OK:", dict(c1))
 
 # --- BUG-013: traded pick drafted by current_team holder -----------------
-from game_classes import Team, DraftPick
+from game_classes import Team
 la = League("T", season_year=2027)
 la.teams.clear()
 a = Team("Alpha", "A", "D1", "C1"); a.league_name = "National Hockey League"

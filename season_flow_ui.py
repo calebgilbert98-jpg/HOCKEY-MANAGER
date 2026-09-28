@@ -7,8 +7,8 @@ from popup_system import messagebox, InGamePopup
 from tkinter import ttk
 import customtkinter as ctk
 from ctk_theme import BG, CARD
-from datetime import date, timedelta
-from automated_season_flow import AutomatedSeasonFlow, AutoAdvanceMode, SeasonPhase, get_season_phase_color, format_days_until_milestone
+from datetime import date
+from automated_season_flow import (AutomatedSeasonFlow, AutoAdvanceMode, SeasonPhase, format_days_until_milestone)
 
 class SeasonFlowControlPanel(ttk.Frame):
     """Control panel for automated season progression"""

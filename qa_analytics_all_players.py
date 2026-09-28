@@ -28,8 +28,7 @@ import sys
 
 sys.path.insert(0, ".")
 
-from game_classes import (Player, PlayerPosition, PlayerStats, Team,
-                          to_100_scale)
+from game_classes import (Player, PlayerPosition, PlayerStats, Team)
 import advanced_metrics as am
 import analytics_scouting as asc
 

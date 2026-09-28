@@ -75,7 +75,6 @@ win = PBPVisualSim.__new__(PBPVisualSim)
 win.home_team, win.away_team, win.user_team = home, away, home
 win._tac_tab, win._tac_pending, win._tac_response_text = "pbp", {}, ""
 win._ui_accent = "#2EB5A5"; win._cur_score = (1, 3)
-import pbp_visual_sim as pv
 win._pill = PBPVisualSim._pill.__get__(win, PBPVisualSim)
 win._refresh_toggle_btn = PBPVisualSim._refresh_toggle_btn
 shell = tk.Toplevel(root); shell.withdraw()

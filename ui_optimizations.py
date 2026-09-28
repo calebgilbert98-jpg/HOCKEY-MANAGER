@@ -8,7 +8,6 @@ import time
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from collections import deque
-import weakref
 
 @dataclass
 class UIPerformanceMetrics:

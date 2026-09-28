@@ -12,7 +12,6 @@ def check(name, fn):
         fn(); passed += 1; print(f"  PASS {name}")
     except Exception as e:
         import traceback; traceback.print_exc(); failed.append(name); print(f"  FAIL {name}: {e}")
-
 p1 = g.Player("Test", "Player", 25, PlayerPosition.CENTER, 75)
 p2 = g.Player("Other", "Guy", 27, PlayerPosition.LEFT_WING, 72)
 

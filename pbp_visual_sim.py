@@ -18,7 +18,6 @@ import threading
 import tkinter as tk
 from popup_system import InGamePopup
 from collections import deque
-from tkinter import ttk
 
 from game_classes import PlayerPosition
 from simulation import GameSim
@@ -4531,9 +4530,7 @@ class PBPVisualSim(InGamePopup):
         for w in body.winfo_children():
             w.destroy()
         try:
-            from matchups import (set_shadow, preset_shutdown,
-                                  preset_shelter_scorers, preset_auto,
-                                  describe_prefs, report)
+            from matchups import (set_shadow, preset_shutdown, preset_shelter_scorers, preset_auto, report)
         except Exception:
             return
         home = self.home_team

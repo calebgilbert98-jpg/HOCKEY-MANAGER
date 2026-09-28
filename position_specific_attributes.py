@@ -3,9 +3,6 @@
 
 from dataclasses import dataclass, field
 import random
-from enum import Enum
-from typing import Dict, List, Optional
-import itertools
 
 # Use the same enums and counters as the original game_classes.py
 from game_classes import PlayerPosition, PlayerRole, GameBalance, player_id_counter

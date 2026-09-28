@@ -2,12 +2,8 @@
 # Comprehensive visual identity and atmosphere system for Hockey Manager
 
 import tkinter as tk
-from tkinter import ttk
-import random
 from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
-from datetime import datetime, date
-import math
 
 @dataclass
 class TeamColorScheme:

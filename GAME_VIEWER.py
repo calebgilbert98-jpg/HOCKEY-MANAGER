@@ -10,9 +10,7 @@ from PIL import Image, ImageTk
 import math
 import time
 import os
-from typing import Dict, List, Tuple, Optional, Any
-import threading
-import json
+from typing import (Dict, Tuple, Any)
 
 class RebuiltNHLGameViewer:
     """

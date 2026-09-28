@@ -12,7 +12,6 @@ sys.path.insert(0, "/home/hatch/workspace/HOCKEY-MANAGER")
 os.chdir("/home/hatch/workspace/HOCKEY-MANAGER")
 
 import tkinter as tk
-from unittest.mock import patch
 
 PASS, FAIL = 0, 0
 def check(name, cond, detail=""):

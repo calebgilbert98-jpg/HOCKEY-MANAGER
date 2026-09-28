@@ -5,9 +5,7 @@ Clean, simple entry point for the hockey management game
 """
 
 import sys
-import os
 from pathlib import Path
-import tkinter as tk
 from popup_system import messagebox
 
 # Ensure we can import from current directory

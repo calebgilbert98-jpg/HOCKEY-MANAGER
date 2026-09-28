@@ -352,7 +352,7 @@ class RosterImportView(tk.Frame):
                 text="Select both teams.csv and players.csv to continue.")
             self._set_report("")
             return
-        import csv as _csv, os as _os
+        import csv as _csv
         try:
             with open(t, newline="", encoding="utf-8-sig") as fh:
                 teams = list(_csv.DictReader(fh))

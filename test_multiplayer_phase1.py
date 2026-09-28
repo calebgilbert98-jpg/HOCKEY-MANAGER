@@ -18,9 +18,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from multiplayer import PROTOCOL_VERSION
-from multiplayer.net_host import MultiplayerHost, DEFAULT_PORT
-from multiplayer.net_client import MultiplayerClient, ConnectionError
+from multiplayer.net_host import MultiplayerHost
+from multiplayer.net_client import MultiplayerClient
 import checkpoint_manager as cm
 
 TMP = tempfile.mkdtemp(prefix="pd_mp_test_")

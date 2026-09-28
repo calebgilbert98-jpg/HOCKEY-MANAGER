@@ -4,7 +4,7 @@
 
 import random
 from typing import List, Dict, Optional
-from game_classes import Player, PlayerPosition, Team, League, GameBalance
+from game_classes import (Player, PlayerPosition, Team)
 from player_generator import PlayerGenerator, generate_complete_database
 from draft_generator import generate_draft_class
 

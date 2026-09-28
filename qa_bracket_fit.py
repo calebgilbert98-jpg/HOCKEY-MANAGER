@@ -22,7 +22,6 @@ os.environ.setdefault("DISPLAY", ":99")
 sys.path.insert(0, "/home/hatch/workspace/HOCKEY-MANAGER")
 os.chdir("/home/hatch/workspace/HOCKEY-MANAGER")
 
-import tkinter as tk
 import tkinter.messagebox as _mb
 _mb.showinfo = _mb.showwarning = _mb.showerror = _mb.askyesno = lambda *a, **k: None
 import popup_system as _ps

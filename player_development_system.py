@@ -4,9 +4,8 @@ Handles age-based progression, training, potential tracking, and skill developme
 """
 
 import random
-import math
-from datetime import date, timedelta
-from typing import Dict, List, Tuple, Optional
+from datetime import date
+from typing import (Dict, List, Tuple)
 from dataclasses import dataclass, field
 from enum import Enum
 from game_classes import Player, PlayerPosition

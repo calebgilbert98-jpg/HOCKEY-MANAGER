@@ -9,11 +9,10 @@ runs every September 12-30 in the daily advance.
 Opened via app.open_training_camp_window() (Team menu).
 """
 
-import tkinter as tk
 from tkinter import ttk
 
 import customtkinter as ctk
-from popup_system import InGamePopup, messagebox
+from popup_system import InGamePopup
 
 try:
     import training_camp as _tc

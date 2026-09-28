@@ -2,7 +2,7 @@ import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
 import customtkinter as ctk
-from datetime import date, timedelta
+from datetime import date
 
 class GameResultsView(ctk.CTkFrame):
     """Simple, clean game results window"""

@@ -23,7 +23,6 @@ def check(name, cond, extra=""):
         failed += 1
         print(f"FAIL {name}" + (f"  [{extra}]" if extra else ""), flush=True)
 
-import draft_generator as dg
 from draft_generator import (
     generate_draft_class, is_draft_eligible, _assign_junior_league,
 )
@@ -395,7 +394,7 @@ check("undrafted fa never retired", p8 in league.free_agents)
 check("signed keeps drafted_year=0", p1.drafted_year == 0)
 
 # ---------------------------------------------------------------- H: euro free agents
-from euro_free_agents import run_euro_free_agency, generate_euro_free_agents
+from euro_free_agents import generate_euro_free_agents
 sizes, ok_invariants = [], True
 for yr, sd in zip(range(2028, 2031), (11, 22, 33)):
     lgx, _ = make_league(2027)

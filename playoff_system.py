@@ -7,11 +7,11 @@ import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
 from popup_system import messagebox, InGamePopup
-from datetime import date, timedelta
+from datetime import date
 import random
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
-from game_classes import Team, PlayerPosition
+from game_classes import Team
 
 
 def _sfont(family, size, weight=""):

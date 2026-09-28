@@ -295,7 +295,7 @@ class PlayerContextMenu:
                 win.grab_set()
             except Exception:
                 pass
-            from ctk_theme import heading, body, PANEL, GREEN, RED, GOLD
+            from ctk_theme import (heading, body, PANEL, GREEN, RED)
             heading(win, "Physio Report", size=16).pack(anchor="w", padx=18, pady=(16, 2))
             body(win, player.full_name, dim=True).pack(anchor="w", padx=18, pady=(0, 12))
             card = ctk.CTkFrame(win, fg_color=PANEL, corner_radius=12)

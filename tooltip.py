@@ -2,7 +2,6 @@
 # Professional tooltip system for Hockey Manager
 
 import tkinter as tk
-from tkinter import ttk
 
 class ToolTip:
     """

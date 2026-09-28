@@ -5,7 +5,7 @@ import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
 import customtkinter as ctk
-from game_classes import PlayerPosition, to_100_scale
+from game_classes import PlayerPosition
 
 def _to_20_scale(value, default=10):
     """Convert a 50-point-scale attribute to the 1-20 display scale."""

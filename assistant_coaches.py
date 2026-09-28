@@ -22,7 +22,7 @@ Design notes (Chris's constraints):
 - Old saves: every read is getattr-defensive.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import (Any, List, Optional, Tuple)
 
 _ASSISTANT_ROLES = ("Assistant Coach", "Associate Coach")
 

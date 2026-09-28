@@ -11,7 +11,6 @@ from player_context_menu import bind_player_context
 import tkinter as tk
 import customtkinter as ctk
 from popup_system import InGamePopup
-from tkinter import ttk
 from datetime import date
 
 

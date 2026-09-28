@@ -1,7 +1,7 @@
 # team_identity_system.py
 # Team visual identity system with authentic NHL colors and styling
 
-from typing import Dict, Tuple, Optional
+from typing import (Dict, Optional)
 from dataclasses import dataclass
 
 @dataclass

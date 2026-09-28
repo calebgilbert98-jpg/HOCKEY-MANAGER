@@ -15,7 +15,6 @@ Run under Xvfb: xvfb-run -a -s "-screen 0 1680x1050x24" \
     python3 qa_scout_private_tips.py
 """
 import os
-import re
 import sys
 import time
 
@@ -124,7 +123,6 @@ view._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
 view._heading = heading
 view._body = body
 view.app = app
-import tkinter as _tk
 view.tk = root.tk  # noqa: attribute for widget parenting fallback
 import customtkinter as ctk
 scroll = ctk.CTkScrollableFrame(root, fg_color="transparent")

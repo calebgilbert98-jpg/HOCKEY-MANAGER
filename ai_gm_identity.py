@@ -27,10 +27,8 @@ User and AI share every mechanic: the same identity model could describe a
 human player's tendencies; the AI simply acts on its own.
 """
 
-import random
-from dataclasses import dataclass, field
-from datetime import date
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 
 # ---------------------------------------------------------------------------

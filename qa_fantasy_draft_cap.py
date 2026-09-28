@@ -17,7 +17,7 @@ def check(label, cond):
 
 from database_generator import DatabaseGenerator, DATABASE_CONFIGURATIONS
 from fantasy_draft import FantasyDraftManager
-from salary_cap_system import cap_breakdown, DEFAULT_CAP
+from salary_cap_system import cap_breakdown
 import real_cap_data as rcd
 from game_classes import Team, Player, Contract
 from player_generator import PlayerPosition

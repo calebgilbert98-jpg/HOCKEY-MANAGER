@@ -32,8 +32,7 @@ def main():
     
     # 1. Shared composites exist and are attribute-first
     print("\n[Shared composites]", flush=True)
-    from mesh_system import (shooter_skill_composite, goalie_skill_composite,
-                             playmaking_score, assist_weight, relationship_mult)
+    from mesh_system import (goalie_skill_composite, playmaking_score, assist_weight, relationship_mult)
     from game_classes import Player, PlayerPosition
     
     # Elite playmaker vs grinder: attributes dominate

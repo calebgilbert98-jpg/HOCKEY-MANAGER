@@ -159,7 +159,6 @@ def main():
         def update_all_views(self):
             pass
 
-    import main as _main_mod  # noqa: F401  (ensures no import cycle)
     mapp = FakeMainApp(league)
     mapp.user_team = ut
     # bind the real method

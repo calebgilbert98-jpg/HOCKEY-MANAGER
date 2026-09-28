@@ -3,16 +3,14 @@
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox, InGamePopup, simpledialog
+from popup_system import (messagebox, InGamePopup)
 import customtkinter as ctk
-from game_classes import StaffRole, PlayerPosition, ScoutingReport, to_100_scale
-from datetime import timedelta
+from game_classes import (StaffRole, PlayerPosition, to_100_scale)
 import random
 import os
 import re
 from player_context_menu import PlayerContextMenu, add_player_context_menu
 from ui_widgets import PillButton
-from modern_ui import AppColors, AppCard
 from manager_career import morale_label
 
 

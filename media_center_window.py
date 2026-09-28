@@ -6,8 +6,7 @@
 import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
-from media_system import MediaSystem, MediaEngagementLevel, JournalistType
-import random
+from media_system import (MediaSystem, MediaEngagementLevel)
 
 import customtkinter as ctk
 

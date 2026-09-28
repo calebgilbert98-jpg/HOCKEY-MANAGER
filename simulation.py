@@ -15,7 +15,7 @@ from player_archetypes import (
     get_archetype, complementarity, matchup_multiplier, get_tendency,
     ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
 )
-from player_traits import get_sim_bonus as _trait_bonus, has_trait as _has_trait
+from player_traits import get_sim_bonus as _trait_bonus
 
 class ShotType(Enum):
     WRIST_SHOT = "wrist_shot"

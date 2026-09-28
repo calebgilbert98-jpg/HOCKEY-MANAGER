@@ -10,9 +10,7 @@ unchanged from the legacy build -- this is a UI rebuild only.
 import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
-from typing import Dict, List, Optional
-import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import customtkinter as ctk
 

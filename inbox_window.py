@@ -6,9 +6,8 @@
 import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
-from datetime import date, timedelta
-from game_classes import EmailMessage, EmailGenerator
-from typing import List, Optional
+from datetime import date
+from game_classes import EmailMessage
 
 import customtkinter as ctk
 from player_context_menu import PlayerContextMenu
@@ -390,10 +389,6 @@ class InboxView(ctk.CTkFrame):
                 txt.tag_delete(tag)
         index = self._build_player_name_index()
         if not index:
-            return
-        try:
-            from player_context_menu import bind_player_context  # noqa
-        except Exception:
             return
         # Longest names first so "John Smith Jr" wins over "John Smith"
         for name in sorted(index, key=len, reverse=True):

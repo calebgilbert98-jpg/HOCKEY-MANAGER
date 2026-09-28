@@ -7,8 +7,7 @@ import tkinter as tk
 from tkinter import ttk
 from popup_system import messagebox, InGamePopup
 import customtkinter as ctk
-import math
-from datetime import datetime, timedelta
+from datetime import datetime
 from player_development_system import PlayerDevelopmentEngine, initialize_player_potential
 from game_classes import Player, PlayerPosition, to_100_scale
 from player_context_menu import PlayerContextMenu

@@ -3,7 +3,6 @@
 
 import tkinter as tk
 from tkinter import ttk
-import math
 from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass
 

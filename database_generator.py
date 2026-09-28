@@ -3,10 +3,8 @@
 # Supports multiple database sizes for different levels of realism and detail
 
 import random
-import math
-from datetime import datetime, timedelta
-from typing import List, Dict, Tuple, Optional, Callable, Union
-from game_classes import Player, Team, League, PlayerPosition, GameBalance, Contract, debug_print
+from typing import (List, Dict, Optional)
+from game_classes import (Player, Team, League, PlayerPosition, Contract, debug_print)
 from dataclasses import dataclass
 
 @dataclass

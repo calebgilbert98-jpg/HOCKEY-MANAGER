@@ -4,7 +4,6 @@
 # GM advisories, line control, team actions, and the dynamics feed.
 # CustomTkinter: CTkToplevel chrome, dark ttk.Treeview, CTkScrollableFrame.
 
-import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
 

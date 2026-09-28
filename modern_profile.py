@@ -13,9 +13,7 @@
 import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
-from modern_ui import (
-    AppColors, AppFonts, AppCard, PillBadge, AppButton
-)
+from modern_ui import (AppColors, AppFonts, AppCard, PillBadge)
 
 # FM24-style attribute groups: (display label, Player field name)
 SKATER_TECHNICAL = [

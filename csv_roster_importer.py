@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import csv
 import os
-import random
 from typing import Any, Dict, List, Optional, Tuple
 
 TEAM_HEADERS = ["team_name", "city", "division", "conference", "league"]

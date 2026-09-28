@@ -12,15 +12,9 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from modern_ui import (
-    AppColors, AppFonts, AppCard, StatCard,
-    PlayerRow, PillBadge, apply_app_theme,
-)
+from modern_ui import (AppColors, AppFonts, AppCard, StatCard, PillBadge)
 
-from ctk_theme import (
-    init_ctk_theme, TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
-    TEXT, TEXT_DIM, TEXT_FAINT,
-)
+from ctk_theme import (init_ctk_theme, TEAL, TEAL_HOVER, BG, CARD, BORDER, TEXT)
 
 try:
     from manager_career import morale_label

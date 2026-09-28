@@ -13,7 +13,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import main as main_mod
-from game_classes import Contract, League, Player, PlayerPosition, Team
+from game_classes import (Contract, Player, PlayerPosition, Team)
 
 PASS, FAIL = [], []
 
@@ -204,7 +204,6 @@ else:
     check("draft-eligible kid blocked on MP path (not draft-eligible)", True)
 
 # 6. Dispatch wiring probes.
-import re as _re
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "main.py")).read()
 check("return_to_junior in MP dispatch",

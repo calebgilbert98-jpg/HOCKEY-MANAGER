@@ -11,7 +11,6 @@ from datetime import date, time as dtime
 
 sys.path.insert(0, ".")
 
-import outdoor_games as og
 from outdoor_games import (
     schedule_outdoor_games, outdoor_info_for, pregame_presentation,
     record_outdoor_result, VENUES,

@@ -5,8 +5,7 @@
 from datetime import date, timedelta
 from enum import Enum
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Callable
-import random
+from typing import (List, Optional, Callable)
 
 class SeasonPhase(Enum):
     """Different phases of the hockey season"""
@@ -387,7 +386,6 @@ class AutomatedSeasonFlow:
     def _show_milestone_notification(self, milestone):
         """Show notification for important milestones"""
         try:
-            import tkinter as tk
             from popup_system import messagebox
             
             messagebox.showinfo(

@@ -3,7 +3,7 @@ NHL Records System for Hockey Manager
 Tracks all-time NHL records and compares current players against historical achievements
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 import json

@@ -8,14 +8,12 @@ from tkinter import ttk, filedialog
 from popup_system import messagebox, InGamePopup
 import os
 import sys
-from pathlib import Path
 from datetime import datetime, date
 import json
 import random
-import calendar
 from PIL import Image
 
-from modern_ui import AppColors, AppFonts, AppCard, AppButton, PillBadge
+from modern_ui import (AppColors, AppFonts, AppButton)
 
 
 class _ThemedButton(tk.Button):

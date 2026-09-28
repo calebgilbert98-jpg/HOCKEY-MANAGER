@@ -1,12 +1,11 @@
 """QA: advanced metrics model + franchise records + history UI tabs."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import random
 
 import game_classes as g
 from game_classes import PlayerPosition
 import advanced_metrics as am
-from league_history import LeagueHistory, FranchiseRecords
+from league_history import LeagueHistory
 
 passed, failed = 0, 0
 def check(name, cond):

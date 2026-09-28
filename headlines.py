@@ -24,7 +24,7 @@ Anti-flood / performance design (the game must stay fast):
 """
 
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import (Any, Dict, Optional, Tuple)
 
 HEADLINE_TTL_DAYS = 7          # news items live 7 game-days unless saved/milestone
 DAILY_HEADLINE_CAP = 4         # safety valve: max headlines delivered per game-day

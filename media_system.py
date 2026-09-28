@@ -3,12 +3,9 @@
 # Fully optional system that adds immersive media interactions
 
 import random
-import tkinter as tk
-from tkinter import ttk
-from popup_system import messagebox
 from datetime import date, timedelta
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from typing import (List, Optional)
 from enum import Enum
 
 class MediaEngagementLevel(Enum):

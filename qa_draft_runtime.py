@@ -74,7 +74,6 @@ def _probe_market_deals():
     return found
 
 
-import game_classes as g
 import draft_day_trades as ddt
 from draft_generator import generate_draft_class
 from ai_team_management import ManagementPriority
@@ -144,7 +143,6 @@ def grab(win, name):
 
 
 def main():
-    import customtkinter as ctk
     from windows import DraftView
 
     # Deterministic market probe (multi-seed; the market is probabilistic).

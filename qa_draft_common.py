@@ -1,12 +1,10 @@
 """Shared builders for the draft QA suites (headless-safe)."""
-import random
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import game_classes as g
-from game_classes import PlayerPosition
 from ai_team_management import ManagementPriority
 
 

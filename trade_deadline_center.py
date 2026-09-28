@@ -8,11 +8,10 @@ from popup_system import InGamePopup
 from tkinter import ttk
 import time
 from datetime import datetime, timedelta
-import threading
 import random
 
 # Import the trade deadline manager for backend logic
-from trade_deadline_manager import TradeDeadlineManager, get_deadline_manager
+from trade_deadline_manager import get_deadline_manager
 
 
 class TradeDeadlineCenter(InGamePopup):

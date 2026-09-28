@@ -225,10 +225,7 @@ check("quiet -> no inbox spam", len(fake.inbox) == 0)
 from inbox_window import InboxView
 from game_classes import EmailMessage
 iw = InboxView.__new__(InboxView)
-from ctk_theme import (init_ctk_theme, primary_button, secondary_button,
-                       heading, body, TEAL, TEAL_HOVER, TEAL_DARK, BG, PANEL,
-                       CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN,
-                       RED, BLUE, ROW_HOVER, ROW_SELECTED)
+from ctk_theme import (primary_button, secondary_button, heading, body, TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE, ROW_HOVER, ROW_SELECTED)
 iw._ct = dict(TEAL=TEAL, BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER,
               TEXT=TEXT, TEXT_DIM=TEXT_DIM, TEXT_FAINT=TEXT_FAINT, GOLD=GOLD,
               GREEN=GREEN, RED=RED, BLUE=BLUE, ROW_HOVER=ROW_HOVER,

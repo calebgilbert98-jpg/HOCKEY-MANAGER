@@ -6,7 +6,6 @@
 # (suggest / enforce / take over the whiteboard).
 # CustomTkinter: CTkToplevel chrome, CTkScrollableFrame, mirrors morale_window.
 
-import tkinter as tk
 from tkinter import messagebox
 from popup_system import InGamePopup
 

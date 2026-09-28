@@ -167,7 +167,6 @@ check("expiry after rollover",
       and real_cap_data.seeded_dead_cap_total(league3.teams[0]) == 0)
 
 # -- 8. save/load round-trip -------------------------------------------------------
-import save_load_system as sls
 t_sv = mkteam("Boston Bruins")
 t_sv.roster.extend([mkplayer(5_000_000)])
 t_sv.real_buyout_cap, t_sv.real_retained_salary = 0, 615_000

@@ -6,7 +6,7 @@ Phase 1: Deep Player Psychology & Hidden Attributes
 from dataclasses import dataclass, field
 from enum import Enum
 import random
-from typing import Dict, List, Optional
+from typing import (Dict, List)
 from game_classes import PlayerPosition
 
 class PersonalityType(Enum):

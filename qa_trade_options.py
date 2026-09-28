@@ -588,7 +588,7 @@ check("counter drops retention terms for removed assets",
       _neg.retention == {})
 
 # --- Fix 4: clause survives agent-counter -> inbox accept ---
-from main import HockeyManagerGUI, GameManager, SALARY_CAP as _SALARY_CAP
+from main import (HockeyManagerGUI, GameManager)
 
 _c4_team = mkteam("Cap Club")
 _c4_league = _SN(teams=[_c4_team], free_agents=[], salary_cap_system=None,
