@@ -7473,13 +7473,44 @@ class ContractNegotiationWindow(InGamePopup):
         self.player = player
         self.is_extension = is_extension
         self.title(f"Negotiate with {player.full_name}")
-        self.geometry("500x450")
+        self.geometry("520x560")
         self.configure(background=parent.BG_COLOR)
         self.transient(parent)
         self.grab_set()
 
+        # Scrollable body: sections can never be cut off at the card edge,
+        # no matter how many are shown (extension mode adds a frame).
+        # The Submit/Cancel buttons stay pinned at the bottom, outside
+        # the scroll region.
+        _bg = parent.BG_COLOR
+        canvas = tk.Canvas(self, bg=_bg, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self, orient="vertical",
+                                  command=canvas.yview)
+        scroll_body = ttk.Frame(canvas, style='Panel.TFrame')
+        scroll_body.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_body, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _on_wheel(event):
+            try:
+                if event.num == 4:
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    canvas.yview_scroll(1, "units")
+                else:
+                    canvas.yview_scroll(int(-event.delta / 120), "units")
+            except Exception:
+                pass
+        canvas.bind("<MouseWheel>", _on_wheel)
+        canvas.bind("<Button-4>", _on_wheel)
+        canvas.bind("<Button-5>", _on_wheel)
+
         # Create main container with padding
-        main_frame = ttk.Frame(self, style='Panel.TFrame')
+        main_frame = ttk.Frame(scroll_body, style='Panel.TFrame')
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
 
         # Title section
@@ -7535,12 +7566,15 @@ class ContractNegotiationWindow(InGamePopup):
         self.years_var.trace('w', self.update_total)
         self.update_total()
         
-        # Buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill='x', pady=20)
-        
+        # Buttons (pinned at the bottom, outside the scroll region)
+        button_frame = ttk.Frame(self, style='Panel.TFrame')
+        button_frame.pack(fill='x', side='bottom', padx=20, pady=(0, 16))
+
         ttk.Button(button_frame, text="Submit Offer", command=self.submit_offer, style='TButton').pack(side='right', padx=(5, 0))
         ttk.Button(button_frame, text="Cancel", command=self.destroy, style='TButton').pack(side='right')
+
+        # Grow the card to fit the content (clamped to the app window).
+        self.fit_to_content()
 
     def update_total(self, *args):
         """Update the total contract value display."""
@@ -7570,8 +7604,10 @@ class ContractNegotiationWindow(InGamePopup):
             self.player.salary = salary
             self.player.contract_years = years
             
-            # Then call handle_contract_offer with proper arguments
-            accepted = self.parent.handle_contract_offer(self.player, extension=self.is_extension)
+            # Then call handle_contract_offer with proper arguments.
+            # Results land in the inbox (FM24/EHM style); the window closes
+            # on a signed deal, stays open for counters/rejections.
+            accepted = self.parent.handle_contract_offer(self.player, extension=self.is_extension, notify="inbox")
             if accepted:
                 self.destroy()
         except ValueError:

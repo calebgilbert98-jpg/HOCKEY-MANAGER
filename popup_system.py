@@ -273,6 +273,37 @@ class InGamePopup(tk.Frame):
     def minsize(self, w, h):
         self._popup_minsize = (w, h)
 
+    def fit_to_content(self, min_w=None, min_h=None, max_ratio=0.92, pad=24):
+        """Resize the card to fit its content, clamped to the app window.
+
+        Fixes the classic cut-off: a fixed ``geometry("500x450")`` whose
+        packed content is actually 600px tall (e.g. extra frames added in
+        extension mode). Grows the card to the content's requested size,
+        never beyond ``max_ratio`` of the app window. Call at the end of
+        the subclass ``__init__`` after building the UI.
+        """
+        try:
+            self.update_idletasks()
+            root = self._app_root
+            try:
+                rw, rh = root.winfo_width(), root.winfo_height()
+            except Exception:
+                rw, rh = 0, 0
+            if rw < 50:
+                rw = 1400
+            if rh < 50:
+                rh = 900
+            req_w = self.winfo_reqwidth() + pad
+            req_h = self.winfo_reqheight() + pad
+            cur_w, cur_h = self._popup_size
+            w = min(max(min_w or cur_w, req_w), int(rw * max_ratio))
+            h = min(max(min_h or cur_h, req_h), int(rh * max_ratio))
+            w, h = int(w), int(h)
+            if (w, h) != (cur_w, cur_h):
+                self.geometry(f"{w}x{h}")
+        except Exception:
+            pass
+
     def maxsize(self, w, h):  # noqa: D102 - compat no-op
         pass
 
