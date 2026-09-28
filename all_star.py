@@ -115,14 +115,14 @@ def _division_of(player_team: Any) -> str:
     return getattr(player_team, "division", "") or ""
 
 
-def _stamp_accolade(p: Any, season_label: str) -> None:
+def _stamp_accolade(p: Any, ceremony_year: str) -> None:
+    """Bank the All-Star nod into the player's trophy case via the
+    canonical accolades module (idempotent on (award, year)). The card's
+    Accolades section renders it from there. Ceremony-year convention:
+    the Feb-2027 game for the 2026-27 season banks as "2027"."""
     try:
-        case = getattr(p, "career_accolades", None)
-        if case is None:
-            return
-        if not any(isinstance(a, dict) and a.get("award") == "all_star"
-                   and a.get("year") == season_label for a in case):
-            case.append({"award": "all_star", "year": season_label})
+        from accolades import bank_accolade
+        bank_accolade(p, "all_star", ceremony_year)
     except Exception:
         pass
 
@@ -143,6 +143,9 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
     except Exception:
         season_year = 2026
     label = _SEASON_LABEL(season_year)
+    # Ceremony-year convention (accolades.py): the All-Star game is
+    # played in February of season_year + 1.
+    ceremony_year = str(season_year + 1)
 
     store = getattr(league, "all_star_rosters", None)
     if store is None:
@@ -260,7 +263,7 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
                     skater_lineup.append(add)
 
         for p in [captain] + skater_lineup + goalie_lineup:
-            _stamp_accolade(p, label)
+            _stamp_accolade(p, ceremony_year)
         result[div] = {"captain": captain, "skaters": skater_lineup,
                        "goalies": goalie_lineup}
 

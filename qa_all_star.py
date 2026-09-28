@@ -125,14 +125,23 @@ cen_g = rosters["Central"]["goalies"]
 check("top goalie by SV% picked",
       any("G1" in p.name for p in cen_g), str([p.name for p in cen_g]))
 
-# Accolades stamped exactly once with the season label.
+# Accolades stamped exactly once with the ceremony year (2027 for the
+# 2026-27 season -- the individual-award convention in accolades.py).
 n_acc = sum(1 for t in teams for p in t.roster
             for a in p.career_accolades
-            if a.get("award") == "all_star" and a.get("year") == "2026-27")
+            if a.get("award") == "all_star" and a.get("year") == "2027")
 n_picks = sum(1 + len(r["skaters"]) + len(r["goalies"])
               for r in rosters.values())
 check("accolade per pick, none duplicated", n_acc == n_picks,
       f"{n_acc} vs {n_picks}")
+
+# The player card renders the trophy case via group_accolades.
+import accolades as _accmod
+star = rosters["Atlantic"]["captain"]
+groups = dict(_accmod.group_accolades(star))
+check("card shows 'NHL All-Star' label", "NHL All-Star" in groups, str(groups))
+check("card shows ceremony year", groups.get("NHL All-Star") == ["2027"],
+      str(groups.get("NHL All-Star")))
 
 # Idempotent: second call is a no-op.
 again = AS.select_all_star_rosters(league, rng=rng)
