@@ -96,6 +96,33 @@ class ManagerHubView(ctk.CTkFrame):
                                       font=("Helvetica", 10))
         self.review_label.pack(anchor="w")
 
+        self.patience_label = ttk.Label(frame, text="", wraplength=600,
+                                        font=("Helvetica", 10, "italic"))
+        self.patience_label.pack(anchor="w", pady=(5, 2))
+
+        def _request_patience():
+            board = self.career.board
+            today = ""
+            try:
+                today = self.app.current_date.isoformat()
+            except Exception:
+                pass
+            granted, headline, body = board.request_patience(today)
+            # Granted: the room settles knowing the manager is safe.
+            if granted:
+                try:
+                    team = self.app.user_team
+                    for p in (getattr(team, "roster", []) or []):
+                        m = getattr(p, "morale", 70) or 70
+                        p.morale = min(100, m + 2)
+                except Exception:
+                    pass
+            messagebox.showinfo(headline, body)
+            self._refresh_board()
+
+        ttk.Button(frame, text="Request a meeting with the owner",
+                   command=_request_patience).pack(anchor="w", pady=5)
+
         ttk.Label(frame, text="Expectation progress:",
                   font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(10, 2))
         self.progress_label = ttk.Label(frame, text="", wraplength=620,
@@ -119,6 +146,11 @@ class ManagerHubView(ctk.CTkFrame):
             text=f"{board.season_wins}W - {board.season_losses}L - {board.season_otl}OTL")
         self.review_label.config(
             text=board.last_review or "No reviews yet this season.")
+        try:
+            today = self.app.current_date.isoformat()
+        except Exception:
+            today = ""
+        self.patience_label.config(text=board.patience_status(today))
         self.progress_label.config(text=self._expectation_progress_text())
 
     # Rough full-season point targets per expectation. These are estimates

@@ -13503,6 +13503,11 @@ class HockeyManagerGUI(tk.Tk):
                 career.career_start_date = self.current_date.isoformat()
                 strength = self._career_team_strength(team)
                 career.board.auto_expectation(strength)
+                ages = [getattr(p, "age", 27) or 27
+                        for p in (getattr(team, "roster", []) or [])]
+                avg_age = sum(ages) / len(ages) if ages else 27.0
+                career.board.on_hired(strength, avg_age,
+                                      self.current_date.isoformat())
                 exp = manager_career.EXPECTATIONS[career.board.expectation]
                 from game_classes import EmailMessage
                 self.send_email_to_user(EmailMessage(
@@ -13511,9 +13516,12 @@ class HockeyManagerGUI(tk.Tk):
                     content=(f"Welcome to {team.team_name}.\n\n"
                              f"The board's expectation this season is: {exp['label']}.\n"
                              f"{exp['description']}\n\n"
+                             f"Your owner: {career.board.owner.label}.\n"
                              f"Board confidence starts at {career.board.confidence}/100. "
-                             f"Results, signings and your media handling will move it. "
-                             f"If it hits zero, you're gone."),
+                             f"The board reviews progress monthly — it judges trends, "
+                             f"not single games. If things go badly, you can request "
+                             f"a meeting with the owner from the Manager Hub to ask "
+                             f"for patience. If confidence hits zero, you're gone."),
                     date_sent=self.current_date, category="General",
                     is_important=True))
             # 2. Weekly update: happiness, concerns, training effects
@@ -13670,7 +13678,7 @@ class HockeyManagerGUI(tk.Tk):
             return
         points = b.season_wins * 2 + b.season_otl
         pct = points / (games * 2)
-        headline, body = b.monthly_review(pct)
+        headline, body = b.monthly_review(pct, self.current_date.isoformat())
         # GM stature: the board gives a respected GM a longer leash and a
         # clown GM a shorter one. Drift only (+/-2/mo); results dominate.
         try:
@@ -13685,6 +13693,20 @@ class HockeyManagerGUI(tk.Tk):
             sender="Board of Directors", sender_type="Owner",
             subject=headline, content=body, date_sent=self.current_date,
             category="General", is_important=b.confidence < 30))
+        # Restless board: nudge the GM that they can ask the owner for time.
+        if (b.confidence < 40
+                and not b._on_or_after(self.current_date.isoformat(),
+                                       b.patience_cooldown_until)):
+            self.send_email_to_user(EmailMessage(
+                sender="Board of Directors", sender_type="Owner",
+                subject="The walls are closing in",
+                content=("Confidence in your project is fading. If you need "
+                         "time to get things together, you can request a "
+                         "meeting with the owner from the Manager Hub and ask "
+                         "for patience — but choose the moment wisely. A "
+                         "refused request makes the next two months harder."),
+                date_sent=self.current_date, category="General",
+                is_important=True))
         if b.sacked:
             self._career_handle_sack()
 
@@ -13957,7 +13979,8 @@ class HockeyManagerGUI(tk.Tk):
                 m = getattr(p, "morale", 70) or 70
                 p.morale = max(1, min(100, m + (5 if total_morale > 0 else -5)))
         if total_board:
-            self.career.board.confidence = max(0, min(100, self.career.board.confidence + total_board))
+            self.career.board.apply_press_board_effect(
+                total_board, self.current_date.isoformat())
         summary = f"{kind}: " + "; ".join(a.get("label", "") for a in answers)
         self.career.press_history.append(
             {"date": self.current_date.isoformat(), "type": kind, "summary": summary})
@@ -13993,8 +14016,14 @@ class HockeyManagerGUI(tk.Tk):
             opp_strength = self._career_team_strength(opp)
             was_favorite = my_strength >= opp_strength
 
-            delta = self.career.board.record_result(user_won, went_ot, was_favorite)
+            delta = self.career.board.record_result(
+                user_won, went_ot, was_favorite,
+                today_iso=self.current_date.isoformat())
             self.career.profile.record_result(user_won, went_ot, is_playoff=False)
+
+            # Board crisis (8-game skid, disastrous start): surface it as news.
+            if self.career.board.last_crisis:
+                self.add_news("🏛️ " + self.career.board.last_crisis)
 
             # Dressing room mood swing
             for p in (getattr(team, "roster", []) or []):
