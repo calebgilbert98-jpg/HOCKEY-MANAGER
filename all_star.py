@@ -127,6 +127,67 @@ def _stamp_accolade(p: Any, ceremony_year: str) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Coaches
+#
+# The real rule: the head coach of each division's leading club at the
+# announcement date (points, then wins) coaches that division's team.
+# ---------------------------------------------------------------------------
+
+def _division_leader(league: Any, division: str) -> Optional[Any]:
+    """Team leading `division` right now (points, then wins)."""
+    div_teams = [t for t in getattr(league, "teams", []) or []
+                 if getattr(t, "league_name", "") == "National Hockey League"
+                 and getattr(t, "division", "") == division]
+    if not div_teams:
+        return None
+    standings = getattr(league, "standings", {}) or {}
+
+    def _key(t: Any) -> Tuple[int, int]:
+        row = standings.get(getattr(t, "team_name", ""), {}) or {}
+        try:
+            pts = int(row.get("Points", 0) or 0)
+        except Exception:
+            pts = 0
+        try:
+            wins = int(row.get("W", 0) or 0)
+        except Exception:
+            wins = 0
+        return (pts, wins)
+
+    return max(div_teams, key=_key)
+
+
+def _head_coach_of(team: Any) -> Optional[Any]:
+    """The team's Staff head coach, or None."""
+    try:
+        from game_classes import StaffRole
+        hcs = team.get_staff_by_role(StaffRole.HEAD_COACH)
+        return hcs[0] if hcs else None
+    except Exception:
+        return None
+
+
+def _coach_display_name(c: Any) -> str:
+    try:
+        return c.full_name
+    except Exception:
+        return str(getattr(c, "name", "Unknown"))
+
+
+def select_all_star_coaches(league: Any) -> Dict[str, Optional[Any]]:
+    """{division: Staff head coach} -- the real All-Star rule.
+
+    The bench boss of each division's leading club at the announcement
+    date coaches that division's team.
+    """
+    out: Dict[str, Optional[Any]] = {}
+    for div in DIVISIONS:
+        leader = _division_leader(league, div)
+        out[div] = _head_coach_of(leader) if leader is not None else None
+    return out
+
+
 def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
                             rng: Optional[random.Random] = None
                             ) -> Dict[str, Dict[str, List[Any]]]:
@@ -169,6 +230,10 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
                     pass
     if not div_teams:
         return {}
+
+    # Coaches: the division leaders' bench bosses (the real rule).
+    coaches = select_all_star_coaches(league)
+    leaders = {div: _division_leader(league, div) for div in DIVISIONS}
 
     result: Dict[str, Dict[str, List[Any]]] = {}
     for div in DIVISIONS:
@@ -265,16 +330,24 @@ def select_all_star_rosters(league: Any, season_year: Optional[int] = None,
         for p in [captain] + skater_lineup + goalie_lineup:
             _stamp_accolade(p, ceremony_year)
         result[div] = {"captain": captain, "skaters": skater_lineup,
-                       "goalies": goalie_lineup}
+                       "goalies": goalie_lineup,
+                       "coach": coaches.get(div),
+                       "leader_team": _team_name(leaders.get(div))
+                       if leaders.get(div) is not None else None}
 
     # Persist as plain IDs (save/load safe); objects stay in the return.
     for div, r in result.items():
         try:
             store[label] = store.get(label, {})
+            coach = r.get("coach")
             store[label][div] = {
                 "captain_id": getattr(r["captain"], "id", None),
                 "skater_ids": [getattr(p, "id", None) for p in r["skaters"]],
                 "goalie_ids": [getattr(p, "id", None) for p in r["goalies"]],
+                "coach_id": getattr(coach, "id", None),
+                "coach_name": _coach_display_name(coach)
+                if coach is not None else None,
+                "leader_team": r.get("leader_team"),
             }
         except Exception:
             pass
@@ -300,7 +373,9 @@ def resolve_rosters(league: Any, season_label: str
             sk = [by_id[i] for i in (r.get("skater_ids") or []) if i in by_id]
             gl = [by_id[i] for i in (r.get("goalie_ids") or []) if i in by_id]
             if cap is not None:
-                out[div] = {"captain": cap, "skaters": sk, "goalies": gl}
+                out[div] = {"captain": cap, "skaters": sk, "goalies": gl,
+                            "coach_name": r.get("coach_name"),
+                            "leader_team": r.get("leader_team")}
         except Exception:
             pass
     return out
@@ -391,6 +466,7 @@ def announcement_copy(rosters: Dict[str, Dict[str, List[Any]]],
                       season_label: str) -> str:
     """One inbox-ready story announcing the rosters."""
     bits = []
+    benches = []
     for div in DIVISIONS:
         r = rosters.get(div)
         if not r:
@@ -398,6 +474,16 @@ def announcement_copy(rosters: Dict[str, Dict[str, List[Any]]],
         cap = _pname(r["captain"])
         n = len(r["skaters"]) + len(r["goalies"])
         bits.append(f"{div} ({cap} wearing the C, {n} total)")
-    return (f"🌟 {season_label} All-Star rosters are set: the fans voted "
-            f"their captains and hockey ops filled out the four division "
-            f"squads -- " + "; ".join(bits) + ". Every club is represented.")
+        coach = r.get("coach_name") or (
+            _coach_display_name(r["coach"]) if r.get("coach") else None)
+        if coach:
+            leader = r.get("leader_team") or ""
+            benches.append(f"{div}: {coach}" + (f" ({leader})" if leader else ""))
+    story = (f"🌟 {season_label} All-Star rosters are set: the fans voted "
+             f"their captains and hockey ops filled out the four division "
+             f"squads -- " + "; ".join(bits) + ". Every club is represented.")
+    if benches:
+        story += (" Behind the benches, as tradition dictates, the head "
+                  "coaches of the division leaders: " + "; ".join(benches)
+                  + ".")
+    return story

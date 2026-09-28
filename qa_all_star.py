@@ -41,9 +41,18 @@ def mkplayer(name, pos, gp, goals, assists, overall=80, reputation=50,
                            career_accolades=[])
 
 
+def mkcoach(name):
+    return SimpleNamespace(id=abs(hash(name)) % 10**6, full_name=name,
+                           name=name, role="HEAD_COACH")
+
+
 def mkteam(name, division, players):
-    return SimpleNamespace(team_name=name, league_name="National Hockey League",
-                           division=division, roster=players)
+    coach = mkcoach(f"Coach {name}")
+    t = SimpleNamespace(team_name=name, league_name="National Hockey League",
+                        division=division, roster=players,
+                        staff=[coach])
+    t.get_staff_by_role = lambda role, _c=coach: [_c]
+    return t
 
 
 DIVS = ["Atlantic", "Metropolitan", "Central", "Pacific"]
@@ -73,8 +82,15 @@ for t in teams:
         t.roster.append(star)
 
 asg_date = date(2027, 2, 7)
+# Standings: make "{div} Team 1" the leader of each division.
+_standings = {}
+for t in teams:
+    ti = int(t.team_name.rsplit(" ", 1)[1])
+    _standings[t.team_name] = {"W": 40 - ti, "L": 10, "OTL": 2,
+                               "Points": 82 - 2 * ti}
 league = SimpleNamespace(
     teams=teams, season_year=2026, all_star_rosters={},
+    standings=_standings,
     schedule=[(asg_date, "NHL_EVENT", {"type": "all_star_game"})])
 
 rng = random.Random(7)
@@ -188,6 +204,22 @@ check("winners from the rosters", all(w[1] in roster_names for w in sw))
 copy = AS.announcement_copy(rosters, "2026-27")
 check("copy names all divisions", all(d in copy for d in DIVS))
 check("copy names the superstar captain", "Super Star" in copy)
+
+# Coaches: the division leaders' head coaches (the real rule).
+coaches = AS.select_all_star_coaches(league)
+from game_classes import StaffRole
+for div in DIVS:
+    leader = max([t for t in teams if t.division == div],
+                 key=lambda t: (league.standings[t.team_name]["Points"],
+                                league.standings[t.team_name]["W"]))
+    hc = leader.get_staff_by_role(StaffRole.HEAD_COACH)[0]
+    check(f"{div} coach is the leader's HC", coaches[div] is hc,
+          f"{getattr(coaches[div], 'full_name', None)} vs {hc.full_name}")
+    check(f"{div} roster carries coach", rosters[div]["coach"] is hc)
+    check(f"{div} coach name persisted",
+          league.all_star_rosters["2026-27"][div]["coach_name"] == hc.full_name)
+check("copy names the coaches", "Behind the benches" in copy and
+      all(f"Coach {div} Team 1" in copy for div in DIVS))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

@@ -6081,6 +6081,13 @@ class HockeyManagerGUI(tk.Tk):
                                              f"{_who} ({_div})."})
                             _res = _as.play_all_star_game(_rosters, _rng)
                             if _res:
+                                _champ_coach = (_rosters.get(
+                                    _res['champion'], {}) or {}).get(
+                                        "coach_name")
+                                _coach_bit = (f" {_champ_coach} gets the win "
+                                              f"behind the "
+                                              f"{_res['champion']} bench."
+                                              if _champ_coach else "")
                                 self.news_log.append({
                                     'date': self.current_date,
                                     'story': f"🌟 All-Star Game: "
@@ -6088,7 +6095,7 @@ class HockeyManagerGUI(tk.Tk):
                                              f"3v3 tournament "
                                              f"{_res['score']} over "
                                              f"{_res['finalists'][1]} in the "
-                                             f"final."})
+                                             f"final.{_coach_bit}"})
             except Exception as _ase:
                 print(f"All-Star weekend skipped (non-fatal): {_ase}")
 
@@ -10238,19 +10245,33 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
-        # International windows: Olympics (Feb 10, Olympic years) and World
-        # Championship (May 12), each once per year. Instant lightweight
-        # resolution + inbox card; the NHL schedule is never touched.
+        # International windows: Olympics (announced Feb 9, medals Feb 22
+        # of Olympic years -- the NHL goes dark Feb 10-24 via the
+        # olympic_break in schedule generation) and World Championship
+        # (May 12), each once per year. Instant lightweight resolution +
+        # inbox card.
         try:
             from international import (
-                OLYMPIC_MONTH, OLYMPIC_DAY, WORLDS_MONTH, WORLDS_DAY,
-                is_olympic_year, hold_olympics, hold_worlds)
+                OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY,
+                OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY,
+                WORLDS_MONTH, WORLDS_DAY,
+                is_olympic_year, announce_olympics, resolve_olympics,
+                hold_worlds)
             _md = (today.month, today.day)
-            if _md == (OLYMPIC_MONTH, OLYMPIC_DAY) and is_olympic_year(year):
+            _oly = is_olympic_year(year)
+            _ann = (getattr(league, "intl_announced", None) or [])
+            if (_md == (OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY)
+                    and _oly and year not in _ann):
+                _story = announce_olympics(self, year)
+                if _story:
+                    self.news_log.append({'date': self.current_date,
+                                          'story': _story})
+            elif (_md == (OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY)
+                    and _oly):
                 _held = (getattr(league, "intl_held", None) or {}).get(
                     "olympics", [])
                 if year not in _held:
-                    _res = hold_olympics(self, year)
+                    _res = resolve_olympics(self, year)
                     if _res:
                         self._deliver_intl_card(_res)
             elif _md == (WORLDS_MONTH, WORLDS_DAY):

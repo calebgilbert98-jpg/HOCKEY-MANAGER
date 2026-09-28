@@ -231,6 +231,10 @@ class GameSaveManager:
                           (getattr(league, 'intl_held', None) or {}).items()},
             'intl_history': [dict(h) for h in
                              (getattr(league, 'intl_history', None) or [])],
+            'intl_prep': {str(k): v for k, v in
+                          (getattr(league, 'intl_prep', None) or {}).items()},
+            'intl_announced': sorted(
+                getattr(league, 'intl_announced', None) or []),
             'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
             # Years the draft was actually conducted (idempotency guard).
             # Missing key = old save -> empty list.
@@ -1193,6 +1197,15 @@ class GameSaveManager:
                 league.intl_held = {"olympics": [], "worlds": []}
             league.intl_history = [dict(h) for h in
                                    (league_data.get('intl_history', None) or [])]
+            try:
+                league.intl_prep = {
+                    int(k): v for k, v in
+                    (league_data.get('intl_prep', None) or {}).items()
+                }
+            except Exception:
+                league.intl_prep = {}
+            league.intl_announced = sorted(
+                league_data.get('intl_announced', None) or [])
             # Tentpole event state (years the entry draft was held, event
             # prompts already shown). Defaults keep old saves working.
             league.draft_held_years = list(league_data.get('draft_held_years', []) or [])

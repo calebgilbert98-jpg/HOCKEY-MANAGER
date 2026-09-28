@@ -3415,6 +3415,10 @@ class League:
     intl_held: Dict[str, List[int]] = field(
         default_factory=lambda: {"olympics": [], "worlds": []})
     intl_history: List[Dict] = field(default_factory=list)
+    # Olympic prep between announcement (Feb 9) and medal day (Feb 22):
+    # plain-data rosters + coaches per year; years already announced.
+    intl_prep: Dict[int, Dict] = field(default_factory=dict)
+    intl_announced: List[int] = field(default_factory=list)
     # League-wide bad blood: coach-coach, GM-coach, player-player, team-team
     rivalries: List[dict] = field(default_factory=list)
     # Dynamic salary cap system: growth, history, market-setting contracts.
@@ -3502,8 +3506,9 @@ class League:
     # stale templates are never served.
     # ------------------------------------------------------------------
     # v2: template entries carry the preseason flag (6-tuples). v1 caches
-    # predate preseason games and are ignored.
-    SCHEDULE_CACHE_VERSION = 2
+    # predate preseason games and are ignored. v3: the Olympic break
+    # (Feb 10-24, Olympic years) keeps NHL games off those dates.
+    SCHEDULE_CACHE_VERSION = 3
     SCHEDULE_CACHE_DIR = _os.path.join("saves", "schedule_cache")
 
     def _schedule_cache_path(self, season_year, seed):
@@ -3994,7 +3999,8 @@ class League:
                 for break_name, break_period in [
                     ('thanksgiving_break', calendar_events.get('thanksgiving_break')),
                     ('christmas_break', calendar_events.get('christmas_break')),
-                    ('all_star_break', calendar_events.get('all_star_break'))
+                    ('all_star_break', calendar_events.get('all_star_break')),
+                    ('olympic_break', calendar_events.get('olympic_break'))
                 ]:
                     if break_period and isinstance(break_period, tuple) and len(break_period) == 2:
                         break_start, break_end = break_period
@@ -4736,6 +4742,13 @@ class League:
                 date(season_year + 1, 2, 5),   # Typically first week of February
                 date(season_year + 1, 2, 11)
             ),
+            'olympic_break': (
+                # NHL goes dark for the Olympic tournament (Feb 10-24),
+                # Olympic years only. None otherwise -- the break checks
+                # below skip non-tuple entries.
+                date(season_year + 1, 2, 10),
+                date(season_year + 1, 2, 24)
+            ) if ((season_year + 1) % 4 == 2) else None,
             'trade_deadline': date(season_year + 1, 3, 8),  # First Friday in March
             'entry_draft': date(season_year + 1, 6, 27),   # Late June
             'free_agency': date(season_year + 1, 7, 1)     # July 1st
@@ -4753,7 +4766,8 @@ class League:
             for break_name, break_period in [
                 ('thanksgiving_break', calendar_events['thanksgiving_break']),
                 ('christmas_break', calendar_events['christmas_break']),
-                ('all_star_break', calendar_events['all_star_break'])
+                ('all_star_break', calendar_events['all_star_break']),
+                ('olympic_break', calendar_events.get('olympic_break'))
             ]:
                 if isinstance(break_period, tuple) and len(break_period) == 2:
                     if break_period[0] <= current_date <= break_period[1]:
