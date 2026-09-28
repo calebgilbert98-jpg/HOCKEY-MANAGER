@@ -249,8 +249,27 @@ def simulate_prospect_season(player: Any, league: Optional[str] = None,
             goal_share = 0.42
         goal_share = max(0.25, min(0.60, goal_share))
         goals = int(round(pts * goal_share))
+        # Defensive performance: plus/minus from defensive attributes vs
+        # league par, scaled by ice time, with sample noise. Shutdown
+        # defenders and two-way forwards finally get a number that tells
+        # their story; one-dimensional scorers bleed against. The baseline
+        # sits below overall par -- teenagers defend worse than their
+        # overall suggests. Small samples are noisy on purpose: sample
+        # size is a legitimate reason to be deceived, decorative numbers
+        # are not.
+        try:
+            _def_avg = (float(getattr(player, "defensive_awareness", 50)
+                              or 50)
+                        + float(getattr(player, "checking", 50) or 50)
+                        + float(getattr(player, "pokecheck", 50) or 50)) / 3.0
+            _pm_exp = (_def_avg - (env["par"] - 12)) * gp * 0.016
+            _pm = int(round(_pm_exp + rng.gauss(0, math.sqrt(max(gp, 1))
+                                                 * 0.55)))
+        except Exception:
+            _pm = 0
         season = {"league": league, "gp": gp, "g": goals, "a": pts - goals,
-                  "pts": pts, "ppg": round(pts / gp, 3) if gp else 0.0}
+                  "pts": pts, "ppg": round(pts / gp, 3) if gp else 0.0,
+                  "plus_minus": _pm}
 
     player.farm_league = league
     player.farm_season = dict(season)
@@ -575,6 +594,12 @@ def process_prospect_offseason(player: Any, league: Optional[str] = None,
     """
     season = simulate_prospect_season(player, league, rng)
     result = evaluate_prospect_season(player, rng)
+    # Persist the season's story (breakout/bust/noticed/cooled/None) so the
+    # accolades system can weight awards by form, not just raw production.
+    try:
+        player.farm_result = result
+    except Exception:
+        pass
     return {"league": season.get("league"), "gp": season.get("gp"),
             "result": result,
             "true": true_grade(player), "displayed": displayed_grade(player)}
