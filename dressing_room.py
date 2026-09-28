@@ -654,7 +654,10 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
     elif arch == "veteran":
         # Respect travels: a softer landing than a nobody gets.
         if best is not None:
-            lines.append(f"{aname} lands with the {best['name'].lower()} -- "
+            _gname = str(best['name'] or "")
+            if _gname.lower().startswith("the "):
+                _gname = _gname[4:]
+            lines.append(f"{aname} lands with the {_gname.lower()} -- "
                          f"a vet knows how to find his people.")
         else:
             _bump(arriving, -2)
@@ -714,7 +717,10 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
                 except Exception:
                     wing = False
             _bump(arriving, -1 if wing else -2)
-            lines.append(f"{aname} lands with the {best['name'].lower()} -- "
+            _gname = str(best['name'] or "")
+            if _gname.lower().startswith("the "):
+                _gname = _gname[4:]
+            lines.append(f"{aname} lands with the {_gname.lower()} -- "
                          f"familiar faces help.")
             if wing:
                 lines.append(f"{best['leader']} has taken him under his wing.")
@@ -955,14 +961,26 @@ def _tenure_bucket(player: Any) -> str:
     return "new"
 
 
+def _is_goalie(p: Any) -> bool:
+    try:
+        pos = getattr(p, "primary_position", None)
+        v = getattr(pos, "value", pos)
+        return str(v or "").upper() == "G"
+    except Exception:
+        return False
+
+
 def _group_name(members: List[Any], idx: int) -> tuple:
     """FM24-style label from the group's dominant shared trait.
 
-    Returns (name, kind, nationality)."""
+    Returns (name, kind, nationality). Names use real dressing-room
+    language: the goalies' union, the young Swedes, the Swedish Mafia,
+    the Toronto boys, the kids, the old guard."""
     nats: Dict[str, int] = {}
     cities: Dict[str, int] = {}
     ages: List[int] = []
     buckets: Dict[str, int] = {}
+    goalies = 0
     for m in members:
         nn = _norm_nationality(m)
         nats[nn] = nats.get(nn, 0) + 1
@@ -974,6 +992,8 @@ def _group_name(members: List[Any], idx: int) -> tuple:
             ages.append(ag)
         tb = _tenure_bucket(m)
         buckets[tb] = buckets.get(tb, 0) + 1
+        if _is_goalie(m):
+            goalies += 1
     n = len(members)
     top_nat, nat_n = max(nats.items(), key=lambda kv: kv[1])
     nat_share = nat_n / n
@@ -995,18 +1015,25 @@ def _group_name(members: List[Any], idx: int) -> tuple:
     noun = max(raw_nats.items(), key=lambda kv: kv[1])[0] \
         if raw_nats else _display_nationality(top_nat)
     plural = _display_nationality(top_nat)
+    known_nat = top_nat != "unknown"
 
-    if mean_age <= 23 and nat_share >= 0.5 and top_nat != "unknown":
+    if goalies == n:
+        return "The goalies' union", "position", noun
+    if mean_age <= 23 and nat_share >= 0.5 and known_nat:
         return f"The young {plural}", "young", noun
-    if nat_share >= 0.6 and top_nat != "unknown":
+    if nat_share >= 0.6 and known_nat:
         if top_bucket == "core":
             return f"The {noun} core", "nationality", noun
-        return f"The {noun} group", "nationality", noun
+        if top_nat == "sweden":
+            return "The Swedish Mafia", "nationality", noun
+        return f"The {plural}", "nationality", noun
     if city_share >= 0.6:
         cname = top_city[:1].upper() + top_city[1:]
         return f"The {cname} boys", "hometown", noun
     if mean_age <= 23:
         return "The kids", "young", noun
+    if mean_age >= 33:
+        return "The old guard", "veterans", noun
     if top_bucket == "core":
         return "The core", "tenure", noun
     return f"Group {idx}", "mixed", noun

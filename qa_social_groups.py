@@ -15,7 +15,8 @@ import dressing_room as dr
 
 def make_player(name, nat="Canada", birthplace="", age=25, tenure="4+ years",
                 letter="", leadership=50, morale=70, pid=None,
-                relationships=None, drafted_year=None, ovr=75, gp=100):
+                relationships=None, drafted_year=None, ovr=75, gp=100,
+                goalie=False):
     p = SimpleNamespace(
         id=pid if pid is not None else name,
         full_name=name, name=name,
@@ -23,6 +24,7 @@ def make_player(name, nat="Canada", birthplace="", age=25, tenure="4+ years",
         team_tenure=tenure, captaincy=letter, leadership=leadership,
         morale=morale, relationships=dict(relationships or {}),
         drafted_year=drafted_year,
+        primary_position=SimpleNamespace(value="G" if goalie else "C"),
         stats=SimpleNamespace(games_played=gp),
         overall_rating=lambda _o=ovr: _o,
     )
@@ -208,6 +210,54 @@ stranger = make_player("Stranger", nat="Japan", age=26,
 lines2 = dr.cascade_on_arrival(team6, stranger, how="signing")
 check("true outsider stays outsider",
       any("outsider" in ln for ln in lines2) and stranger.morale == 64)
+
+# 33-38: great room names -------------------------------------------------
+mafia = [make_player(f"SM{i}", nat="Sweden", age=27, tenure="2 years")
+         for i in range(4)]
+team7 = make_team(mafia + [make_player(f"ZZ{i}", nat="Canada", age=30,
+                                       tenure="4+ years") for i in range(4)])
+g7 = dr.form_cliques(team7)
+check("the Swedish Mafia", any(g["name"] == "The Swedish Mafia" for g in g7))
+
+tenders = [make_player(f"G{i}", nat=n, age=28 + i, tenure="4+ years",
+                       birthplace="Toronto, ON", goalie=True)
+           for i, n in enumerate(["Canada", "Sweden", "USA"])]
+team8 = make_team(tenders + [make_player(f"SK{i}", nat="Canada", age=25)
+                             for i in range(5)])
+g8 = dr.form_cliques(team8)
+check("the goalies' union", any(g["name"] == "The goalies' union"
+                                for g in g8))
+
+olds = [make_player(f"V{i}", nat=n, age=34 + i, tenure="4+ years",
+                    drafted_year=2008)
+        for i, n in enumerate(["Canada", "USA", "Finland"])]
+team9 = make_team(olds)
+g9 = dr.form_cliques(team9)
+check("the old guard", any(g["name"] == "The old guard" for g in g9))
+
+finns = [make_player(f"FN{i}", nat="Finland", age=26, tenure="2 years")
+         for i in range(3)]
+team10 = make_team(finns + [make_player(f"Q{i}", nat="Canada", age=30,
+                                         tenure="4+ years")
+                            for i in range(4)])
+g10 = dr.form_cliques(team10)
+check("the Finns", any(g["name"] == "The Finns" for g in g10))
+
+kids_mixed = [make_player(f"KM{i}", nat=n, age=20 + i, tenure="This season")
+              for i, n in enumerate(["Canada", "Sweden", "USA"])]
+team11 = make_team(kids_mixed + [make_player(f"W{i}", nat="Canada", age=31,
+                                             tenure="4+ years")
+                                 for i in range(4)])
+g11 = dr.form_cliques(team11)
+check("the kids", any(g["name"] == "The kids" for g in g11))
+
+# No double-"the" in arrival lines.
+team12 = make_team([make_player(f"SV{i}", nat="Sweden", age=28,
+                                tenure="4+ years") for i in range(4)])
+newbie = make_player("Newbie", nat="Sweden", age=24, tenure="This season")
+lines12 = dr.cascade_on_arrival(team12, newbie, how="signing")
+check("no double the in arrival line",
+      not any("the the " in ln for ln in lines12))
 
 print(f"\nQA social_groups: {len(passed)} passed, {len(failed)} failed")
 sys.exit(1 if failed else 0)
