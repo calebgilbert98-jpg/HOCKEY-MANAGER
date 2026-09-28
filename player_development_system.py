@@ -129,24 +129,44 @@ class PlayerDevelopmentEngine:
         self.development_history: Dict[str, DevelopmentHistory] = {}
     
     def get_development_stage(self, player: Player) -> DevelopmentStage:
-        """Determine a player's current development stage"""
+        """Determine a player's current development stage.
+
+        Development arc shifts the age thresholds:
+        - late_bloomer: +2 years (peaks at 28-30 instead of 26-27)
+        - early_peak: -2 years (peaks at 24-25 instead of 26-27)
+        - standard: no shift
+        """
         age = player.age
-        
-        if age <= 19:
+        arc = getattr(player, 'development_arc', 'standard')
+
+        # Arc shifts thresholds
+        shift = 0
+        if arc == "late_bloomer":
+            shift = 2
+        elif arc == "early_peak":
+            shift = -2
+
+        if age <= 19 + shift:
             return DevelopmentStage.JUNIOR
-        elif age <= 23:
+        elif age <= 23 + shift:
             return DevelopmentStage.RISING
-        elif age <= 27:
+        elif age <= 27 + shift:
             return DevelopmentStage.PRIME_EARLY
-        elif age <= 31:
+        elif age <= 31 + shift:
             return DevelopmentStage.PRIME
-        elif age <= 35:
+        elif age <= 35 + shift:
             return DevelopmentStage.VETERAN
         else:
             return DevelopmentStage.AGING
     
     def calculate_base_development_rate(self, player: Player) -> float:
-        """Calculate base development rate based on age and stage"""
+        """Calculate base development rate based on age and stage.
+
+        Development arc modifies the rate:
+        - late_bloomer: 0.7x in JUNIOR/RISING, 1.3x in PRIME_EARLY/PRIME
+        - early_peak: 1.3x in JUNIOR/RISING, 0.7x in PRIME/VETERAN
+        - standard: 1.0x (unchanged)
+        """
         stage = self.get_development_stage(player)
         
         # Base rates by development stage
@@ -160,6 +180,25 @@ class PlayerDevelopmentEngine:
         }
         
         base_rate = stage_rates[stage]
+
+        # Apply development arc multiplier (additive to engine, not override)
+        arc = getattr(player, 'development_arc', 'standard')
+        if arc == "late_bloomer":
+            if stage in (DevelopmentStage.JUNIOR, DevelopmentStage.RISING):
+                base_rate *= 0.7  # Slower early
+            elif stage in (DevelopmentStage.PRIME_EARLY, DevelopmentStage.PRIME):
+                base_rate *= 1.3  # Stronger/longer peak
+            elif stage == DevelopmentStage.VETERAN:
+                base_rate *= 0.7  # Slower decline (less negative)
+        elif arc == "early_peak":
+            if stage in (DevelopmentStage.JUNIOR, DevelopmentStage.RISING):
+                base_rate *= 1.3  # Faster early
+            elif stage == DevelopmentStage.PRIME_EARLY:
+                base_rate *= 0.5  # Peak ends sooner
+            elif stage == DevelopmentStage.PRIME:
+                base_rate = -0.1  # Early decline (was +0.1 maintenance)
+            elif stage in (DevelopmentStage.VETERAN, DevelopmentStage.AGING):
+                base_rate *= 1.3  # Faster decline (more negative)
         
         # Apply potential modifiers based on player's work ethic and
         # determination. Both live on the ~100-scale in the live game, so

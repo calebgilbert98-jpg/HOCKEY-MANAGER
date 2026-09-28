@@ -222,6 +222,14 @@ class Player:
     # Football Manager-style career fields (happiness, squad status, chats)
     happiness: int = 70  # 0-100, how happy the player is at the club
 
+    # Development arc: career trajectory variance (late bloomers / early peaks)
+    # standard: normal development curve (70%)
+    # late_bloomer: slower early, peaks later (28-30), declines slower (15%)
+    # early_peak: faster early, peaks earlier (24-25), declines earlier (15%)
+    development_arc: str = field(default_factory=lambda: random.choices(
+        ["standard", "late_bloomer", "early_peak"],
+        weights=[0.7, 0.15, 0.15])[0])
+
     # Reputation system (ratchet 0-100; visible attitude/volatility 0-100)
     reputation: int = 0
     controversy: int = 0
