@@ -28,8 +28,10 @@ import ctk_theme as _ct
 _ct.init_ctk_theme()
 from PIL import Image, ImageGrab
 
-from playoff_system import PlayoffBracket, PlayoffView, _playoff_team_line
+from playoff_system import (PlayoffBracket, PlayoffView, _playoff_team_line,
+                              _top_playoff_scorers, _playoff_goalie_line)
 from narrative_ledger import NarrativeLedger, set_active_ledger
+from game_classes import PlayerStats
 
 PASS, FAIL = [], []
 
@@ -298,6 +300,28 @@ if ok:
     final.save(out)
     print(f"saved {out} ({W}x{header_h + total})")
     check("stitched screenshot saved", True, f"{W}x{header_h + total}")
+
+# --- PlayerStats dataclass shape (his Playoff/RS split): the tape helpers
+# must read attribute-style ledgers, not just dict fixtures ---
+_dc_roster = []
+for _fn, _g, _a in [("Auston Matthews", 8, 6), ("Mitch Marner", 4, 11)]:
+    _ps = PlayerStats()
+    _ps.goals, _ps.assists, _ps.games_played = _g, _a, 14
+    _dc_roster.append(SimpleNamespace(full_name=_fn, playoff_stats=_ps))
+_gps = PlayerStats()
+_gps.saves, _gps.shots_against, _gps.shutouts = 412, 440, 2
+_gps.games_played, _gps.wins = 14, 10
+_dc_roster.append(SimpleNamespace(full_name="Joseph Woll",
+                                  playoff_stats=_gps))
+_dc_team = SimpleNamespace(team_name="Dataclass Club", roster=_dc_roster)
+_dc_top = _top_playoff_scorers(_dc_team)
+check("dataclass top scorer", len(_dc_top) == 2
+      and _dc_top[0][1] == "Mitch Marner" and _dc_top[0][0] == 15,
+      str([r[1] for r in _dc_top]))
+_dc_goalie = _playoff_goalie_line(_dc_team)
+check("dataclass goalie line", _dc_goalie is not None
+      and _dc_goalie[0] == "Woll" and abs(_dc_goalie[1] - 412 / 440) < 1e-9
+      and _dc_goalie[2] == 2, str(_dc_goalie))
 
 try:
     pop.close()

@@ -11949,6 +11949,15 @@ class HockeyManagerGUI(tk.Tk):
                 team.add_player(selected, "prospects")
             except Exception:
                 continue
+            # Draft rights: mirror the draft board (DraftView.execute_pick)
+            # so the headless path feeds the rights lifecycle too --
+            # the rollover backstop only covers contract-less prospects,
+            # and real draftees carry a default Contract.
+            try:
+                league.stamp_draft_rights(
+                    selected, getattr(team, 'team_name', ''), draft_year)
+            except Exception:
+                pass
             try:
                 league.draft_prospects.remove(selected)
             except Exception:

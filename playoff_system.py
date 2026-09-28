@@ -1887,19 +1887,38 @@ def _sibling_series(bracket, series):
     return None
 
 
+def _ps_val(ps, *keys, default=0):
+    """Read one stat from a per-player playoff ledger, any shape.
+
+    Real games store player.playoff_stats as a PlayerStats dataclass
+    (attribute access, games_played); fixtures sometimes use plain dicts
+    (key access, 'GP'). Tries each key in order; never raises.
+    """
+    if ps is None:
+        return default
+    for key in keys:
+        try:
+            v = ps.get(key, None) if isinstance(ps, dict) else getattr(ps, key, None)
+            if v is not None:
+                return v
+        except Exception:
+            continue
+    return default
+
+
 def _top_playoff_scorers(team, n=3):
     rows = []
     for p in getattr(team, 'roster', None) or []:
-        d = getattr(p, 'playoff_stats', None) or {}
+        d = getattr(p, 'playoff_stats', None)
         try:
-            pts = int(d.get('points', 0) or 0)
+            pts = int(_ps_val(d, 'points') or 0)
         except Exception:
             pts = 0
         if pts > 0:
             name = getattr(p, 'full_name', None) or getattr(p, 'name', 'Unknown')
             try:
-                g = int(d.get('goals', 0) or 0)
-                a = int(d.get('assists', 0) or 0)
+                g = int(_ps_val(d, 'goals') or 0)
+                a = int(_ps_val(d, 'assists') or 0)
             except Exception:
                 g, a = 0, 0
             rows.append((pts, name, g, a))
@@ -2234,28 +2253,28 @@ def _playoff_goalie_line(team):
     """
     best, best_gp = None, -1
     for p in getattr(team, 'roster', None) or []:
-        ps = getattr(p, 'playoff_stats', None) or {}
+        ps = getattr(p, 'playoff_stats', None)
         try:
-            saves = int(ps.get('saves', 0) or 0)
+            saves = int(_ps_val(ps, 'saves') or 0)
         except Exception:
             saves = 0
         if saves <= 0:
             continue
         try:
-            gp = int(ps.get('GP', ps.get('gp', 0)) or 0)
+            gp = int(_ps_val(ps, 'GP', 'gp', 'games_played') or 0)
         except Exception:
             gp = 0
         if gp > best_gp:
             best, best_gp = p, gp
     if best is None:
         return None
-    ps = getattr(best, 'playoff_stats', None) or {}
+    ps = getattr(best, 'playoff_stats', None)
     try:
-        sv = float(ps.get('saves', 0) or 0) / float(ps.get('shots_against', 0) or 1)
+        sv = float(_ps_val(ps, 'saves') or 0) / float(_ps_val(ps, 'shots_against') or 1)
     except Exception:
         sv = 0.0
     try:
-        so = int(ps.get('shutouts', 0) or 0)
+        so = int(_ps_val(ps, 'shutouts') or 0)
     except Exception:
         so = 0
     name = getattr(best, 'full_name', None) or getattr(best, 'name', 'Unknown')

@@ -210,6 +210,10 @@ class GameSaveManager:
             'intl_history': [dict(h) for h in
                              (getattr(league, 'intl_history', None) or [])],
             'draft_held_years': list(getattr(league, 'draft_held_years', []) or []),
+            # Prospect awards news + prospect-class year stamp (his draft
+            # wave). Missing keys = old save -> graceful defaults.
+            'prospect_awards_news': list(getattr(league, 'prospect_awards_news', []) or []),
+            'draft_prospects_year': getattr(league, 'draft_prospects_year', None),
             'event_day_prompted': [list(p) for p in (getattr(league, 'event_day_prompted', []) or [])],
             # Dynamic salary cap system (growth history + market comps).
             # Missing key = old save -> defaults to the modern $104M cap.
@@ -906,6 +910,12 @@ class GameSaveManager:
             # Tentpole event state (years the entry draft was held, event
             # prompts already shown). Defaults keep old saves working.
             league.draft_held_years = list(league_data.get('draft_held_years', []) or [])
+            # Prospect awards news + prospect-class year stamp (his draft
+            # wave). Old saves lack the keys -> empty news, None year (his
+            # draft flow regenerates the class when the stamp mismatches).
+            league.prospect_awards_news = list(
+                league_data.get('prospect_awards_news', []) or [])
+            league.draft_prospects_year = league_data.get('draft_prospects_year', None)
             league.event_day_prompted = [
                 list(p) for p in (league_data.get('event_day_prompted', []) or [])
             ]
