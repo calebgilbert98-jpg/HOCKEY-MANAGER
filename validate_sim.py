@@ -76,9 +76,19 @@ def run_validation(n_games=50, seed=20260928):
         results['penalties'].append(pens)
 
         # xG
-        xg_h = getattr(sim, 'expected_goals_for', {}).get(h.team_name, 0)
-        xg_a = getattr(sim, 'expected_goals_for', {}).get(a.team_name, 0)
-        results['xg'].append(xg_h + xg_a)
+        # xG from event log via analytics module
+        try:
+            from analytics import game_xg
+            # Build minimal pbp from event_log
+            xg_total = sum(
+                e.get('details', {}).get('expected_goal', 0)
+                for e in sim.event_log
+                if 'GOAL' in str(e.get('type', '')) or
+                   'SAVE' in str(e.get('type', ''))
+            )
+            results['xg'].append(xg_total)
+        except ImportError:
+            results['xg'].append(0)
 
         # Shutouts, blowouts, OT
         if sim.home_score == 0 or sim.away_score == 0:
