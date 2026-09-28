@@ -82,6 +82,12 @@ class GameSaveManager:
                 # Email and communication
                 'inbox_messages': getattr(self.game_manager, 'inbox_messages', []),
                 'news_stories': getattr(self.game_manager, 'news_stories', []),
+
+                # League Memory: season archive, Hall of Fame
+                'league_history': (
+                    self.game_manager.league_history.to_dict()
+                    if getattr(self.game_manager, 'league_history', None) else {}
+                ),
             }
 
             # FM-style career state (board, training, reputation, press history)
@@ -568,6 +574,19 @@ class GameSaveManager:
                     self.game_manager.deadline_clock = dict(dc)
                 except Exception as _dce:
                     print(f"deadline clock restore failed (non-fatal): {_dce}")
+
+            # League Memory: season archive + Hall of Fame
+            if 'league_history' in save_data:
+                try:
+                    from league_history import LeagueHistory
+                    lh_data = save_data['league_history'] or {}
+                    if lh_data:
+                        self.game_manager.league_history = LeagueHistory.from_dict(lh_data)
+                    else:
+                        self.game_manager.league_history = LeagueHistory()
+                except Exception as _lhe:
+                    print(f"league history restore failed (non-fatal): {_lhe}")
+                    self.game_manager.league_history = None
 
             for key in ['player_stats_history', 'team_stats_history', 'draft_classes', 
                        'scouting_reports', 'waiver_claims', 'trade_history', 

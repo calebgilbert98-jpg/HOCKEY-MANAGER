@@ -4284,7 +4284,12 @@ class HockeyManagerGUI(tk.Tk):
         self._create_nav_pill(right_menu_frame, "Stats",
                               self.open_stats_standings_window, side="right",
                               tooltip="Stats: standings, scoring leaders, and team analytics")
-        
+
+        # League History button
+        self._create_nav_pill(right_menu_frame, "History",
+                              self.open_league_history_window, side="right",
+                              tooltip="League History: champions, awards, career leaders, Hall of Fame")
+
         # GM Options as standalone button
         self._create_nav_pill(right_menu_frame, "GM Options",
                               self.open_gm_options_window, side="right",
@@ -10074,6 +10079,12 @@ class HockeyManagerGUI(tk.Tk):
         # Controversy cooldown + staff rep + Cup bonus. Reads standings before
         # league.end_of_season() wipes them.
         self._update_offseason_reputations()
+        # League Memory: record the completed season (champion, awards,
+        # standings) before league.end_of_season() wipes the stats.
+        try:
+            self._record_season_to_history()
+        except Exception:
+            pass
         # Copycat league: AI teams steal the Cup champion's systems.
         # (Familiarity cost included -- copying isn't free.)
         try:
@@ -10120,7 +10131,108 @@ class HockeyManagerGUI(tk.Tk):
                            "• Free agency is now open")
         
         self.update_all_views()
-        
+
+    def _record_season_to_history(self):
+        """Record the completed season to League Memory.
+
+        Called from _start_offseason after the champion is resolved but
+        before league.end_of_season() wipes stats. Purely additive —
+        records outcomes, never changes them.
+        """
+        from league_history import LeagueHistory
+        # Get or create the history object on the career
+        hist = getattr(self, 'league_history', None)
+        if hist is None:
+            hist = LeagueHistory()
+            self.league_history = hist
+
+        year = getattr(getattr(self, 'league', None), 'season_year', 2026)
+
+        # Champion, runner-up, series score from the playoff bracket
+        champion = None
+        runner_up = None
+        series_score = None
+        try:
+            pw = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            bracket = None
+            if pw is not None and hasattr(pw, 'winfo_exists') and pw.winfo_exists():
+                bracket = getattr(pw, 'playoff_bracket', None)
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None), 'playoff_bracket', None)
+            if bracket is not None:
+                champ = getattr(bracket, 'stanley_cup_champion', None)
+                champion = getattr(champ, 'team_name', None)
+                # Final series for runner-up and score
+                finals = (getattr(bracket, 'playoff_series', {}) or {}).get(
+                    'stanley_cup_final', [])
+                if finals:
+                    s = finals[0]
+                    winner = getattr(s, 'winner', None)
+                    if winner is not None:
+                        wname = getattr(winner, 'team_name', None)
+                        # Runner-up is the other team
+                        t1 = getattr(getattr(s, 'team1', None), 'team_name', None)
+                        t2 = getattr(getattr(s, 'team2', None), 'team_name', None)
+                        runner_up = t2 if wname == t1 else t1
+                        ww = s.team1_wins if wname == t1 else s.team2_wins
+                        lw = s.team2_wins if wname == t1 else s.team1_wins
+                        series_score = f"{ww}-{lw}"
+        except Exception:
+            pass
+
+        # Awards (calculate from current stats before wipe)
+        awards = {}
+        try:
+            all_players = []
+            for team in self.league.teams:
+                all_players.extend(team.roster)
+            raw_awards = self._calculate_season_awards(all_players)
+            # Normalize to {award_name: player_name}
+            for award_name, winner in raw_awards.items():
+                if winner is not None:
+                    awards[str(award_name)] = getattr(
+                        winner, 'full_name', getattr(winner, 'name', str(winner)))
+        except Exception:
+            pass
+
+        # Presidents' Trophy: best regular-season record
+        presidents = None
+        standings_snapshot = []
+        try:
+            best_pts = -1
+            for team in self.league.teams:
+                st = self.league.standings.get(team.team_name, {})
+                w = st.get('W', st.get('Wins', 0))
+                l = st.get('L', st.get('Losses', 0))
+                otl = st.get('OTL', 0)
+                pts = w * 2 + otl
+                if pts > best_pts:
+                    best_pts = pts
+                    presidents = team.team_name
+                standings_snapshot.append({
+                    "team": team.team_name,
+                    "w": w, "l": l, "otl": otl, "pts": pts,
+                })
+            # Sort by points, keep top 16 (playoff teams)
+            standings_snapshot.sort(key=lambda x: x["pts"], reverse=True)
+            standings_snapshot = standings_snapshot[:16]
+        except Exception:
+            pass
+
+        # Conn Smythe: from awards if present, else None
+        conn_smythe = awards.get("Conn Smythe")
+
+        hist.record_season(
+            year=year,
+            champion=champion,
+            runner_up=runner_up,
+            series_score=series_score,
+            presidents_trophy=presidents,
+            conn_smythe=conn_smythe,
+            awards=awards,
+            standings_snapshot=standings_snapshot,
+        )
+
     def process_trade_block_offers(self):
         """Process trade offers for players on the trade block."""
         if not self.trade_block:
@@ -10536,6 +10648,17 @@ class HockeyManagerGUI(tk.Tk):
         # Set focus to specific tab if requested
         if focus_tab:
             window.set_focus_tab(focus_tab)
+
+    def open_league_history_window(self):
+        """Open the League History window (champions, awards, leaders, HOF)."""
+        if 'league_history' not in self.open_windows or not self.open_windows['league_history'].winfo_exists():
+            self.open_windows['league_history'] = LeagueHistoryWindow(self, self)
+        window = self.open_windows['league_history']
+        try:
+            window.focus_set()
+            window.lift()
+        except Exception:
+            pass
     
     def open_records_window(self):
         """Open the NHL Records in the Stats window."""
@@ -15887,6 +16010,243 @@ def _launch_with_wizard():
         except:
             pass
         return False
+
+
+class LeagueHistoryWindow(InGamePopup):
+    """League History: Champions, Awards, Career Leaders, Hall of Fame.
+
+    Reads from the career's LeagueHistory archive (populated at season end
+    via _record_season_to_history). Non-modal card.
+    """
+
+    def __init__(self, parent, game_manager):
+        self.game_manager = game_manager
+        super().__init__(parent, title="League History", width=900, height=650)
+        self._build()
+
+    def _history(self):
+        from league_history import LeagueHistory
+        h = getattr(self.game_manager, 'league_history', None)
+        if h is None:
+            h = LeagueHistory()
+            self.game_manager.league_history = h
+        return h
+
+    def _build(self):
+        import tkinter as tk
+        from tkinter import ttk
+        h = self._history()
+
+        # Note for fresh careers
+        if not h.seasons:
+            first = getattr(h, 'first_season_year', None)
+            note = ("No completed seasons yet. History begins with the "
+                    "current season.")
+            ttk.Label(self.content, text=note, font=('Arial', 10, 'italic')).pack(pady=10)
+
+        notebook = ttk.Notebook(self.content)
+        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # Champions tab
+        champ_frame = ttk.Frame(notebook)
+        notebook.add(champ_frame, text="Champions")
+        self._build_champions(champ_frame, h)
+
+        # Awards tab
+        awards_frame = ttk.Frame(notebook)
+        notebook.add(awards_frame, text="Awards")
+        self._build_awards(awards_frame, h)
+
+        # Career Leaders tab
+        leaders_frame = ttk.Frame(notebook)
+        notebook.add(leaders_frame, text="Career Leaders")
+        self._build_leaders(leaders_frame, h)
+
+        # Hall of Fame tab
+        hof_frame = ttk.Frame(notebook)
+        notebook.add(hof_frame, text="Hall of Fame")
+        self._build_hof(hof_frame, h)
+
+    def _build_champions(self, parent, h):
+        import tkinter as tk
+        from tkinter import ttk
+        champs = h.champions_list()
+        if not champs:
+            ttk.Label(parent, text="No champions recorded yet.").pack(pady=20)
+            return
+        # Header
+        header = ttk.Frame(parent)
+        header.pack(fill='x', padx=10, pady=(10, 5))
+        for col, txt in [("Year", 8), ("Champion", 25), ("Defeated", 25),
+                         ("Series", 10), ("Presidents'", 20)]:
+            ttk.Label(header, text=txt, font=('Arial', 9, 'bold'),
+                      width=col).pack(side='left', padx=2)
+        # Rows
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+        scrollable = ttk.Frame(canvas)
+        scrollable.bind("<Configure>",
+                        lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side='left', fill='both', expand=True, padx=(10, 0), pady=5)
+        scrollbar.pack(side='right', fill='y', padx=(0, 10), pady=5)
+        for s in champs:
+            row = ttk.Frame(scrollable)
+            row.pack(fill='x', pady=2)
+            year = s.get('year', '?')
+            champ = s.get('champion', '?') or '?'
+            runner = s.get('runner_up', '?') or '?'
+            score = s.get('series_score', '') or ''
+            pres = s.get('presidents_trophy', '') or ''
+            # Champion in bold with a trophy marker
+            ttk.Label(row, text=str(year), width=8).pack(side='left', padx=2)
+            ttk.Label(row, text=f"🏆 {champ}", font=('Arial', 9, 'bold'),
+                      width=25).pack(side='left', padx=2)
+            ttk.Label(row, text=runner, width=25).pack(side='left', padx=2)
+            ttk.Label(row, text=score, width=10).pack(side='left', padx=2)
+            ttk.Label(row, text=pres, width=20).pack(side='left', padx=2)
+
+    def _build_awards(self, parent, h):
+        from tkinter import ttk
+        if not h.seasons:
+            ttk.Label(parent, text="No awards recorded yet.").pack(pady=20)
+            return
+        # Year selector
+        ctrl = ttk.Frame(parent)
+        ctrl.pack(fill='x', padx=10, pady=10)
+        ttk.Label(ctrl, text="Season:").pack(side='left', padx=5)
+        years = sorted([s['year'] for s in h.seasons], reverse=True)
+        year_var = ttk.StringVar(value=str(years[0]))
+        combo = ttk.Combobox(ctrl, textvariable=year_var,
+                             values=[str(y) for y in years],
+                             state='readonly', width=10)
+        combo.pack(side='left', padx=5)
+        # Awards display
+        awards_box = ttk.Frame(parent)
+        awards_box.pack(fill='both', expand=True, padx=10, pady=5)
+
+        def refresh(*args):
+            for w in awards_box.winfo_children():
+                w.destroy()
+            yr = int(year_var.get())
+            season = h.get_season(yr)
+            if not season:
+                return
+            awards = season.get('awards', {})
+            # Conn Smythe is stored separately
+            if season.get('conn_smythe'):
+                awards = dict(awards)
+                awards['Conn Smythe'] = season['conn_smythe']
+            if not awards:
+                ttk.Label(awards_box, text="No awards recorded for this season.").pack(pady=10)
+                return
+            for award_name in sorted(awards.keys()):
+                row = ttk.Frame(awards_box)
+                row.pack(fill='x', pady=3, padx=5)
+                ttk.Label(row, text=award_name + ":", font=('Arial', 10, 'bold'),
+                          width=22, anchor='e').pack(side='left', padx=5)
+                ttk.Label(row, text=awards[award_name],
+                          font=('Arial', 10)).pack(side='left', padx=5)
+
+        year_var.trace('w', refresh)
+        refresh()
+
+    def _build_leaders(self, parent, h):
+        from tkinter import ttk
+        # Category selector
+        ctrl = ttk.Frame(parent)
+        ctrl.pack(fill='x', padx=10, pady=10)
+        ttk.Label(ctrl, text="Category:").pack(side='left', padx=5)
+        cats = ["points", "goals", "assists", "wins", "shutouts", "save_pct"]
+        cat_var = ttk.StringVar(value="points")
+        combo = ttk.Combobox(ctrl, textvariable=cat_var, values=cats,
+                             state='readonly', width=12)
+        combo.pack(side='left', padx=5)
+        # Leaders display
+        leaders_box = ttk.Frame(parent)
+        leaders_box.pack(fill='both', expand=True, padx=10, pady=5)
+
+        def refresh(*args):
+            for w in leaders_box.winfo_children():
+                w.destroy()
+            from league_history import LeagueHistory
+            # Gather all players
+            players = []
+            try:
+                for team in self.game_manager.league.teams:
+                    players.extend(team.roster)
+            except Exception:
+                pass
+            leaders = LeagueHistory.career_leaders(
+                players, cat_var.get(), limit=25)
+            if not leaders:
+                ttk.Label(leaders_box, text="No leaders yet.").pack(pady=10)
+                return
+            # Header
+            hdr = ttk.Frame(leaders_box)
+            hdr.pack(fill='x', pady=(0, 5))
+            ttk.Label(hdr, text="#", width=4, font=('Arial', 9, 'bold')).pack(side='left')
+            ttk.Label(hdr, text="Player", width=28, font=('Arial', 9, 'bold')).pack(side='left')
+            ttk.Label(hdr, text="Team", width=20, font=('Arial', 9, 'bold')).pack(side='left')
+            ttk.Label(hdr, text="GP", width=8, font=('Arial', 9, 'bold')).pack(side='left')
+            val_label = "SV%" if cat_var.get() == "save_pct" else cat_var.get().upper()
+            ttk.Label(hdr, text=val_label, width=10, font=('Arial', 9, 'bold')).pack(side='left')
+            for i, ld in enumerate(leaders, 1):
+                row = ttk.Frame(leaders_box)
+                row.pack(fill='x', pady=1)
+                ttk.Label(row, text=str(i), width=4).pack(side='left')
+                ttk.Label(row, text=ld['name'], width=28).pack(side='left')
+                ttk.Label(row, text=ld['team'] or '', width=20).pack(side='left')
+                ttk.Label(row, text=str(ld['games']), width=8).pack(side='left')
+                v = ld['value']
+                vstr = f"{v:.3f}" if cat_var.get() == "save_pct" else str(int(v))
+                ttk.Label(row, text=vstr, width=10).pack(side='left')
+
+        cat_var.trace('w', refresh)
+        refresh()
+
+    def _build_hof(self, parent, h):
+        import tkinter as tk
+        from tkinter import ttk
+        if not h.hall_of_fame:
+            msg = ("No Hall of Famers yet.\n\nPlayers are inducted at retirement "
+                   "when they clear the bar:\n• 1000+ points / 500+ goals (skaters)\n"
+                   "• 300+ wins (goalies)\n• Icon-level reputation")
+            ttk.Label(parent, text=msg, justify='left').pack(pady=20, padx=20)
+            return
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+        scrollable = ttk.Frame(canvas)
+        scrollable.bind("<Configure>",
+                        lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side='left', fill='both', expand=True, padx=(10, 0), pady=10)
+        scrollbar.pack(side='right', fill='y', padx=(0, 10), pady=10)
+        for ind in sorted(h.hall_of_fame,
+                          key=lambda x: x.get('year_inducted', 0), reverse=True):
+            card = ttk.Frame(scrollable, relief='groove', borderwidth=1)
+            card.pack(fill='x', pady=5, padx=5)
+            name = ind.get('name', '?')
+            pos = ind.get('position', '')
+            yr = ind.get('year_inducted', '?')
+            ttk.Label(card, text=f"{name} ({pos})",
+                      font=('Arial', 11, 'bold')).pack(anchor='w', padx=10, pady=(8, 2))
+            ttk.Label(card, text=f"Inducted {yr}",
+                      font=('Arial', 9, 'italic')).pack(anchor='w', padx=10)
+            # Career line
+            if 'GOALIE' in pos.upper():
+                line = (f"{ind.get('games', 0)} GP, {ind.get('wins', 0)} W, "
+                        f"{ind.get('shutouts', 0)} SO")
+            else:
+                line = (f"{ind.get('games', 0)} GP, {ind.get('goals', 0)} G, "
+                        f"{ind.get('assists', 0)} A, {ind.get('points', 0)} Pts")
+            ttk.Label(card, text=line).pack(anchor='w', padx=10, pady=2)
+            cups = ind.get('cups', 0)
+            if cups:
+                ttk.Label(card, text=f"🏆 {cups}× Stanley Cup",
+                          font=('Arial', 9)).pack(anchor='w', padx=10, pady=(0, 8))
 
 
 # --- Main execution
