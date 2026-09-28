@@ -425,6 +425,10 @@ def _move_to_free_agents(league, player) -> None:
         roster = getattr(team, "roster", None)
         if roster is not None and player in roster:
             try:
+                player.last_team_name = _team_name(team)
+            except Exception:
+                pass
+            try:
                 roster.remove(player)
             except Exception:
                 pass
@@ -529,6 +533,16 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
         if r.random() < 0.60:
             still_unsigned.append((team, player, qo))
             continue
+        try:
+            import player_decision as _pd
+            if _pd.wants_out(player):
+                # He wants out and won't sign the QO: he holds out into the
+                # offer-sheet/arbitration pool (the Tkachuk path) rather than
+                # re-signing somewhere he's miserable.
+                still_unsigned.append((team, player, qo))
+                continue
+        except Exception:
+            pass
         budget = _spending_budget(team, core=_is_core_keep(player))
         if budget < LEAGUE_MIN_SALARY:
             # Doesn't fit the plan: he holds out (stays unsigned) rather
@@ -595,6 +609,19 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
                 continue
             years = r.choice([1, 2, 3, 4, 5])
             label, picks = offer_sheet_compensation(aav)
+            # --- the PLAYER's side: he must agree to sign the sheet --------
+            # Loyalty and bad blood are the classic vetoes (nobody signs
+            # with a hated rival lightly -- especially a fan favourite who
+            # would turn the love into boos overnight).
+            try:
+                import player_decision as _pd
+                _willing, _appeal, _why = _pd.player_accepts_offer_sheet(
+                    player, offering_team, aav, years, original_team,
+                    league=league, app=app, rng=r)
+            except Exception:
+                _willing, _why = True, []
+            if not _willing:
+                continue  # he won't sign there; next suitor
             if ai_match_decision(original_team, player, aav, label):
                 try:
                     player.offer_sheet_pending = False
@@ -731,7 +758,8 @@ def _club_elected_arbitration(league, ai_teams, app, r, summary) -> None:
 
 def _queue_offer_sheet_match(app, league, offering_team, original_team,
                              player, aav: int, years: int,
-                             compensation_label: str) -> None:
+                             compensation_label: str,
+                             player_reasons: Optional[List[str]] = None) -> None:
     """Interactive inbox message: match the offer sheet or take the picks
     (7-day clock, as in real life)."""
     if app is None:
@@ -741,6 +769,13 @@ def _queue_offer_sheet_match(app, league, offering_team, original_team,
     except Exception:
         return
     pname = getattr(player, "full_name", getattr(player, "name", "Unknown"))
+    intel = ""
+    try:
+        if player_reasons:
+            intel = (f"\n\nWord from {pname.split()[-1]}'s camp: "
+                     f"{player_reasons[0]}.")
+    except Exception:
+        intel = ""
     msg = EmailMessage(
         sender=_team_name(offering_team),
         sender_type="System",
@@ -750,7 +785,7 @@ def _queue_offer_sheet_match(app, league, offering_team, original_team,
                  f"Match it and keep him at those terms (he can't be traded "
                  f"for a year without his consent), or decline and take the "
                  f"compensation: {compensation_label}.\n\n"
-                 f"You have 7 days to decide."),
+                 f"You have 7 days to decide.{intel}"),
         category="Contracts",
         is_important=True,
         is_urgent=True,
@@ -889,6 +924,10 @@ def execute_offer_sheet(league, offering_team, original_team, player,
     for t in getattr(league, "teams", []) or []:
         roster = getattr(t, "roster", None)
         if roster is not None and player in roster:
+            try:
+                player.last_team_name = _team_name(t)
+            except Exception:
+                pass
             try:
                 roster.remove(player)
             except Exception:
@@ -1157,8 +1196,20 @@ def resolve_user_rfa(app, league, team, player, rng=None) -> Dict[str, Any]:
                 continue
             years = r.choice([1, 2, 3, 4, 5])
             label, _picks = offer_sheet_compensation(aav)
+            # the player's side: he must want to sign the sheet (loyalty /
+            # bad blood vetoes apply to the user's RFAs too)
+            try:
+                import player_decision as _pd
+                _willing, _appeal, _why = _pd.player_accepts_offer_sheet(
+                    player, offering_team, aav, years, team,
+                    league=league, app=app, rng=r)
+            except Exception:
+                _willing, _why = True, []
+            if not _willing:
+                continue
             _queue_offer_sheet_match(app, league, offering_team, team,
-                                     player, aav, years, label)
+                                     player, aav, years, label,
+                                     player_reasons=_why)
             out["offer_sheet"] = {
                 "offering_team": _team_name(offering_team),
                 "aav": aav, "years": years, "compensation": label,

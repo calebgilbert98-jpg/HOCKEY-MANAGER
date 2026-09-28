@@ -12065,6 +12065,11 @@ class HockeyManagerGUI(tk.Tk):
         # decisions arrive as an interactive inbox message. Runs after
         # end_of_season() expired the contracts above.
         try:
+            import player_decision as _pd
+            _pd.seed_league_decision_fields(self.league)
+        except Exception:
+            pass
+        try:
             import rfa_system as _rfa
             _rfa_summary = _rfa.process_rfa_offseason(
                 self.league, app=self, rng=getattr(self, "_rng", None))

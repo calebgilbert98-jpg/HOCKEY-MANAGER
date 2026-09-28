@@ -97,12 +97,73 @@ hearings ~5%, offer sheets ~0.6/yr.
    `offer_sheet_match` inbox; arbitration filing → award news; walk-away
    window → `arbitration_walkaway` inbox when the threshold binds).
 
+## The player's side — how UFAs/RFAs weigh offers (`player_decision.py`)
+
+Teams decide what to *offer*; this module decides what players *sign*.
+`contract_appeal(player, team, aav, years, ...)` returns a 0..1 appeal
+score plus human-readable reasons (surfaced in the negotiation dialog
+and the offer-sheet inbox intel). Factors and per-ambition weights:
+
+- **Money + term security** — AAV vs the game's market estimator (scaled
+  by the GM dysfunction premium: a disrespected GM's dollar is worth
+  less), term fit by age. Ring-chasers 32+ take the discount.
+- **Cup contention** (`ambition="cup"`) — team strength from standings
+  pace or roster talent. A chaser won't sign with a rebuilder at any
+  price short of a ransom.
+- **Ice time / role** (`ambition="ice_time"`) — projected lineup slot at
+  his position group (top line/pair/starter → 1.0). Kids ≤23 crave
+  opportunity whatever their stated ambition.
+- **Loyalty** — new `player.loyalty` (1–100) + `player.ambition`
+  (`cup|money|ice_time|stability|home`), seeded from career stage and
+  personality, old-save safe. Staying home scales with loyalty × tenure
+  × happiness; leaving costs the loyal.
+- **Hometown** — `birthplace` city match (strong for `ambition="home"`).
+- **People** — `relationships` (friend/rival, −100..100) and `family_ids`
+  already on that roster move the needle.
+- **Bad blood (the veto)** — signing with a hated rival costs up to 0.40
+  appeal, convex in ledger rivalry heat × fan-favourite score: a beloved
+  star crossing a hot rivalry is the back page for a month; a replaceable
+  player is a wrinkle. High-controversy villains shrug (×0.5); mercenaries
+  barely read the papers (×0.5). *A rival coach/GM alone won't make or
+  break it — but turning the fans who loved you might.*
+- **Situation** — happiness, tenure, team trajectory, GM stature all feed
+  the weights above.
+
+Wired in: both user negotiation paths (`simulate_negotiation` for
+auto-re-signs, `calculate_acceptance_chance` for the FA/extension dialog
+— bonus/NTC logic and GM-stature hooks unchanged, reasons shown in the
+verdict line); **offer-sheet consent** — the RFA must agree to sign
+before the match/decline mechanics run (AI loop and `resolve_user_rfa`);
+**holdouts** — `wants_out()` (miserable + disloyal) RFAs won't sign the
+QO and hold out into the offer-sheet/arbitration pool instead. `last_team_name`
+is stamped on every roster exit (`Team.remove_player`, `_move_to_free_agents`,
+`execute_offer_sheet`) so the loyalty/bad-blood math knows where he came from.
+
 ## Cap compliance — nobody signs what they can't fit
 
 `_cap_room(team)` reads `salary_cap_system.cap_breakdown` — the exact
 accounting (roster + buyouts + retained + dead cap) the user's
 day-advancement blocker enforces. `Team.cap_space` is a live property
 (`salary_cap − payroll`, recomputed on every read), used only as fallback.
+
+### Cap consciousness — AI GMs think like real GMs
+
+Beyond hard compliance, every AI decision runs through real front-office
+discipline (`CAP_RESERVE_PCT = 0.015`, ~$1.56M operating reserve;
+`LEAGUE_MIN_SALARY = $775k`; `MIN_ROSTER_SIZE = 20`):
+
+- **`_spending_budget(team, core)`** — room minus the reserve minus
+  roster-fill math (empty slots × league minimum). Core keeps
+  (ovr ≥ 82, or age ≤ 24 & ovr ≥ 78) may dip into the reserve; every
+  discretionary dollar (fringe QOs, pool signings, offer-sheet poaches)
+  must preserve it. Thin rosters can't splurge.
+- **Qualifying** — fringe RFAs aren't qualified into the reserve.
+- **Victims take the picks** — a match that wrecks the plan is declined;
+  the picks are the rational return.
+- **Aggressors stay in-plan** — the target score is 0 outside the budget.
+- **Backfill** — pool signings and ELC prospect promotions are
+  reserve-aware; a cap-strapped club promotes kids rather than buying
+  depth.
 
 - **AI teams never go over the cap.** Every AI spend path is hard-gated:
   no QO above room (non-tender instead), no RFA/UFA signing above room
@@ -163,8 +224,15 @@ from the interactive gate, so it rendered as plain text — now gated.
 
 ## QA
 
-`qa_rfa_arbitration.py` — 57 checks: QO math incl. real Johansson/Hughes
+`qa_rfa_arbitration.py` — 88 checks: QO math incl. real Johansson/Hughes
 arithmetic, all 14 compensation boundaries, RFA/UFA/Group 6, arbitration
 experience table, arbitrator floor/walk-away/term rules, settlement shape,
 multi-summer calibration bands, full offseason pass on a fake league
-(AI rosters intact, no unsigned expired left, user inbox queued, backfill).
+(AI rosters intact, no unsigned expired left, user inbox queued, backfill),
+cap-consciousness (reserve, roster math, core keeps, aggressor/victim
+discipline, ELC gate), and the player-decision suite: ambition seeding,
+cup-chaser vs mercenary vs kid-ice-time vs hometown choices,
+friends/rivals/family, bad-blood veto (fan favourite vs villain),
+offer-sheet consent, holdout routing, previous-team resolution, loyalty
+stay-vs-go. Regressions: `qa_cards_inbox.py` 31/31, `qa_day_one_cap.py`
+15/15.

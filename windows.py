@@ -10570,56 +10570,58 @@ class ContractExtensionsView(ctk.CTkFrame):
         self.populate_tables()
     
     def simulate_negotiation(self, player, salary_offer, years):
-        """Simulate contract negotiation based on player expectations."""
-        # Calculate minimum acceptable salary based on overall rating and age
-        # (100-scale: ~75% of the market-value base curve, NHL-minimum floor)
-        min_salary = max(750000, (player.overall_rating() - 60) * 187500)
+        """Simulate contract negotiation: the PLAYER weighs the offer.
 
-        # GM stature: a GM the league doesn't respect pays a dysfunction
-        # premium (up to +15%) to get a signature; respected GMs pay
-        # sticker. Additive to the existing age curve.
+        The player-decision model (player_decision.py) replaces the old
+        money-only math: ambition (cup/money/ice/stability/home), loyalty,
+        role, hometown, people in the room, and bad blood all move the
+        needle. The GM-stature hooks below are unchanged.
+        """
         _uteam = (getattr(getattr(self, 'app', None), 'game_manager', None)
                   is not None and
                   getattr(self.app.game_manager, 'user_team', None)) or \
             getattr(getattr(self, 'app', None), 'user_team', None)
         try:
-            if _uteam is not None:
-                import reputation_system as _rs
-                min_salary *= _rs.gm_ask_premium(_uteam)
+            import player_decision as _pd
+            import reputation_system as _rs
+            _premium = _rs.gm_ask_premium(_uteam) if _uteam is not None else 1.0
+            _appeal, _reasons = _pd.contract_appeal(
+                player, _uteam, salary_offer, years,
+                current_team=_uteam,  # re-signing: he is staying home
+                league=getattr(getattr(self, 'app', None), 'league', None),
+                app=getattr(self, 'app', None),
+                market_mult=_premium)
+            acceptance_chance = 0.05 + 0.90 * _appeal
         except Exception:
-            pass
-        
-        # Adjust for age
-        if player.age >= 30:
-            min_salary *= max(0.5, 1.0 - ((player.age - 30) * 0.05))
-        
-        # Chance of accepting depends on how good the offer is
-        acceptance_chance = 0.5  # Base chance
-        
-        # Adjust based on salary offered vs minimum expected
-        if salary_offer >= min_salary * 1.2:
-            acceptance_chance += 0.4  # Great offer
-        elif salary_offer >= min_salary * 1.1:
-            acceptance_chance += 0.25  # Good offer
-        elif salary_offer >= min_salary:
-            acceptance_chance += 0.1  # Fair offer
-        else:
-            acceptance_chance -= 0.3  # Poor offer
-        
-        # Adjust based on years
-        ideal_years = 8 if player.age <= 25 else 5 if player.age <= 30 else 2
-        years_diff = abs(years - ideal_years)
-        
-        if years_diff == 0:
-            acceptance_chance += 0.2  # Perfect term
-        elif years_diff <= 1:
-            acceptance_chance += 0.1  # Close to ideal term
-        elif years_diff >= 3:
-            acceptance_chance -= 0.2  # Far from ideal term
-        
-        # Adjust for player loyalty
-        if hasattr(player, 'teamwork') and player.teamwork > 15:
-            acceptance_chance += 0.1  # Loyal player
+            # Legacy money/term fallback if the model is unavailable.
+            min_salary = max(750000, (player.overall_rating() - 60) * 187500)
+            try:
+                if _uteam is not None:
+                    import reputation_system as _rs
+                    min_salary *= _rs.gm_ask_premium(_uteam)
+            except Exception:
+                pass
+            if player.age >= 30:
+                min_salary *= max(0.5, 1.0 - ((player.age - 30) * 0.05))
+            acceptance_chance = 0.5
+            if salary_offer >= min_salary * 1.2:
+                acceptance_chance += 0.4
+            elif salary_offer >= min_salary * 1.1:
+                acceptance_chance += 0.25
+            elif salary_offer >= min_salary:
+                acceptance_chance += 0.1
+            else:
+                acceptance_chance -= 0.3
+            ideal_years = 8 if player.age <= 25 else 5 if player.age <= 30 else 2
+            years_diff = abs(years - ideal_years)
+            if years_diff == 0:
+                acceptance_chance += 0.2
+            elif years_diff <= 1:
+                acceptance_chance += 0.1
+            elif years_diff >= 3:
+                acceptance_chance -= 0.2
+            if hasattr(player, 'teamwork') and player.teamwork > 15:
+                acceptance_chance += 0.1
 
         # GM stature: stars can afford to be picky about who they play
         # for -- a respected GM gets a small bump, a clown GM gets the
@@ -10869,10 +10871,17 @@ class ExtensionNegotiationView(ctk.CTkFrame):
                     pass
                 self.player.contract.no_trade_clause = self.ntc_var.get()
 
+                _why = ""
+                try:
+                    _rs0 = getattr(self, "_last_appeal_reasons", []) or []
+                    if _rs0:
+                        _why = f" ({_rs0[0][0].upper()}{_rs0[0][1:]}.)"
+                except Exception:
+                    pass
                 self._say(f"{self.player.full_name} has accepted: {years} years "
                           f"at ${salary:,}/year "
                           f"({'with' if self.ntc_var.get() else 'without'} NTC, "
-                          f"bonus ${bonus:,}).")
+                          f"bonus ${bonus:,}).{_why}")
                 self._hide_counter()
                 self.after(1200, self.close_view)
             else:
@@ -10934,44 +10943,67 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self.after(1200, self.close_view)
     
     def calculate_acceptance_chance(self, salary, years, bonus):
-        """Calculate the likelihood of the player accepting the contract offer."""
-        # Base acceptance chance
-        chance = 0.5
-        
-        # Adjust based on salary vs market value
-        salary_ratio = salary / self.market_value
-        
-        if salary_ratio >= 1.1:
-            chance += 0.3  # Great offer
-        elif salary_ratio >= 1.0:
-            chance += 0.15  # Good offer
-        elif salary_ratio >= 0.9:
-            chance += 0.05  # Fair offer
-        else:
-            chance -= 0.3  # Poor offer
-        
-        # Adjust based on player age and contract length
-        ideal_years = 8 if self.player.age <= 25 else 5 if self.player.age <= 30 else 2
-        years_diff = abs(years - ideal_years)
-        
-        if years_diff == 0:
-            chance += 0.15  # Perfect term
-        elif years_diff <= 1:
-            chance += 0.05  # Close to ideal term
-        elif years_diff >= 4:
-            chance -= 0.15  # Far from ideal term
-        
+        """Likelihood the player accepts: the player-decision model
+        (ambition, loyalty, role, hometown, people, bad blood) sets the
+        base chance; bonus money and trade protection add on top, as before.
+        """
+        _app = getattr(self, 'app', None)
+        _uteam = (getattr(getattr(_app, 'game_manager', None), 'user_team', None)
+                  or getattr(_app, 'user_team', None))
+        _league = getattr(_app, 'league', None)
+        try:
+            import player_decision as _pd
+            import reputation_system as _rs
+            _premium = _rs.gm_ask_premium(_uteam) if _uteam is not None else 1.0
+            # extension (he is ours) vs open-market signing (he is leaving
+            # his last club): the stay-vs-go math differs completely.
+            _pteam = getattr(self.player, 'team_name', '') or ''
+            _uname = getattr(_uteam, 'team_name', '') or ''
+            if _uteam is not None and _pteam == _uname:
+                _current = _uteam
+            else:
+                _current = _pd.previous_team(self.player, _league)
+            _appeal, _reasons = _pd.contract_appeal(
+                self.player, _uteam, salary, years,
+                current_team=_current, league=_league, app=_app,
+                market_mult=_premium)
+            try:
+                self._last_appeal_reasons = list(_reasons or [])
+            except Exception:
+                pass
+            chance = 0.05 + 0.90 * _appeal
+        except Exception:
+            # Legacy money/term fallback.
+            chance = 0.5
+            salary_ratio = salary / max(1, getattr(self, 'market_value', salary) or 1)
+            if salary_ratio >= 1.1:
+                chance += 0.3
+            elif salary_ratio >= 1.0:
+                chance += 0.15
+            elif salary_ratio >= 0.9:
+                chance += 0.05
+            else:
+                chance -= 0.3
+            ideal_years = 8 if self.player.age <= 25 else 5 if self.player.age <= 30 else 2
+            years_diff = abs(years - ideal_years)
+            if years_diff == 0:
+                chance += 0.15
+            elif years_diff <= 1:
+                chance += 0.05
+            elif years_diff >= 4:
+                chance -= 0.15
+
         # Bonus adds slight bonus to acceptance
         if bonus > 0:
-            chance += min(0.1, bonus / (salary * years) * 0.5)
-        
+            chance += min(0.1, bonus / max(1, salary * years) * 0.5)
+
         # Trade protection: one shared valuation (trade_engine), scaled by
         # how hard this player actually pushes for a clause -- not a flat
         # veteran bonus.
         if self.ntc_var.get():
             import trade_engine as _te
             chance += _te.clause_acceptance_bonus(self.player, "ntc")
-        
+
         # Cap the chance between 5% and 95%
         return max(0.05, min(0.95, chance))
 

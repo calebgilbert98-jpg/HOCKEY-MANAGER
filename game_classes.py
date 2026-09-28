@@ -2386,6 +2386,12 @@ class Team:
 
     def remove_player(self, player: Player):
         """Removes a player from any list they are on."""
+        # Remember where he played: the player-decision model uses the last
+        # club for loyalty / bad-blood math (signing with a hated rival).
+        try:
+            player.last_team_name = self.team_name
+        except Exception:
+            pass
         if player in self.roster: self.roster.remove(player)
         if player in self.ahl_roster: self.ahl_roster.remove(player)
         if player in self.prospects: self.prospects.remove(player)

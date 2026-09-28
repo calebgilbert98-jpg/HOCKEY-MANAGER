@@ -380,5 +380,184 @@ check("roster math blocks thin-roster splurge", b2 < 2_000_000,
 check("aggressor score zero outside plan",
       R.ai_offer_sheet_target_score(tm, star_young, 8_000_000) == 0.0)
 
+# ---------------------------------------------------------------------------
+# Player-decision model (player_decision.py): the player's side of the market
+# ---------------------------------------------------------------------------
+import player_decision as PD
+
+
+def dplayer(name="Dec", age=27, ovr=80, ambition=None, loyalty=50,
+            happiness=70, controversy=10, pos="C", city_bp="Unknown"):
+    p = FakePlayer(name=name, age=age, seasons_played=6, ovr=ovr,
+                   salary=1_000_000)
+    p.primary_position = pos  # plain string for the role projector
+    p.loyalty = loyalty
+    p.ambition = ambition or "stability"
+    p.happiness = happiness
+    p.controversy = controversy
+    p.birthplace = city_bp
+    p.nationality = "Canada"
+    p.relationships = {}
+    p.family_ids = []
+    p.teamwork = 50
+    p.leadership = 50
+    p.morale = 70
+    p.games_played = 300
+    p.points = 150
+    p.reputation = 40
+    p.last_team_name = ""
+    p.team_name = "Free Agent"
+    return p
+
+
+def dteam(name, city, avgs, user=False):
+    t = FakeTeam(name=name, user=user)
+    t.city = city
+    r = random.Random(abs(hash(name)) % (2 ** 31))
+    t.roster = []
+    for i, a in enumerate(avgs):
+        pl = FakePlayer(name=f"{name} P{i}", age=28, seasons_played=6,
+                        ovr=a, salary=3_000_000)
+        pl.primary_position = "C"
+        t.roster.append(pl)
+    return t
+
+
+dleague = SimpleNamespace(teams=[], free_agents=[], season_year=2026,
+                          rivalries=[])
+contender = dteam("Contenders", "Denver", [85] * 20)
+rebuilder = dteam("Rebuilders", "Anaheim", [70] * 20)
+dleague.teams = [contender, rebuilder]
+
+# seeding
+sp = FakePlayer(name="Seed")
+for attr in ("loyalty", "ambition"):
+    if hasattr(sp, attr):
+        delattr(sp, attr)
+PD.ensure_decision_fields(sp)
+check("loyalty seeded 1..99", 1 <= sp.loyalty <= 99, f"{sp.loyalty}")
+check("ambition seeded valid", sp.ambition in PD.AMBITIONS, sp.ambition)
+
+# cup-chaser (35yo star): contender at 0.8x market beats rebuilder at 1.3x
+chaser = dplayer("Chaser", age=35, ovr=88, ambition="cup", loyalty=50)
+mk = (88 - 60) * 250_000  # 7.0M market
+a_con, _ = PD.contract_appeal(chaser, contender, int(mk * 0.8), 2,
+                              league=dleague)
+a_reb, _ = PD.contract_appeal(chaser, rebuilder, int(mk * 1.3), 4,
+                              league=dleague)
+check("cup-chaser picks contender over money", a_con > a_reb,
+      f"{a_con:.2f} vs {a_reb:.2f}")
+
+# mercenary: takes the bigger bag
+merc = dplayer("Merc", age=28, ovr=88, ambition="money", loyalty=20)
+a_con2, _ = PD.contract_appeal(merc, contender, int(mk * 0.8), 2,
+                               league=dleague)
+a_reb2, _ = PD.contract_appeal(merc, rebuilder, int(mk * 1.3), 4,
+                               league=dleague)
+check("mercenary takes the money", a_reb2 > a_con2,
+      f"{a_reb2:.2f} vs {a_con2:.2f}")
+
+# kid wants ice: top-six on rebuilder beats press box on contender
+stacked = dteam("Stacked", "Boston", [86] * 12)
+thin = dteam("Thin", "Buffalo", [68] * 12)
+dleague.teams = [stacked, thin]
+kid = dplayer("Kid", age=20, ovr=76, ambition="ice_time", loyalty=40)
+a_st, r_st = PD.contract_appeal(kid, stacked, 2_000_000, 3, league=dleague)
+a_th, r_th = PD.contract_appeal(kid, thin, 1_800_000, 3, league=dleague)
+check("kid picks ice time over contender", a_th > a_st,
+      f"{a_th:.2f} vs {a_st:.2f}")
+check("role reason surfaces", any("line" in x or "role" in x for x in r_th),
+      str(r_th))
+dleague.teams = [contender, rebuilder]
+
+# hometown pull
+homeboy = dplayer("Homeboy", age=27, ovr=80, ambition="home",
+                  city_bp="Denver, CO")
+a_home, r_home = PD.contract_appeal(homeboy, contender, 5_000_000, 4,
+                                    league=dleague)
+a_away, _ = PD.contract_appeal(homeboy, rebuilder, 5_000_000, 4,
+                               league=dleague)
+check("hometown pull is real", a_home > a_away + 0.05,
+      f"{a_home:.2f} vs {a_away:.2f}")
+check("hometown reason surfaces", any("hometown" in x for x in r_home),
+      str(r_home))
+
+# people: friend on team A, rival on team B, brother on team A
+pal = dplayer("Pal", age=27, ovr=80, ambition="stability")
+friend = contender.roster[0]
+foe = rebuilder.roster[0]
+bro = contender.roster[1]
+pal.relationships = {friend.id: 85, foe.id: -85}
+pal.family_ids = [bro.id]
+a_pal_c, r_pal = PD.contract_appeal(pal, contender, 5_000_000, 4,
+                                    league=dleague)
+a_pal_r, _ = PD.contract_appeal(pal, rebuilder, 5_000_000, 4,
+                                league=dleague)
+check("friends/family beat rivals", a_pal_c > a_pal_r + 0.05,
+      f"{a_pal_c:.2f} vs {a_pal_r:.2f}")
+check("people reasons surface",
+      any("friend" in x or "family" in x for x in r_pal), str(r_pal))
+
+# bad blood: monkeypatched hot rivalry; fan favourite vs villain
+class HotLedger:
+    def memory_weight(self, a, b):
+        return 90.0
+
+PD._ledger = lambda app: HotLedger()
+star = dplayer("Star", age=28, ovr=90, ambition="stability", loyalty=85,
+               happiness=80)
+star.games_played = 500
+star.points = 500  # PPG fan favourite
+star.last_team_name = "Rebuilders"
+cost, why = PD._rival_move_cost(star, rebuilder, contender, None)
+check("fan favourite pays bad-blood cost", cost > 0.12, f"{cost:.2f}")
+check("bad-blood reason names the turn",
+      why is not None and "villain" in why, str(why))
+goon = dplayer("Goon", age=28, ovr=90, ambition="money", loyalty=20,
+               controversy=95)
+goon.games_played = 500
+goon.points = 200
+goon.last_team_name = "Rebuilders"
+cost_v, _ = PD._rival_move_cost(goon, rebuilder, contender, None)
+check("villain shrugs at bad blood", cost_v < cost,
+      f"{cost_v:.2f} vs {cost:.2f}")
+
+# offer-sheet consent: loyal star refuses the rival; mercenary signs
+r0 = random.Random(11)
+ok_star, ap_star, _ = PD.player_accepts_offer_sheet(
+    star, contender, 9_000_000, 5, rebuilder, league=dleague, app=None,
+    rng=r0)
+check("loyal star won't sign rival sheet", ap_star < 0.52,
+      f"appeal {ap_star:.2f}")
+ok_merc, ap_merc, _ = PD.player_accepts_offer_sheet(
+    merc, contender, 12_500_000, 5, rebuilder, league=dleague, app=None,
+    rng=random.Random(11))
+check("mercenary signs the big-money sheet", ap_merc >= 0.52,
+      f"appeal {ap_merc:.2f}")
+
+# wants_out routing
+out = dplayer("Out", age=26, ovr=84, loyalty=40, happiness=25)
+check("miserable + disloyal wants out", PD.wants_out(out) is True)
+calm = dplayer("Calm", age=26, ovr=84, loyalty=70, happiness=70)
+check("happy player stays put", PD.wants_out(calm) is False)
+
+# previous_team resolution
+star.last_team_name = "Rebuilders"
+check("previous_team resolves", PD.previous_team(star, dleague) is rebuilder)
+star.last_team_name = ""
+check("previous_team None when unknown",
+      PD.previous_team(star, dleague) is None)
+
+# staying beats leaving for the loyal (same money)
+loyal = dplayer("Loyal", age=29, ovr=84, ambition="stability", loyalty=90,
+                happiness=80)
+loyal.team_name = "Contenders"
+a_stay, _ = PD.contract_appeal(loyal, contender, 6_000_000, 5,
+                              current_team=contender, league=dleague)
+a_go, _ = PD.contract_appeal(loyal, rebuilder, 6_000_000, 5,
+                             current_team=contender, league=dleague)
+check("loyal player prefers staying", a_stay > a_go + 0.05,
+      f"{a_stay:.2f} vs {a_go:.2f}")
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
