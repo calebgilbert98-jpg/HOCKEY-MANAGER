@@ -37,14 +37,23 @@ app.add_news = lambda line: None
 from tactics_window import TacticsWindow
 w = TacticsWindow(app)
 root.update()
-check("menu window builds 5 category cards", len(w._cards.winfo_children()) == 5)
-w._on_pick("offense", tx.OFFENSIVE_SYSTEMS["rush_attack"]["name"])
-check("pick stages pending under coach control", w._pending == {"offense": "rush_attack"})
+check("menu window builds 7 module cards", len(w._cards.winfo_children()) == 7,
+      str(len(w._cards.winfo_children())))
+w._on_pick("ozone", tx.OZONE_SYSTEMS["oz_rush"]["name"])
+check("pick stages pending under coach control", w._pending == {"ozone": "oz_rush"})
 with patch.object(rs.random, "random", return_value=0.0):
     w._on_suggest()
 root.update()
 check("suggest applies + clears pending",
-      not w._pending and team.tactics["offense"] == "rush_attack")
+      not w._pending and team.tactics["ozone"] == "oz_rush")
+# identity preset stages every differing module as pending
+w._on_identity_preset("stranglehold")
+_expected = {c: k for c, k in tx.IDENTITY_PRESETS["stranglehold"]["modules"].items()
+             if team.tactics.get(c) != k}
+check("preset stages all differing modules",
+      w._pending == _expected and len(w._pending) >= 5, str(w._pending))
+w._pending.clear()
+w._response_text = ""
 tx.set_tactics_control(team, "gm")
 w._on_pick("pp", tx.POWERPLAY_SYSTEMS["umbrella"]["name"])
 check("gm control applies immediately",
@@ -88,20 +97,20 @@ check("tab shows opponent systems", any("OPPONENT (AI)" in t for t in labels))
 # simulate a pick -> pending -> suggest
 first = win._tactics_frame
 with patch.object(rs.random, "random", return_value=0.0):
-    win._on_tac_pick("offense", tx.OFFENSIVE_SYSTEMS["rush_attack"]["name"],
-                     {v.get("name", k): k for k, v in tx.OFFENSIVE_SYSTEMS.items()})
-    check("tab pick stages pending", win._tac_pending == {"offense": "rush_attack"})
+    win._on_tac_pick("ozone", tx.OZONE_SYSTEMS["oz_rush"]["name"],
+                     {v.get("name", k): k for k, v in tx.OZONE_SYSTEMS.items()})
+    check("tab pick stages pending", win._tac_pending == {"ozone": "oz_rush"})
     win._on_tac_suggest()
-check("tab suggest applies live", home.tactics["offense"] == "rush_attack" and not win._tac_pending)
+check("tab suggest applies live", home.tactics["ozone"] == "oz_rush" and not win._tac_pending)
 check("mid-game familiarity hit is soft",
       35 <= float(home.tactics_familiarity) < 85, str(home.tactics_familiarity))
 # takeover path
-win._on_tac_pick("defense", tx.DEFENSIVE_SYSTEMS["neutral_trap"]["name"],
-                 {v.get("name", k): k for k, v in tx.DEFENSIVE_SYSTEMS.items()})
+win._on_tac_pick("neutral_zone", tx.NEUTRAL_ZONE_SYSTEMS["nz_trap_131"]["name"],
+                 {v.get("name", k): k for k, v in tx.NEUTRAL_ZONE_SYSTEMS.items()})
 with patch("tkinter.messagebox.askyesno", return_value=True):
     win._on_tac_takeover()
 check("tab takeover: gm control + pending applied",
-      tx.get_tactics_control(home) == "gm" and home.tactics["defense"] == "neutral_trap")
+      tx.get_tactics_control(home) == "gm" and home.tactics["neutral_zone"] == "nz_trap_131")
 shell.destroy(); root.destroy()
 
 print(); print(f"{len(PASS)} passed, {len(FAIL)} failed")

@@ -42,210 +42,401 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
-# Offensive systems (7)
+# Even-strength modules — the three-zone playbook.
+#
+# A team's 5v5 identity is five independent choices: how you forecheck, how
+# you defend the neutral zone, how you protect your own zone, how you attack
+# theirs, and how you break the puck out. Defense in the modern NHL starts
+# 200 feet away at the opposing goal line; offense is about breaking
+# structural integrity before the opponent sets. Each module resolves to
+# biases on the engine (attack/defense/pace/shot volume/shot quality/
+# physicality); resolve_team_tactics() multiplies the five modules into the
+# numbers the sim applies. _normalize_catalogs() keeps the SEEDED league
+# exactly neutral, so relative differences are story, not calibration drift.
 # ---------------------------------------------------------------------------
 
-OFFENSIVE_SYSTEMS: Dict[str, Dict[str, Any]] = {
-    "rush_attack": {
-        "name": "Up-Tempo Rush",
-        "blurb": ("Stretch the ice and attack off the rush. Defensemen join, "
-                  "wingers fly the zone, and the team trades chances "
-                  "willingly. When the legs are there it's breathtaking; "
-                  "when they're not, it's track-meet hockey."),
-        "exemplars": ["Colorado Avalanche", "New Jersey Devils"],
-        "attack": 1.06, "pace": 1.14, "shot_vol": 1.10, "shot_qual": 1.00, "physical": 0.90,
-        "wants": {"skating": 1.3, "shooting": 1.2, "puckhandling": 1.2,
-                  "flair": 1.1, "shoot_pass_tendency": 1.3},
+# ---------------------------------------------------------------------------
+# Forecheck systems — pressure without the puck in the offensive zone
+# ---------------------------------------------------------------------------
+
+FORECHECK_SYSTEMS: Dict[str, Dict[str, Any]] = {
+    "forecheck_122": {
+        "name": "1-2-2 Forecheck",
+        "blurb": ("The modern standard. F1 pressures the puck carrier and "
+                  "forces him down one side, F2/F3 form a second wall through "
+                  "the neutral zone, and the D hold the line. It doesn't "
+                  "always produce turnovers, but it clogs the middle, denies "
+                  "clean entries, and starves odd-man rushes. Risk mitigation "
+                  "as identity."),
+        "exemplars": ["Pittsburgh Penguins", "Tampa Bay Lightning",
+                      "Vegas Golden Knights"],
+        "attack": 1.00, "defense": 0.97, "pace": 0.98,
+        "shot_vol": 1.00, "shot_qual": 1.00, "physical": 1.00,
+        "wants": {"anticipation": 1.2, "positioning": 1.2, "work_rate": 1.2,
+                  "decisions": 1.1},
     },
-    "heavy_cycle": {
-        "name": "Heavy Cycle",
-        "blurb": ("Own the walls, own the puck, own the game. Forwards grind "
-                  "low, defensemen hold the line, and chances come from "
-                  "point shots through traffic and second efforts. "
-                  "Exhausting to play against for 60 minutes."),
-        "exemplars": ["Vegas Golden Knights", "Los Angeles Kings (2012-14)"],
-        "attack": 1.04, "pace": 0.94, "shot_vol": 0.95, "shot_qual": 1.08, "physical": 1.30,
-        "wants": {"strength": 1.3, "checking": 1.1, "work_rate": 1.2,
-                  "hitting_tendency": 1.2, "flair": 0.7},
+    "forecheck_212_swarm": {
+        "name": "2-1-2 Swarm Forecheck",
+        "blurb": ("Two forwards hunt the puck deep behind the goal line, a "
+                  "third supports in the slot, and the defensemen pinch "
+                  "aggressively down the walls. Suffocate the breakout "
+                  "before it starts, force panicked rims, and live in their "
+                  "zone. Demands elite conditioning and mobile defensemen — "
+                  "and accepts the odd breakaway against."),
+        "exemplars": ["Colorado Avalanche", "Florida Panthers",
+                      "Carolina Hurricanes"],
+        "attack": 1.04, "defense": 1.03, "pace": 1.08,
+        "shot_vol": 1.05, "shot_qual": 1.01, "physical": 1.15,
+        "wants": {"skating": 1.3, "aggressiveness": 1.2, "stamina": 1.2,
+                  "checking": 1.1, "work_rate": 1.2},
     },
-    "dump_chase": {
-        "name": "North-South / Dump & Chase",
-        "blurb": ("Get it in, get it back, get it to the net. No cute "
-                  "entries, no east-west risk — just pucks deep, bodies on "
-                  "defensemen, and a forecheck that punishes every breakout. "
-                  "Old school, and proud of it."),
-        "exemplars": ["Philadelphia Flyers", "Nashville Predators"],
-        "attack": 1.00, "pace": 1.05, "shot_vol": 1.05, "shot_qual": 0.97, "physical": 1.15,
-        "wants": {"skating": 1.2, "hitting_tendency": 1.3,
-                  "aggressiveness": 1.2, "work_rate": 1.3, "flair": 0.6},
+}
+
+# ---------------------------------------------------------------------------
+# Neutral zone & transition philosophies — the 80-foot battleground
+# ---------------------------------------------------------------------------
+
+NEUTRAL_ZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
+    "nz_trap_131": {
+        "name": "1-3-1 Neutral Zone Trap",
+        "blurb": ("The Red Line Restrictor. One forward pressures near "
+                  "center, a horizontal wall of three takes away the carry, "
+                  "one defenseman stays home. Maximum spatial compression — "
+                  "the opponent dumps it in or tries a seam pass into "
+                  "coverage. Strangles speed teams; bores everyone else."),
+        "exemplars": ["Tampa Bay Lightning", "Montreal Canadiens"],
+        "attack": 0.98, "defense": 0.93, "pace": 0.90,
+        "shot_vol": 0.97, "shot_qual": 1.00, "physical": 0.95,
+        "wants": {"positioning": 1.3, "anticipation": 1.2, "decisions": 1.2,
+                  "discipline": 1.1},
     },
-    "counterattack": {
-        "name": "Counterattack",
-        "blurb": ("Absorb, frustrate, then strike. The team gives up the "
-                  "perimeter, clogs the middle, and turns the first bad "
-                  "pass into a 2-on-1 the other way. Low-event hockey until "
-                  "it suddenly isn't."),
-        "exemplars": ["New York Islanders", "St. Louis Blues (2019)"],
-        "attack": 1.02, "pace": 0.90, "shot_vol": 0.88, "shot_qual": 1.10, "physical": 0.95,
-        "wants": {"skating": 1.3, "anticipation": 1.2, "positioning": 1.2,
-                  "decisions": 1.2, "flair": 0.8},
+    "nz_regroup": {
+        "name": "Controlled Regroup & Wave Attack",
+        "blurb": ("Patience over panic. Against a set neutral-zone structure "
+                  "the carrier circles back, drops to a trailing defenseman, "
+                  "and all five re-establish speed and spacing. Possession "
+                  "is an asset — never surrendered cheaply on a blind "
+                  "dump-in. The wave comes at you with numbers, again and "
+                  "again."),
+        "exemplars": ["Colorado Avalanche", "Edmonton Oilers"],
+        "attack": 1.02, "defense": 1.00, "pace": 1.00,
+        "shot_vol": 1.00, "shot_qual": 1.03, "physical": 0.95,
+        "wants": {"passing": 1.3, "puckhandling": 1.2, "skating": 1.2,
+                  "decisions": 1.1},
     },
-    "net_front": {
-        "name": "Crash the Net",
-        "blurb": ("Everything goes to the blue paint. Screens, tips, "
-                  "rebounds, greasy goals — the prettiest play is the one "
-                  "that goes in off somebody's shin pad. Goalies hate "
-                  "this team."),
-        "exemplars": ["Florida Panthers", "Boston Bruins"],
-        "attack": 1.05, "pace": 1.02, "shot_vol": 1.12, "shot_qual": 1.02, "physical": 1.20,
-        "wants": {"strength": 1.2, "bravery": 1.3, "shooting": 1.2,
-                  "hitting_tendency": 1.1, "flair": 0.7},
+    "nz_counterpress": {
+        "name": "NZ Delay & Pinch (Counter-Press)",
+        "blurb": ("Turn the neutral zone into a killing field. Weak-side "
+                  "forwards step up and pinch passing lanes the moment the "
+                  "opponent tries a short-area transition — attack the "
+                  "breakout at its inception instead of waiting at your own "
+                  "blue line. Chaos for them, chances for you."),
+        "exemplars": ["Carolina Hurricanes", "Toronto Maple Leafs"],
+        "attack": 1.03, "defense": 1.01, "pace": 1.07,
+        "shot_vol": 1.03, "shot_qual": 1.01, "physical": 1.05,
+        "wants": {"anticipation": 1.3, "skating": 1.2, "aggressiveness": 1.2,
+                  "checking": 1.1},
     },
-    "skill_possession": {
-        "name": "Skill Possession",
-        "blurb": ("The puck is a treasure and turnovers are sins. Controlled "
-                  "entries, seam passes, give-and-go below the dots — the "
-                  "power play stretched across five-on-five. Needs elite "
-                  "hands; without them it's perimeter passing into a loss."),
-        "exemplars": ["Edmonton Oilers", "Tampa Bay Lightning"],
-        "attack": 1.07, "pace": 1.06, "shot_vol": 1.00, "shot_qual": 1.06, "physical": 0.85,
-        "wants": {"passing": 1.3, "puckhandling": 1.3, "flair": 1.3,
-                  "shoot_pass_tendency": 0.4, "anticipation": 1.1},
-    },
-    "balanced": {
-        "name": "Balanced / Read & React",
-        "blurb": ("No dogma. Take what the game gives: rush when it's there, "
-                  "cycle when it isn't. The system is the players reading "
-                  "the play — which means it rises and falls on hockey IQ."),
-        "exemplars": ["Dallas Stars", "Winnipeg Jets"],
-        "attack": 1.00, "pace": 1.00, "shot_vol": 1.00, "shot_qual": 1.00, "physical": 1.00,
-        "wants": {"decisions": 1.1, "teamwork": 1.1, "work_rate": 1.1,
+}
+
+# ---------------------------------------------------------------------------
+# Defensive-zone coverage — protecting the house
+# ---------------------------------------------------------------------------
+
+DZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
+    "dz_hybrid": {
+        "name": "Hybrid Man-to-Man Coverage",
+        "blurb": ("The modern default below the circles: defenders track "
+                  "their checks aggressively up the wall and into the "
+                  "corners, while weak-side players collapse to zone. "
+                  "Suffocates time and space near the crease and kills slot "
+                  "passes — but it only works if the reads are elite."),
+        "exemplars": ["Vegas Golden Knights", "Boston Bruins"],
+        "attack": 1.00, "defense": 0.96, "pace": 1.00,
+        "shot_vol": 1.00, "shot_qual": 0.96, "physical": 1.00,
+        "wants": {"anticipation": 1.3, "positioning": 1.2, "decisions": 1.2,
                   "skating": 1.1},
     },
+    "dz_box": {
+        "name": "Passive Box-Plus-One",
+        "blurb": ("Four skaters form a tight box around the low slot while "
+                  "one forward tracks the puck on the perimeter. Protect the "
+                  "royal road at all costs, force everything outside, and "
+                  "let the goalie see clean shots. Bend-don't-break, taken "
+                  "literally — low danger against, low pressure for."),
+        "exemplars": ["Dallas Stars", "New York Islanders"],
+        "attack": 0.98, "defense": 0.92, "pace": 0.95,
+        "shot_vol": 0.98, "shot_qual": 0.94, "physical": 1.05,
+        "wants": {"bravery": 1.3, "positioning": 1.2, "strength": 1.1,
+                  "shot_blocking": 1.2},
+    },
+    "dz_slide_match": {
+        "name": "Aggressive Slide & Match",
+        "blurb": ("Track your man anywhere below the hash marks. Mirror his "
+                  "cuts, swap on screens without a word, and never let an "
+                  "elite shooter catch and release clean. Takes away time "
+                  "and space entirely — and punishes any defender who can't "
+                  "skate."),
+        "exemplars": ["Vegas Golden Knights", "Carolina Hurricanes"],
+        "attack": 1.01, "defense": 0.95, "pace": 1.04,
+        "shot_vol": 1.00, "shot_qual": 0.97, "physical": 1.05,
+        "wants": {"skating": 1.3, "stamina": 1.2, "anticipation": 1.2,
+                  "aggressiveness": 1.1},
+    },
 }
 
 # ---------------------------------------------------------------------------
-# Defensive systems (7)
+# Offensive-zone attack — breaking structural integrity
 # ---------------------------------------------------------------------------
 
-DEFENSIVE_SYSTEMS: Dict[str, Dict[str, Any]] = {
-    "neutral_trap": {
-        "name": "1-2-2 Neutral Zone Trap",
-        "blurb": ("The Lemaire special. Four skaters form a wall through the "
-                  "neutral zone and dare you to beat them with skill. "
-                  "Devils hockey won three Cups this way — and emptied "
-                  "buildings doing it."),
-        "exemplars": ["New Jersey Devils (1995-2003)", "Minnesota Wild"],
-        "defense": 0.88, "pace": 0.86, "risk": 0.90, "physical": 0.9,
+OZONE_SYSTEMS: Dict[str, Dict[str, Any]] = {
+    "oz_micro": {
+        "name": "Controlled Micro-Transitions",
+        "blurb": ("No blind chips. Quick D-to-D movement, stretch passes to "
+                  "flying forwards, and regroups that turn into controlled "
+                  "entries with speed and possession — which multiply "
+                  "scoring-chance probability over a 50/50 dump chase. "
+                  "Let the defensemen skate or push the pace dynamically."),
+        "exemplars": ["Colorado Avalanche", "Tampa Bay Lightning"],
+        "attack": 1.04, "defense": 1.00, "pace": 1.00,
+        "shot_vol": 1.00, "shot_qual": 1.06, "physical": 0.95,
+        "wants": {"passing": 1.3, "puckhandling": 1.3, "skating": 1.2,
+                  "flair": 1.2, "decisions": 1.1},
     },
-    "trap_131": {
-        "name": "1-3-1 Neutral Zone",
-        "blurb": ("One forechecker funnels, three across the middle take "
-                  "away the carry, one back. Modern trap — less passive than "
-                  "the 1-2-2, same suffocating idea through center ice."),
-        "exemplars": ["Tampa Bay Lightning", "Los Angeles Kings"],
-        "defense": 0.90, "pace": 0.90, "risk": 0.92, "physical": 0.9,
+    "oz_cycle": {
+        "name": "Cycle & Point-Shot Volume",
+        "blurb": ("Heavy loops down low, short passes through the office "
+                  "behind the net, and low-to-high feeds that activate the "
+                  "defensemen for point shots through traffic. Wear the "
+                  "opposing D down physically and mentally — make the big "
+                  "man bend over for forty minutes and he'll break in the "
+                  "third."),
+        "exemplars": ["St. Louis Blues", "Florida Panthers",
+                      "Vegas Golden Knights"],
+        "attack": 1.03, "defense": 0.99, "pace": 0.95,
+        "shot_vol": 0.98, "shot_qual": 1.08, "physical": 1.25,
+        "wants": {"strength": 1.3, "work_rate": 1.2, "bravery": 1.1,
+                  "puckhandling": 1.1, "flair": 0.7},
     },
-    "left_wing_lock": {
-        "name": "Left Wing Lock",
-        "blurb": ("Bowman's machine. The left winger drops to the blue line "
-                  "on every possession change, creating a five-man wall "
-                  "without ever looking passive. Structure as identity."),
-        "exemplars": ["Detroit Red Wings (1990s)", "Vegas Golden Knights"],
-        "defense": 0.93, "pace": 0.94, "risk": 0.95, "physical": 1.0,
+    "oz_flow": {
+        "name": "Five-Man Flow",
+        "blurb": ("Positionless rotation: the defenseman pinches deep, the "
+                  "center drops to cover the point, and nobody is where the "
+                  "coverage chart says they should be. Forces traditional "
+                  "man-to-man and zone schemes into rushed hand-offs — and "
+                  "broken coverage in the slot."),
+        "exemplars": ["Toronto Maple Leafs", "New Jersey Devils"],
+        "attack": 1.02, "defense": 1.01, "pace": 1.03,
+        "shot_vol": 1.02, "shot_qual": 1.03, "physical": 1.00,
+        "wants": {"skating": 1.2, "passing": 1.2, "flair": 1.2,
+                  "anticipation": 1.1, "decisions": 1.1},
     },
-    "aggressive_man": {
-        "name": "Aggressive 2-1-2 / Man-on-Man",
-        "blurb": ("Hunt the puck everywhere. Two forecheckers deep, "
-                  "defensemen step up at their own blue line, and the "
-                  "D-zone is man-on-man with no hiding. Creates turnovers "
-                  "in bunches — and gives up the odd breakaway."),
+    "oz_rush": {
+        "name": "Stretch & Speed (Rush Offense)",
+        "blurb": ("Drive the wingers wide to pull defensemen deep, open the "
+                  "middle for the trailer, and hit the seam before the "
+                  "defense sets its feet. Speed beats structure — enter "
+                  "against unorganized coverage and the chaos is yours. "
+                  "Track-meet hockey when the legs are there."),
+        "exemplars": ["Colorado Avalanche", "Edmonton Oilers"],
+        "attack": 1.05, "defense": 1.02, "pace": 1.10,
+        "shot_vol": 1.08, "shot_qual": 1.00, "physical": 0.90,
+        "wants": {"skating": 1.3, "shoot_pass_tendency": 1.3, "flair": 1.1,
+                  "shooting": 1.2},
+    },
+    "oz_netfront": {
+        "name": "Net-Front Saturation",
+        "blurb": ("When clean cross-seam plays dry up — playoff hockey, "
+                  "sticks and bodies in every lane — manufacture uglier "
+                  "chaos. Point shots aimed at shin pads, two forwards "
+                  "crashing the crease, garbage goals off screens, tips, "
+                  "and rebounds. Goalies hate this team."),
+        "exemplars": ["St. Louis Blues", "Florida Panthers",
+                      "Vegas Golden Knights"],
+        "attack": 1.04, "defense": 1.00, "pace": 1.02,
+        "shot_vol": 1.10, "shot_qual": 1.02, "physical": 1.20,
+        "wants": {"bravery": 1.3, "strength": 1.2, "work_rate": 1.2,
+                  "deflections": 1.2, "flair": 0.7},
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Breakout systems — how the puck leaves your zone
+# ---------------------------------------------------------------------------
+
+BREAKOUT_SYSTEMS: Dict[str, Dict[str, Any]] = {
+    "bo_controlled": {
+        "name": "Controlled Breakout",
+        "blurb": ("D-to-D, short support, and clean exits with numbers. "
+                  "Never surrender possession cheaply — the breakout is the "
+                  "first pass of the attack, not an escape. Patient, "
+                  "repeatable, and kind to defensemen who think the game."),
+        "exemplars": ["Tampa Bay Lightning", "Dallas Stars"],
+        "attack": 1.01, "defense": 0.99, "pace": 0.99,
+        "shot_vol": 1.00, "shot_qual": 1.01, "physical": 0.95,
+        "wants": {"passing": 1.3, "decisions": 1.2, "puckhandling": 1.2,
+                  "positioning": 1.1},
+    },
+    "bo_stretch": {
+        "name": "Stretch Pass Breakout",
+        "blurb": ("High forwards and home-run passes. One touch out of the "
+                  "zone and the winger is behind their D before the gap "
+                  "closes — or the pass is picked and you're defending a "
+                  "2-on-1. Maximum verticality, maximum variance."),
+        "exemplars": ["Colorado Avalanche", "Edmonton Oilers"],
+        "attack": 1.03, "defense": 1.02, "pace": 1.05,
+        "shot_vol": 1.02, "shot_qual": 1.02, "physical": 0.95,
+        "wants": {"passing": 1.3, "skating": 1.2, "flair": 1.1,
+                  "anticipation": 1.1},
+    },
+    "bo_direct": {
+        "name": "Direct / Chip & Chase",
+        "blurb": ("Up and out, then win the race. Chip it past the pinching "
+                  "defenseman, get it deep, and let the forecheck go to "
+                  "work. Concedes the pretty entry for territorial pressure "
+                  "— simple, honest, and exhausting to defend."),
+        "exemplars": ["Philadelphia Flyers", "Nashville Predators"],
+        "attack": 1.00, "defense": 1.00, "pace": 1.03,
+        "shot_vol": 1.03, "shot_qual": 0.98, "physical": 1.10,
+        "wants": {"skating": 1.2, "work_rate": 1.3, "aggressiveness": 1.2,
+                  "strength": 1.1},
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Unified identities — the doc's Phase 4. A coach doesn't pick modules at
+# random; he builds a closed-loop system where every action triggers a
+# predictable reaction. One click installs all seven modules.
+# ---------------------------------------------------------------------------
+
+IDENTITY_PRESETS: Dict[str, Dict[str, Any]] = {
+    "chaos_pressure": {
+        "name": "Chaos & Pressure",
+        "tagline": "High event — pin them deep, overwhelm with numbers",
+        "blurb": ("The 2-1-2 swarm suffocates breakouts, the rush attack "
+                  "strikes before coverages set, and aggressive man-to-man "
+                  "takes away time and space everywhere. You accept the "
+                  "odd-man rushes against because the system generates "
+                  "three times the offensive-zone touches it allows."),
         "exemplars": ["Carolina Hurricanes", "Florida Panthers"],
-        "defense": 0.96, "pace": 1.12, "risk": 1.15, "physical": 1.15,
+        "modules": {
+            "forecheck": "forecheck_212_swarm",
+            "neutral_zone": "nz_counterpress",
+            "dzone": "dz_slide_match",
+            "ozone": "oz_rush",
+            "breakout": "bo_stretch",
+            "pp": "shoot_first",
+            "pk": "aggressive_swarm",
+        },
     },
-    "passive_box": {
-        "name": "Collapsing Box",
-        "blurb": ("Protect the house. Four skaters sag to the slot, block "
-                  "everything, and let the goalie see the perimeter. "
-                  "Bend-don't-break taken literally — low danger against, "
-                  "low pressure for."),
-        "exemplars": ["New York Islanders", "St. Louis Blues"],
-        "defense": 0.90, "pace": 0.96, "risk": 0.92, "physical": 1.0,
+    "stranglehold": {
+        "name": "Stranglehold",
+        "tagline": "Low event — defensive chess, suffocate with the lead",
+        "blurb": ("The 1-3-1 trap compresses the neutral zone, controlled "
+                  "regroups refuse to surrender possession, and the passive "
+                  "box protects the royal road at all costs. Turn the game "
+                  "into a chess match: refuse to beat yourself, limit "
+                  "transition, and strangle third periods with a lead."),
+        "exemplars": ["New York Islanders", "Dallas Stars"],
+        "modules": {
+            "forecheck": "forecheck_122",
+            "neutral_zone": "nz_trap_131",
+            "dzone": "dz_box",
+            "ozone": "oz_cycle",
+            "breakout": "bo_controlled",
+            "pp": "umbrella",
+            "pk": "passive_box",
+        },
     },
-    "hybrid": {
-        "name": "Modern Hybrid",
-        "blurb": ("Read-based defending: zone until a trigger, then man. "
-                  "Switches on picks, layers in the slot, activates when "
-                  "the puck is vulnerable. The league's default — and "
-                  "only as good as the reads."),
-        "exemplars": ["Dallas Stars", "Edmonton Oilers"],
-        "defense": 0.94, "pace": 1.00, "risk": 1.00, "physical": 1.0,
-    },
-    "pressure_swarm": {
-        "name": "D-Zone Swarm / Puck Pressure",
-        "blurb": ("Two men on every puck carrier below the dots. The zone "
-                  "is chaos by design — win it back in three seconds or "
-                  "chase for thirty. Not for the faint of heart, or the "
-                  "slow of foot."),
-        "exemplars": ["Toronto Maple Leafs (Keefe era)", "Ottawa Senators"],
-        "defense": 0.97, "pace": 1.08, "risk": 1.10, "physical": 1.1,
-    },
-}
-
-# ---------------------------------------------------------------------------
-# Overall coach philosophies (6)
-# ---------------------------------------------------------------------------
-
-PHILOSOPHIES: Dict[str, Dict[str, Any]] = {
-    "offense_first": {
-        "name": "Run and Gun",
-        "blurb": ("Score one more than them. Defensemen pinch, the fourth "
-                  "line gets offensive-zone starts, and 'backcheck' is a "
-                  "suggestion. Electric when it works."),
-        "attack": 1.03, "defense": 1.02, "pace": 1.05, "physical": 1.0,
-    },
-    "defense_first": {
-        "name": "Defense Wins",
-        "blurb": ("Structure over everything. Lines roll, risks get benched, "
-                  "and 2-1 is a perfect game. The room buys in or the room "
-                  "gets traded."),
-        "attack": 0.98, "defense": 0.95, "pace": 0.95, "physical": 1.0,
-    },
-    "heavy_identity": {
-        "name": "Heavy Hockey",
-        "blurb": ("Finish every check, win every wall, make them dread the "
-                  "third period. The forecheck is the system and the "
-                  "penalty kill feeds off the crowd."),
-        "attack": 1.01, "defense": 0.98, "pace": 1.02, "physical": 1.25,
-    },
-    "possession": {
-        "name": "Puck Possession",
-        "blurb": ("Analytics-driven: entries with control, exits with "
-                  "support, shots from the right places. The process is "
-                  "trusted even when the bounces aren't."),
-        "attack": 1.03, "defense": 0.97, "pace": 1.00, "physical": 0.95,
-    },
-    "development": {
-        "name": "Development First",
-        "blurb": ("The kids play through mistakes. Systems are kept simple "
-                  "so young legs can think fast, and the future matters as "
-                  "much as tonight. Veterans may grumble."),
-        "attack": 0.99, "defense": 1.01, "pace": 1.03, "physical": 1.0,
-        "youth_growth": 1.15,
-    },
-    "pragmatist": {
-        "name": "Pragmatist",
-        "blurb": ("No system is sacred. Match the opponent, ride the hot "
-                  "hand, change on the fly. Players call it trust; "
-                  "traditionalists call it no identity at all."),
-        "attack": 1.00, "defense": 1.00, "pace": 1.00, "physical": 1.0,
-        "adaptability": 1.30,
+    "hybrid_transition": {
+        "name": "Hybrid Transition",
+        "tagline": "The modern standard — balanced, read-based, lethal",
+        "blurb": ("What most multi-cup teams actually play. The 1-2-2 "
+                  "forecheck without over-committing, micro-transitions "
+                  "that enter with control, hybrid coverage keyed on reads, "
+                  "and elite skating defensemen flipping defense into "
+                  "quick-strike offense. No extremes — just answers."),
+        "exemplars": ["Tampa Bay Lightning", "Vegas Golden Knights"],
+        "modules": {
+            "forecheck": "forecheck_122",
+            "neutral_zone": "nz_regroup",
+            "dzone": "dz_hybrid",
+            "ozone": "oz_micro",
+            "breakout": "bo_controlled",
+            "pp": "one_three_one",
+            "pk": "diamond",
+        },
     },
 }
 
 # ---------------------------------------------------------------------------
-# Power play systems (7)
+# Category metadata — the seven whiteboard rows, in presentation order.
 # ---------------------------------------------------------------------------
+
+ES_CATEGORIES = (
+    ("forecheck", "Forecheck", "FORECHECK_SYSTEMS"),
+    ("neutral_zone", "Neutral Zone", "NEUTRAL_ZONE_SYSTEMS"),
+    ("dzone", "D-Zone Coverage", "DZONE_SYSTEMS"),
+    ("ozone", "O-Zone Attack", "OZONE_SYSTEMS"),
+    ("breakout", "Breakout", "BREAKOUT_SYSTEMS"),
+)
+ST_CATEGORIES = (
+    ("pp", "Power Play", "POWERPLAY_SYSTEMS"),
+    ("pk", "Penalty Kill", "PENALTY_KILL_SYSTEMS"),
+)
+ALL_CATEGORIES = ES_CATEGORIES + ST_CATEGORIES
+
+# Fast lookup: category key -> catalog dict (filled after PP/PK defined below).
+CATALOGS: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+
+def _register_catalogs() -> None:
+    CATALOGS.update({
+        "forecheck": FORECHECK_SYSTEMS,
+        "neutral_zone": NEUTRAL_ZONE_SYSTEMS,
+        "dzone": DZONE_SYSTEMS,
+        "ozone": OZONE_SYSTEMS,
+        "breakout": BREAKOUT_SYSTEMS,
+        "pp": POWERPLAY_SYSTEMS,
+        "pk": PENALTY_KILL_SYSTEMS,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Save migration — the old flat offense/defense/philosophy model maps onto
+# the zone modules. Old saves load and translate once, then play on.
+# ---------------------------------------------------------------------------
+
+_LEGACY_OFFENSE_MAP = {
+    # legacy offense -> {module category: new system}
+    "rush_attack":    {"ozone": "oz_rush", "breakout": "bo_stretch"},
+    "heavy_cycle":    {"ozone": "oz_cycle"},
+    "dump_chase":     {"ozone": "oz_netfront", "breakout": "bo_direct"},
+    "counterattack":  {"ozone": "oz_flow", "neutral_zone": "nz_counterpress"},
+    "net_front":      {"ozone": "oz_netfront"},
+    "skill_possession": {"ozone": "oz_micro"},
+    "balanced":       {"ozone": "oz_flow"},
+}
+_LEGACY_DEFENSE_MAP = {
+    "neutral_trap":   {"neutral_zone": "nz_trap_131"},
+    "trap_131":       {"neutral_zone": "nz_trap_131"},
+    "left_wing_lock": {"forecheck": "forecheck_122"},
+    "aggressive_man": {"forecheck": "forecheck_212_swarm",
+                       "dzone": "dz_slide_match"},
+    "passive_box":    {"dzone": "dz_box"},
+    "hybrid":         {"dzone": "dz_hybrid"},
+    "pressure_swarm": {"forecheck": "forecheck_212_swarm",
+                       "neutral_zone": "nz_counterpress"},
+}
+_LEGACY_PHILOSOPHY_MAP = {
+    # philosophy nudges the forecheck/attack when nothing else claimed them
+    "offense_first":  {"forecheck": "forecheck_212_swarm"},
+    "defense_first":  {"neutral_zone": "nz_trap_131"},
+    "heavy_identity": {"ozone": "oz_cycle"},
+    "possession":     {"ozone": "oz_micro"},
+    "development":    {"breakout": "bo_stretch"},
+    "pragmatist":     {},
+}
 
 POWERPLAY_SYSTEMS: Dict[str, Dict[str, Any]] = {
     "umbrella": {
@@ -366,6 +557,9 @@ PENALTY_KILL_SYSTEMS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+_register_catalogs()
+
+
 def _normalize_catalogs() -> None:
     """Scale every scoring-relevant catalog so the SEEDED league is neutral.
 
@@ -374,53 +568,83 @@ def _normalize_catalogs() -> None:
     engine's calibrated level. Relative differences between systems are
     preserved, so copying the trap still slows the whole league down --
     that's the dynamic story, not calibration drift.
+
+    Combined attack = forecheck x neutral_zone x ozone x breakout, so the
+    seed-weighted mean of that FULL product is divided out of the ozone
+    catalog (same for defense via the d-zone catalog). _apply_edge is
+    linear, so normalizing the raw product mean fixes the edged mean too.
+    Pace multiplies five catalogs: the product mean is split across them
+    with the 5th root (within a percent of neutral -- well inside
+    tolerance, as the matchup takes a geometric mean across the pair).
     """
+    ES_ALL = (FORECHECK_SYSTEMS, NEUTRAL_ZONE_SYSTEMS, DZONE_SYSTEMS,
+              OZONE_SYSTEMS, BREAKOUT_SYSTEMS)
+
     seeds = list(NHL_TEAM_TACTICS.values())
     n = len(seeds)
 
     def wmean(fn):
         return sum(fn(sd) for sd in seeds) / n
 
-    # Combined attack = offense x philosophy; defense = defense x philosophy.
-    # _apply_edge is linear, so normalizing raw means fixes edged means too.
-    a_mean = wmean(lambda sd: OFFENSIVE_SYSTEMS[sd["offense"]]["attack"]
-                   * PHILOSOPHIES[sd["philosophy"]]["attack"])
-    d_mean = wmean(lambda sd: DEFENSIVE_SYSTEMS[sd["defense"]]["defense"]
-                   * PHILOSOPHIES[sd["philosophy"]]["defense"])
+    # Attack: center the full four-module product via the ozone catalog.
+    a_prod = wmean(lambda sd: FORECHECK_SYSTEMS[sd["forecheck"]]["attack"]
+                   * NEUTRAL_ZONE_SYSTEMS[sd["neutral_zone"]]["attack"]
+                   * OZONE_SYSTEMS[sd["ozone"]]["attack"]
+                   * BREAKOUT_SYSTEMS[sd["breakout"]]["attack"])
+    for sys in OZONE_SYSTEMS.values():
+        sys["attack"] /= a_prod
+    # Defense: center the full three-module product via the d-zone catalog.
+    d_prod = wmean(lambda sd: FORECHECK_SYSTEMS[sd["forecheck"]]["defense"]
+                   * NEUTRAL_ZONE_SYSTEMS[sd["neutral_zone"]]["defense"]
+                   * DZONE_SYSTEMS[sd["dzone"]]["defense"])
+    for sys in DZONE_SYSTEMS.values():
+        sys["defense"] /= d_prod
+    sv_prod = wmean(lambda sd: FORECHECK_SYSTEMS[sd["forecheck"]]["shot_vol"]
+                    * NEUTRAL_ZONE_SYSTEMS[sd["neutral_zone"]]["shot_vol"]
+                    * DZONE_SYSTEMS[sd["dzone"]]["shot_vol"]
+                    * OZONE_SYSTEMS[sd["ozone"]]["shot_vol"]
+                    * BREAKOUT_SYSTEMS[sd["breakout"]]["shot_vol"])
+    for sys in OZONE_SYSTEMS.values():
+        sys["shot_vol"] /= sv_prod
+    sq_prod = wmean(lambda sd: FORECHECK_SYSTEMS[sd["forecheck"]]["shot_qual"]
+                    * NEUTRAL_ZONE_SYSTEMS[sd["neutral_zone"]]["shot_qual"]
+                    * DZONE_SYSTEMS[sd["dzone"]]["shot_qual"]
+                    * OZONE_SYSTEMS[sd["ozone"]]["shot_qual"]
+                    * BREAKOUT_SYSTEMS[sd["breakout"]]["shot_qual"])
+    for sys in OZONE_SYSTEMS.values():
+        sys["shot_qual"] /= sq_prod
     pp_mean = wmean(lambda sd: POWERPLAY_SYSTEMS[sd["pp"]]["pp"])
     pk_mean = wmean(lambda sd: PENALTY_KILL_SYSTEMS[sd["pk"]]["pk"])
-    for sys in OFFENSIVE_SYSTEMS.values():
-        sys["attack"] /= a_mean
-    for sys in DEFENSIVE_SYSTEMS.values():
-        sys["defense"] /= d_mean
     for sys in POWERPLAY_SYSTEMS.values():
         sys["pp"] /= pp_mean
     for sys in PENALTY_KILL_SYSTEMS.values():
         sys["pk"] /= pk_mean
 
-    # _apply_edge is linear, so normalizing the seed-weighted arithmetic
-    # mean fixes the edged mean too. (The GameSim matchup takes a geometric
-    # mean across the pair; with pace clustered near 1.0 that lands within
-    # a percent of neutral -- well inside tolerance.)
-    pf = wmean(lambda sd: OFFENSIVE_SYSTEMS[sd["offense"]]["pace"]
-               * DEFENSIVE_SYSTEMS[sd["defense"]]["pace"]
-               * PHILOSOPHIES[sd["philosophy"]]["pace"])
-    # Three catalogs multiply into one combined pace: split the correction
-    # across them with the cube root.
-    pf3 = pf ** (1.0 / 3.0)
-    for cat in (OFFENSIVE_SYSTEMS, DEFENSIVE_SYSTEMS, PHILOSOPHIES):
+    # Pace multiplies five catalogs: split the correction with the 5th root.
+    pf = wmean(lambda sd: FORECHECK_SYSTEMS[sd["forecheck"]]["pace"]
+               * NEUTRAL_ZONE_SYSTEMS[sd["neutral_zone"]]["pace"]
+               * DZONE_SYSTEMS[sd["dzone"]]["pace"]
+               * OZONE_SYSTEMS[sd["ozone"]]["pace"]
+               * BREAKOUT_SYSTEMS[sd["breakout"]]["pace"])
+    pf5 = pf ** (1.0 / 5.0)
+    for cat in ES_ALL:
         for sys in cat.values():
-            sys["pace"] /= pf3
+            sys["pace"] /= pf5
 
-    # Physicality feeds the hit engine, not scoring, but the same logic
-    # applies: the seeded league should throw an average number of hits.
-    ph_mean = wmean(lambda sd: OFFENSIVE_SYSTEMS[sd["offense"]]
+    # Physicality feeds the hit engine: same logic, 5th root.
+    ph_mean = wmean(lambda sd: FORECHECK_SYSTEMS[sd["forecheck"]]
                     .get("physical", 1.0)
-                    * DEFENSIVE_SYSTEMS[sd["defense"]].get("physical", 1.0)
-                    * PHILOSOPHIES[sd["philosophy"]].get("physical", 1.0))
-    for sys in OFFENSIVE_SYSTEMS.values():
-        if "physical" in sys:
-            sys["physical"] /= ph_mean
+                    * NEUTRAL_ZONE_SYSTEMS[sd["neutral_zone"]]
+                    .get("physical", 1.0)
+                    * DZONE_SYSTEMS[sd["dzone"]].get("physical", 1.0)
+                    * OZONE_SYSTEMS[sd["ozone"]].get("physical", 1.0)
+                    * BREAKOUT_SYSTEMS[sd["breakout"]]
+                    .get("physical", 1.0))
+    ph5 = ph_mean ** (1.0 / 5.0)
+    for cat in ES_ALL:
+        for sys in cat.values():
+            if "physical" in sys:
+                sys["physical"] /= ph5
 
 
 # ---------------------------------------------------------------------------
@@ -428,46 +652,51 @@ def _normalize_catalogs() -> None:
 # ---------------------------------------------------------------------------
 
 NHL_TEAM_TACTICS: Dict[str, Dict[str, str]] = {
-    "Anaheim Ducks":           {"offense": "rush_attack",     "defense": "hybrid",         "pp": "one_three_one", "pk": "diamond",         "philosophy": "development"},
-    "Boston Bruins":           {"offense": "heavy_cycle",     "defense": "hybrid",         "pp": "umbrella",      "pk": "diamond",         "philosophy": "heavy_identity"},
-    "Buffalo Sabres":          {"offense": "rush_attack",     "defense": "aggressive_man", "pp": "umbrella",      "pk": "diamond",         "philosophy": "offense_first"},
-    "Calgary Flames":          {"offense": "heavy_cycle",     "defense": "passive_box",    "pp": "overload",      "pk": "wedge_plus_one", "philosophy": "heavy_identity"},
-    "Carolina Hurricanes":     {"offense": "rush_attack",     "defense": "aggressive_man", "pp": "one_three_one", "pk": "aggressive_swarm","philosophy": "possession"},
-    "Chicago Blackhawks":      {"offense": "rush_attack",     "defense": "hybrid",         "pp": "one_three_one", "pk": "diamond",         "philosophy": "development"},
-    "Colorado Avalanche":      {"offense": "rush_attack",     "defense": "aggressive_man", "pp": "one_three_one", "pk": "aggressive_swarm","philosophy": "offense_first"},
-    "Columbus Blue Jackets":   {"offense": "balanced",        "defense": "hybrid",         "pp": "umbrella",      "pk": "diamond",         "philosophy": "pragmatist"},
-    "Dallas Stars":            {"offense": "skill_possession","defense": "hybrid",         "pp": "umbrella",      "pk": "passive_box",     "philosophy": "possession"},
-    "Detroit Red Wings":       {"offense": "balanced",        "defense": "hybrid",         "pp": "overload",      "pk": "diamond",         "philosophy": "pragmatist"},
-    "Edmonton Oilers":         {"offense": "skill_possession","defense": "hybrid",         "pp": "one_three_one", "pk": "diamond",         "philosophy": "offense_first"},
-    "Florida Panthers":        {"offense": "heavy_cycle",     "defense": "aggressive_man", "pp": "net_crash",     "pk": "aggressive_swarm","philosophy": "heavy_identity"},
-    "Los Angeles Kings":       {"offense": "counterattack",   "defense": "neutral_trap",   "pp": "umbrella",      "pk": "wedge_plus_one", "philosophy": "defense_first"},
-    "Minnesota Wild":          {"offense": "counterattack",   "defense": "hybrid",         "pp": "overload",      "pk": "passive_box",     "philosophy": "pragmatist"},
-    "Montreal Canadiens":      {"offense": "rush_attack",     "defense": "hybrid",         "pp": "umbrella",      "pk": "diamond",         "philosophy": "development"},
-    "Nashville Predators":     {"offense": "dump_chase",      "defense": "passive_box",    "pp": "umbrella",      "pk": "diamond",         "philosophy": "defense_first"},
-    "New Jersey Devils":       {"offense": "rush_attack",     "defense": "hybrid",         "pp": "one_three_one", "pk": "aggressive_swarm","philosophy": "offense_first"},
-    "New York Islanders":      {"offense": "dump_chase",      "defense": "passive_box",    "pp": "net_crash",     "pk": "passive_box",     "philosophy": "defense_first"},
-    "New York Rangers":        {"offense": "balanced",        "defense": "hybrid",         "pp": "one_three_one", "pk": "diamond",         "philosophy": "pragmatist"},
-    "Ottawa Senators":         {"offense": "rush_attack",     "defense": "aggressive_man", "pp": "umbrella",      "pk": "diamond",         "philosophy": "offense_first"},
-    "Philadelphia Flyers":     {"offense": "dump_chase",      "defense": "aggressive_man", "pp": "net_crash",     "pk": "aggressive_swarm","philosophy": "heavy_identity"},
-    "Pittsburgh Penguins":     {"offense": "balanced",        "defense": "hybrid",         "pp": "umbrella",      "pk": "diamond",         "philosophy": "pragmatist"},
-    "San Jose Sharks":         {"offense": "rush_attack",     "defense": "hybrid",         "pp": "umbrella",      "pk": "diamond",         "philosophy": "development"},
-    "Seattle Kraken":          {"offense": "counterattack",   "defense": "hybrid",         "pp": "overload",      "pk": "wedge_plus_one", "philosophy": "pragmatist"},
-    "St. Louis Blues":         {"offense": "heavy_cycle",     "defense": "passive_box",    "pp": "overload",      "pk": "passive_box",     "philosophy": "heavy_identity"},
-    "Tampa Bay Lightning":     {"offense": "skill_possession","defense": "hybrid",         "pp": "one_three_one", "pk": "diamond",         "philosophy": "possession"},
-    "Toronto Maple Leafs":     {"offense": "skill_possession","defense": "hybrid",         "pp": "umbrella",      "pk": "diamond",         "philosophy": "offense_first"},
-    "Utah Mammoth":            {"offense": "balanced",        "defense": "hybrid",         "pp": "overload",      "pk": "diamond",         "philosophy": "development"},
-    "Vancouver Canucks":       {"offense": "rush_attack",     "defense": "hybrid",         "pp": "umbrella",      "pk": "aggressive_swarm","philosophy": "pragmatist"},
-    "Vegas Golden Knights":    {"offense": "heavy_cycle",     "defense": "aggressive_man", "pp": "overload",      "pk": "passive_box",     "philosophy": "heavy_identity"},
-    "Washington Capitals":     {"offense": "balanced",        "defense": "passive_box",    "pp": "one_three_one", "pk": "diamond",         "philosophy": "pragmatist"},
-    "Winnipeg Jets":           {"offense": "counterattack",   "defense": "passive_box",    "pp": "umbrella",      "pk": "wedge_plus_one", "philosophy": "defense_first"},
+    # Every club seeded to its real-world identity. Doc tie-ins honored:
+    # 1-2-2 forecheck -> PIT/TBL/VGK; swarm -> COL/FLA/CAR; 1-3-1 trap ->
+    # TBL/MTL; regroup -> COL/EDM; slide&match D -> VGK/CAR; passive box ->
+    # DAL/NYI; cycle/volume -> STL/FLA/VGK; rush -> COL/EDM; 1-3-1 PP ->
+    # TBL/WSH.
+    "Anaheim Ducks":           {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "one_three_one", "pk": "diamond"},
+    "Boston Bruins":           {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_cycle",    "breakout": "bo_direct",    "pp": "umbrella",      "pk": "diamond"},
+    "Buffalo Sabres":          {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "umbrella",      "pk": "diamond"},
+    "Calgary Flames":          {"forecheck": "forecheck_212_swarm", "neutral_zone": "nz_counterpress", "dzone": "dz_box",        "ozone": "oz_cycle",    "breakout": "bo_direct",    "pp": "overload",      "pk": "wedge_plus_one"},
+    "Carolina Hurricanes":     {"forecheck": "forecheck_212_swarm", "neutral_zone": "nz_counterpress", "dzone": "dz_slide_match","ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "one_three_one", "pk": "aggressive_swarm"},
+    "Chicago Blackhawks":      {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_flow",     "breakout": "bo_controlled","pp": "one_three_one", "pk": "diamond"},
+    "Colorado Avalanche":      {"forecheck": "forecheck_212_swarm", "neutral_zone": "nz_regroup",      "dzone": "dz_slide_match","ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "one_three_one", "pk": "aggressive_swarm"},
+    "Columbus Blue Jackets":   {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_flow",     "breakout": "bo_controlled","pp": "umbrella",      "pk": "diamond"},
+    "Dallas Stars":            {"forecheck": "forecheck_122",       "neutral_zone": "nz_trap_131",     "dzone": "dz_box",        "ozone": "oz_micro",    "breakout": "bo_controlled","pp": "umbrella",      "pk": "passive_box"},
+    "Detroit Red Wings":       {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_flow",     "breakout": "bo_controlled","pp": "overload",      "pk": "diamond"},
+    "Edmonton Oilers":         {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "one_three_one", "pk": "diamond"},
+    "Florida Panthers":        {"forecheck": "forecheck_212_swarm", "neutral_zone": "nz_counterpress", "dzone": "dz_hybrid",     "ozone": "oz_cycle",    "breakout": "bo_direct",    "pp": "net_crash",     "pk": "aggressive_swarm"},
+    "Los Angeles Kings":       {"forecheck": "forecheck_122",       "neutral_zone": "nz_trap_131",     "dzone": "dz_box",        "ozone": "oz_cycle",    "breakout": "bo_controlled","pp": "umbrella",      "pk": "wedge_plus_one"},
+    "Minnesota Wild":          {"forecheck": "forecheck_122",       "neutral_zone": "nz_trap_131",     "dzone": "dz_hybrid",     "ozone": "oz_cycle",    "breakout": "bo_direct",    "pp": "overload",      "pk": "passive_box"},
+    "Montreal Canadiens":      {"forecheck": "forecheck_122",       "neutral_zone": "nz_trap_131",     "dzone": "dz_hybrid",     "ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "umbrella",      "pk": "diamond"},
+    "Nashville Predators":     {"forecheck": "forecheck_212_swarm", "neutral_zone": "nz_counterpress", "dzone": "dz_box",        "ozone": "oz_netfront", "breakout": "bo_direct",    "pp": "umbrella",      "pk": "diamond"},
+    "New Jersey Devils":       {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "one_three_one", "pk": "aggressive_swarm"},
+    "New York Islanders":      {"forecheck": "forecheck_122",       "neutral_zone": "nz_trap_131",     "dzone": "dz_box",        "ozone": "oz_netfront", "breakout": "bo_direct",    "pp": "net_crash",     "pk": "passive_box"},
+    "New York Rangers":        {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_flow",     "breakout": "bo_controlled","pp": "one_three_one", "pk": "diamond"},
+    "Ottawa Senators":         {"forecheck": "forecheck_212_swarm", "neutral_zone": "nz_counterpress", "dzone": "dz_slide_match","ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "umbrella",      "pk": "diamond"},
+    "Philadelphia Flyers":     {"forecheck": "forecheck_212_swarm", "neutral_zone": "nz_counterpress", "dzone": "dz_slide_match","ozone": "oz_netfront", "breakout": "bo_direct",    "pp": "net_crash",     "pk": "aggressive_swarm"},
+    "Pittsburgh Penguins":     {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_flow",     "breakout": "bo_controlled","pp": "umbrella",      "pk": "diamond"},
+    "San Jose Sharks":         {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "umbrella",      "pk": "diamond"},
+    "Seattle Kraken":          {"forecheck": "forecheck_122",       "neutral_zone": "nz_counterpress", "dzone": "dz_hybrid",     "ozone": "oz_flow",     "breakout": "bo_controlled","pp": "overload",      "pk": "wedge_plus_one"},
+    "St. Louis Blues":         {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_box",        "ozone": "oz_cycle",    "breakout": "bo_direct",    "pp": "overload",      "pk": "passive_box"},
+    "Tampa Bay Lightning":     {"forecheck": "forecheck_122",       "neutral_zone": "nz_trap_131",     "dzone": "dz_hybrid",     "ozone": "oz_micro",    "breakout": "bo_controlled","pp": "one_three_one", "pk": "diamond"},
+    "Toronto Maple Leafs":     {"forecheck": "forecheck_212_swarm", "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_flow",     "breakout": "bo_stretch",   "pp": "umbrella",      "pk": "diamond"},
+    "Utah Mammoth":            {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "overload",      "pk": "diamond"},
+    "Vancouver Canucks":       {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_hybrid",     "ozone": "oz_rush",     "breakout": "bo_stretch",   "pp": "umbrella",      "pk": "aggressive_swarm"},
+    "Vegas Golden Knights":    {"forecheck": "forecheck_122",       "neutral_zone": "nz_counterpress", "dzone": "dz_slide_match","ozone": "oz_cycle",    "breakout": "bo_direct",    "pp": "overload",      "pk": "passive_box"},
+    "Washington Capitals":     {"forecheck": "forecheck_122",       "neutral_zone": "nz_regroup",      "dzone": "dz_box",        "ozone": "oz_netfront", "breakout": "bo_direct",    "pp": "one_three_one", "pk": "diamond"},
+    "Winnipeg Jets":           {"forecheck": "forecheck_122",       "neutral_zone": "nz_trap_131",     "dzone": "dz_box",        "ozone": "oz_cycle",    "breakout": "bo_controlled","pp": "umbrella",      "pk": "wedge_plus_one"},
 }
 
-DEFAULT_TACTICS: Dict[str, str] = {
-    "offense": "balanced", "defense": "hybrid",
-    "pp": "umbrella", "pk": "diamond", "philosophy": "pragmatist",
-}
+
+DEFAULT_TACTICS: Dict[str, str] = dict(
+    IDENTITY_PRESETS["hybrid_transition"]["modules"])
 
 
+_register_catalogs()
 _normalize_catalogs()
 
 
@@ -482,16 +711,74 @@ def _get(d: Any, key: str, default: Any = 0.0) -> float:
         return float(default)
 
 
+def _migrate_legacy_tactics(raw: Dict[str, str]) -> Dict[str, str]:
+    """Translate the old flat offense/defense/philosophy model onto the
+    zone modules. Old saves load and translate once, then play on."""
+    out: Dict[str, str] = {}
+    leg_off = _LEGACY_OFFENSE_MAP.get(raw.get("offense", ""), {})
+    leg_def = _LEGACY_DEFENSE_MAP.get(raw.get("defense", ""), {})
+    leg_phi = _LEGACY_PHILOSOPHY_MAP.get(raw.get("philosophy", ""), {})
+    for src in (leg_off, leg_def, leg_phi):
+        for cat, key in src.items():
+            out.setdefault(cat, key)
+    return out
+
+
 def team_tactics(team: Any) -> Dict[str, str]:
-    """This team's five tactic choices, with sane defaults."""
+    """This team's seven module choices, with sane defaults.
+
+    Saves from the old flat model (offense/defense/philosophy) are
+    migrated onto the zone modules on read."""
     raw = getattr(team, "tactics", None) or {}
     out = dict(DEFAULT_TACTICS)
     if isinstance(raw, dict):
+        if any(k in raw for k in ("offense", "defense", "philosophy")):
+            for k, v in _migrate_legacy_tactics(raw).items():
+                out[k] = v
         for k in out:
             v = raw.get(k)
-            if v:
+            if v and v in CATALOGS.get(k, {}):
                 out[k] = v
     return out
+
+
+def apply_identity_preset(team: Any, preset_key: str) -> bool:
+    """One click: install a unified identity (Phase 4) across all modules.
+
+    The room learns it like any system change -- familiarity drops and
+    rebuilds. Returns False for an unknown preset."""
+    preset = IDENTITY_PRESETS.get(preset_key)
+    if not preset:
+        return False
+    try:
+        ensure_team_tactics(team)
+        modules = preset["modules"]
+        changed = [c for c in modules
+                   if team.tactics.get(c) != modules[c]]
+        if not changed:
+            return True
+        for c in changed:
+            team.tactics[c] = modules[c]
+        fam = _get(team, "tactics_familiarity", 85)
+        team.tactics_familiarity = max(40.0, min(fam, 45)
+                                       if fam > 45 else fam - 10)
+        _bust_tactics_cache(team)
+    except Exception:
+        return False
+    return True
+
+
+def matching_identity(team: Any) -> Optional[str]:
+    """If the team's modules exactly match a preset, its key; else None."""
+    try:
+        tk = team_tactics(team)
+        for key, preset in IDENTITY_PRESETS.items():
+            if all(tk.get(c) == preset["modules"].get(c)
+                   for c in preset["modules"]):
+                return key
+    except Exception:
+        pass
+    return None
 
 
 def ensure_team_tactics(team: Any) -> Dict[str, str]:
@@ -527,9 +814,7 @@ def set_team_system(team: Any, category: str, system_key: str,
     mid_game=True: a softer familiarity hit for intermission adjustments --
     the room is already warm, but new reads mid-game are still messy.
     """
-    catalog = {"offense": OFFENSIVE_SYSTEMS, "defense": DEFENSIVE_SYSTEMS,
-               "pp": POWERPLAY_SYSTEMS, "pk": PENALTY_KILL_SYSTEMS,
-               "philosophy": PHILOSOPHIES}.get(category)
+    catalog = CATALOGS.get(category)
     if catalog is None or system_key not in catalog:
         return False
     try:
@@ -542,10 +827,8 @@ def set_team_system(team: Any, category: str, system_key: str,
         if mid_game:
             team.tactics_familiarity = max(35.0, fam - 12)
         else:
-            phil = team_tactics(team).get("philosophy")
-            floor = 55 if phil == "pragmatist" else 45
             team.tactics_familiarity = max(
-                floor, min(fam, 45) if fam > 45 else fam - 10)
+                45.0, min(fam, 45) if fam > 45 else fam - 10)
         _bust_tactics_cache(team)
     except Exception:
         return False
@@ -581,7 +864,7 @@ def install_coach_systems(team: Any, coach: Any,
             return installed
         prefs = ensure_coach_tactics(coach)
         ensure_team_tactics(team)
-        for cat in ("offense", "defense", "pp", "pk", "philosophy"):
+        for cat, _label, _attr in ALL_CATEGORIES:
             if prefs.get(cat) and team.tactics.get(cat) != prefs[cat]:
                 team.tactics[cat] = prefs[cat]
                 installed[cat] = prefs[cat]
@@ -630,9 +913,7 @@ def get_preferred_tactics(team: Any) -> Optional[Dict[str, str]]:
 
 def system_tradeoffs(category: str, system_key: str) -> str:
     """One-line expected tradeoff vs league average, e.g. 'Pace +12% . Shots +10% . Physical -18%'."""
-    catalog = {"offense": OFFENSIVE_SYSTEMS, "defense": DEFENSIVE_SYSTEMS,
-               "pp": POWERPLAY_SYSTEMS, "pk": PENALTY_KILL_SYSTEMS,
-               "philosophy": PHILOSOPHIES}.get(category, {})
+    catalog = CATALOGS.get(category, {})
     sys = catalog.get(system_key)
     if not sys:
         return ""
@@ -675,36 +956,38 @@ def ai_intermission_adjustment(team: Any, score_diff: int) -> Optional[Dict[str,
         tname = getattr(team, "team_name", "the club")
 
         if score_diff <= -2:
-            # Chasing the game: open it up, once the room has seen a period.
+            # Chasing the game: stretch the ice, then hunt the puck.
             p = 0.15 + adapt / 250.0
             if _random.random() > p:
                 return None
-            if tk.get("philosophy") != "offense_first":
-                return {"category": "philosophy", "old_key": tk["philosophy"],
-                        "new_key": "offense_first",
-                        "line": (f"{tname} are opening it up -- {cname} has switched "
-                                 f"to an attack-first philosophy chasing the game.")}
-            if tk.get("offense") != "rush_attack":
-                return {"category": "offense", "old_key": tk["offense"],
-                        "new_key": "rush_attack",
+            if tk.get("ozone") != "oz_rush":
+                return {"category": "ozone", "old_key": tk["ozone"],
+                        "new_key": "oz_rush",
                         "line": (f"{cname} is stretching the ice -- {tname} "
-                                 f"to an up-tempo rush attack.")}
+                                 f"to a rush attack chasing the game.")}
+            if tk.get("forecheck") != "forecheck_212_swarm":
+                return {"category": "forecheck",
+                        "old_key": tk["forecheck"],
+                        "new_key": "forecheck_212_swarm",
+                        "line": (f"{tname} are hunting in twos -- {cname} "
+                                 f"has sent the swarm after the puck.")}
             return None
         if score_diff >= 3 and style in ("Tactician", "Drill Sergeant"):
             # Protecting a lead: a defensive mind locks it down.
             p = 0.10 + adapt / 400.0
             if _random.random() > p:
                 return None
-            if tk.get("philosophy") != "defense_first":
-                return {"category": "philosophy", "old_key": tk["philosophy"],
-                        "new_key": "defense_first",
-                        "line": (f"{cname} is locking it down -- {tname} "
-                                 f"to a defense-first shell protecting the lead.")}
-            if tk.get("defense") not in ("neutral_trap", "trap_131"):
-                return {"category": "defense", "old_key": tk["defense"],
-                        "new_key": "neutral_trap",
+            if tk.get("neutral_zone") != "nz_trap_131":
+                return {"category": "neutral_zone",
+                        "old_key": tk["neutral_zone"],
+                        "new_key": "nz_trap_131",
                         "line": (f"{tname} are clogging the neutral zone -- "
-                                 f"{cname} has gone to the trap.")}
+                                 f"{cname} has gone to the 1-3-1 trap.")}
+            if tk.get("dzone") != "dz_box":
+                return {"category": "dzone", "old_key": tk["dzone"],
+                        "new_key": "dz_box",
+                        "line": (f"{cname} is locking it down -- {tname} "
+                                 f"to a passive box protecting the lead.")}
             return None
         return None
     except Exception:
@@ -734,14 +1017,16 @@ def tick_tactics_familiarity(team: Any, amount: float = 4.0) -> None:
 # Fit: tendency attributes are first-class citizens
 # ---------------------------------------------------------------------------
 
-def player_system_fit(player: Any, offense_key: str) -> float:
-    """0.6..1.2 — how well this skater's game suits the offensive system.
+def player_system_fit(player: Any, system_key: str,
+                      category: str = "ozone") -> float:
+    """0.6..1.2 -- how well this skater's game suits a system module.
 
     A sniper with 90 speed flies in a rush attack and drowns in a
-    dump-and-chase grinder's role. Uses the real tendency attributes:
+    chip-and-chase grinder's role. Uses the real tendency attributes:
     shoot_pass_tendency, hitting_tendency, flair, work_rate, aggressiveness.
     """
-    sys = OFFENSIVE_SYSTEMS.get(offense_key) or OFFENSIVE_SYSTEMS["balanced"]
+    catalog = CATALOGS.get(category, OZONE_SYSTEMS)
+    sys = catalog.get(system_key) or next(iter(catalog.values()))
     wants = sys.get("wants", {})
     if not wants:
         return 1.0
@@ -768,16 +1053,17 @@ def player_system_fit(player: Any, offense_key: str) -> float:
 
 
 def team_system_fit(team: Any) -> float:
-    """Roster-average fit to the offensive system, 0.92..1.08."""
+    """Roster-average fit to the O-zone attack system, 0.92..1.08."""
     try:
-        tk = team_tactics(team).get("offense", "balanced")
+        tk = team_tactics(team).get("ozone", "oz_micro")
         roster = getattr(team, "roster", None) or []
         skaters = [p for p in roster
                    if not str(getattr(p, "primary_position", "")).upper()
                    .startswith("G")]
         if not skaters:
             return 1.0
-        avg = sum(player_system_fit(p, tk) for p in skaters) / len(skaters)
+        avg = sum(player_system_fit(p, tk, "ozone")
+                    for p in skaters) / len(skaters)
         # 0.6..1.2 maps to 0.92..1.08
         return max(0.92, min(1.08, 0.92 + (avg - 0.6) * (0.16 / 0.6)))
     except Exception:
@@ -792,7 +1078,7 @@ def coach_tactics_fit(coach: Any, team: Any) -> float:
         prefs = getattr(coach, "tactics_prefs", None) or {}
         mine = team_tactics(team)
         score, n = 0.0, 0
-        for cat in ("offense", "defense", "pp", "pk", "philosophy"):
+        for cat, _label, _attr in ALL_CATEGORIES:
             want = prefs.get(cat)
             if want:
                 n += 1
@@ -822,24 +1108,32 @@ def _apply_edge(mult: float, factor: float) -> float:
 # and heaviness; a Player's Coach wants skill and freedom. Used to seed a
 # new coach's tactics_prefs so his hockey has an identity on day one.
 STYLE_PREFS: Dict[str, Dict[str, str]] = {
-    "Drill Sergeant": {"offense": "dump_chase", "defense": "passive_box",
-                       "pp": "net_crash", "pk": "passive_box",
-                       "philosophy": "defense_first"},
-    "Player's Coach":  {"offense": "skill_possession", "defense": "hybrid",
-                       "pp": "motion", "pk": "diamond",
-                       "philosophy": "offense_first"},
-    "Tactician":       {"offense": "counterattack", "defense": "neutral_trap",
-                       "pp": "one_three_one", "pk": "wedge_plus_one",
-                       "philosophy": "possession"},
-    "Motivator":       {"offense": "rush_attack", "defense": "aggressive_man",
-                       "pp": "shoot_first", "pk": "aggressive_swarm",
-                       "philosophy": "heavy_identity"},
-    "Developer":       {"offense": "rush_attack", "defense": "hybrid",
-                       "pp": "umbrella", "pk": "diamond",
-                       "philosophy": "development"},
-    "Balanced":        {"offense": "balanced", "defense": "hybrid",
-                       "pp": "umbrella", "pk": "diamond",
-                       "philosophy": "pragmatist"},
+    "Drill Sergeant": {"forecheck": "forecheck_122",
+                       "neutral_zone": "nz_trap_131",
+                       "dzone": "dz_box", "ozone": "oz_cycle",
+                       "breakout": "bo_direct",
+                       "pp": "net_crash", "pk": "passive_box"},
+    "Player's Coach":  {"forecheck": "forecheck_122",
+                       "neutral_zone": "nz_regroup",
+                       "dzone": "dz_hybrid", "ozone": "oz_flow",
+                       "breakout": "bo_stretch",
+                       "pp": "motion", "pk": "diamond"},
+    "Tactician":       {"forecheck": "forecheck_122",
+                       "neutral_zone": "nz_trap_131",
+                       "dzone": "dz_hybrid", "ozone": "oz_micro",
+                       "breakout": "bo_controlled",
+                       "pp": "one_three_one", "pk": "wedge_plus_one"},
+    "Motivator":       {"forecheck": "forecheck_212_swarm",
+                       "neutral_zone": "nz_counterpress",
+                       "dzone": "dz_slide_match", "ozone": "oz_rush",
+                       "breakout": "bo_stretch",
+                       "pp": "shoot_first", "pk": "aggressive_swarm"},
+    "Developer":       {"forecheck": "forecheck_122",
+                       "neutral_zone": "nz_regroup",
+                       "dzone": "dz_hybrid", "ozone": "oz_rush",
+                       "breakout": "bo_stretch",
+                       "pp": "umbrella", "pk": "diamond"},
+    "Balanced":        dict(DEFAULT_TACTICS),
 }
 
 
@@ -874,8 +1168,28 @@ def _coach_for(team: Any) -> Any:
     return None
 
 
+# --- shot-volume calibration vs real NHL (2016-17..2025-26, via StatMuse) ---
+# Real league: ~29.5 SOG/team/game; team-season means run ~24.5 (worst) to
+# ~34 (best), std ~2. Playoffs dip lower; single games in the low teens
+# happen a few times a season league-wide.
+# SHOT_LIFT raises the sim's base chance-gen to real volume. SHOT_VOL_DAMPEN
+# compresses the cross-team spread so trap teams sit ~25 not ~11.
+# SHOT_QUAL_TRADEOFF dilutes per-shot quality as volume rises (extra shots
+# are worse shots) -- scoring stays in the 2.7-3.6 band.
+SHOT_LIFT = 1.38
+SHOT_VOL_DAMPEN = 0.35
+SHOT_QUAL_TRADEOFF = 0.35
+SHOT_LIFT_DILUTION = SHOT_LIFT ** SHOT_QUAL_TRADEOFF  # ~1.119
+
+
 def resolve_team_tactics(team: Any) -> Dict[str, float]:
-    """Collapse a team's five systems into engine multipliers.
+    """Collapse a team's seven modules into engine multipliers.
+
+    attack  = forecheck x neutral_zone x ozone x breakout
+    defense = forecheck x neutral_zone x dzone   (lower = stingier)
+    pace    = all five even-strength modules multiplied
+    Special teams resolve separately. Familiarity mutes every edge
+    toward 1.0 -- a team mid-transition plays like a team thinking.
 
     Memoized per (systems, familiarity, coach prefs): systems only change
     between games, so one resolution serves the whole game.
@@ -884,20 +1198,25 @@ def resolve_team_tactics(team: Any) -> Dict[str, float]:
     fam_raw = _get(team, "tactics_familiarity", 85)
     coach = _coach_for(team)
     prefs = ensure_coach_tactics(coach) if coach is not None else {}
-    cache_key = (tk["offense"], tk["defense"], tk["pp"], tk["pk"],
-                 tk["philosophy"], round(fam_raw, 1),
-                 tuple(sorted(prefs.items())))
+    cache_key = (tuple(tk.get(c[0], "") for c in ALL_CATEGORIES),
+                 round(fam_raw, 1), tuple(sorted(prefs.items())))
     try:
         ck, cv = getattr(team, "_tactics_cache", (None, None))
         if ck == cache_key and isinstance(cv, dict):
             return cv
     except Exception:
         pass
-    off = OFFENSIVE_SYSTEMS.get(tk["offense"], OFFENSIVE_SYSTEMS["balanced"])
-    dfn = DEFENSIVE_SYSTEMS.get(tk["defense"], DEFENSIVE_SYSTEMS["hybrid"])
-    phi = PHILOSOPHIES.get(tk["philosophy"], PHILOSOPHIES["pragmatist"])
-    pp = POWERPLAY_SYSTEMS.get(tk["pp"], POWERPLAY_SYSTEMS["umbrella"])
-    pk = PENALTY_KILL_SYSTEMS.get(tk["pk"], PENALTY_KILL_SYSTEMS["diamond"])
+
+    def _sys(cat, fallback):
+        return CATALOGS[cat].get(tk.get(cat), CATALOGS[cat][fallback])
+
+    fc = _sys("forecheck", "forecheck_122")
+    nz = _sys("neutral_zone", "nz_regroup")
+    dz = _sys("dzone", "dz_hybrid")
+    oz = _sys("ozone", "oz_micro")
+    bo = _sys("breakout", "bo_controlled")
+    pp = _sys("pp", "umbrella")
+    pk = _sys("pk", "diamond")
 
     fam = _familiarity_factor(team)
     fit = team_system_fit(team)
@@ -909,21 +1228,37 @@ def resolve_team_tactics(team: Any) -> Dict[str, float]:
     except Exception:
         coach_factor = 1.0
 
-    attack = _apply_edge(off["attack"] * phi["attack"] * fit, fam) * coach_factor
-    defense = _apply_edge(dfn["defense"] * phi["defense"], fam) * coach_factor
-    pace = _apply_edge(off["pace"] * dfn["pace"] * phi["pace"], fam)
+    attack = _apply_edge(fc["attack"] * nz["attack"] * oz["attack"]
+                         * bo["attack"] * fit, fam) * coach_factor
+    defense = _apply_edge(fc["defense"] * nz["defense"] * dz["defense"],
+                          fam) * coach_factor
+    pace = _apply_edge(fc["pace"] * nz["pace"] * dz["pace"] * oz["pace"]
+                       * bo["pace"], fam)
     pace = max(0.85, min(1.18, pace))
+    vol_raw = (fc["shot_vol"] * nz["shot_vol"] * dz["shot_vol"]
+               * oz["shot_vol"] * bo["shot_vol"])
+    qual_raw = (fc["shot_qual"] * nz["shot_qual"] * dz["shot_qual"]
+                * oz["shot_qual"] * bo["shot_qual"])
+    # Dampen the cross-team volume spread (sqrt) and trade volume for
+    # quality: high-volume systems generate more, worse shots -- the extra
+    # attempts are point shots and bad angles, not grade-A looks.
+    shot_vol = _apply_edge(vol_raw ** SHOT_VOL_DAMPEN, fam)
+    shot_qual = _apply_edge(qual_raw / (vol_raw ** SHOT_QUAL_TRADEOFF), fam)
     out = {
         "attack": attack,
         "defense": defense,
         "pace": pace,
+        "shot_vol": shot_vol,
+        "shot_qual": shot_qual,
         "pp": _apply_edge(pp["pp"], fam),
         "pk": _apply_edge(pk["pk"], fam),
         "sh_threat": pk.get("sh_threat", 1.0),
-        "physical": (off.get("physical", 1.0) * dfn.get("physical", 1.0)
-                       * phi.get("physical", 1.0)),
+        "physical": (fc.get("physical", 1.0) * nz.get("physical", 1.0)
+                     * dz.get("physical", 1.0) * oz.get("physical", 1.0)
+                     * bo.get("physical", 1.0)),
         "fit": fit,
         "familiarity": _get(team, "tactics_familiarity", 85),
+        "identity": matching_identity(team),
     }
     try:
         team._tactics_cache = (cache_key, out)
@@ -953,6 +1288,10 @@ def matchup_modifiers(home: Any, away: Any) -> Dict[str, float]:
         "away_pp": a["pp"] * (2.0 - h["pk"]),
         "home_sh_threat": h["sh_threat"],
         "away_sh_threat": a["sh_threat"],
+        "home_shot_vol": h["shot_vol"],
+        "away_shot_vol": a["shot_vol"],
+        "home_shot_qual": h["shot_qual"],
+        "away_shot_qual": a["shot_qual"],
         "physical": (h["physical"] + a["physical"]) / 2.0,
     }
 
@@ -962,8 +1301,8 @@ def matchup_modifiers(home: Any, away: Any) -> Dict[str, float]:
 # ---------------------------------------------------------------------------
 
 # Categories coaches steal, weighted: special teams first, always.
-COPYCAT_WEIGHTS = (("pp", 0.35), ("pk", 0.30), ("offense", 0.20),
-                   ("defense", 0.15))
+COPYCAT_WEIGHTS = (("pp", 0.30), ("pk", 0.25), ("ozone", 0.20),
+                   ("forecheck", 0.15), ("dzone", 0.10))
 
 
 def offseason_copycat(league: Any, rng=None) -> list:
@@ -1031,17 +1370,23 @@ def offseason_copycat(league: Any, rng=None) -> list:
 # ---------------------------------------------------------------------------
 
 def describe_team_tactics(team: Any) -> List[str]:
-    """Human-readable identity lines for UI / media."""
+    """Human-readable identity lines for UI / media.
+
+    Leads with the unified identity (Phase 4) when the modules match a
+    preset, then lists the seven module choices."""
     tk = team_tactics(team)
-    catalogs = {"offense": OFFENSIVE_SYSTEMS, "defense": DEFENSIVE_SYSTEMS,
-                "pp": POWERPLAY_SYSTEMS, "pk": PENALTY_KILL_SYSTEMS,
-                "philosophy": PHILOSOPHIES}
-    labels = {"offense": "Offense", "defense": "Defense", "pp": "Power play",
-              "pk": "Penalty kill", "philosophy": "Philosophy"}
+    labels = {"forecheck": "Forecheck", "neutral_zone": "Neutral zone",
+              "dzone": "D-zone", "ozone": "O-zone attack",
+              "breakout": "Breakout", "pp": "Power play",
+              "pk": "Penalty kill"}
     lines = []
-    for cat in ("philosophy", "offense", "defense", "pp", "pk"):
-        sys = catalogs[cat].get(tk[cat], {})
-        lines.append(f"{labels[cat]}: {sys.get('name', tk[cat])}")
+    ident = matching_identity(team)
+    if ident:
+        preset = IDENTITY_PRESETS[ident]
+        lines.append(f"Identity: {preset['name']} -- {preset['tagline']}")
+    for cat, _label, _attr in ALL_CATEGORIES:
+        sys = CATALOGS[cat].get(tk.get(cat), {})
+        lines.append(f"{labels[cat]}: {sys.get('name', tk.get(cat))}")
     return lines
 
 

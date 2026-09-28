@@ -1709,7 +1709,9 @@ class AdvancedGameSim:
         self._systems_matchup = {"home_goals": 1.0, "away_goals": 1.0,
                                  "pace": 1.0, "home_pp": 1.0, "away_pp": 1.0,
                                  "home_sh_threat": 1.0,
-                                 "away_sh_threat": 1.0}
+                                 "away_sh_threat": 1.0,
+                                 "home_shot_vol": 1.0, "away_shot_vol": 1.0,
+                                 "home_shot_qual": 1.0, "away_shot_qual": 1.0}
         try:
             import tactics as _tx
             _tx.ensure_team_tactics(self.home_team)
@@ -2029,6 +2031,20 @@ class AdvancedGameSim:
             if _cf != 1.0:
                 shot_prob *= _cf
                 pass_prob *= _cf
+        except Exception:
+            pass
+
+        # -- Installed NHL systems (tactics.py): zone modules drive shot
+        # volume team-by-team -- swarm/rush/net-front teams shoot more,
+        # trap teams shoot less. Dynamic per team, per game. SHOT_LIFT
+        # raises the league to real NHL volume (~29.5 SOG/team/game).
+        try:
+            _m = self._systems_matchup or {}
+            _h = (team is not None and getattr(team, "team_name", "")
+                  == self.home_team.team_name)
+            _sv = _m.get("home_shot_vol" if _h else "away_shot_vol", 1.0)
+            import tactics as _txl
+            shot_prob *= _sv * _txl.SHOT_LIFT
         except Exception:
             pass
         
@@ -2472,6 +2488,21 @@ class AdvancedGameSim:
         # Installed NHL systems: your attack vs their structure, your
         # power play vs their kill. Own channel, precomputed per game.
         shot_chance *= self._systems_edge_for(puck_team_name)
+        # O-zone system sets chance quality: cycle teams get better looks,
+        # rush teams get more looks. Own channel, precomputed per game.
+        # The quick-sim has no per-tick clamp to absorb SHOT_LIFT (unlike
+        # GameSim's [0.2, 0.85] gate), so the full lift flows into volume --
+        # dilute by the full SHOT_LIFT here to keep scoring flat while
+        # volume rises to real NHL levels. Team differentiation survives
+        # via shot_vol (undiluted) and the qual/vol tradeoff.
+        try:
+            _m = self._systems_matchup or {}
+            _h = puck_team_name == self.home_team.team_name
+            import tactics as _txq
+            shot_chance *= _m.get("home_shot_qual" if _h else "away_shot_qual",
+                                  1.0) / _txq.SHOT_LIFT
+        except Exception:
+            pass
         shot_chance = max(0.04, min(0.16, shot_chance))
 
         # Shot blocking check
@@ -10074,18 +10105,17 @@ class HockeyManagerGUI(tk.Tk):
         try:
             import tactics as _tx
             _CAT_LABEL = {"pp": "power play", "pk": "penalty kill",
-                          "offense": "offensive system",
-                          "defense": "defensive system"}
+                          "ozone": "offensive-zone system",
+                          "forecheck": "forecheck",
+                          "dzone": "defensive-zone coverage"}
             for _tn, _cat, _sys in _tx.offseason_copycat(
                     getattr(self, 'league', None)):
-                _sysname = {"pp": _tx.POWERPLAY_SYSTEMS,
-                            "pk": _tx.PENALTY_KILL_SYSTEMS,
-                            "offense": _tx.OFFENSIVE_SYSTEMS,
-                            "defense": _tx.DEFENSIVE_SYSTEMS}[_cat][_sys]["name"]
+                _sysname = _tx.CATALOGS.get(_cat, {}).get(_sys, {}).get(
+                    "name", _sys)
                 self.add_news(
                     f"Copycat league: {_tn} install the {_sysname} "
-                    f"{_CAT_LABEL[_cat]} after watching the champions "
-                    f"win with it.")
+                    f"{_CAT_LABEL.get(_cat, 'system')} after watching the "
+                    f"champions win with it.")
         except Exception:
             pass
         # Age players and reset stats

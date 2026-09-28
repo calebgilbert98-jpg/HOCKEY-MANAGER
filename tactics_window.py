@@ -1,8 +1,9 @@
 # tactics_window.py
 # FM24-style Team Tactics screen for Puck Dynasty's NHL systems layer:
-# all five systems with descriptions + expected tradeoffs, familiarity,
-# roster/coach fit, club identity, saved preferred tactics, and the
-# coach-control flow (suggest / enforce / take over the whiteboard).
+# all seven zone modules with descriptions + expected tradeoffs,
+# familiarity, roster/coach fit, club identity, saved preferred tactics,
+# one-click identity presets, and the coach-control flow
+# (suggest / enforce / take over the whiteboard).
 # CustomTkinter: CTkToplevel chrome, CTkScrollableFrame, mirrors morale_window.
 
 import tkinter as tk
@@ -19,11 +20,13 @@ class TacticsView(ctk.CTkFrame):
     """Team Tactics - the whiteboard: systems, fit, and who owns it."""
 
     CATS = [
-        ("offense", "Offense", "OFFENSIVE_SYSTEMS"),
-        ("defense", "Defense", "DEFENSIVE_SYSTEMS"),
+        ("forecheck", "Forecheck", "FORECHECK_SYSTEMS"),
+        ("neutral_zone", "Neutral Zone", "NEUTRAL_ZONE_SYSTEMS"),
+        ("dzone", "Defensive Zone", "DZONE_SYSTEMS"),
+        ("ozone", "Offensive Zone", "OZONE_SYSTEMS"),
+        ("breakout", "Breakout", "BREAKOUT_SYSTEMS"),
         ("pp", "Power Play", "POWERPLAY_SYSTEMS"),
         ("pk", "Penalty Kill", "PENALTY_KILL_SYSTEMS"),
-        ("philosophy", "Philosophy", "PHILOSOPHIES"),
     ]
 
     def __init__(self, parent, app=None):
@@ -159,6 +162,20 @@ class TacticsView(ctk.CTkFrame):
         for b in (self._btn_suggest, self._btn_enforce, self._btn_takeover,
                   self._btn_handback, self._btn_save_pref, self._btn_load_pref):
             b.pack(side='left', padx=6)
+        presetrow = ctk.CTkFrame(self._footer, fg_color="transparent")
+        presetrow.pack(fill='x', padx=10, pady=(2, 2))
+        self._body(presetrow, text="Identity:", size=11).pack(side='left', padx=(4, 2))
+        for _pkey, _pmeta in tx.IDENTITY_PRESETS.items():
+            _b = self._secondary_button(
+                presetrow, text=_pmeta["name"],
+                command=lambda k=_pkey: self._on_identity_preset(k))
+            _b.pack(side='left', padx=4)
+            _tip = _pmeta.get("blurb", "")
+            if _tip:
+                try:
+                    _b.configure(text=f"{_pmeta['name']}")  # tooltip via title below
+                except Exception:
+                    pass
         self._response_label = self._body(self._footer, text="", size=11)
         self._response_label.pack(anchor='w', padx=14, pady=(0, 10))
 
@@ -207,14 +224,14 @@ class TacticsView(ctk.CTkFrame):
         except Exception:
             fit_txt = ""
 
-        # Rebuild the five category cards.
+        # Rebuild the seven module cards.
         for w in self._cards.winfo_children():
             w.destroy()
         coach_prefs = tx.ensure_coach_tactics(coach) if coach else {}
         for cat, label, attr in self.CATS:
             catalog = self._catalog(attr)
             self._build_card(cat, label, catalog, tk_.get(cat), coach,
-                             coach_prefs.get(cat), fit_txt if cat == "offense" else "")
+                             coach_prefs.get(cat), fit_txt if cat == "ozone" else "")
 
         # Footer state.
         n = len(self._pending)
@@ -305,7 +322,7 @@ class TacticsView(ctk.CTkFrame):
             if coach is not None and coach_pref_key:
                 bits.append("Suits the coach's style"
                             if key == coach_pref_key else "Not his preferred system")
-            if fit_txt and cat == "offense":
+            if fit_txt and cat == "ozone":
                 bits.append(fit_txt)
             fitline.configure(text="  |  ".join(bits))
 
@@ -319,6 +336,35 @@ class TacticsView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
+    def _on_identity_preset(self, preset_key):
+        """One-click identity install: stages all seven modules as pending
+        changes so they flow through the normal suggest/enforce path."""
+        team = self._team()
+        if team is None:
+            return
+        meta = tx.IDENTITY_PRESETS.get(preset_key, {})
+        modules = meta.get("modules", {})
+        if not modules:
+            return
+        try:
+            current = tx.team_tactics(team)
+        except Exception:
+            current = {}
+        n = 0
+        for cat, key in modules.items():
+            try:
+                catalog = tx.CATALOGS.get(cat, {})
+            except Exception:
+                catalog = {}
+            if key in catalog and current.get(cat) != key:
+                self._pending[cat] = key
+                n += 1
+        self._response_text = (f"{meta.get('name', preset_key)} staged "
+                               f"({n} modules) -- suggest it to the coach or "
+                               f"enforce it." if n else
+                               f"{meta.get('name', preset_key)} already installed.")
+        self.refresh()
+
     def _on_pick(self, cat, display_name):
         team = self._team()
         if team is None:

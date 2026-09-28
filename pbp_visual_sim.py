@@ -1193,11 +1193,13 @@ class PBPVisualSim(InGamePopup):
 
         tk.Label(f, text=f"{my_abbr} -- YOUR WHITEBOARD", bg=CONTENT_BG,
                  fg=TEXT, font=_vfont(11, "bold")).pack(anchor="w", padx=10)
-        cats = [("offense", "Offense", "OFFENSIVE_SYSTEMS"),
-                ("defense", "Defense", "DEFENSIVE_SYSTEMS"),
-                ("pp", "Power Play", "POWERPLAY_SYSTEMS"),
-                ("pk", "Penalty Kill", "PENALTY_KILL_SYSTEMS"),
-                ("philosophy", "Philosophy", "PHILOSOPHIES")]
+        cats = [("forecheck", "Forechk", "FORECHECK_SYSTEMS"),
+                ("neutral_zone", "NeutZne", "NEUTRAL_ZONE_SYSTEMS"),
+                ("dzone", "D-Zone", "DZONE_SYSTEMS"),
+                ("ozone", "O-Zone", "OZONE_SYSTEMS"),
+                ("breakout", "Brkout", "BREAKOUT_SYSTEMS"),
+                ("pp", "PowPly", "POWERPLAY_SYSTEMS"),
+                ("pk", "PenKill", "PENALTY_KILL_SYSTEMS")]
         cur = _tx.team_tactics(my)
         for cat, short, attr in cats:
             catalog = getattr(_tx, attr)
@@ -1253,16 +1255,21 @@ class PBPVisualSim(InGamePopup):
         tk.Label(f, text=f"{opp_abbr} -- OPPONENT (AI)", bg=CONTENT_BG,
                  fg=self._ui_accent, font=_vfont(11, "bold")).pack(anchor="w", padx=10)
         ocur = _tx.team_tactics(opp)
+        def _onm(cat, attr):
+            return getattr(_tx, attr).get(ocur.get(cat), {}).get("name", "--")
         onames = {
-            "offense": getattr(_tx, "OFFENSIVE_SYSTEMS").get(ocur.get("offense"), {}).get("name", "--"),
-            "defense": getattr(_tx, "DEFENSIVE_SYSTEMS").get(ocur.get("defense"), {}).get("name", "--"),
-            "pp": getattr(_tx, "POWERPLAY_SYSTEMS").get(ocur.get("pp"), {}).get("name", "--"),
-            "pk": getattr(_tx, "PENALTY_KILL_SYSTEMS").get(ocur.get("pk"), {}).get("name", "--"),
-            "philosophy": getattr(_tx, "PHILOSOPHIES").get(ocur.get("philosophy"), {}).get("name", "--"),
+            "forecheck": _onm("forecheck", "FORECHECK_SYSTEMS"),
+            "neutral_zone": _onm("neutral_zone", "NEUTRAL_ZONE_SYSTEMS"),
+            "dzone": _onm("dzone", "DZONE_SYSTEMS"),
+            "ozone": _onm("ozone", "OZONE_SYSTEMS"),
+            "breakout": _onm("breakout", "BREAKOUT_SYSTEMS"),
+            "pp": _onm("pp", "POWERPLAY_SYSTEMS"),
+            "pk": _onm("pk", "PENALTY_KILL_SYSTEMS"),
         }
-        for lbl, val in (("Off", onames["offense"]), ("Def", onames["defense"]),
-                         ("PP", onames["pp"]), ("PK", onames["pk"]),
-                         ("Phil", onames["philosophy"])):
+        for lbl, val in (("FC", onames["forecheck"]), ("NZ", onames["neutral_zone"]),
+                         ("DZ", onames["dzone"]), ("OZ", onames["ozone"]),
+                         ("BO", onames["breakout"]),
+                         ("PP", onames["pp"]), ("PK", onames["pk"])):
             r = tk.Frame(f, bg=CONTENT_BG)
             r.pack(fill="x", padx=10)
             tk.Label(r, text=lbl, bg=CONTENT_BG, fg="#AEB6C8",

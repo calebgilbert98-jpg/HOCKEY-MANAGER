@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Deterministic QA for the NHL coaching tactics layer (tactics.py).
 
+Zone-based architecture: forecheck / neutral zone / D-zone coverage /
+O-zone attack / breakout + power play / penalty kill, with three club
+identity presets (Chaos & Pressure, Stranglehold, Hybrid Transition).
+
 Covers: catalog completeness, NHL seeding, resolution ranges, matchup
-gradients (trap suppresses, 1-3-1 PP converts, aggressive kills counter),
+gradients (trap suppresses, 1-3-1 PP converts, aggressive kills counter,
+swarm/forecheck drives shot volume team-by-team), identity presets,
 familiarity muting, roster fit, coach prefs, engine hook behavior, and
 league-wide scoring neutrality. No randomness: all seeds fixed.
 """
@@ -48,71 +53,101 @@ def seeded(name):
 
 
 # ---------------------------------------------------------------- catalogs
-check("offense catalog >= 6", len(tx.OFFENSIVE_SYSTEMS) >= 6,
-      str(len(tx.OFFENSIVE_SYSTEMS)))
-check("defense catalog >= 6", len(tx.DEFENSIVE_SYSTEMS) >= 6)
-check("philosophy catalog >= 6", len(tx.PHILOSOPHIES) >= 6)
+check("forecheck catalog >= 2", len(tx.FORECHECK_SYSTEMS) >= 2,
+      str(len(tx.FORECHECK_SYSTEMS)))
+check("neutral-zone catalog >= 3", len(tx.NEUTRAL_ZONE_SYSTEMS) >= 3)
+check("d-zone catalog >= 3", len(tx.DZONE_SYSTEMS) >= 3)
+check("o-zone catalog >= 4", len(tx.OZONE_SYSTEMS) >= 4)
+check("breakout catalog >= 3", len(tx.BREAKOUT_SYSTEMS) >= 3)
 check("pp catalog >= 6", len(tx.POWERPLAY_SYSTEMS) >= 6)
 check("pk catalog >= 6", len(tx.PENALTY_KILL_SYSTEMS) >= 6)
+check("identity presets == 3", len(tx.IDENTITY_PRESETS) == 3)
+for _pk, _pm in tx.IDENTITY_PRESETS.items():
+    for _cat, _key in _pm["modules"].items():
+        if _key not in tx.CATALOGS.get(_cat, {}):
+            check(f"preset {_pk} module {_cat}={_key} valid", False)
+            break
+else:
+    check("all preset modules reference valid systems", True)
 
 # ---------------------------------------------------------------- seeding
 teams = [seeded(n) for n in tx.NHL_TEAM_TACTICS]
 check("all 32 NHL teams seed", len(teams) == 32)
-bad = [t.team_name for t in teams
-       if tx.team_tactics(t)["offense"] not in tx.OFFENSIVE_SYSTEMS
-       or tx.team_tactics(t)["defense"] not in tx.DEFENSIVE_SYSTEMS
-       or tx.team_tactics(t)["pp"] not in tx.POWERPLAY_SYSTEMS
-       or tx.team_tactics(t)["pk"] not in tx.PENALTY_KILL_SYSTEMS
-       or tx.team_tactics(t)["philosophy"] not in tx.PHILOSOPHIES]
+bad = []
+for t in teams:
+    tk_ = tx.team_tactics(t)
+    for cat in ("forecheck", "neutral_zone", "dzone", "ozone",
+                "breakout", "pp", "pk"):
+        if tk_.get(cat) not in tx.CATALOGS[cat]:
+            bad.append(t.team_name)
+            break
 check("all seeds reference valid systems", not bad, str(bad[:3]))
-check("trap teams exist", any(tx.team_tactics(t)["defense"] in
-                              ("neutral_trap", "neutral_131", "passive_box")
-                              for t in teams))
+check("trap teams exist", any(tx.team_tactics(t)["neutral_zone"] ==
+                              "nz_trap_131" for t in teams))
 check("identities differ across league",
       len({" | ".join(tx.describe_team_tactics(t)) for t in teams}) > 20)
 
 # ---------------------------------------------------------------- resolve ranges
 for t in teams:
     r = tx.resolve_team_tactics(t)
-for t in teams:
-    r = tx.resolve_team_tactics(t)
-    for k in ("attack", "defense", "pace", "pp", "pk"):
-        if not (0.75 <= r[k] <= 1.25):
+    for k in ("attack", "defense", "pace", "pp", "pk",
+              "shot_vol", "shot_qual"):
+        if not (0.70 <= r[k] <= 1.30):
             check(f"range {t.team_name}.{k}", False, str(r[k]))
+            break
+        if not (0.60 <= r["physical"] <= 1.70):
+            check(f"range {t.team_name}.physical", False,
+                  str(r["physical"]))
             break
     else:
         continue
     break
 else:
-    check("resolve multipliers within 0.75-1.25", True)
+    check("resolve multipliers within designed bands", True)
 
 # ---------------------------------------------------------------- gradients
-def sys_team(off="balanced", dfn="hybrid", pp="umbrella", pk="diamond",
-             phi="pragmatist", fam=85):
-    t = fake_team(team_name="T", roster=[],
-                  tactics={"offense": off, "defense": dfn, "pp": pp,
-                           "pk": pk, "philosophy": phi},
-                  tactics_familiarity=fam)
-    return t
+def sys_team(fc="forecheck_122", nz="nz_regroup", dz="dz_hybrid",
+             oz="oz_micro", bo="bo_controlled", pp="umbrella",
+             pk="diamond", fam=85):
+    return fake_team(team_name="T", roster=[],
+                     tactics={"forecheck": fc, "neutral_zone": nz,
+                              "dzone": dz, "ozone": oz, "breakout": bo,
+                              "pp": pp, "pk": pk},
+                     tactics_familiarity=fam)
 
-trap = sys_team(dfn="neutral_trap")
-hyb = sys_team(dfn="hybrid")
-check("trap defends better than hybrid",
+trap = sys_team(nz="nz_trap_131", dz="dz_box")
+regroup = sys_team(nz="nz_regroup", dz="dz_hybrid")
+check("trap defends better than regroup/hybrid",
       tx.resolve_team_tactics(trap)["defense"] <
-      tx.resolve_team_tactics(hyb)["defense"])
+      tx.resolve_team_tactics(regroup)["defense"])
 
-rush = sys_team(off="rush_attack")
-dump = sys_team(off="dump_chase")
+rush = sys_team(oz="oz_rush", fc="forecheck_212_swarm")
+cyc = sys_team(oz="oz_cycle", fc="forecheck_122")
 m_rush_trap = tx.matchup_modifiers(rush, trap)
 check("trap drags pace below 1.0 vs rush", m_rush_trap["pace"] < 1.0,
       str(m_rush_trap["pace"]))
-m_rush_hyb = tx.matchup_modifiers(rush, hyb)
-check("trap suppresses the same rush attack more than hybrid",
-      m_rush_trap["home_goals"] < m_rush_hyb["home_goals"],
-      f"{m_rush_trap['home_goals']:.3f} vs {m_rush_hyb['home_goals']:.3f}")
-m_trap_trap = tx.matchup_modifiers(trap, sys_team(dfn="neutral_trap"))
+m_rush_reg = tx.matchup_modifiers(rush, regroup)
+check("trap suppresses the same rush attack more than regroup",
+      m_rush_trap["home_goals"] < m_rush_reg["home_goals"],
+      f"{m_rush_trap['home_goals']:.3f} vs {m_rush_reg['home_goals']:.3f}")
+m_trap_trap = tx.matchup_modifiers(trap, sys_team(nz="nz_trap_131",
+                                                  dz="dz_box"))
 check("trap-vs-trap is the lowest-event matchup",
       m_trap_trap["pace"] < m_rush_trap["pace"])
+
+# shot volume is team-by-team: swarm out-shoots the 1-2-2, trap shoots less
+check("swarm forecheck drives more volume than 1-2-2",
+      tx.resolve_team_tactics(rush)["shot_vol"] >
+      tx.resolve_team_tactics(sys_team(fc="forecheck_122"))["shot_vol"])
+m_vol = tx.matchup_modifiers(rush, cyc)
+check("matchup exposes per-team shot volume",
+      m_vol["home_shot_vol"] > m_vol["away_shot_vol"],
+      f"{m_vol['home_shot_vol']:.3f} vs {m_vol['away_shot_vol']:.3f}")
+check("matchup exposes per-team shot quality",
+      "home_shot_qual" in m_vol and "away_shot_qual" in m_vol)
+check("trap team shoots less than rush team",
+      tx.resolve_team_tactics(trap)["shot_vol"] <
+      tx.resolve_team_tactics(rush)["shot_vol"])
 
 pp131 = sys_team(pp="one_three_one")
 ppum = sys_team(pp="umbrella")
@@ -133,33 +168,51 @@ check("swarm threatens shorthanded",
       tx.resolve_team_tactics(swarm)["sh_threat"] >
       tx.resolve_team_tactics(box)["sh_threat"])
 
-heavy = sys_team(off="heavy_cycle")
-check("heavy cycle is the most physical",
-      tx.resolve_team_tactics(heavy)["physical"] >
-      tx.resolve_team_tactics(sys_team(off="balanced"))["physical"])
+swarm_fc = sys_team(fc="forecheck_212_swarm")
+check("swarm forecheck is the most physical",
+      tx.resolve_team_tactics(swarm_fc)["physical"] >
+      tx.resolve_team_tactics(sys_team(fc="forecheck_122"))["physical"])
+
+# ---------------------------------------------------------------- identity presets
+t_id = sys_team()
+tx.apply_identity_preset(t_id, "chaos_pressure")
+check("chaos preset installs swarm modules",
+      tx.team_tactics(t_id)["forecheck"] == "forecheck_212_swarm"
+      and tx.team_tactics(t_id)["ozone"] == "oz_rush",
+      str(tx.team_tactics(t_id)))
+check("matching_identity detects chaos",
+      tx.matching_identity(t_id) == "chaos_pressure")
+tx.apply_identity_preset(t_id, "stranglehold")
+check("stranglehold installs trap modules",
+      tx.team_tactics(t_id)["neutral_zone"] == "nz_trap_131"
+      and tx.team_tactics(t_id)["dzone"] == "dz_box")
+check("matching_identity detects stranglehold",
+      tx.matching_identity(t_id) == "stranglehold")
+check("unknown preset key returns False",
+      tx.apply_identity_preset(sys_team(), "nope") is False)
 
 # ---------------------------------------------------------------- familiarity
-fresh = sys_team(off="rush_attack", fam=85, phi="defense_first")
-tx.set_team_system(fresh, "offense", "dump_chase")
+fresh = sys_team(oz="oz_rush", fc="forecheck_212_swarm",
+                 nz="nz_counterpress", bo="bo_stretch")
+tx.set_team_system(fresh, "ozone", "oz_cycle")
 r_fresh = tx.resolve_team_tactics(fresh)
 check("fresh system change drops familiarity",
       r_fresh["familiarity"] <= 45, str(r_fresh["familiarity"]))
-prag = sys_team(off="rush_attack", fam=85, phi="pragmatist")
-tx.set_team_system(prag, "offense", "dump_chase")
-check("pragmatist floor is higher (adapts faster)",
-      tx.resolve_team_tactics(prag)["familiarity"] == 55)
+r_full = tx.resolve_team_tactics(sys_team(oz="oz_cycle",
+                                          fc="forecheck_212_swarm",
+                                          nz="nz_counterpress",
+                                          bo="bo_stretch", fam=95))
 check("fresh system is muted toward 1.0",
-      abs(r_fresh["attack"] - 1.0) <
-      abs(tx.resolve_team_tactics(sys_team(off="dump_chase", fam=95,
-                                           phi="defense_first"))["attack"]
-          - 1.0))
+      abs(r_fresh["pace"] - 1.0) < abs(r_full["pace"] - 1.0),
+      f"{r_fresh['pace']:.4f} vs {r_full['pace']:.4f}")
 for _ in range(14):
     tx.tick_tactics_familiarity(fresh)
 r_learned = tx.resolve_team_tactics(fresh)
 check("familiarity recovers with games", r_learned["familiarity"] >= 90,
       str(r_learned["familiarity"]))
 check("learned system bites harder than fresh",
-      abs(r_learned["attack"] - 1.0) > abs(r_fresh["attack"] - 1.0))
+      abs(r_learned["pace"] - 1.0) > abs(r_fresh["pace"] - 1.0),
+      f"{r_learned['pace']:.4f} vs {r_fresh['pace']:.4f}")
 
 # ---------------------------------------------------------------- roster fit
 speedster = [skater(skating=96, puckhandling=92, flair=90,
@@ -168,25 +221,25 @@ speedster = [skater(skating=96, puckhandling=92, flair=90,
 grinder = [skater(skating=72, checking=92, strength=90, flair=25,
                   shoot_pass_tendency=60, hitting_tendency=85,
                   aggressiveness=80, bravery=85) for _ in range(12)]
-t_spd = fake_team(team_name="SPD", roster=speedster,
-                  tactics_familiarity=85)
-t_grd = fake_team(team_name="GRD", roster=grinder,
-                  tactics_familiarity=85)
-f_spd_rush = tx.player_system_fit(speedster[0], "rush_attack")
-f_spd_dump = tx.player_system_fit(speedster[0], "dump_chase")
-f_grd_rush = tx.player_system_fit(grinder[0], "rush_attack")
-f_grd_dump = tx.player_system_fit(grinder[0], "dump_chase")
-check("speedster fits rush better than dump", f_spd_rush > f_spd_dump,
-      f"{f_spd_rush:.2f} vs {f_spd_dump:.2f}")
-check("grinder fits dump better than rush", f_grd_dump > f_grd_rush,
-      f"{f_grd_dump:.2f} vs {f_grd_rush:.2f}")
+f_spd_rush = tx.player_system_fit(speedster[0], "oz_rush", "ozone")
+f_spd_cyc = tx.player_system_fit(speedster[0], "oz_cycle", "ozone")
+f_grd_rush = tx.player_system_fit(grinder[0], "oz_rush", "ozone")
+f_grd_cyc = tx.player_system_fit(grinder[0], "oz_cycle", "ozone")
+check("speedster fits rush better than cycle", f_spd_rush > f_spd_cyc,
+      f"{f_spd_rush:.2f} vs {f_spd_cyc:.2f}")
+check("grinder fits cycle better than rush", f_grd_cyc > f_grd_rush,
+      f"{f_grd_cyc:.2f} vs {f_grd_rush:.2f}")
 check("fit stays in 0.6..1.2",
       all(0.6 <= f <= 1.2 for f in
-          (f_spd_rush, f_spd_dump, f_grd_rush, f_grd_dump)))
-t_spd.tactics = {"offense": "rush_attack", "defense": "hybrid",
-                 "pp": "umbrella", "pk": "diamond",
-                 "philosophy": "pragmatist"}
-_raw = sum(tx.player_system_fit(p, "rush_attack") for p in speedster) / len(speedster)
+          (f_spd_rush, f_spd_cyc, f_grd_rush, f_grd_cyc)))
+t_spd = fake_team(team_name="SPD", roster=speedster,
+                  tactics_familiarity=85)
+t_spd.tactics = {"forecheck": "forecheck_122", "neutral_zone": "nz_regroup",
+                 "dzone": "dz_hybrid", "ozone": "oz_rush",
+                 "breakout": "bo_controlled", "pp": "umbrella",
+                 "pk": "diamond"}
+_raw = sum(tx.player_system_fit(p, "oz_rush", "ozone")
+           for p in speedster) / len(speedster)
 _expected = max(0.92, min(1.08, 0.92 + (_raw - 0.6) * (0.16 / 0.6)))
 check("team fit compresses roster average 0.6..1.2 -> 0.92..1.08",
       abs(tx.team_system_fit(t_spd) - _expected) < 1e-9,
@@ -197,29 +250,31 @@ c_sergeant = SimpleNamespace(discipline=96, motivating=55, leadership=80,
                              man_management=45, adaptability=40,
                              controversy=30)
 prefs = tx.default_coach_prefs(c_sergeant)
-check("drill sergeant gets 5 valid prefs",
-      set(prefs) == {"offense", "defense", "pp", "pk", "philosophy"}
-      and prefs["offense"] in tx.OFFENSIVE_SYSTEMS
-      and prefs["defense"] in tx.DEFENSIVE_SYSTEMS
+check("drill sergeant gets 7 valid prefs",
+      set(prefs) == {"forecheck", "neutral_zone", "dzone", "ozone",
+                     "breakout", "pp", "pk"}
+      and prefs["neutral_zone"] in tx.NEUTRAL_ZONE_SYSTEMS
+      and prefs["dzone"] in tx.DZONE_SYSTEMS
+      and prefs["ozone"] in tx.OZONE_SYSTEMS
       and prefs["pp"] in tx.POWERPLAY_SYSTEMS
-      and prefs["pk"] in tx.PENALTY_KILL_SYSTEMS
-      and prefs["philosophy"] in tx.PHILOSOPHIES, str(prefs))
+      and prefs["pk"] in tx.PENALTY_KILL_SYSTEMS, str(prefs))
 check("drill sergeant wants structure",
-      prefs["defense"] in ("neutral_trap", "neutral_131", "passive_box",
-                           "left_wing_lock", "collapsing_box"))
+      prefs["neutral_zone"] == "nz_trap_131"
+      and prefs["dzone"] == "dz_box")
 c_none = SimpleNamespace()
 check("pref-less coach gets seeded prefs",
       set(tx.ensure_coach_tactics(c_none)) ==
-      {"offense", "defense", "pp", "pk", "philosophy"})
+      {"forecheck", "neutral_zone", "dzone", "ozone",
+       "breakout", "pp", "pk"})
 check("coach fit neutral without prefs",
       abs(tx.coach_tactics_fit(None, t_spd) - 0.7) < 1e-9)
 
 # ---------------------------------------------------------------- resolve cache
-t_c = sys_team(off="rush_attack")
+t_c = sys_team(oz="oz_rush")
 r1 = tx.resolve_team_tactics(t_c)
 r2 = tx.resolve_team_tactics(t_c)
 check("resolve memoized per game", r1 is r2)
-tx.set_team_system(t_c, "offense", "heavy_cycle")
+tx.set_team_system(t_c, "ozone", "oz_cycle")
 r3 = tx.resolve_team_tactics(t_c)
 check("system change busts cache", r3 is not r1
       and r3["attack"] != r1["attack"])
@@ -249,8 +304,8 @@ check("swarm PK raises SH volume",
 # AdvancedGameSim edge (unbound: only needs teams + pp/pk names)
 import main as _main
 ags = _main.AdvancedGameSim.__new__(_main.AdvancedGameSim)
-ags.home_team = sys_team(off="rush_attack", pp="one_three_one")
-ags.away_team = sys_team(dfn="neutral_trap", pk="passive_box")
+ags.home_team = sys_team(oz="oz_rush", pp="one_three_one")
+ags.away_team = sys_team(nz="nz_trap_131", pk="passive_box")
 ags.home_team.team_name = "HOME"
 ags.away_team.team_name = "AWAY"
 ags.pp_team = None
@@ -261,7 +316,12 @@ check("systems edge precomputed",
       or True)  # presence check below
 check("edge has all keys",
       all(k in ags._systems_matchup for k in
-          ("home_goals", "away_goals", "pace", "home_pp", "away_pp")))
+          ("home_goals", "away_goals", "pace", "home_pp", "away_pp",
+           "home_shot_vol", "away_shot_vol",
+           "home_shot_qual", "away_shot_qual")))
+check("rush team out-shoots trap team via edge",
+      ags._systems_matchup["home_shot_vol"] >
+      ags._systems_matchup["away_shot_vol"])
 e_home = ags._systems_edge_for("HOME")
 check("ES edge for shooter sane", 0.8 < e_home < 1.25, str(e_home))
 ags.pp_team = "HOME"
@@ -280,34 +340,63 @@ hg = [tx.matchup_modifiers(a, b)["home_goals"]
       for a in teams for b in teams if a is not b]
 pc = [tx.matchup_modifiers(a, b)["pace"]
       for a in teams for b in teams if a is not b]
+sv = [tx.matchup_modifiers(a, b)["home_shot_vol"]
+      for a in teams for b in teams if a is not b]
+sq = [tx.matchup_modifiers(a, b)["home_shot_qual"]
+      for a in teams for b in teams if a is not b]
 mean_hg = sum(hg) / len(hg)
 mean_pc = sum(pc) / len(pc)
+mean_sv = sum(sv) / len(sv)
+mean_sq = sum(sq) / len(sq)
 check("league scoring neutral (home_goals mean ~1.0)",
       abs(mean_hg - 1.0) < 0.03, f"{mean_hg:.4f}")
 check("league pace neutral (pace mean ~1.0)",
       abs(mean_pc - 1.0) < 0.03, f"{mean_pc:.4f}")
+check("league shot volume neutral (mean ~1.0)",
+      abs(mean_sv - 1.0) < 0.03, f"{mean_sv:.4f}")
+check("league shot quality neutral (mean ~1.0)",
+      abs(mean_sq - 1.0) < 0.03, f"{mean_sq:.4f}")
+check("volume spread is real (trap vs rush)",
+      # dampened (2026-09-28 NHL calibration, exponent 0.35): ~9 pts of
+      # spread -- trap and rush stay distinct, team-season means land in
+      # the real 24.5..34 band instead of 11..35.
+      max(sv) - min(sv) > 0.07,
+      f"range {min(sv):.3f}..{max(sv):.3f}")
 
 # ---------------------------------------------------------------- identity lines
 line = " | ".join(tx.describe_team_tactics(seeded("Toronto Maple Leafs")))
 check("identity line mentions systems",
       "Power play:" in line and "Penalty kill:" in line, line)
+t_chaos = sys_team()
+tx.apply_identity_preset(t_chaos, "chaos_pressure")
+chaos_line = " | ".join(tx.describe_team_tactics(t_chaos))
+check("identity line leads with club identity",
+      chaos_line.startswith("Identity: Chaos & Pressure"),
+      chaos_line[:60])
 
 # ---------------------------------------------------------------- xG hook
 print("--- engine: xG factor ---")
 g = GameSim.__new__(GameSim)
 g._get_current_situation = lambda: SpecialSituation.EVEN_STRENGTH
 g._team_situation = lambda team, sit: sit
-att = sys_team(off="rush_attack", fam=95)
+att = sys_team(oz="oz_rush", fam=95)
 att.tactic_even_strength = "Balanced"
-tdef = sys_team(dfn="neutral_trap", fam=95)
+tdef = sys_team(nz="nz_trap_131", dz="dz_box", fam=95)
 tdef.tactic_even_strength = "Balanced"
-hdef = sys_team(dfn="hybrid", fam=95)
+hdef = sys_team(nz="nz_regroup", dz="dz_hybrid", fam=95)
 hdef.tactic_even_strength = "Balanced"
 f_trap = GameSim._team_tactics_xg_factor(g, att, tdef)
 f_hyb = GameSim._team_tactics_xg_factor(g, att, hdef)
 check("xG hook: trap suppresses the same rush attack",
       f_trap < f_hyb, f"{f_trap:.3f} vs {f_hyb:.3f}")
 check("xG hook: factor inside widened clamp", 0.75 <= f_trap <= 1.35)
+check("xG hook: cycle team gets quality edge over rush",
+      GameSim._team_tactics_xg_factor(
+          g, sys_team(oz="oz_cycle", fam=95),
+          sys_team(nz="nz_regroup", dz="dz_hybrid", fam=95)) >
+      GameSim._team_tactics_xg_factor(
+          g, sys_team(oz="oz_rush", fam=95),
+          sys_team(nz="nz_regroup", dz="dz_hybrid", fam=95)))
 
 # PP branch of the xG hook
 g._get_current_situation = lambda: SpecialSituation.POWER_PLAY
@@ -325,12 +414,12 @@ check("xG hook: passive box kills the 1-3-1 better than diamond",
 
 # ---------------------------------------------------------------- physical
 print("--- physicality ---")
-ph_heavy = tx.resolve_team_tactics(sys_team(off="heavy_cycle", fam=95,
-                                            phi="heavy_identity"))["physical"]
-ph_skill = tx.resolve_team_tactics(sys_team(off="skill_possession", fam=95,
-                                            phi="offense_first"))["physical"]
-check("heavy cycle out-hits skill possession", ph_heavy > ph_skill,
-      f"{ph_heavy:.3f} vs {ph_skill:.3f}")
+ph_swarm = tx.resolve_team_tactics(sys_team(fc="forecheck_212_swarm",
+                                            fam=95))["physical"]
+ph_122 = tx.resolve_team_tactics(sys_team(fc="forecheck_122",
+                                          fam=95))["physical"]
+check("swarm forecheck out-hits the 1-2-2", ph_swarm > ph_122,
+      f"{ph_swarm:.3f} vs {ph_122:.3f}")
 ph_mean = sum(tx.resolve_team_tactics(t)["physical"] for t in teams) / len(teams)
 check("league hit rate neutral", abs(ph_mean - 1.0) < 0.05,
       f"{ph_mean:.4f}")
@@ -354,9 +443,11 @@ def league_of(champ_pp="one_three_one", rv=0.0, user_pp="umbrella",
               ai_pp="umbrella", coach=None):
     def mk(name, pp, user=False):
         t = fake_team(team_name=name, roster=[],
-                      tactics={"offense": "balanced", "defense": "hybrid",
-                               "pp": pp, "pk": "diamond",
-                               "philosophy": "pragmatist"},
+                      tactics={"forecheck": "forecheck_122",
+                               "neutral_zone": "nz_regroup",
+                               "dzone": "dz_hybrid", "ozone": "oz_micro",
+                               "breakout": "bo_controlled",
+                               "pp": pp, "pk": "diamond"},
                       tactics_familiarity=85, is_user_team=user)
         if coach is not None:
             t.staff = [coach]
@@ -434,13 +525,14 @@ tx.set_tactics_control(t0, "gm")
 check("control roundtrips", tx.get_tactics_control(t0) == "gm")
 
 rookie = tcoach(first_nhl_chair=True, years_with_team=1)
-prev = rs.preview_tactics_discussion(rookie, {"offense": "rush_attack"})
+prev = rs.preview_tactics_discussion(rookie, {"ozone": "oz_rush"})
 check("rookie welcomes suggestions", prev["tone"] == "welcomes" and prev["accept_p"] >= 0.7,
       f"{prev['tone']} p={prev['accept_p']:.2f}")
 
 torts = tcoach(control_need=95, gm_trust=40, adaptability=20)
-prev = rs.preview_tactics_discussion(torts, {"offense": "rush_attack", "defense": "neutral_trap", "philosophy": "offense_first"})
-check("authoritarian hates overhaul", prev["tone"] == "furious" and prev["accept_p"] < 0.35,
+prev = rs.preview_tactics_discussion(torts, {"ozone": "oz_rush", "neutral_zone": "nz_trap_131", "dzone": "dz_box"})
+check("authoritarian hates identity overhaul",
+      prev["tone"] == "furious" and prev["accept_p"] < 0.35,
       f"{prev['tone']} p={prev['accept_p']:.2f} trust{prev['trust_delta']}")
 
 coop = tcoach(control_need=25, gm_trust=85, adaptability=70)
@@ -455,29 +547,29 @@ check("dry spell raises acceptance", prev_dry["accept_p"] > prev_ok["accept_p"],
 c_acc = tcoach()
 tm = wteam(c_acc)
 with patch.object(rs.random, "random", return_value=0.0):
-    res = rs.suggest_tactics_to_coach(tm, {"offense": "rush_attack"})
+    res = rs.suggest_tactics_to_coach(tm, {"ozone": "oz_rush"})
 check("suggest accepted applies + trust up",
-      res["applied"] and tm.tactics["offense"] == "rush_attack" and c_acc.gm_trust == 73,
+      res["applied"] and tm.tactics["ozone"] == "oz_rush" and c_acc.gm_trust == 73,
       res["text"][:60])
 
 # suggest: reject path
 c_rej = tcoach()
 tm2 = wteam(c_rej)
-old_off = tm2.tactics["offense"]
+old_oz = tm2.tactics["ozone"]
 with patch.object(rs.random, "random", return_value=0.99):
-    res = rs.suggest_tactics_to_coach(tm2, {"offense": "rush_attack"})
+    res = rs.suggest_tactics_to_coach(tm2, {"ozone": "oz_rush"})
 check("suggest rejected keeps systems, trust dips",
-      not res["applied"] and tm2.tactics["offense"] == old_off and c_rej.gm_trust == 68,
+      not res["applied"] and tm2.tactics["ozone"] == old_oz and c_rej.gm_trust == 68,
       res["text"][:60])
 
 # enforce: authoritarian hurt more than collaborator
 c_auth = tcoach(control_need=95)
 c_col = tcoach(control_need=20)
 tm3, tm4 = wteam(c_auth), wteam(c_col)
-rs.enforce_tactics(tm3, {"defense": "neutral_trap"}, {"win_pct": 0.5})
-rs.enforce_tactics(tm4, {"defense": "neutral_trap"}, {"win_pct": 0.5})
+rs.enforce_tactics(tm3, {"neutral_zone": "nz_trap_131"}, {"win_pct": 0.5})
+rs.enforce_tactics(tm4, {"neutral_zone": "nz_trap_131"}, {"win_pct": 0.5})
 check("enforce lands, authoritarian hit harder",
-      tm3.tactics["defense"] == "neutral_trap" and c_auth.gm_trust < c_col.gm_trust,
+      tm3.tactics["neutral_zone"] == "nz_trap_131" and c_auth.gm_trust < c_col.gm_trust,
       f"auth {c_auth.gm_trust} vs collab {c_col.gm_trust}")
 
 # take over / hand back
@@ -523,7 +615,9 @@ tm9 = wteam(c_ai)
 hits = [tx.ai_intermission_adjustment(tm9, -3) for _ in range(20)]
 got = [h for h in hits if h]
 check("losing adaptable coach adjusts",
-      bool(got) and all(h["category"] in ("philosophy", "offense") for h in got),
+      bool(got) and all(h["category"] in ("ozone", "forecheck",
+                                          "neutral_zone", "dzone")
+                        for h in got),
       f"{len(got)}/20 adjusted")
 check("no adjustment when GM controls",
       tx.ai_intermission_adjustment(tm9, -3) is None
@@ -531,10 +625,10 @@ check("no adjustment when GM controls",
 tx.set_tactics_control(tm9, "coach")
 c_serg = tcoach(adaptability=90, discipline=98, motivating=70, man_management=50)
 tm10 = wteam(c_serg)
-tm10.tactics["philosophy"] = "offense_first"
+tm10.tactics["ozone"] = "oz_rush"
 lead_hits = [tx.ai_intermission_adjustment(tm10, 4) for _ in range(30)]
 check("defensive mind protects a big lead",
-      any(h and h["new_key"] in ("defense_first", "neutral_trap", "trap_131")
+      any(h and h["new_key"] in ("nz_trap_131", "dz_box")
           for h in lead_hits),
       f"{sum(1 for h in lead_hits if h)}/30 locked down")
 
@@ -544,8 +638,8 @@ tx.save_preferred_tactics(tm11)
 check("preferred save/load roundtrip",
       tx.get_preferred_tactics(tm11) == tx.team_tactics(tm11))
 check("tradeoffs line non-empty",
-      bool(tx.system_tradeoffs("offense", "rush_attack")),
-      tx.system_tradeoffs("offense", "rush_attack"))
+      bool(tx.system_tradeoffs("ozone", "oz_rush")),
+      tx.system_tradeoffs("ozone", "oz_rush"))
 
 print()
 print(f"{len(PASS)} passed, {len(FAIL)} failed")

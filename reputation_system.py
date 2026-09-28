@@ -1884,9 +1884,11 @@ def set_line_control(team: Any, who: str,
 # same personality factors: control_need, gm_trust, adaptability, form,
 # and whether he's a rookie you believed in.
 
-_TACTICS_CAT_LABEL = {"offense": "Offense", "defense": "Defense",
-                      "pp": "Power play", "pk": "Penalty kill",
-                      "philosophy": "Philosophy"}
+_TACTICS_CAT_LABEL = {"forecheck": "Forecheck",
+                      "neutral_zone": "Neutral zone",
+                      "dzone": "D-zone coverage", "ozone": "O-zone attack",
+                      "breakout": "Breakout",
+                      "pp": "Power play", "pk": "Penalty kill"}
 
 
 def _tactics_coach(team: Any) -> Any:
@@ -1924,7 +1926,7 @@ def preview_tactics_discussion(coach: Any, changes: Dict[str, str],
         (getattr(coach, "years_with_team", 0) or 0) <= 2
     cname = getattr(coach, "full_name", "Coach").split()[0]
     n = max(1, len(changes))
-    phil = "philosophy" in changes
+    ident = len(changes) >= 3  # ripping up 3+ modules is an identity change
     summ = _changes_summary(changes)
 
     # Likelihood he says yes -- personality is the major factor.
@@ -1939,8 +1941,8 @@ def preview_tactics_discussion(coach: Any, changes: Dict[str, str],
     if rookie:
         p += 0.20                      # he owes you
     p -= 0.07 * (n - 1)                # wholesale overhauls scare coaches
-    if phil:
-        p -= 0.10                      # philosophy is identity
+    if ident:
+        p -= 0.10                      # identity overhauls scare coaches
     p = max(0.05, min(0.95, p))
 
     if rookie:

@@ -6393,6 +6393,10 @@ class GameSim:
             _att = _tx.resolve_team_tactics(attacking_team)
             _dfn = _tx.resolve_team_tactics(defending_team)
             shot_chance *= (_att["pace"] * _dfn["pace"]) ** 0.5
+            # Zone modules drive shot volume team-by-team: swarm/rush/
+            # net-front teams shoot more, trap teams shoot less. SHOT_LIFT
+            # raises the league to real NHL volume (~29.5 SOG/team/game).
+            shot_chance *= _att.get("shot_vol", 1.0) * _tx.SHOT_LIFT
             if (current_situation == SpecialSituation.POWER_PLAY
                     and self._is_team_on_power_play(attacking_team)):
                 # A good kill smothers PP shot volume, not just finishing.
@@ -8453,6 +8457,11 @@ class GameSim:
             _att = _tx.resolve_team_tactics(attacking_team)
             _dfn = _tx.resolve_team_tactics(defending_team)
             factor *= _att["attack"] * _dfn["defense"]
+            # O-zone system sets chance quality: cycle/volume teams get
+            # better looks, rush teams get more looks. SHOT_LIFT_DILUTION
+            # keeps scoring sane as league volume rises (extra shots are
+            # worse shots).
+            factor *= _att.get("shot_qual", 1.0) / _tx.SHOT_LIFT_DILUTION
             if sit_att == SpecialSituation.POWER_PLAY:
                 factor *= _att["pp"] * (2.0 - _dfn["pk"])
         except Exception:
