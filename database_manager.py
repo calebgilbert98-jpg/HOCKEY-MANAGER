@@ -107,11 +107,11 @@ class DatabaseManager:
             target_team = teams_by_position_need[0]
             player.team_name = target_team.team_name
             
-            # Determine roster level based on overall rating (50-point scale)
+            # Determine roster level based on overall rating (1-100 scale)
             overall = player.overall_rating()
-            if overall >= 44:
+            if overall >= 72:
                 target_team.add_player(player, "roster")
-            elif overall >= 40:
+            elif overall >= 68:
                 # Some go to AHL
                 if random.random() < 0.3:
                     target_team.add_player(player, "ahl")
@@ -148,9 +148,9 @@ class DatabaseManager:
             for player in list(team.roster):
                 # Everyone on an NHL roster gets an NHL deal, even depth players
                 ovr = player.overall_rating()
-                if ovr >= 49:
+                if ovr >= 80:
                     tier = "NHL_ELITE"
-                elif ovr >= 44:
+                elif ovr >= 70:
                     tier = "NHL_STARTER"
                 else:
                     tier = "NHL_DEPTH"
