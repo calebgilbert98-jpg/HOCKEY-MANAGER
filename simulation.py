@@ -2395,7 +2395,7 @@ class GameSim:
             return self._resolve_loose_puck_battle()
 
         attacking_team = self.possession_team
-        defending_team = self.away_team if attacking_team == self.home_team else self.home_team
+        defending_team = self.away_team if attacking_team is self.home_team else self.home_team
 
         # Background obstruction penalties: hooking/holding/interference away
         # from the puck happen all game in real hockey, not just on hits.
@@ -2730,7 +2730,7 @@ class GameSim:
         """Recompute current_zone from the puck and who's attacking."""
         self._ppos_ensure()
         px = self.puck_pos[0]
-        adir = 1 if attacking_team == self.home_team else -1
+        adir = 1 if attacking_team is self.home_team else -1
         if (adir == 1 and px >= 125.0) or (adir == -1 and px <= 75.0):
             self.current_zone = Zone.OFFENSIVE_ZONE
         elif (adir == 1 and px <= 75.0) or (adir == -1 and px >= 125.0):
@@ -2741,7 +2741,7 @@ class GameSim:
 
     def _maybe_icing(self, clearing_team, clearer):
         """NHL icing: no icing while shorthanded; tired/pressured clears get iced."""
-        pens = self.home_penalties if clearing_team == self.home_team else self.away_penalties
+        pens = self.home_penalties if clearing_team is self.home_team else self.away_penalties
         if any(p for p in pens if p.get('manpower_loss', True)):
             return False  # shorthanded (manpower loss): no icing
         fatigue = self.player_fatigue.get(getattr(clearer, 'id', None), 100) / 100
@@ -2820,7 +2820,7 @@ class GameSim:
             self.game_stats[clearer.id]['zone_exits'] += 1
             self._log_event(f"{clearer.full_name} clears the zone", "ZONE_CLEAR")
             # outlet pass to start the breakout
-            other = self.away_team if clearing_team == self.home_team else self.home_team
+            other = self.away_team if clearing_team is self.home_team else self.home_team
             self.puck_pos = self._ppos_get(clearer)[:]
             self._shape_positions(clearing_team, self.puck_pos)
             self._attempt_pass(clearer, clearing_team, other, kind="breakout")
@@ -2883,7 +2883,7 @@ class GameSim:
         """Keep the cycle alive: work the puck laterally (D-to-D, low to
         high) instead of standing still. A real pass event, so the
         visualizer shows the puck moving and a defender can jump it."""
-        defending_team = (self.away_team if attacking_team == self.home_team
+        defending_team = (self.away_team if attacking_team is self.home_team
                           else self.home_team)
         skaters = [p for p in self._get_on_ice(attacking_team)
                    if p.primary_position != PlayerPosition.GOALIE]
@@ -3106,7 +3106,7 @@ class GameSim:
         self._emit_skate()
         # Battles are scrums: the losing side throws a hit at the winner
         if loser is not None:
-            lteam = self.away_team if wteam == self.home_team else self.home_team
+            lteam = self.away_team if wteam is self.home_team else self.home_team
             self._maybe_throw_hit(lteam, wteam, winner, 0.35)
         return "PUCK_RECOVERY"
 
@@ -3117,27 +3117,29 @@ class GameSim:
     # forechecks, battles. The UI tweens dots to these spots.
     # ------------------------------------------------------------------
     def _ppos_ensure(self):
-        if not hasattr(self, "player_positions"):
-            self.player_positions = {}   # player.id -> [x, y]
-            self.puck_pos = [100.0, 42.5]
-            self._last_skate_sent = {}
-        if not hasattr(self, "player_jobs"):
-            # player.id -> job code describing the skater's current tactical
-            # intent (e.g. "f1_pressure", "slot", "point", "carrier"). This
-            # is the sim-to-renderer contract: the visualizer is a VIEW of
-            # the sim, so the sim must say what everyone is TRYING to do,
-            # not just where they are.
-            self.player_jobs = {}
-        if not hasattr(self, "team_phases"):
-            # team_name -> phase code (e.g. "oz_attack", "dz_coverage",
-            # "forecheck", "breakout", "pp_setup"). One plan per team per
-            # possession phase; every skater's job serves the plan.
-            self.team_phases = {}
-        if not hasattr(self, "_lost_coverage_ids"):
-            # player.id set: give-and-go cutters whose checker lost them
-            # (backdoor). The next pass read treats them as open;
-            # consumed on that read, cleared on turnovers.
-            self._lost_coverage_ids = set()
+        # Fast path: these are created once and never deleted (the only
+        # assignments are below), so a single dict-membership test replaces
+        # four hasattr() calls on this ~100k-call-per-game hot path.
+        if "_ppos_ready" in self.__dict__:
+            return
+        self.player_positions = {}   # player.id -> [x, y]
+        self.puck_pos = [100.0, 42.5]
+        self._last_skate_sent = {}
+        # player.id -> job code describing the skater's current tactical
+        # intent (e.g. "f1_pressure", "slot", "point", "carrier"). This
+        # is the sim-to-renderer contract: the visualizer is a VIEW of
+        # the sim, so the sim must say what everyone is TRYING to do,
+        # not just where they are.
+        self.player_jobs = {}
+        # team_name -> phase code (e.g. "oz_attack", "dz_coverage",
+        # "forecheck", "breakout", "pp_setup"). One plan per team per
+        # possession phase; every skater's job serves the plan.
+        self.team_phases = {}
+        # player.id set: give-and-go cutters whose checker lost them
+        # (backdoor). The next pass read treats them as open;
+        # consumed on that read, cleared on turnovers.
+        self._lost_coverage_ids = set()
+        self.__dict__["_ppos_ready"] = True
 
     def _set_job(self, p, job):
         """Tag a skater's current tactical job for the visualizer."""
@@ -3212,14 +3214,14 @@ class GameSim:
         if puck is None:
             puck = self.puck_pos
         px, py = puck
-        defending_team = (self.away_team if attacking_team == self.home_team
+        defending_team = (self.away_team if attacking_team is self.home_team
                           else self.home_team)
         carrier = getattr(self, "possession_player", None)
         carrier_id = getattr(carrier, "id", None)
 
         for team in (attacking_team, defending_team):
             is_att = (team == attacking_team)
-            adir = 1 if team == self.home_team else -1  # direction team attacks
+            adir = 1 if team is self.home_team else -1  # direction team attacks
             att_net = 189.0 if adir == 1 else 11.0     # net this team attacks
             def_net = 11.0 if adir == 1 else 189.0     # net this team defends
             # where is the puck relative to this team?
@@ -3470,7 +3472,7 @@ class GameSim:
         """
         self._ppos_ensure()
         px, py = self.puck_pos
-        adir = 1 if defending_team == self.home_team else -1
+        adir = 1 if defending_team is self.home_team else -1
         def_net = 11.0 if adir == 1 else 189.0
         skaters = self._on_ice_skaters(defending_team)
         if not skaters:
@@ -3614,7 +3616,7 @@ class GameSim:
         """
         self._ppos_ensure()
         px, py = self.puck_pos
-        adir = 1 if attacking_team == self.home_team else -1
+        adir = 1 if attacking_team is self.home_team else -1
         att_net = 189.0 if adir == 1 else 11.0
         carrier = getattr(self, "possession_player", None)
         carrier_id = getattr(carrier, "id", None)
@@ -3748,7 +3750,7 @@ class GameSim:
         back to the old zone-based heuristic when not provided.
         """
         self._ppos_ensure()
-        wdir = 1 if winner == self.home_team else -1   # direction winner attacks
+        wdir = 1 if winner is self.home_team else -1   # direction winner attacks
         wnet = 189.0 if wdir == 1 else 11.0
         if dot is not None:
             dx, dy = dot
@@ -3759,7 +3761,7 @@ class GameSim:
             # offensive-zone draw ~20 ft outside the attacked net, else own end
             nx = wnet - 20 * wdir if zone == FaceoffZone.OFFENSIVE_ZONE else (11.0 if wdir == 1 else 189.0) + 20 * wdir
             dx, dy = nx, random.choice((20.5, 64.5))
-        loser = self.away_team if winner == self.home_team else self.home_team
+        loser = self.away_team if winner is self.home_team else self.home_team
         for team in (winner, loser):
             won = (team == winner)
             tdir = wdir if won else -wdir
@@ -3773,14 +3775,14 @@ class GameSim:
                 self._ppos_place(p, dx + (0 if won else 6 * tdir), dy + s, jitter=1.0)
             for p, s in zip(ds, (30, 55)):
                 # D hold back toward their own end
-                own = 11.0 if team == self.home_team else 189.0
+                own = 11.0 if team is self.home_team else 189.0
                 bx = dx + (24 if (own < dx) else -24)
                 self._ppos_place(p, bx, s, jitter=1.5)
             for p in centers[1:] + wings[2:] + ds[2:]:
                 self._ppos_place(p, dx + 18 * tdir, 42.5)
             g = self._on_ice_goalie(team)
             if g is not None:
-                own = 11.0 if team == self.home_team else 189.0
+                own = 11.0 if team is self.home_team else 189.0
                 self._ppos_place(g, own, 42.5, jitter=0.5)
         self.puck_pos = self._clamp_boards(dx, dy)
         self._emit_skate(force=True)
@@ -3810,7 +3812,7 @@ class GameSim:
         if not mates:
             return None
         defenders = self._on_ice_skaters(defending_team)
-        adir = 1 if attacking_team == self.home_team else -1
+        adir = 1 if attacking_team is self.home_team else -1
         att_net = 189.0 if adir == 1 else 11.0
         px, py = self._ppos_get(passer)
 
@@ -3968,10 +3970,10 @@ class GameSim:
     def _is_on_penalty_kill(self, player):
         """Check if player is on penalty kill."""
         team = self.home_team if player in self.home_on_ice else self.away_team
-        opposing_team = self.away_team if team == self.home_team else self.home_team
+        opposing_team = self.away_team if team is self.home_team else self.home_team
         
-        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
-        opposing_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        opposing_penalties = self.away_penalties if team is self.home_team else self.home_penalties
         
         return len(opposing_penalties) > len(team_penalties)
 
@@ -3979,8 +3981,8 @@ class GameSim:
         """Check if player is on power play."""
         team = self.home_team if player in self.home_on_ice else self.away_team
         
-        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
-        opposing_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        opposing_penalties = self.away_penalties if team is self.home_team else self.home_penalties
         
         return len(team_penalties) > len(opposing_penalties)
         """Determines and resolves the next gameplay event."""
@@ -4020,7 +4022,7 @@ class GameSim:
         # shooter caught outside the offensive zone makes a hockey play --
         # moves the puck -- instead of firing a prayer from distance.
         _px, _py = self._ppos_get(shooter)
-        _in_zone = (_px >= 124.0) if attacking_team == self.home_team \
+        _in_zone = (_px >= 124.0) if attacking_team is self.home_team \
             else (_px <= 76.0)
         if not _in_zone:
             self._attempt_pass(shooter, attacking_team, defending_team,
@@ -4473,7 +4475,7 @@ class GameSim:
         # Missed shot rims around -- loose puck battle behind the net
         if random.random() < 0.40:
             self._ppos_ensure()
-            nx = 189.0 if attacking_team == self.home_team else 11.0
+            nx = 189.0 if attacking_team is self.home_team else 11.0
             self.puck_pos = self._clamp_boards(nx + random.uniform(-8, 8),
                                                  42.5 + random.uniform(-14, 14))
             self.possession_team = None
@@ -4519,7 +4521,7 @@ class GameSim:
     def _shot_spot_coords(self, location, attacking_team):
         key = location.value if hasattr(location, "value") else str(location)
         x, y = self._SHOT_SPOTS.get(key, (160, 42.5))
-        if attacking_team != self.home_team:
+        if attacking_team is not self.home_team:
             x = 200.0 - x
         return x, y
 
@@ -4607,7 +4609,7 @@ class GameSim:
                        shooter_pos=(round(sx, 1), round(sy, 1)))
         # Positional: the shot heads for the net
         self._ppos_ensure()
-        self.puck_pos = [189.0 if attacking_team == self.home_team else 11.0, 42.5]
+        self.puck_pos = [189.0 if attacking_team is self.home_team else 11.0, 42.5]
         
         # Determine goaltender positioning and style
         self._adjust_goaltender_positioning(goalie, location, self.current_situation)
@@ -4698,7 +4700,7 @@ class GameSim:
                 self._handle_goal(attacking_team, shooter, assists, shot_type, location)
             
                 # Log advanced goal details
-                defending_team = (self.away_team if attacking_team == self.home_team
+                defending_team = (self.away_team if attacking_team is self.home_team
                                   else self.home_team)
                 if defending_team.team_name in getattr(self, "goalie_pulled", set()):
                     _goal_strength = 'EN'
@@ -5028,7 +5030,7 @@ class GameSim:
         else:
             outcome = FaceoffOutcome.BATTLE
             winner = random.choice([self.home_team, self.away_team])
-            winner_player = home_player if winner == self.home_team else away_player
+            winner_player = home_player if winner is self.home_team else away_player
         
         if forced_team is not None:
             # Winner-relative: draw is in the forced team's defensive zone
@@ -5093,7 +5095,7 @@ class GameSim:
         strong_left = py < 42.5
 
         def ez_dot(team):
-            dots = (self._FACEOFF_DOTS_EZ_HOME if team == self.home_team
+            dots = (self._FACEOFF_DOTS_EZ_HOME if team is self.home_team
                     else self._FACEOFF_DOTS_EZ_AWAY)
             return dots[0] if strong_left else dots[1]
 
@@ -5172,7 +5174,7 @@ class GameSim:
                     self.game_stats[player.id]['zone_starts_offensive'] += 1
             
             # Losing team starts in defensive zone
-            losing_team = self.away_team if winning_team == self.home_team else self.home_team
+            losing_team = self.away_team if winning_team is self.home_team else self.home_team
             for player in self._get_on_ice(losing_team):
                 if player.id in self.game_stats:
                     self.game_stats[player.id]['zone_starts_defensive'] += 1
@@ -5185,7 +5187,7 @@ class GameSim:
                     self.game_stats[player.id]['zone_starts_defensive'] += 1
             
             # Losing team starts in offensive zone
-            losing_team = self.away_team if winning_team == self.home_team else self.home_team
+            losing_team = self.away_team if winning_team is self.home_team else self.home_team
             for player in self._get_on_ice(losing_team):
                 if player.id in self.game_stats:
                     self.game_stats[player.id]['zone_starts_offensive'] += 1
@@ -5199,7 +5201,7 @@ class GameSim:
         Excludes coincidental minors/majors (offsetting) and misconducts,
         which keep a player in the box without changing manpower.
         """
-        plist = self.home_penalties if team == self.home_team else self.away_penalties
+        plist = self.home_penalties if team is self.home_team else self.away_penalties
         return [p for p in plist if p.get('manpower_loss', True)]
 
     def _get_current_situation(self):
@@ -5323,7 +5325,7 @@ class GameSim:
     def _is_team_on_power_play(self, team):
         """Check if a team is currently on the power play."""
         situation = self._get_current_situation()
-        if team == self.home_team:
+        if team is self.home_team:
             return situation == SpecialSituation.POWER_PLAY
         else:
             return situation == SpecialSituation.PENALTY_KILL  # Away team on PP when home on PK
@@ -5331,7 +5333,7 @@ class GameSim:
     def _is_team_on_penalty_kill(self, team):
         """Check if a team is currently on the penalty kill."""
         situation = self._get_current_situation()
-        if team == self.home_team:
+        if team is self.home_team:
             return situation == SpecialSituation.PENALTY_KILL
         else:
             return situation == SpecialSituation.POWER_PLAY  # Away team on PK when home on PP
@@ -5449,7 +5451,7 @@ class GameSim:
             self._delayed_penalty = {"player": player, "team": team,
                                      "infraction": (name, penalty_length, detail),
                                      "ticks": 0}
-            opposing = self.away_team if team == self.home_team else self.home_team
+            opposing = self.away_team if team is self.home_team else self.home_team
             self._pull_goalie(opposing)  # 6th attacker during the delay
             self._log_event(
                 f"Delayed penalty coming up on {player.full_name} "
@@ -5763,9 +5765,9 @@ class GameSim:
         """Book one coincidental fighting-major pair (5 each, teams stay 5v5).
         Shared by the normal fight path and brawls."""
         if opposing_team is None:
-            opposing_team = self.away_team if team == self.home_team else self.home_team
-        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
-        opp_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+            opposing_team = self.away_team if team is self.home_team else self.home_team
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        opp_penalties = self.away_penalties if team is self.home_team else self.home_penalties
         player.stats.penalties_in_minutes += 5
         team_penalties.append({'player': player, 'time': 5 * 60, 'minutes': 5,
                                'infraction': "Fighting", 'manpower_loss': False,
@@ -5788,7 +5790,7 @@ class GameSim:
             self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
         self._emit_pbp("fight", player=player, team=team.team_name)
         self.fights_called += 1
-        if team == self.home_team:
+        if team is self.home_team:
             self.home_penalties_called += 1
             self.home_pim_called += 5
             self.away_penalties_called += 1
@@ -5805,12 +5807,12 @@ class GameSim:
     def _book_misconduct(self, player, team):
         """10-minute misconduct: the player sits, no manpower change."""
         player.stats.penalties_in_minutes += 10
-        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
         team_penalties.append({'player': player, 'time': 10 * 60, 'minutes': 10,
                                'infraction': "Misconduct", 'manpower_loss': False,
                                'terminates_on_goal': False})
         self.misconducts_called += 1
-        if team == self.home_team:
+        if team is self.home_team:
             self.home_pim_called += 10
         else:
             self.away_pim_called += 10
@@ -5818,9 +5820,9 @@ class GameSim:
     def _book_penalty(self, player, team, name, penalty_length, detail):
         """Record a penalty (box time, PIM, PP/PK bookkeeping, PBP) without
         stopping play. The whistle/faceoff is the caller's job."""
-        opposing_team = self.away_team if team == self.home_team else self.home_team
-        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
-        opp_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+        opposing_team = self.away_team if team is self.home_team else self.home_team
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        opp_penalties = self.away_penalties if team is self.home_team else self.home_penalties
 
         # Penalty semantics by type:
         # - minor (2): reduces manpower, ends on PP goal
@@ -5859,7 +5861,7 @@ class GameSim:
             player.stats.penalties_in_minutes += 10
             misconduct = " plus a 10-minute misconduct"
             self.misconducts_called += 1
-            if team == self.home_team:
+            if team is self.home_team:
                 self.home_pim_called += 10
             else:
                 self.away_pim_called += 10
@@ -5887,7 +5889,7 @@ class GameSim:
                            team=team.team_name,
                            minutes=penalty_length,
                            infraction=name)
-            if team == self.home_team:
+            if team is self.home_team:
                 self.home_penalties_called += 1
                 self.home_pim_called += penalty_length
             else:
@@ -6040,7 +6042,7 @@ class GameSim:
             self.team_stats[scoring_team.team_name]['short_handed_goals'] += 1
             
             # Opposing team gets a goal against on their power play
-            opposing_team = self.away_team if scoring_team == self.home_team else self.home_team
+            opposing_team = self.away_team if scoring_team is self.home_team else self.home_team
             self.team_stats[opposing_team.team_name]['penalty_kill_goals_against'] += 1
         
         assist_str = []
@@ -6049,7 +6051,7 @@ class GameSim:
             self.game_stats[assist_player.id]['a'] += 1
             assist_str.append(assist_player.last_name)
         
-        if scoring_team == self.home_team:
+        if scoring_team is self.home_team:
             self.home_score += 1
         else:
             self.away_score += 1
@@ -6098,8 +6100,8 @@ class GameSim:
         # - double minors stage down: a goal wipes the first 2 min only
         # - coincidental calls never terminate on a goal
         if self._is_team_on_power_play(scoring_team):
-            opposing_team = self.away_team if scoring_team == self.home_team else self.home_team
-            opposing_penalties = self.away_penalties if scoring_team == self.home_team else self.home_penalties
+            opposing_team = self.away_team if scoring_team is self.home_team else self.home_team
+            opposing_penalties = self.away_penalties if scoring_team is self.home_team else self.home_penalties
 
             terminating = [p for p in opposing_penalties
                            if p.get('manpower_loss', True) and p.get('terminates_on_goal', True)]
@@ -6190,7 +6192,7 @@ class GameSim:
         # _get_current_situation is home-centric (POWER_PLAY = home has the
         # manpower). Flip it when the AWAY team is attacking so modifiers and
         # formations reflect the attacking team's actual situation.
-        if attacking_team != self.home_team:
+        if attacking_team is not self.home_team:
             current_situation = {
                 SpecialSituation.POWER_PLAY: SpecialSituation.PENALTY_KILL,
                 SpecialSituation.PENALTY_KILL: SpecialSituation.POWER_PLAY,
@@ -6322,7 +6324,7 @@ class GameSim:
             ciq = (_shot_carrier.offensive_awareness
                    + _shot_carrier.decision_making) / 2.0
             iq_factor = (ciq - 72.0) / 100.0
-            _att_net = 189.0 if attacking_team == self.home_team else 11.0
+            _att_net = 189.0 if attacking_team is self.home_team else 11.0
             _ccx, _ = self._ppos_get(_shot_carrier)
             if abs(_ccx - _att_net) < 35.0:
                 shot_chance *= 1.0 + iq_factor * 1.2
@@ -6410,7 +6412,7 @@ class GameSim:
                           if p.primary_position != PlayerPosition.GOALIE]
         scorer = max(candidates,
                      key=lambda p: p.shooting_accuracy + p.offensive_awareness)
-        loser = self.away_team if winner == self.home_team else self.home_team
+        loser = self.away_team if winner is self.home_team else self.home_team
         _gg_goalie = self._selected_goalie(loser)
         self._update_shot_stats(scorer, winner, loser, 'high', 15.0, ShotType.WRIST_SHOT)
         if _gg_goalie is not None:
@@ -6588,17 +6590,47 @@ class GameSim:
 
     def _get_on_ice(self, team):
         """Returns the list of players currently on the ice for a team, based on lines."""
-        all_penalties = self.home_penalties if team == self.home_team else self.away_penalties
+        is_home = team is self.home_team
+        # Fast path: the answer only changes when the game state below
+        # changes, but this runs ~5k times per game. Key on everything read.
+        try:
+            _nlc = getattr(self, '_no_line_change_team', None)
+            _key = (
+                is_home, self.period, self.clock // 45, self.clock // 60,
+                tuple(sorted((p['player'].id,
+                              1 if p.get('manpower_loss', True) else 0)
+                             for p in self.home_penalties)),
+                tuple(sorted((p['player'].id,
+                              1 if p.get('manpower_loss', True) else 0)
+                             for p in self.away_penalties)),
+                self.home_score, self.away_score,
+                bool(getattr(self, '_ot_4v4_until_whistle', False)),
+                _nlc.team_name if _nlc is not None else None,
+                getattr(self, '_frozen_line', 0),
+                getattr(self, '_frozen_d_pair', 0),
+                tuple(sorted(getattr(self, 'goalie_pulled', ()))),
+                id(getattr(team, 'lineup', None)),
+            )
+            _cache = self.__dict__.setdefault('_on_ice_cache', {})
+            if len(_cache) > 1024:
+                _cache.clear()
+            _hit = _cache.get(_key)
+            if _hit is not None:
+                return list(_hit)
+        except Exception:
+            _key, _cache = None, None
+        all_penalties = self.home_penalties if is_home else self.away_penalties
         penalized_players = [p['player'] for p in all_penalties]
+        penalized_ids = {p.id for p in penalized_players}
         # Only manpower-loss penalties reduce strength: 5v5 -> 5v4 -> 5v3
         # (never below 3). Coincidental majors/minors and misconducts keep
         # the player in the box but the team at full strength.
         penalized_skaters = [p['player'] for p in all_penalties
                              if p.get('manpower_loss', True)
                              and getattr(p['player'], 'primary_position', None) != PlayerPosition.GOALIE]
-        opp = self.away_team if team == self.home_team else self.home_team
+        opp = self.away_team if is_home else self.home_team
         opp_mp_skaters = [p['player'] for p in
-                          (self.home_penalties if opp == self.home_team else self.away_penalties)
+                          (self.home_penalties if opp is self.home_team else self.away_penalties)
                           if p.get('manpower_loss', True)
                           and getattr(p['player'], 'primary_position', None) != PlayerPosition.GOALIE]
         num_skaters = 5
@@ -6623,12 +6655,12 @@ class GameSim:
         current_line = (self.clock // 45) % 4 + 1 # Change lines every 45 seconds
         current_d_pair = (self.clock // 60) % 3 + 1
         # Icing: offending team cannot change lines (tired skaters stay out)
-        if getattr(self, '_no_line_change_team', None) is team:
+        if _nlc is team:
             current_line = getattr(self, '_frozen_line', current_line)
             current_d_pair = getattr(self, '_frozen_d_pair', current_d_pair)
 
         # Line matching: aggressive home-ice deployment reacts to score state
-        if team == self.home_team and getattr(team, 'tactic_line_matching', 'Standard') == 'Aggressive':
+        if is_home and getattr(team, 'tactic_line_matching', 'Standard') == 'Aggressive':
             goal_diff = self.home_score - self.away_score
             rotation = (self.clock // 45) % 2
             if goal_diff <= -2:
@@ -6637,6 +6669,7 @@ class GameSim:
                 current_line = 3 if rotation == 0 else 4  # protect the lead: bottom six
 
         on_ice = []
+        on_ice_ids = set()
 
         # Special teams: dress the PP/PK units when manpower differs (not in 3v3 OT)
         special_unit = None
@@ -6652,8 +6685,9 @@ class GameSim:
                 # penalty situation allows (5v4 -> 4, 5v3 -> 3).
                 if len(on_ice) >= num_skaters:
                     break
-                if p and p not in penalized_players and p not in on_ice:
+                if p and p.id not in penalized_ids and p.id not in on_ice_ids:
                     on_ice.append(p)
+                    on_ice_ids.add(p.id)
 
         # Get forwards from the current line (only tops up when the special
         # unit left gaps, or for even strength / 3v3 OT)
@@ -6669,8 +6703,9 @@ class GameSim:
                 pos_enum = PlayerPosition.RIGHT_WING
 
             player = self._lineup_player(team, f"F{current_line}_{pos}")
-            if player and player not in penalized_players and player not in on_ice:
+            if player and player.id not in penalized_ids and player.id not in on_ice_ids:
                 on_ice.append(player)
+                on_ice_ids.add(player.id)
 
         # Get defensemen from the current pairing
         for pos in ['L', 'R']:
@@ -6683,8 +6718,9 @@ class GameSim:
                 pos_enum = PlayerPosition.RIGHT_DEFENSE
 
             player = self._lineup_player(team, f"D{current_d_pair}_{pos}")
-            if player and player not in penalized_players and player not in on_ice:
+            if player and player.id not in penalized_ids and player.id not in on_ice_ids:
                 on_ice.append(player)
+                on_ice_ids.add(player.id)
         
         # Empty net: the pulled team skates six (extra attacker, no goalie)
         pulled = team.team_name in getattr(self, "goalie_pulled", set())
@@ -6693,7 +6729,7 @@ class GameSim:
         # If lineup is incomplete, fill with best available players
         if len(on_ice) < num_skaters:
             pool = [pl for pl in team.roster
-                    if pl not in on_ice and pl not in penalized_players]
+                    if pl.id not in on_ice_ids and pl.id not in penalized_ids]
             if pulled:
                 # the 6th skater is a forward -- never dress the goalie
                 pool = [pl for pl in pool
@@ -6703,10 +6739,14 @@ class GameSim:
             on_ice.extend(best_available[:num_skaters - len(on_ice)])
 
         if pulled:
+            if _cache is not None and _key is not None:
+                _cache[_key] = list(on_ice)
             return on_ice  # net is empty
         # Selected starter (G1) first; fall back to best goalie on the roster.
         goalie = self._selected_goalie(team)
         on_ice.append(goalie)
+        if _cache is not None and _key is not None:
+            _cache[_key] = list(on_ice)
         return on_ice
 
     def _select_starting_lines(self):
@@ -6741,7 +6781,7 @@ class GameSim:
             return False
         if team.team_name in getattr(self, "goalie_pulled", set()):
             return False
-        diff = ((self.home_score - self.away_score) if team == self.home_team
+        diff = ((self.home_score - self.away_score) if team is self.home_team
                 else (self.away_score - self.home_score))
         if diff >= 0:
             return False
@@ -6759,8 +6799,8 @@ class GameSim:
     def _team_in_oz(self, team):
         """Puck deep in this team's attacking end (on-the-fly pull spot)."""
         px = self.puck_pos[0] if getattr(self, "puck_pos", None) else 100.0
-        return ((team == self.home_team and px > 125)
-                or (team == self.away_team and px < 75))
+        return ((team is self.home_team and px > 125)
+                or (team is self.away_team and px < 75))
 
     def _pull_goalie(self, team):
         """Pull the goalie for the extra attacker (6 skaters, empty net)."""
@@ -6804,18 +6844,18 @@ class GameSim:
         for team in (self.home_team, self.away_team):
             if not self._pull_eligible(team):
                 continue
-            adir = 1 if team == self.home_team else -1
+            adir = 1 if team is self.home_team else -1
             if (adir == 1 and fx > 125) or (adir == -1 and fx < 75):
                 self._pull_goalie(team)
 
     def _maybe_empty_net_goal(self, team_with_puck):
         """The other team's net is empty and they just turned it over."""
-        other = (self.away_team if team_with_puck == self.home_team
+        other = (self.away_team if team_with_puck is self.home_team
                  else self.home_team)
         if other.team_name not in self.goalie_pulled:
             return
         px = self.puck_pos[0] if getattr(self, "puck_pos", None) else 100.0
-        adir = 1 if team_with_puck == self.home_team else -1
+        adir = 1 if team_with_puck is self.home_team else -1
         deep_off = (adir == 1 and px > 125) or (adir == -1 and px < 75)
         neutral = (adir == 1 and px > 75) or (adir == -1 and px < 125)
         prob = 0.30 if deep_off else (0.10 if neutral else 0.03)
@@ -6833,8 +6873,8 @@ class GameSim:
         # not already deep, the scorer skates the puck into the zone first
         # so the visual shows a proper play, not a prayer from distance.
         if not deep_off:
-            anx = 189.0 if team_with_puck == self.home_team else 11.0
-            adir = 1 if team_with_puck == self.home_team else -1
+            anx = 189.0 if team_with_puck is self.home_team else 11.0
+            adir = 1 if team_with_puck is self.home_team else -1
             self._ppos_place(scorer, anx - 25 * adir, 42.5, jitter=3.0)
             self.possession_player = scorer
             self.possession_team = team_with_puck
@@ -7180,9 +7220,9 @@ class GameSim:
 
     def _get_team_goals(self, team_name):
         """Helper to get total goals for a team."""
-        if team_name == self.home_team.team_name:
+        if team_name is self.home_team.team_name:
             return self.home_score
-        elif team_name == self.away_team.team_name:
+        elif team_name is self.away_team.team_name:
             return self.away_score
         return 0
 
@@ -8072,7 +8112,7 @@ class GameSim:
         
         # Get base coaching adjustment for situation
         base_adjustment = self.coaching_adjustments.get(situation, {}).get(
-            'home' if team == self.home_team else 'away', 1.0
+            'home' if team is self.home_team else 'away', 1.0
         )
         
         # Tactical system bonuses
@@ -8100,7 +8140,7 @@ class GameSim:
 
     def _team_situation(self, team, situation):
         """Translate the home-centric situation to the given team's perspective."""
-        if team == self.home_team:
+        if team is self.home_team:
             return situation
         swap = {SpecialSituation.POWER_PLAY: SpecialSituation.PENALTY_KILL,
                 SpecialSituation.PENALTY_KILL: SpecialSituation.POWER_PLAY}
@@ -8127,7 +8167,7 @@ class GameSim:
         situation = self._get_current_situation()
         if situation == SpecialSituation.POWER_PLAY \
                 and self._is_team_on_power_play(attacking_team):
-            opp_pens = (self.home_penalties if defending_team == self.home_team
+            opp_pens = (self.home_penalties if defending_team is self.home_team
                         else self.away_penalties)
             n_opp = sum(1 for p in opp_pens if p.get('minutes', 2) >= 2)
             return 3.0 if n_opp >= 2 else 2.2
@@ -8906,7 +8946,7 @@ class GameSim:
             report['team_analytics'][team_name] = {
                 'expected_goals': stats['expected_goals_for'],
                 'goals_above_expected': stats['goals_above_expected'],
-                'win_probability_final': self.win_probability if team_name == self.home_team.team_name else 1 - self.win_probability,
+                'win_probability_final': self.win_probability if team_name is self.home_team.team_name else 1 - self.win_probability,
                 'clutch_rating': stats['clutch_rating']
             }
         
