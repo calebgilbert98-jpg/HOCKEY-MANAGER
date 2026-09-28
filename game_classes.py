@@ -5229,8 +5229,14 @@ class League:
         except Exception:
             pass
         
-        # Sort teams by points (worst to best for each round)
-        sorted_teams = sorted(self.teams, 
+        # Sort teams by points (worst to best for each round).
+        # NHL Entry Draft only: AHL clubs hold pick objects in the data
+        # model but do not draft. Iterating all 62 teams once produced a
+        # 434-pick order that exhausted the 224-prospect class mid-draft.
+        _nhl_teams = [t for t in self.teams
+                      if getattr(t, 'league_name', '') == 'National Hockey League']
+        _draft_teams = _nhl_teams or list(self.teams)
+        sorted_teams = sorted(_draft_teams,
                             key=lambda t: self.standings.get(t.team_name, {}).get('Points', 0))
 
         # Draft lottery: round 1 follows the televised lottery order.
@@ -5266,7 +5272,7 @@ class League:
                 for pick in team_picks:
                     # Find the team that currently owns this pick
                     current_owner = None
-                    for owner_team in self.teams:
+                    for owner_team in _draft_teams:
                         if pick in owner_team.get_picks_for_year(year):
                             current_owner = owner_team
                             break

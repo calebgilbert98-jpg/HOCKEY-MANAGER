@@ -11421,6 +11421,14 @@ class HockeyManagerGUI(tk.Tk):
         # Generate new draft class (quality from settings: Weak/Normal/Strong/Generational)
         draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
         self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)  # 7 rounds × 32 teams = 224 players
+
+        # Reset the deadline manager's per-season state so last year's
+        # trade activity doesn't leak into the new season's intel panel.
+        try:
+            from trade_deadline_manager import get_deadline_manager
+            get_deadline_manager(getattr(self, 'game_manager', None)).reset_for_new_season()
+        except Exception:
+            pass
         
         # Update the current date to offseason
         self.current_date = date(self.league.season_year, 7, 1)  # Jump to July 1st (Free Agency)

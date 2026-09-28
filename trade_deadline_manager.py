@@ -51,6 +51,27 @@ class TradeDeadlineManager:
         
         # Initialize team market activity
         self._initialize_team_strategies()
+
+    def reset_for_new_season(self):
+        """Clear per-season deadline state at the offseason rollover.
+
+        Without this the singleton keeps last season's trade activity log
+        (stale "hot"/"warm" intel) and last season's buyer/seller
+        strategies into the new year.
+        """
+        self.trade_activity_log = []
+        self.breaking_news = []
+        self.deadline_passed = False
+        self.deadline_stats = {
+            'total_trades': 0,
+            'players_moved': 0,
+            'biggest_deal_value': 0,
+            'most_active_team': None,
+            'deadline_minute_trades': 0
+        }
+        self._initialize_team_strategies()
+        self._clock = {'date': None, 'minutes': self.CLOCK_START_MIN,
+                       'expired': False}
         
     def is_trade_deadline_day(self, current_date=None) -> bool:
         """Check if the current date is trade deadline day"""

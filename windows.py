@@ -5198,8 +5198,10 @@ class DraftView(ctk.CTkFrame):
             self.draft_order.append([draft_pick.round, team, draft_pick])
         if not self.draft_order:
             standings = getattr(self.app.league, 'standings', None) or {}
+            _nhl = [t for t in self.app.league.teams
+                    if getattr(t, 'league_name', '') == 'National Hockey League']
             sorted_teams = sorted(
-                self.app.league.teams,
+                _nhl or list(self.app.league.teams),
                 key=lambda t: standings.get(t.team_name, {}).get('Points', 0))
             for round_num in range(1, self.total_rounds + 1):
                 for team in sorted_teams:
@@ -5477,6 +5479,9 @@ class DraftView(ctk.CTkFrame):
             return
         available = self._board_sorted_available()
         if not available:
+            # Prospect pool exhausted: terminate the draft so no pick
+            # driver can spin on an un-advanced current_pick.
+            self.end_draft()
             return
         if self.strategy_var.get() == "Need":
             needs = self.te.team_needs(self.app.user_team)
@@ -5746,6 +5751,13 @@ class DraftView(ctk.CTkFrame):
             ug.pack(pady=10)
 
     def end_draft(self):
+        # Terminate the pick order: a draft that ends early (e.g. the
+        # prospect pool runs out) must not leave current_pick mid-order,
+        # or any direct pick driver spins forever re-calling pick methods.
+        try:
+            self.current_pick = len(self.draft_order)
+        except Exception:
+            pass
         if self._ai_after_id:
             try:
                 self.after_cancel(self._ai_after_id)
