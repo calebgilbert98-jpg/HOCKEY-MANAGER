@@ -2294,7 +2294,10 @@ class AdvancedGameSim:
         position_factor = self._calculate_position_factor(shooter, puck_team_name)
         
         # --- Determine Event Type based on player attributes ---
-        event_type = self._determine_event_type(shooter, shooters, fatigue_factor)
+        _puck_team = (self.home_team if puck_team_name == self.home_team.team_name
+                      else self.away_team)
+        event_type = self._determine_event_type(shooter, shooters, fatigue_factor,
+                                                team=_puck_team)
         
         if event_type == "SHOT":
             self._resolve_shot_event(shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters)
@@ -2371,7 +2374,7 @@ class AdvancedGameSim:
         position_skill = (off_the_puck + anticipation + hockey_iq) / 3
         return 1.0 + (position_skill - 10) * 0.03
     
-    def _determine_event_type(self, player, shooters, fatigue_factor):
+    def _determine_event_type(self, player, shooters, fatigue_factor, team=None):
         """Determine what type of event occurs based on player attributes"""
         creativity = getattr(player, 'creativity', 10)
         decision_making = getattr(player, 'decision_making', 10)
@@ -2402,6 +2405,20 @@ class AdvancedGameSim:
         # Fatigue reduces creative plays
         deke_prob *= fatigue_factor
         pass_prob *= fatigue_factor
+
+        # -- Perfect mesh (additive): aligned units create more -- the extra
+        # pass, the extra look, the assist that wins the game. A guy doesn't
+        # need a hat trick to have his night. Half the conversion effect.
+        try:
+            from mesh_system import mesh_chance_factor as _mesh_chance
+            _mates = [p for p in shooters if p is not player]
+            _cf = _mesh_chance(player, _mates, team,
+                               is_playoff=bool(getattr(self, "is_playoff", False)))
+            if _cf != 1.0:
+                shot_prob *= _cf
+                pass_prob *= _cf
+        except Exception:
+            pass
         
         # Random selection based on probabilities
         rand = random.random()
@@ -2546,6 +2563,7 @@ class AdvancedGameSim:
             
             scores = (self.score[self.home_team.team_name], self.score[self.away_team.team_name])
             notable_events = [e for e in self.events if e['event'] == 'Goal' or e['event'] == 'Shootout Goal']
+            self._record_mesh_performances()
             return winner, loser, scores, self.events, notable_events
         if self.score[self.home_team.team_name] > self.score[self.away_team.team_name]:
             winner, loser = self.home_team, self.away_team
@@ -2556,8 +2574,36 @@ class AdvancedGameSim:
         
         # Gameplay injuries: small chance per game (NHL: ~1 injury per 3-4 games)
         self._process_gameplay_injuries()
-        
+        self._record_mesh_performances()
+
         return winner, loser, scores, self.events, notable_events
+
+    def _record_mesh_performances(self):
+        """Feed finished-game lines into the mesh form tracker (moments ->
+        streaks -> breakouts). Additive: never touches existing stat flow."""
+        try:
+            from mesh_system import record_performance
+            is_po = bool(getattr(self, "is_playoff", False))
+            for team in (self.home_team, self.away_team):
+                tstats = self.stats.get(team.team_name, {})
+                by_id = {pl.id: pl for pl in (getattr(team, 'roster', []) or [])}
+                for pid, ps in tstats.items():
+                    pl = by_id.get(pid)
+                    if pl is None:
+                        continue
+                    note = record_performance(
+                        pl, ps.get('goals', 0), ps.get('assists', 0),
+                        team=team, is_playoff=is_po)
+                    if note:
+                        try:
+                            self.events.append({
+                                'time': self.time, 'period': self.period,
+                                'team': team.team_name, 'player': pl,
+                                'event': 'MeshNote', 'note': note})
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
     def _process_gameplay_injuries(self):
         """Process potential injuries from gameplay.
@@ -2669,9 +2715,13 @@ class AdvancedGameSim:
         
         # NHL-realistic shooting percentage: ~9% base
         # Each point of skill difference shifts scoring chance by ~0.8%
-        # (Elite 18 vs weak 8 = +8% → ~17% is the realistic ceiling for great chances)
+        # Recalibrated (mesh_system): both skills resolve on the 1-100 scale
+        # with goalies systematically ~15 points above shooters, so the raw
+        # differential is recentered to restore the designed 9% for an
+        # average shot. Talent sensitivity itself is unchanged.
+        from mesh_system import recalibrated_shot_chance
         skill_diff = shooter_skill - goalie_skill
-        shot_chance = 0.09 + (skill_diff * 0.008)
+        shot_chance = recalibrated_shot_chance(skill_diff)
 
         # -- Impact tier (additive): tired / normal / big shot. Scales the
         # existing shot_chance on top of the agreed math above -- big shots
@@ -2692,6 +2742,22 @@ class AdvancedGameSim:
             _sm = _seff["save_prob_mult"]
             if _sm != 1.0:
                 shot_chance = min(0.45, max(0.005, shot_chance / _sm))
+        except Exception:
+            pass
+
+        # -- Perfect mesh (additive): situational alignment -- chemistry,
+        # system fit, morale, form -- pays a super-additive kicker with an
+        # underdog tilt, plus playoff elevators in April. Multiplies the
+        # agreed math above; never overrides it.
+        try:
+            from mesh_system import mesh_factor as _mesh_factor
+            _shooting_team = (self.home_team if puck_team_name == self.home_team.team_name
+                              else self.away_team)
+            _mates = [p for p in shooters if p is not shooter]
+            _mf = _mesh_factor(shooter, _mates, _shooting_team,
+                               is_playoff=bool(getattr(self, "is_playoff", False)))
+            if _mf != 1.0:
+                shot_chance = min(0.45, max(0.005, shot_chance * _mf))
         except Exception:
             pass
         

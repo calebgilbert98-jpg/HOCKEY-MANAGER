@@ -301,6 +301,12 @@ class Player:
     # from attributes. See player_traits.py. Stored as trait ID strings.
     traits: list = field(default_factory=list)
     line_chemistry: int = field(default_factory=lambda: random.randint(10, 20))
+
+    # Perfect-mesh form tracker (-1.0 cold .. 1.0 hot) and heater counter.
+    # Written by mesh_system.record_performance(), read back as a mesh input:
+    # moments -> streaks -> (sometimes) breakouts. Defaults keep old saves fine.
+    mesh_form: float = 0.0
+    mesh_streak: int = 0
     
     # SEASON STATISTICS - Reset each season
     games_played: int = 0

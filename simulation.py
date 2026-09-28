@@ -2211,6 +2211,22 @@ class GameSim:
         self._emit_pbp("game_end", winner=winner.team_name,
                        home_score=self.home_score, away_score=self.away_score)
 
+        # -- Perfect mesh: feed finished-game lines into the form tracker
+        # (moments -> streaks -> breakouts). Additive; touches no stat flow.
+        try:
+            from mesh_system import record_performance as _rec
+            _is_po = bool(getattr(self, "is_playoff", False))
+            for _stats in self.game_stats.values():
+                _pl = _stats.get('player')
+                if _pl is None:
+                    continue
+                _note = _rec(_pl, _stats.get('g', 0), _stats.get('a', 0),
+                             is_playoff=_is_po)
+                if _note:
+                    self.notable_events.append({'player': _pl, 'event': _note})
+        except Exception:
+            pass
+
         self._emit_telemetry()
 
         return winner, loser, (self.home_score, self.away_score), self.game_log, self.notable_events
@@ -4587,7 +4603,15 @@ class GameSim:
         if random.random() * 100 < pass_chance \
                 and shot_type not in [ShotType.REBOUND, ShotType.TIP_IN]:
             teammates = [p for p in self._get_on_ice(attacking_team) if p != shooter and p.primary_position != PlayerPosition.GOALIE]
-            if teammates and random.random() < 0.3:  # 30% chance of pass play
+            _pass_look = 0.3
+            try:
+                from mesh_system import mesh_chance_factor as _mcf2
+                _pm = [pl for pl in teammates if pl is not shooter]
+                _pass_look *= _mcf2(shooter, _pm, attacking_team,
+                                    is_playoff=bool(getattr(self, "is_playoff", False)))
+            except Exception:
+                pass
+            if teammates and random.random() < _pass_look:  # ~30% chance of pass play
                 passer = shooter
                 shooter = random.choice(teammates)
                 # The one-timer man arrives at the same spot and takes it;
@@ -4622,6 +4646,22 @@ class GameSim:
         # controversy momentum channel -- not part of any capped budget.
         expected_goal = min(0.95, expected_goal * self._situation_xg_factor(
             attacking_team))
+
+        # -- Perfect mesh (additive): situational alignment -- chemistry,
+        # system fit, morale, form -- pays a super-additive kicker with an
+        # underdog tilt, plus playoff elevators in April. Own channel next to
+        # the tactics/situation factors above; never overrides them.
+        try:
+            from mesh_system import mesh_factor as _mesh_factor
+            _mates = [pl for pl in self._get_on_ice(attacking_team)
+                      if pl is not shooter
+                      and pl.primary_position != PlayerPosition.GOALIE]
+            _mf = _mesh_factor(shooter, _mates, attacking_team,
+                               is_playoff=bool(getattr(self, "is_playoff", False)))
+            if _mf != 1.0:
+                expected_goal = min(0.95, expected_goal * _mf)
+        except Exception:
+            pass
 
         # Update expected goals tracking
         self.expected_goals[attacking_team.team_name] = \
@@ -6326,6 +6366,22 @@ class GameSim:
                     and self._is_team_on_power_play(attacking_team)):
                 # A good kill smothers PP shot volume, not just finishing.
                 shot_chance *= (2.0 - _dfn["pk"])
+        except Exception:
+            pass
+
+        # -- Perfect mesh (additive): aligned units generate more -- the extra
+        # look, the extra pass. Half the conversion effect; the playmaker's
+        # night counts as much as the sniper's.
+        try:
+            from mesh_system import mesh_chance_factor as _mesh_chance
+            _ref = (self.possession_player
+                    if self.possession_player in attacking_skaters
+                    else attacking_skaters[0])
+            _mm = [pl for pl in attacking_skaters if pl is not _ref]
+            _cf = _mesh_chance(_ref, _mm, attacking_team,
+                               is_playoff=bool(getattr(self, "is_playoff", False)))
+            if _cf != 1.0:
+                shot_chance *= _cf
         except Exception:
             pass
 
