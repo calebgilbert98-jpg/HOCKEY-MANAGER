@@ -346,6 +346,19 @@ class HomeDashboard:
         try:
             from ui_components import PlayerProfileWindow
             PlayerProfileWindow(self.parent, player)
+            return
+        except Exception:
+            pass
+        # Never silently swallow: route through the app's canonical path.
+        try:
+            app = self.parent
+            for _ in range(4):
+                if hasattr(app, "open_player_profile"):
+                    break
+                app = getattr(app, "parent", app)
+            if hasattr(app, "open_player_profile"):
+                app.open_player_profile(player)
+                return
         except Exception as e:
             print(f"Could not open player profile: {e}")
 

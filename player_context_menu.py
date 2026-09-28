@@ -136,12 +136,26 @@ class PlayerContextMenu:
             context_menu.grab_release()
     
     def _view_player_profile(self, player):
-        """Open player profile window"""
+        """Open player profile window.
+
+        Primary: the card popup. Any failure (not just ImportError) falls
+        back to the app's canonical open_player_profile so a right-click
+        never silently dies inside a menu callback.
+        """
         try:
             from ui_components import PlayerProfileWindow
             PlayerProfileWindow(self.parent, player)
-        except ImportError:
-            # Fallback if PlayerProfileWindow doesn't exist
+            return
+        except Exception:
+            pass
+        try:
+            app = self._app()
+            if hasattr(app, "open_player_profile"):
+                app.open_player_profile(player)
+                return
+        except Exception:
+            pass
+        try:
             messagebox.showinfo(
                 "Player Profile", 
                 f"Player: {player.full_name}\\n"
@@ -151,6 +165,8 @@ class PlayerContextMenu:
                 f"Potential: {getattr(player, 'potential', 'Unknown')}\\n\\n"
                 f"Team: {getattr(player, 'team_name', 'Free Agent')}"
             )
+        except Exception:
+            pass
     
     def _scout_player(self, player):
         """Open scouting assignment dialog or show existing report"""

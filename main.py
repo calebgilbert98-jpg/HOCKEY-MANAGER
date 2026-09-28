@@ -150,7 +150,7 @@ NHL_ROSTER_SIZE = 23
 AHL_ROSTER_SIZE = 20
 PROSPECT_POOL_SIZE = 15
 GAMES_PER_SIM_DAY = 8 
-SALARY_CAP = 83_500_000
+SALARY_CAP = 104_000_000  # 2026-27 NHL cap (modern day)
 PLAYER_BUDGET = 92_000_000
 START_DATE = date(datetime.now().year, 10, 1)
 
@@ -296,6 +296,21 @@ class GameManager:
                 print("Initializing draft picks for all teams...")
                 self.league.initialize_all_draft_picks()
                 print("Draft picks initialized!")
+
+                # Real-life cap finances: seed each club's actual 2026-27
+                # dead-cap penalties (buyouts + retained salary), unless
+                # the user chose "start without cap penalties".
+                try:
+                    import real_cap_data
+                    season_yr = getattr(self.league, 'season_year', 2026)
+                    if settings.get('start_without_cap_penalties', False):
+                        real_cap_data.clear_dead_cap(self.league)
+                        print("Cap penalties cleared (start without cap penalties).")
+                    else:
+                        n = real_cap_data.seed_real_dead_cap(self.league, season_yr)
+                        print(f"Seeded real-life dead-cap penalties for {n} teams.")
+                except Exception as e:
+                    print(f"Dead-cap seeding skipped: {e}")
             
             # Apply comprehensive game settings
             debug_print("DEBUG: Applying game settings...")
@@ -533,7 +548,7 @@ class GameManager:
             for team in self.league.teams:
                 if team.league_name == "National Hockey League":
                     if self.salary_cap_enabled:
-                        team.salary_cap = 83500000  # Standard NHL cap
+                        team.salary_cap = 104000000  # Standard NHL cap (2026-27)
                     else:
                         team.salary_cap = 999999999  # Effectively unlimited
         
@@ -1813,12 +1828,21 @@ class AdvancedGameSim:
             import dressing_room as _dr
             for team in (self.home_team, self.away_team):
                 boost = _dr.consume_pregame_boost(team)
+                name = team.team_name
+                mult = self.dressing_boost.get(name, 1.0)
                 if boost:
-                    name = team.team_name
-                    self.dressing_boost[name] = max(
-                        0.96, min(1.04,
-                                  self.dressing_boost.get(name, 1.0)
-                                  + 0.01 * int(boost)))
+                    mult = max(0.96, min(1.04, mult + 0.01 * int(boost)))
+                # One-game practice edge (bag-skate compete response): folds
+                # into the same finishing channel, then zeroes.
+                try:
+                    dr = _dr.ensure_dressing_room_fields(team)
+                    edge = float(dr.get("practice_edge", 0) or 0)
+                    if edge:
+                        mult = max(0.96, min(1.06, mult + edge))
+                        dr["practice_edge"] = 0.0
+                except Exception:
+                    pass
+                self.dressing_boost[name] = mult
         except Exception:
             pass
 
@@ -4922,7 +4946,7 @@ class HockeyManagerGUI(tk.Tk):
         # Salary cap
         ttk.Label(details_frame, text="Salary Cap:", style='Info.TLabel', 
                  font=(self.FONT_FAMILY, 8)).grid(row=0, column=1, sticky='w')
-        self.cap_value_label = ttk.Label(details_frame, text="$83.5M", style='PlayerInfo.TLabel', 
+        self.cap_value_label = ttk.Label(details_frame, text="$104M", style='PlayerInfo.TLabel', 
                                        font=(self.FONT_FAMILY, 9, 'bold'))
         self.cap_value_label.grid(row=1, column=1, sticky='w')
         
@@ -6693,7 +6717,7 @@ class HockeyManagerGUI(tk.Tk):
         if not cap:
             # Fall back to league cap
             league = getattr(self, 'league', None)
-            cap = getattr(league, 'salary_cap', 87500000)  # 2024-25-ish default
+            cap = getattr(league, 'salary_cap', 104000000)  # modern-day default
         payroll = sum(getattr(p.contract, 'salary', 0) or 0
                       for p in getattr(team, 'roster', [])
                       if getattr(p, 'contract', None))
@@ -7879,6 +7903,7 @@ class HockeyManagerGUI(tk.Tk):
         if self.current_date.weekday() == 6:  # Sunday - weekly development processing
             self._process_player_development()
             self._process_training_programs()
+            self._process_room_politics_weekly()
 
         # FM-style career systems: board, happiness, youth, press (cheap daily)
         self._process_career_daily()
@@ -7950,6 +7975,33 @@ class HockeyManagerGUI(tk.Tk):
         # Keep the window registry in sync for display purposes
         for pid, prog in gm.training_programs.items():
             ACTIVE_TRAINING_PROGRAMS[pid] = prog
+
+    def _process_room_politics_weekly(self):
+        """Weekly room-politics tick (module 03, Wave 2): practice plans are
+        executed, captaincy crises surface, demanding coaches' shelf life
+        ticks. User and AI teams run the same engine; only the choices
+        differ (the GM's vs automated)."""
+        try:
+            import dressing_room as _dr
+            league = getattr(self, "league", None)
+            teams = list(getattr(league, "teams", []) or [])
+            date_str = ""
+            try:
+                date_str = self.current_date.isoformat()
+            except Exception:
+                pass
+            for team in teams:
+                try:
+                    if bool(getattr(team, "is_user_team", False)):
+                        _dr.user_room_politics_tick(
+                            team, date_str=date_str, league=league)
+                    else:
+                        _dr.ai_room_politics_tick(
+                            team, date_str=date_str, league=league)
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     def _process_player_development(self):
         """Process weekly player development for all teams"""
@@ -12822,22 +12874,42 @@ class HockeyManagerGUI(tk.Tk):
         # Use modern profile by default (clean, card-based)
         # Set use_modern_profile=False to revert to the classic detailed view
         use_modern_profile = True
-        
+
+        last_error = None
         if use_modern_profile:
             try:
                 from modern_profile import PlayerProfile
                 PlayerProfile(self, player)
                 return
             except Exception as e:
+                last_error = e
                 print(f"Modern profile failed, falling back: {e}")
-        
-        report = self.user_team.scouting_reports.get(player.id)
-        is_scouted = report is not None
-        
-        # Fallback to the standard player profile view
-        from ui_components import PlayerProfileView
-        return self.show_screen("player_profile", f"Profile: {player.full_name}",
-                                PlayerProfileView, player, is_scouted, report)
+
+        try:
+            team = getattr(self, "user_team", None)
+            reports = getattr(team, "scouting_reports", None) or {}
+            report = reports.get(getattr(player, "id", None))
+            is_scouted = report is not None
+
+            # Fallback to the standard player profile view
+            from ui_components import PlayerProfileView
+            return self.show_screen("player_profile", f"Profile: {player.full_name}",
+                                    PlayerProfileView, player, is_scouted, report)
+        except Exception as e:
+            # Never fail silently: the user clicked and deserves to know why
+            # no card appeared.
+            print(f"Player profile fallback failed: {e}")
+            try:
+                from popup_system import messagebox
+                detail = f"{last_error}" if last_error else f"{e}"
+                messagebox.showerror(
+                    "Player Profile",
+                    f"Could not open the profile for "
+                    f"{getattr(player, 'full_name', 'this player')}.\n\n"
+                    f"Details: {detail}")
+            except Exception:
+                pass
+            return None
         
     def send_to_ahl(self, player):
         self.user_team.roster.remove(player)
@@ -12934,7 +13006,7 @@ class HockeyManagerGUI(tk.Tk):
             _ovr100 = int(_ovr * 2)
         _pos = getattr(person, "primary_position", "")
         _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
-        _base_pct = (_ovr * 100_000) / 83_500_000  # ~0.12% per OVR point
+        _base_pct = (_ovr * 100_000) / 104_000_000  # ~0.096% per OVR point at the modern cap
         if _cap_sys is not None:
             _season = getattr(getattr(self, 'league', None), 'season_year', 0)
             asking_price = _cap_sys.demand_for(
@@ -15324,8 +15396,27 @@ class TacticsView(tk.Frame):
         tk.Label(header, text="Your game plan shapes sim results in every situation.",
                  bg=bg, fg=muted, font=(font, 10)).pack(side='left', padx=(12, 0))
 
+        # Tab strip: Systems | Practice (the weekly planner lives here,
+        # in the tactics bucket, per the Wave 2 roadmap).
+        tabrow = tk.Frame(self, bg=bg)
+        tabrow.pack(fill='x', padx=20, pady=(4, 0))
+        self._tab_buttons = {}
+        for tab in ("Systems", "Practice"):
+            btn = PillButton(
+                tabrow, text=tab, bg=bg, font=(font, 10, 'bold'),
+                command=lambda t=tab: self._switch_tactic_tab(t))
+            btn.pack(side='left', padx=(0, 8))
+            self._tab_buttons[tab] = btn
+
         body = tk.Frame(self, bg=bg)
         body.pack(fill='both', expand=True, padx=20, pady=8)
+        body._is_systems_body = True
+
+        self._practice_frame = tk.Frame(self, bg=bg)
+        # packed on demand by _switch_tactic_tab
+        self._build_practice_tab(self._practice_frame, bg, font, fg, muted,
+                                 accent)
+        self._switch_tactic_tab("Systems")
 
         self.pill_buttons = {}  # attr -> {value: button}
         for title, attr, default, values, hint in self.TACTIC_GROUPS:
@@ -15358,6 +15449,7 @@ class TacticsView(tk.Frame):
 
         footer = tk.Frame(self, bg=bg)
         footer.pack(fill='x', padx=20, pady=(8, 16))
+        self._footer = footer
         done_btn = PillButton(footer, text="Done", bg=bg, font=(font, 11, 'bold'),
                               fg='white', selected_bg='#00ceb8',
                               selected_fg='white', hover_bg='#00a894',
@@ -15434,6 +15526,205 @@ class TacticsView(tk.Frame):
                 "net-front chaos, tips and rebounds"),
         ]
         self.impact_label.configure(text="\n".join(lines))
+
+    # -- Practice tab (weekly planner, Wave 2) ---------------------------
+    def _switch_tactic_tab(self, tab):
+        for name, btn in self._tab_buttons.items():
+            btn.set_selected(name == tab)
+        footer = getattr(self, "_footer", None)
+        if tab == "Practice":
+            # hide systems body, show practice frame before the footer
+            for child in list(self.pack_slaves()):
+                if getattr(child, "_is_systems_body", False):
+                    child.pack_forget()
+            kw = dict(fill='both', expand=True, padx=20, pady=8)
+            if footer is not None:
+                kw["before"] = footer
+            self._practice_frame.pack(**kw)
+        else:
+            self._practice_frame.pack_forget()
+            for child in list(self.pack_slaves()):
+                if getattr(child, "_is_systems_body", False):
+                    kw = dict(fill='both', expand=True, padx=20, pady=8)
+                    if footer is not None:
+                        kw["before"] = footer
+                    child.pack(**kw)
+
+    def _build_practice_tab(self, frame, bg, font, fg, muted, accent):
+        import dressing_room as _dr
+        self._practice_focus = tk.StringVar(value="systems")
+        self._practice_intensity = tk.StringVar(value="moderate")
+        self._bag_var = tk.BooleanVar(value=False)
+
+        # Restore the stored plan, if any.
+        try:
+            plan = _dr.ensure_dressing_room_fields(self.team).get(
+                "practice_plan") or {}
+            if plan.get("focus") in _dr.PRACTICE_FOCI:
+                self._practice_focus.set(plan["focus"])
+            if plan.get("intensity") in _dr.PRACTICE_INTENSITIES:
+                self._practice_intensity.set(plan["intensity"])
+            self._bag_var.set(bool(plan.get("bag_skate", False)))
+        except Exception:
+            pass
+
+        tk.Label(frame, text="Weekly Practice Planner", bg=bg, fg=fg,
+                 font=(font, 13, 'bold')).pack(anchor='w', pady=(10, 0))
+        tk.Label(frame,
+                 text="Set the week's focus. The plan repeats every Sunday "
+                      "until you change it. Short-term gains cost room "
+                      "politics -- the receipt says who paid.",
+                 bg=bg, fg=muted, font=(font, 9), wraplength=640,
+                 justify='left').pack(anchor='w')
+
+        try:
+            coach = _dr._room_head_coach(self.team)
+            cname = getattr(coach, "name",
+                            getattr(coach, "full_name", "No head coach"))
+            axis = _dr.coach_demanding_axis(coach)
+            ax_label = ("Demanding" if axis >= 0.7 else "Players' coach"
+                        if axis <= 0.3 else "Balanced")
+            tk.Label(frame, text=f"Head coach: {cname} ({ax_label})",
+                     bg=bg, fg=fg, font=(font, 10, 'bold')).pack(
+                         anchor='w', pady=(8, 0))
+        except Exception:
+            pass
+
+        tk.Label(frame, text="Focus", bg=bg, fg=fg,
+                 font=(font, 11, 'bold')).pack(anchor='w', pady=(8, 2))
+        frow = tk.Frame(frame, bg=bg)
+        frow.pack(anchor='w')
+        self._focus_pills = {}
+        for key, spec in _dr.PRACTICE_FOCI.items():
+            btn = PillButton(
+                frow, text=spec["label"], bg=bg, font=(font, 10, 'bold'),
+                command=lambda k=key: self._pick_practice_focus(k))
+            btn.pack(side='left', padx=(0, 8))
+            self._focus_pills[key] = btn
+        self._focus_hint = tk.Label(frame, text="", bg=bg, fg=muted,
+                                    font=(font, 9))
+        self._focus_hint.pack(anchor='w', pady=(2, 0))
+
+        tk.Label(frame, text="Intensity", bg=bg, fg=fg,
+                 font=(font, 11, 'bold')).pack(anchor='w', pady=(8, 2))
+        irow = tk.Frame(frame, bg=bg)
+        irow.pack(anchor='w')
+        self._intensity_pills = {}
+        for key, spec in _dr.PRACTICE_INTENSITIES.items():
+            btn = PillButton(
+                irow, text=spec["label"], bg=bg, font=(font, 10, 'bold'),
+                command=lambda k=key: self._pick_practice_intensity(k))
+            btn.pack(side='left', padx=(0, 8))
+            self._intensity_pills[key] = btn
+
+        bag = tk.Checkbutton(frame, text="Bag skate (punishment skate)",
+                             bg=bg, fg=fg, selectcolor=bg, activebackground=bg,
+                             font=(font, 10, 'bold'), variable=self._bag_var)
+        bag.pack(anchor='w', pady=(8, 0))
+        tk.Label(frame,
+                 text="May stop a slide now (+2% one-game compete edge). "
+                      "Repeated punishment erodes trust and recovery -- "
+                      "every skate is logged.",
+                 bg=bg, fg=muted, font=(font, 9), wraplength=640,
+                 justify='left').pack(anchor='w')
+
+        tk.Label(frame, text="Assistants on this session", bg=bg, fg=fg,
+                 font=(font, 11, 'bold')).pack(anchor='w', pady=(8, 2))
+        self._assistant_label = tk.Label(frame, text="", bg=bg, fg=muted,
+                                         font=(font, 9), justify='left')
+        self._assistant_label.pack(anchor='w')
+
+        tk.Label(frame, text="Last week's receipt", bg=bg, fg=fg,
+                 font=(font, 11, 'bold')).pack(anchor='w', pady=(8, 2))
+        self._receipt_label = tk.Label(frame, text="", bg=bg, fg=muted,
+                                       font=(font, 9), justify='left',
+                                       wraplength=680)
+        self._receipt_label.pack(anchor='w')
+
+        set_btn = PillButton(frame, text="Set & Run This Week", bg=bg,
+                             font=(font, 11, 'bold'), fg='white',
+                             selected_bg='#00ceb8', selected_fg='white',
+                             hover_bg='#00a894', padx=24, pady=8,
+                             command=self._save_practice_plan)
+        set_btn.pack(anchor='w', pady=(12, 0))
+        set_btn.set_selected(True)
+        self._plan_status = tk.Label(frame, text="", bg=bg, fg=accent,
+                                     font=(font, 9))
+        self._plan_status.pack(anchor='w', pady=(4, 0))
+        self._refresh_practice_tab()
+
+    def _pick_practice_focus(self, key):
+        self._practice_focus.set(key)
+        self._refresh_practice_tab()
+
+    def _pick_practice_intensity(self, key):
+        self._practice_intensity.set(key)
+        self._refresh_practice_tab()
+
+    def _refresh_practice_tab(self):
+        import dressing_room as _dr
+        focus = self._practice_focus.get()
+        for key, btn in self._focus_pills.items():
+            btn.set_selected(key == focus)
+        self._focus_hint.configure(
+            text=_dr.PRACTICE_FOCI.get(focus, {}).get("hint", ""))
+        intensity = self._practice_intensity.get()
+        for key, btn in self._intensity_pills.items():
+            btn.set_selected(key == intensity)
+        try:
+            matched = _dr.assistant_session_match(self.team, focus)
+            if matched:
+                lines = [f"{m['name']} ({m['specialty']}, {m['prowess']:.0f})"
+                         + (" -- session match" if m["matched"] else "")
+                         for m in matched]
+            else:
+                lines = ["No assistants on staff."]
+            self._assistant_label.configure(text="\n".join(lines))
+        except Exception:
+            pass
+        try:
+            receipts = _dr.ensure_dressing_room_fields(
+                self.team).get("practice_receipts", [])
+            if receipts:
+                r = receipts[-1]
+                goal = r.get("goal", "")
+                met = r.get("goal_met")
+                met_txt = ("goal met" if met else
+                           "goal missed" if met is False else "goal pending")
+                paid = ", ".join(f"{n} ({d:+})"
+                                 for n, d in (r.get("paid") or [])[:3])
+                self._receipt_label.configure(
+                    text=f"{r.get('date', '')} {r.get('focus', '')} / "
+                         f"{r.get('intensity', '')}: {goal} -- {met_txt}."
+                         + (f" Paid: {paid}." if paid else ""))
+            else:
+                self._receipt_label.configure(text="No practices logged yet.")
+        except Exception:
+            pass
+
+    def _save_practice_plan(self):
+        import dressing_room as _dr
+        focus = self._practice_focus.get()
+        intensity = self._practice_intensity.get()
+        bag = bool(self._bag_var.get())
+        try:
+            date_str = ""
+            app = self.app
+            if hasattr(app, "current_date"):
+                try:
+                    date_str = app.current_date.isoformat()
+                except Exception:
+                    pass
+            rec = _dr.run_weekly_practice(
+                self.team, focus=focus, intensity=intensity, bag_skate=bag,
+                approved_by="GM", date_str=date_str)
+            eff = rec.get("effectiveness", 0)
+            self._plan_status.configure(
+                text=f"Week set: {rec.get('focus')} / {rec.get('intensity')} "
+                     f"(effectiveness {eff}). Repeats Sundays until changed.")
+        except Exception as e:
+            self._plan_status.configure(text=f"Couldn't set plan: {e}")
+        self._refresh_practice_tab()
 
 
 class TacticsWindow(InGamePopup):
@@ -16153,7 +16444,7 @@ class ContractExtensionsView(ctk.CTkFrame):
     def calculate_market_value(self, player):
         """Calculate the market value of a player.
 
-        Cap-relative: the base (ovr * 100k at the $83.5M baseline) is
+        Cap-relative: the base (ovr * 100k) is
         expressed as a cap % and repriced against the live cap, so market
         values rise as the cap grows.
         """
