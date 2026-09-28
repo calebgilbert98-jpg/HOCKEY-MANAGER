@@ -4111,6 +4111,11 @@ class HockeyManagerGUI(tk.Tk):
                               self.open_dressing_room,
                               tooltip="Dressing Room: hierarchy, social groups, team talks")
 
+        # Analytics Hub button (module 04: xG maps, momentum, entries, lines)
+        self._create_nav_pill(left_menu_frame, "Analytics",
+                              self.open_analytics_hub,
+                              tooltip="Analytics Hub: shot/xG maps, momentum graphs, zone entries, line trends")
+
         # Tactics button (systems, familiarity, fit -- the whiteboard)
         self._create_nav_pill(left_menu_frame, "Tactics",
                               self.open_tactics_window,
@@ -10895,6 +10900,14 @@ class HockeyManagerGUI(tk.Tk):
         from dressing_room import DressingRoomView
         return self.show_screen('dressing_room', 'Dressing Room',
                                 DressingRoomView)
+
+    def open_analytics_hub(self):
+        """Open the Analytics Hub screen (module 04: shot/xG maps,
+        momentum graphs, zone-entry maps, line trends, Ask the analyst).
+        The player-card Analytics tabs are preserved untouched."""
+        from analytics_hub import AnalyticsHubView
+        return self.show_screen('analytics_hub', 'Analytics Hub',
+                                AnalyticsHubView)
 
     def open_tactics_window(self):
         """Open the Team Tactics screen (systems, familiarity, fit)."""
