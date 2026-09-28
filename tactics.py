@@ -403,6 +403,169 @@ def _register_catalogs() -> None:
 
 
 # ---------------------------------------------------------------------------
+# System families & tactical counters — the hockey-answer layer.
+#
+# Every system belongs to a philosophical family: "pressure" (hunt the puck,
+# high event, chaos) or "structure" (patience, layers, low event), with
+# "balanced" systems fitting either room. Families preserve playstyle
+# identity: a Chaos & Pressure team answers with pressure, a Stranglehold
+# team answers with structure. Cross-family answers only happen when the
+# coach is highly adaptable or the room is getting shelled (dire intel).
+#
+# TACTICAL_COUNTERS maps a system key -> (answer_category, answer_key,
+# reason). Keys are unique across catalogs so one flat table covers all
+# seven modules. This is the table AI coaches consult when the intel says
+# one of your systems is beating them.
+# ---------------------------------------------------------------------------
+
+SYSTEM_FAMILIES: Dict[str, str] = {
+    # forecheck
+    "forecheck_122": "structure",
+    "forecheck_212_swarm": "pressure",
+    # neutral zone
+    "nz_trap_131": "structure",
+    "nz_regroup": "structure",
+    "nz_counterpress": "pressure",
+    # d-zone
+    "dz_hybrid": "balanced",
+    "dz_box": "structure",
+    "dz_slide_match": "pressure",
+    # o-zone
+    "oz_micro": "balanced",
+    "oz_cycle": "structure",
+    "oz_flow": "balanced",
+    "oz_rush": "pressure",
+    "oz_netfront": "pressure",
+    # breakout
+    "bo_controlled": "structure",
+    "bo_stretch": "pressure",
+    "bo_direct": "pressure",
+    # power play
+    "umbrella": "structure",
+    "one_three_one": "structure",
+    "overload": "structure",
+    "spread": "balanced",
+    "net_crash": "pressure",
+    "shoot_first": "pressure",
+    "motion": "balanced",
+    # penalty kill
+    "diamond": "pressure",
+    "passive_box": "structure",
+    "wedge_plus_one": "balanced",
+    "aggressive_swarm": "pressure",
+    "czech_press": "pressure",
+    "split": "balanced",
+}
+
+# Identity presets -> family (used for philosophy compatibility).
+PRESET_FAMILIES: Dict[str, str] = {
+    "chaos_pressure": "pressure",
+    "stranglehold": "structure",
+    "hybrid_transition": "balanced",
+}
+
+TACTICAL_COUNTERS: Dict[str, tuple] = {
+    # ---- vs your power play: the PK that takes away its money look ----
+    "umbrella":      ("pk", "passive_box",
+                      "the box takes away the royal road the umbrella wants"),
+    "one_three_one": ("pk", "wedge_plus_one",
+                      "the +1 pressures the high forward who runs the 1-3-1"),
+    "overload":      ("pk", "split",
+                      "the split takes away the overloaded side"),
+    "spread":        ("pk", "diamond",
+                      "the diamond forces the spread to the perimeter"),
+    "net_crash":     ("pk", "passive_box",
+                      "the box collapses on the net-front traffic"),
+    "shoot_first":   ("pk", "czech_press",
+                      "the press takes away the point barrage"),
+    "motion":        ("pk", "aggressive_swarm",
+                      "the swarm disrupts the rotation before it sets"),
+    # ---- vs your forecheck: the breakout that beats it ----
+    "forecheck_212_swarm": ("breakout", "bo_controlled",
+                            "short safe exits — don't feed the swarm"),
+    "forecheck_122":       ("breakout", "bo_stretch",
+                            "beat the passive 1-2-2 up the ice"),
+    # ---- vs your neutral zone: the answer ----
+    "nz_trap_131":     ("breakout", "bo_direct",
+                        "chip it past the trap — never carry into the 1-3-1"),
+    "nz_counterpress": ("breakout", "bo_stretch",
+                        "stretch them before the pinch arrives"),
+    "nz_regroup":      ("neutral_zone", "nz_counterpress",
+                        "pinch their regroup and force the turnover"),
+    # ---- vs your O-zone: the D-zone coverage ----
+    "oz_cycle":    ("dzone", "dz_slide_match",
+                    "slide and match the cycle man-for-man"),
+    "oz_rush":     ("dzone", "dz_hybrid",
+                    "hybrid clogs the rush lanes through the middle"),
+    "oz_netfront": ("dzone", "dz_box",
+                    "the box protects the house"),
+    "oz_flow":     ("dzone", "dz_hybrid",
+                    "hybrid takes away the middle of the five-man flow"),
+    "oz_micro":    ("dzone", "dz_slide_match",
+                    "match their micro-movement step for step"),
+    # ---- vs your breakout: the forecheck / NZ that eats it ----
+    "bo_stretch":    ("forecheck", "forecheck_122",
+                      "the 1-2-2 sits in the stretch lanes"),
+    "bo_controlled": ("forecheck", "forecheck_212_swarm",
+                      "swarm the short controlled exits"),
+    "bo_direct":     ("neutral_zone", "nz_trap_131",
+                      "the trap eats chip-and-chase alive"),
+    # ---- vs your penalty kill: the PP that picks it apart ----
+    "passive_box":      ("pp", "shoot_first",
+                         "point barrage through the passive box"),
+    "diamond":          ("pp", "spread",
+                         "the spread stretches the diamond's rotations"),
+    "wedge_plus_one":   ("pp", "overload",
+                         "overload the side away from the +1"),
+    "aggressive_swarm": ("pp", "umbrella",
+                         "the umbrella keeps the puck above the swarm"),
+    "czech_press":      ("pp", "motion",
+                         "rotation escapes the press"),
+    "split":            ("pp", "one_three_one",
+                         "the 1-3-1 attacks the split's seam"),
+    # ---- vs your D-zone: the O-zone attack that solves it ----
+    "dz_box":         ("ozone", "oz_cycle",
+                       "the cycle pulls the box out of the house"),
+    "dz_hybrid":      ("ozone", "oz_flow",
+                       "five-man flow overloads the hybrid reads"),
+    "dz_slide_match": ("ozone", "oz_micro",
+                       "micro-transitions beat man-matching with misdirection"),
+}
+
+
+def system_family(system_key: str) -> str:
+    """Philosophical family of a system: pressure / structure / balanced."""
+    return SYSTEM_FAMILIES.get(system_key, "balanced")
+
+
+def team_family(team: Any) -> str:
+    """A team's philosophical family from its identity preset, else the
+    majority family of its installed modules."""
+    try:
+        ident = matching_identity(team)
+        if ident and ident in PRESET_FAMILIES:
+            return PRESET_FAMILIES[ident]
+        tk = team_tactics(team)
+        fams = [system_family(k) for k in tk.values()]
+        # balanced modules don't vote
+        votes = [f for f in fams if f != "balanced"]
+        if not votes:
+            return "balanced"
+        return "pressure" if votes.count("pressure") >= votes.count("structure") \
+            else "structure"
+    except Exception:
+        return "balanced"
+
+
+def families_compatible(team_fam: str, system_key: str) -> bool:
+    """Can this team install this system without betraying its philosophy?
+    Balanced is the universal donor — it fits any room."""
+    sys_fam = system_family(system_key)
+    return (team_fam == "balanced" or sys_fam == "balanced"
+            or team_fam == sys_fam)
+
+
+# ---------------------------------------------------------------------------
 # Save migration — the old flat offense/defense/philosophy model maps onto
 # the zone modules. Old saves load and translate once, then play on.
 # ---------------------------------------------------------------------------
@@ -1301,21 +1464,207 @@ def matchup_modifiers(home: Any, away: Any) -> Dict[str, float]:
 # ---------------------------------------------------------------------------
 
 # Categories coaches steal, weighted: special teams first, always.
+# ---------------------------------------------------------------------------
+# Tactical intel — per-opponent tracking of system effectiveness.
+#
+# After every game vs the user's team, the AI files what the user ran and
+# how well it worked: goals, shots, PP%. plan_adaptation (adaptive_rivals)
+# reads this to answer the specific system that's beating them, not just
+# "they score a lot". Coaches don't overreact to one game: nothing fires
+# until a system has hurt them across 2+ meetings.
+# ---------------------------------------------------------------------------
+
+_INTEL_MEETINGS_CAP = 5
+
+# Effectiveness thresholds that trigger a hockey answer. PP% is the most
+# sensitive (league average ~20%); even-strength answers need sustained
+# shelling because goals are noisier. Defensive answers (your PK / D-zone
+# is stifling them) key off their goals per game vs you.
+_INTEL_PP_THRESHOLD = 0.27
+_INTEL_GPG_THRESHOLD = 3.8
+_INTEL_GA_THRESHOLD = 2.4
+_INTEL_MIN_MEETINGS = 2
+
+
+def record_tactical_intel(ai_team: Any, user_team: Any, user_goals: int,
+                          ai_goals: int = 0,
+                          user_shots: Optional[int] = None,
+                          user_pp_pct: Optional[float] = None) -> None:
+    """File one meeting's intel: the user's systems and their effectiveness
+    against this AI team. Never raises; inert without teams."""
+    try:
+        user_name = getattr(user_team, "team_name", None)
+        if not user_name:
+            return
+        intel = getattr(ai_team, "tactical_intel", None)
+        if not isinstance(intel, dict):
+            intel = {}
+        meetings = intel.get(user_name)
+        if not isinstance(meetings, list):
+            meetings = []
+        meetings.append({
+            "systems": dict(team_tactics(user_team)),
+            "g": int(user_goals or 0),
+            "ga": int(ai_goals or 0),
+            "sog": user_shots,
+            "pp_pct": user_pp_pct,
+        })
+        intel[user_name] = meetings[-_INTEL_MEETINGS_CAP:]
+        ai_team.tactical_intel = intel
+    except Exception:
+        pass
+
+
+def get_tactical_intel(ai_team: Any, user_team: Any) -> list:
+    """Recent meetings vs this user, oldest first. Empty list if none."""
+    try:
+        user_name = getattr(user_team, "team_name", "")
+        intel = getattr(ai_team, "tactical_intel", None) or {}
+        meetings = intel.get(user_name, [])
+        return list(meetings) if isinstance(meetings, list) else []
+    except Exception:
+        return []
+
+
+def damaging_user_systems(ai_team: Any, user_team: Any) -> list:
+    """Which of the user's CURRENT systems are hurting this AI team?
+
+    Returns [(category, system_key, heat)] sorted by heat desc, where heat
+    is effectiveness relative to the answer threshold (>1.0 = answerable).
+    Only systems with 2+ meetings of intel qualify — one bad night isn't
+    a trend, and real coaches know it.
+    """
+    out = []
+    try:
+        meetings = get_tactical_intel(ai_team, user_team)
+        if len(meetings) < _INTEL_MIN_MEETINGS:
+            return out
+        current = team_tactics(user_team)
+        for cat, sys_key in current.items():
+            if cat not in CATALOGS or not sys_key:
+                continue
+            # Meetings where the user ran this exact system in this category.
+            rel = [m for m in meetings
+                   if isinstance(m.get("systems"), dict)
+                   and m["systems"].get(cat) == sys_key]
+            if len(rel) < _INTEL_MIN_MEETINGS:
+                continue
+            if cat == "pp":
+                vals = [m["pp_pct"] for m in rel
+                        if m.get("pp_pct") is not None]
+                if not vals:
+                    continue
+                avg = sum(vals) / len(vals)
+                heat = avg / _INTEL_PP_THRESHOLD
+            elif cat in ("pk", "dzone"):
+                # Your PK / D-zone is stifling them: their goals vs you
+                # are the signal (lower = hotter).
+                vals = [m.get("ga", 0) for m in rel]
+                avg = sum(vals) / len(vals)
+                if avg <= 0:
+                    continue
+                heat = _INTEL_GA_THRESHOLD / avg
+            else:
+                vals = [m.get("g", 0) for m in rel]
+                avg = sum(vals) / len(vals)
+                heat = avg / _INTEL_GPG_THRESHOLD
+            if heat > 1.0:
+                out.append((cat, sys_key, heat))
+        out.sort(key=lambda t: t[2], reverse=True)
+    except Exception:
+        pass
+    return out
+
+
 COPYCAT_WEIGHTS = (("pp", 0.30), ("pk", 0.25), ("ozone", 0.20),
                    ("forecheck", 0.15), ("dzone", 0.10))
 
 
+# Historical echoes for the copycat news feed: when a style sweeps the
+# league, the story writes itself the way it did in real life.
+BLUEPRINT_LORE: Dict[str, str] = {
+    "nz_trap_131": "the way the whole league chased Lemaire's trap after '95",
+    "forecheck_212_swarm": "echoes of the '17-18 Golden Knights — everyone talked about it, few could skate it",
+    "one_three_one": "everyone wants Tampa's 1-3-1 on the man advantage",
+    "oz_cycle": "the Kings' heavy cycle blueprint — you need the horses to play it",
+    "umbrella": "the default setting of the modern power play",
+    "dz_box": "the Islanders' house-first gospel",
+}
+
+
+def _blueprint_heat(league: Any, champ: Any, champ_sys: Dict[str, str]) -> float:
+    """How hot is the champion's blueprint? Real copycat dynamics:
+
+    - A repeat champion (or the same core systems winning again) is a
+      DYNASTY blueprint (heat 1.8) — this is the Lemaire trap scenario,
+      three Cups in nine years, the league had no choice but to answer.
+    - A first-time winner is INTRIGUING (heat 1.0) — the Vegas scenario:
+      talked about all summer, rarely fully copied.
+    Heat is tracked on the league so dynasties build over seasons.
+    """
+    try:
+        champ_name = getattr(champ, "team_name", "?")
+        core = frozenset(champ_sys.get(c, "") for c in
+                         ("forecheck", "neutral_zone", "ozone", "pp"))
+        last_champ = getattr(league, "_last_cup_champ", None)
+        last_core = getattr(league, "_last_champ_core", None)
+        dynasties = getattr(league, "_blueprint_dynasties", None) or {}
+        # This title extends a run if the same team repeats or the same
+        # core systems win again (a philosophy proving it travels).
+        run = 1
+        if last_champ == champ_name:
+            run = int(dynasties.get(champ_name, 1)) + 1
+        elif last_core is not None and last_core == core:
+            run = 2  # same philosophy, new flag-bearer
+        dynasties[champ_name] = run
+        league._blueprint_dynasties = dynasties
+        league._last_cup_champ = champ_name
+        league._last_champ_core = core
+        return 1.8 if run >= 2 else 1.0
+    except Exception:
+        return 1.0
+
+
+def _roster_fits_system(team: Any, category: str, system_key: str,
+                        threshold: float = 0.78) -> bool:
+    """Can this roster actually play the system? You can't trap without
+    smart centers or swarm without fast wingers — copying what you can't
+    play is how coaches get fired."""
+    try:
+        roster = getattr(team, "roster", None) or []
+        skaters = [p for p in roster
+                   if not str(getattr(p, "primary_position", ""))
+                   .upper().startswith("G")]
+        if not skaters:
+            return True
+        avg = sum(player_system_fit(p, system_key, category)
+                  for p in skaters[:20]) / min(len(skaters), 20)
+        # player_system_fit is 0.6..1.2; 0.78 ≈ a room that can survive it.
+        return avg >= threshold
+    except Exception:
+        return True
+
+
 def offseason_copycat(league: Any, rng=None) -> list:
-    """One offseason pass: AI teams copy the Cup champion's systems.
+    """One offseason pass: AI teams may steal from the Cup champion's
+    blueprint — but like real life, slowly and selectively.
 
-    Every AI team (never the user's, never the champs) may adopt one of
-    the champion's systems -- usually the power play or penalty kill, the
-    two things coaches steal first. Stubborn rooms copy less: low coach
-    adaptability and high control_need both drag the odds down, because
-    personality is a major factor in *likelihood*. Adopting a system
-    costs familiarity (see set_team_system) -- copying isn't free.
+    Real copycat dynamics (the history of winners):
+    - One Cup makes a style INTRIGUING (Vegas '18: talked about, rarely
+      copied). Sustained winning makes it a DYNASTY blueprint (Lemaire's
+      trap: three Cups, the league had to answer). Heat gates the odds.
+    - Teams steal PIECES, not identities — usually the PP, PK, or
+      forecheck, the three things coaches actually lift first.
+    - Philosophy filters everything: a Stranglehold room doesn't install
+      a 2-1-2 swarm. Cross-family theft needs a highly adaptable coach.
+    - Personnel is destiny: rooms that can't skate the system don't take
+      it, no matter how shiny the Cup is.
+    - Stubborn veteran coaches (low adaptability, high control need) would
+      rather retire than change — and often do.
+    - At most 3 teams adopt per summer. The league never moves as one.
 
-    Returns [(team_name, category, system_key)] for the news feed.
+    Adopting a system costs familiarity (see set_team_system) — copying
+    isn't free. Returns [(team_name, category, system_key, lore_line)].
     """
     import random as _random
     rng = rng or _random
@@ -1332,32 +1681,51 @@ def offseason_copycat(league: Any, rng=None) -> list:
         if champ is None:
             return copied
         champ_sys = team_tactics(champ)
+        heat = _blueprint_heat(league, champ, champ_sys)
         cats, weights = zip(*COPYCAT_WEIGHTS)
         for team in teams:
             try:
+                if len(copied) >= 3:
+                    break
                 if team is champ:
                     continue
                 if getattr(team, "is_user_team", False):
                     continue
                 mine = team_tactics(team)
-                # Stubborn rooms don't copy: adaptability opens minds,
-                # control_need closes them.
                 coach = _coach_for(team)
                 adapt = float(getattr(coach, "adaptability", 65) or 65)
                 ctrl = float(getattr(coach, "control_need", 50) or 50)
-                p = 0.18 * (0.5 + adapt / 130.0) * (1.1 - ctrl / 200.0)
+                # The immovables: low adaptability + high control need =
+                # the coach retires before he changes (Trotz/Lemaire types).
+                if adapt < 40 and ctrl > 60:
+                    continue
+                # Base 6%: copycat is a slow league-wide drift, not a stampede.
+                # Heat (dynasty blueprint) up to ~1.8x; adaptability opens
+                # minds, control_need closes them.
+                p = (0.06 * heat * (0.5 + adapt / 130.0)
+                     * (1.1 - ctrl / 200.0))
                 if rng.random() >= p:
                     continue
-                # Weighted pick, then roll off categories the champ
-                # doesn't improve on.
+                fam = team_family(team)
+                # Weighted pick, then roll off categories the champ doesn't
+                # improve on — filtered by philosophy and personnel.
                 order = list(rng.choices(cats, weights=weights, k=len(cats)))
                 for cat in order:
                     want = champ_sys.get(cat)
-                    if want and mine.get(cat) != want:
-                        if set_team_system(team, cat, want):
-                            copied.append((getattr(team, "team_name", "?"),
-                                           cat, want))
-                        break
+                    if not want or mine.get(cat) == want:
+                        continue
+                    # Philosophy: stay in your family's lane unless the
+                    # coach is genuinely malleable (adapt >= 80).
+                    if (not families_compatible(fam, want)) and adapt < 80:
+                        continue
+                    # Personnel: don't steal what the room can't skate.
+                    if not _roster_fits_system(team, cat, want):
+                        continue
+                    if set_team_system(team, cat, want):
+                        lore = BLUEPRINT_LORE.get(want, "")
+                        copied.append((getattr(team, "team_name", "?"),
+                                       cat, want, lore))
+                    break
             except Exception:
                 continue
     except Exception:

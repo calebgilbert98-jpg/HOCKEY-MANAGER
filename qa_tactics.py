@@ -464,7 +464,8 @@ def league_of(champ_pp="one_three_one", rv=0.0, user_pp="umbrella",
 lg, champ, ai, user = league_of()
 copied = tx.offseason_copycat(lg, rng=RiggedRng(0.0))
 check("copycat copies the champs' PP",
-      ("Coyotes", "pp", "one_three_one") in copied, str(copied))
+      any(c[0] == "Coyotes" and c[1] == "pp" and c[2] == "one_three_one"
+          for c in copied), str(copied))
 check("user team never copies",
       not any(c[0] == "Mine" for c in copied))
 check("champs don't copy themselves",
@@ -474,13 +475,14 @@ check("copying costs familiarity",
 
 stubborn = SimpleNamespace(role=SimpleNamespace(value="Head Coach"),
                            adaptability=20, control_need=95)
-# p = 0.18*(0.5+20/130)*(1.1-95/200) ~= 0.0736
+# Immovables (low adaptability + high control need) never copy, no matter
+# the roll -- the Trotz/Lemaire types retire before they change.
 lg2, _, ai2, _ = league_of(coach=stubborn)
-c_yes = tx.offseason_copycat(lg2, rng=RiggedRng(0.07))
+c_yes = tx.offseason_copycat(lg2, rng=RiggedRng(0.0))
 lg3, _, ai3, _ = league_of(coach=stubborn)
-c_no = tx.offseason_copycat(lg3, rng=RiggedRng(0.08))
-check("stubborn coach copies at 0.07", len(c_yes) == 1, str(c_yes))
-check("stubborn coach balks at 0.08", len(c_no) == 0, str(c_no))
+c_no = tx.offseason_copycat(lg3, rng=RiggedRng(0.99))
+check("stubborn coach never copies",
+      len(c_yes) == 0 and len(c_no) == 0, f"{c_yes} / {c_no}")
 
 lg4, _, _, _ = league_of()
 check("no champion -> no copies",
@@ -640,6 +642,138 @@ check("preferred save/load roundtrip",
 check("tradeoffs line non-empty",
       bool(tx.system_tradeoffs("ozone", "oz_rush")),
       tx.system_tradeoffs("ozone", "oz_rush"))
+
+# ------------------------------------------------- adaptive AI coaches
+import adaptive_rivals as ar
+
+# Counter table covers every system in every catalog
+_all_sys = [k for cat in tx.CATALOGS.values() for k in cat]
+check("counter table covers all systems",
+      all(k in tx.TACTICAL_COUNTERS for k in _all_sys),
+      f"{sum(1 for k in _all_sys if k not in tx.TACTICAL_COUNTERS)} missing")
+check("every system has a family tag",
+      all(k in tx.SYSTEM_FAMILIES for k in _all_sys))
+check("counter answers are valid module keys",
+      all(tx.TACTICAL_COUNTERS[k][1] in tx.CATALOGS[tx.TACTICAL_COUNTERS[k][0]]
+          for k in _all_sys))
+
+# Philosophy preserved: presets map to families
+chaos_t = wteam(tcoach()); tx.apply_identity_preset(chaos_t, "chaos_pressure")
+strang_t = wteam(tcoach()); tx.apply_identity_preset(strang_t, "stranglehold")
+check("chaos preset is pressure family", tx.team_family(chaos_t) == "pressure")
+check("stranglehold preset is structure family",
+      tx.team_family(strang_t) == "structure")
+check("balanced fits any room",
+      tx.families_compatible("pressure", "dz_hybrid")
+      and tx.families_compatible("structure", "dz_hybrid"))
+check("cross-family blocked",
+      not tx.families_compatible("pressure", "nz_trap_131")
+      and not tx.families_compatible("structure", "forecheck_212_swarm"))
+
+# Intel: no overreaction to one game; fires on a real trend
+user = wteam(tcoach()); user.team_name = "User Club"
+user.tactics["pp"] = "umbrella"
+ai = wteam(tcoach(adaptability=60)); ai.team_name = "AI Club"
+tx.apply_identity_preset(ai, "stranglehold")
+ai.tactics["pk"] = "diamond"  # not already playing the answer
+tx.record_tactical_intel(ai, user, 2, 3, 26, 0.40)
+check("one meeting is not a trend",
+      tx.damaging_user_systems(ai, user) == [])
+tx.record_tactical_intel(ai, user, 2, 3, 24, 0.38)
+tx.record_tactical_intel(ai, user, 3, 4, 28, 0.42)
+dmg = tx.damaging_user_systems(ai, user)
+check("hot umbrella PP flagged after 3 meetings",
+      any(c == "pp" and s == "umbrella" for c, s, h in dmg),
+      str([(c, s, round(h, 2)) for c, s, h in dmg]))
+
+# plan_adaptation: structure team answers the umbrella with the box
+plan = ar.plan_adaptation(ai, user, [])
+check("plans passive box vs hot umbrella",
+      any(c == "pk" and n == "passive_box" for c, o, n, r in plan),
+      str([(c, n) for c, o, n, r in plan]))
+
+# Philosophy gate: chaos team won't trap up for you unless adaptable/desperate
+ai2 = wteam(tcoach(adaptability=60)); ai2.team_name = "AI Club 2"
+tx.apply_identity_preset(ai2, "chaos_pressure")
+for _ in range(3):
+    tx.record_tactical_intel(ai2, user, 4, 2, 30, 0.33)
+plan2 = ar.plan_adaptation(ai2, user, [])
+check("chaos room refuses the structure answer at adapt 60",
+      not any(c == "pk" and n == "passive_box" for c, o, n, r in plan2))
+ai3 = wteam(tcoach(adaptability=85)); ai3.team_name = "AI Club 3"
+tx.apply_identity_preset(ai3, "chaos_pressure")
+for _ in range(3):
+    tx.record_tactical_intel(ai3, user, 4, 2, 30, 0.33)
+plan3 = ar.plan_adaptation(ai3, user, [])
+check("adaptable coach crosses families",
+      any(c == "pk" and n == "passive_box" for c, o, n, r in plan3))
+
+# Apply/revert round-trip is exact
+before = dict(tx.team_tactics(ai))
+ar.apply_adaptation(ai, plan)
+check("adaptation installs the answer",
+      tx.team_tactics(ai)["pk"] == "passive_box")
+ar.revert_adaptation(ai, plan)
+check("revert restores exact systems",
+      tx.team_tactics(ai) == before)
+
+# Defensive answer: your PK/D-zone is stifling them -> they change the PP/OZ
+ai4 = wteam(tcoach(adaptability=60)); ai4.team_name = "AI Club 4"
+tx.apply_identity_preset(ai4, "chaos_pressure")
+ai4.tactics["pp"] = "umbrella"  # not already playing the answer
+user2 = wteam(tcoach()); user2.team_name = "User Club 2"
+user2.tactics["pk"] = "passive_box"
+user2.tactics["dzone"] = "dz_box"  # structure answer blocked for chaos room
+for _ in range(2):
+    tx.record_tactical_intel(ai4, user2, 2, 2, 24, 0.10)
+tx.record_tactical_intel(ai4, user2, 1, 1, 22, 0.08)
+plan4 = ar.plan_adaptation(ai4, user2, [])
+check("stifled AI answers your passive box with point barrage",
+      any(c == "pp" and n == "shoot_first" for c, o, n, r in plan4),
+      str([(c, n) for c, o, n, r in plan4]))
+
+# Pre-game report surfaces the answer
+lines = ar.adaptation_report_lines(ai, user, [])
+check("scout report lines non-empty when adapting", len(lines) > 0, str(lines))
+quiet_ai = wteam(tcoach()); quiet_ai.team_name = "Quiet Club"
+check("no lines when nothing is hurting them",
+      ar.adaptation_report_lines(quiet_ai, user, []) == [])
+
+# Copycat realism: stubborn coaches never move; max 3 adopters; dynasty heat
+def _cleague(champ, teams):
+    lg = SimpleNamespace(teams=teams,
+                         playoff_bracket=SimpleNamespace(
+                             stanley_cup_champion=champ))
+    return lg
+
+rng = random.Random(7)
+champ = wteam(tcoach()); champ.team_name = "Champs"
+tx.apply_identity_preset(champ, "chaos_pressure")
+stubborn = wteam(tcoach(adaptability=30, control_need=70))
+stubborn.team_name = "Stubborn Club"
+field = [champ, stubborn] + [wteam(tcoach(adaptability=65))
+                              for _ in range(10)]
+for i, t in enumerate(field[2:], 1):
+    t.team_name = f"Club {i}"
+copies = [tx.offseason_copycat(_cleague(champ, field), rng) for _ in range(6)]
+flat = [c for run in copies for c in run]
+check("stubborn coach never copies",
+      not any(c[0] == "Stubborn Club" for c in flat))
+check("at most 3 adopters per summer",
+      all(len(run) <= 3 for run in copies),
+      str([len(run) for run in copies]))
+# Dynasty heat: repeat champ is hotter than a fresh winner
+lg = _cleague(champ, field)
+h1 = tx._blueprint_heat(lg, champ, tx.team_tactics(champ))
+h2 = tx._blueprint_heat(lg, champ, tx.team_tactics(champ))
+check("repeat title heats the blueprint", h2 > h1, f"{h1} -> {h2}")
+fresh = wteam(tcoach()); fresh.team_name = "Fresh Champs"
+tx.apply_identity_preset(fresh, "stranglehold")
+h3 = tx._blueprint_heat(lg, fresh, tx.team_tactics(fresh))
+check("fresh winner is merely intriguing", h3 == 1.0, str(h3))
+# Copycat returns lore-ready 4-tuples
+check("copycat 4-tuple shape",
+      all(len(c) == 4 for c in flat), str(flat[:1]))
 
 print()
 print(f"{len(PASS)} passed, {len(FAIL)} failed")

@@ -8005,11 +8005,13 @@ class HockeyManagerGUI(tk.Tk):
                     talk_boost = self._career_team_talk(opponent)
                 # Adaptive Rivals: AI scouts the user (quick sim)
                 _qs_adapted = None
+                _qs_plan = []
                 try:
-                    from adaptive_rivals import adapt_for_opponent, revert_to_base
+                    from adaptive_rivals import adapt_for_opponent
                     if opponent != self.user_team:
-                        adapt_for_opponent(opponent, self.user_team,
-                                           getattr(self, 'game_results', []))
+                        _qs_plan = adapt_for_opponent(
+                            opponent, self.user_team,
+                            getattr(self, 'game_results', []))
                         _qs_adapted = opponent
                 except Exception:
                     pass
@@ -8018,11 +8020,27 @@ class HockeyManagerGUI(tk.Tk):
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
                 winner, loser, scores, events, notable_events = sim_engine.run()
-                # Revert AI tactics
+                # Revert AI tactics + file tactical intel on the user's systems
                 if _qs_adapted is not None:
                     try:
-                        from adaptive_rivals import revert_to_base
-                        revert_to_base(_qs_adapted)
+                        from adaptive_rivals import revert_adaptation
+                        revert_adaptation(_qs_adapted, _qs_plan)
+                    except Exception:
+                        pass
+                    try:
+                        import tactics as _tx
+                        _uname = self.user_team.team_name
+                        _user_home = home_team == self.user_team
+                        _ugoals = scores[0] if _user_home else scores[1]
+                        _agoals = scores[1] if _user_home else scores[0]
+                        _ushots = sum(
+                            _ps.get('shots', 0)
+                            for _ps in (sim_engine.stats.get(_uname, {})
+                                        or {}).values()
+                            if isinstance(_ps, dict))
+                        _tx.record_tactical_intel(_qs_adapted, self.user_team,
+                                                  _ugoals, _agoals,
+                                                  _ushots or None, None)
                     except Exception:
                         pass
                 # AdvancedGameSim does not touch player season stats.
@@ -9586,8 +9604,9 @@ class HockeyManagerGUI(tk.Tk):
         # Adaptive Rivals: AI scouts the user and adjusts tactics for this game.
         # Reverts to base identity afterwards.
         _adapted_team = None
+        _adapted_plan = []
         try:
-            from adaptive_rivals import adapt_for_opponent, revert_to_base
+            from adaptive_rivals import adapt_for_opponent
             user = getattr(self, 'user_team', None)
             user_name = user.team_name if user else None
             ai_team = None
@@ -9596,7 +9615,8 @@ class HockeyManagerGUI(tk.Tk):
             elif away_team.team_name == user_name and home_team.team_name != user_name:
                 ai_team = home_team
             if ai_team is not None and user is not None:
-                adapt_for_opponent(ai_team, user, getattr(self, 'game_results', []))
+                _adapted_plan = adapt_for_opponent(
+                    ai_team, user, getattr(self, 'game_results', []))
                 _adapted_team = ai_team
         except Exception:
             pass
@@ -9706,11 +9726,27 @@ class HockeyManagerGUI(tk.Tk):
             notable_events.append({'period': 5 if had_shootout else 4,
                                    'event': 'overtime'})
 
-        # Adaptive Rivals: revert AI tactics to base identity
+        # Adaptive Rivals: revert AI tactics + file tactical intel
         if _adapted_team is not None:
             try:
-                from adaptive_rivals import revert_to_base
-                revert_to_base(_adapted_team)
+                from adaptive_rivals import revert_adaptation
+                revert_adaptation(_adapted_team, _adapted_plan)
+            except Exception:
+                pass
+            try:
+                import tactics as _tx
+                _ts = ((getattr(sim, 'team_stats', None) or {})
+                       .get(user_name, {})) or {}
+                _ppg = _ts.get('power_play_goals', 0) or 0
+                _ppo = _ts.get('power_play_opportunities', 0) or 0
+                _pp_pct = (_ppg / _ppo) if _ppo else None
+                _ugoals = (home_score if home_team.team_name == user_name
+                           else away_score)
+                _agoals = (away_score if home_team.team_name == user_name
+                           else home_score)
+                _tx.record_tactical_intel(_adapted_team, user, _ugoals,
+                                          _agoals, _ts.get('shots_on_goal'),
+                                          _pp_pct)
             except Exception:
                 pass
 
@@ -10221,14 +10257,15 @@ class HockeyManagerGUI(tk.Tk):
                           "ozone": "offensive-zone system",
                           "forecheck": "forecheck",
                           "dzone": "defensive-zone coverage"}
-            for _tn, _cat, _sys in _tx.offseason_copycat(
+            for _tn, _cat, _sys, _lore in _tx.offseason_copycat(
                     getattr(self, 'league', None)):
                 _sysname = _tx.CATALOGS.get(_cat, {}).get(_sys, {}).get(
                     "name", _sys)
+                _lorebit = f" — {_lore}" if _lore else ""
                 self.add_news(
                     f"Copycat league: {_tn} install the {_sysname} "
                     f"{_CAT_LABEL.get(_cat, 'system')} after watching the "
-                    f"champions win with it.")
+                    f"champions win with it{_lorebit}.")
         except Exception:
             pass
         # Age players and reset stats
@@ -11486,6 +11523,18 @@ class HockeyManagerGUI(tk.Tk):
         lines += ["• " + w for w in report["weaknesses"]]
         lines.append("Tactical advice:")
         lines += ["• " + a for a in report["tactical_advice"]]
+        # Adaptive Rivals: has the opponent scouted your systems and
+        # installed a hockey answer for tonight?
+        try:
+            from adaptive_rivals import adaptation_report_lines
+            _adapt_lines = adaptation_report_lines(
+                opponent, self.user_team, getattr(self, 'game_results', []))
+            if _adapt_lines:
+                lines.append("")
+                lines.append("Their answer to your systems:")
+                lines += ["• " + _l for _l in _adapt_lines]
+        except Exception:
+            pass
         self.send_email_to_user(EmailMessage(
             sender="Chief Scout", sender_type="Scout",
             subject=f"Opposition report: {report['team']}",

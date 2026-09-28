@@ -1,130 +1,220 @@
-"""Adaptive Rivals: AI teams scout the user and adjust tactics.
+"""Adaptive Rivals: AI teams scout the user and make a hockey answer.
 
-Each AI team has a base tactical identity (set from roster strengths at
-season start). Before a game vs the user's team, the AI scouts the user's
-recent tendencies and shifts tactics 1 step to counter:
+Each AI team plays its own philosophical identity (zone modules installed
+via tactics.py). Before a game vs the user's team, the AI checks its
+tactical intel — how the user's *specific systems* have performed against
+it in recent meetings — and installs the hockey answer for the most
+damaging one, using the TACTICAL_COUNTERS table:
 
-- User scores a lot (high GF/GP) -> AI plays more Defensive
-- User defends well (low GA/GP) -> AI plays more Offensive
-- User draws many penalties -> AI plays more disciplined (less aggressive)
-- User has strong PP -> AI avoids penalties (Conservative PK)
+- Your umbrella PP is at 32% vs them -> they sit in a passive box tonight
+- Your 2-1-2 swarm is eating their breakouts -> short controlled exits
+- Your 1-3-1 trap strangles them -> chip-and-chase, never carry it in
 
-The adjustment is temporary (for that game only); tactics revert to base
-identity afterwards. This is purely additive — the sim engine is untouched.
+Answers are philosophy-gated: a Chaos & Pressure room answers with
+pressure, a Stranglehold room with structure. Cross-family answers only
+happen when the coach is highly adaptable or the room is getting shelled.
+One-game game-plan tweak, not a system overhaul: small familiarity dip,
+reverted after the game.
 
-Engine boundary: reads tactics, never changes sim math.
+Without intel yet (early season), falls back to the blunt read: you score
+a lot -> they get more defensive; you defend well -> they open up.
+
+Engine boundary: reads tactics, never changes sim math. Purely additive.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
 
-
-# Tactic scales (ordered from defensive to offensive)
-ES_SCALE = ["Very Defensive", "Defensive", "Balanced", "Offensive", "Very Offensive"]
-PP_SCALE = ["Conservative", "Balanced", "Offensive", "Very Offensive"]
-PK_SCALE = ["Very Defensive", "Defensive", "Balanced", "Aggressive"]
-MATCHING_SCALE = ["Conservative", "Standard", "Aggressive"]
+import tactics as _tx
 
 
-def _shift(tactic: str, scale: List[str], steps: int) -> str:
-    """Shift a tactic along its scale, clamped."""
+# Fallback nudge scales (structure -> pressure) per category, for the
+# no-intel early-season read. Philosophy still gates: a structure team
+# nudges toward structure, a pressure team toward pressure.
+_FALLBACK_SCALES = {
+    "dzone": ["dz_box", "dz_hybrid", "dz_slide_match"],
+    "forecheck": ["forecheck_122", "forecheck_212_swarm"],
+    "neutral_zone": ["nz_trap_131", "nz_regroup", "nz_counterpress"],
+    "ozone": ["oz_cycle", "oz_flow", "oz_micro", "oz_rush"],
+    "breakout": ["bo_controlled", "bo_direct", "bo_stretch"],
+}
+
+# plan entry: (category, old_key, new_key, reason)
+Plan = List[Tuple[str, str, str, str]]
+
+
+def _coach_adaptability(team: Any) -> float:
     try:
-        idx = scale.index(tactic)
-    except ValueError:
-        idx = len(scale) // 2
-    new_idx = max(0, min(len(scale) - 1, idx + steps))
-    return scale[new_idx]
+        coach = _tx._coach_for(team)
+        return float(getattr(coach, "adaptability", 60) or 60)
+    except Exception:
+        return 60.0
+
+
+def _module_label(category: str, key: str) -> str:
+    try:
+        return _tx.CATALOGS.get(category, {}).get(key, {}).get("name", key)
+    except Exception:
+        return key
+
+
+def plan_adaptation(ai_team: Any, user_team: Any,
+                    game_results: List[Any]) -> Plan:
+    """Pure planning: what would this AI team change for tonight's game?
+
+    Returns [(category, old_key, new_key, reason)]. Empty = no answer
+    (nothing's hurting them, or nothing fits their philosophy).
+    """
+    plan: Plan = []
+    try:
+        _tx.ensure_team_tactics(ai_team)
+        _tx.ensure_team_tactics(user_team)
+        mine = _tx.team_tactics(ai_team)
+        fam = _tx.team_family(ai_team)
+        adapt = _coach_adaptability(ai_team)
+
+        # 1) Intel-driven: answer the specific system that's beating them.
+        damaging = _tx.damaging_user_systems(ai_team, user_team)
+        for _cat_u, sys_key, heat in damaging:
+            counter = _tx.TACTICAL_COUNTERS.get(sys_key)
+            if not counter:
+                continue
+            cat, answer, why = counter
+            if mine.get(cat) == answer:
+                continue  # already playing the answer
+            dire = heat >= 1.8
+            if (not _tx.families_compatible(fam, answer)
+                    and adapt < 75 and not dire):
+                continue  # won't betray the philosophy for this
+            old = mine.get(cat, "")
+            plan.append((cat, old, answer,
+                         f"your { _module_label(_cat_u, sys_key) } is at "
+                         f"{heat:.1f}x the answer threshold vs them — "
+                         f"{why}"))
+            break  # one answer per game: coaches fix the biggest leak
+
+        if plan:
+            return plan
+
+        # 2) Fallback: blunt GF/GA read (no intel yet).
+        tendencies = scout_user_tendencies(user_team, game_results)
+        gf = tendencies["goals_for_per_game"]
+        ga = tendencies["goals_against_per_game"]
+        if gf > 3.5:
+            # Getting shelled: nudge the D-zone a step toward structure.
+            plan.extend(_nudge(mine, fam, "dzone", toward="structure",
+                               reason="you're scoring in bunches — "
+                                      "they're collapsing to protect the house"))
+        elif ga < 2.5:
+            # Can't buy a goal vs you: nudge the attack toward pressure.
+            plan.extend(_nudge(mine, fam, "ozone", toward="pressure",
+                               reason="they can't solve your defense — "
+                                      "they're opening the attack up"))
+    except Exception:
+        pass
+    return plan
+
+
+def _nudge(mine: Dict[str, str], fam: str, category: str,
+           toward: str, reason: str) -> Plan:
+    """Move one module one step along its fallback scale, philosophy-gated."""
+    try:
+        scale = _FALLBACK_SCALES.get(category, [])
+        cur = mine.get(category)
+        if cur not in scale:
+            return []
+        idx = scale.index(cur)
+        step = -1 if toward == "structure" else 1
+        nxt = scale[max(0, min(len(scale) - 1, idx + step))]
+        if nxt == cur:
+            return []
+        if not _tx.families_compatible(fam, nxt):
+            return []
+        return [(category, cur, nxt, reason)]
+    except Exception:
+        return []
+
+
+def apply_adaptation(ai_team: Any, plan: Plan) -> None:
+    """Install a planned adaptation for tonight's game.
+
+    A game-plan tweak, not a system overhaul: small familiarity dip (-5),
+    because new reads are messy even for one night. The plan carries the
+    originals so revert is exact.
+    """
+    try:
+        _tx.ensure_team_tactics(ai_team)
+        for cat, _old, new, _reason in plan:
+            if ai_team.tactics.get(cat) != new:
+                ai_team.tactics[cat] = new
+        fam = _tx._get(ai_team, "tactics_familiarity", 85)
+        ai_team.tactics_familiarity = max(40.0, fam - 5)
+        _tx._bust_tactics_cache(ai_team)
+    except Exception:
+        pass
+
+
+def revert_adaptation(ai_team: Any, plan: Plan) -> None:
+    """Restore pre-game systems after the final horn."""
+    try:
+        for cat, old, _new, _reason in plan:
+            if old:
+                ai_team.tactics[cat] = old
+        _tx._bust_tactics_cache(ai_team)
+    except Exception:
+        pass
+
+
+def adapt_for_opponent(ai_team: Any, user_team: Any,
+                       game_results: List[Any]) -> Plan:
+    """Plan + apply. Returns the plan (for reporting / revert)."""
+    plan = plan_adaptation(ai_team, user_team, game_results)
+    if plan:
+        apply_adaptation(ai_team, plan)
+    return plan
+
+
+def revert_to_base(ai_team: Any, plan: Optional[Plan] = None) -> None:
+    """Backward-compatible revert. Prefers the plan; falls back to the
+    legacy base_tactics stamp if some old caller has no plan."""
+    try:
+        if plan:
+            revert_adaptation(ai_team, plan)
+            return
+        base = getattr(ai_team, "base_tactics", None)
+        if base:
+            for k, v in base.items():
+                setattr(ai_team, k, v)
+    except Exception:
+        pass
+
+
+def adaptation_report_lines(ai_team: Any, user_team: Any,
+                            game_results: List[Any]) -> List[str]:
+    """Human-readable lines for the pre-game scout report. Empty = the
+    opponent is playing their own game tonight."""
+    lines = []
+    try:
+        for cat, _old, new, reason in plan_adaptation(ai_team, user_team,
+                                                      game_results):
+            label = _module_label(cat, new)
+            lines.append(f"They've made a hockey answer: {label} — {reason}.")
+    except Exception:
+        pass
+    return lines
 
 
 def assign_base_identity(team: Any) -> Dict[str, str]:
-    """Set a team's base tactical identity from roster strengths.
-
-    Returns the identity dict and stamps it on the team as
-    `base_tactics` (so adaptation can revert to it).
-    """
-    # Evaluate roster: offensive vs defensive talent
-    off_talent = 0
-    def_talent = 0
-    count = 0
+    """Legacy entry point: ensure the team has seeded zone modules.
+    (The old flat-slider identity is superseded by ensure_team_tactics.)"""
     try:
-        for p in team.roster[:20]:  # top 20 skaters
-            pos = getattr(p, 'primary_position', None)
-            pos_name = pos.name if hasattr(pos, 'name') else str(pos)
-            if 'GOALIE' in pos_name.upper():
-                continue
-            # Simple: use overall rating components if available
-            off = getattr(p, 'offensive_rating', None) or getattr(p, 'overall', 70)
-            dfn = getattr(p, 'defensive_rating', None) or getattr(p, 'overall', 70)
-            # Try attributes
-            try:
-                off = (p.shooting + p.passing + p.puck_handling) / 3
-            except Exception:
-                pass
-            try:
-                dfn = (p.defense + p.positioning + p.checking) / 3
-            except Exception:
-                pass
-            off_talent += off
-            def_talent += dfn
-            count += 1
+        return dict(_tx.ensure_team_tactics(team))
     except Exception:
-        pass
-
-    if count > 0:
-        off_avg = off_talent / count
-        def_avg = def_talent / count
-        diff = off_avg - def_avg
-    else:
-        diff = 0
-
-    # Map diff to identity
-    if diff > 5:
-        es = "Offensive"
-    elif diff > 2:
-        es = "Balanced"  # lean offensive but not extreme
-        # Actually use Offensive for clear offensive edge
-        es = "Offensive" if diff > 3 else "Balanced"
-    elif diff < -5:
-        es = "Defensive"
-    elif diff < -2:
-        es = "Defensive" if diff < -3 else "Balanced"
-    else:
-        es = "Balanced"
-
-    # PP/PK/matching defaults based on identity
-    if es in ("Offensive", "Very Offensive"):
-        pp, pk, matching = "Offensive", "Defensive", "Standard"
-    elif es in ("Defensive", "Very Defensive"):
-        pp, pk, matching = "Balanced", "Defensive", "Aggressive"
-    else:
-        pp, pk, matching = "Offensive", "Defensive", "Standard"
-
-    identity = {
-        "tactic_even_strength": es,
-        "tactic_power_play": pp,
-        "tactic_penalty_kill": pk,
-        "tactic_line_matching": matching,
-    }
-    # Stamp on team
-    try:
-        team.base_tactics = dict(identity)
-        # Apply as current tactics
-        for k, v in identity.items():
-            setattr(team, k, v)
-    except Exception:
-        pass
-    return identity
+        return {}
 
 
 def scout_user_tendencies(user_team: Any, game_results: List[Any],
                           last_n: int = 10) -> Dict[str, float]:
-    """Analyze user's last N games for tactical tendencies.
-
-    Returns dict with:
-    - goals_for_per_game
-    - goals_against_per_game
-    - penalties_drawn_per_game (if available)
-    - power_play_pct (if available)
-    """
+    """Analyze user's last N games for blunt tendencies (fallback read)."""
     tendencies = {
         "goals_for_per_game": 3.0,
         "goals_against_per_game": 3.0,
@@ -135,11 +225,9 @@ def scout_user_tendencies(user_team: Any, game_results: List[Any],
         user_name = user_team.team_name
         recent = []
         for gr in reversed(game_results):
-            # game_results entries vary; try common formats
             home = getattr(gr, 'home_team', None)
             away = getattr(gr, 'away_team', None)
             if home is None:
-                # Try dict format
                 if isinstance(gr, dict):
                     home = gr.get('home_team') or gr.get('home')
                     away = gr.get('away_team') or gr.get('away')
@@ -183,74 +271,3 @@ def scout_user_tendencies(user_team: Any, game_results: List[Any],
     except Exception:
         pass
     return tendencies
-
-
-def adapt_for_opponent(ai_team: Any, user_team: Any,
-                      game_results: List[Any]) -> Dict[str, str]:
-    """Adjust AI tactics to counter the user's tendencies.
-
-    Returns the adapted tactics dict (also applied to the team).
-    Call `revert_to_base(ai_team)` after the game.
-    """
-    # Ensure base identity exists
-    base = getattr(ai_team, 'base_tactics', None)
-    if base is None:
-        base = assign_base_identity(ai_team)
-
-    tendencies = scout_user_tendencies(user_team, game_results)
-    adapted = dict(base)
-
-    gf = tendencies["goals_for_per_game"]
-    ga = tendencies["goals_against_per_game"]
-
-    # If user scores a lot, play more defensive (priority: stop the bleeding)
-    defensive_shift = False
-    if gf > 3.5:
-        adapted["tactic_even_strength"] = _shift(
-            base["tactic_even_strength"], ES_SCALE, -1)
-        defensive_shift = True
-    elif gf > 3.2:
-        # Slight lean defensive (only if not already defensive)
-        cur = base["tactic_even_strength"]
-        if cur in ("Offensive", "Very Offensive", "Balanced"):
-            adapted["tactic_even_strength"] = _shift(cur, ES_SCALE, -1)
-            defensive_shift = True
-
-    # If user defends well (but isn't also torching us), play more offensive
-    # to break through. If both are true, the defensive shift takes priority.
-    if not defensive_shift:
-        if ga < 2.5:
-            adapted["tactic_even_strength"] = _shift(
-                adapted["tactic_even_strength"], ES_SCALE, +1)
-        elif ga < 2.8:
-            cur = adapted["tactic_even_strength"]
-            if cur in ("Defensive", "Very Defensive", "Balanced"):
-                adapted["tactic_even_strength"] = _shift(cur, ES_SCALE, +1)
-
-    # If user has strong PP (inferred from high GF), be more disciplined
-    # (less aggressive PK to avoid penalties)
-    if gf > 3.5:
-        adapted["tactic_penalty_kill"] = _shift(
-            base["tactic_penalty_kill"], PK_SCALE, -1)
-
-    # Apply to team
-    try:
-        for k, v in adapted.items():
-            setattr(ai_team, k, v)
-    except Exception:
-        pass
-
-    return adapted
-
-
-def revert_to_base(ai_team: Any):
-    """Revert AI tactics to base identity after the game."""
-    base = getattr(ai_team, 'base_tactics', None)
-    if base:
-        try:
-            for k, v in base.items():
-                setattr(ai_team, k, v)
-        except Exception:
-            pass
-
-

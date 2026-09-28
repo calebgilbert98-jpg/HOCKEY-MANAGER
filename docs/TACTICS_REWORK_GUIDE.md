@@ -136,3 +136,41 @@ calibration.
 - Old per-team slider attrs (`tactic_even_strength`, `tactic_power_play`,
   `tactic_penalty_kill`) are still read by legacy xG/PP branches in
   `simulation.py`/`main.py` — left alone deliberately (additive layering).
+
+## Adaptive AI coaches (2026-09-28)
+
+AI teams now scout the user's *specific systems* and make a hockey answer,
+built on the zone modules (not the old sliders).
+
+- `tactics.TACTICAL_COUNTERS`: every system in all 7 catalogs maps to its
+  hockey answer (umbrella -> passive box, 2-1-2 swarm -> controlled
+  breakouts, trap -> chip-and-chase, your PK/D-zone -> PP/OZ answers, ...).
+- `tactics.SYSTEM_FAMILIES` + `team_family()` + `families_compatible()`:
+  philosophy preservation. Pressure rooms answer with pressure, structure
+  rooms with structure; cross-family answers need adaptability >= 75 or
+  dire intel (getting shelled).
+- `tactics.record_tactical_intel()` / `damaging_user_systems()`: per-opponent
+  tracking of each system’s effectiveness (PP%, GPG, GA) across the last 5
+  meetings. Nothing fires until a system hurts them in 2+ meetings —
+  coaches don’t overreact to one night.
+- `adaptive_rivals.plan_adaptation()` (pure) -> `apply_adaptation()` /
+  `revert_adaptation()`: one-game game-plan tweak (small familiarity dip),
+  reverted after the horn. `adaptation_report_lines()` feeds the matchday
+  scout report: "They've made a hockey answer: Passive Box — ...".
+- Wired in `main.py`: both sim paths (quick-sim + GameSim) plan/apply,
+  record intel from real stats (GameSim: PP%, SOG; quick-sim: goals+shots),
+  revert. Scout report previews the answer matchday morning.
+
+### Copycat realism (2026-09-28 rework)
+
+- `_blueprint_heat()`: one Cup = INTRIGUING (1.0x, the Vegas scenario);
+  repeat title / same core systems winning again = DYNASTY (1.8x, the
+  Lemaire-trap scenario). Tracked on the league across seasons.
+- Base adoption 6% (was 18%), max 3 teams per summer, one module each
+  (PP/PK/forecheck weighted first — what coaches actually steal).
+- Philosophy filter: only family-compatible systems (adapt >= 80 can
+  cross). Personnel filter: `_roster_fits_system()` — rooms that can’t
+  skate it don’t take it. Immovables (adapt < 40 + control_need > 60)
+  never copy.
+- News carries historical lore (`BLUEPRINT_LORE`): e.g. trap adoption ->
+  "the way the whole league chased Lemaire's trap after '95".
