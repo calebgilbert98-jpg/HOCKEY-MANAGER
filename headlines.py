@@ -54,6 +54,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "media_beef": _media_beef_headline,
         "narrative_shutdown": _narrative_shutdown_headline,
         "grudge_callback": _grudge_callback_headline,
+        "game_story": _game_story_headline,
         "outdoor_pregame": _outdoor_pregame_headline,
         "milestone_hit": _milestone_headline,
         "lottery_results": _lottery_headline,
@@ -311,6 +312,30 @@ def _narrative_shutdown_headline(game_date, player="", team="",
         priority=2,
         is_important=True,
     )
+
+
+def _game_story_headline(game_date, story_kind="", text="",
+                         home="", away="", **kw):
+    """A night worth remembering: hat trick, shutout, steal, blowout,
+    OT thriller. Delivered only for the user's games."""
+    from game_classes import EmailMessage
+    _emoji = {"hat_trick": "🎩", "shutout": "🧱", "goalie_steal": "🥅",
+              "blowout": "💥", "ot_thriller": "⚡"}.get(story_kind, "🏒")
+    subject = f"{_emoji} {_label(story_kind)}: {away} @ {home}"
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=subject,
+        content=f"{text}\n\nSome nights are bigger than the score.",
+        category="Game Story",
+        priority=2,
+    )
+
+
+def _label(story_kind):
+    return {"hat_trick": "Hat trick", "shutout": "Shutout",
+            "goalie_steal": "Goalie steal", "blowout": "Statement win",
+            "ot_thriller": "OT thriller"}.get(story_kind, "Big night")
 
 
 def _grudge_callback_headline(game_date, home="", away="", short="",

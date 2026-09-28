@@ -8686,6 +8686,53 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             return False
 
+    def _narrative_postgame(self, sim_engine, home_team, away_team,
+                              scores, went_ot=False, shootout=False,
+                              roll_incidents=True, deliver_headlines=False):
+        """Shared post-game narrative hook (narrative_incidents.py).
+
+        Rolls incidents for engines that don't model them live (AdvGS),
+        records game stories for both engines, and feeds the fight count
+        back onto the sim so the grudge-week grader sees real numbers.
+        Headlines only when deliver_headlines (user-involved games).
+        Never raises; never touches scoring or stats.
+        """
+        try:
+            import narrative_incidents as _ni
+            from narrative_ledger import active_ledger
+            home_score, away_score = scores[0], scores[1]
+            rivalries = getattr(getattr(self, "league", None),
+                                "rivalries", None) or []
+            res = _ni.process_postgame(
+                sim_engine, home_team, away_team,
+                int(home_score), int(away_score),
+                went_ot=bool(went_ot), shootout=bool(shootout),
+                rivalries=rivalries, ledger=active_ledger(),
+                roll_incidents=bool(roll_incidents))
+            if roll_incidents and sim_engine is not None:
+                try:
+                    if not getattr(sim_engine, "_fights_total", 0):
+                        sim_engine._fights_total = int(res.get("fights", 0))
+                except Exception:
+                    pass
+            if deliver_headlines and res.get("stories"):
+                try:
+                    from headlines import deliver_spec as _deliver_spec
+                    for _st in res["stories"]:
+                        _deliver_spec(self, {
+                            "kind": "game_story",
+                            "story_kind": _st.get("kind", ""),
+                            "text": _st.get("text", ""),
+                            "home": _st.get("home", ""),
+                            "away": _st.get("away", ""),
+                            "involved": _st.get("involved", ()),
+                        })
+                except Exception:
+                    pass
+            return res
+        except Exception:
+            return {}
+
     def _grudge_week_grade(self, game_date, home_team, away_team,
                            home_score, away_score, went_to_ot, fights=0):
         """Post-game: call out hollow overhype when the game fizzled."""
@@ -8955,6 +9002,23 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
                 winner, loser, scores, events, notable_events = sim_engine.run()
+                # Narrative: the quick-sim never modeled fights/brawls, so
+                # roll them post-game through the shared incident module
+                # (same dice GameSim uses live); record the night's stories
+                # for both engines. Headlines for the user's game only.
+                try:
+                    _nwent_ot = any(
+                        isinstance(_e, dict) and _e.get('period', 0) > 3
+                        for _e in (notable_events or []))
+                    _nshootout = any(
+                        isinstance(_e, dict) and _e.get('event') == 'Shootout Goal'
+                        for _e in (notable_events or []))
+                    self._narrative_postgame(
+                        sim_engine, home_team, away_team, scores,
+                        went_ot=_nwent_ot, shootout=_nshootout,
+                        roll_incidents=True, deliver_headlines=True)
+                except Exception:
+                    pass
                 # Revert AI tactics + file tactical intel on the user's systems
                 if _qs_adapted is not None:
                     try:
@@ -8988,6 +9052,19 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 import headlines
                 headlines.drain_sim_headlines(self, sim_engine)
+            except Exception:
+                pass
+            # Narrative: GameSim modeled incidents live; record the night's
+            # stories (hat tricks, shutouts, steals) -- the visualizer's
+            # story_worthy() never reached the ledger.
+            try:
+                _nwent_ot = any(
+                    isinstance(_e, dict) and _e.get('period', 0) > 3
+                    for _e in (notable_events or []))
+                self._narrative_postgame(
+                    sim_engine, home_team, away_team, scores,
+                    went_ot=_nwent_ot, roll_incidents=False,
+                    deliver_headlines=True)
             except Exception:
                 pass
             # Legacy events: permanent season memory for outdoor games.
@@ -9944,6 +10021,22 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
 
+            # Narrative: quick-simmed games never modeled fights/brawls, so
+            # roll them post-game through the shared incident module; record
+            # the night's stories for both engines. Headlines only if the
+            # user's team was involved (no league-wide spam).
+            try:
+                _sim_cls = type(full_sim).__name__ if full_sim is not None else ""
+                _nres = self._narrative_postgame(
+                    full_sim, home_team, away_team, scores,
+                    went_ot=bool(went_to_ot), shootout=False,
+                    roll_incidents=_sim_cls != "GameSim",
+                    deliver_headlines=bool(user_team) and
+                    user_team in (home_team, away_team))
+                _gfights = int((_nres or {}).get("fights", 0) or 0)
+            except Exception:
+                _gfights = 0
+
             # Store minimal game result
             game_result = {
                 'date': game_date,
@@ -9972,12 +10065,8 @@ class HockeyManagerGUI(tk.Tk):
 
             # Hollow overhype: marketed as grudge week, delivered a
             # snoozer -- the marketing wrote checks the game couldn't cash.
-            _gfights = 0
-            if full_sim is not None:
-                try:
-                    _gfights = int(getattr(full_sim, "_fights_total", 0) or 0)
-                except Exception:
-                    _gfights = 0
+            # (_gfights came from the narrative post-game hook above, which
+            # also stamped _fights_total onto the sim.)
             self._grudge_week_grade(game_date, home_team, away_team,
                                     home_score, away_score, went_to_ot,
                                     fights=_gfights)
