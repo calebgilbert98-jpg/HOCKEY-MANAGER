@@ -176,7 +176,7 @@ def _bump_star_counts(player: Any, rank: int) -> None:
 def _record_first_star_moment(player: Any, star: Dict[str, Any],
                               game_result: Dict[str, Any],
                               home_team: Any, away_team: Any,
-                              game_date: Any) -> None:
+                              game_date: Any, playoff: bool = False) -> None:
     """The 1st star's night lands in Signature Games on the player card."""
     tname = star.get("team_name", "")
     home_name = getattr(home_team, "team_name", "") if home_team else ""
@@ -211,6 +211,7 @@ def _record_first_star_moment(player: Any, star: Dict[str, Any],
         "opp": opp,
         "score": score_str,
         "sig": 25,
+        "playoff": bool(playoff),
     })
 
 
@@ -218,7 +219,8 @@ def record_game_stars(game_result: Dict[str, Any],
                       home_team: Any = None,
                       away_team: Any = None,
                       preseason: bool = False,
-                      game_date: Any = None) -> List[Dict[str, Any]]:
+                      game_date: Any = None,
+                      playoff: bool = False) -> List[Dict[str, Any]]:
     """Select the three stars, stamp them on the result, and record them
     onto the players. Idempotent per game: callers record each game once.
     Preseason exhibitions name no stars."""
@@ -245,7 +247,8 @@ def record_game_stars(game_result: Dict[str, Any],
         _bump_star_counts(p, star["rank"])
         if star["rank"] == 1:
             _record_first_star_moment(p, star, game_result,
-                                      home_team, away_team, game_date)
+                                      home_team, away_team, game_date,
+                                      playoff=playoff)
     return stars
 
 

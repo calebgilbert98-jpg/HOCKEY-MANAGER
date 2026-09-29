@@ -845,8 +845,10 @@ class AITeamManager:
 
         for p in prospects:
             try:
-                if getattr(p, "contract", None) is not None:
-                    continue  # already signed
+                _pc = getattr(p, "contract", None)
+                if _pc is not None and int(
+                        getattr(_pc, "years_remaining", 0) or 0) > 0:
+                    continue  # already signed to a live deal
                 if getattr(p, "rights_team", "") != team.team_name:
                     continue  # not our rights
                 if getattr(p, "retired", False):
@@ -1289,8 +1291,10 @@ class AITeamManager:
                     self._execute_contract_extension(team, d, league)
                     continue
                 if d.decision_type == "sign_prospect":
-                    if getattr(p, "contract", None) is not None:
-                        continue
+                    _pc = getattr(p, "contract", None)
+                    if _pc is not None and int(
+                            getattr(_pc, "years_remaining", 0) or 0) > 0:
+                        continue  # already signed to a live deal
                     if hasattr(league, "sign_drafted_prospect"):
                         league.sign_drafted_prospect(team, p)
                 elif d.decision_type == "promote_prospect":

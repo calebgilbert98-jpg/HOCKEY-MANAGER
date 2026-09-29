@@ -3510,11 +3510,14 @@ def user_room_politics_tick(team: Any, date_str: str = "",
                     "the room. A decision is due.")
     # Coach's leash (user's chair): same evaluation math as the AI GMs, but
     # the human makes the call -- a hot-seat flag, never an auto-firing.
+    # The result rides along in the tick's output so the weekly caller can
+    # surface it to the GM once per hot-seat episode.
     try:
-        coach_hot_seat_check(team, date_str=date_str, league=league)
+        _hot_seat = coach_hot_seat_check(team, date_str=date_str,
+                                         league=league)
     except Exception:
-        pass
-    return {"practice": out, "crisis": crisis}
+        _hot_seat = None
+    return {"practice": out, "crisis": crisis, "coach_hot_seat": _hot_seat}
 
 
 # ---------------------------------------------------------------------------
@@ -4008,15 +4011,18 @@ def coach_hot_seat_check(team, date_str="", league=None):
         month = 10
     if month not in _COACH_EVAL_MONTHS:
         dr["coach_hot_seat"] = None
+        dr.pop("coach_hot_seat_surfaced", None)
         return None
     dr["coach_eval_last"] = str(date_str)[:10]
     coach = _room_head_coach(team)
     if coach is None:
         dr["coach_hot_seat"] = None
+        dr.pop("coach_hot_seat_surfaced", None)
         return None
     pace, gp = _team_points_pace(team, league)
     if gp < 10:
         dr["coach_hot_seat"] = None
+        dr.pop("coach_hot_seat_surfaced", None)
         return None
     expectation, expected = _coach_board_expectation(team)
     trust, gap = _apply_coach_trust_drift(coach, team, league, pace, expected)
@@ -4027,6 +4033,7 @@ def coach_hot_seat_check(team, date_str="", league=None):
            and trust < _COACH_FIRE_TRUST and gap < -_COACH_FIRE_PACE_GAP)
     if not hot:
         dr["coach_hot_seat"] = None
+        dr.pop("coach_hot_seat_surfaced", None)
         return None
     _stayed, p, pitch = coach_reprieve_roll(coach, team)
     res = {"trust": round(trust, 1), "pace": round(pace, 3),

@@ -494,6 +494,24 @@ class PlayoffBracket:
         except Exception:
             pass
 
+        # Three stars of the game: Cup runs leave the same card trace as
+        # the regular season -- stars on the result, season counts, and a
+        # 1st-star Signature Games moment (marked playoff).
+        try:
+            from stars import record_game_stars as _rgs
+            _pdate = getattr(getattr(self, "app", None),
+                             "current_date", None)
+            _pgr = {
+                "game_stats": getattr(game_sim, "game_stats", None) or {},
+                "home_score": home_score,
+                "away_score": away_score,
+                "winner": series.team1 if team1_won else series.team2,
+            }
+            _rgs(_pgr, series.team1, series.team2, preseason=False,
+                 game_date=_pdate, playoff=True)
+        except Exception:
+            pass
+
         # Live bracket: tell observers (the tree view) a game just finished.
         self._notify_game_listeners(series)
 

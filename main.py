@@ -9261,13 +9261,56 @@ class HockeyManagerGUI(tk.Tk):
                         except Exception:
                             pass
                     if _human:
-                        _dr.user_room_politics_tick(
+                        _urt = _dr.user_room_politics_tick(
                             team, date_str=date_str, league=league)
+                        # Coach's leash, surfaced: the human GM decides --
+                        # never an auto-firing. One alert per hot-seat
+                        # episode; the flag clears (and re-arms) in
+                        # coach_hot_seat_check when the seat cools.
+                        try:
+                            _hs = (_urt or {}).get("coach_hot_seat")
+                            if isinstance(_hs, dict) and _hs.get("coach_name"):
+                                _drf = _dr.ensure_dressing_room_fields(team)
+                                if not _drf.get("coach_hot_seat_surfaced"):
+                                    _drf["coach_hot_seat_surfaced"] = True
+                                    self._alert_coach_hot_seat(
+                                        team, _hs, date_str)
+                        except Exception:
+                            pass
                     else:
                         _dr.ai_room_politics_tick(
                             team, date_str=date_str, league=league, app=self)
                 except Exception:
                     continue
+        except Exception:
+            pass
+
+    def _alert_coach_hot_seat(self, team, hot, date_str):
+        """Surface the coach hot-seat flag to the human GM: one inbox
+        alert per episode, carrying the coach's own case for staying.
+        The decision stays human -- this only opens the conversation."""
+        try:
+            from headlines import deliver as _deliver
+            from game_classes import EmailMessage
+            coach_name = hot.get("coach_name", "your head coach")
+            pitch = hot.get("pitch") or ""
+            body = (
+                f"{coach_name}'s seat is getting warm. Trust is at "
+                f"{hot.get('trust', '?')}/100 with the club pacing "
+                f"{hot.get('pace', '?')} against a "
+                f"{hot.get('expectation', 'board')} expectation "
+                f"({hot.get('expected', '?')} pts pace)."
+            )
+            if pitch:
+                body += f"\n\nHis case for staying: {pitch}"
+            body += ("\n\nThis is your call, not the board's -- open the "
+                     "Dressing Room to back him, warn him, or make a change.")
+            tname = getattr(team, "team_name", "")
+            _deliver(self, EmailMessage(
+                sender="Owner's office", sender_type="Staff",
+                subject=f"Hot seat: {coach_name}",
+                content=body, category="General",
+                is_important=True, priority=3), involved=(tname,))
         except Exception:
             pass
 
