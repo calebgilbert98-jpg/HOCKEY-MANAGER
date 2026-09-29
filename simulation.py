@@ -4272,10 +4272,19 @@ class GameSim:
             else:
                 got_open = off > dfn
             if got_open and nd is not None:
-                # shake the checker: step away into space, drift dangerous
+                # shake the checker: step away into space, drift dangerous.
+                # (Part B 2026-09-29: cap the backward drift -- a receiver
+                # shaking directly away from a goal-side checker was walking
+                # 7ft backward per pass, and 3-4 setup passes carried the puck
+                # ~48ft out of the zone, turning keep-ins into neutral-zone
+                # regathers. Max 3ft backward from the shake; the forward
+                # drift still applies.)
                 nx_, ny_ = self._ppos_get(nd)
                 ang = math.atan2(my - ny_, mx - nx_)
-                mx2 = mx + math.cos(ang) * 7 + (adir * 4 if kind in ("cycle", "attack") else 0)
+                _dx_shake = math.cos(ang) * 7
+                if _dx_shake * adir < -3:
+                    _dx_shake = -3 * adir
+                mx2 = mx + _dx_shake + (adir * 4 if kind in ("cycle", "attack") else 0)
                 my2 = my + math.sin(ang) * 7
                 self._ppos_place(m, mx2, my2, jitter=1.0)
                 mx, my = self.player_positions[m.id]
