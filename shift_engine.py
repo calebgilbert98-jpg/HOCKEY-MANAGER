@@ -9,6 +9,12 @@ Design doc: docs/SHIFT_ENGINE_DESIGN.md
 Engine boundary: this changes WHO is on the ice and WHEN they change. It does
 NOT touch goal probabilities, shot math, save logic, tactics multipliers, or
 fatigue drain rates.
+
+Rotation is policy-driven (icetime-ecosystem, W2): the next line/pair comes
+from deployment_policy.deployment_weights -- coaching style, morale, score
+state, talent, attitude, archetype fit, relationships, honored GM advice --
+with a ~30-min soft-cap governor. Per-game TOI is credited at every change
+via deployment_policy's accumulator.
 """
 
 import random
@@ -70,6 +76,9 @@ def get_shift_state(sim: Any, team: Any) -> ShiftState:
         st.d_shift_start = clock
         st.st_shift_start = clock
         st._period = period
+        # W2 (icetime-ecosystem): TOI accounting anchor -- the goalie credit
+        # clock starts when the state is created.
+        st._toi_flush_clock = clock
         states[key] = st
     # Period boundary: the clock resets to 1200 each period. A shift can't
     # span the intermission — reset the shift clocks so ages stay sane.
@@ -80,9 +89,18 @@ def get_shift_state(sim: Any, team: Any) -> ShiftState:
             st.record_shift(st.f_shift_start - 0)  # clock hit 0; length unknown, skip
         except Exception:
             pass
+        # W2 (icetime-ecosystem): credit the truncated shift to the horn so
+        # per-game TOI stays exact across periods. deployment_policy owns
+        # the accounting; this is just the hook.
+        try:
+            from deployment_policy import flush_team_toi_at_clock
+            flush_team_toi_at_clock(sim, team, st, 0.0)
+        except Exception:
+            pass
         st.f_shift_start = clock
         st.d_shift_start = clock
         st.st_shift_start = clock
+        st._toi_flush_clock = clock
         st._period = period
     return st
 
@@ -170,6 +188,97 @@ def _sustained_oz_pressure(sim: Any, team: Any) -> bool:
         return False
 
 
+def _credit_outgoing(sim: Any, team: Any, st: ShiftState, clock: float,
+                   side: str) -> None:
+    """Hook: credit the outgoing unit's elapsed ice time before it changes.
+
+    Delegates to deployment_policy (manpower-aware: PP/PK time credits the
+    special-teams unit the sim actually dressed). Never raises.
+    """
+    try:
+        from deployment_policy import (credit_forwards_elapsed,
+                                        credit_defense_elapsed)
+        if side == "F":
+            credit_forwards_elapsed(sim, team, st, clock)
+        else:
+            credit_defense_elapsed(sim, team, st, clock)
+    except Exception:
+        pass
+
+
+def _policy_next_line(sim: Any, team: Any, st: ShiftState, side: str,
+                      reason: str = "rotation") -> int:
+    """Next line/pair by coaching deployment policy (weighted rotation).
+
+    Replaces the fixed 1->2->3->4 round-robin: shares come from
+    deployment_policy.deployment_weights (coach style, morale, score state,
+    talent, fit, relationships, honored advice), then the ~30-min soft-cap
+    governor downweights lines whose skaters hit the cap. A change means a
+    change -- the unit coming off is excluded from the pick. Falls back to
+    plain round-robin if the policy is unavailable.
+    """
+    n = 4 if side == "F" else 3
+    current = st.f_line if side == "F" else st.d_pair
+    try:
+        from deployment_policy import (deployment_weights_for_game,
+                                        soft_cap_adjust_shares,
+                                        pick_weighted_line)
+        weights = deployment_weights_for_game(sim, team)
+        shares = list(weights["F" if side == "F" else "D"])
+        shares = soft_cap_adjust_shares(sim, team, side, shares)
+        return pick_weighted_line(shares, n, exclude=current)
+    except Exception:
+        return _next_in_rotation(current, n)
+
+
+def _policy_pick_from(sim: Any, team: Any, side: str,
+                      candidates: Tuple[int, ...]) -> int:
+    """Weighted pick among explicit candidate lines (chase/protect calls).
+
+    Unlike _policy_next_line this is the coach's explicit call, so the
+    current line is NOT excluded -- sending the top line back out to chase
+    a game is the whole point.
+    """
+    n = 4 if side == "F" else 3
+    try:
+        from deployment_policy import (deployment_weights_for_game,
+                                        soft_cap_adjust_shares,
+                                        pick_weighted_line)
+        weights = deployment_weights_for_game(sim, team)
+        shares = list(weights["F" if side == "F" else "D"])
+        shares = soft_cap_adjust_shares(sim, team, side, shares)
+        sub = [shares[c - 1] if 1 <= c <= n else 0.0 for c in candidates]
+        if sum(sub) <= 0:
+            sub = [1.0 / len(candidates)] * len(candidates)
+        pick = random.choices(list(candidates), weights=sub, k=1)[0]
+        return pick
+    except Exception:
+        return random.choice(list(candidates))
+
+
+def _policy_score_thresholds(sim: Any, team: Any) -> Tuple[int, int]:
+    """(chase_at, protect_at) goal-diff thresholds, parameterized by policy.
+
+    Defaults (-2, +2) preserve the historical behavior; an aggressive coach
+    (high concentration) trailing late starts chasing at -1.
+    """
+    try:
+        from deployment_policy import (deployment_weights_for_game,
+                                        score_state_thresholds)
+        weights = deployment_weights_for_game(sim, team)
+        gs = weights.get("meta", {})
+        concentration = float(gs.get("concentration", 0.40))
+        return score_state_thresholds(
+            {"period": getattr(sim, "period", 1),
+             "clock": getattr(sim, "clock", 1200),
+             "score_diff": _goal_diff_for(sim, team,
+                                          team is getattr(sim, "home_team",
+                                                           None))},
+            concentration)
+    except Exception:
+        return -2, 2
+
+
 def change_lines(sim: Any, team: Any, st: ShiftState,
                  change_f: bool = True, change_d: bool = True,
                  reason: str = "rotation") -> Dict[str, Any]:
@@ -178,14 +287,16 @@ def change_lines(sim: Any, team: Any, st: ShiftState,
     result = {"forwards": False, "defense": False, "wholesale": False}
 
     if change_f:
+        _credit_outgoing(sim, team, st, clock, "F")
         st.record_shift(st.f_age(clock))
-        st.f_line = _next_in_rotation(st.f_line, 4)
+        st.f_line = _policy_next_line(sim, team, st, "F", reason)
         st.f_shift_start = clock
         result["forwards"] = True
 
     if change_d:
+        _credit_outgoing(sim, team, st, clock, "D")
         st.record_shift(st.d_age(clock))
-        st.d_pair = _next_in_rotation(st.d_pair, 3)
+        st.d_pair = _policy_next_line(sim, team, st, "D", reason)
         st.d_shift_start = clock
         result["defense"] = True
 
@@ -245,15 +356,17 @@ def stoppage_change(sim: Any, team: Any, st: ShiftState,
         # Away team rolls rotation (no last change on the road)
         pass
 
-    # Score-state layer (existing behavior, preserved):
-    # trailing by 2+ -> shorten to top six; leading by 2+ -> bottom six.
-    # This overrides matching.
+    # Score-state layer (deployment policy, was fixed +-2 for every coach):
+    # trailing -> shorten to top six; leading -> bottom six / checkers.
+    # Thresholds AND the pick among the short-bench lines now come from the
+    # coach's deployment policy. This overrides matching.
     goal_diff = _goal_diff_for(sim, team, is_home)
-    if goal_diff <= -2:
-        target_line = 1 if random.random() < 0.5 else 2
+    chase_at, protect_at = _policy_score_thresholds(sim, team)
+    if goal_diff <= chase_at:
+        target_line = _policy_pick_from(sim, team, "F", (1, 2))
         result["reason"] = "chase_game"
-    elif goal_diff >= 2:
-        target_line = 3 if random.random() < 0.5 else 4
+    elif goal_diff >= protect_at:
+        target_line = _policy_pick_from(sim, team, "F", (3, 4))
         result["reason"] = "protect_lead"
 
     # Decide changes
@@ -269,6 +382,7 @@ def stoppage_change(sim: Any, team: Any, st: ShiftState,
             change_d = True
 
     if target_line is not None and change_f:
+        _credit_outgoing(sim, team, st, clock, "F")
         st.record_shift(st.f_age(clock))
         st.f_line = target_line
         st.f_shift_start = clock
@@ -279,6 +393,7 @@ def stoppage_change(sim: Any, team: Any, st: ShiftState,
         result["forwards"] = info["forwards"]
 
     if target_pair is not None and change_d:
+        _credit_outgoing(sim, team, st, clock, "D")
         st.record_shift(st.d_age(clock))
         st.d_pair = target_pair
         st.d_shift_start = clock
