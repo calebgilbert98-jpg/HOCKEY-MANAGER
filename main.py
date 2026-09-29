@@ -11899,7 +11899,7 @@ class HockeyManagerGUI(tk.Tk):
         away_strength += away_star_effects['offensive_boost']
         
         # Base goal expectation for NHL-like scoring
-        base_goals = 2.95  # Lowered slightly for more realistic low-scoring games
+        base_goals = 2.70  # Re-anchored 2026-09-29: star-effect tiers moved to the native 1-100 scale, so the league-average defensive_reduction fell; 2.70 holds the ~6.1 goals/game equilibrium
         home_goal_expectation = base_goals + (home_strength - 0.75) * 2.2
         away_goal_expectation = base_goals + (away_strength - 0.75) * 2.2
         
@@ -12103,40 +12103,45 @@ class HockeyManagerGUI(tk.Tk):
                 effects['clutch_factor'] += 0.08
         
         # Elite defensemen reduce opponent scoring and add clutch
+        # (native 1-100 scale: ~84+ is a top-pair NHL defender)
         for defenseman in top_defense:
             rating = defenseman.overall_rating()
-            if rating >= 51:  # Elite defender (Norris level)
+            if rating >= 93:  # Elite defender (Norris level)
                 effects['defensive_reduction'] += 0.25
                 effects['clutch_factor'] += 0.25
-            elif rating >= 49:  # Very good defender
+            elif rating >= 90:  # Very good defender
                 effects['defensive_reduction'] += 0.15
                 effects['clutch_factor'] += 0.15
-            elif rating >= 46:  # Good defender
+            elif rating >= 87:  # Good defender
                 effects['defensive_reduction'] += 0.08
                 effects['clutch_factor'] += 0.08
-            elif rating >= 43:  # Decent defender
+            elif rating >= 84:  # Decent defender
                 effects['defensive_reduction'] += 0.03
                 effects['clutch_factor'] += 0.03
         
         # Elite goalies have major defensive impact
+        # (native 1-100 scale: ~82+ is an NHL starter; 91+ is Vezina-tier)
         for goalie in top_goalies:
             rating = goalie.overall_rating()
-            if rating >= 52:  # Elite goalie (Vezina level)
+            if rating >= 95:  # Generational goalie
+                effects['defensive_reduction'] += 0.45
+                effects['clutch_factor'] += 0.3
+            elif rating >= 91:  # Elite goalie (Vezina level)
                 effects['defensive_reduction'] += 0.35
                 effects['clutch_factor'] += 0.3
-            elif rating >= 50:  # Very good goalie
-                effects['defensive_reduction'] += 0.22
+            elif rating >= 88:  # Very good goalie
+                effects['defensive_reduction'] += 0.25
                 effects['clutch_factor'] += 0.2
-            elif rating >= 47:  # Good goalie
-                effects['defensive_reduction'] += 0.12
+            elif rating >= 85:  # Good goalie
+                effects['defensive_reduction'] += 0.15
                 effects['clutch_factor'] += 0.12
-            elif rating >= 44:  # Decent goalie
-                effects['defensive_reduction'] += 0.05
-                effects['clutch_factor'] += 0.05
+            elif rating >= 82:  # Decent goalie
+                effects['defensive_reduction'] += 0.08
+                effects['clutch_factor'] += 0.08
         
         # Cap the effects to prevent unrealistic swings
         effects['offensive_boost'] = min(0.4, effects['offensive_boost'])
-        effects['defensive_reduction'] = min(0.5, effects['defensive_reduction'])
+        effects['defensive_reduction'] = min(0.7, effects['defensive_reduction'])
         effects['clutch_factor'] = min(1.0, effects['clutch_factor'])
         
         return effects
