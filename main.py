@@ -12154,9 +12154,16 @@ class HockeyManagerGUI(tk.Tk):
         away_strength += away_star_effects['offensive_boost']
         
         # Base goal expectation for NHL-like scoring
-        base_goals = 2.70  # Re-anchored 2026-09-29: star-effect tiers moved to the native 1-100 scale, so the league-average defensive_reduction fell; 2.70 holds the ~6.1 goals/game equilibrium
-        home_goal_expectation = base_goals + (home_strength - 0.75) * 2.2
-        away_goal_expectation = base_goals + (away_strength - 0.75) * 2.2
+        base_goals = 2.11  # Parity-calibrated 2026-09-29 vs the event sim
+        # (~3.05 goals/team/game healthy). Note: offensive_boost (+0.40) and
+        # the home bonus (+0.05) sit INSIDE the strength term, so the 2.5
+        # slope scales them too; the anchor absorbs that level shift while
+        # the slope carries the team-quality spread. (Recalibrated +0.24
+        # when the harness started deep-copying teams per game -- the old
+        # aggregate was injury-depressed; the true healthy reference level
+        # is ~3.05, not ~2.9.)
+        home_goal_expectation = base_goals + (home_strength - 0.75) * 2.5
+        away_goal_expectation = base_goals + (away_strength - 0.75) * 2.5
         
         # Apply defensive effects (elite goalies/defense reduce opponent scoring)
         home_goal_expectation -= away_star_effects['defensive_reduction']
@@ -12166,23 +12173,13 @@ class HockeyManagerGUI(tk.Tk):
         home_goal_expectation = max(1.0, min(4.5, home_goal_expectation))
         away_goal_expectation = max(1.0, min(4.5, away_goal_expectation))
 
-        # Team tactics shape scoring (EHM-style: style matters, not just talent).
-        # Offensive hockey opens the game up (both teams score more);
-        # defensive systems suppress scoring at both ends.
-        def _tactic_shifts(es_tactic):
-            own_shift = {'Very Offensive': 0.14, 'Offensive': 0.10, 'Balanced': 0.0,
-                         'Defensive': -0.08, 'Very Defensive': -0.11}.get(es_tactic, 0.0)
-            opp_shift = {'Very Offensive': 0.11, 'Offensive': 0.08, 'Balanced': 0.0,
-                         'Defensive': -0.06, 'Very Defensive': -0.09}.get(es_tactic, 0.0)
-            return own_shift, opp_shift
-
-        home_own, home_opp = _tactic_shifts(getattr(home_team, 'tactic_even_strength', 'Balanced'))
-        away_own, away_opp = _tactic_shifts(getattr(away_team, 'tactic_even_strength', 'Balanced'))
-        home_goal_expectation += home_own + away_opp
-        away_goal_expectation += away_own + home_opp
-
-        # Installed NHL systems (tactics.py): layered under the old
-        # sliders. Your attack vs their structure; pace moves total goals;
+        # Installed NHL systems (tactics.py): the single shared tactics
+        # channel -- the same matchup_modifiers() the event sims apply per
+        # shot. (Factor parity 2026-09-29: the old additive _tactic_shifts
+        # double-counted tactics here -- the legacy slider already folds
+        # into tactics.py's resolution -- making rush/trap responses ~2x
+        # the event sim's. Removed; both engines now read one channel.)
+        # Your attack vs their structure; pace moves total goals;
         # PP/PK systems nudge season-level expectations (there is no
         # per-man-advantage state in the lightweight path).
         try:
@@ -12213,9 +12210,12 @@ class HockeyManagerGUI(tk.Tk):
         
         # Generate goals with realistic NHL distribution
         # Use round() not int() to avoid truncation bias (~0.5 goals lost per team)
-        # σ=1.0 gives ~7% shutout rate (NHL realistic) vs 24.5% with σ=1.25
-        home_goals = max(0, min(8, round(random.normalvariate(home_goal_expectation, 1.0))))
-        away_goals = max(0, min(8, round(random.normalvariate(away_goal_expectation, 1.0))))
+        # σ=1.85 with the 2.5 team-quality slope (parity 2026-09-29): slightly
+        # tighter than the reference spread; team differences carry more of
+        # the variance, lifting ties and trimming shutouts toward the event
+        # sim's shape.
+        home_goals = max(0, min(8, round(random.normalvariate(home_goal_expectation, 1.85))))
+        away_goals = max(0, min(8, round(random.normalvariate(away_goal_expectation, 1.85))))
         
         # Apply clutch performance factors in close games
         if abs(home_goals - away_goals) <= 1:
@@ -12401,10 +12401,13 @@ class HockeyManagerGUI(tk.Tk):
             total_strength += player.overall_rating() * 0.1  # Goalies are 10% of team strength
             player_count += 0.1
         
-        # Normalize to 0.5-1.0 range for better goal calculation
-        # (50-point OVR scale: ~35 avg -> 0.5, ~50 avg -> 1.0)
-        avg_ovr = (total_strength / max(player_count, 1)) if player_count > 0 else 37.5
-        strength = 0.5 + (avg_ovr - 35) / 30.0
+        # Normalize to 0.5-1.0 range for goal calculation.
+        # (native 1-100 scale: 70 avg -> 0.5, 80 avg -> 0.75, 90 avg -> 1.0;
+        #  typical NHL clubs sit ~78-85. Re-anchored 2026-09-29 for parity
+        #  with the event sim: the old 50-point anchors (35/30) saturated
+        #  every NHL roster at 1.0, killing team-quality differentiation.)
+        avg_ovr = (total_strength / max(player_count, 1)) if player_count > 0 else 80.0
+        strength = 0.5 + (avg_ovr - 70) / 40.0
         strength = max(0.5, min(1.0, strength))  # Clamp between 50-100% strength
         
         # Cache the result
@@ -12461,23 +12464,36 @@ class HockeyManagerGUI(tk.Tk):
         
         # Elite goalies have major defensive impact
         # (native 1-100 scale: ~82+ is an NHL starter; 91+ is Vezina-tier)
+        # Factor-calibrated 2026-09-29 vs the event sim: the event engine's
+        # goalie response is ~2x the old tiers (weak goalie 86->30: +0.37
+        # there vs +0.13 here; elite 87->95: -0.30 there vs -0.20 here).
+        # Steepened through the NHL range and extended below it -- a bad
+        # goalie actively bleeds goals (negative reduction), matching the
+        # event sim's continuous (unfloored) goalie skill response.
         for goalie in top_goalies:
             rating = goalie.overall_rating()
             if rating >= 95:  # Generational goalie
-                effects['defensive_reduction'] += 0.45
+                effects['defensive_reduction'] += 0.60
                 effects['clutch_factor'] += 0.3
             elif rating >= 91:  # Elite goalie (Vezina level)
-                effects['defensive_reduction'] += 0.35
+                effects['defensive_reduction'] += 0.48
                 effects['clutch_factor'] += 0.3
             elif rating >= 88:  # Very good goalie
-                effects['defensive_reduction'] += 0.25
+                effects['defensive_reduction'] += 0.36
                 effects['clutch_factor'] += 0.2
             elif rating >= 85:  # Good goalie
-                effects['defensive_reduction'] += 0.15
+                effects['defensive_reduction'] += 0.25
                 effects['clutch_factor'] += 0.12
             elif rating >= 82:  # Decent goalie
-                effects['defensive_reduction'] += 0.08
+                effects['defensive_reduction'] += 0.16
                 effects['clutch_factor'] += 0.08
+            elif rating >= 79:  # Fringe starter
+                effects['defensive_reduction'] += 0.08
+                effects['clutch_factor'] += 0.04
+            elif rating >= 76:  # Replacement level
+                effects['defensive_reduction'] += 0.0
+            else:  # Below replacement: actively costs goals
+                effects['defensive_reduction'] -= 0.12
         
         # Cap the effects to prevent unrealistic swings
         effects['offensive_boost'] = min(0.4, effects['offensive_boost'])
@@ -15648,20 +15664,22 @@ class HockeyManagerGUI(tk.Tk):
             return 1.0
 
     def _career_morale_modifier(self, team) -> float:
-        """FM-style squad-confidence modifier from average morale (0.97-1.03).
+        """FM-style squad-confidence modifier from average morale.
 
         Native 1-100 morale: 70 is neutral, each point moves expectations
-        0.1% -- the original +/-3% intent, rescaled from the old 1-10 math.
-        Own channel next to the situations factor: situations reads room
-        structure, bench buy-in and hunger counts; this reads the squad's
-        raw confidence level. Applied only in the lightweight quick-sim.
+        0.03% -- factor-calibrated 2026-09-29 vs the event sim, whose
+        per-shot morale channel moves a fully toxic room only ~-1.3%
+        (the old 0.1%/pt, +/-3% intent, overstated it ~2.5x). Own channel
+        next to the situations factor: situations reads room structure,
+        bench buy-in and hunger counts; this reads the squad's raw
+        confidence level. Applied only in the lightweight quick-sim.
         """
         try:
             roster = getattr(team, "roster", []) or []
             if not roster:
                 return 1.0
             avg = sum((getattr(p, "morale", 70) or 70) for p in roster) / len(roster)
-            return max(0.97, min(1.03, 1.0 + (avg - 70) * 0.001))
+            return max(0.97, min(1.03, 1.0 + (avg - 70) * 0.0003))
         except Exception:
             return 1.0
 
