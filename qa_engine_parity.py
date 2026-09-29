@@ -178,9 +178,11 @@ check("C-vs-B suppression agrees within 25%",
       f"qs={_qs_cedge:.3f} gs={_gs_cedge:.3f}")
 
 # ------------------------------------------------------------------
-# 6. End-to-end distribution parity (lightweight: 6 games per engine)
+# 6. End-to-end distribution parity (12 games/engine -- hardened
+# 2026-09-29: 6 games left GameSim's ~8% grade-A conversion on too few
+# chances, so A>B>C ordering flaked on small samples)
 # ------------------------------------------------------------------
-print("\n6. End-to-end grade distribution parity (6 games/engine):")
+print("\n6. End-to-end grade distribution parity (12 games/engine):")
 try:
     import sys as _sys2
     _sys2.path.insert(0, os.path.expanduser('~/workspace/playthrough'))
@@ -190,9 +192,22 @@ try:
               if getattr(t, 'league_name', '') == 'National Hockey League']
     from quick_sim import AdvancedGameSim as _AdvGS
 
-    def _collect(engine_cls, n=6, seed=999):
+    def _collect(engine_cls, n=12, seed=999):
         import random as _r
         _r.seed(seed)
+        # Reset shared mesh form/streak: record_performance writes
+        # player.mesh_form during a run, and the players are shared
+        # between engine runs. Without reset, the second engine inherits
+        # the first engine's heaters -- a test artifact, not a parity
+        # signal. (Heater mechanics themselves are covered in
+        # qa_chance_grading.)
+        for _t in _teams:
+            for _p in getattr(_t, 'roster', []) or []:
+                try:
+                    _p.mesh_form = 0.0
+                    _p.mesh_streak = 0
+                except Exception:
+                    pass
         _cs, _cg = Counter(), Counter()
         for _i in range(n):
             _s = engine_cls(_teams[_i % 32], _teams[(_i * 3 + 1) % 32])
@@ -214,8 +229,8 @@ try:
                     _cg[_g] += _st.get(f'grade_{_g}_goals', 0)
         return _cs, _cg
 
-    _qs_c, _qs_g = _collect(_AdvGS, n=6, seed=999)
-    _gs_c, _gs_g = _collect(GameSim, n=6, seed=999)
+    _qs_c, _qs_g = _collect(_AdvGS, n=12, seed=999)
+    _gs_c, _gs_g = _collect(GameSim, n=12, seed=999)
     _qt, _gt = sum(_qs_c.values()), sum(_gs_c.values())
     print(f"    quick-sim dist: " +
           ", ".join(f"{g.upper()}={_qs_c[g]/_qt:.1%}" for g in 'abc'))

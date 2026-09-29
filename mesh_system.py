@@ -1000,20 +1000,23 @@ CHANCE_LOCATION_PRIORS = {
 }
 
 # Archetype grade-A generation tilt: who LIVES in the high-danger areas.
-# Snipers / playmakers / power forwards generate; grinders / enforcers /
-# stay-at-home D do not.
+# Archetype differentiates WITHIN talent bands, never across them --
+# talent (below) is the primary gate. A weight, NOT a prohibition
+# (per Muck 2026-09-28): a generational enforcer with elite finishing
+# attributes can still bury 50; he just earns fewer grade-A looks per
+# unit of talent than a sniper does.
 CHANCE_ARCHETYPE_A_TILT = {
-    "Sniper": 1.20,
-    "Playmaker": 1.15,
-    "Power Forward": 1.18,
+    "Sniper": 1.18,
+    "Playmaker": 1.10,
+    "Power Forward": 1.12,
     "Two-Way Forward": 1.00,
-    "Grinder": 0.70,
-    "Enforcer": 0.60,
-    "Offensive Defenseman": 1.08,
-    "Puck-Moving Defenseman": 0.95,
-    "Two-Way Defenseman": 0.90,
-    "Physical Defenseman": 0.70,
-    "Defensive Defenseman": 0.65,
+    "Grinder": 0.80,
+    "Enforcer": 0.72,
+    "Offensive Defenseman": 1.04,
+    "Puck-Moving Defenseman": 0.96,
+    "Two-Way Defenseman": 0.94,
+    "Physical Defenseman": 0.88,
+    "Defensive Defenseman": 0.86,
 }
 
 # Conversion multipliers per grade, applied to the agreed conversion math.
@@ -1055,17 +1058,47 @@ def chance_archetype_a_tilt(player) -> float:
         return 1.0
 
 
+def _piecewise_tilt(x, points):
+    """Linear interpolation over (x, tilt) points. The talent gradient is
+    explicit -- every point a named, A/B-tunable design decision (per Muck
+    2026-09-29). Steep where it matters (the star band), gentle at the
+    bottom so the 65-ovr's rare story stays real. Continuous, never a wall,
+    no caps."""
+    if x <= points[0][0]:
+        return points[0][1]
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        if x <= x1:
+            _f = (x - x0) / (x1 - x0) if x1 > x0 else 0.0
+            return y0 + _f * (y1 - y0)
+    return points[-1][1]
+
+
+# Grade-A talent tilt curve (2026-09-29, per Muck): the star band is STEEP
+# (95 earns 1.94x the grade-A rate of 85) so P(monster | generational) >>
+# P(monster | average) and the leaderboard is star-dominated BY MECHANICS.
+# Calibrated 2026-09-29: the 1.70 top was producing 97-goal cartoons; the
+# absolute level is set so 93+ separates at 60-70 goals while 85-88 sits
+# at 35-45. Gentle at the bottom (65->0.60) so the 65-ovr's rare 40-goal
+# story stays real when the factors align. Continuous, never a wall.
+CHANCE_TALENT_TILT_POINTS = (
+    (50, 0.40), (60, 0.50), (65, 0.60), (70, 0.68), (75, 0.76),
+    (80, 0.80), (85, 0.85), (88, 0.95), (90, 1.05), (92, 1.15), (95, 1.25),
+)
+
+
 def _chance_talent_tilt(player) -> float:
-    """Talent gate on grade-A frequency: offensive positioning (getting
+    """Talent gate on grade-A frequency -- talent FIRST, archetype second
+    (2026-09-29, per Muck wheelhouse). Offensive positioning (getting
     open), skating (separation), offensive awareness (finding the soft
-    spot). Elite ~1.2x, fringe ~0.75x. Compressed 2026-09-29 (acceptance):
-    the 1.55x max was giving stars 2.5x+ grade-A volume and 30+ fifty-goal
-    men. Never raises."""
+    spot), on the CHANCE_TALENT_TILT_POINTS curve. NO CAPS (per Muck):
+    steeply sloped by talent but never a wall. The 65-ovr's story stays
+    real when the factors genuinely align (hot form, great linemates,
+    weak matchups). Never raises."""
     try:
         _talent = (offensive_positioning(player) * 0.40
                    + _chance_attr(player, "skating") * 0.30
                    + _chance_attr(player, "offensive_awareness") * 0.30)
-        return max(0.75, min(1.20, 0.75 + (_talent / 100.0) * 0.45))
+        return _piecewise_tilt(_talent, CHANCE_TALENT_TILT_POINTS)
     except Exception:
         return 1.0
 
@@ -1104,6 +1137,18 @@ def _chance_matchup_tilt(shooter, defenders, goalie,
     except Exception:
         pass
     try:
+        # Self-correcting realism (2026-09-29, per Muck): the league
+        # adjusts. A heater draws the shutdown checkers -- tighter
+        # coverage offsets the heater's swagger. Positive feedback
+        # (heat -> chances) meets negative feedback (heat -> tighter
+        # checking), so hot streaks self-limit instead of running to
+        # 100-goal cartoons. Reuses the existing mesh form tracker.
+        _heat = _player_heat(shooter)
+        if _heat > 0.5:
+            _tilt *= 1.0 - CHANCE_HEAT_CHECK * (_heat - 0.5) * 2.0
+    except Exception:
+        pass
+    try:
         # Bad goalie matchup: shooters get cleaner looks against a
         # struggling netminder (overall vs ~88 league starter par).
         _govr = _chance_attr(goalie, "overall", 88.0)
@@ -1115,6 +1160,38 @@ def _chance_matchup_tilt(shooter, defenders, goalie,
     except Exception:
         pass
     return max(0.70, min(1.45, _tilt))
+
+
+# Heater constants (2026-09-29, per Muck): the INTENSITY factor's player
+# component. A player riding a heater earns chances at a hotter rate and
+# converts with swagger -- an amplifier, not a cheat code. The boost
+# (swagger) is paired with the check above (tighter checking) so the
+# net heater effect is positive but self-limiting.
+CHANCE_HEAT_BOOST = 0.12   # max +12% grade-A rate from a full heater
+CHANCE_HEAT_CHECK = 0.18   # max -18% from the shutdown response
+
+
+def _player_heat(player) -> float:
+    """Heater level 0..1. Reuses the existing mesh form tracker
+    (record_performance writes player.mesh_form, -1 cold .. 1 hot) --
+    no duplicate engine. In-game 'seize the moment' (multi-goal period
+    raising later-period grade-A) wires in via game_ctx in the
+    factor-stack phase."""
+    try:
+        _form = float(getattr(player, "mesh_form", 0.0) or 0.0)
+    except Exception:
+        _form = 0.0
+    return max(0.0, min(1.0, (_form + 1.0) / 2.0))
+
+
+def chance_heat_boost_tilt(player) -> float:
+    """INTENSITY: heater swagger on grade-A earning. The positive half of
+    the heater; the negative half (tighter checking) lives in
+    _chance_matchup_tilt. Never raises."""
+    try:
+        return 1.0 + CHANCE_HEAT_BOOST * _player_heat(player)
+    except Exception:
+        return 1.0
 
 
 def _chance_gametime_tilt(rivalry_heat: float = 0.0, morale: float = 70.0,
@@ -1207,6 +1284,10 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         # Who gets the grade: archetype x talent x matchup x gametime.
         _tilt = (chance_archetype_a_tilt(shooter)
                  * _chance_talent_tilt(shooter))
+        # INTENSITY: heater swagger (2026-09-29, per Muck). A player riding
+        # a heater earns chances at a hotter rate -- the positive half of
+        # the heater; the shutdown response is in _chance_matchup_tilt.
+        _tilt *= chance_heat_boost_tilt(shooter)
         _gc = game_ctx or {}
         _tilt *= _chance_matchup_tilt(
             shooter, defenders, goalie,
@@ -1221,6 +1302,11 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         _tilt = max(0.25, min(3.20, _tilt))
 
         _pA = _pA * _tilt
+        # No caps on _pA (per Muck 2026-09-29): the probability gradient is
+        # truthful -- elite talent earns elite grade-A rates. Diminishing
+        # returns emerge naturally from the normalization below (_tot grows
+        # with _pA), not from a hand-placed ceiling. (Hard gates above
+        # return before this; breakaways stay automatic.)
         _pC = _pC / max(0.40, _tilt ** 0.6)
         _tot = _pA + _pB + _pC
         if _tot <= 0:
