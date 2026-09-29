@@ -702,6 +702,18 @@ class GameSaveManager:
             return True
             
         except Exception as e:
+            # Log the full traceback to a file: on the built Windows exe,
+            # stdout is invisible, so a save crash otherwise leaves no
+            # signature. This file is what we ask for in a crash report.
+            try:
+                import traceback as _tb
+                _log = os.path.join(self.save_directory, "save_crash_log.txt")
+                with open(_log, "a", encoding="utf-8") as _f:
+                    _f.write(f"\n=== {datetime.now().isoformat()} "
+                             f"save failed: {e!r} ===\n")
+                    _tb.print_exc(file=_f)
+            except Exception:
+                pass
             print(f"Error saving game: {e}")
             messagebox.showerror("Save Error", f"Failed to save game: {str(e)}")
             return False

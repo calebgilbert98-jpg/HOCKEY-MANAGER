@@ -15673,7 +15673,11 @@ class HockeyManagerGUI(tk.Tk):
     def setup_autosave(self):
         """Set up automatic saving system - only for existing saves, not new games."""
         if not hasattr(self, 'save_manager'):
-            self.save_manager = GameSaveManager(self)
+            # NB: pass the game manager, not the GUI -- GameSaveManager
+            # serializes game_manager.league / inbox / career. Passing the
+            # GUI silently produced degraded autosaves (empty inbox/news).
+            gm = getattr(self, 'game_manager', None) or self
+            self.save_manager = GameSaveManager(gm)
         
         # Only enable autosave if this is not a new game
         if getattr(self, 'is_new_game', True):
