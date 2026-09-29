@@ -11487,11 +11487,16 @@ class HockeyManagerGUI(tk.Tk):
 
         Set by the new-game setup wizard (gm.sim_detail). Defaults: the user's
         league runs full, everything else runs quick.
+
+        NOTE (2026-09-29, BUG-025): sim_detail and user_league live on the
+        GameManager (gm), not on the app. Reading them from self (the GUI)
+        always missed, so every batch game silently ran 'quick'.
         """
-        detail = getattr(self, 'sim_detail', None) or {}
+        _gm = getattr(self, 'game_manager', None)
+        detail = getattr(_gm, 'sim_detail', None) or {}
         if league_key in detail:
             return detail[league_key]
-        user_league = getattr(self, 'user_league', None)
+        user_league = getattr(_gm, 'user_league', None)
         if league_key and user_league and league_key == user_league:
             return 'full'
         return 'quick'
