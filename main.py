@@ -1640,6 +1640,16 @@ NHL League Office""",
             pass
         return False
 
+    def _captaincy_blocker_suppressed(self) -> bool:
+        """Display-free: True while the mandatory-captains Continue blocker
+        must stay suppressed. That is the fantasy draft itself (its own
+        blocker covers it) and the post-fantasy-draft deferral window:
+        rosters are letter-less by design until the first preseason game
+        day arms the picker. Headless-QA safe."""
+        if getattr(self, 'pending_fantasy_draft', False):
+            return True
+        return bool(getattr(self, '_fantasy_draft_captaincy_deferred', False))
+
     def set_user_team(self, team_name):
         """Set the user's selected team"""
         # Find the team by name
@@ -5764,8 +5774,11 @@ class HockeyManagerGUI(tk.Tk):
         # Item 7 follow-up: the human club must wear exactly 1 C + 2 As --
         # chosen by the user, never auto-repaired -- before the day can
         # advance. The action opens the mandatory picker directly.
+        # Fantasy-draft deferral: after the draft, rosters are letter-less
+        # by design until the first preseason game day arms the picker, so
+        # the blocker stays suppressed for that window.
         try:
-            if gm is not None and not getattr(gm, 'pending_fantasy_draft', False):
+            if gm is not None and not gm._captaincy_blocker_suppressed():
                 _ut = getattr(gm, 'user_team', None)
                 if _ut is not None and (
                         getattr(gm, '_captaincy_choice_pending', False)
@@ -6376,6 +6389,16 @@ class HockeyManagerGUI(tk.Tk):
                         != (_sy, _phase)):
                     self._captaincy_checked_phase = (_sy, _phase)
                     _ut = getattr(self, 'user_team', None)
+                    # Fantasy-draft deferral ends here: the first game day
+                    # of preseason (or the regular season, if preseason was
+                    # skipped) is when captains get set, so the normal
+                    # mandatory-picker rules apply from this point on.
+                    try:
+                        _dgm = getattr(self, 'game_manager', None)
+                        if _dgm is not None:
+                            _dgm._fantasy_draft_captaincy_deferred = False
+                    except Exception:
+                        pass
                     # NOTE (Item 7): the captaincy helpers live on
                     # GameManager, but this is a HockeyManagerGUI method --
                     # the old self._ensure_captaincy call here was dead

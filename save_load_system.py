@@ -82,6 +82,11 @@ class GameSaveManager:
                 # serialized: every load unassigned all scouts.
                 'scout_region_assignments': dict(
                     getattr(self.game_manager, 'scout_region_assignments', {}) or {}),
+                # Fantasy-draft captaincy deferral: no captains until the
+                # first preseason game day arms the picker. Old saves
+                # default to False (no deferral window open).
+                '_fantasy_draft_captaincy_deferred': bool(
+                    getattr(self.game_manager, '_fantasy_draft_captaincy_deferred', False)),
                 
                 # Free agency and waivers
                 'free_agents': self._serialize_free_agents(),
@@ -1032,7 +1037,7 @@ class GameSaveManager:
             for key in ['player_stats_history', 'team_stats_history', 'draft_classes',
                        'scouting_reports', 'scout_region_assignments', 'waiver_claims', 'trade_history',
                        'contract_negotiations', 'inbox_messages', 'news_stories',
-                       'training_programs']:
+                       'training_programs', '_fantasy_draft_captaincy_deferred']:
                 if key in save_data:
                     setattr(self.game_manager, key, save_data[key])
 

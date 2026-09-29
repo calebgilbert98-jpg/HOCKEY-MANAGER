@@ -3529,13 +3529,18 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         except Exception:
             pass
 
-        # Item 7 follow-up: the draft scrambled every roster -- the human
-        # club's letters must be the user's choice, never leftovers.
+        # Chris's directive: after a fantasy draft, no captains until they
+        # are set at the start of preseason. The backstop above stripped
+        # every letter league-wide; the mandatory picker arms at the first
+        # preseason game day via the phase check in main.py
+        # (_opening_night_captaincy_check -> _require_captaincy_choice for
+        # the human club, auto-repair for AI clubs). Until then the
+        # Continue blocker stays suppressed so the user can advance into
+        # preseason freely -- the flag clears when the phase check runs.
         try:
             _gm = getattr(self, 'game_manager', None)
-            _ut = getattr(_gm, 'user_team', None) if _gm is not None else None
-            if _gm is not None and _ut is not None:
-                _gm._claim_user_team_captaincy(_ut)
+            if _gm is not None:
+                _gm._fantasy_draft_captaincy_deferred = True
         except Exception:
             pass
 
