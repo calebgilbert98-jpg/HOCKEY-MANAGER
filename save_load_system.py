@@ -236,6 +236,11 @@ class GameSaveManager:
             # Cup recap idempotency: "season:champion" once the awarding
             # story has hit the inbox. Missing key = old save -> unsent.
             'cup_recap_sent': getattr(league, 'cup_recap_sent', None),
+            # AI trade market (trade_market.py): plain dicts. Missing key =
+            # old save -> lazy-init on next process_market call.
+            'trade_market': getattr(league, 'trade_market', None),
+            'trade_blocks': {str(k): list(v) for k, v in
+                             (getattr(league, 'trade_blocks', None) or {}).items()},
             # Jersey ceremony schedule: absolute dates for the first
             # season's real-life retirements. Missing = old save -> the
             # real 2026-27 dates are used as fallback.
@@ -359,6 +364,10 @@ class GameSaveManager:
                 'salary_cap_info': getattr(team, 'salary_cap_info', {}),
                 'draft_picks': getattr(team, 'draft_picks', {}),
                 'trade_block': getattr(team, 'trade_block', []),
+                # Scouting shortlist (trade_market.py): plain dicts.
+                # Missing = old save -> empty list.
+                'scout_shortlist': [dict(e) for e in
+                                    (getattr(team, 'scout_shortlist', None) or [])],
                 'division': getattr(team, 'division', ''),
                 'conference': getattr(team, 'conference', ''),
                 # League identity (NHL vs AHL). Was never serialized: every
@@ -1144,6 +1153,15 @@ class GameSaveManager:
             league.rivalries = [dict(r) for r in
                                 (league_data.get('rivalries', None) or [])]
             league.cup_recap_sent = league_data.get('cup_recap_sent', None)
+            # AI trade market: plain dicts; missing = old save -> lazy init.
+            try:
+                _tm = league_data.get('trade_market', None)
+                league.trade_market = _tm if isinstance(_tm, dict) else None
+                league.trade_blocks = {str(k): list(v) for k, v in
+                                       (league_data.get('trade_blocks', None) or {}).items()}
+            except Exception:
+                league.trade_market = None
+                league.trade_blocks = {}
             league.ceremony_schedule = [dict(c) for c in
                                         (league_data.get('ceremony_schedule', None)
                                          or [])]
@@ -1526,6 +1544,12 @@ class GameSaveManager:
             team.salary_cap_info = team_data.get('salary_cap_info', {})
             team.draft_picks = team_data.get('draft_picks', {})
             team.trade_block = team_data.get('trade_block', [])
+            # Scouting shortlist: plain dicts; missing = old save -> empty.
+            try:
+                team.scout_shortlist = [dict(e) for e in
+                                        (team_data.get('scout_shortlist', None) or [])]
+            except Exception:
+                team.scout_shortlist = []
             team.board_expectation = team_data.get('board_expectation')
             # Annual staff payroll budget. Absent in old saves -> market-tier
             # default so existing leagues get the rule without a wipe.
