@@ -3338,6 +3338,7 @@ class HockeyManagerGUI(tk.Tk):
             def on_cancel():
                 print("Team selection cancelled - exiting...")
                 selection_window.destroy()
+                self.quit()  # Unwind mainloop (game runs nested in launcher's)
                 self.destroy()  # Close the main app too
                 sys.exit()
             
@@ -9788,6 +9789,24 @@ class HockeyManagerGUI(tk.Tk):
         """Set up the window close protocol to prompt for saving"""
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
     
+    def _exit_app(self):
+        """Quit the Tk mainloop and destroy the root window.
+
+        The game runs its mainloop nested inside the launcher's mainloop
+        (two Tk roots). destroy() alone does NOT unwind the nested mainloop,
+        which left the process running invisibly after the window closed
+        until killed in Task Manager. quit() ends this root's mainloop so
+        the launcher can finish shutting down cleanly.
+        """
+        try:
+            self.quit()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
     def on_closing(self):
         """Handle application closing with enhanced save prompt"""
         # Check if this is a new game or if there are unsaved changes
@@ -9818,24 +9837,24 @@ class HockeyManagerGUI(tk.Tk):
                     # Check result and close appropriately
                     if hasattr(save_window, 'save_completed') and save_window.save_completed:
                         # Save was successful, safe to exit
-                        self.destroy()
+                        self._exit_app()
                     elif hasattr(save_window, 'was_cancelled') and save_window.was_cancelled:
                         # User cancelled, remain in game
                         pass
                     else:
                         # Unclear state, ask user
                         if messagebox.askyesno("Exit Confirmation", "Save dialog closed unexpectedly. Exit anyway?"):
-                            self.destroy()
+                            self._exit_app()
                     
                 except Exception as e:
                     messagebox.showerror("Save Error", f"Failed to open save dialog: {str(e)}")
                     # Ask if they still want to exit
                     if messagebox.askyesno("Exit Anyway?", "Save dialog failed. Do you still want to exit?"):
-                        self.destroy()
+                        self._exit_app()
                         
             elif response is False:  # No - exit without saving
                 if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit without saving?"):
-                    self.destroy()
+                    self._exit_app()
             # Cancel - do nothing, return to game
         else:
             # For existing saves, offer quick save option
@@ -9855,7 +9874,7 @@ class HockeyManagerGUI(tk.Tk):
                         success = self.save_manager.save_game(compress=True)
                         if success:
                             messagebox.showinfo("Game Saved", "Your progress has been saved!")
-                            self.destroy()
+                            self._exit_app()
                         else:
                             # If quick save fails, offer enhanced save dialog
                             if messagebox.askyesno("Quick Save Failed", "Quick save failed. Open save dialog instead?"):
@@ -9866,7 +9885,7 @@ class HockeyManagerGUI(tk.Tk):
                                 except tk.TclError:
                                     pass
                                 if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                                    self.destroy()
+                                    self._exit_app()
                     else:
                         # No save manager, show enhanced save dialog
                         from save_load_system import SaveLoadWindow
@@ -9876,16 +9895,16 @@ class HockeyManagerGUI(tk.Tk):
                         except tk.TclError:
                             pass
                         if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                            self.destroy()
+                            self._exit_app()
                             
                 except Exception as e:
                     messagebox.showerror("Save Error", f"Failed to save: {str(e)}")
                     if messagebox.askyesno("Exit Anyway?", "Save failed. Do you still want to exit?"):
-                        self.destroy()
+                        self._exit_app()
                         
             elif response is False:  # No - exit without saving
                 if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit without saving?"):
-                    self.destroy()
+                    self._exit_app()
             # Cancel - do nothing, return to game
             
     def open_calendar_window(self):

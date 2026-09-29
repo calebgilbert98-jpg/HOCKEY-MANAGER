@@ -1829,9 +1829,15 @@ This profile will influence player relationships, media interactions, and trade 
             app.mainloop()
             
             # Now destroy the launcher after game exits
+            # quit() first: the game ran its mainloop nested inside ours,
+            # so make sure our own mainloop is unwound too.
+            try:
+                self.quit()
+            except Exception:
+                pass
             try:
                 self.destroy()
-            except:
+            except Exception:
                 pass
             
             print("Game completed normally")
