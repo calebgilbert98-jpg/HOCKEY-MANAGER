@@ -269,25 +269,62 @@ def shooter_finish_mult(shooter_skill: float, mean_skill: float = 65.3) -> float
 # attribute weighting is a single shared number. Weights are the
 # quick-sim's live ones (the richer, considered model); GameSim's side was
 # dead code (shooter) or an equal-split (goalie).
+#
+# SYNERGY GATE (2026-09-28, per Muck): composites aggregate by WEIGHTED
+# HARMONIC mean, not arithmetic. A lone 85 spike surrounded by 30s no
+# longer carries the bundle -- the harmonic mean drags lopsided profiles
+# down hard while leaving balanced profiles essentially untouched
+# (harmonic ~= arithmetic when all inputs are close). This is the
+# anti-Sbisa gate: an 85 wristshot with 32 offensive awareness and 43
+# skating is a 47 finisher, not an 85 one. Real hockey -- you can't
+# snipe if you can't get open.
 # ---------------------------------------------------------------------------
+
+def harmonic_bundle(pairs) -> float:
+    """Weighted harmonic mean of (weight, value) pairs. Never raises.
+
+    Returns 50.0 on empty/bad input. Values are clamped to [1, 100]
+    so a single 0/None attribute can't zero the whole bundle.
+    """
+    try:
+        _num = 0.0
+        _den = 0.0
+        for _w, _v in pairs:
+            _w = float(_w)
+            _v = min(100.0, max(1.0, float(_v)))
+            if _w <= 0:
+                continue
+            _num += _w
+            _den += _w / _v
+        if _num <= 0 or _den <= 0:
+            return 50.0
+        return _num / _den
+    except Exception:
+        return 50.0
+
 
 def shooter_skill_composite(shooter, shooting_base=None) -> float:
     """Shooter talent on the native 1-100 scale.
 
-    Weights: shot-attr 0.30 + shooting_accuracy 0.25 + off_the_puck 0.20 +
-    composure 0.15 + vision 0.10. shooting_base is the shot-type-specific
-    base (wristshot/slapshot/one_timer/backhand); each engine picks it from
-    position/shot type the way it always has, then shares this weighting.
+    Weights: shot-attr 0.25 + shooting_accuracy 0.20 + offensive_awareness
+    0.20 + skating 0.15 + off_the_puck 0.10 + composure 0.10. shooting_base
+    is the shot-type-specific base (wristshot/slapshot/one_timer/backhand);
+    each engine picks it from position/shot type the way it always has,
+    then shares this weighting. Aggregated by harmonic_bundle (synergy
+    gate) -- the "get open" attributes (awareness, skating) gate the shot.
     Never raises.
     """
     try:
         if shooting_base is None:
             shooting_base = getattr(shooter, "wristshot", 10)
-        return (float(shooting_base) * 0.30
-                + float(getattr(shooter, "shooting_accuracy", 10)) * 0.25
-                + float(getattr(shooter, "off_the_puck", 10)) * 0.20
-                + float(getattr(shooter, "composure", 10)) * 0.15
-                + float(getattr(shooter, "vision", 10)) * 0.10)
+        return harmonic_bundle([
+            (0.25, shooting_base),
+            (0.20, getattr(shooter, "shooting_accuracy", 10)),
+            (0.20, getattr(shooter, "offensive_awareness", 10)),
+            (0.15, getattr(shooter, "skating", 10)),
+            (0.10, getattr(shooter, "off_the_puck", 10)),
+            (0.10, getattr(shooter, "composure", 10)),
+        ])
     except Exception:
         return 50.0
 
@@ -324,12 +361,16 @@ def goalie_skill_composite(goalie) -> float:
 def playmaking_score(player) -> float:
     """Raw playmaking talent on the 1-100 scale.
 
-    passing .45 + vision .35 + offensive_awareness .20. Never raises.
+    passing .45 + vision .35 + offensive_awareness .20, aggregated by
+    harmonic_bundle (synergy gate) -- a lone passing spike can't carry
+    30s vision/awareness. Never raises.
     """
     try:
-        return (float(getattr(player, "passing", 10)) * 0.45
-                + float(getattr(player, "vision", 10)) * 0.35
-                + float(getattr(player, "offensive_awareness", 10)) * 0.20)
+        return harmonic_bundle([
+            (0.45, getattr(player, "passing", 10)),
+            (0.35, getattr(player, "vision", 10)),
+            (0.20, getattr(player, "offensive_awareness", 10)),
+        ])
     except Exception:
         return 30.0
 
