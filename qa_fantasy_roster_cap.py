@@ -122,6 +122,42 @@ def main():
     check("goalie ceiling demotes extras", g5 == 3, f"goalies={g5}")
     check("skaters backfilled to 18", s5 >= 18, f"skaters={s5}")
 
+    # 7. critical-gap FA: club with 1 goalie org-wide signs the best
+    #    undrafted netminder; club with 2 centers signs an undrafted C
+    from fantasy_draft import DraftPick
+    fa_pool = [make_player(200 + i, 58 - i, goalie=True) for i in range(2)]
+    fa_pool += [make_player(300 + i, 52 - i) for i in range(3)]  # centers
+    t6 = make_team("ShortG")
+    drafted = [make_player(i, 70, goalie=(i == 0)) for i in range(21)]
+    t6.roster, t6.ahl_roster, t6.prospects = list(drafted), [], []
+    mgr6 = FantasyDraftManager([t6], drafted + fa_pool)
+    mgr6.draft_picks = [DraftPick(1, i + 1, i + 1, t6, p)
+                        for i, p in enumerate(drafted)]
+    mgr6.normalize_post_draft_rosters()
+    g6 = sum(1 for p in t6.roster
+             if p.primary_position == PlayerPosition.GOALIE)
+    check("FA fill signs a 2nd goalie", g6 == 2, f"goalies={g6}")
+    signed_g = [p for p in t6.roster if p is fa_pool[0]]
+    check("FA fill takes the best undrafted goalie", len(signed_g) == 1,
+          f"{[p.full_name for p in signed_g]}")
+    t7 = make_team("ShortC")
+    # 21 skaters, only 2 centers: force positions
+    ros7 = []
+    for i in range(21):
+        p = make_player(400 + i, 68)
+        p.primary_position = (PlayerPosition.CENTER if i < 2
+                              else PlayerPosition.LEFT_WING)
+        p.overall_rating = lambda _o=68: _o
+        ros7.append(p)
+    t7.roster, t7.ahl_roster, t7.prospects = ros7, [], []
+    mgr7 = FantasyDraftManager([t7], ros7 + fa_pool)
+    mgr7.draft_picks = [DraftPick(1, i + 1, i + 1, t7, p)
+                        for i, p in enumerate(ros7)]
+    mgr7.normalize_post_draft_rosters()
+    c7 = sum(1 for p in t7.roster
+             if p.primary_position == PlayerPosition.CENTER)
+    check("FA fill signs a 3rd center", c7 == 3, f"centers={c7}")
+
     fails = [(n, d) for n, ok, d in res if not ok]
     for n, ok, d in res:
         print(f"{'PASS' if ok else 'FAIL'} {n} {d}")

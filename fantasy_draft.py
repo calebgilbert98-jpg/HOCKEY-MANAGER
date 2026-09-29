@@ -527,6 +527,64 @@ class FantasyDraftManager:
                     new_pro.append(p)
             team.roster, team.ahl_roster, team.prospects = \
                 new_ros, new_ahl, new_pro
+        # Critical-gap free agency: a club that drafted fewer than 2
+        # goalies or 3 centers org-wide signs the best undrafted free
+        # agents at those positions, exactly like a real GM would after
+        # the draft. (The draft AI's needs signal can drown in its top-8
+        # randomness over 40 rounds; this does not retune it.)
+        try:
+            undrafted = self.get_available_players()
+        except Exception:
+            undrafted = []
+        fa_goalies = sorted([p for p in undrafted if _goalie(p)],
+                            key=_ovr, reverse=True)
+        fa_centers = sorted([p for p in undrafted
+                             if _pos_group(p) == "C"],
+                            key=_ovr, reverse=True)
+        for team in self.teams:
+            ros = team.roster
+            ahl = team.ahl_roster
+            if not isinstance(ahl, list):
+                ahl = team.ahl_roster = []
+
+            def _space():
+                try:
+                    from salary_cap_system import cap_breakdown
+                    return cap_breakdown(team).get("space", 0)
+                except Exception:
+                    return getattr(team, "cap_space", 10 ** 9)
+
+            def _salary(p):
+                c = getattr(p, "contract", None)
+                return int(getattr(c, "salary", 0) or 0)
+
+            def _make_room():
+                # demote the worst non-critical skater to fit a FA
+                # signing (never a goalie or a center -- those are the
+                # scarce positions we're filling)
+                cands = sorted(
+                    [p for p in ros if not _goalie(p)
+                     and _pos_group(p) != "C"], key=_ovr)
+                if not cands:
+                    return False
+                out = cands[0]
+                ros.remove(out)
+                ahl.append(out)
+                return True
+
+            while (sum(1 for p in ros if _goalie(p)) < 2 and fa_goalies):
+                if _salary(fa_goalies[0]) > _space():
+                    break  # can't afford him; leave the gap for the GM
+                if len(ros) >= self.NHL_ROSTER_MAX and not _make_room():
+                    break
+                ros.append(fa_goalies.pop(0))
+            while (sum(1 for p in ros if _pos_group(p) == "C") < 3
+                   and fa_centers):
+                if _salary(fa_centers[0]) > _space():
+                    break
+                if len(ros) >= self.NHL_ROSTER_MAX and not _make_room():
+                    break
+                ros.append(fa_centers.pop(0))
 
 class FantasyDraftView(tk.Frame):
     """Modern interactive fantasy draft as an embedded full-screen view.
