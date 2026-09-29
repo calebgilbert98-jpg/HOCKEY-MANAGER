@@ -121,10 +121,13 @@ def distribute_stats(home, away, hs, ag):
         goalies = [p for p in healthy if p.primary_position.name == "GOALIE"]
         if goalies:
             st = max(goalies, key=ovr)
-            sa = max(tg, int(random.normalvariate(30, 4)))
+            # goals_against is what the OTHER team scored (opp goals charged,
+            # not own: previously tg was used here, manufacturing sub-2.00 GAAs)
+            opp_tg = ag if team is home else hs
+            sa = max(opp_tg, int(random.normalvariate(30, 4)))
             st.stats.shots_against += sa
-            st.stats.saves += sa - tg
-            st.stats.goals_against += tg
+            st.stats.saves += max(0, sa - opp_tg)
+            st.stats.goals_against += opp_tg
             st.stats.games_played += 1
             try:
                 st.stats._update_goalie_stats()
