@@ -6,7 +6,9 @@ sys.path.insert(0, "/home/hatch/workspace/hockey-push/HOCKEY-MANAGER")
 
 from playoff_system import PlayoffBracket, PlayoffSeries
 
-# --- P-1: alias populated, no double-count, save/load round-trip ---------
+# --- P-1: conference_finals stays a legacy empty key (Caleb's design) ------
+# _create_conference_finals routes to the Stanley Cup Final; the legacy key
+# is never appended to. Readers must not double-count it.
 from game_classes import League, Team
 
 lg = League("Test")
@@ -37,10 +39,16 @@ b._create_division_finals([s.winner for s in b.playoff_series["division_semifina
 div = b.playoff_series["division_finals"]
 conf = b.playoff_series["conference_finals"]
 print(f"P-1 division_finals={len(div)} conference_finals={len(conf)}")
-assert len(div) == 2 and len(conf) == 2, "alias not populated"
-assert all(any(s is c for c in conf) for s in div), "alias must hold the SAME objects"
+assert len(div) == 2, "division finals not created"
+assert len(conf) == 0, "legacy conference_finals key must stay empty"
 
-# Stats-window aggregation must not double-count the aliased series.
+# _create_conference_finals routes to the Cup Final, not the legacy key.
+b._create_conference_finals([lg.teams[0], lg.teams[4]])
+assert len(b.playoff_series["stanley_cup_final"]) == 1, "Cup Final not routed"
+assert len(b.playoff_series["conference_finals"]) == 0, "legacy key appended to"
+print("P-1 legacy key stays empty; creation routes to Cup Final OK")
+
+# Stats-window aggregation sees each series once.
 import stats_standings_window as _ssw
 seen = set()
 total = 0
@@ -51,10 +59,10 @@ for key in ["wild_card", "division_semifinals", "division_finals",
             continue
         seen.add(id(s))
         total += 1
-assert total == 6, f"reader would count {total} series, expected 6"
+assert total == 7, f"reader would count {total} series, expected 7"
 print("P-1 no double-count OK")
 
-# Save/load round-trip keeps the alias.
+# Save/load round-trip preserves the series and the empty legacy key.
 import save_load_system as _sls
 sl = _sls.GameSaveManager.__new__(_sls.GameSaveManager)
 # _serialize takes league; emulate via a stub holding the bracket
@@ -62,14 +70,12 @@ class _Stub: pass
 stub = _Stub(); stub.playoff_bracket = b
 data = sl._serialize_playoff_bracket(stub)
 n_series = len(data["series"])
-assert n_series == 6, f"serialized {n_series} series, expected 6 (dedupe)"
+assert n_series == 7, f"serialized {n_series} series, expected 7"
 sl._restore_playoff_bracket(lg, data)
 rb = lg.playoff_bracket
 assert len(rb.playoff_series["division_finals"]) == 2
-assert len(rb.playoff_series["conference_finals"]) == 2
-assert all(any(s.team1.team_name == c.team1.team_name
-               for c in rb.playoff_series["conference_finals"])
-           for s in rb.playoff_series["division_finals"])
+assert len(rb.playoff_series["conference_finals"]) == 0
+assert len(rb.playoff_series["stanley_cup_final"]) == 1
 print("P-1 save/load round-trip OK")
 
 # --- P-2: final_table_snapshot (Caleb's banking) ---------------------------
@@ -113,6 +119,5 @@ for t in lg2.teams:
                 print("LEFTOVER:", pl.first_name, pl.last_name)
 assert bad == 0, f"{bad} blocked surnames in fresh league"
 print("P-5 fresh league ships zero blocked star surnames")
-print("P-2b league-wide name check clean")
 
-print("ALL P-1/P-2/SCRUB QA PASSED")
+print("ALL P-1/P-2/P-5 QA PASSED")

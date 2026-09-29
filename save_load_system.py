@@ -1310,28 +1310,6 @@ class GameSaveManager:
                                  'stanley_cup_final')):
                 return None
             champ = getattr(b, 'stanley_cup_champion', None)
-            # Dedupe by object id: 'conference_finals' is a compat alias
-            # holding the same series objects as 'division_finals' -- serial-
-            # izing both would restore two divergent copies on load.
-            _seen, _series = set(), []
-            for rkey, slist in (b.playoff_series or {}).items():
-                for s in slist or []:
-                    if id(s) in _seen:
-                        continue
-                    _seen.add(id(s))
-                    _series.append({
-                        'round': rkey,
-                        'round_name': getattr(s, 'round_name', ''),
-                        'team1': getattr(s.team1, 'team_name', ''),
-                        'team2': getattr(s.team2, 'team_name', ''),
-                        't1_wins': int(getattr(s, 'team1_wins', 0) or 0),
-                        't2_wins': int(getattr(s, 'team2_wins', 0) or 0),
-                        'games_played': int(getattr(s, 'games_played', 0) or 0),
-                        'is_complete': bool(getattr(s, 'is_complete', False)),
-                        'winner': getattr(getattr(s, 'winner', None),
-                                          'team_name', None),
-                        'game_results': [dict(g) for g in
-                                         getattr(s, 'game_results', None) or []]})
             return {
                 'current_round': getattr(b, 'current_round', 'wild_card'),
                 'is_projection': bool(getattr(b, 'is_projection', False)),
@@ -1340,7 +1318,22 @@ class GameSaveManager:
                             for t in getattr(b, 'eastern_teams', None) or []],
                 'western': [getattr(t, 'team_name', '')
                             for t in getattr(b, 'western_teams', None) or []],
-                'series': _series,
+                'series': [
+                    {'round': rkey,
+                     'round_name': getattr(s, 'round_name', ''),
+                     'team1': getattr(s.team1, 'team_name', ''),
+                     'team2': getattr(s.team2, 'team_name', ''),
+                     't1_wins': int(getattr(s, 'team1_wins', 0) or 0),
+                     't2_wins': int(getattr(s, 'team2_wins', 0) or 0),
+                     'games_played': int(getattr(s, 'games_played', 0) or 0),
+                     'is_complete': bool(getattr(s, 'is_complete', False)),
+                     'winner': getattr(getattr(s, 'winner', None),
+                                       'team_name', None),
+                     'game_results': [dict(g) for g in
+                                      getattr(s, 'game_results', None) or []]}
+                    for rkey, slist in b.playoff_series.items()
+                    for s in slist or []
+                ],
             }
         except Exception:
             return None
@@ -1386,13 +1379,6 @@ class GameSaveManager:
             cname = data.get('champion')
             b.stanley_cup_champion = by_name.get(cname) if cname else None
             league.playoff_bracket = b
-            # 'conference_finals' is a compat alias of 'division_finals':
-            # rebuild it so the invariant survives the round-trip.
-            try:
-                b.playoff_series['conference_finals'] = list(
-                    b.playoff_series.get('division_finals', None) or [])
-            except Exception:
-                pass
         except Exception:
             pass
     
