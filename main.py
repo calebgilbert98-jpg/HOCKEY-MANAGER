@@ -6224,6 +6224,16 @@ class HockeyManagerGUI(tk.Tk):
             self._milestone_postgame()
             self.current_date += timedelta(days=1)
 
+            # Offer-sheet match windows: a sheet whose 7-day clock ran out
+            # unanswered resolves as a decline -- the player goes to the
+            # offering club at the sheet terms (real CBA rule). Idempotent;
+            # only expired pending sheets are touched.
+            try:
+                import rfa_system as _rfa_os
+                _rfa_os.process_offer_sheet_deadlines(self, self.league)
+            except Exception:
+                pass
+
             # Real-life jersey retirement ceremonies: the rafters match
             # reality, on the real month/day of the first season.
             # Idempotent -- a retired number never re-fires. Old saves

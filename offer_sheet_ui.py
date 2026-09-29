@@ -495,9 +495,13 @@ class OfferSheetWindow(InGamePopup):
         # 5. The original club matches or declines -- the same
         # ai_match_decision the July pass uses. One rulebook.
         if _rfa.ai_match_decision(original_team, p, aav, label):
-            story = (f"✍️ OFFER SHEET: you sign {pname} "
-                     f"({_money(aav)}/yr × {years}y) — {tname} match and "
-                     f"keep him.")
+            # Matched: he signs WITH THE ORIGINAL CLUB at the sheet terms
+            # (real NHL rule) -- cap registered, same helper every match
+            # path uses.
+            mres = _rfa.apply_offer_sheet_matched(
+                self.league, self.user_team, original_team, p, aav, years,
+                app=None)  # UI posts the story itself below -- one news post
+            story = mres.get("story", "")
             self._result_var.set(f"😤 {tname} matched. He stays.")
         else:
             res = _rfa.execute_offer_sheet(
