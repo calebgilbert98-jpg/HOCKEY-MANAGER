@@ -2097,8 +2097,10 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
             return
         try:
             want = self._cand_var.get()
-            cand = next((c for c in self._coach_cands
-                         if f"{c['name']} ({c['archetype']})" == want), None)
+            cand = (getattr(self, "_cand_display", None) or {}).get(want)
+            if cand is None:
+                cand = next((c for c in self._coach_cands
+                             if f"{c['name']} ({c['archetype']})" == want), None)
             if cand is None:
                 return
             date_str = ""
@@ -2388,8 +2390,32 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
                         f"({ax_label})\nGM trust {trust}/100{shelf}")
             self._coach_info.configure(text=info)
             self._coach_cands = coaching_candidates(team)
-            vals = [f"{c['name']} ({c['archetype']})"
-                    for c in self._coach_cands] or ["No candidates"]
+            # Interviews: rank the candidates and show the impression, not
+            # the raw numbers (analytics is a puzzle). Stable per candidate
+            # set so the notes don't flicker between refreshes.
+            self._cand_display = {}
+            try:
+                import random as _rng_mod
+                _seed = abs(hash("|".join(sorted(
+                    str(c.get("name", "")) for c in self._coach_cands)))) \
+                    % (2 ** 31)
+                ranked = interview_candidates(
+                    team, self._coach_cands,
+                    rng=_rng_mod.Random(_seed))
+                self._coach_cands = [r["candidate"] for r in ranked]
+                vals = []
+                for r in ranked:
+                    c = r["candidate"]
+                    label = (f"{c['name']} ({c['archetype']}) -- "
+                             f"{r['interview_note']}")
+                    self._cand_display[label] = c
+                    vals.append(label)
+                vals = vals or ["No candidates"]
+            except Exception:
+                vals = [f"{c['name']} ({c['archetype']})"
+                        for c in self._coach_cands] or ["No candidates"]
+                self._cand_display = {
+                    v: c for v, c in zip(vals, self._coach_cands)}
             self._cand_menu.configure(values=vals)
             self._cand_var.set(vals[0])
         except Exception:
@@ -3386,6 +3412,7 @@ def hire_coach(team: Any, candidate: Dict[str, Any],
         team.head_coach = coach
         coach.shelf_weeks = 0
         coach.gm_trust = 70  # a new voice gets a clean ledger
+        coach.hire_date = str(date_str)[:10]  # the leash starts now
     except Exception:
         pass
     # The hire lands in team.staff with the Head Coach role: promotions
@@ -3473,11 +3500,537 @@ def user_room_politics_tick(team: Any, date_str: str = "",
         }
         _log(team, f"Captaincy crisis: {crisis['captain_name']} is losing "
                     "the room. A decision is due.")
+    # Coach's leash (user's chair): same evaluation math as the AI GMs, but
+    # the human makes the call -- a hot-seat flag, never an auto-firing.
+    try:
+        coach_hot_seat_check(team, date_str=date_str, league=league)
+    except Exception:
+        pass
     return {"practice": out, "crisis": crisis}
 
 
+# ---------------------------------------------------------------------------
+# The coach's leash: monthly GM evaluation, reprieve negotiations, interviews
+#
+# The coach-GM trust ledger (coach.gm_trust, 70 on hire) was written by
+# events -- bag skates, stale messages, media -- but never read by any
+# decision, and no production path ever fired an AI coach. This section
+# closes the loop:
+#   1. Every AI GM reviews his coach monthly: results vs the same board
+#      expectation the GM himself is judged against drift trust up or down.
+#   2. A coach below the trust floor while underperforming faces the axe --
+#      but first he gets one chance to talk his way into staying. His odds
+#      come from his own attributes (media_handling, leadership,
+#      man_management, reputation) plus room support and allies.
+#   3. Open chairs are filled through interviews, not an instant pick: each
+#      candidate's attributes and track record produce an interview
+#      impression, adjusted for team fit. AI GMs hire the best impression;
+#      the user sees the interview notes and picks.
+# User/AI parity: the user's coach is evaluated by the same math, but the
+# human GM makes the call -- a hot-seat flag, never an auto-firing.
+# ---------------------------------------------------------------------------
+
+_COACH_EVAL_EVERY_DAYS = 30      # the GM reviews the coach monthly
+_COACH_EVAL_MONTHS = (10, 11, 12, 1, 2, 3, 4)  # regular season + Black Monday
+# The trust ledger is mean-reverting: each month it closes part of the gap
+# toward "deserved" trust -- the exact formula the board uses for the GM's
+# own job security (ai_gm_identity.update_job_security). The coach answers
+# to the same bar as the GM: deserved = 50 + 90*(pace - expected).
+_COACH_TRUST_PULL = 0.35          # fraction of the gap closed per month
+_COACH_FIRE_TRUST = 35.0         # below this trust AND underperforming: axe hovers
+_COACH_FIRE_PACE_GAP = 0.05      # ...must also trail expectation by this much
+_COACH_GRACE_DAYS = 60           # a new voice gets ~20 games before judgment
+_COACH_INTERIM_GRACE_DAYS = 120  # mid-season replacements get the season out
+_COACH_REPRIEVE_BUMP = 15.0      # trust restored when the talk works
+_COACH_REPRIEVE_COOLDOWN_DAYS = 45  # a successful plea buys ~one skipped eval
+
+
+def _num(obj, name, default=60.0):
+    try:
+        v = getattr(obj, name, default)
+        return float(v if v is not None else default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _parse_coach_date(date_str):
+    from datetime import date as _d
+    try:
+        return _d.fromisoformat(str(date_str)[:10])
+    except Exception:
+        return _d.today()
+
+
+def _coach_eval_due(dr, date_str):
+    last = dr.get("coach_eval_last")
+    if not last:
+        return True
+    try:
+        days = (_parse_coach_date(date_str) - _parse_coach_date(last)).days
+    except Exception:
+        return True
+    return days >= _COACH_EVAL_EVERY_DAYS
+
+
+def _reprieve_cooling_down(dr, date_str):
+    last = dr.get("coach_reprieve_last")
+    if not last:
+        return False
+    try:
+        days = (_parse_coach_date(date_str) - _parse_coach_date(last)).days
+    except Exception:
+        return False
+    return 0 <= days < _COACH_REPRIEVE_COOLDOWN_DAYS
+
+
+def _team_points_pace(team, league):
+    """(pace 0..1, games played) from league standings; falls back to team."""
+    try:
+        row = (getattr(league, "standings", None) or {}).get(
+            getattr(team, "team_name", ""), None)
+        if row:
+            w = int(row.get("W", 0) or 0)
+            l = int(row.get("L", 0) or 0)
+            otl = int(row.get("OTL", 0) or 0)
+            gp = w + l + otl
+            if gp > 0:
+                return (2.0 * w + otl) / (2.0 * gp), gp
+    except Exception:
+        pass
+    try:
+        w = int(getattr(team, "wins", 0) or 0)
+        l = int(getattr(team, "losses", 0) or 0)
+        otl = int(getattr(team, "ot_losses", 0) or 0)
+        gp = w + l + otl
+        if gp > 0:
+            return (2.0 * w + otl) / (2.0 * gp), gp
+    except Exception:
+        pass
+    return 0.5, 0
+
+
+def _coach_board_expectation(team):
+    """(expectation, expected pace): the same bar the GM is judged against."""
+    try:
+        from ai_gm_identity import expectation_from_strength, EXPECTED_PACE
+    except Exception:
+        return "playoffs", 0.55
+    ovrs = []
+    try:
+        for p in _roster(team):
+            try:
+                ovrs.append(float(p.overall_rating()))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    avg = sum(ovrs) / len(ovrs) if ovrs else 60.0
+    exp = expectation_from_strength(avg)
+    return exp, float(EXPECTED_PACE.get(exp, 0.55))
+
+
+def _apply_coach_trust_drift(coach, team, league, pace, expected):
+    """Monthly trust movement: mean-reverting toward "deserved" trust.
+
+    deserved = 50 + 90*(pace - expected) is the exact formula the board uses
+    for the GM's own job security (ai_gm_identity.update_job_security): the
+    coach answers to the same bar as the GM. An average club settles mid-trust
+    (safe); only sustained underperformance drags it under the floor.
+    """
+    trust = _num(coach, "gm_trust", 70.0)
+    gap = pace - expected
+    deserved = max(0.0, min(100.0, 50.0 + 90.0 * gap))
+    trust += _COACH_TRUST_PULL * (deserved - trust)
+    trust = max(0.0, min(100.0, trust))
+    try:
+        coach.gm_trust = trust
+    except Exception:
+        pass
+    return trust, gap
+
+
+def _coach_recent_cup(coach, date_str):
+    """A Cup in the last two seasons buys a long leash (tenured winner)."""
+    try:
+        today = _parse_coach_date(date_str)
+        for e in getattr(coach, "career_record", None) or []:
+            if not isinstance(e, dict):
+                continue
+            if e.get("playoff") != "Won Stanley Cup":
+                continue
+            try:
+                season = int(str(e.get("season", "0"))[:4])
+            except (TypeError, ValueError):
+                continue
+            if today.year - season <= 2:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _coach_days_since_hire(coach, date_str):
+    hired = getattr(coach, "hire_date", "") or ""
+    if not hired:
+        return None
+    try:
+        return (_parse_coach_date(date_str) - _parse_coach_date(hired)).days
+    except Exception:
+        return None
+
+
+def _coach_is_protected(coach, team, league, date_str, expectation):
+    """(protected, reason). The leash has limits -- some coaches can't go."""
+    try:
+        champ = getattr(league, "_last_cup_champ", None)
+        if champ and getattr(team, "team_name", "") == champ:
+            return True, "defending Cup champion"
+    except Exception:
+        pass
+    if _coach_recent_cup(coach, date_str):
+        return True, "tenured winner (recent Cup)"
+    if expectation == "rebuild":
+        return True, "rebuild -- the board is patient"
+    days = _coach_days_since_hire(coach, date_str)
+    if days is not None:
+        grace = (_COACH_INTERIM_GRACE_DAYS
+                 if getattr(coach, "interim", False) else _COACH_GRACE_DAYS)
+        if 0 <= days < grace:
+            return True, "grace period (new voice)"
+    return False, ""
+
+
+def _coach_room_support(coach, team):
+    """(bonds, grudges): how many players still play for him vs quit on him."""
+    bonds, grudges = 0, 0
+    try:
+        import reputation_system as _rs
+        cid = getattr(coach, "id", None)
+        for p in _roster(team):
+            try:
+                cbs = getattr(p, "coach_bonds", None) or {}
+                if cid is not None and cid in cbs:
+                    bonds += 1
+                    continue
+                if _rs.player_coach_response(
+                        p, coach).get("label") == "Quit on coach":
+                    grudges += 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return bonds, grudges
+
+
+def coach_reprieve_roll(coach, team, rng=None):
+    """The coach talks his way into staying. Returns (stayed, p, pitch).
+
+    Odds come from the coach's own attributes: media_handling (controls the
+    narrative), leadership and man_management (the room's backing),
+    reputation (the track record). Player bonds and league allies nudge it.
+    """
+    persuasion = (0.35 * _num(coach, "media_handling")
+                  + 0.25 * _num(coach, "leadership")
+                  + 0.20 * _num(coach, "man_management")
+                  + 0.20 * min(_num(coach, "reputation"), 100.0)) / 100.0
+    p = 0.15 + 0.55 * persuasion
+    bonds, grudges = _coach_room_support(coach, team)
+    room_note = ""
+    if bonds > grudges:
+        p += 0.10
+        room_note = f" {bonds} players go to bat for him."
+    elif grudges > bonds:
+        p -= 0.05
+        room_note = " The room has quit on him, and it shows."
+    try:
+        allies = len(getattr(coach, "connections", None) or [])
+        p += 0.03 * min(allies, 3)
+    except Exception:
+        pass
+    p = max(0.05, min(0.85, p))
+    r = rng.random() if rng is not None else __import__("random").random()
+    stayed = r < p
+    cname = getattr(coach, "name", getattr(coach, "full_name", "The coach"))
+    if _num(coach, "media_handling") >= _num(coach, "leadership"):
+        how = (f"{cname} goes on the radio, takes the heat off his players, "
+               f"and sells a plan.")
+    else:
+        how = (f"{cname} leans on the room -- his leaders tell the GM "
+               f"they're still with him.")
+    pitch = (f"{how}{room_note} "
+             f"{'The GM buys another month.' if stayed else 'The GM has heard enough.'}")
+    return stayed, round(p, 3), pitch
+
+
+def interview_candidates(team, candidates, rng=None, seed=None,
+                         exclude_ids=None):
+    """Interview every candidate; return ranked [{candidate, name, score,
+    interview_note}]. Presence (tactical_knowledge, leadership,
+    media_handling, reputation, experience) plus track record, adjusted for
+    team fit: rebuilders want a developer, contenders want a tactician.
+    exclude_ids: coach ids skipped (a club never re-hires the man it just
+    fired in the same search)."""
+    import random as _random
+    if rng is None:
+        if seed is not None:
+            rng = _random.Random(seed)
+        else:
+            rng = _random
+    expectation, _ = _coach_board_expectation(team)
+    ranked = []
+    excluded = {str(x) for x in (exclude_ids or set())}
+    for c in candidates or []:
+        coach = c.get("coach")
+        if coach is None:
+            continue
+        try:
+            if str(getattr(coach, "id", id(coach))) in excluded:
+                continue
+        except Exception:
+            pass
+        presence = (0.30 * _num(coach, "tactical_knowledge")
+                    + 0.25 * _num(coach, "leadership")
+                    + 0.20 * _num(coach, "media_handling")
+                    + 0.15 * min(_num(coach, "reputation"), 100.0)
+                    + 0.10 * min(_num(coach, "experience") * 4.0, 100.0))
+        try:
+            import coach_records as _cr
+            totals = _cr.career_totals(
+                getattr(coach, "career_record", None) or [])
+            presence += 3.0 * min(int(totals.get("cups", 0) or 0), 2) \
+                + 2.0 * min(int(totals.get("adams", 0) or 0), 2)
+        except Exception:
+            pass
+        fit = 0.0
+        arch = str(c.get("archetype", ""))
+        style = str(c.get("style", ""))
+        if expectation == "rebuild":
+            if arch == "fresh blood" or _num(coach, "working_with_youngsters") >= 70:
+                fit += 6.0
+            if arch == "retread" and _num(coach, "hot_seat", 50) >= 60:
+                fit -= 4.0  # a retread on a hot seat scares a rebuild
+        if expectation in ("win_cup", "contend"):
+            if arch == "specialist" or style == "tactician":
+                fit += 6.0
+        try:
+            score = presence + fit + rng.uniform(-5.0, 5.0)
+        except Exception:
+            score = presence + fit
+        if score >= 85:
+            note = "Blew the room away -- commands it like he's been here for years."
+        elif score >= 75:
+            note = "Strong interview. Clear plan, sharp on systems."
+        elif score >= 65:
+            note = "Solid. Says the right things; nothing electric."
+        elif score >= 55:
+            note = "Underwhelming -- vague on details, leans on cliches."
+        else:
+            note = "Poor. The room would eat him alive."
+        ranked.append({"candidate": c,
+                       "name": c.get("name", getattr(
+                           coach, "name",
+                           getattr(coach, "full_name", "Coach"))),
+                       "score": round(score, 1),
+                       "interview_note": note})
+    ranked.sort(key=lambda r: r["score"], reverse=True)
+    return ranked
+
+
+def _coach_headline(app, team, coach, change, date_str=""):
+    """League news for a firing, a hire, or a vote of confidence."""
+    if app is None:
+        return
+    try:
+        import headlines as _hl
+        cname = getattr(coach, "name",
+                        getattr(coach, "full_name", "the coach"))
+        _hl.deliver_spec(app, {
+            "kind": "coaching_change",
+            "team_name": getattr(team, "team_name", ""),
+            "coach_name": cname,
+            "change": change,
+            "involved": (getattr(team, "team_name", ""),),
+        })
+    except Exception:
+        pass
+
+
+def _ai_hire_from_interviews(team, date_str, league, app=None, rng=None,
+                             interim=False, exclude_coach=None):
+    """Fill an open chair through interviews; AI hires the best impression."""
+    cands = coaching_candidates(team)
+    if not cands:
+        return None
+    exclude_ids = set()
+    if exclude_coach is not None:
+        try:
+            exclude_ids.add(str(getattr(exclude_coach, "id",
+                                        id(exclude_coach))))
+        except Exception:
+            pass
+    ranked = interview_candidates(team, cands, rng=rng,
+                                  exclude_ids=exclude_ids)
+    if not ranked:
+        return None
+    top = ranked[0]
+    coach = top["candidate"].get("coach")
+    if coach is not None:
+        try:
+            coach.interim = bool(interim)
+        except Exception:
+            pass
+    lines = hire_coach(team, top["candidate"], date_str=date_str)
+    _coach_headline(app, team, coach, "hired", date_str=date_str)
+    return {"name": top["name"], "interview_note": top["interview_note"],
+            "interview_score": top["score"], "lines": lines}
+
+
+def ai_coach_evaluation(team, date_str="", league=None, app=None, rng=None):
+    """Monthly AI GM review of his coach. Returns a result dict.
+
+    Trust drifts with results vs the board's expectation; a coach under the
+    trust floor while underperforming faces the axe -- after one chance to
+    talk his way into staying. Firings are followed by an interview hire.
+    """
+    out = {"evaluated": False, "fired": False, "stayed": False,
+           "hired": None, "note": ""}
+    try:
+        month = _parse_coach_date(date_str).month
+    except Exception:
+        month = 10
+    if month not in _COACH_EVAL_MONTHS:
+        return out
+    dr = ensure_dressing_room_fields(team)
+    if not _coach_eval_due(dr, date_str):
+        return out
+    dr["coach_eval_last"] = str(date_str)[:10]
+    coach = _room_head_coach(team)
+    if coach is None:
+        return out
+    out["evaluated"] = True
+    pace, gp = _team_points_pace(team, league)
+    if gp < 10:
+        out["note"] = "season too young to judge"
+        return out
+    expectation, expected = _coach_board_expectation(team)
+    trust, gap = _apply_coach_trust_drift(coach, team, league, pace, expected)
+    out.update({"trust": round(trust, 1), "pace": round(pace, 3),
+                "expected": expected, "expectation": expectation,
+                "gap": round(gap, 3)})
+    protected, why = _coach_is_protected(coach, team, league, date_str,
+                                         expectation)
+    if protected:
+        out["note"] = f"protected: {why}"
+        return out
+    if _reprieve_cooling_down(dr, date_str):
+        out["note"] = "reprieve cooling down"
+        return out
+    if trust < _COACH_FIRE_TRUST and gap < -_COACH_FIRE_PACE_GAP:
+        stayed, p, pitch = coach_reprieve_roll(coach, team, rng=rng)
+        out["reprieve_p"] = p
+        out["pitch"] = pitch
+        if stayed:
+            try:
+                coach.gm_trust = min(100.0, trust + _COACH_REPRIEVE_BUMP)
+            except Exception:
+                pass
+            dr["coach_reprieve_last"] = str(date_str)[:10]
+            out["stayed"] = True
+            out["trust"] = round(min(100.0, trust + _COACH_REPRIEVE_BUMP), 1)
+            out["note"] = pitch
+            _coach_headline(app, team, coach, "reprieve", date_str=date_str)
+        else:
+            cname = getattr(coach, "name",
+                            getattr(coach, "full_name", "the coach"))
+            entry = fire_coach(team, reason="fired", date_str=str(date_str)[:10],
+                               league=league)
+            out["fired"] = True
+            out["fired_name"] = cname
+            out["note"] = pitch
+            _coach_headline(app, team, coach, "fired", date_str=date_str)
+            try:
+                _log(team, f"{cname} fired after losing the room "
+                           f"(trust {trust:.0f}).")
+            except Exception:
+                pass
+            hired = _ai_hire_from_interviews(team, str(date_str)[:10], league,
+                                             app=app, rng=rng, interim=True,
+                                             exclude_coach=coach)
+            if hired is None:
+                # No interview candidate came through: if a senior staffer
+                # is still behind the bench (generation can double-list a
+                # head coach), the associate steps up as interim rather
+                # than leaving a phantom in the chair.
+                succ = _room_head_coach(team)
+                if succ is not None and succ is not coach:
+                    try:
+                        succ.interim = True
+                        succ.hire_date = str(date_str)[:10]
+                    except Exception:
+                        pass
+                    try:
+                        succ.gm_trust = 70.0
+                    except Exception:
+                        pass
+                    hired = {
+                        "name": getattr(
+                            succ, "name", getattr(succ, "full_name", "interim")),
+                        "interview_note":
+                            "No outside candidate available -- the associate "
+                            "steps up as interim head coach.",
+                    }
+            out["hired"] = (hired or {}).get("name")
+            out["hire_note"] = (hired or {}).get("interview_note")
+    else:
+        out["note"] = "safe"
+    return out
+
+
+def coach_hot_seat_check(team, date_str="", league=None):
+    """The user's chair: same math as the AI evaluation, but the human GM
+    makes the call. Returns None when safe, else a dict with the numbers
+    and the coach's case for staying."""
+    dr = ensure_dressing_room_fields(team)
+    if not _coach_eval_due(dr, date_str):
+        return dr.get("coach_hot_seat")
+    try:
+        month = _parse_coach_date(date_str).month
+    except Exception:
+        month = 10
+    if month not in _COACH_EVAL_MONTHS:
+        dr["coach_hot_seat"] = None
+        return None
+    dr["coach_eval_last"] = str(date_str)[:10]
+    coach = _room_head_coach(team)
+    if coach is None:
+        dr["coach_hot_seat"] = None
+        return None
+    pace, gp = _team_points_pace(team, league)
+    if gp < 10:
+        dr["coach_hot_seat"] = None
+        return None
+    expectation, expected = _coach_board_expectation(team)
+    trust, gap = _apply_coach_trust_drift(coach, team, league, pace, expected)
+    protected, why = _coach_is_protected(coach, team, league, date_str,
+                                         expectation)
+    hot = (not protected
+           and not _reprieve_cooling_down(dr, date_str)
+           and trust < _COACH_FIRE_TRUST and gap < -_COACH_FIRE_PACE_GAP)
+    if not hot:
+        dr["coach_hot_seat"] = None
+        return None
+    _stayed, p, pitch = coach_reprieve_roll(coach, team)
+    res = {"trust": round(trust, 1), "pace": round(pace, 3),
+           "expected": expected, "expectation": expectation,
+           "coach_name": getattr(coach, "name",
+                                 getattr(coach, "full_name", "the coach")),
+           "reprieve_p": p, "pitch": pitch}
+    dr["coach_hot_seat"] = res
+    return res
+
+
 def ai_room_politics_tick(team: Any, date_str: str = "",
-                          league: Any = None) -> Dict[str, Any]:
+                          league: Any = None, app: Any = None) -> Dict[str, Any]:
     """AI weekly tick: same practice function, automated choices; crises
     auto-resolved; an empty chair gets filled from the carousel.
 
@@ -3492,15 +4045,23 @@ def ai_room_politics_tick(team: Any, date_str: str = "",
         res = auto_resolve_crisis(team, crisis, date_str=date_str)
     hired = None
     if _room_head_coach(team) is None:
-        cands = coaching_candidates(team)
-        if cands:
-            # Prefer the specialist; hot seats scare AI GMs too.
-            cands.sort(key=lambda c: (c.get("hot_seat", 50),
-                                      0 if c.get("archetype") == "specialist"
-                                      else 1))
-            hired = hire_coach(team, cands[0], date_str=date_str)
+        # Open chair: fill it through interviews, not an instant pick.
+        # A club with games on the board hires an interim for the season.
+        try:
+            _pace, _gp = _team_points_pace(team, league)
+        except Exception:
+            _gp = 0
+        hired = _ai_hire_from_interviews(team, date_str, league, app=app,
+                                         interim=_gp > 0)
+    # Monthly: the GM reviews his coach (gates itself; D-8 -- this never ran).
+    coach_eval = None
+    try:
+        coach_eval = ai_coach_evaluation(team, date_str=date_str,
+                                         league=league, app=app)
+    except Exception:
+        coach_eval = None
     return {"practice": out, "crisis": crisis, "resolution": res,
-            "hired": hired}
+            "hired": hired, "coach_eval": coach_eval}
 
 
 def apply_practice_edge(sim: Any) -> None:

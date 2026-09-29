@@ -189,6 +189,20 @@ def _blockbuster_headline(game_date, team_a, team_b, pieces_a, pieces_b, **kw):
 def _coaching_change_headline(game_date, team_name, coach_name,
                               change="fired", **kw):
     from game_classes import EmailMessage
+    if change == "reprieve":
+        return EmailMessage(
+            sender="League News Desk",
+            sender_type="Media",
+            subject=f"📋 {team_name}: vote of confidence for {coach_name}",
+            content=(
+                f"{team_name} ownership publicly backed {coach_name} today, "
+                f"calling him \"our coach\" -- the dreaded vote of confidence. "
+                f"He bought himself another month. The room -- and the "
+                f"fanbase -- will be watching very closely."
+            ),
+            category="League",
+            priority=2,
+        )
     verb = "has been relieved of his duties" if change == "fired" else \
         "has been named head coach"
     return EmailMessage(

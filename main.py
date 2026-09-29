@@ -9177,7 +9177,7 @@ class HockeyManagerGUI(tk.Tk):
                             team, date_str=date_str, league=league)
                     else:
                         _dr.ai_room_politics_tick(
-                            team, date_str=date_str, league=league)
+                            team, date_str=date_str, league=league, app=self)
                 except Exception:
                     continue
         except Exception:
