@@ -823,18 +823,55 @@ def _find_team_by_name(league: Any, name: str) -> Optional[Any]:
     return None
 
 
+# A ceremony whose exact date was skipped (fast-forward, date jump, old
+# save mid-window) still stages late inside this grace window instead of
+# vanishing. Anything older is a stale old-save entry and retires quietly.
+CEREMONY_CATCHUP_DAYS = 60
+
+
+def _ceremony_day(ceremony: Dict[str, Any]):
+    try:
+        from datetime import date as _d
+        y, m, d = (int(x) for x in str(ceremony.get("date", ""))[:10].split("-"))
+        return _d(y, m, d)
+    except Exception:
+        return None
+
+
+def _as_day(today: Any):
+    try:
+        from datetime import date as _d, datetime as _dt
+        if isinstance(today, _dt):
+            return today.date()
+        if isinstance(today, _d):
+            return today
+        y, m, d = (int(x) for x in str(today)[:10].split("-"))
+        return _d(y, m, d)
+    except Exception:
+        return None
+
+
 def ceremonies_due(league: Any, today: Any) -> List[Tuple[Any, Dict[str, Any]]]:
-    """(team, ceremony) pairs whose date is today and number not yet retired.
+    """(team, ceremony) pairs due for staging: date is today or was missed
+    inside the catch-up window, and the number is not yet retired.
 
     Idempotent: once the number is retired the ceremony never re-fires."""
     out: List[Tuple[Any, Dict[str, Any]]] = []
-    try:
-        today_s = str(getattr(today, "isoformat", lambda: today)())
-    except Exception:
-        today_s = str(today)
+    now = _as_day(today)
     for c in _ceremony_schedule(league):
-        if str(c.get("date")) != today_s:
-            continue
+        cday = _ceremony_day(c)
+        if cday is None or now is None:
+            # Unparseable date: fall back to the legacy exact-match.
+            try:
+                today_s = str(getattr(today, "isoformat", lambda: today)())
+            except Exception:
+                today_s = str(today)
+            if str(c.get("date")) != today_s:
+                continue
+        else:
+            delta = (now - cday).days
+            if delta < 0 or delta > CEREMONY_CATCHUP_DAYS:
+                continue
         team = _find_team_by_name(league, c.get("team", ""))
         if team is None:
             continue
@@ -845,16 +882,22 @@ def ceremonies_due(league: Any, today: Any) -> List[Tuple[Any, Dict[str, Any]]]:
 
 
 def retire_overdue_ceremonies(league: Any, today: Any) -> List[str]:
-    """Old-save backfill: ceremonies whose date passed without firing get
+    """Old-save backfill: ceremonies stale beyond the catch-up window get
     their numbers retired quietly (one inbox note each). Idempotent -- a
-    retired number never re-fires."""
+    retired number never re-fires. Anything inside the window is left for
+    ceremonies_due() to stage late."""
     stories: List[str] = []
+    now = _as_day(today)
     try:
         today_s = str(getattr(today, "isoformat", lambda: today)())
     except Exception:
         today_s = str(today)
     for c in _ceremony_schedule(league):
-        if str(c.get("date", "")) >= today_s:
+        cday = _ceremony_day(c)
+        if cday is not None and now is not None:
+            if (now - cday).days <= CEREMONY_CATCHUP_DAYS:
+                continue
+        elif str(c.get("date", "")) >= today_s:
             continue
         team = _find_team_by_name(league, c.get("team", ""))
         if team is None:

@@ -368,9 +368,35 @@ class CalendarView(ctk.CTkFrame):
                     self.events_by_date[game_date] = []
                 self.events_by_date[game_date].append(event)
 
+                # Outdoor games stamped on the schedule (Winter Classic,
+                # Stadium Series): surface the venue + matchup.
+                try:
+                    _od = game_entry.get("outdoor") if isinstance(
+                        game_entry, dict) else None
+                    if isinstance(_od, dict) and _od.get("event"):
+                        _hn = home_team.team_name if hasattr(
+                            home_team, "team_name") else str(home_team)
+                        _an = away_team.team_name if hasattr(
+                            away_team, "team_name") else str(away_team)
+                        _wx = _od.get("weather")
+                        _wxf = (_wx.get("framing", "") if isinstance(
+                            _wx, dict) else "")
+                        self._add_calendar_event(
+                            game_date, "outdoor_game",
+                            f"{_od.get('event')}: {_an} @ {_hn}",
+                            f"{_od.get('venue', 'Outdoors')}"
+                            f"{' -- ' + _wxf if _wxf else ''}",
+                            "critical")
+                except Exception:
+                    pass
+
         # NHL events are now loaded from the main schedule above
         # Only add break days and other calendar events
         self._add_break_days_and_holidays()
+
+        # Marquee events: jersey ceremonies, Olympic window, outdoor games
+        # that aren't stamped on the schedule yet.
+        self._add_marquee_events()
 
         # Add other important dates
         self._add_important_dates()
@@ -500,6 +526,88 @@ class CalendarView(ctk.CTkFrame):
             self.events_by_date[current_date].append(event)
             current_date += timedelta(days=1)
 
+    def _add_marquee_events(self):
+        """Surface marquee calendar events the sim actually stages:
+
+        - jersey-retirement ceremonies (the league's ceremony schedule,
+          skipped once the number is retired);
+        - the Olympic window in Olympic years (roster announcement Feb 9,
+          NHL dark Feb 10-24, medal games Feb 22);
+        - outdoor games stamped on the schedule (Winter Classic etc.).
+        All additive; the calendar never crashes on a missing system.
+        """
+        try:
+            league = getattr(self.app, "league", None)
+            season_year = self._get_season_year()
+            # -- Jersey ceremonies -------------------------------------
+            try:
+                import immortality as _im
+                sched = (getattr(league, "ceremony_schedule", None)
+                         or _im.ceremony_schedule_for(season_year))
+                for c in sched or []:
+                    try:
+                        y, m, d = (int(x) for x in
+                                   str(c.get("date", ""))[:10].split("-"))
+                        cdate = date(y, m, d)
+                    except Exception:
+                        continue
+                    team = next(
+                        (t for t in (getattr(league, "teams", None) or [])
+                         if getattr(t, "team_name", "") == c.get("team", "")),
+                        None)
+                    if team is not None and _im.is_number_retired(
+                            team, int(c.get("number", 0) or 0)):
+                        continue  # already in the rafters
+                    self._add_calendar_event(
+                        cdate, "ceremony",
+                        f"Jersey retirement: {c.get('player', '')} "
+                        f"No. {c.get('number', '')} ({c.get('team', '')})",
+                        f"{c.get('player', 'A franchise icon')}'s number "
+                        f"rises to the rafters.", "high")
+            except Exception:
+                pass
+            # -- Olympic window ----------------------------------------
+            try:
+                from international import is_olympic_year
+                if is_olympic_year(season_year + 1):
+                    self._add_calendar_event(
+                        date(season_year + 1, 2, 9), "olympics",
+                        "Olympic rosters announced",
+                        "Best-on-best national teams named; the NHL goes "
+                        "dark tomorrow.", "high")
+                    cur = date(season_year + 1, 2, 10)
+                    while cur <= date(season_year + 1, 2, 24):
+                        # Styled as a break so the dark stretch reads on the
+                        # grid; the details panel names it.
+                        self._add_calendar_event(
+                            cur, "break_day", "Olympic break -- NHL dark",
+                            "No NHL games; the tournament is on.", "medium")
+                        cur += timedelta(days=1)
+                    self._add_calendar_event(
+                        date(season_year + 1, 2, 22), "olympics",
+                        "Olympic medal games",
+                        "Gold-medal game day.", "high")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _add_calendar_event(self, event_date, type_, title, description,
+                            importance):
+        """Append one event, skipping exact duplicates."""
+        try:
+            existing = self.events_by_date.get(event_date) or []
+            if any(e.get("type") == type_ and e.get("title") == title
+                   for e in existing):
+                return
+            existing.append({
+                "type": type_, "title": title,
+                "description": description, "importance": importance,
+            })
+            self.events_by_date[event_date] = existing
+        except Exception:
+            pass
+
     def _add_important_dates(self):
         """Add important league dates and events (non-NHL calendar events).
 
@@ -587,6 +695,12 @@ class CalendarView(ctk.CTkFrame):
                 style_key, marker = 'freeagency', 'FA'
             elif xmas:
                 style_key, marker = 'important', 'XMAS'
+            elif any(e['type'] == 'ceremony' for e in events):
+                style_key, marker = 'important', 'RETIRE'
+            elif any(e['type'] == 'outdoor_game' for e in events):
+                style_key, marker = 'important', 'WC'
+            elif any(e['type'] == 'olympics' for e in events):
+                style_key, marker = 'important', 'OLY'
             elif breaks:
                 style_key, marker = 'break', 'BREAK'
             elif any(e.get('importance') in ('high', 'critical')

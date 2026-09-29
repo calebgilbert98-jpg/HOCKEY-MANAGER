@@ -43,20 +43,26 @@ ana = make_team("Anaheim Ducks")
 lak = make_team("Los Angeles Kings")
 league.teams = [bos, ana, lak]
 
-# --- 1. ceremonies fire only on their real dates ------------------------------
+# --- 1. ceremonies fire on their real dates, with a 60-day catch-up window --
+# (date jumps / bulk sims must not silently drop a ceremony)
 due = im.ceremonies_due(league, date(2026, 12, 1))
 check("Bergeron ceremony due Dec 1 2026",
       len(due) == 1 and due[0][1]["player"] == "Patrice Bergeron"
       and due[0][1]["number"] == 37 and due[0][0] is bos)
-check("nothing due Dec 2", im.ceremonies_due(league, date(2026, 12, 2)) == [])
+due = im.ceremonies_due(league, date(2026, 12, 2))
+check("Bergeron still due Dec 2 via catch-up",
+      len(due) == 1 and due[0][1]["player"] == "Patrice Bergeron",
+      str([d[1]["player"] for d in due]))
 due = im.ceremonies_due(league, date(2027, 1, 30))
 check("Getzlaf ceremony due Jan 30 2027",
-      len(due) == 1 and due[0][1]["player"] == "Ryan Getzlaf"
-      and due[0][0] is ana)
+      any(d[1]["player"] == "Ryan Getzlaf" and d[0] is ana for d in due),
+      str([d[1]["player"] for d in due]))
 due = im.ceremonies_due(league, date(2027, 2, 24))
 check("Kopitar ceremony due Feb 24 2027",
-      len(due) == 1 and due[0][1]["player"] == "Anze Kopitar"
-      and due[0][0] is lak)
+      any(d[1]["player"] == "Anze Kopitar" and d[0] is lak for d in due),
+      str([d[1]["player"] for d in due]))
+check("Bergeron expired by Feb 24 (85 days > 60-day window)",
+      not any(d[1]["player"] == "Patrice Bergeron" for d in due))
 
 # --- 2b. first-season-relative scheduling -----------------------------------
 sched = im.ceremony_schedule_for(2028)

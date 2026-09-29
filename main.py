@@ -10878,46 +10878,55 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
-        # International windows: Olympics (announced Feb 9, medals Feb 22
-        # of Olympic years -- the NHL goes dark Feb 10-24 via the
+        # International windows: Olympics (rosters announced Feb 9, medals
+        # Feb 22 of Olympic years -- the NHL goes dark Feb 10-24 via the
         # olympic_break in schedule generation) and World Championship
         # (May 12), each once per year. Instant lightweight resolution +
-        # inbox card.
+        # inbox card. Catch-up semantics live in the helper so a skipped
+        # date still fires late, idempotently.
         try:
-            from international import (
-                OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY,
-                OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY,
-                WORLDS_MONTH, WORLDS_DAY,
-                is_olympic_year, announce_olympics, resolve_olympics,
-                hold_worlds)
-            _md = (today.month, today.day)
-            _oly = is_olympic_year(year)
-            _ann = (getattr(league, "intl_announced", None) or [])
-            if (_md == (OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY)
-                    and _oly and year not in _ann):
-                _story = announce_olympics(self, year)
-                if _story:
-                    self.news_log.append({'date': self.current_date,
-                                          'story': _story})
-            elif (_md == (OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY)
-                    and _oly):
-                _held = (getattr(league, "intl_held", None) or {}).get(
-                    "olympics", [])
-                if year not in _held:
-                    _res = resolve_olympics(self, year)
-                    if _res:
-                        self._deliver_intl_card(_res)
-            elif _md == (WORLDS_MONTH, WORLDS_DAY):
-                _held = (getattr(league, "intl_held", None) or {}).get(
-                    "worlds", [])
-                if year not in _held:
-                    _res = hold_worlds(self, year)
-                    if _res:
-                        self._deliver_intl_card(_res)
+            self._daily_international_window(today, year, league)
         except Exception:
             debug_print("International window failed (non-fatal):")
             import traceback
             traceback.print_exc()
+
+    def _daily_international_window(self, today, year, league) -> None:
+        """Fire the day's international window legs (Olympics announce /
+        resolve, Worlds) with catch-up semantics: a skipped Feb 9, Feb 22
+        or May 12 still fires late. Each leg is idempotent via
+        league.intl_announced / league.intl_held, and medal day self-heals
+        by announcing first when the prep is missing."""
+        from international import (
+            OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY,
+            OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY,
+            WORLDS_MONTH, WORLDS_DAY,
+            is_olympic_year, announce_olympics, resolve_olympics,
+            hold_worlds)
+        _md = (today.month, today.day)
+        _oly = is_olympic_year(year)
+        _ann = (getattr(league, "intl_announced", None) or [])
+        if (_md >= (OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY)
+                and _oly and year not in _ann):
+            _story = announce_olympics(self, year)
+            if _story:
+                self.news_log.append({'date': self.current_date,
+                                      'story': _story})
+        if (_md >= (OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY)
+                and _oly):
+            _held = (getattr(league, "intl_held", None) or {}).get(
+                "olympics", [])
+            if year not in _held:
+                _res = resolve_olympics(self, year)
+                if _res:
+                    self._deliver_intl_card(_res)
+        if _md >= (WORLDS_MONTH, WORLDS_DAY):
+            _held = (getattr(league, "intl_held", None) or {}).get(
+                "worlds", [])
+            if year not in _held:
+                _res = hold_worlds(self, year)
+                if _res:
+                    self._deliver_intl_card(_res)
 
         # Hub prompt: once per (event, year)
         try:
