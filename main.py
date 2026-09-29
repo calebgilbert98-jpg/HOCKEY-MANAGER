@@ -10582,11 +10582,28 @@ class HockeyManagerGUI(tk.Tk):
                         and getattr(p, 'primary_position', None) 
                         and p.primary_position.name != "G"
                     ]
-                    num_assists = random.choices([2, 1, 0], weights=[0.7, 0.2, 0.1])[0]
-                    if potential_assisters and num_assists > 0:
-                        assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
-                        for assister in assisters:
-                            assister.stats.assists += 1
+                    # P2 (scoring calibration 2026-09-29): trust the sim's
+                    # own attribute-weighted assist ledger when the Goal
+                    # event carries one -- this is the same single source of
+                    # truth the box score uses, so the season log agrees with
+                    # it and star playmakers are no longer diluted by a
+                    # uniform re-roll. Legacy events without an assist ledger
+                    # keep the previous re-roll behavior.
+                    event_assists = event.get('assists', None)
+                    if event_assists is not None:
+                        for assister in event_assists:
+                            pos_name = getattr(getattr(assister, 'primary_position', None), 'name', '')
+                            if (assister is not None
+                                    and getattr(assister, 'id', None) != player.id
+                                    and pos_name not in ("GOALIE", "G")
+                                    and getattr(assister, 'stats', None) is not None):
+                                assister.stats.assists += 1
+                    else:
+                        num_assists = random.choices([2, 1, 0], weights=[0.7, 0.2, 0.1])[0]
+                        if potential_assisters and num_assists > 0:
+                            assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
+                            for assister in assisters:
+                                assister.stats.assists += 1
                 
                     # Opposing goalie: shot against (goal counts as shot faced, not a save)
                     opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
@@ -12206,7 +12223,12 @@ class HockeyManagerGUI(tk.Tk):
             
             # Distribute goals and assists
             goals_to_distribute = team_goals
-            assists_to_distribute = team_goals * random.randint(1, 2)
+            # P1 (scoring calibration 2026-09-29): NHL-shaped assists per
+            # goal -- 68% two, 30% one, 2% unassisted (A/G ~1.66). The
+            # assister selection below stays ovr-weighted and unchanged.
+            assists_to_distribute = sum(
+                random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
+                for _ in range(team_goals))
             
             # Weight players by rating for stat distribution
             weighted_players = []

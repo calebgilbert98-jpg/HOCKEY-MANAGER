@@ -1436,12 +1436,13 @@ class AdvancedGameSim:
         # x line chemistry. Most real goals come off a pass; this keeps
         # the primary rate unified with GameSim's reworked pass play, and
         # the ledger keeps the pair.
-        # Parity retune 2026-09-28 (per Muck: half the assist-system
-        # intensity): 0.60 -> 0.45. Targets A/G ~1.30-1.35 with the 0.62
-        # secondary below -- between the old 1.06 and the 1.61 peak.
+        # Restored 2026-09-29 (scoring calibration): 0.45 -> 0.60, the
+        # pre-parity intensity. With P2 the sim ledger is the single source
+        # of truth for user games; at 0.60 the primary rate matches the
+        # event derivation it replaces (A/G ~1.6-1.7).
         if not assist_ids:
             _pool = [p for p in _skaters if p.id != shooter.id]
-            if _pool and random.random() < 0.45:
+            if _pool and random.random() < 0.60:
                 _passer = None
                 try:
                     from mesh_system import (primary_assist_score as _pas,
@@ -1496,13 +1497,12 @@ class AdvancedGameSim:
                         pass
 
         # Secondary assist: another on-ice teammate.
-        # Parity retune 2026-09-28 (per Muck: half the assist-system
-        # intensity): 0.78 -> 0.62 -> 0.55 (step 3). With the 0.45 selected
-        # primary above, targets assists/goal ~1.30-1.35 -- between the old
-        # 1.06 and the 1.61 peak. Selection stays attribute-weighted (below),
+        # Restored 2026-09-29 (scoring calibration): 0.55 -> 0.78, the
+        # pre-parity intensity. With the 0.60 primary above, targets
+        # assists/goal ~1.6-1.7. Selection stays attribute-weighted (below),
         # not a dice roll -- the hierarchy (attributes first) is unchanged,
         # only the rate. Same decision GameSim makes.
-        if random.random() < 0.55:
+        if random.random() < 0.78:
             candidates = [p for p in _skaters
                           if p.id not in (shooter.id, *assist_ids)]
             if candidates:
