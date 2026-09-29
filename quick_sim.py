@@ -1755,19 +1755,14 @@ class AdvancedGameSim:
         # Scoring volume is thus held constant while the block rate
         # becomes attribute-driven and truthful in structure.
         shot_chance *= 1.03
-        # Heater shutdown on finishing (2026-09-29, per Muck: the breakout/
-        # seize-the-moment engine must be self-limiting). The grade-A
-        # suppression alone didn't stop 100-goal outliers -- when a
-        # shooter is scorching (mesh_form high), defenses overplay him
-        # and his FINISHING dries up too. Up to -50% at full heater.
-        # No wall: a generational talent still scores, just not 105.
-        try:
-            from mesh_system import _player_heat as _ph
-            _ht = _ph(shooter)
-            if _ht > 0.60:
-                shot_chance *= 1.0 - 0.50 * (_ht - 0.60) / 0.40
-        except Exception:
-            pass
+        # Heater shutdown REMOVED (2026-09-29, per Muck): the damper below cut
+        # a hot player's finishing up to -50% when mesh_form heat > 0.60.
+        # That fought the seize-the-moment vision -- a heater should feel
+        # MORE dangerous, not get quietly nerfed. Heater self-correction
+        # lives in the grade system where it belongs: heat boosts chance
+        # earning (CHANCE_HEAT_BOOST swagger) and draws tighter checking
+        # (CHANCE_HEAT_CHECK) -- the league adjusts, the player stays
+        # dangerous. No caps, no dampers, no "impossible" outcomes.
 
         # Defensive contest 2026-09-28 (shared decision): the two on-ice
         # defenders contest every shot -- blocks (shot_blocking), gap

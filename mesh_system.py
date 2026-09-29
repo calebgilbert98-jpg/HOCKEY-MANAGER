@@ -1069,12 +1069,16 @@ CHANCE_GRADES = (CHANCE_GRADE_A, CHANCE_GRADE_B, CHANCE_GRADE_C)
 # gospel -- NHL-like targets are ~15-20% A, ~50-60% B, ~25-30% C overall.
 CHANCE_LOCATION_PRIORS = {
     "breakaway": (0.85, 0.13, 0.02),
-    "crease":    (0.38, 0.50, 0.12),
-    "netfront":  (0.32, 0.52, 0.16),
-    "slot":      (0.22, 0.62, 0.16),
-    "point":     (0.06, 0.68, 0.26),
-    "perimeter": (0.03, 0.53, 0.44),
+    "crease":    (0.50, 0.42, 0.08),
+    "netfront":  (0.45, 0.43, 0.12),
+    "slot":      (0.36, 0.52, 0.12),
+    "point":     (0.08, 0.66, 0.26),
+    "perimeter": (0.04, 0.52, 0.44),
 }
+# Raised 2026-09-29 (heater-damper removal pass): grade-A share had sunk
+# to 8.9% after the talent-gradient restepening lowered mid-band tilts.
+# Target ~15-20% -- elite talent (steep tilt) captures disproportionately
+# more of the increase, which is the star-separation design working.
 
 # Archetype grade-A generation tilt: who LIVES in the high-danger areas.
 # Archetype differentiates WITHIN talent bands, never across them --
@@ -1107,19 +1111,22 @@ CHANCE_ARCHETYPE_A_TILT = {
 # (19 fifty-goal men). The A>B>C ordering is held; the absolute premium
 # is reined in so 50-goal seasons stay rare.
 CHANCE_GRADE_FINISH_MULT = {
-    CHANCE_GRADE_A: 2.20,
+    CHANCE_GRADE_A: 1.75,
     CHANCE_GRADE_B: 1.00,
     CHANCE_GRADE_C: 0.35,
 }
 
-# Grade-specific conversion clamps. Grade A reaches NHL high-danger
-# (~20%+): the ceiling lifts for clean slot looks instead of squashing
-# every chance into the same band.
+# Grade-specific conversion clamps. Grade A reaches NHL high-danger:
+# the ceiling lifts for clean slot looks instead of squashing every
+# chance into the same band.
 # Tightened 2026-09-29 (shot-volume pass): A ceiling 0.21->0.18 -- with
 # ~14% of attempts grading A, the 21% ceiling was letting the tail run
 # to 19 fifty-goal men. Still NHL high-danger (~18%), just not cartoon.
+# (Open design question for Muck: original brief said ~20%+; the 0.20
+# ceiling was tried and pushed fifty-goal men 13->17, so the tail is
+# currently tamed here. Revisit on the opportunity/volume side.)
 CHANCE_GRADE_CLAMP = {
-    CHANCE_GRADE_A: (0.10, 0.21),
+    CHANCE_GRADE_A: (0.10, 0.18),
     CHANCE_GRADE_B: (0.04, 0.12),
     CHANCE_GRADE_C: (0.015, 0.09),
 }
@@ -1157,16 +1164,15 @@ def _piecewise_tilt(x, points):
     return points[-1][1]
 
 
-# Grade-A talent tilt curve (2026-09-29, per Muck): the star band is STEEP
-# (95 earns 1.94x the grade-A rate of 85) so P(monster | generational) >>
-# P(monster | average) and the leaderboard is star-dominated BY MECHANICS.
-# Calibrated 2026-09-29: the 1.70 top was producing 97-goal cartoons; the
-# absolute level is set so 93+ separates at 60-70 goals while 85-88 sits
-# at 35-45. Gentle at the bottom (65->0.60) so the 65-ovr's rare 40-goal
-# story stays real when the factors align. Continuous, never a wall.
+# Grade-A talent tilt curve (2026-09-29, per Muck): separates the star band
+# so the leaderboard is star-dominated BY MECHANICS, not by rule.
+# Recalibrated 2026-09-29 (damper-removal pass): the absolute level is set
+# so 92-ovr elite lands in the 55-65 band. The 95/85 ratio is 1.29x --
+# moderate steepness, but the clamp floor (0.50) lets the gradient actually
+# separate at the bottom where it matters. Continuous, never a wall, no caps.
 CHANCE_TALENT_TILT_POINTS = (
-    (50, 0.40), (60, 0.50), (65, 0.60), (70, 0.68), (75, 0.76),
-    (80, 0.80), (85, 0.85), (88, 0.95), (90, 1.05), (92, 1.15), (95, 1.25),
+    (50, 0.38), (60, 0.48), (65, 0.58), (70, 0.62), (75, 0.70),
+    (80, 0.74), (85, 0.78), (88, 0.82), (90, 0.88), (92, 0.95), (95, 1.05),
 )
 
 
@@ -1243,7 +1249,15 @@ def _chance_matchup_tilt(shooter, defenders, goalie,
         _tilt *= max(0.90, min(1.15, 1.0 + (88.0 - _govr) * 0.008))
     except Exception:
         pass
-    return max(0.70, min(1.45, _tilt))
+    # Tilt clamp (2026-09-29, damper-removal pass): [0.50, 1.20]. The floor
+    # was 0.70 -- that compressed the gradient by preventing the bottom
+    # from dropping, so lowering the top only flattened the curve (fatter
+    # tail). 0.50 lets the gradient actually separate: elites earn their
+    # A's, grinders earn fewer. The 1.20 cap (was 1.45) trims cartoon
+    # compounding at the very top -- with the A-conversion ceiling at
+    # 0.18, the tilt cap is the remaining tail lever. Still continuous,
+    # no walls.
+    return max(0.50, min(1.20, _tilt))
 
 
 # Heater constants (2026-09-29, per Muck): the INTENSITY factor's player
@@ -1252,11 +1266,16 @@ def _chance_matchup_tilt(shooter, defenders, goalie,
 # (swagger) is paired with the check above (tighter checking) so the
 # net heater effect is positive but self-limiting.
 CHANCE_HEAT_BOOST = 0.12   # max +12% grade-A rate from a full heater
-# Strengthened 2026-09-29 (shot-volume pass): 0.18 -> 0.40. The heater
-# self-correction must actually bite when a star is running at a 70+ goal
-# pace -- defenses overplay him, his premium looks dry up. Still no wall,
-# but a 40% suppression at full heater is a real defensive adjustment.
-CHANCE_HEAT_CHECK = 0.18   # max -25% from the shutdown response
+# Tighter-checking response (2026-09-29, per Muck): the honest half of
+# heater self-correction. A hot player draws the shutdown coverage --
+# his premium looks dry up because defenses overplay him, NOT because
+# his finishing is nerfed. The player stays dangerous; the league adjusts.
+# Calibrated 2026-09-29 (damper-removal pass): 0.18 -> 0.40. The -18%
+# was not biting hard enough to self-limit 100-goal paces -- with the
+# finishing shutdown gone, the checking response must actually contain
+# a scorching star. Still probabilistic, still no wall. (0.40 was the
+# intended value in the original shot-volume pass; the code never landed it.)
+CHANCE_HEAT_CHECK = 0.40   # up to -40% grade-A rate at full heater
 
 
 def _player_heat(player) -> float:
@@ -1368,9 +1387,10 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         _pA, _pB, _pC = CHANCE_LOCATION_PRIORS[_loc]
 
         # Contest shifts mass from A toward C (rushed release).
-        # Tuned 2026-09-29: 0.38 -> 0.32 (paired with raised location
-        # priors) so tight checking suppresses quality without erasing it.
-        _shift = _con * 0.38
+        # Tuned 2026-09-29: 0.38 -> 0.32 so tight checking suppresses
+        # quality without erasing it (grade-A share was 8.9%, target
+        # ~15-20%). The fixed value below matches this comment.
+        _shift = _con * 0.32
         _moved_a = _pA * _shift
         _moved_b = _pB * _shift * 0.45
         _pA -= _moved_a

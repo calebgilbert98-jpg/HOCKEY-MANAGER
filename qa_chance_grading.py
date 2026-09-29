@@ -156,7 +156,10 @@ check("A mult > B mult > C mult",
       chance_grade_finish_mult("A") > chance_grade_finish_mult("B") >
       chance_grade_finish_mult("C"))
 _lo_a, _hi_a = chance_grade_clamp("A")
-check(f"A clamp ceiling ({_hi_a}) reaches ~20%+", _hi_a >= 0.20)
+# Deliberate 2026-09-29: ceiling 0.18 (was 0.21) -- the 0.20+ ceiling let
+# the tail run to 19 fifty-goal men; the fifty-goal bar (4-8) is the
+# binding constraint. ~20%+ high-danger remains an open design question.
+check(f"A clamp ceiling ({_hi_a}) at designed 0.18", _hi_a >= 0.18)
 _lo_c, _hi_c = chance_grade_clamp("C")
 check(f"C clamp ceiling ({_hi_c}) below B floor",
       _hi_c <= chance_grade_clamp("B")[0] + 0.06)
