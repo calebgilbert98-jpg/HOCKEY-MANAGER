@@ -971,6 +971,71 @@ def build_prematch_presser(user_team, opponent, ctx: dict) -> List[dict]:
     return out
 
 
+def _drama_questions(drama: list) -> List[dict]:
+    """Incident-driven press questions, asked before the routine ones --
+    the room wants to know where the coach stands on the night's
+    flashpoint. Answers move morale, the board, and the fans, exactly
+    like the rest of the presser."""
+    out = []
+    for d in drama or []:
+        kind = d.get("kind")
+        if kind == "line_brawl":
+            out.append({
+                "id": "drama_brawl",
+                "journalist": "Dave Tremblay (TSN)",
+                "question": ("It turned ugly out there -- the gloves came "
+                             "off all over the ice late. What's your message "
+                             "to the room?"),
+                "answers": [
+                    {"label": "Back them: 'That's playoff hockey. I love it.'",
+                     "tone": "passionate", "morale_effect": 1,
+                     "board_effect": -1, "fan_effect": 2,
+                     "reaction": ("The room roars its approval -- the "
+                                  "players love a coach who has their back. "
+                                  "The board winces at the circus.")},
+                    {"label": "Calm it: 'We can't take ourselves out of games.'",
+                     "tone": "calm", "morale_effect": 0,
+                     "board_effect": 1, "fan_effect": 0,
+                     "reaction": ("The veterans nod. The board appreciates "
+                                  "a steady hand.")},
+                    {"label": "Deflect: 'Ask the league office.'",
+                     "tone": "evasive", "morale_effect": -1,
+                     "board_effect": 0, "fan_effect": -1,
+                     "reaction": ("The players wanted their coach to pick a "
+                                  "side. The fans wanted one too.")},
+                ],
+            })
+        elif kind == "controversial_hit":
+            hitter = d.get("hitter", "your player")
+            victim = d.get("victim", "their player")
+            fined = d.get("fined", False)
+            out.append({
+                "id": "drama_hit",
+                "journalist": "Sarah Chen (Hockey Night)",
+                "question": (f"The league reviewed {hitter}'s hit on "
+                             f"{victim}{' and handed down a fine' if fined else ''}. "
+                             f"Any concern about how your player handled it?"),
+                "answers": [
+                    {"label": "Defend him: 'Clean hit. He plays on the edge.'",
+                     "tone": "passionate", "morale_effect": 1,
+                     "board_effect": 0, "fan_effect": 1,
+                     "reaction": (f"{hitter} hears his coach went to bat for "
+                                  "him -- the room tightens. The fans eat it up.")},
+                    {"label": "Measured: 'We'll accept whatever comes.'",
+                     "tone": "calm", "morale_effect": -1,
+                     "board_effect": 1, "fan_effect": 0,
+                     "reaction": ("The board likes the professionalism. "
+                                  "The room wanted more fight.")},
+                    {"label": "No comment.",
+                     "tone": "evasive", "morale_effect": 0,
+                     "board_effect": 0, "fan_effect": -1,
+                     "reaction": ("Nobody believes a coach has no opinion on "
+                                  "a hit like that. The fans grumble.")},
+                ],
+            })
+    return out
+
+
 def build_postmatch_presser(user_team, opponent, won: bool, drew: bool,
                             score: str, star_name: str, ctx: dict) -> List[dict]:
     journalists = ["Sarah Chen (Hockey Night)", "Mike Ross (The Athletic)",
@@ -995,7 +1060,8 @@ def build_postmatch_presser(user_team, opponent, won: bool, drew: bool,
             "question": _fill(q["ask"], full_ctx),
             "answers": answers,
         })
-    return out
+    # The night's flashpoints get asked about first.
+    return _drama_questions(full_ctx.get("drama")) + out
 
 
 # ---------------------------------------------------------------------------

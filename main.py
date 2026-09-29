@@ -681,6 +681,15 @@ NHL League Office""",
                 team.goals_against = 0
                 team.games_played = 0
         print("Clean season records initialized for NHL teams")
+
+        # NHL Rule 6.1: every club opens with exactly one captain (never a
+        # goaltender) and two alternates. Leadership is picked, not dealt.
+        for team in self.league.teams:
+            if team.league_name == "National Hockey League":
+                try:
+                    self._ensure_captaincy(team)
+                except Exception:
+                    pass
         
         # Set draft prospects from database manager
         self.league.draft_prospects = self.database_manager.draft_eligibles
@@ -1341,6 +1350,87 @@ NHL League Office""",
         if len(leaders) > 2:
             leaders[2].captaincy = 'A'
     
+    def _ensure_captaincy(self, team) -> "str | None":
+        """NHL Rule 6.1: every club must have exactly one captain -- and it
+        can't be a goaltender. Idempotent: a valid existing captain is
+        never overwritten, alternates are only topped up to two. Returns
+        the new captain's name when one had to be named, else None."""
+        try:
+            from game_classes import PlayerPosition as _PP
+        except Exception:
+            _PP = None
+        roster = list(getattr(team, "roster", None) or [])
+        if not roster:
+            return None
+
+        def _is_goalie(p):
+            try:
+                return _PP is not None and getattr(p, "primary_position", None) == _PP.GOALIE
+            except Exception:
+                return False
+
+        def _lead(p):
+            try:
+                return int(getattr(p, "leadership", 50) or 50)
+            except Exception:
+                return 50
+
+        def _tenure(p):
+            try:
+                return int(getattr(p, "team_tenure_years", 0) or 0)
+            except Exception:
+                return 0
+
+        # Strip invalid letters first: goalie captains, duplicate Cs.
+        changed = False
+        for p in roster:
+            if getattr(p, "captaincy", "") == "C" and _is_goalie(p):
+                try:
+                    p.captaincy = ""
+                    changed = True
+                except Exception:
+                    pass
+        captains = [p for p in roster if getattr(p, "captaincy", "") == "C"]
+        new_captain = None
+        if len(captains) != 1:
+            for p in captains:
+                try:
+                    p.captaincy = ""
+                except Exception:
+                    pass
+            skaters = [p for p in roster if not _is_goalie(p)]
+            pool = skaters or roster
+
+            def _ovr(p):
+                try:
+                    return int(p.overall_rating())
+                except Exception:
+                    return 0
+
+            pick = max(pool, key=lambda p: (_lead(p), _tenure(p), _ovr(p)))
+            try:
+                pick.captaincy = "C"
+            except Exception:
+                pass
+            new_captain = getattr(pick, "full_name", "A new captain")
+            changed = True
+        # Top up alternates to two among non-captain skaters.
+        try:
+            alternates = [p for p in roster
+                          if getattr(p, "captaincy", "") == "A"]
+            if len(alternates) < 2:
+                cands = sorted(
+                    (p for p in roster
+                     if getattr(p, "captaincy", "") not in ("C", "A")
+                     and not _is_goalie(p)),
+                    key=lambda p: (_lead(p), _tenure(p)), reverse=True)
+                for p in cands[:2 - len(alternates)]:
+                    p.captaincy = "A"
+                    changed = True
+        except Exception:
+            pass
+        return new_captain
+
     def set_user_team(self, team_name):
         """Set the user's selected team"""
         # Find the team by name
@@ -5949,6 +6039,28 @@ class HockeyManagerGUI(tk.Tk):
                     and self._maybe_open_game_day_bundle(todays_games)):
                 return
 
+            # NHL Rule 6.1, opening night: every club must have exactly one
+            # captain (never a goaltender). Once per season, on the first
+            # regular-season game day -- catches offseason retirements, FA
+            # departures, and trades the dressing-room succession didn't
+            # see. A valid existing captain is never overwritten.
+            if todays_games and not _all_preseason:
+                _sy = getattr(getattr(self, 'league', None), 'season_year', None)
+                if (_sy is not None
+                        and getattr(self, '_captaincy_checked_year', None) != _sy):
+                    self._captaincy_checked_year = _sy
+                    _ut = getattr(self, 'user_team', None)
+                    for _t in (getattr(getattr(self, 'league', None),
+                                       'teams', None) or []):
+                        try:
+                            _nc = self._ensure_captaincy(_t)
+                            if _nc and _t is _ut:
+                                self.add_news(
+                                    f"© {_nc} has been named captain of the "
+                                    f"{getattr(_t, 'team_name', 'club')}.")
+                        except Exception:
+                            pass
+
             self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
             if todays_games:
@@ -9367,6 +9479,20 @@ class HockeyManagerGUI(tk.Tk):
                         sim_engine._fights_total = int(res.get("fights", 0))
                 except Exception:
                     pass
+            # Drama layer: turn tonight's incidents into consequences --
+            # rivalry heat, headlines, DoPS fines, room morale, press
+            # hooks. Single consumer per game (fed only by rolled
+            # incidents; GameSim did its own live), so neither engine
+            # can double-fire. Skipped for preseason exhibitions.
+            try:
+                _ut = getattr(self, "user_team", None)
+                _ni.apply_incident_consequences(
+                    self, home_team, away_team,
+                    res.get("incidents"), res.get("incident_details"),
+                    bool(res.get("brawl")), (home_score, away_score),
+                    game_date, _ut, rivalries)
+            except Exception:
+                pass
             if deliver_headlines and res.get("stories"):
                 try:
                     from headlines import deliver_spec as _deliver_spec
@@ -14750,7 +14876,8 @@ class HockeyManagerGUI(tk.Tk):
                 hs, aws = scores
                 score_str = f"{hs}-{aws}"
                 star = self._career_star_of_game(sim_engine, team)
-                ctx = {"n": "a few"}
+                ctx = {"n": "a few",
+                       "drama": getattr(team, "_recent_drama", None)}
                 questions = manager_career.build_postmatch_presser(
                     team, opp, user_won, went_ot, score_str, star, ctx)
                 if questions:

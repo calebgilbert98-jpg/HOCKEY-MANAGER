@@ -44,6 +44,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
 
     builders = {
         "line_brawl": _brawl_headline,
+        "line_brawl_quick": _quick_brawl_headline,
         "trade_request": _trade_request_headline,
         "star_injury": _star_injury_headline,
         "blockbuster_trade": _blockbuster_headline,
@@ -69,6 +70,34 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         msg.game_date_sent = game_date
         msg.date_sent = game_date  # game-world email: show the game date
     return msg
+
+
+def _quick_brawl_headline(game_date, home="", away="", home_score=0,
+                          away_score=0, **kw):
+    """League headline for a line brawl in a quick-simmed game: no live
+    pair data, so the story is told from the scoresheet and the bad
+    blood, not the play-by-play."""
+    from game_classes import EmailMessage
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🥊 LINE BRAWL: {away} at {home}",
+        content=(
+            f"It turned ugly in {home} late in the game. With the score "
+            f"{away} {away_score}, {home} {home_score}, the gloves came "
+            f"off all over the ice -- multiple fights at once, both "
+            f"benches emptying onto the fringes.\n\n"
+            f"Every skater involved was handed a 10-minute misconduct, "
+            f"the NHL's standard answer to a line brawl. The league says "
+            f"it will review the incident, but no suspensions are "
+            f"expected.\n\n"
+            f"Circle the rematch on the calendar. These two won't have "
+            f"forgotten."
+        ),
+        category="League",
+        priority=3,
+        is_important=True,
+    )
 
 
 def _brawl_headline(game_date, home, away, pairs, home_score=0,

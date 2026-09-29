@@ -78,14 +78,46 @@ def _is_rivalry_game(home: Any, away: Any, rivalries: list) -> bool:
 # Incident rolls (AdvancedGameSim post-game; GameSim does these live)
 # ---------------------------------------------------------------------------
 
+def _pick_hit_participants(home: Any, away: Any):
+    """Who threw the borderline hit and who took it. The chippier room
+    supplies the hitter (its most aggressive skater); the other room
+    supplies the victim. Names only -- the engines own injuries."""
+    try:
+        from reputation_system import _roster_chippiness
+        hc = _roster_chippiness(getattr(home, "roster", []))
+        ac = _roster_chippiness(getattr(away, "roster", []))
+    except Exception:
+        hc, ac = 30.0, 30.0
+    if hc == ac:
+        hitting, victim_team = (home, away) if random.random() < 0.5 else (away, home)
+    else:
+        hitting, victim_team = (home, away) if hc > ac else (away, home)
+
+    def _skaters(team):
+        try:
+            from game_classes import PlayerPosition as _PP
+            return [p for p in (getattr(team, "roster", []) or [])
+                    if getattr(p, "primary_position", None) != _PP.GOALIE]
+        except Exception:
+            return list(getattr(team, "roster", []) or [])
+
+    hs, vs = _skaters(hitting), _skaters(victim_team)
+    hitter = (max(hs, key=lambda p: getattr(p, "aggressiveness", 50) or 50)
+              if hs else None)
+    victim = random.choice(vs) if vs else None
+    return hitting, hitter, victim_team, victim
+
+
 def _roll_incidents(home: Any, away: Any, home_score: int, away_score: int,
                     rivalries: list, ledger: Any,
                     is_playoff: bool = False,
                     series_game: int = 0) -> Dict[str, Any]:
     """Roll fights / brawls / controversial hits for a finished game the
     engine didn't model live. Returns {"fights": int, "brawl": bool,
-    "incidents": [...]}. All writes go through record_game_incident()."""
-    out: Dict[str, Any] = {"fights": 0, "brawl": False, "incidents": []}
+    "incidents": [...], "incident_details": [...]}. All writes go through
+    record_game_incident()."""
+    out: Dict[str, Any] = {"fights": 0, "brawl": False,
+                           "incidents": [], "incident_details": []}
     try:
         from reputation_system import (game_tension, fight_probability,
                                        brawl_probability,
@@ -131,19 +163,47 @@ def _roll_incidents(home: Any, away: Any, home_score: int, away_score: int,
                                  "line brawl")
             out["brawl"] = True
             out["incidents"].append("line_brawl")
+            out["incident_details"].append({
+                "kind": "line_brawl",
+                "home": _team_name(home), "away": _team_name(away),
+                "home_score": home_score, "away_score": away_score,
+            })
     except Exception:
         pass
 
     # Controversial hit: under 1% of games, scaled by tension. No injury
-    # invented -- the engines own injuries; this is just bad blood.
+    # invented -- the engines own injuries; this is just bad blood. The
+    # detail names the hitter and the victim so the consequence pass
+    # (DoPS review, press, morale) has a story to tell.
     try:
         p_hit = 0.004 * (0.5 + 2.0 * (tension / 100.0))
         if is_playoff:
             p_hit *= 1.25
         if random.random() < p_hit:
-            record_game_incident(rivalries, home, away, "controversial_hit",
-                                 "borderline hit under review")
+            _ht, _hp, _vt, _vp = _pick_hit_participants(home, away)
+            _hn = getattr(_hp, "full_name", "A hitter") if _hp else "A hitter"
+            _vn = getattr(_vp, "full_name", "a victim") if _vp else "a victim"
+            _htn, _vtn = _team_name(_ht), _team_name(_vt)
+            record_game_incident(
+                rivalries, home, away, "controversial_hit",
+                f"{_hn} ({_htn}) caught {_vn} ({_vtn}) with a borderline "
+                f"hit -- under league review")
             out["incidents"].append("controversial_hit")
+            # The hitter's controversy (original personality parameter,
+            # dealt at generation) travels with the detail so the DoPS
+            # fine chance scales off who he is, not a flat league rate.
+            try:
+                _hcon = float(getattr(_hp, "controversy",
+                                      getattr(_hp, "base_controversy", 30))
+                              or 30) if _hp else 30.0
+            except Exception:
+                _hcon = 30.0
+            out["incident_details"].append({
+                "kind": "controversial_hit",
+                "hitter": _hn, "hitter_team": _htn,
+                "victim": _vn, "victim_team": _vtn,
+                "hitter_controversy": max(0.0, min(100.0, _hcon)),
+            })
     except Exception:
         pass
 
@@ -474,8 +534,8 @@ def process_postgame(sim: Any, home: Any, away: Any,
     never touches scoring or stats.
     """
     out: Dict[str, Any] = {"fights": 0, "brawl": False,
-                           "incidents": [], "stories": [], "moments": 0,
-                           "iconic": False}
+                           "incidents": [], "incident_details": [],
+                           "stories": [], "moments": 0, "iconic": False}
     rivalries = rivalries if rivalries is not None else []
     try:
         if roll_incidents:
@@ -484,7 +544,13 @@ def process_postgame(sim: Any, home: Any, away: Any,
                                   is_playoff=is_playoff,
                                   series_game=series_game)
             out.update({k: inc.get(k, out[k])
-                        for k in ("fights", "brawl", "incidents")})
+                        for k in ("fights", "brawl", "incidents",
+                                  "incident_details")})
+        # GameSim models incidents live instead of rolling them: surface
+        # its brawl flag so iconic-games detection and the consequence
+        # pass see the same truth the quick path reports.
+        if getattr(sim, "_brawl_happened", False):
+            out["brawl"] = True
         out["stories"] = record_stories(home, away, home_score,
                                         away_score, went_ot, shootout,
                                         sim, rivalries, ledger)
@@ -508,3 +574,160 @@ def process_postgame(sim: Any, home: Any, away: Any,
     except Exception:
         pass
     return out
+
+
+# ---------------------------------------------------------------------------
+# Incident consequences -- the drama layer's shared aftermath.
+# ---------------------------------------------------------------------------
+# One consumer per game (called from _narrative_postgame), fed only by
+# rolled incidents -- GameSim applies its own live consequences inline and
+# never lands here, so neither engine can double-fire. Turns a recorded
+# incident into: a league headline, a DoPS fine, room morale, and a press
+# hook. Rivalry heat flows through the original wound mechanism --
+# record_game_incident() logs the incident on the team_team record with the
+# original INCIDENT_WEIGHTS, and game_tension_breakdown() heats the next
+# meeting from those wounds (weight * 0.75^games_ago). No new heat numbers
+# here. Never raises; never touches scoring or stats.
+
+
+def _find_player(team: Any, name: str):
+    for p in (getattr(team, "roster", None) or []):
+        if getattr(p, "full_name", "") == name:
+            return p
+    return None
+
+
+def apply_incident_consequences(app: Any, home: Any, away: Any,
+                                incidents: list, incident_details: list,
+                                brawl: bool, scores, game_date: Any,
+                                user_team: Any, rivalries: list) -> list:
+    """Shared aftermath for one finished game. Returns the drama dicts
+    stashed on both clubs for the press (also returned for QA)."""
+    drama = []
+    try:
+        from reputation_system import record_team_event
+    except Exception:
+        return drama
+    try:
+        import headlines as _hl
+    except Exception:
+        _hl = None
+
+    home_score, away_score = int(scores[0]), int(scores[1])
+    details = {d.get("kind"): d for d in (incident_details or [])
+               if isinstance(d, dict)}
+
+    def _involved():
+        names = set()
+        if user_team is not None:
+            names.add(getattr(user_team, "team_name", ""))
+        return (getattr(home, "team_name", ""), getattr(away, "team_name", ""))
+
+    # -- Line brawl ------------------------------------------------------
+    # Rivalry heat: the brawl was already logged on the team_team record by
+    # _roll_incidents (kind "brawl", original INCIDENT_WEIGHTS) -- the
+    # wound mechanism heats the rematch, no extra bump here.
+    if "line_brawl" in (incidents or []):
+        d = details.get("line_brawl", {})
+        if _hl is not None:
+            try:
+                _hl.deliver_spec(app, {
+                    "kind": "line_brawl_quick",
+                    "home": _team_name(home), "away": _team_name(away),
+                    "home_score": home_score, "away_score": away_score,
+                    "involved": _involved(),
+                })
+            except Exception:
+                pass
+        # Both rooms come out of a brawl bonded: us-against-the-world.
+        try:
+            record_team_event(
+                home, "line_brawl",
+                f"Line brawl vs {_team_name(away)} -- the room answered "
+                f"the bell together.", morale_delta=1, tone="up")
+            record_team_event(
+                away, "line_brawl",
+                f"Line brawl at {_team_name(home)} -- nobody backed down.",
+                morale_delta=1, tone="up")
+        except Exception:
+            pass
+        drama.append({"kind": "line_brawl", "live": False,
+                      "home": _team_name(home), "away": _team_name(away),
+                      "home_score": home_score, "away_score": away_score})
+
+    # -- Controversial hit -----------------------------------------------
+    # Rivalry heat: already logged by _roll_incidents (kind
+    # "controversial_hit", original INCIDENT_WEIGHTS) -- the wound
+    # mechanism heats the rematch, no extra bump here.
+    if "controversial_hit" in (incidents or []):
+        d = details.get("controversial_hit", {})
+        hitter_team_name = d.get("hitter_team", "")
+        victim_team_name = d.get("victim_team", "")
+        hitter_team = home if _team_name(home) == hitter_team_name else away
+        victim_team = away if hitter_team is home else home
+        hitter, victim = d.get("hitter", "A hitter"), d.get("victim", "a victim")
+        # DoPS review: the wallet gets lighter, never the lineup -- there
+        # is no suspension mechanic, and a fine tells the story cleanly.
+        # Grounded in the original personality model: the hitter's
+        # controversy attribute (dealt at generation from discipline /
+        # composure / aggressiveness / teamwork) drives the fine chance --
+        # hotheads draw the league's eye. $5,000 is the NHL CBA maximum.
+        try:
+            _hc = float(d.get("hitter_controversy", 30) or 0)
+        except Exception:
+            _hc = 30.0
+        _hc = max(0.0, min(100.0, _hc))
+        fined = random.random() < 0.15 + 0.55 * (_hc / 100.0)
+        if fined and _hl is not None:
+            amount = 5000
+            try:
+                _hl.deliver_spec(app, {
+                    "kind": "media_fine", "name": hitter,
+                    "team": hitter_team_name, "amount": amount,
+                    "reason": f"the borderline hit on {victim}",
+                    "involved": _involved(),
+                })
+                lg = getattr(app, "league", None)
+                if lg is not None:
+                    mf = getattr(lg, "media_fines", None)
+                    if isinstance(mf, list):
+                        mf.append({"date": str(game_date), "name": hitter,
+                                   "team": hitter_team_name, "amount": amount,
+                                   "reason": "borderline hit"})
+            except Exception:
+                pass
+        try:
+            record_team_event(
+                victim_team, "controversial_hit",
+                f"Seething: {hitter} ({hitter_team_name}) caught {victim} "
+                f"with a borderline hit{' and was fined' if fined else ''} "
+                f"-- the room wants payback.",
+                morale_delta=-1, tone="down")
+            record_team_event(
+                hitter_team, "controversial_hit",
+                f"Rallying around {hitter} after the DoPS review -- "
+                f"{'fined' if fined else 'no supplemental discipline'}.",
+                morale_delta=1, tone="up")
+        except Exception:
+            pass
+        drama.append({"kind": "controversial_hit", "live": False,
+                      "hitter": hitter, "hitter_team": hitter_team_name,
+                      "victim": victim, "victim_team": victim_team_name,
+                      "fined": fined})
+
+    # -- Live-brawl press hook (GameSim did its own consequences) ---------
+    # The live brawl already called record_game_incident(kind "brawl") in
+    # simulation._run_brawl -- the wound mechanism heats the rematch.
+    if brawl and "line_brawl" not in (incidents or []):
+        drama.append({"kind": "line_brawl", "live": True,
+                      "home": _team_name(home), "away": _team_name(away),
+                      "home_score": home_score, "away_score": away_score})
+
+    # Stash for the press: the post-match presser reads the club's most
+    # recent drama and asks about it.
+    try:
+        for team in (home, away):
+            team._recent_drama = list(drama)
+    except Exception:
+        pass
+    return drama
