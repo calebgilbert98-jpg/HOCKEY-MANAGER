@@ -1101,7 +1101,14 @@ class DatabaseGenerator:
         
         # Get appropriate names
         first_name = random.choice(EXTENDED_FIRST_NAMES.get(nationality, EXTENDED_FIRST_NAMES["Other"]))
-        last_name = random.choice(EXTENDED_LAST_NAMES.get(nationality, EXTENDED_LAST_NAMES["Other"]))
+        # P-5: star-surname filter -- generated players must not borrow a
+        # recognizable real player's surname (e.g. "Mikko Rantanen").
+        try:
+            import name_safety as _ns
+            last_name = _ns.pick_surname(
+                EXTENDED_LAST_NAMES.get(nationality, EXTENDED_LAST_NAMES["Other"]))
+        except Exception:
+            last_name = random.choice(EXTENDED_LAST_NAMES.get(nationality, EXTENDED_LAST_NAMES["Other"]))
         birthplace = random.choice(EXTENDED_BIRTHPLACES.get(nationality, EXTENDED_BIRTHPLACES["Other"]))
         
         # Create base player

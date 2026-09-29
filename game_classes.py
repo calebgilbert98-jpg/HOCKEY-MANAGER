@@ -3573,6 +3573,21 @@ def junior_assignment_label(player) -> str:
         return "Junior"
 
 
+def bank_final_table(standings):
+    """Copy the final standings table before a season rollover zeroes it.
+
+    P-2: League.end_of_season() calls initialize_standings(), which clears
+    lg.standings by design. This returns an independent snapshot
+    ({team_name: {W/L/OTL/Points}}) that offseason consumers can read after
+    the rollover. Never raises; never mutates the input.
+    """
+    try:
+        return {str(_name): dict(_row or {})
+                for _name, _row in (standings or {}).items()}
+    except Exception:
+        return {}
+
+
 @dataclass
 class League:
     """Represents the entire league, structured like the NHL."""
@@ -6218,7 +6233,14 @@ class League:
         self._report_schedule_stats_enhanced(team_tracking, teams)
 
     def end_of_season(self):
-        """Handles all end-of-season logic like aging players and resetting stats."""
+        """Handles all end-of-season logic like aging players and resetting stats.
+
+        ORDERING CONTRACT (P-2): this call zeroes lg.standings by design for
+        the new season. Any points-based offseason logic (coaching carousel,
+        awards, waiver snapshots) MUST run BEFORE end_of_season(), or read
+        the banked `final_table_snapshot` below -- reading lg.standings after
+        the rollover silently returns zeros.
+        """
         # Prospect development (EHM on steroids): farm/junior seasons are
         # simulated statistically and evaluated BEFORE aging, so breakout
         # years reshape the growth curve. NHL-roster players keep the
@@ -6722,6 +6744,17 @@ class League:
         try:
             import waiver_logic as _wl
             _wl.snapshot_final_standings(self)
+        except Exception:
+            pass
+
+        # P-2: bank the FULL final table (W/L/OTL/Points per club) before
+        # initialize_standings() zeroes it. The waiver snapshot above keeps
+        # points/games only; this is the general-purpose copy any other
+        # offseason consumer can read after the rollover. Old-save safe:
+        # plain attribute, read via getattr with a default.
+        try:
+            self.final_table_snapshot = bank_final_table(self.standings)
+            self.final_table_season = str(getattr(self, "season_year", "") or "")
         except Exception:
             pass
 

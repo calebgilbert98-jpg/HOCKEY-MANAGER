@@ -510,7 +510,13 @@ def get_random_name(country: str) -> Tuple[str, str]:
     """Returns a random first and last name appropriate for the given country.
     Names are normalized to ASCII-safe text (transliteration safety net)."""
     first_name = random.choice(FIRST_NAMES.get(country, FIRST_NAMES["Other"]))
-    last_name = random.choice(LAST_NAMES.get(country, LAST_NAMES["Other"]))
+    # P-5: star-surname filter -- generated prospects must not borrow a
+    # recognizable real player's surname (e.g. "Klaus Draisaitl").
+    try:
+        import name_safety as _ns
+        last_name = _ns.pick_surname(LAST_NAMES.get(country, LAST_NAMES["Other"]))
+    except Exception:
+        last_name = random.choice(LAST_NAMES.get(country, LAST_NAMES["Other"]))
     return _to_ascii(first_name), _to_ascii(last_name)
 
 def get_random_birthplace(country: str) -> str:
