@@ -1113,6 +1113,12 @@ class PlayerProfileView(ctk.CTkFrame):
 
             # Value on the native 1-100 display scale
             raw = getattr(self.player, attr_key, 10)
+            if raw is None and attr_key in ("offensive_positioning",
+                                           "defensive_positioning"):
+                # Old saves predate the positioning split: fall back to the
+                # single positioning, same as the engine does
+                # (mesh_system.offensive/defensive_positioning).
+                raw = getattr(self.player, "positioning", 10)
             disp = _to_100_scale(raw)
 
             # Bar
@@ -1257,7 +1263,10 @@ class PlayerProfileView(ctk.CTkFrame):
             ("Shooting Power", "shooting_power"),
             ("One Timer", "one_timer"),
             ("Backhand", "backhand"),
-            ("Deflections", "deflections")
+            ("Deflections", "deflections"),
+            # Positioning split (2026-09-28, per Muck): getting open,
+            # net-front spot wins, shot quality.
+            ("Offensive Positioning", "offensive_positioning"),
         ]
         self._create_attribute_section(parent, "Shooting & Scoring", technical_attrs)
         
@@ -1313,7 +1322,10 @@ class PlayerProfileView(ctk.CTkFrame):
             ("Defensive Awareness", "defensive_awareness"),
             ("Aggressiveness", "aggressiveness"),
             ("Discipline", "discipline"),
-            ("Screen Shots", "screen_shots")
+            ("Screen Shots", "screen_shots"),
+            # Positioning split (2026-09-28, per Muck): gap control,
+            # box-outs, blocks, takeaways.
+            ("Defensive Positioning", "defensive_positioning")
         ]
         self._create_attribute_section(parent, "Defensive Skills", defensive_attrs)
         

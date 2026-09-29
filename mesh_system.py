@@ -359,6 +359,37 @@ def is_goalie_position(player) -> bool:
         return False
 
 
+def roll_positioning_split(off_lo, off_hi, def_lo, def_hi, unicorn_rate=0.015):
+    """Roll (offensive_positioning, defensive_positioning) for a new skater.
+
+    Scale-agnostic: the caller passes ranges in its own attribute scale
+    (draft prospects use the 20-scale, the database generator the 100-scale).
+    Goalies never get the split -- they keep the single `positioning`
+    (crease), so callers skip them and leave both attrs None.
+
+    ~1.5% of rolls are Bergeron/Coffey unicorns: genuinely elite at both
+    ends (both values rolled near the top of the better range).
+    Never raises; always returns a pair of ints.
+    """
+    try:
+        off_lo, off_hi = int(off_lo), int(off_hi)
+        def_lo, def_hi = int(def_lo), int(def_hi)
+        if off_lo > off_hi:
+            off_lo, off_hi = off_hi, off_lo
+        if def_lo > def_hi:
+            def_lo, def_hi = def_hi, def_lo
+        off = random.randint(off_lo, off_hi)
+        dfn = random.randint(def_lo, def_hi)
+        if random.random() < unicorn_rate:
+            top = max(off_hi, def_hi)
+            span = max(1, top // 6)
+            off = random.randint(max(off_lo, top - span), top)
+            dfn = random.randint(max(def_lo, top - span), top)
+        return int(off), int(dfn)
+    except Exception:
+        return 50, 50
+
+
 # ---------------------------------------------------------------------------
 # Talent composites -- ONE decision, two fidelities (divergences #2 and #5).
 # Both engines resolve shooter and goalie talent through these functions so

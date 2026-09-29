@@ -6,6 +6,7 @@ import random
 from typing import (List, Dict, Optional)
 from game_classes import (Player, Team, League, PlayerPosition, Contract, debug_print)
 from dataclasses import dataclass
+import mesh_system
 
 @dataclass
 class DatabaseConfig:
@@ -1342,6 +1343,30 @@ class DatabaseGenerator:
         # Set playing tendencies
         player.shooting_tendency = random.randint(20, 80)
         player.hitting_tendency = random.randint(20, 80)
+
+        # Positioning split (2026-09-28, per Muck): every skater gets
+        # offensive_positioning (getting open, net-front spot wins, shot
+        # quality) and defensive_positioning (gap control, box-outs, blocks,
+        # takeaways) on the native 100-point scale, tilted by position --
+        # forwards lean offensive, defensemen lean defensive. Goalies keep
+        # the single `positioning` (crease). ~1.5% unicorns come out elite
+        # at both ends (the Bergeron/Coffey mold).
+        if player.primary_position != PlayerPosition.GOALIE:
+            _is_dman = player.primary_position in (
+                PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                PlayerPosition.RIGHT_DEFENSE)
+            if _is_dman:
+                _off_range = (max(1, base_min - 12), max(1, base_max - 4))
+                _def_range = (base_min + 2, min(100, base_max + 8))
+            else:
+                _off_range = (base_min + 2, min(100, base_max + 8))
+                _def_range = (max(1, base_min - 12), max(1, base_max - 4))
+            _off, _dfn = mesh_system.roll_positioning_split(
+                _off_range[0], _off_range[1], _def_range[0], _def_range[1])
+            player.offensive_positioning = max(
+                1, min(100, int(_off * current_factor)))
+            player.defensive_positioning = max(
+                1, min(100, int(_dfn * current_factor)))
         
         # Set potential grade
         if age < 23:

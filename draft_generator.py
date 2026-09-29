@@ -6,6 +6,7 @@ import math
 from datetime import (timedelta, date)
 from typing import (List, Tuple, Optional)
 from game_classes import Player, PlayerPosition, GameBalance
+import mesh_system
 
 # --- Constants for Data Generation ---
 # Using larger name pools makes for a more diverse game world.
@@ -419,6 +420,27 @@ ARCHETYPES = {
 }
 
 # --- League and Draft Settings ---
+# Positioning split by archetype (2026-09-28, per Muck): every skater
+# prospect rolls offensive_positioning (getting open, net-front spot wins,
+# shot quality) and defensive_positioning (gap control, box-outs, blocks,
+# takeaways) from their archetype. Ranges are 20-scale, applied with the
+# same x2.0 x potential_factor conversion as archetype attributes below.
+# Goalies keep the single `positioning` (crease) -- no split.
+_ARCHETYPE_POSITIONING_SPLIT = {
+    # archetype: ((off_lo, off_hi), (def_lo, def_hi))
+    "Sniper":               ((30, 40), (18, 26)),
+    "Playmaker":            ((28, 38), (20, 28)),
+    "Power Forward":        ((26, 36), (20, 28)),
+    "Two-Way Forward":      ((24, 34), (28, 38)),
+    "Grinder":              ((18, 28), (24, 34)),
+    "Skilled Finesse":      ((28, 38), (18, 26)),
+    "Enforcer":             ((14, 24), (20, 30)),
+    "Offensive Defenseman": ((26, 36), (20, 30)),
+    "Defensive Defenseman": ((16, 26), (30, 40)),
+    "Two-Way Defenseman":   ((24, 32), (28, 36)),
+    "Physical Defenseman":  ((16, 26), (28, 38)),
+    "Puck-Moving Defenseman": ((24, 34), (22, 32)),
+}
 # Nationality-first weights (real-draft-like). COUNTRY_DISTRIBUTION is the
 # name older callers (get_random_nationality, player_generator) use.
 COUNTRY_DISTRIBUTION = dict(NATIONALITY_WEIGHTS)
@@ -911,6 +933,23 @@ def create_prospect(age: int = 18,
         adjusted_value = max(GameBalance.MIN_ATTRIBUTE, min(GameBalance.MAX_ATTRIBUTE, adjusted_value))
         # Set the attribute
         setattr(player, attr, adjusted_value)
+
+    # Positioning split (2026-09-28, per Muck): skaters roll
+    # offensive/defensive positioning from their archetype on the same
+    # 20-scale x2.0 x potential_factor conversion. Goalies keep the single
+    # `positioning` (crease). ~1.5% unicorns come out elite at both ends.
+    if position != PlayerPosition.GOALIE:
+        _split = _ARCHETYPE_POSITIONING_SPLIT.get(archetype_name)
+        if _split:
+            _pf = DEVELOPMENT_PROFILES[potential]["ceiling_modifier"]
+            (_olo, _ohi), (_dlo, _dhi) = _split
+            _off20, _def20 = mesh_system.roll_positioning_split(_olo, _ohi, _dlo, _dhi)
+            player.offensive_positioning = max(
+                GameBalance.MIN_ATTRIBUTE,
+                min(GameBalance.MAX_ATTRIBUTE, int(_off20 * 2.0 * _pf)))
+            player.defensive_positioning = max(
+                GameBalance.MIN_ATTRIBUTE,
+                min(GameBalance.MAX_ATTRIBUTE, int(_def20 * 2.0 * _pf)))
     
     # Apply archetype-specific tendencies if available
     for tendency, (min_val, max_val) in archetype_data.get("tendency", {}).items():
