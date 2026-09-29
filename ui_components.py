@@ -2517,36 +2517,34 @@ class PlayerProfileView(ctk.CTkFrame):
                   style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
 
         moments = getattr(self.player, 'career_moments', None) or []
-        moments = [m for m in moments if isinstance(m, dict)]
-        # Newest first.
-        moments = sorted(moments, key=lambda m: m.get("date", ""),
-                         reverse=True)
 
-        _emoji = {"hat_trick": "🎩", "four_point": "⭐", "five_point": "🌟",
-                  "shutout": "🧱", "forty_saves": "🥅", "steal": "🥅",
-                  "iconic_game": "🏛️"}
-        if not moments:
+        # Repeat 1st-star nights collapse into one tally+dates row
+        # (stars.signature_game_rows); everything else renders one row per
+        # moment, newest first.
+        try:
+            from stars import signature_game_rows
+            rows = signature_game_rows(moments)
+        except Exception:
+            rows = []
+        if not rows:
             ttk.Label(moments_frame, text="No signature games yet.",
                       style='PlayerInfo.TLabel').pack(anchor='w')
             return
-        for m in moments[:6]:
-            emo = _emoji.get(m.get("kind", ""), "🏒")
-            date_s = m.get("date", "")
-            label = m.get("label", "Big night")
-            detail = m.get("detail", "")
-            line1 = f"{emo} {label} — {date_s}"
-            if m.get("playoff"):
-                line1 += " (playoffs)"
-            ttk.Label(moments_frame, text=line1,
+        shown = rows[:6]
+        for r in shown:
+            ttk.Label(moments_frame, text=r["line1"],
                       style='PlayerValue.TLabel').pack(anchor='w')
-            if detail:
-                ttk.Label(moments_frame, text=f"    {detail}",
+            if r["detail"]:
+                ttk.Label(moments_frame, text=f"    {r['detail']}",
                           style='PlayerInfo.TLabel').pack(anchor='w')
-        if len(moments) > 6:
+        consumed = sum(r["consumed"] for r in shown)
+        total = sum(r["consumed"] for r in rows)
+        if consumed < total:
+            remaining = total - consumed
             ttk.Label(
                 moments_frame,
-                text=f"+ {len(moments) - 6} more signature "
-                     f"{'game' if len(moments) == 7 else 'games'} on record.",
+                text=f"+ {remaining} more signature "
+                     f"{'game' if remaining == 1 else 'games'} on record.",
                 style='PlayerInfo.TLabel').pack(anchor='w', pady=(4, 0))
 
     def _create_enhanced_key_attributes(self, parent, row=0):

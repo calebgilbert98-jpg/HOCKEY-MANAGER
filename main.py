@@ -6352,6 +6352,14 @@ class HockeyManagerGUI(tk.Tk):
                     headlines.monthly_trade_request_check(self)
                 except Exception as e:
                     print(f"Trade-request check error (non-fatal): {e}")
+                # Monthly NHL awards: Player of the Month / Rookie of the
+                # Month from month splits; banked, announced, baselines
+                # re-stamped.
+                try:
+                    import stars as _stars_mo
+                    _stars_mo.monthly_awards_tick(self)
+                except Exception as e:
+                    print(f"Monthly awards error (non-fatal): {e}")
             
             # Update game_manager's current_date for dashboard synchronization
             self.game_manager.current_date = self.current_date
@@ -10117,7 +10125,17 @@ class HockeyManagerGUI(tk.Tk):
         }
         
         self._record_game_result(game_result)
-        
+
+        # Three stars of the game (NHL media criteria) -- stamped on the
+        # result and recorded onto the players. Preseason names no stars.
+        try:
+            import stars as _stars_mod
+            _stars_mod.record_game_stars(game_result, home_team, away_team,
+                                        preseason=preseason,
+                                        game_date=game_date)
+        except Exception as _se:
+            print(f"Three-stars error (non-fatal): {_se}")
+
         # Generate media events for the game (if media system enabled)
         if hasattr(self, 'media_system') and self.media_system:
             self.media_system.process_game_result(game_result)
@@ -10198,6 +10216,23 @@ class HockeyManagerGUI(tk.Tk):
             for team in [home_team, away_team]:
                 for player in team.roster:
                     player.stats.games_played += 1
+            # Goalie decisions: the events path credits goals/saves above
+            # but not W/L/SO. GameSim and the lightweight path credit them,
+            # so do it here too -- monthly awards and the record book must
+            # see the same numbers on every sim path.
+            if not preseason:
+                for _team, _opp_score, _won in (
+                        (home_team, away_score, winner is home_team),
+                        (away_team, home_score, winner is away_team)):
+                    _g = get_starting_goalie(_team)
+                    if _g is None:
+                        continue
+                    if _won:
+                        _g.stats.wins += 1
+                    else:
+                        _g.stats.losses += 1
+                    if _opp_score == 0:
+                        _g.stats.shutouts += 1
             # Defensive record: same shared roll as every other sim path --
             # shutdown defensemen leave a hits/takeaways/blocks trail.
             try:
@@ -11321,6 +11356,15 @@ class HockeyManagerGUI(tk.Tk):
             
             # Add to game results (keeps the date/matchup indexes in sync)
             self._record_game_result(game_result)
+
+            # Three stars of the game (regular season only).
+            try:
+                import stars as _stars_mod2
+                _stars_mod2.record_game_stars(
+                    game_result, home_team, away_team,
+                    preseason=is_preseason, game_date=game_date)
+            except Exception as _se2:
+                print(f"Three-stars error (non-fatal): {_se2}")
 
             # Hollow overhype: marketed as grudge week, delivered a
             # snoozer -- the marketing wrote checks the game couldn't cash.

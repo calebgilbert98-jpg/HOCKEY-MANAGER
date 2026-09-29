@@ -32,6 +32,8 @@ ACCOLADE_LABELS: Dict[str, str] = {
     "jennings": "Jennings Trophy",
     "jack_adams": "Jack Adams Award",
     "all_star": "NHL All-Star",
+    "player_of_month": "NHL Player of the Month",
+    "rookie_of_month": "NHL Rookie of the Month",
     # --- Junior / college (banked by prospect_accolades.py) ---
     "memorial_cup": "Memorial Cup",
     "stafford_smythe": "Stafford Smythe Memorial Trophy",
@@ -83,7 +85,7 @@ ACCOLADE_LABELS: Dict[str, str] = {
 ACCOLADE_ORDER: List[str] = [
     "stanley_cup", "conn_smythe", "hart", "art_ross", "rocket",
     "norris", "vezina", "selke", "byng", "calder", "jennings",
-    "jack_adams", "all_star",
+    "jack_adams", "all_star", "player_of_month", "rookie_of_month",
     # --- Junior / college (prospect_accolades.py) ---
     "memorial_cup", "stafford_smythe", "ed_chynoweth_trophy",
     "chl_player_of_year", "chl_top_scorer", "chl_goaltender_of_year",

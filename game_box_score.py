@@ -130,6 +130,13 @@ class GameBoxScoreView(ctk.CTkFrame):
                 ).pack(side='left', padx=10)
 
     def _three_stars(self):
+        # Prefer the stars recorded at game time (stars.record_game_stars)
+        # so the box score agrees with the player card and monthly
+        # narratives. Older results fall back to the ratings sort.
+        saved = self.result.get('three_stars')
+        if saved:
+            return [(s.get('name'), s.get('team_name'), s.get('line'))
+                    for s in saved[:3] if isinstance(s, dict)]
         ratings = self.result.get('player_ratings') or {}
         by_id = self._roster_lookup()
         stars = []
