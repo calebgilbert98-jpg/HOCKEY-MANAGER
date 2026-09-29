@@ -1,11 +1,13 @@
-"""QA for playtest bug fixes: P-4 (draft need-boost decay) and P-5 (famous-name blocklist)."""
+"""QA for playtest bug fixes: P-4 (draft need-boost decay) and P-5 (name_safety
+star-surname filter)."""
 import os, sys, random
 os.environ.setdefault("DISPLAY", ":99")
 sys.path.insert(0, "/home/hatch/workspace/hockey-push/HOCKEY-MANAGER")
 from types import SimpleNamespace
 
 from draft_night import ai_select_prospect
-from draft_generator import get_random_name, _is_famous_real_name, _FAMOUS_REAL_NAMES
+from draft_generator import get_random_name
+import name_safety as _ns
 
 POSITIONS = ['LW', 'C', 'RW', 'LD', 'RD', 'G']
 
@@ -59,24 +61,24 @@ print("P-4 seven-round positions with persistent RW hole:", picks)
 assert not all(p == 'RW' for p in picks), "still drafting RW 7 straight times!"
 assert picks.count('RW') <= 4, f"RW still over-drafted late: {picks}"
 
-# --- P-5: no famous real names generated ----------------------------------
-assert _is_famous_real_name("Mikko", "Rantanen")
-assert _is_famous_real_name("Leon", "Draisaitl")
-assert not _is_famous_real_name("Mikko", "Virtanen")  # real surname, obscure first: fine
-assert len(_FAMOUS_REAL_NAMES) >= 40
+# --- P-5: no star surnames generated (name_safety) --------------------------
+assert _ns.is_blocked_surname("Rantanen")
+assert _ns.is_blocked_surname("Draisaitl")
+assert not _ns.is_blocked_surname("Virtanen")  # real surname, not a star: fine
+assert len(_ns.BLOCKED_SURNAMES) >= 40
 
 seen_famous = 0
 for i in range(20000):
     fn, ln = get_random_name("Finland")
-    if _is_famous_real_name(fn, ln):
+    if _ns.is_blocked_surname(ln):
         seen_famous += 1
         print("COLLISION:", fn, ln)
 for i in range(20000):
     fn, ln = get_random_name("Germany")
-    if _is_famous_real_name(fn, ln):
+    if _ns.is_blocked_surname(ln):
         seen_famous += 1
         print("COLLISION:", fn, ln)
-print(f"P-5 famous-name collisions in 40k generated names: {seen_famous}")
+print(f"P-5 blocked-surname collisions in 40k generated names: {seen_famous}")
 assert seen_famous == 0
 
 # --- P-4b: dynamic pivot -- a need filled early stops pulling ---------

@@ -1,11 +1,10 @@
-"""QA for playtest fixes: P-1 (conference_finals alias), P-2 (standings
-snapshot), and new-game name scrub."""
+"""QA for playtest fixes: P-1 (conference_finals alias), P-2 (Caleb's
+final_table_snapshot), and P-5 (name_safety star-surname filter)."""
 import os, sys, random
 os.environ.setdefault("DISPLAY", ":99")
 sys.path.insert(0, "/home/hatch/workspace/hockey-push/HOCKEY-MANAGER")
 
 from playoff_system import PlayoffBracket, PlayoffSeries
-from draft_generator import scrub_league_names, _is_famous_real_name
 
 # --- P-1: alias populated, no double-count, save/load round-trip ---------
 from game_classes import League, Team
@@ -73,7 +72,7 @@ assert all(any(s.team1.team_name == c.team1.team_name
            for s in rb.playoff_series["division_finals"])
 print("P-1 save/load round-trip OK")
 
-# --- P-2: previous_standings snapshot ------------------------------------
+# --- P-2: final_table_snapshot (Caleb's banking) ---------------------------
 from database_generator import generate_database
 lg2 = generate_database("Small")
 lg2.initialize_standings()
@@ -83,8 +82,8 @@ for i, t in enumerate(lg2.teams[:4]):
                                   "Points": 100 - 2 * i, "GP": 82}
 print("P-2 running end_of_season (this takes a bit)...")
 lg2.end_of_season()
-prev = getattr(lg2, "previous_standings", None)
-assert prev, "previous_standings missing after rollover"
+prev = getattr(lg2, "final_table_snapshot", None)
+assert prev, "final_table_snapshot missing after rollover"
 sample = next(iter(prev.values()))
 assert sample.get("Points", 0) > 0, f"snapshot has no real rows: {sample}"
 # New season table must be zeroed.
@@ -92,27 +91,28 @@ cur = next(iter(lg2.standings.values()))
 assert cur.get("Points", 0) == 0, "new standings not reset"
 print(f"P-2 snapshot OK (sample row: {sample}); new table zeroed")
 
-# --- Name scrub: injected famous names get renamed ------------------------
-from game_classes import Player, PlayerPosition
-p = Player(first_name="Connor", last_name="McDavid", age=28,
-           primary_position=PlayerPosition.CENTER)
-p.nationality = "Canada"
-lg2.teams[0].roster.append(p)
-n = scrub_league_names(lg2)
-assert n >= 1, "scrub did not rename the injected McDavid"
-assert not _is_famous_real_name(p.first_name, p.last_name), \
-    f"still famous after scrub: {p.first_name} {p.last_name}"
-print(f"P-2b scrub renamed {n}; McDavid is now {p.first_name} {p.last_name}")
-# Whole league clean.
+# --- P-5: name_safety star-surname filter ----------------------------------
+# Generation paths must never mint a blocked star surname; a fresh league
+# ships zero of them. (No post-hoc scrub exists by design: there is no
+# real/fictional flag, so a scrub could not tell a generated "Mikko
+# Rantanen" from the real one.)
+import name_safety as _ns
+assert _ns.is_blocked_surname("McDavid") and _ns.is_blocked_surname("Draisaitl")
+pool = ["McDavid", "Smith", "Draisaitl", "Jones", "Rantanen", "Brown"]
+seen_blocked = 0
+for _ in range(300):
+    s = _ns.pick_surname(pool)
+    assert not _ns.is_blocked_surname(s), f"pick_surname leaked {s}"
+print("P-5 pick_surname never returns a blocked surname (300 draws)")
 bad = 0
 for t in lg2.teams:
     for attr in ("roster", "ahl_roster", "prospects"):
         for pl in getattr(t, attr, None) or []:
-            if _is_famous_real_name(getattr(pl, "first_name", ""),
-                                    getattr(pl, "last_name", "")):
+            if _ns.is_blocked_surname(getattr(pl, "last_name", "") or ""):
                 bad += 1
                 print("LEFTOVER:", pl.first_name, pl.last_name)
-assert bad == 0, f"{bad} famous names left in league"
+assert bad == 0, f"{bad} blocked surnames in fresh league"
+print("P-5 fresh league ships zero blocked star surnames")
 print("P-2b league-wide name check clean")
 
 print("ALL P-1/P-2/SCRUB QA PASSED")

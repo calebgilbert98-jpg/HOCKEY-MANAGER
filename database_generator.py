@@ -424,15 +424,9 @@ class DatabaseGenerator:
         print(f"Free agents: {len(free_agents)}")
         print(f"Prospects: {len(prospects)}")
 
-        # New-game scouting integrity: guarantee zero recognizable real
-        # NHL names anywhere in the fresh league.
-        try:
-            from draft_generator import scrub_league_names as _scrub
-            _n = _scrub(main_league)
-            if _n:
-                print(f"Scrubbed {_n} recognizable real-name collisions")
-        except Exception:
-            pass
+        # P-5 is enforced at creation time by name_safety (star-surname
+        # filter in the name generators) -- see the note in
+        # main.setup_new_game for why there is no post-hoc scrub.
 
         return main_league
     
