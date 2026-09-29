@@ -142,6 +142,7 @@ class PlayerProfile(InGamePopup):
             ("Personality", self._page_personality),
             ("Scout Report", self._page_scout),
             ("Dynamics", self._page_dynamics),
+            ("History", self._page_history),
         ]
         self._tab_buttons = {}
         self._tab_pages = {}
@@ -218,6 +219,123 @@ class PlayerProfile(InGamePopup):
 
     def _page_dynamics(self, parent):
         self._create_dynamics(parent)
+
+    def _page_history(self, parent):
+        self._create_history(parent)
+
+    def _history_season_label(self, season):
+        """2027 -> '2027-28'."""
+        try:
+            _y = int(season)
+            return f"{_y}-{str(_y + 1)[-2:]}"
+        except Exception:
+            return str(season)
+
+    def _create_history(self, parent):
+        """Season History tab: per-team stints, newest season first."""
+        from game_classes import current_season_splits
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        content = card.get_content_frame()
+
+        title = tk.Label(content, text="Season History",
+                         font=AppFonts.H2,
+                         fg=AppColors.TEXT_PRIMARY,
+                         bg=card.card_bg)
+        title.pack(anchor="w", pady=(0, 4))
+        sub = tk.Label(content,
+                       text="Per-team splits -- mid-season trades shown separately.",
+                       font=AppFonts.CAPTION,
+                       fg=AppColors.TEXT_SECONDARY,
+                       bg=card.card_bg)
+        sub.pack(anchor="w", pady=(0, 12))
+
+        try:
+            is_goalie = 'GOALIE' in str(self.player.primary_position).upper()
+        except Exception:
+            is_goalie = False
+
+        # Group finalized stints by season, newest first.
+        _by_season = {}
+        try:
+            for _s in (getattr(self.player, "season_history", None) or []):
+                if not isinstance(_s, dict):
+                    continue
+                _by_season.setdefault(_s.get("season"), []).append(_s)
+        except Exception:
+            pass
+        _seasons = sorted(
+            (s for s in _by_season.keys() if s is not None),
+            reverse=True)
+
+        # Current in-progress season splits (not yet finalized).
+        _live = []
+        try:
+            _live = [s for s in current_season_splits(self.player)
+                     if isinstance(s, dict) and int(s.get("gp", 0) or 0) > 0]
+        except Exception:
+            pass
+
+        if not _seasons and not _live:
+            tk.Label(content, text="No NHL season history yet.",
+                     font=AppFonts.SMALL,
+                     fg=AppColors.TEXT_SECONDARY,
+                     bg=card.card_bg).pack(anchor="w")
+            return
+
+        def _stint_line(st):
+            _team = st.get("team", "???")
+            _gp = int(st.get("gp", 0) or 0)
+            if is_goalie:
+                _w = int(st.get("w", 0) or 0)
+                _l = int(st.get("l", 0) or 0)
+                _sa = int(st.get("sa", 0) or 0)
+                _sv = int(st.get("sv", 0) or 0)
+                _svp = (_sv / _sa) if _sa > 0 else 0.0
+                return (f"{_team}", f"{_gp} GP",
+                        f"{_w}-{_l}", f"{_svp:.3f} SV%")
+            _g = int(st.get("g", 0) or 0)
+            _a = int(st.get("a", 0) or 0)
+            return (f"{_team}", f"{_gp} GP",
+                    f"{_g} G", f"{_a} A", f"{_g + _a} PTS")
+
+        def _add_season_block(label, stints, live=False):
+            _hdr = tk.Label(
+                content,
+                text=label + ("  (in progress)" if live else ""),
+                font=AppFonts.H3 if hasattr(AppFonts, "H3") else AppFonts.SMALL,
+                fg=AppColors.ACCENT if live else AppColors.TEXT_PRIMARY,
+                bg=card.card_bg)
+            _hdr.pack(anchor="w", pady=(10, 4))
+            for _st in stints:
+                _row = tk.Frame(content, bg=card.card_bg)
+                _row.pack(fill="x", pady=1)
+                for _i, _bit in enumerate(_stint_line(_st)):
+                    tk.Label(
+                        _row, text=_bit,
+                        font=AppFonts.SMALL,
+                        fg=(AppColors.TEXT_PRIMARY if _i == 0
+                            else AppColors.TEXT_SECONDARY),
+                        bg=card.card_bg,
+                        width=10, anchor="w").pack(side="left")
+            if len(stints) > 1 and not is_goalie:
+                _tg = sum(int(s.get("g", 0) or 0) for s in stints)
+                _ta = sum(int(s.get("a", 0) or 0) for s in stints)
+                _tgp = sum(int(s.get("gp", 0) or 0) for s in stints)
+                _tot = tk.Label(
+                    content,
+                    text=f"TOT   {_tgp} GP   {_tg} G   {_ta} A   "
+                         f"{_tg + _ta} PTS",
+                    font=AppFonts.CAPTION,
+                    fg=AppColors.TEXT_SECONDARY,
+                    bg=card.card_bg)
+                _tot.pack(anchor="w", pady=(2, 0))
+
+        for _s in _seasons:
+            _add_season_block(self._history_season_label(_s),
+                              _by_season[_s])
+        if _live:
+            _add_season_block("Current season", _live, live=True)
 
     def _create_header(self, parent):
         """Player header: avatar, name, pills, team + contract strip."""
@@ -369,6 +487,40 @@ class PlayerProfile(InGamePopup):
                           fg=AppColors.TEXT_SECONDARY,
                           bg=card.card_bg)
             lbl.pack()
+
+        # Per-team splits for mid-season movers: instead of one blended
+        # row, show each stint's line (e.g. "OTT 41 GP / BOS 38 GP").
+        try:
+            from game_classes import current_season_splits as _splits_fn
+            _splits = [s for s in _splits_fn(self.player)
+                       if isinstance(s, dict)
+                       and int(s.get("gp", 0) or 0) > 0]
+            _teams = {s.get("team") for s in _splits if s.get("team")}
+            if len(_teams) > 1:
+                _split_title = tk.Label(
+                    content, text="Per-team splits",
+                    font=AppFonts.CAPTION,
+                    fg=AppColors.TEXT_SECONDARY,
+                    bg=card.card_bg)
+                _split_title.pack(anchor="w", pady=(12, 4))
+                for _st in _splits:
+                    _gp = int(_st.get("gp", 0) or 0)
+                    if is_goalie:
+                        _w = int(_st.get("w", 0) or 0)
+                        _l = int(_st.get("l", 0) or 0)
+                        _line = (f"{_st.get('team', '???')}  {_gp} GP  "
+                                 f"{_w}W-{_l}L")
+                    else:
+                        _g = int(_st.get("g", 0) or 0)
+                        _a = int(_st.get("a", 0) or 0)
+                        _line = (f"{_st.get('team', '???')}  {_gp} GP  "
+                                 f"{_g} G  {_a} A  {_g + _a} PTS")
+                    tk.Label(content, text=_line,
+                             font=AppFonts.SMALL,
+                             fg=AppColors.TEXT_PRIMARY,
+                             bg=card.card_bg).pack(anchor="w")
+        except Exception:
+            pass
 
     def _create_attributes(self, parent):
         """FM24-style grouped attributes: Technical / Mental / Physical."""

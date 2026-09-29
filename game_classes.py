@@ -290,6 +290,128 @@ def roll_defensive_game_stats(player, rng=None):
         return 0, 0, 0
 
 
+# --- Season-history stint tracker -------------------------------------------
+# Per-team stints for the player-card History tab. A stint opens when a
+# player joins an NHL roster (Team.add_player, roster only) and closes when
+# he leaves it (Team.remove_player) or at League.end_of_season. Only NHL
+# roster time is tracked -- AHL/prospect moves never open stints.
+#
+# Stint stats are deltas: the anchor snapshots player.stats at open, the
+# close subtracts it. Plain dicts throughout -- pickle/save-load safe.
+
+# PlayerStats field -> stint dict key.
+_STINT_STAT_MAP = (
+    ("games_played", "gp"),
+    ("goals", "g"),
+    ("assists", "a"),
+    ("penalties_in_minutes", "pim"),
+    ("shots", "shots"),
+    ("wins", "w"),
+    ("losses", "l"),
+    ("saves", "sv"),
+    ("shots_against", "sa"),
+    ("goals_against", "ga"),
+    ("shutouts", "so"),
+)
+
+
+def _team_abbr_safe(team_name):
+    """Three-letter team code without risking a circular import."""
+    try:
+        from playoff_system import team_abbr as _ta
+        return _ta(team_name)
+    except Exception:
+        pass
+    try:
+        return (str(team_name)[:3].upper() if team_name else "???")
+    except Exception:
+        return "???"
+
+
+def _snapshot_stint_stats(player):
+    """Current player.stats as a plain {field: int} dict. Never raises."""
+    try:
+        _stats = getattr(player, "stats", None)
+        return {f: int(getattr(_stats, f, 0) or 0)
+                for f, _k in _STINT_STAT_MAP}
+    except Exception:
+        return {f: 0 for f, _k in _STINT_STAT_MAP}
+
+
+def open_stint(player, team_abbr):
+    """Open an NHL stint anchor for this team. Idempotent. Never raises."""
+    try:
+        if player is None or not team_abbr:
+            return
+        _anchor = getattr(player, "stint_anchor", None)
+        if isinstance(_anchor, dict) and _anchor.get("team") == team_abbr:
+            return  # already tracking this stint
+        if isinstance(_anchor, dict) and _anchor.get("team"):
+            close_stint(player)  # different team open: seal it first
+        player.stint_anchor = {"team": team_abbr,
+                               "baseline": _snapshot_stint_stats(player)}
+    except Exception:
+        pass
+
+
+def close_stint(player):
+    """Seal the open stint into a plain dict and queue it for finalizing.
+
+    Returns the stint dict (without a season label -- League.end_of_season
+    stamps it) or None when no stint was open. Never raises.
+    """
+    try:
+        if player is None:
+            return None
+        _anchor = getattr(player, "stint_anchor", None)
+        if not isinstance(_anchor, dict) or not _anchor.get("team"):
+            return None
+        _base = _anchor.get("baseline") or {}
+        _now = _snapshot_stint_stats(player)
+        _stint = {"team": _anchor.get("team")}
+        for _f, _k in _STINT_STAT_MAP:
+            _stint[_k] = max(
+                0,
+                int(_now.get(_f, 0) or 0) - int(_base.get(_f, 0) or 0))
+        player.stint_anchor = None
+        _pending = getattr(player, "_stint_pending", None)
+        if not isinstance(_pending, list):
+            _pending = []
+            player._stint_pending = _pending
+        _pending.append(_stint)
+        return _stint
+    except Exception:
+        return None
+
+
+def current_season_splits(player):
+    """Per-team stint dicts for the in-progress season (no season label).
+
+    Closed stints this season first, then the live open stint computed
+    against its baseline. Used by the profile Overview card. Never raises.
+    """
+    _splits = []
+    try:
+        if player is None:
+            return _splits
+        for _s in (getattr(player, "_stint_pending", None) or []):
+            if isinstance(_s, dict) and _s.get("team"):
+                _splits.append(dict(_s))
+        _anchor = getattr(player, "stint_anchor", None)
+        if isinstance(_anchor, dict) and _anchor.get("team"):
+            _base = _anchor.get("baseline") or {}
+            _now = _snapshot_stint_stats(player)
+            _cur = {"team": _anchor.get("team")}
+            for _f, _k in _STINT_STAT_MAP:
+                _cur[_k] = max(
+                    0,
+                    int(_now.get(_f, 0) or 0) - int(_base.get(_f, 0) or 0))
+            _splits.append(_cur)
+    except Exception:
+        pass
+    return _splits
+
+
 player_id_counter = itertools.count()
 
 @dataclass(eq=False)
@@ -350,6 +472,18 @@ class Player:
     # Plain dicts {"award": key, "year": label} -- save/load safe.
     # Old-save safe: read via getattr(player, 'career_accolades', []).
     career_accolades: list = field(default_factory=list)
+    # Season history: finalized per-team stints, one dict per stint --
+    # {"season": 2027, "team": "OTT", "gp": 41, "g": 12, "a": 18,
+    #  "pim": 22, "shots": 98, "w": 0, "l": 0, "sv": 0, "sa": 0,
+    #  "ga": 0, "so": 0}. Appended at League.end_of_season from the
+    # stint tracker below. Plain dicts -- save/load safe (pickle).
+    # Old-save safe: read via getattr(player, 'season_history', []).
+    season_history: list = field(default_factory=list)
+    # Live stint anchor: {"team": "OTT", "baseline": {stat: value}} while
+    # the player is on an NHL roster, else None. Opened by Team.add_player
+    # (roster only), closed by Team.remove_player / League.end_of_season.
+    # Old-save safe: read via getattr(player, 'stint_anchor', None).
+    stint_anchor: object = field(default=None)
     family_ids: list = field(default_factory=list)
     reputation_history: list = field(default_factory=list)
     controversy_history: list = field(default_factory=list)
@@ -3136,6 +3270,13 @@ class Team:
         if roster_type in roster_map:
             roster_map[roster_type].append(player)
             player.team_name = self.team_name
+            # Season-history stint tracker: NHL roster joins open a stint.
+            # AHL/prospect moves never open stints.
+            if roster_type == "roster":
+                try:
+                    open_stint(player, _team_abbr_safe(self.team_name))
+                except Exception:
+                    pass
         else:
             raise ValueError("Invalid roster type specified.")
 
@@ -3147,10 +3288,21 @@ class Team:
             player.last_team_name = self.team_name
         except Exception:
             pass
+        # Season-history stint tracker: leaving the NHL roster seals the
+        # open stint. AHL/prospect-only players have no stint to seal.
+        try:
+            _was_nhl = player in self.roster
+        except Exception:
+            _was_nhl = False
         if player in self.roster: self.roster.remove(player)
         if player in self.ahl_roster: self.ahl_roster.remove(player)
         if player in self.prospects: self.prospects.remove(player)
         player.team_name = "Free Agent"
+        if _was_nhl:
+            try:
+                close_stint(player)
+            except Exception:
+                pass
 
     def get_players_by_position(self, position: PlayerPosition) -> List[Player]:
         return [p for p in self.roster if p.primary_position == position]
@@ -6198,7 +6350,76 @@ class League:
                         int(getattr(player, "elc_seasons_completed", 0) or 0) + 1
             except Exception:
                 pass
+            # Season-history stints: seal the open NHL stint (or synthesize
+            # one from a zero baseline for players who never went through
+            # add_player, e.g. league-creation rosters), stamp every stint
+            # with this season, and append to season_history -- all BEFORE
+            # the stats wipe below. Zero-GP stints are skipped. A fresh
+            # anchor is then opened for the new season.
+            try:
+                _season = int(getattr(self, "season_year", 0) or 0)
+                _anchor = getattr(player, "stint_anchor", None)
+                if not isinstance(_anchor, dict) or not _anchor.get("team"):
+                    try:
+                        _cur_team = None
+                        for _t in (getattr(self, "teams", None) or []):
+                            try:
+                                if player in (getattr(_t, "roster", None)
+                                              or []):
+                                    _cur_team = _t
+                                    break
+                            except Exception:
+                                continue
+                        if _cur_team is not None:
+                            open_stint(
+                                player,
+                                _team_abbr_safe(
+                                    getattr(_cur_team, "team_name", "")))
+                    except Exception:
+                        pass
+                # Seal the open stint; it lands in _stint_pending alongside
+                # any stints sealed mid-season by trades/waivers.
+                close_stint(player)
+                _pending = getattr(player, "_stint_pending", None)
+                _all_stints = [_s for _s in (_pending or [])
+                               if isinstance(_s, dict)]
+                for _st in _all_stints:
+                    try:
+                        if int(_st.get("gp", 0) or 0) <= 0:
+                            continue
+                        _st["season"] = _season
+                        _hist = getattr(player, "season_history", None)
+                        if not isinstance(_hist, list):
+                            _hist = []
+                            player.season_history = _hist
+                        _hist.append(_st)
+                    except Exception:
+                        continue
+                try:
+                    player._stint_pending = []
+                except Exception:
+                    pass
+            except Exception:
+                pass
             player.stats = PlayerStats()
+            # Fresh stint anchor for the new season, opened AFTER the wipe
+            # so the baseline is zeroed stats.
+            try:
+                _new_team = None
+                for _t in (getattr(self, "teams", None) or []):
+                    try:
+                        if player in (getattr(_t, "roster", None) or []):
+                            _new_team = _t
+                            break
+                    except Exception:
+                        continue
+                if _new_team is not None:
+                    open_stint(
+                        player,
+                        _team_abbr_safe(
+                            getattr(_new_team, "team_name", "")))
+            except Exception:
+                pass
             # Fresh playoff ledger for the new season (the Conn Smythe race
             # reads it during the playoffs; wiped here with everything else).
             try:
