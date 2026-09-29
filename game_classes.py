@@ -431,6 +431,9 @@ class Player:
     second_number: int = 0
     jersey_number_since: int = None
     captaincy: str = None # 'C', 'A', or None
+    icon_team: str = ""  # franchise where he is a team icon as a PLAYER
+    # ("" = none). Stamped when legendary-captain status is earned; the
+    # Coffey rule: icon status is team-specific and never reassigned.
     
     # Personal information with realistic defaults
     nationality: str = "Canada"

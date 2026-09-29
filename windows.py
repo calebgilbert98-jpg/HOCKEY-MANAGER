@@ -12524,6 +12524,106 @@ class StaffContractView(ctk.CTkFrame):
                                 f"{staff.full_name} has declined your offer. "
                                 f"Consider offering a better salary.")
 
+class CaptainChangeDialog(InGamePopup):
+    """Pre-change judgment call: stripping the C has consequences.
+
+    Buttons: speak with him first / announce it cold / cancel.
+    Result in self.result: "speak" | "cold" | "cancel".
+    """
+
+    def __init__(self, app, old_name, new_name, reasons, **kwargs):
+        kwargs.pop("parent", None)
+        super().__init__(app, modal=True, **kwargs)
+        self.title("Changing the Captaincy")
+        self.result = "cancel"
+        body = ttk.Frame(self, style='Card.TFrame', padding=20)
+        body.pack(fill='both', expand=True)
+        ttk.Label(
+            body,
+            text=(f"Stripping the C from {old_name} will have consequences.\n"
+                  f"{new_name} takes over -- unless {old_name} is spoken "
+                  "to first and respects the call."),
+            style='TLabel', wraplength=480, justify='left').pack(
+                anchor='w', pady=(0, 10))
+        if reasons:
+            ttk.Label(body, text="What you know:",
+                      style='TLabel').pack(anchor='w')
+            for r in reasons[:5]:
+                ttk.Label(body, text=f"\u2022 {r}", style='Secondary.TLabel',
+                          wraplength=480, justify='left').pack(
+                              anchor='w', padx=8, pady=1)
+        btns = ttk.Frame(body, style='Card.TFrame')
+        btns.pack(fill='x', pady=(16, 0))
+        ttk.Button(btns, text="Speak with him first",
+                   command=lambda: self._choose("speak")).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(btns, text="Announce it cold",
+                   command=lambda: self._choose("cold")).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(btns, text="Cancel",
+                   command=lambda: self._choose("cancel")).pack(side='left')
+        try:
+            self.geometry("560x460")
+        except Exception:
+            pass
+
+    def _choose(self, value):
+        self.result = value
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
+class CaptainPushbackDialog(InGamePopup):
+    """He pushed back: stand firm, compromise (keep an A), or back down.
+
+    Result in self.result: "firm" | "alternate" | "backdown".
+    """
+
+    _QUOTES = {
+        "pushback": "\u201cAfter everything I've given this team? You're "
+                    "making a mistake.\u201d",
+        "extreme": "\u201cWe're done here.\u201d He walks out.",
+    }
+
+    def __init__(self, app, old_name, new_name, tier, **kwargs):
+        kwargs.pop("parent", None)
+        super().__init__(app, modal=True, **kwargs)
+        self.title("He Pushed Back")
+        self.result = "backdown"
+        body = ttk.Frame(self, style='Card.TFrame', padding=20)
+        body.pack(fill='both', expand=True)
+        ttk.Label(
+            body,
+            text=(f"{old_name} is not accepting the change to {new_name}:\n\n"
+                  f"{self._QUOTES.get(tier, '')}\n\n"
+                  "You have to make the call."),
+            style='TLabel', wraplength=480, justify='left').pack(
+                anchor='w', pady=(0, 16))
+        btns = ttk.Frame(body, style='Card.TFrame')
+        btns.pack(fill='x')
+        ttk.Button(btns, text="Stand firm",
+                   command=lambda: self._choose("firm")).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(btns, text="Name him alternate (A)",
+                   command=lambda: self._choose("alternate")).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(btns, text="Back down",
+                   command=lambda: self._choose("backdown")).pack(side='left')
+        try:
+            self.geometry("560x400")
+        except Exception:
+            pass
+
+    def _choose(self, value):
+        self.result = value
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
 class SetCaptainsView(ctk.CTkFrame):
     def __init__(self, parent, app=None):
         ctk.CTkFrame.__init__(self, parent)
@@ -12576,18 +12676,44 @@ class SetCaptainsView(ctk.CTkFrame):
                     self.alternate2_var.set(p.full_name)
 
     def save_captains(self):
-        for p in self.app.user_team.roster:
-            p.captaincy = None
+        team = self.app.user_team
+        try:
+            import captaincy_change as _cc
+        except Exception:
+            _cc = None
 
-        captain_name = self.captain_var.get()
-        alt1_name = self.alternate1_var.get()
-        alt2_name = self.alternate2_var.get()
+        def _by_name(nm):
+            if not nm:
+                return None
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    if p.full_name == nm:
+                        return p
+                except Exception:
+                    pass
+            return None
 
-        for p in self.app.user_team.roster:
-            if p.full_name == captain_name:
-                p.captaincy = 'C'
-            elif p.full_name == alt1_name or p.full_name == alt2_name:
-                p.captaincy = 'A'
+        old_c = next((p for p in (getattr(team, "roster", None) or [])
+                      if getattr(p, "captaincy", "") == "C"), None)
+        new_c = _by_name(self.captain_var.get())
+        alt1 = _by_name(self.alternate1_var.get())
+        alt2 = _by_name(self.alternate2_var.get())
+
+        # A deposition: an established captain is losing the C to someone
+        # else (or to a vacancy). That has consequences -- route through
+        # the judgment-call flow instead of the silent wipe.
+        deposition = (
+            _cc is not None and old_c is not None
+            and _cc.is_established_captain(old_c)
+            and (new_c is None or new_c is not old_c))
+        if deposition:
+            if not self._run_deposition_flow(team, old_c, new_c, _cc):
+                return  # backed down or cancelled: leave everything as is
+            self._apply_letters(team, new_c, alt1, alt2,
+                               skip_captain=True)
+        else:
+            self._apply_letters(team, new_c, alt1, alt2,
+                               skip_captain=False)
         # A human just chose: never mistake these letters for auto-repair.
         try:
             self.app.user_team._captaincy_auto_assigned = False
@@ -12596,6 +12722,93 @@ class SetCaptainsView(ctk.CTkFrame):
         messagebox.showinfo("Captains Updated", "Team captaincy has been updated.")
         self.app.update_all_views()
         self.close_view()
+
+    @staticmethod
+    def _apply_letters(team, new_c, alt1, alt2, skip_captain=False):
+        """Write the chosen letters. skip_captain: the C was already dealt
+        by the deposition flow -- only the alternates are (re)written."""
+        for p in (getattr(team, "roster", None) or []):
+            try:
+                if skip_captain and getattr(p, "captaincy", "") == "C":
+                    continue
+                p.captaincy = None
+            except Exception:
+                pass
+        targets = []
+        if new_c is not None and not skip_captain:
+            targets.append((new_c, "C"))
+        if alt1 is not None:
+            targets.append((alt1, "A"))
+        if alt2 is not None:
+            targets.append((alt2, "A"))
+        for p, letter in targets:
+            try:
+                if getattr(p, "captaincy", "") == "C" and letter != "C":
+                    continue  # never clobber the dealt C
+                p.captaincy = letter
+            except Exception:
+                pass
+
+    def _run_deposition_flow(self, team, old_c, new_c, _cc):
+        """The judgment call. Returns True when the change went through
+        (letters applied via captaincy_change), False on back-down/cancel.
+        Headless fallback: talk first, stand firm -- same as the AI."""
+        try:
+            league = getattr(self.app, "league", None)
+            info = _cc.assess_deposition(old_c, new_c, team, league)
+            old_name = getattr(old_c, "full_name", "the captain")
+            new_name = (getattr(new_c, "full_name", "no one")
+                        if new_c is not None else "no one")
+            dlg = CaptainChangeDialog(self.app, old_name, new_name,
+                                      info.get("reasons", []))
+            dlg.wait_window()
+            pre = dlg.result
+        except Exception:
+            pre, info = "speak", {"acceptance": 0.5}
+            old_name = getattr(old_c, "full_name", "the captain")
+            new_name = (getattr(new_c, "full_name", "no one")
+                        if new_c is not None else "no one")
+        if pre == "cancel":
+            return False
+        talked = (pre == "speak")
+        acceptance = float(info.get("acceptance", 0.5))
+        acceptance += 0.18 if talked else -0.10
+        acceptance = max(0.02, min(0.98, acceptance))
+        tier = _cc.roll_tier(acceptance)
+        if tier in ("pushback", "extreme"):
+            try:
+                pdlg = CaptainPushbackDialog(self.app, old_name, new_name,
+                                             tier)
+                pdlg.wait_window()
+                call = pdlg.result
+            except Exception:
+                call = "firm"
+            if call == "backdown":
+                return False
+            compromise = (call == "alternate")
+        else:
+            compromise = False
+        try:
+            date_str = self.app.current_date.isoformat()
+        except Exception:
+            date_str = ""
+        report = _cc.apply_deposition(team, old_c, new_c, tier,
+                                      talked=talked, date_str=date_str,
+                                      compromise_alternate=compromise)
+        for line in (report.get("news") or []):
+            try:
+                self.app.add_news(line)
+            except Exception:
+                pass
+        detail = "\n".join(report.get("lines", []))
+        if detail:
+            try:
+                messagebox.showinfo("Captaincy Change", detail)
+            except Exception:
+                pass
+        # Extreme fallout leaves a repair path in the Dressing Room
+        # ("Clear the air" row) -- nothing more to do here.
+        return True
 
     def close_view(self):
         """Close this screen (dashboard in screen mode, card in popup mode)."""

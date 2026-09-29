@@ -6361,16 +6361,20 @@ class HockeyManagerGUI(tk.Tk):
                     and self._maybe_open_game_day_bundle(todays_games)):
                 return
 
-            # NHL Rule 6.1, opening night: every club must have exactly one
-            # captain (never a goaltender). Once per season, on the first
-            # regular-season game day -- catches offseason retirements, FA
-            # departures, and trades the dressing-room succession didn't
-            # see. A valid existing captain is never overwritten.
-            if todays_games and not _all_preseason:
+            # NHL Rule 6.1, season start: every club must have exactly one
+            # captain (never a goaltender). Runs once per phase -- at the
+            # first preseason game day AND the first regular-season game
+            # day -- so post-fantasy-draft rosters (letter-less by design)
+            # get their captains at the start of preseason, and any
+            # preseason departures are caught on opening night. A valid
+            # existing captain is never overwritten.
+            if todays_games:
                 _sy = getattr(getattr(self, 'league', None), 'season_year', None)
+                _phase = "preseason" if _all_preseason else "regular"
                 if (_sy is not None
-                        and getattr(self, '_captaincy_checked_year', None) != _sy):
-                    self._captaincy_checked_year = _sy
+                        and getattr(self, '_captaincy_checked_phase', None)
+                        != (_sy, _phase)):
+                    self._captaincy_checked_phase = (_sy, _phase)
                     _ut = getattr(self, 'user_team', None)
                     # NOTE (Item 7): the captaincy helpers live on
                     # GameManager, but this is a HockeyManagerGUI method --
@@ -12941,6 +12945,28 @@ class HockeyManagerGUI(tk.Tk):
                         playoff_rounds_won=playoff_rounds_won,
                         is_champ=is_champ,
                         best_letter_leadership=_cg_mentor_lead)
+                    # Legendary captain: the completed Toews/Crosby/Yzerman
+                    # arc. Stamped once (flags + team icon status); the
+                    # story fires exactly once.
+                    try:
+                        _cg_syr = int(
+                            getattr(self.league, "season_year", 0) or 0)
+                    except Exception:
+                        _cg_syr = 0
+                    if _cg2.stamp_legendary_captain(
+                            p, getattr(team, "team_name", "") or "",
+                            season_year=_cg_syr):
+                        _cg_add2 = getattr(getattr(self, "app", None),
+                                           "add_news", None)
+                        if callable(_cg_add2):
+                            _cg_nm = getattr(p, "full_name", None) \
+                                or "The captain"
+                            _cg_tn = getattr(team, "team_name", "") \
+                                or "the franchise"
+                            _cg_add2(
+                                f"\u00a9 {_cg_nm} has completed the "
+                                f"captain's arc: a LEGENDARY CAPTAIN, the "
+                                f"face of {_cg_tn}.")
                 except Exception:
                     pass
             for s in getattr(team, 'staff', []) or []:
@@ -13000,6 +13026,39 @@ class HockeyManagerGUI(tk.Tk):
                 rs.snapshot_roster_churn(team)
             except Exception:
                 pass
+
+    def _ai_offseason_captaincy_changes(self):
+        """AI torch-passing (captaincy_change.py). Rare, conservative, and
+        resolved with the same assess/apply logic the human GM faces."""
+        try:
+            import captaincy_change as _cc
+        except Exception:
+            return
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        user_team = getattr(self, "user_team", None)
+        try:
+            date_str = self.current_date.isoformat()
+        except Exception:
+            date_str = ""
+        for team in (getattr(league, "teams", None) or []):
+            try:
+                if team is user_team:
+                    continue
+                if getattr(team, "league_name", "") != "National Hockey League":
+                    continue
+                report = _cc.ai_consider_captaincy_change(
+                    team, league, date_str=date_str)
+                if not report:
+                    continue
+                for line in (report.get("news") or []):
+                    try:
+                        self.add_news(line)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
@@ -13524,6 +13583,13 @@ class HockeyManagerGUI(tk.Tk):
         # Controversy cooldown + staff rep + Cup bonus. Reads standings before
         # league.end_of_season() wipes them.
         self._update_offseason_reputations()
+        # Captaincy torch-passing (captaincy_change.py): AI clubs rarely
+        # and conservatively hand the C to a plainly worthier successor.
+        # Same assess/apply logic the human GM faces -- no free lunch.
+        try:
+            self._ai_offseason_captaincy_changes()
+        except Exception:
+            pass
         # League Memory: record the completed season (champion, awards,
         # standings) before league.end_of_season() wipes the stats.
         try:

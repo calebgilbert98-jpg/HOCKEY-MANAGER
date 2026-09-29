@@ -2275,12 +2275,19 @@ def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]
     attrs["connections"] = [last] if last else []
     # Franchise icon: a star retiring in your sweater is YOUR legend.
     # (Coffey in Edmonton.) Only real stars qualify -- icons are earned.
+    # A legendary captain skips the queue: his icon team is the franchise
+    # he captained to glory, not merely the last sweater he wore.
     try:
-        _rep = float(getattr(player, "career_reputation", 0) or 0)
-        _gp = float(getattr(player, "career_games", 0) or 0)
-        if last and _rep >= 65 and _gp >= 400:
-            attrs["icon_team"] = last
-            attrs["icon_level"] = "icon" if (_rep >= 80 and _gp >= 600) else "star"
+        _leg_team = getattr(player, "_legendary_captain_team", "") or ""
+        if getattr(player, "_legendary_captain", False) and _leg_team:
+            attrs["icon_team"] = _leg_team
+            attrs["icon_level"] = "icon"
+        else:
+            _rep = float(getattr(player, "career_reputation", 0) or 0)
+            _gp = float(getattr(player, "career_games", 0) or 0)
+            if last and _rep >= 65 and _gp >= 400:
+                attrs["icon_team"] = last
+                attrs["icon_level"] = "icon" if (_rep >= 80 and _gp >= 600) else "star"
     except Exception:
         pass
     return attrs
@@ -2838,6 +2845,23 @@ def fan_favourite_score(player: Any, team: Any = None,
             reasons.append("Wears the C")
         elif role == "A":
             score += 4
+
+        # Legendary captain: the face of the franchise. Icon status is
+        # team-specific (the Coffey rule) -- it only moves the needle in
+        # his sweater, never for a visitor wearing it down the road.
+        try:
+            if getattr(player, "_legendary_captain", False):
+                score += 12
+                reasons.append(
+                    "Legendary captain -- the face of the franchise")
+            elif team is not None:
+                _icon = getattr(player, "icon_team", "") or ""
+                _tn = getattr(team, "team_name", "") or ""
+                if _icon and _tn and _icon == _tn:
+                    score += 8
+                    reasons.append("Franchise icon")
+        except Exception:
+            pass
 
         vol = getattr(player, "controversy", 0) or 0
         if vol >= 70:

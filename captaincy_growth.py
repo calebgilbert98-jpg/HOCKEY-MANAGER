@@ -59,6 +59,9 @@ SEASON_GROWTH_CAP = 4        # max leadership gained in one season
 ELITE_THRESHOLD = 90        # crossing this as a young letter-wearer is news
 ELITE_STORY_MAX_AGE = 25
 CUP_CAPTAIN_REP_BONUS = 4   # extra reputation for the Cup-winning captain
+# --- Legendary captain (the Toews/Crosby/Yzerman arc, completed) -----------
+LEGENDARY_CAPTAIN_TENURE = 5       # seasons wearing the C
+LEGENDARY_CAPTAIN_LEADERSHIP = 88  # genuinely elite leader
 # --- Mentorship (the Yzerman effect) -------------------------------------
 # A young player who spends his formative years in a room run by elite
 # leaders -- and sees that regime WIN -- absorbs leadership by osmosis.
@@ -386,3 +389,68 @@ def cup_captain_rep_bonus(player: Any, is_champ: bool = True,
         return int(player.reputation)
     except Exception:
         return 0
+
+
+# ----------------------------------------------------------------------
+# Legendary captain: the Toews/Crosby/Yzerman arc, completed.
+#
+# A legendary captain is not just a long-tenured C or a Cup winner --
+# it is the full arc: years wearing the C, genuinely elite leadership,
+# AND a Cup lifted as captain. All three are required. A beloved
+# long-timer who never won, or a passenger who wore the C on a stacked
+# team, does not qualify. Once earned, the status is permanent -- it
+# feeds fan opinion (the face of the franchise), team icon status
+# (icon_team), and legacy (immortality's career score).
+# ----------------------------------------------------------------------
+def is_legendary_captain(player: Any) -> bool:
+    """True when the captaincy arc is complete."""
+    try:
+        if int(getattr(player, "captain_tenure_years", 0) or 0) \
+                < LEGENDARY_CAPTAIN_TENURE:
+            return False
+        if int(getattr(player, "leadership", 0) or 0) \
+                < LEGENDARY_CAPTAIN_LEADERSHIP:
+            return False
+        cups_as_captain = getattr(player, "_cup_captain_rep_seasons", None)
+        if not cups_as_captain:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def stamp_legendary_captain(player: Any, team_name: str,
+                           season_year: Optional[int] = None) -> bool:
+    """Stamp legendary status once. Returns True when newly stamped.
+
+    Stamping sets the permanent status flags AND the player's team icon
+    status (``icon_team``): a legendary captain IS the franchise's icon,
+    while he is still wearing the sweater -- not only at retirement.
+    The icon team is the franchise he captained to glory, so a later
+    trade cannot reassign it (the Coffey rule: status is team-specific).
+    Re-runs no-op via the flag; the caller raises the news story.
+    """
+    try:
+        if getattr(player, "_legendary_captain", False):
+            return False
+        if not is_legendary_captain(player):
+            return False
+        player._legendary_captain = True
+        try:
+            player._legendary_captain_team = team_name or ""
+        except Exception:
+            pass
+        if season_year is not None:
+            try:
+                player._legendary_captain_season = int(season_year)
+            except Exception:
+                pass
+        # Team icon status: the face of THIS franchise.
+        try:
+            if team_name:
+                player.icon_team = team_name
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False

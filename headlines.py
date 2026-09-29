@@ -740,6 +740,17 @@ def monthly_trade_request_check(app) -> int:
         except Exception:
             win_pct = 0.5
         roster = list(getattr(team, "roster", None) or [])
+        # Deposed-captain grudges (captaincy_change.py): monthly repair.
+        # Winning heals; time heals slowly. While a grudge burns the
+        # player's happiness stays capped and his trade risk elevated.
+        try:
+            import captaincy_change as _cc
+            for _p in roster:
+                if float(getattr(_p, "_gm_grudge", 0.0) or 0.0) > 0:
+                    _cc.decay_gm_grudge(_p, win_pct)
+                    _cc.apply_gm_grudge_effects(_p)
+        except Exception:
+            pass
         random.shuffle(roster)
         for player in roster:
             if fired >= TRADE_REQUEST_MONTHLY_CAP:

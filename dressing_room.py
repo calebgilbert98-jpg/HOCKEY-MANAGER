@@ -2003,6 +2003,21 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
             text_color=ct["TEXT_DIM"])
         self.decisions_label.pack(fill="both", expand=True, padx=12,
                                   pady=(0, 10))
+        # Repair row: "clear the air" with a deposed captain holding a
+        # grudge against management (captaincy_change.py). Hidden unless
+        # such a player is on the roster.
+        self._repair_row = ctk.CTkFrame(dec_card, fg_color="transparent")
+        self._repair_label = ctk.CTkLabel(
+            self._repair_row, text="", justify="left", anchor="w",
+            font=("Segoe UI", 10, "bold"), text_color=ct["GOLD"],
+            wraplength=300)
+        self._repair_label.pack(side="left", padx=12)
+        self._repair_btn = ctk.CTkButton(
+            self._repair_row, text="Clear the air", width=130, height=28,
+            fg_color=ct["TEAL"], hover_color=ct["TEAL_HOVER"],
+            font=("Segoe UI", 10, "bold"),
+            command=self._clear_the_air)
+        self._repair_btn.pack(side="right", padx=12, pady=(0, 8))
 
     def _build_crisis_banner(self, parent):
         """Captaincy-crisis decision event banner (hidden unless a crisis is
@@ -2030,6 +2045,39 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
                               command=lambda k=key: self._resolve_crisis(k))
             b.pack(side="left", padx=(0, 6))
         return banner
+
+    def _clear_the_air(self):
+        """One direct conversation to repair a fractured relationship
+        (captaincy_change.clear_the_air). One attempt per month."""
+        team = self._team()
+        if team is None:
+            return
+        try:
+            import captaincy_change as _cc
+        except Exception:
+            return
+        grudged = [p for p in _roster(team)
+                   if float(getattr(p, "_gm_grudge", 0.0) or 0.0) > 0]
+        if not grudged:
+            return
+        old = grudged[0]
+        try:
+            from tkinter import messagebox as _mb
+            today = self.app.current_date.isoformat()[:7]
+            if getattr(old, "_grudge_talk_stamp", "") == today:
+                _mb.showinfo("Not yet",
+                             "You've already tried this month. Give it time.")
+                return
+            league = getattr(self.app, "league", None)
+            res = _cc.clear_the_air(old, team, league)
+            old._grudge_talk_stamp = today
+            _mb.showinfo("Clear the Air", "\n".join(res.get("lines", [])))
+        except Exception:
+            pass
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     def _resolve_crisis(self, choice):
         team = self._team()
@@ -2462,6 +2510,23 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
                 out.append(title + tail + "\n" + detail)
             self.decisions_label.configure(
                 text="\n\n".join(out) if out else "No decisions logged yet.")
+        except Exception:
+            pass
+
+        # Repair row: surface a deposed captain holding a grudge.
+        try:
+            grudged = [p for p in _roster(team)
+                       if float(getattr(p, "_gm_grudge", 0.0) or 0.0) > 0]
+            if grudged:
+                g = grudged[0]
+                self._repair_label.configure(
+                    text=f"{_name(g)} is barely speaking to management "
+                         f"since losing the C.")
+                if not self._repair_row.winfo_ismapped():
+                    self._repair_row.pack(fill="x", pady=(0, 6))
+            else:
+                if self._repair_row.winfo_ismapped():
+                    self._repair_row.pack_forget()
         except Exception:
             pass
 

@@ -163,6 +163,16 @@ class FantasyDraftManager:
                 if actual_player:
                     current_pick.player = actual_player
                     actual_player.team_name = current_pick.team.team_name
+                    # A drafted player starts letter-less on his new club:
+                    # no two-C rosters, no inherited captaincies. Letters
+                    # are dealt at the start of preseason (user picks his
+                    # own via the mandatory chooser; AI clubs auto-repair).
+                    try:
+                        actual_player.captaincy = ""
+                        actual_player.captain_tenure_years = 0
+                        actual_player.alternate_tenure_years = 0
+                    except Exception:
+                        pass
                     self.current_pick += 1
                     debug_print(f"DEBUG: Successfully drafted {actual_player.full_name} for {current_pick.team.team_name}")
                     return True
@@ -3503,6 +3513,21 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Mark fantasy draft as completed in game manager
         if hasattr(self.game_manager, 'pending_fantasy_draft'):
             self.game_manager.pending_fantasy_draft = False
+
+        # Backstop: no club skates with letters after the draft -- every
+        # roster is letter-less until captains are set at preseason.
+        try:
+            _lg = getattr(self.game_manager, 'league', None)
+            for _t in (getattr(_lg, 'teams', None) or []):
+                for _p in (getattr(_t, 'roster', None) or []):
+                    try:
+                        _p.captaincy = ""
+                        _p.captain_tenure_years = 0
+                        _p.alternate_tenure_years = 0
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         # Item 7 follow-up: the draft scrambled every roster -- the human
         # club's letters must be the user's choice, never leftovers.

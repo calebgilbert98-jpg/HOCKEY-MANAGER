@@ -92,6 +92,8 @@ def snapshot_player(player: Any, team_name: str, year: int) -> Dict[str, Any]:
         "shutouts": int(getattr(player, "career_shutouts", 0) or 0),
         "cups": int(getattr(player, "stanley_cups", 0) or 0),
         "awards": _awards,
+        "legendary_captain": bool(getattr(player, "_legendary_captain",
+                                         False)),
         "ballot_years": 0,
         "inducted": False,
     }
@@ -151,6 +153,11 @@ def career_score(snap: Dict[str, Any]) -> float:
                  + snap.get("games", 0) / 1400.0 * 10.0)
         s += min(20.0, snap.get("cups", 0) * 7.0)
         s += min(15.0, len(snap.get("awards", [])) * 5.0)
+        # Legendary captain: the completed Toews/Crosby/Yzerman arc is a
+        # legacy credential on par with a ring -- it stacks with the Cups
+        # he actually won, and feeds number_worthy and the HOF ballot.
+        if snap.get("legendary_captain"):
+            s += 8.0
         return round(max(0.0, min(100.0, s)), 1)
     except Exception:
         return 0.0
