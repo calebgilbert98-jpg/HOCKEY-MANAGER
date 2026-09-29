@@ -88,13 +88,13 @@ led = NarrativeLedger()
 led.set_clock(2026, 200)
 set_active_ledger(led)
 led.record("incident",
-           teams=["Buffalo Sabres", "Toronto Maple Leafs"],
+           teams=["Buffalo Sabres", "Detroit Red Wings"],
            players=["Rival Slugger", "Star Victim"],
            facts={"incident_kind": "star_injured",
                   "detail": "Rival Slugger injured Star Victim with a charging hit"},
            weight=25, text="Rival Slugger injured Star Victim with a charging hit")
 led.record("incident",
-           teams=["Buffalo Sabres", "Toronto Maple Leafs"],
+           teams=["Buffalo Sabres", "Detroit Red Wings"],
            players=[],
            facts={"incident_kind": "brawl", "detail": "Line brawl in the third"},
            weight=15, text="Line brawl in the third")
@@ -172,7 +172,7 @@ scf[0].add_game_result(True, g(True, 2, 1))
 feud = None
 for s in r1:
     names = {s.team1.team_name, s.team2.team_name}
-    if names == {"Buffalo Sabres", "Toronto Maple Leafs"}:
+    if names == {"Buffalo Sabres", "Detroit Red Wings"}:
         feud = s
         break
 if feud is None:
@@ -196,7 +196,7 @@ victim = SimpleNamespace(full_name="Star Victim", overall=91,
                          games_remaining_injured=0)
 hitter = SimpleNamespace(full_name="Rival Slugger", overall=78)
 ht = SimpleNamespace(team_name="Buffalo Sabres")
-vt = SimpleNamespace(team_name="Toronto Maple Leafs")
+vt = SimpleNamespace(team_name="Detroit Red Wings")
 sim._apply_hit_injury(victim, hitter, ht, vt, HitType.CHARGING, 2)
 check("victim sidelined", victim.is_injured is True)
 check("dirty hit costs 4+ games",
@@ -216,6 +216,9 @@ check("ledger bridge recorded", len(bridge) >= 1, str(len(bridge)))
 # ------------------------------------------------------- render the tree
 app = SimpleNamespace(
     league=league, current_date=date(2027, 5, 20),
+    # Projection scenario: the season is NOT complete, so the window must
+    # show a projection, never auto-generate the real bracket.
+    _check_season_complete=lambda: False,
     FONT_FAMILY="Arial", BG_COLOR="#0B0F14", CONTENT_BG="#0B0F14")
 league.playoff_bracket = b
 

@@ -263,6 +263,15 @@ class GameManager:
                 # New-game wizard options (stored for the session)
                 self.fog_of_war = settings.get('fog_of_war', True)
                 self.sim_detail = settings.get('sim_detail', {}) or {}
+                # Playoff seeding format (setup-only; lives on the league so
+                # the bracket and save/load both read one source of truth).
+                try:
+                    _pf = settings.get('playoff_format', 'divisional')
+                    self.league.playoff_format = (
+                        _pf if _pf in ("divisional", "conference")
+                        else "divisional")
+                except Exception:
+                    pass
                 self.user_league = settings.get('user_league', 'NHL')
                 self.gm_name = settings.get('gm_name', 'General Manager')
                 try:
@@ -6271,6 +6280,15 @@ class HockeyManagerGUI(tk.Tk):
             self._continue_after_bundle = False
 
         try:
+            # PLAYOFF PHASE (date-driven): once the bracket is alive, the
+            # date keeps advancing -- each Next Day sims that day's
+            # scheduled playoff games through the bracket. Bracket
+            # controls keep working: either path driving first wins
+            # (exactly-once is enforced in try_play_scheduled_game).
+            if self._playoffs_in_progress():
+                self._simulate_playoff_day()
+                return
+
             # Check for season end by games completed (primary trigger).
             # The date cutoff is only a safety net set AFTER the last scheduled
             # game, since the generated schedule can run past April 15.
@@ -6346,6 +6364,11 @@ class HockeyManagerGUI(tk.Tk):
                             # Skip if date is past today
                             if item_date and item_date > self.current_date:
                                 break
+                            # Playoff games live on the schedule for display
+                            # but are simmed through the playoff bracket --
+                            # never double-sim them here.
+                            if item.get('playoff'):
+                                continue
                             # Process if date matches today
                             if item_date == self.current_date and item.get('event_type') != 'NHL_EVENT':
                                 todays_games.append(item)
@@ -13139,13 +13162,170 @@ class HockeyManagerGUI(tk.Tk):
         if getattr(self, '_bulk_simming', False):
             result = True  # bulk sims auto-start playoffs, matching test behavior
         else:
-            result = messagebox.askyesno("Playoffs", "Start the Stanley Cup Playoffs?")
+            result = messagebox.askyesno(
+                "Playoffs",
+                "Play through the Stanley Cup Playoffs?\n\n"
+                "Yes: open the bracket and sim it yourself.\n"
+                "No: quick-sim the tournament to crown a champion.")
         if result:
             self.open_playoffs_window()
         else:
-            # Skip directly to offseason
+            # Declined the interactive bracket: the tournament still
+            # happens -- quick-sim it headless so the season always crowns
+            # a champion, then roll to the offseason.
+            self._quick_sim_playoffs_headless()
             self._start_offseason()
+
+    def _quick_sim_playoffs_headless(self):
+        """Sim the entire playoff tournament without opening the window.
+
+        Used when the user declines the interactive playoffs at season's
+        end: every season still decides a Stanley Cup champion.
+        """
+        try:
+            from playoff_system import PlayoffBracket
+            league = getattr(self, 'league', None)
+            if league is None:
+                return
+            bracket = getattr(league, 'playoff_bracket', None)
+            try:
+                _has = bracket is not None and any(
+                    bracket.playoff_series.get(r)
+                    for r in PlayoffBracket.ROUND_ORDER)
+            except Exception:
+                _has = False
+            if not _has:
+                bracket = PlayoffBracket(league)
+                bracket.generate_playoff_bracket()
+                try:
+                    league.playoff_bracket = bracket
+                except Exception:
+                    pass
+            for round_name in PlayoffBracket.ROUND_ORDER:
+                try:
+                    current = bracket.playoff_series.get(round_name) or []
+                except Exception:
+                    current = []
+                for series in current:
+                    while not getattr(series, 'is_complete', True):
+                        bracket.simulate_playoff_game(series)
+                bracket.advance_to_next_round(round_name)
+            try:
+                self._maybe_send_cup_recap()
+            except Exception:
+                pass
+        except Exception:
+            pass
             
+    def _playoffs_in_progress(self) -> bool:
+        """True while a generated bracket is alive and uncrowned.
+
+        The regular season is complete AND league.playoff_bracket holds
+        a real (non-projection) bracket with no champion yet. Mid-season
+        projections never reach league.playoff_bracket, and the
+        season-complete check excludes them anyway.
+        """
+        try:
+            if not self._check_season_complete():
+                return False
+            league = getattr(self, 'league', None)
+            bracket = getattr(league, 'playoff_bracket', None)
+            if bracket is None \
+                    or bool(getattr(bracket, 'is_projection', False)):
+                return False
+            if getattr(bracket, 'stanley_cup_champion', None) is not None:
+                return False
+            return True
+        except Exception:
+            return False
+
+    def _simulate_playoff_day(self):
+        """Advance one playoff day through the date-driven path.
+
+        Sims today's scheduled playoff games via the bracket
+        (exactly-once: entries the bracket controls already played are
+        skipped), advances finished rounds, and crowns the champion.
+        No regular-season machinery (maintenance, AI decisions, the
+        game-day bundle) runs during the tournament -- the bracket owns
+        those weeks, and both playoff paths stay equivalent.
+        """
+        try:
+            self._set_continue_feedback(True, "Simulating playoff games...")
+        except Exception:
+            pass
+        try:
+            league = getattr(self, 'league', None)
+            bracket = getattr(league, 'playoff_bracket', None)
+            if bracket is None:
+                return
+            # Restored brackets lose their app pointer on save/load --
+            # re-point it so stars/ledger read the right date.
+            if getattr(bracket, 'app', None) is None:
+                try:
+                    bracket.app = self
+                except Exception:
+                    pass
+            today = getattr(self, 'current_date', None)
+            for entry in list(getattr(league, 'schedule', None) or []):
+                if not isinstance(entry, dict) or not entry.get('playoff'):
+                    continue
+                if entry.get('date') != today:
+                    continue
+                try:
+                    bracket.try_play_scheduled_game(
+                        entry.get('series_id'), entry.get('series_game'))
+                except Exception:
+                    continue
+            # A finished round publishes the next one (dynamic start:
+            # REST_DAYS after the last completed series). Idempotent --
+            # safe if the bracket window already advanced it. Only try
+            # when every series in the current round is actually done,
+            # so incomplete days stay quiet.
+            try:
+                _cur = getattr(bracket, 'current_round', '')
+                _series = (getattr(bracket, 'playoff_series', {})
+                           or {}).get(_cur) or []
+                if _series and all(
+                        getattr(s, 'is_complete', False) for s in _series):
+                    bracket.advance_to_next_round(_cur)
+            except Exception:
+                pass
+            # Champion crowned -> Cup recap, then the offseason. The Cup
+            # is never skipped: no offseason before a champion.
+            if getattr(bracket, 'stanley_cup_champion', None) is not None:
+                try:
+                    self._maybe_send_cup_recap()
+                except Exception:
+                    pass
+                try:
+                    self._start_offseason()
+                except Exception:
+                    pass
+                return
+            try:
+                self.current_date += timedelta(days=1)
+            except Exception:
+                pass
+            try:
+                self.game_manager.current_date = self.current_date
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'dashboard') and hasattr(
+                        self.dashboard, 'refresh_dashboard'):
+                    self.dashboard.refresh_dashboard()
+            except Exception:
+                pass
+            try:
+                self.after_idle(self.update_all_views)
+            except Exception:
+                pass
+        finally:
+            try:
+                self._set_continue_feedback(False)
+            except Exception:
+                pass
+
     def _playoffs_complete(self) -> bool:
         """True once a Stanley Cup champion has been decided."""
         try:
@@ -21096,6 +21276,7 @@ def _launch_with_wizard():
             'gm_name': config['gm_name'],
             'fog_of_war': config['fog_of_war'],
             'sim_detail': config['sim_detail'],
+            'playoff_format': config.get('playoff_format', 'divisional'),
         }
         gm = GameManager()
         gm.apply_startup_settings(settings)

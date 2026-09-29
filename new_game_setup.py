@@ -31,6 +31,8 @@ CONFIG SCHEMA (all keys always present)
     "gm_name":       str,                              # default "General Manager"
     "user_league":   "NHL",                            # league key of managed team
     "user_team":     "Boston Bruins",                  # team name of managed team
+    "playoff_format": "divisional" | "conference",     # default "divisional"
+                                                      # (setup-only)
 }
 
 DATABASE SIZES (verified by headless generation, NHL+AHL default set)
@@ -165,6 +167,23 @@ DEFAULT_CONFIG = {
     "gm_name": "General Manager",
     "user_league": "NHL",
     "user_team": "Boston Bruins",
+    "playoff_format": "divisional",
+}
+
+# Playoff seeding formats (setup-only choice).
+PLAYOFF_FORMATS = {
+    "divisional": {
+        "label": "Divisional \u2014 current NHL",
+        "desc": "Top 3 per division + 2 wild cards per conference. First "
+                "round: best division winner vs lowest wild card, then 2v3 "
+                "and 2v3; fixed bracket, no reseeding.",
+    },
+    "conference": {
+        "label": "Conference \u2014 classic 1v8",
+        "desc": "Top 8 per conference by points. First round: 1v8, 2v7, "
+                "3v6, 4v5; reseeded every round (highest remaining seed "
+                "hosts the lowest). Straight conference seeding \u2014 no protected seeds for division winners.",
+    },
 }
 
 
@@ -227,7 +246,8 @@ def preview_team_names(league_key: str):
 
 def make_config(mode="quick", database_size="medium", leagues=None,
                 sim_detail=None, fog_of_war=True, gm_name="",
-                user_league="NHL", user_team=""):
+                user_league="NHL", user_team="",
+                playoff_format="divisional"):
     """Build a validated config dict (schema documented at top of file)."""
     leagues = list(leagues) if leagues else list(DEFAULT_CONFIG["leagues"])
     leagues = [k for k in leagues if k in WIZARD_LEAGUES] or ["NHL"]
@@ -252,6 +272,8 @@ def make_config(mode="quick", database_size="medium", leagues=None,
         "gm_name": (gm_name or "").strip() or "General Manager",
         "user_league": user_league,
         "user_team": user_team,
+        "playoff_format": (playoff_format if playoff_format in PLAYOFF_FORMATS
+                           else "divisional"),
     }
 
 # ---------------------------------------------------------------------------
@@ -280,6 +302,7 @@ class NewGameSetupView(tk.Frame):
         self.detail_vars = {k: tk.StringVar(value=WIZARD_LEAGUES[k]["detail_default"])
                             for k in WIZARD_LEAGUES}
         self.fog_var = tk.BooleanVar(value=True)
+        self.playoff_format_var = tk.StringVar(value="divisional")
         self.gm_var = tk.StringVar(value="")
         self.q_league_var = tk.StringVar(value="NHL")
         self.q_team_var = tk.StringVar(value="")
@@ -602,6 +625,23 @@ class NewGameSetupView(tk.Frame):
                          self.fog_var).pack(anchor="w")
         self._on_league_toggle()
 
+        # Playoff format (setup-only choice: divisional vs conference)
+        sec = self._section(parent, "Playoff Format",
+                            "How the Stanley Cup playoffs are seeded. Set "
+                            "once here \u2014 it can't change mid-save.")
+        for key in ("divisional", "conference"):
+            tk.Radiobutton(sec, text=PLAYOFF_FORMATS[key]["label"],
+                           variable=self.playoff_format_var, value=key,
+                           command=self._on_playoff_format,
+                           bg=PANEL_BG, fg=TEXT, selectcolor=ACCENT,
+                           activebackground=PANEL_BG,
+                           activeforeground=TEXT).pack(anchor="w")
+        self._playoff_format_desc = tk.Label(sec, text="", font=(FONT, 10),
+                                             bg=PANEL_BG, fg=MUTED,
+                                             justify="left", wraplength=720)
+        self._playoff_format_desc.pack(anchor="w", pady=(4, 0))
+        self._on_playoff_format()
+
         # Your team
         sec = self._section(parent, "Your Team",
                             "The club you'll manage. Leagues list updates with "
@@ -690,6 +730,15 @@ class NewGameSetupView(tk.Frame):
             self.c_league_var.set(active[0])
         self._refresh_teams(self.c_league_var, self.c_team_var)
 
+    def _on_playoff_format(self):
+        """Refresh the one-line description under the format radios."""
+        try:
+            self._playoff_format_desc.config(
+                text=PLAYOFF_FORMATS.get(
+                    self.playoff_format_var.get(), {}).get("desc", ""))
+        except Exception:
+            pass
+
     # -- start -------------------------------------------------------------
     def _active_leagues(self):
         return [k for k, v in self.league_vars.items() if v.get()] or ["NHL"]
@@ -726,6 +775,7 @@ class NewGameSetupView(tk.Frame):
                 gm_name=self.gm_var.get(),
                 user_league=self.c_league_var.get(),
                 user_team=self.c_team_var.get(),
+                playoff_format=self.playoff_format_var.get(),
             )
         try:
             self.on_start_callback(cfg)

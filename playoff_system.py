@@ -7,8 +7,9 @@ import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
 from popup_system import messagebox, InGamePopup
-from datetime import date
+from datetime import date, timedelta
 import random
+from collections import defaultdict
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from game_classes import Team
@@ -115,6 +116,41 @@ class PlayoffSeries:
     # Narrative ledger: per-game facts for series memory (beats are derived
     # from this, not from the win counters). Additive — nothing else reads it.
     game_results: List[Dict] = field(default_factory=list)
+    # Dynamic scheduling: every series lives on the calendar. start_date is
+    # set when the round is created; game_dates holds up to 7 potential
+    # dates (2 days apart, NHL rhythm); end_date stamps the clincher.
+    # series_id tags the league.schedule entries so unplayed games can be
+    # pruned when a series ends early. bracket_side ('EA'..'WD') pins the
+    # fixed-bracket slot for round-2 pairing.
+    start_date: Optional[date] = None
+    game_dates: List[date] = field(default_factory=list)
+    end_date: Optional[date] = None
+    series_id: str = ""
+    bracket_side: str = ""
+    # Hype: computed when the series is scheduled. rivalry_heat (0-100)
+    # comes from the league rivalry store; hype_tags are short story
+    # labels ("Bad blood", "Playoff rematch", "Upset watch"); marquee
+    # flags the calendar entries fans circle. Additive.
+    rivalry_heat: float = 0.0
+    hype_tags: List[str] = field(default_factory=list)
+    marquee: bool = False
+
+    # 2-2-1-1-1: team1 (higher seed) hosts games 1, 2, 5, 7.
+    HOME_GAMES = frozenset({1, 2, 5, 7})
+
+    def home_team_for_game(self, game_number: int):
+        """Venue for game N of the series (1-indexed)."""
+        return self.team1 if game_number in self.HOME_GAMES else self.team2
+
+    def away_team_for_game(self, game_number: int):
+        return self.team2 if game_number in self.HOME_GAMES else self.team1
+
+    def next_game_date(self):
+        """Calendar date for the next unplayed game, if scheduled."""
+        try:
+            return self.game_dates[self.games_played]
+        except (IndexError, TypeError):
+            return None
     
     def add_game_result(self, team1_won: bool, game_info: Optional[Dict] = None):
         """Add a game result to the series"""
@@ -137,6 +173,12 @@ class PlayoffSeries:
         elif self.team2_wins >= wins_needed:
             self.is_complete = True
             self.winner = self.team2
+        if self.is_complete and self.end_date is None:
+            # Stamp the clincher's date from the scheduled game dates.
+            try:
+                self.end_date = self.game_dates[self.games_played - 1]
+            except (IndexError, TypeError):
+                self.end_date = None
 
 
 def _game7_ot_hero(pgr: Dict, team1: Any, team2: Any
@@ -178,7 +220,14 @@ def _game7_ot_hero(pgr: Dict, team1: Any, team2: Any
 
 class PlayoffBracket:
     """Manages the entire NHL playoff bracket"""
-    
+
+    # Dynamic playoff scheduling: games every other day (NHL rhythm),
+    # and each round starts REST_DAYS after the LAST completed series of
+    # the previous round — never on a fixed date, never before every
+    # series is decided.
+    PLAYOFF_GAME_SPACING = 2
+    PLAYOFF_REST_DAYS = 2
+
     def __init__(self, league):
         self.league = league
         self.eastern_teams: List[Team] = []
@@ -222,101 +271,409 @@ class PlayoffBracket:
             except Exception:
                 pass
 
+    # ------------------------------------------------------------------
+    # Dynamic playoff scheduling.
+    #
+    # Every series lives on the calendar: game dates are set when its
+    # round is created, and the next round starts PLAYOFF_REST_DAYS after
+    # the LAST completed series of the previous round. Playoff games are
+    # published to league.schedule (tagged playoff=True) so team
+    # schedules and the calendar show them; unplayed games are pruned
+    # when a series ends early. The daily sim skips playoff entries —
+    # they are simmed through the bracket, never twice.
+    # ------------------------------------------------------------------
+
+    def _next_series_id(self):
+        n = getattr(self, '_series_seq', 0) + 1
+        self._series_seq = n
+        return f"PO-{getattr(getattr(self, 'league', None), 'season_year', '?')}-{n:02d}"
+
+    def _schedule_series(self, series, start_date):
+        """Assign calendar dates to a series (up to 7, every other day)."""
+        try:
+            series.series_id = series.series_id or self._next_series_id()
+            series.start_date = start_date
+            series.game_dates = [
+                start_date + timedelta(days=i * self.PLAYOFF_GAME_SPACING)
+                for i in range(int(getattr(series, 'series_format', 7) or 7))
+            ]
+        except Exception:
+            pass
+
+    def _publish_series_to_schedule(self, series):
+        """Append a series' potential games to league.schedule."""
+        try:
+            sched = getattr(getattr(self, 'league', None), 'schedule', None)
+            if sched is None or not getattr(series, 'game_dates', None):
+                return
+            # Drop any stale entries for this series first (idempotent).
+            self._prune_series_schedule(series, prune_all=True)
+            for i, d in enumerate(series.game_dates, start=1):
+                sched.append({
+                    'date': d,
+                    'home_team': series.home_team_for_game(i),
+                    'away_team': series.away_team_for_game(i),
+                    'playoff': True,
+                    'event_type': 'PLAYOFF',
+                    'series_id': series.series_id,
+                    'series_game': i,
+                    'round_name': getattr(series, 'round_name', ''),
+                    'round_key': getattr(series, '_round_key', ''),
+                    # Hype: calendar views mark marquee games; the tags
+                    # ("Bad blood", "Playoff rematch") are the story.
+                    'marquee': bool(getattr(series, 'marquee', False)),
+                    'hype_tags': list(getattr(series, 'hype_tags', None)
+                                      or []),
+                })
+            # Keep date order: the daily sim early-breaks past today.
+            try:
+                sched.sort(key=lambda x: x['date']
+                           if isinstance(x, dict) and 'date' in x else x[0])
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _prune_series_schedule(self, series, prune_all=False):
+        """Remove unplayed games of a series from league.schedule.
+
+        Called when a series ends early (games beyond the clincher vanish)
+        and before re-publishing (idempotency).
+        """
+        try:
+            sched = getattr(getattr(self, 'league', None), 'schedule', None)
+            if sched is None or not getattr(series, 'series_id', ''):
+                return
+            played = 0 if prune_all else int(
+                getattr(series, 'games_played', 0) or 0)
+            sched[:] = [e for e in sched
+                        if not (isinstance(e, dict)
+                                and e.get('series_id') == series.series_id
+                                and e.get('series_game', 0) > played)]
+        except Exception:
+            pass
+
+    def _stamp_played_game(self, series, home_score, away_score):
+        """Record the score on the scheduled entry for a simmed game."""
+        try:
+            sched = getattr(getattr(self, 'league', None), 'schedule', None)
+            if sched is None:
+                return
+            for e in sched:
+                if (isinstance(e, dict)
+                        and e.get('series_id') == getattr(
+                            series, 'series_id', '')
+                        and e.get('series_game') == int(
+                            getattr(series, 'games_played', 0) or 0)):
+                    e['home_score'] = home_score
+                    e['away_score'] = away_score
+                    e['played'] = True
+                    break
+        except Exception:
+            pass
+
+    def _last_regular_season_date(self):
+        """Latest regular-season game date on the league schedule."""
+        try:
+            sched = getattr(getattr(self, 'league', None), 'schedule', None)
+            dates = [e['date'] for e in sched or []
+                     if isinstance(e, dict) and e.get('date') is not None
+                     and not e.get('playoff') and not e.get('preseason')]
+            return max(dates) if dates else None
+        except Exception:
+            return None
+
     def build_projection(self):
         """Build a projected Round 1 from the current standings.
 
         Used by the bracket tree before the playoffs kick off: shows the
         matchups as they would be if the season ended today. Later rounds
         are genuinely unknown, so only the wild-card round is projected.
+        Projections never touch the calendar (schedule_games=False).
         """
         eastern, western = self._get_playoff_qualified_teams()
         self.eastern_teams = eastern
         self.western_teams = western
-        for i, team in enumerate(eastern):
-            team.standings_position = i + 1
-        for i, team in enumerate(western):
-            team.standings_position = i + 1
+        self._assign_conference_seeds()
         for key in self.playoff_series:
             self.playoff_series[key] = []
-        self._create_wild_card_round()
+        self._create_wild_card_round(schedule_games=False)
         self.is_projection = True
         self.current_round = 'wild_card'
         return self
-        
+
+    def _assign_conference_seeds(self):
+        """standings_position = conference rank by points (display only)."""
+        for conf_teams in (self.eastern_teams, self.western_teams):
+            ranked = sorted(conf_teams, key=self._standings_sort_key)
+            for i, team in enumerate(ranked):
+                try:
+                    team.standings_position = i + 1
+                except Exception:
+                    pass
+
     def generate_playoff_bracket(self):
         """Generate the complete playoff bracket based on standings.
 
-        Top 8 teams per conference by league standings (points, then wins,
-        then goal differential), mirroring the NHL format.
+        Format comes from the setup-time choice on the league:
+        'divisional' (current NHL: top 3 per division + 2 wild cards,
+        fixed bracket) or 'conference' (classic: top 8 per conference
+        by points, 1v8/2v7/3v6/4v5, reseeded each round). Round 1 is
+        scheduled onto the calendar starting shortly after the last
+        regular-season game.
         """
         eastern, western = self._get_playoff_qualified_teams()
         self.eastern_teams = eastern
         self.western_teams = western
+        self._assign_conference_seeds()
 
-        # Assign 1-8 seeds for display/sorting
-        for i, team in enumerate(self.eastern_teams):
-            team.standings_position = i + 1
-        for i, team in enumerate(self.western_teams):
-            team.standings_position = i + 1
+        # Round 1 starts after the regular season breathes: 2 days after
+        # the last scheduled regular-season game (never a fixed date).
+        start = self._last_regular_season_date()
+        if start is not None:
+            start = start + timedelta(days=self.PLAYOFF_REST_DAYS)
+        else:
+            try:
+                start = date(getattr(self.league, 'season_year', 2026) + 1,
+                             4, 16)
+            except Exception:
+                start = None
 
-        # Generate first round matchups
-        self._create_wild_card_round()
+        # Generate first round matchups, on the calendar.
+        self._create_wild_card_round(schedule_games=True,
+                                     start_date=start)
+        # Hype: one "circle the dates" story for the round's marquee
+        # series (silent without an app, e.g. projections).
+        try:
+            self._announce_round_hype('wild_card')
+        except Exception:
+            pass
 
-    def _get_playoff_qualified_teams(self):
-        """Get the top 8 teams per conference that qualify for playoffs.
+    def _standings_sort_key(self, team):
+        """Points, then wins, then goal differential (best-first)."""
+        standings = getattr(self.league, 'standings', None) or {}
+        st = standings.get(getattr(team, 'team_name', ''), None) or {}
+        points = st.get('Points', 0)
+        wins = st.get('W', st.get('Wins', 0))
+        try:
+            goal_diff = (getattr(team, 'goals_for', 0) or 0) - \
+                (getattr(team, 'goals_against', 0) or 0)
+        except Exception:
+            goal_diff = 0
+        return (-points, -wins, -goal_diff)
 
-        Returns (eastern_teams, western_teams), each sorted best-first.
-        Reads the league standings dict (source of truth for the season).
+    def _conference_of(self, team):
+        """Conference for qualification; division-mapped fallback."""
+        conf = getattr(team, 'conference', '') or ''
+        if conf in ('Eastern', 'Western'):
+            return conf
+        div = getattr(team, 'division', '') or ''
+        if div in ('Atlantic', 'Metropolitan'):
+            return 'Eastern'
+        if div in ('Central', 'Pacific'):
+            return 'Western'
+        return 'Eastern'
+
+    def _playoff_format(self):
+        """'divisional' (current NHL) or 'conference' (classic 1v8).
+
+        Setup-only choice stored on the league; old saves default to
+        divisional. One reader so every bracket path agrees.
         """
-        standings = getattr(self.league, 'standings', {})
+        try:
+            pf = getattr(getattr(self, 'league', None), 'playoff_format',
+                         'divisional')
+            return pf if pf in ('divisional', 'conference') else 'divisional'
+        except Exception:
+            return 'divisional'
+
+    def _conference_qualified_teams(self):
+        """Classic format: top 8 per conference by points, best-first.
+
+        No division auto-berths -- straight points ranking with no
+        protected seeds for division winners.
+        """
+        standings = getattr(self.league, 'standings', None) or {}
 
         def sort_key(team):
-            st = standings.get(team.team_name, {})
+            st = standings.get(getattr(team, 'team_name', ''), {}) or {}
             points = st.get('Points', 0)
             wins = st.get('W', st.get('Wins', 0))
-            goal_diff = getattr(team, 'goals_for', 0) - getattr(team, 'goals_against', 0)
+            try:
+                goal_diff = (getattr(team, 'goals_for', 0) or 0) - \
+                    (getattr(team, 'goals_against', 0) or 0)
+            except Exception:
+                goal_diff = 0
             return (-points, -wins, -goal_diff)
 
         eastern, western = [], []
-        for team in self.league.teams:
+        for team in getattr(self.league, 'teams', None) or []:
             if getattr(team, 'league_name', '') != 'National Hockey League':
                 continue
-            if getattr(team, 'conference', '') == 'Eastern':
+            if self._conference_of(team) == 'Eastern':
                 eastern.append(team)
             else:
                 western.append(team)
+        return (sorted(eastern, key=sort_key)[:8],
+                sorted(western, key=sort_key)[:8])
 
-        eastern.sort(key=sort_key)
-        western.sort(key=sort_key)
-        return eastern[:8], western[:8]
+    def _get_playoff_qualified_teams(self):
+        """Route qualification by the setup-time format choice.
+
+        Divisional: NHL qualification, top 3 per division + 2 wild cards
+        per conference (bracket order). Conference: classic top-8-by-points
+        per conference (seed order).
+        """
+        if self._playoff_format() == 'conference':
+            return self._conference_qualified_teams()
+        """NHL qualification: top 3 per division + 2 wild cards per conference.
+
+        Returns (eastern, western): 8 teams each in fixed-bracket order
+        [DW1, DW2, D1#2, D1#3, D2#2, D2#3, WC1, WC2], where DW1 is the
+        division winner with more points and D1 is DW1's division.
+        Reads the league standings dict (source of truth for the season).
+        """
+        by_division = defaultdict(list)
+        for team in getattr(self.league, 'teams', None) or []:
+            if getattr(team, 'league_name', '') != 'National Hockey League':
+                continue
+            by_division[getattr(team, 'division', 'Unknown')
+                        or 'Unknown'].append(team)
+
+        conf_divs = {'Eastern': [], 'Western': []}
+        conf_leftovers = {'Eastern': [], 'Western': []}
+        for div_name in sorted(by_division.keys()):
+            div_teams = sorted(by_division[div_name],
+                               key=self._standings_sort_key)
+            if not div_teams:
+                continue
+            conf = self._conference_of(div_teams[0])
+            conf_divs[conf].append(div_teams[:3])
+            conf_leftovers[conf].extend(div_teams[3:])
+
+        eastern, western = [], []
+        for conf, out in (('Eastern', eastern), ('Western', western)):
+            divs = [d for d in conf_divs[conf][:2] if d]
+            if len(divs) >= 2:
+                # Division winners, best points first; D1 = DW1's division.
+                w1, w2 = sorted(
+                    [(d[0], d) for d in divs],
+                    key=lambda wd: self._standings_sort_key(wd[0]))
+                DW1, D1 = w1[0], w1[1]
+                DW2, D2 = w2[0], w2[1]
+                bracket = [DW1, DW2]
+                bracket += [t for t in D1[1:3]]
+                bracket += [t for t in D2[1:3]]
+            elif len(divs) == 1:
+                bracket = list(divs[0][:3])
+            else:
+                bracket = []
+            wild = sorted(conf_leftovers[conf],
+                          key=self._standings_sort_key)
+            need = 8 - len(bracket)
+            bracket += wild[:max(0, need)]
+            # Defensive: never hand the bracket a short conference.
+            if len(bracket) < 8:
+                pool = sorted(
+                    [t for t in
+                     getattr(self.league, 'teams', None) or []
+                     if getattr(t, 'league_name', '') ==
+                     'National Hockey League'
+                     and self._conference_of(t) == conf
+                     and t not in bracket],
+                    key=self._standings_sort_key)
+                bracket += pool[:8 - len(bracket)]
+            out.extend(bracket[:8])
+        return eastern, western
     
     def _is_eastern_team(self, team: Team) -> bool:
         """Determine if team is in Eastern Conference"""
         eastern_divisions = ['Atlantic', 'Metropolitan']
         return hasattr(team, 'division') and team.division in eastern_divisions
     
-    def _create_wild_card_round(self):
-        """Create Wild Card round matchups"""
-        # Eastern Conference Wild Card
-        east_matchups = [
-            (self.eastern_teams[0], self.eastern_teams[7]),  # 1 vs 8
-            (self.eastern_teams[1], self.eastern_teams[6]),  # 2 vs 7
-            (self.eastern_teams[2], self.eastern_teams[5]),  # 3 vs 6
-            (self.eastern_teams[3], self.eastern_teams[4])   # 4 vs 5
-        ]
-        
-        # Western Conference Wild Card
-        west_matchups = [
-            (self.western_teams[0], self.western_teams[7]),  # 1 vs 8
-            (self.western_teams[1], self.western_teams[6]),  # 2 vs 7
-            (self.western_teams[2], self.western_teams[5]),  # 3 vs 6
-            (self.western_teams[3], self.western_teams[4])   # 4 vs 5
-        ]
-        
-        # Create series
-        for team1, team2 in east_matchups + west_matchups:
-            series = PlayoffSeries("Wild Card Round", team1, team2)
-            self.playoff_series['wild_card'].append(series)
+    def _create_conference_first_round(self, schedule_games=True,
+                                       start_date=None):
+        """Classic round 1: 1v8, 2v7, 3v6, 4v5 per conference.
+
+        In this format eastern_teams/western_teams are best-first seed
+        order, so seeds are list positions. bracket_side pins the slot for
+        the tree view; later rounds reseed, so sides are display-only here.
+        """
+        for conf_teams, conf_tag in ((self.eastern_teams, 'E'),
+                                     (self.western_teams, 'W')):
+            if len(conf_teams) < 8:
+                continue
+            pairs = [(conf_teams[0], conf_teams[7], 'A'),
+                     (conf_teams[1], conf_teams[6], 'B'),
+                     (conf_teams[2], conf_teams[5], 'C'),
+                     (conf_teams[3], conf_teams[4], 'D')]
+            for team1, team2, side in pairs:
+                series = PlayoffSeries("Wild Card Round", team1, team2)
+                series.bracket_side = conf_tag + side
+                self.playoff_series['wild_card'].append(series)
+                if schedule_games:
+                    # Single choke point: dates, hype, calendar, in one.
+                    self._schedule_new_series(series, 'wild_card',
+                                              start_date)
+
+    def _create_reseeded_round(self, winners, start_date, round_key,
+                               round_name):
+        """Classic format rounds 2-3: reseed by conference seed.
+
+        Highest remaining seed hosts the lowest, second-highest hosts
+        second-lowest (straight conference seeding). Seeds are the
+        regular-season conference ranks, which never change once the
+        bracket is set.
+        """
+        def _seed(t):
+            try:
+                return int(getattr(t, 'standings_position', 99) or 99)
+            except Exception:
+                return 99
+
+        for conf_winners, conf_tag in (
+                ([t for t in winners if self._is_eastern_team(t)], 'E'),
+                ([t for t in winners if not self._is_eastern_team(t)],
+                 'W')):
+            ranked = sorted(conf_winners, key=_seed)
+            n = len(ranked)
+            for i in range(n // 2):
+                hi, lo = ranked[i], ranked[n - 1 - i]
+                series = PlayoffSeries(round_name, hi, lo)
+                series.bracket_side = f"{conf_tag}R{i + 1}"
+                self.playoff_series[round_key].append(series)
+                self._schedule_new_series(series, round_key, start_date)
+
+    def _create_wild_card_round(self, schedule_games=True, start_date=None):
+        """Create Round 1 matchups in the NHL divisional format.
+
+        Bracket order per conference is [DW1, DW2, D1#2, D1#3, D2#2,
+        D2#3, WC1, WC2]; pairings: DW1 vs WC2, D1#2 vs D1#3, D2#2 vs
+        D2#3, DW2 vs WC1. Fixed bracket — round 2 pairs winners (A,B)
+        and (C,D), no reseeding.
+        """
+        if self._playoff_format() == 'conference':
+            self._create_conference_first_round(schedule_games, start_date)
+            return
+        for conf_teams, conf_tag in ((self.eastern_teams, 'E'),
+                                     (self.western_teams, 'W')):
+            if len(conf_teams) < 8:
+                continue
+            DW1, DW2, D1_2, D1_3, D2_2, D2_3, WC1, WC2 = conf_teams[:8]
+            matchups = [
+                (DW1, WC2, 'A'),    # best division winner vs worst wild card
+                (D1_2, D1_3, 'B'),  # intra-division 2 vs 3
+                (D2_2, D2_3, 'C'),  # intra-division 2 vs 3
+                (DW2, WC1, 'D'),    # other winner vs top wild card
+            ]
+            for team1, team2, side in matchups:
+                series = PlayoffSeries("Wild Card Round", team1, team2)
+                series.bracket_side = conf_tag + side
+                self.playoff_series['wild_card'].append(series)
+                if schedule_games:
+                    # Single choke point: dates, hype, calendar, in one.
+                    self._schedule_new_series(series, 'wild_card',
+                                              start_date)
     
     # Bracket flow: Round 1 -> Round 2 -> Conference Finals -> Stanley Cup Final.
     # ('division_finals' holds the two conference-final series; 'conference_finals'
@@ -324,9 +681,48 @@ class PlayoffBracket:
     ROUND_ORDER = ['wild_card', 'division_semifinals', 'division_finals',
                    'stanley_cup_final']
 
-    def advance_to_next_round(self, round_name: str):
-        """Advance winners to the next playoff round"""
+    def advance_to_next_round(self, round_name: str) -> bool:
+        """Advance winners to the next playoff round.
+
+        SOUNDNESS GATE: every series in the round must be complete. A
+        partial advance would orphan teams and corrupt the bracket, so a
+        short round refuses (returns False) instead of building half a
+        round. The next round starts PLAYOFF_REST_DAYS after the LAST
+        completed series — dynamic timing, never a fixed date.
+        """
+        # IDEMPOTENCY: the daily loop and the bracket window can both
+        # trigger the advance for a finished round -- either path first
+        # wins. If the current-round pointer already moved past
+        # round_name, the next round was built; never rebuild it.
+        # (Also covers callers that rewind current_round manually: if
+        # the next round already holds series -- or the Cup already has
+        # a champion -- the advance happened.)
+        try:
+            _order = self.ROUND_ORDER
+            _cur = getattr(self, 'current_round', '')
+            _next_key = {'wild_card': 'division_semifinals',
+                         'division_semifinals': 'division_finals',
+                         'division_finals': 'stanley_cup_final'}.get(
+                             round_name)
+            if _cur == 'complete':
+                return True
+            if _cur in _order and round_name in _order \
+                    and _order.index(_cur) > _order.index(round_name):
+                return True
+            if _next_key and (self.playoff_series.get(_next_key) or []):
+                return True
+            if round_name == 'stanley_cup_final' and \
+                    getattr(self, 'stanley_cup_champion', None) is not None:
+                return True
+        except Exception:
+            pass
         current_series = self.playoff_series[round_name]
+        incomplete = [s for s in current_series if not s.is_complete]
+        if incomplete:
+            print(f"⛔ Cannot advance from {round_name}: "
+                  f"{len(incomplete)} of {len(current_series)} series "
+                  f"still playing.")
+            return False
         # Narrative ledger: a completed series acquires a memory — its
         # defining beats, weighted by what actually happened. Recorded once
         # per series, here, before winners move on.
@@ -373,13 +769,35 @@ class PlayoffBracket:
             pass
         winners = [series.winner for series in current_series if series.is_complete and series.winner]
 
+        # Dynamic timing: the next round begins REST_DAYS after the LAST
+        # series of this round ended — a sweep doesn't rush anyone, a
+        # 7-game war doesn't hold the bracket hostage beyond the rest.
+        next_start = None
+        try:
+            end_dates = [s.end_date for s in current_series
+                         if getattr(s, 'end_date', None) is not None]
+            if end_dates:
+                next_start = (max(end_dates)
+                              + timedelta(days=self.PLAYOFF_REST_DAYS))
+        except Exception:
+            next_start = None
+
+        # Fixed-bracket order for round 2: map each winner back to the
+        # bracket_side of the series they won (A,B,C,D per conference).
+        side_of = {}
+        for s in current_series:
+            w = getattr(s, 'winner', None)
+            if w is not None:
+                side_of[id(w)] = getattr(s, 'bracket_side', '')
+
         if round_name == 'wild_card':
-            self._create_division_semifinals(winners)
+            self._create_division_semifinals(winners, next_start,
+                                             prev_sides=side_of)
         elif round_name == 'division_semifinals':
-            self._create_division_finals(winners)
+            self._create_division_finals(winners, next_start)
         elif round_name == 'division_finals':
             # Conference champions advance to the Stanley Cup Final
-            self._create_conference_finals(winners)
+            self._create_conference_finals(winners, next_start)
         elif round_name == 'stanley_cup_final':
             if winners:
                 self.stanley_cup_champion = winners[0]
@@ -392,6 +810,18 @@ class PlayoffBracket:
                 except Exception:
                     pass
 
+        # Hype: one "circle the dates" story for the new round's marquee
+        # series. Not for the completed final (the Cup recap covers it).
+        try:
+            _next_key = {'wild_card': 'division_semifinals',
+                         'division_semifinals': 'division_finals',
+                         'division_finals': 'stanley_cup_final'}.get(
+                             round_name)
+            if _next_key:
+                self._announce_round_hype(_next_key)
+        except Exception:
+            pass
+
         # Move the current-round pointer forward
         try:
             next_idx = self.ROUND_ORDER.index(round_name) + 1
@@ -399,58 +829,271 @@ class PlayoffBracket:
                                   if next_idx < len(self.ROUND_ORDER) else 'complete')
         except ValueError:
             pass
+        return True
     
-    def _create_division_semifinals(self, winners: List[Team]):
-        """Create Division Semifinals matchups"""
+    def _schedule_new_series(self, series, round_key, start_date):
+        """Date, publish, and register one new series (single choke point)."""
+        try:
+            series._round_key = round_key
+            self._schedule_series(series, start_date)
+            self._compute_series_hype(series)
+            self._publish_series_to_schedule(series)
+        except Exception:
+            pass
+
+    def _compute_series_hype(self, series):
+        """Stamp rivalry/intensity hype onto a series at schedule time.
+
+        Reads the league rivalry store (bad blood from old playoff wars,
+        declared hate, regional heat) and the narrative ledger, then tags
+        the series: "Bad blood", "Heated rivalry", "Playoff rematch",
+        "Seven-game war", "Upset watch". Marquee series are the ones fans
+        circle on the calendar. Runs inside the single scheduling choke
+        point so every round gets it; unscheduled projections skip it.
+
+        Feedback loop: advance_to_next_round records heat from each
+        completed series, so wars leave hype for future rounds/years.
+        """
+        t1, t2 = series.team1, series.team2
+        n1 = getattr(t1, 'team_name', '') or ''
+        n2 = getattr(t2, 'team_name', '') or ''
+        heat = 0.0
+        tags: List[str] = []
+        rematch = False
+        try:
+            from reputation_system import get_rivalry_heat, rivalry_between
+            rivalries = getattr(getattr(self, 'league', None),
+                                'rivalries', None) or []
+            try:
+                heat = float(get_rivalry_heat(rivalries, t1, t2)
+                             .get('heat', 0.0) or 0.0)
+            except Exception:
+                heat = 0.0
+            try:
+                rec = rivalry_between(rivalries, t1, t2, 'team_team')
+                story = str((rec or {}).get('story', '') or '')
+                if rec and (rec.get('origin') == 'playoff_series'
+                            or 'Playoff series:' in story):
+                    rematch = True
+                    tags.append('Playoff rematch')
+                    if 'Seven games' in story:
+                        tags.append('Seven-game war')
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # Narrative memory can smolder where the rivalry store is quiet
+        # (grudges decay slowly in the ledger).
+        try:
+            ledger = getattr(self, 'narrative_ledger', None)
+            if ledger is not None and n1 and n2:
+                mem = float(ledger.memory_weight(n1, n2) or 0.0)
+                if mem >= 70.0:
+                    heat = max(heat, 65.0)
+        except Exception:
+            pass
+        if heat >= 65.0:
+            tags.insert(0, 'Bad blood')
+        elif heat >= 35.0:
+            tags.append('Heated rivalry')
+        # Upset watch: a bottom seed (7-8) drawing a top seed (1-2) in
+        # round one. Works for both formats: divisional wild cards vs
+        # division winners, or classic 1v8 / 2v7.
+        try:
+            s1 = int(getattr(t1, 'standings_position', 0) or 0)
+            s2 = int(getattr(t2, 'standings_position', 0) or 0)
+            if min(s1, s2) <= 2 and max(s1, s2) >= 7:
+                tags.append('Upset watch')
+        except Exception:
+            pass
+        try:
+            series.rivalry_heat = max(0.0, min(100.0, heat))
+            # Dedupe while keeping order (ledger + store can agree).
+            seen = set()
+            series.hype_tags = [t for t in tags
+                                if not (t in seen or seen.add(t))]
+            series.marquee = (heat >= 50.0) or rematch
+        except Exception:
+            pass
+
+    def _announce_round_hype(self, round_key):
+        """One inbox story per round for its marquee series.
+
+        "Circle the dates": every flagged series gets its Game 1 date and
+        story tags in a single roundup — one headline per round, inside
+        the daily cap, instead of a per-series blast. Silent when there's
+        no app (headless/bulk sims), when called off the main thread (the
+        Sim-All worker must not touch UI), or when nothing is marquee.
+        """
+        try:
+            import threading
+            if threading.current_thread() is not threading.main_thread():
+                return
+            app = getattr(self, 'app', None)
+            if app is None:
+                return
+            series_list = [s for s in (self.playoff_series.get(round_key)
+                                       or [])
+                           if getattr(s, 'marquee', False)]
+            if not series_list:
+                return
+            import headlines
+            items = []
+            for s in series_list:
+                dates = getattr(s, 'game_dates', None) or []
+                d1 = dates[0] if len(dates) > 0 else None
+                d2 = dates[1] if len(dates) > 1 else None
+                items.append({
+                    't1': getattr(s.team1, 'team_name', ''),
+                    't2': getattr(s.team2, 'team_name', ''),
+                    'tags': list(getattr(s, 'hype_tags', None) or []),
+                    'heat': float(getattr(s, 'rivalry_heat', 0.0) or 0.0),
+                    'game1_fmt': d1.strftime('%b %d') if d1 else '',
+                    'game2_fmt': d2.strftime('%b %d') if d2 else '',
+                })
+            involved = []
+            for it in items:
+                involved.extend([it['t1'], it['t2']])
+            headlines.deliver_spec(app, {
+                'kind': 'playoff_series_preview',
+                'round_name': (getattr(series_list[0], 'round_name', '')
+                               or str(round_key)),
+                'items': items,
+                'involved': tuple(involved),
+            })
+        except Exception:
+            pass
+
+    def _create_division_semifinals(self, winners: List[Team],
+                                    start_date=None, prev_sides=None):
+        """Create Round 2: fixed bracket — winner(A) vs winner(B),
+        winner(C) vs winner(D) per conference. No reseeding (NHL)."""
+        if self._playoff_format() == 'conference':
+            self._create_reseeded_round(winners, start_date,
+                                        'division_semifinals',
+                                        "Division Semifinals")
+            return
         eastern_winners = [team for team in winners if self._is_eastern_team(team)]
         western_winners = [team for team in winners if not self._is_eastern_team(team)]
-        
-        # Sort by original seeding and create matchups
-        eastern_winners.sort(key=lambda t: t.standings_position)
-        western_winners.sort(key=lambda t: t.standings_position)
-        
-        # Eastern matchups (highest vs lowest remaining seeds)
-        for i in range(0, len(eastern_winners), 2):
-            if i + 1 < len(eastern_winners):
-                series = PlayoffSeries("Division Semifinals", 
-                                     eastern_winners[i], eastern_winners[i + 1])
-                self.playoff_series['division_semifinals'].append(series)
-        
-        # Western matchups
-        for i in range(0, len(western_winners), 2):
-            if i + 1 < len(western_winners):
-                series = PlayoffSeries("Division Semifinals", 
-                                     western_winners[i], western_winners[i + 1])
-                self.playoff_series['division_semifinals'].append(series)
-    
-    def _create_division_finals(self, winners: List[Team]):
-        """Create Division Finals matchups"""
+
+        # Bracket order, not seed order: A,B,C,D as the series were made.
+        def _bracket_key(t):
+            return (prev_sides or {}).get(id(t), '')
+        eastern_winners.sort(key=_bracket_key)
+        western_winners.sort(key=_bracket_key)
+
+        for conf_winners in (eastern_winners, western_winners):
+            for i in range(0, len(conf_winners), 2):
+                if i + 1 < len(conf_winners):
+                    series = PlayoffSeries("Division Semifinals",
+                                           conf_winners[i],
+                                           conf_winners[i + 1])
+                    self.playoff_series['division_semifinals'].append(series)
+                    self._schedule_new_series(series, 'division_semifinals',
+                                              start_date)
+
+    def _create_division_finals(self, winners: List[Team], start_date=None):
+        """Create conference championship series.
+
+        Divisional format: winner(AB) vs winner(CD) fixed bracket.
+        Conference format: reseed — highest remaining seed hosts the
+        lowest (with two teams left that's simply seed order).
+        """
+        if self._playoff_format() == 'conference':
+            self._create_reseeded_round(winners, start_date,
+                                        'division_finals',
+                                        "Division Finals")
+            return
         eastern_winners = [team for team in winners if self._is_eastern_team(team)]
         western_winners = [team for team in winners if not self._is_eastern_team(team)]
-        
+
         # Create conference championship series
         if len(eastern_winners) >= 2:
             series = PlayoffSeries("Division Finals", eastern_winners[0], eastern_winners[1])
             self.playoff_series['division_finals'].append(series)
-        
+            self._schedule_new_series(series, 'division_finals', start_date)
+
         if len(western_winners) >= 2:
             series = PlayoffSeries("Division Finals", western_winners[0], western_winners[1])
             self.playoff_series['division_finals'].append(series)
-    
-    def _create_conference_finals(self, winners: List[Team]):
+            self._schedule_new_series(series, 'division_finals', start_date)
+
+    def _create_conference_finals(self, winners: List[Team], start_date=None):
         """Create the Stanley Cup Final from the two conference champions."""
         eastern_winners = [t for t in winners if self._is_eastern_team(t)]
         western_winners = [t for t in winners if not self._is_eastern_team(t)]
 
         if eastern_winners and western_winners:
-            self._create_stanley_cup_final([eastern_winners[0], western_winners[0]])
-    
-    def _create_stanley_cup_final(self, winners: List[Team]):
+            self._create_stanley_cup_final([eastern_winners[0], western_winners[0]],
+                                           start_date=start_date)
+
+    def _create_stanley_cup_final(self, winners: List[Team], start_date=None):
         """Create Stanley Cup Final"""
         if len(winners) >= 2:
             series = PlayoffSeries("Stanley Cup Final", winners[0], winners[1])
             self.playoff_series['stanley_cup_final'].append(series)
-    
+            self._schedule_new_series(series, 'stanley_cup_final',
+                                      start_date)
+
+    def _find_series(self, series_id):
+        """Return the PlayoffSeries with this id, or None."""
+        if not series_id:
+            return None
+        try:
+            for series_list in (self.playoff_series or {}).values():
+                for s in series_list or []:
+                    if getattr(s, 'series_id', None) == series_id:
+                        return s
+        except Exception:
+            pass
+        return None
+
+    def try_play_scheduled_game(self, series_id, game_number) -> bool:
+        """Play one calendar-scheduled playoff game, exactly once.
+
+        The daily loop calls this for each playoff entry dated today;
+        the bracket's own controls call simulate_playoff_game directly.
+        Either path driving first wins -- this sims ONLY when the entry
+        is the series' next unplayed game:
+
+          - unknown series_id -> False (stale/pruned entry)
+          - series already complete -> False
+          - entry already played (games_played >= game_number) -> False
+          - entry is not the next game
+            (games_played + 1 != game_number) -> False
+          - series not in the bracket's current round -> False
+
+        Returns True when a game was simulated (and stamped onto its
+        calendar entry by simulate_playoff_game).
+        """
+        try:
+            game_number = int(game_number or 0)
+        except (TypeError, ValueError):
+            return False
+        if game_number < 1:
+            return False
+        series = self._find_series(series_id)
+        if series is None or bool(getattr(series, 'is_complete', False)):
+            return False
+        try:
+            games_played = int(getattr(series, 'games_played', 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        if games_played + 1 != game_number:
+            # Already simmed via the bracket (games_played >= game_number)
+            # or a stale out-of-order entry -- never double-sim, never skip
+            # ahead of the series' real next game.
+            return False
+        try:
+            current = (self.playoff_series or {}).get(
+                getattr(self, 'current_round', '')) or []
+            if series not in current:
+                return False
+        except Exception:
+            return False
+        self.simulate_playoff_game(series)
+        return True
+
     def simulate_playoff_game(self, series: PlayoffSeries) -> Tuple[int, int]:
         """Simulate a single playoff game and return scores"""
         # Use the existing game simulation but with playoff modifiers
@@ -463,6 +1106,12 @@ class PlayoffBracket:
         from arena_atmosphere import pregame_crowd, crowd_hype_for_tension
         _elim = (series.team1_wins == 3 or series.team2_wins == 3)
         _game_no = series.games_played + 1
+        # 2-2-1-1-1 venues: the higher seed (team1) hosts games 1, 2, 5, 7.
+        # The sim is venue-aware, and the scheduled calendar entries use
+        # the same mapping, so the bracket and the schedule always agree.
+        _home_team = series.home_team_for_game(_game_no)
+        _away_team = series.away_team_for_game(_game_no)
+        _team1_home = _home_team is series.team1
         # Clutch tracking (additive): a Game 7 is the 7th game of a
         # best-of-7 series. Computed BEFORE add_game_result bumps
         # games_played below.
@@ -473,10 +1122,12 @@ class PlayoffBracket:
             _led = _al()
         except Exception:
             _led = None
-        _atm = pregame_crowd(series.team1, series.team2, ledger=_led,
+        _atm = pregame_crowd(_home_team, _away_team, ledger=_led,
                              is_playoff=True, series_game=_game_no,
-                             elimination_game=_elim)
-        game_sim = GameSim(series.team1, series.team2, is_playoff=True,
+                             elimination_game=_elim,
+                             rivalry_heat=getattr(series, 'rivalry_heat',
+                                                  0.0))
+        game_sim = GameSim(_home_team, _away_team, is_playoff=True,
                            series_game=_game_no,
                            rivalries=getattr(getattr(self, "league", None),
                                              "rivalries", None),
@@ -502,8 +1153,10 @@ class PlayoffBracket:
         home_score = result.get('home_score', 0)
         away_score = result.get('away_score', 0)
 
-        # Determine winner and update series
-        team1_won = home_score > away_score
+        # Determine winner and update series (scores are home/away now;
+        # map back to the series-relative team1_won the bracket tracks).
+        team1_won = (home_score > away_score) if _team1_home \
+            else (away_score > home_score)
 
         # Narrative ledger: per-game facts for series memory. Cheap reads
         # off the finished sim — no extra simulation work.
@@ -526,6 +1179,15 @@ class PlayoffBracket:
         except Exception:
             pass
         series.add_game_result(team1_won, game_info)
+
+        # Calendar: stamp the score on this game's scheduled entry; if the
+        # series just ended, prune the unplayed games from the schedule.
+        try:
+            self._stamp_played_game(series, home_score, away_score)
+            if series.is_complete:
+                self._prune_series_schedule(series)
+        except Exception:
+            pass
 
         # Playoff stat ledger: fold this game's per-player numbers into each
         # player's season playoff_stats (feeds the Conn Smythe race). Cheap:
@@ -554,7 +1216,7 @@ class PlayoffBracket:
                 "away_score": away_score,
                 "winner": series.team1 if team1_won else series.team2,
             }
-            _rgs(_pgr, series.team1, series.team2, preseason=False,
+            _rgs(_pgr, _home_team, _away_team, preseason=False,
                  game_date=_pdate, playoff=True, game7=_is_game7)
             # Clutch lore (additive): announce newly-earned tags, and make
             # a Game-7 OT winner read like it. News-feed only, rare by
@@ -833,6 +1495,14 @@ class PlayoffView(ctk.CTkFrame):
         
         # Initialize playoff bracket if season is complete
         self._check_playoff_eligibility()
+        # Seamless transition: at season's end the bracket builds itself
+        # the moment this window opens -- no manual "Generate" click
+        # between the regular season and Game 1.
+        try:
+            if self.playoff_bracket is None and self._regular_season_complete():
+                self._generate_bracket(quiet=True)
+        except Exception:
+            pass
         self._update_status_display()
         self._display_bracket()
 
@@ -998,16 +1668,25 @@ class PlayoffView(ctk.CTkFrame):
             return False
         return True
 
-    def _generate_bracket(self):
-        """Generate the playoff bracket"""
+    def _generate_bracket(self, quiet=False):
+        """Generate the playoff bracket.
+
+        quiet=True skips the popup: used for the automatic bracket at
+        season's end so the playoffs open seamlessly on the bracket.
+        """
         if not self._mp_guard("generate the playoff bracket"):
             return
         try:
             if not hasattr(self.app, 'league') or not self.app.league:
                 messagebox.showerror("Error", "No league data available")
                 return
-            
+
             self.playoff_bracket = PlayoffBracket(self.app.league)
+            # The bracket needs the app for the current date in sim paths.
+            try:
+                self.playoff_bracket.app = self.app
+            except Exception:
+                pass
             self.playoff_bracket.generate_playoff_bracket()
             # The bracket lives on the league: reopening this window
             # mid-playoffs (or any other reader) finds the live tournament.
@@ -1016,16 +1695,35 @@ class PlayoffView(ctk.CTkFrame):
             except Exception:
                 pass
             self.playoff_bracket.add_game_listener(self._on_bracket_game)
-            
+
             self._update_status_display()
             self._display_bracket()
-            
-            messagebox.showinfo("Playoffs Generated", 
-                              f"Playoff bracket created with {len(self.playoff_bracket.eastern_teams)} Eastern and "
-                              f"{len(self.playoff_bracket.western_teams)} Western Conference teams!")
-            
+
+            if not quiet:
+                messagebox.showinfo("Playoffs Generated",
+                                  f"Playoff bracket created with {len(self.playoff_bracket.eastern_teams)} Eastern and "
+                                  f"{len(self.playoff_bracket.western_teams)} Western Conference teams!")
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate playoff bracket: {str(e)}")
+
+    def _regular_season_complete(self):
+        """True when every NHL club has played its full regular-season slate."""
+        try:
+            fn = getattr(self.app, '_check_season_complete', None)
+            if callable(fn):
+                return bool(fn())
+        except Exception:
+            pass
+        try:
+            current_date = getattr(self.app, 'current_date', None)
+            season_year = getattr(getattr(self.app, 'league', None),
+                                  'season_year', None)
+            if current_date is not None and season_year is not None:
+                return current_date >= date(season_year + 1, 4, 16)
+        except Exception:
+            pass
+        return False
 
     # ------------------------------------------------------------------
     # Live bracket updates

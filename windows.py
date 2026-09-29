@@ -7569,6 +7569,13 @@ class ScheduleView(ctk.CTkFrame):
             tree.tag_configure('win', foreground=ct['GREEN'])
             tree.tag_configure('loss', foreground=ct['RED'])
             tree.tag_configure('upcoming', foreground=ct['TEXT'])
+            # Marquee playoff series: the dates fans circle. Gold beats
+            # win/loss green/red -- it is the rarer, deliberate signal.
+            tree.tag_configure('marquee', foreground=ct['GOLD'])
+            # Background-only companion to 'today': lets a marquee game
+            # played today keep its highlight without a second tag
+            # fighting 'marquee' over the foreground.
+            tree.tag_configure('today_bg', background=ct['ROW_SELECTED'])
 
     def _create_schedule_treeview(self, parent, columns, height=25):
         """Dark-styled game table inside a rounded card."""
@@ -7695,7 +7702,7 @@ class ScheduleView(ctk.CTkFrame):
             'away_team': entry['away'],
             'score': entry['score'],
             'status': entry['status'],
-            'has_been_played': entry['status'] == "Final",
+            'has_been_played': str(entry['status']).startswith("Final"),
         }
 
     def watch_selected_game(self):
@@ -7962,13 +7969,30 @@ class ScheduleView(ctk.CTkFrame):
         GameDetailWindow(self.app, result, initial_tab="recap")
 
     @staticmethod
-    def _parse_schedule_entry(game_entry):
-        """Normalize one league.schedule entry to (date, home_team, away_team).
+    def _playoff_entry_result(raw):
+        """(score, status) for a bracket-stamped playoff entry, else None.
 
-        Returns None for malformed entries and non-game special events
-        (e.g. All-Star / NHL_EVENT entries).
+        The bracket sims playoff games itself, so they never land in
+        game_results -- but _stamp_played_game records the score on the
+        schedule entry. The calendar prefers the stamp.
+        """
+        raw = raw or {}
+        if raw.get("playoff") and raw.get("played"):
+            return (f"{raw.get('away_score', 0)}-{raw.get('home_score', 0)}",
+                    "Final")
+        return None
+
+    @staticmethod
+    def _parse_schedule_entry(game_entry):
+        """Normalize one league.schedule entry.
+
+        Returns (date, home_team, away_team, raw) where raw is the
+        original dict entry (carries playoff/marquee/hype fields) or
+        None for tuple-format entries. None for malformed entries and
+        non-game special events (e.g. All-Star / NHL_EVENT entries).
         """
         game_date = home = away = None
+        raw = game_entry if isinstance(game_entry, dict) else None
         if isinstance(game_entry, dict):
             # New format: dictionary with date, home_team, away_team, etc.
             game_date = game_entry.get('date')
@@ -7984,15 +8008,17 @@ class ScheduleView(ctk.CTkFrame):
         if (game_date is None or not hasattr(game_date, 'strftime')
                 or not (hasattr(home, 'team_name') and hasattr(away, 'team_name'))):
             return None
-        return game_date, home, away
+        return game_date, home, away, raw
 
     def _parsed_schedule(self):
-        """Schedule entries normalized to (date, home, away), parsed once.
+        """Schedule entries normalized to (date, home, away, raw), parsed once.
 
         The raw league.schedule mixes dict and tuple formats and is
         re-scanned by several views; parse it once per schedule object and
         reuse. Rebuilds automatically when the schedule list is replaced
-        (new season / load game).
+        (new season / load game). The 4th element is the original dict
+        entry (or None) so playoff/marquee/hype fields survive to the
+        renderer.
         """
         src = self.app.league.schedule
         if getattr(self, '_parsed_schedule_src', None) is not src:
@@ -8009,7 +8035,7 @@ class ScheduleView(ctk.CTkFrame):
         """Month labels present in the schedule, in chronological order."""
         months = []
         seen = set()
-        for game_date, home, away in self._parsed_schedule():
+        for game_date, home, away, _raw in self._parsed_schedule():
             try:
                 label = game_date.strftime("%b %Y")
             except (AttributeError, ValueError):
@@ -8056,7 +8082,7 @@ class ScheduleView(ctk.CTkFrame):
             self.month_combo.set('All')
         selected_month = self.month_filter.get()
 
-        for game_date, home, away in self._parsed_schedule():
+        for game_date, home, away, raw in self._parsed_schedule():
             # Month filter
             try:
                 if selected_month != 'All' and game_date.strftime("%b %Y") != selected_month:
@@ -8069,19 +8095,64 @@ class ScheduleView(ctk.CTkFrame):
             score = "- : -"
 
             if game_date < self.app.current_date:
-                # O(1) result lookup via the app's matchup index (was a full
-                # scan of game_results per scheduled game: O(games x results))
-                game_result = self.app.find_game_result(game_date, home, away)
+                # Playoff entries carry their own stamp
+                # (played/home_score/away_score): the bracket sims them,
+                # not the daily game loop, so they never land in
+                # game_results. Prefer the stamp; fall back to the index.
+                _stamped = self._playoff_entry_result(raw)
+                if _stamped is not None:
+                    score, status = _stamped
+                    game_result = None
+                else:
+                    # O(1) result lookup via the app's matchup index (was a full
+                    # scan of game_results per scheduled game: O(games x results))
+                    game_result = self.app.find_game_result(game_date, home, away)
                 if game_result is not None:
                     score = f"{game_result['away_score']}-{game_result['home_score']}"
                     status = "Final"
-                else:
+                elif status != "Final":
                     score = "0-0"  # Fallback if no result found
                     status = "Simulated"
             elif game_date == self.app.current_date:
                 status = "Today"
 
-            values = (game_date.strftime("%b %d, %Y"), away.team_name, score, home.team_name, status)
+            # Playoff/marquee presentation: the bracket publishes round_key,
+            # series_id, marquee and hype_tags on each calendar entry.
+            # Marquee series are the ones fans circle -- gold row + a star
+            # and the top hype tag in the status column.
+            raw = raw or {}
+            is_playoff = bool(raw.get("round_key") or raw.get("series_id"))
+            marquee = bool(raw.get("marquee"))
+            hype_tags = list(raw.get("hype_tags") or [])
+
+            # Color tag for games involving the user's team (win/loss/today)
+            row_tag = self._game_row_tag(home, away, score, status)
+            # NOTE: ttk Treeview tags with *conflicting* options (two tags
+            # both setting foreground) do not compose under a custom
+            # style -- resolve to a single foreground tag in Python.
+            # Tags with distinct options (marquee fg + today_bg bg) do
+            # combine, in any order.
+            if marquee:
+                # Marquee gold is the rarer, deliberate signal: it beats
+                # win/loss/dimmed. Keep the "today" background highlight
+                # via a background-only tag.
+                tags = ["marquee"]
+                if row_tag == "today":
+                    tags.append("today_bg")
+            elif row_tag:
+                tags = [row_tag]
+            else:
+                tags = []
+            display_status = status
+            if is_playoff and display_status == "Scheduled":
+                display_status = "Playoffs"
+            if marquee:
+                star = "\u2605" + (f" {hype_tags[0]}" if hype_tags else "")
+                display_status = f"{display_status} {star}".strip()
+            league_tags = tuple(tags)
+
+            values = (game_date.strftime("%b %d, %Y"), away.team_name,
+                      score, home.team_name, display_status)
 
             # Store game data for easy access (keyed the same way
             # get_selected_game_data() looks it up: display date string +
@@ -8092,17 +8163,17 @@ class ScheduleView(ctk.CTkFrame):
                 'home': home,
                 'away': away,
                 'score': score,
-                'status': status
+                'status': display_status,
+                'marquee': marquee,
+                'hype_tags': hype_tags,
+                'round_key': raw.get("round_key"),
             }
 
-            # Color tag for games involving the user's team (win/loss/today)
-            row_tag = self._game_row_tag(home, away, score, status)
-            league_tags = (row_tag,) if row_tag else ()
             item_id = self.league_schedule_tree.insert('', 'end', values=values,
                                                        tags=league_tags)
             if self.app.user_team in (home, away):
                 my_item_id = self.my_schedule_tree.insert('', 'end', values=values,
-                                                           tags=(row_tag,))
+                                                           tags=tuple(tags))
                 if self._first_upcoming is None and status in ("Today", "Scheduled"):
                     self._first_upcoming = my_item_id
 

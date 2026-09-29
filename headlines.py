@@ -58,6 +58,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "grudge_callback": _grudge_callback_headline,
         "game_story": _game_story_headline,
         "outdoor_pregame": _outdoor_pregame_headline,
+        "playoff_series_preview": _playoff_series_preview_headline,
         "milestone_hit": _milestone_headline,
         "lottery_results": _lottery_headline,
         "international_results": _intl_headline,
@@ -454,6 +455,105 @@ def _grudge_callback_headline(game_date, home="", away="", short="",
         subject=subject,
         content="\n\n".join(parts),
         category="Rivalry",
+        priority=2,
+        is_important=True,
+    )
+
+
+def _playoff_series_preview_headline(game_date, round_name="", items=(),
+                                     **kw):
+    """'Circle the dates' — the round's marquee series, one story.
+
+    items: [{t1, t2, tags, heat, game1_fmt, game2_fmt}]. A single marquee
+    series gets the full treatment; several become a roundup with each
+    grudge's Game 1 date. The tags are the hype engine's own words
+    ("Bad blood", "Playoff rematch", "Seven-game war", "Upset watch").
+    """
+    from game_classes import EmailMessage
+
+    def _tag_story(tags):
+        lines = []
+        if "Bad blood" in tags:
+            lines.append("These two genuinely dislike each other -- the "
+                         "rivalry file is thick and neither room has "
+                         "forgotten.")
+        if "Seven-game war" in tags:
+            lines.append("Their last playoff meeting went the distance. "
+                         "Seven games. Nobody forgot.")
+        elif "Playoff rematch" in tags:
+            lines.append("They've met in the spring before, and nobody on "
+                         "either side has forgotten how it ended.")
+        if "Heated rivalry" in tags:
+            lines.append("There's real heat between these clubs -- expect "
+                         "the hitting to start early.")
+        if "Upset watch" in tags:
+            lines.append("The wild card isn't supposed to win this. Tell "
+                         "that to their dressing room.")
+        return " ".join(lines)
+
+    def _crowd_line(heat):
+        if heat >= 65:
+            return ("Expect a cauldron for Game 1 -- bad-blood nights are "
+                    "the loudest of the spring.")
+        if heat >= 35:
+            return ("The building will be loud for Game 1 -- this crowd "
+                    "knows the history.")
+        return "Playoff hockey. The building will be rocking."
+
+    def _emoji_for(tags, heat):
+        if "Bad blood" in tags or heat >= 65:
+            return "\U0001F94A", "BAD BLOOD"
+        if "Seven-game war" in tags or "Playoff rematch" in tags:
+            return "⚔️", "PLAYOFF REMATCH"
+        if "Upset watch" in tags:
+            return "\U0001F440", "UPSET WATCH"
+        return "\U0001F3D2", "SERIES PREVIEW"
+
+    items = [it for it in (items or []) if it.get("t1") and it.get("t2")]
+    if not items:
+        return None
+    rnd = (round_name or "playoffs").strip()
+
+    if len(items) == 1:
+        it = items[0]
+        tags = list(it.get("tags") or [])
+        heat = it.get("heat") or 0
+        emoji, label = _emoji_for(tags, heat)
+        tagline = ", ".join(tags) if tags else "first round"
+        g1, g2 = it.get("game1_fmt") or "TBD", it.get("game2_fmt") or "TBD"
+        subject = f"{emoji} {label}: {it['t1']} vs {it['t2']}"
+        content = (
+            f"Circle {g1} on the calendar. {it['t1']} host {it['t2']} to "
+            f"open their {rnd} series, and the storyline writes itself: "
+            f"{tagline}.\n\n"
+            f"THE BUILDUP -- {_tag_story(tags)}\n\n"
+            f"THE BUILDING -- {_crowd_line(heat)}\n\n"
+            f"GAMES -- Game 1: {g1} @ {it['t1']}. Game 2: {g2} @ {it['t1']}."
+        )
+    else:
+        lines = [f"The {rnd} schedule is out, and the calendar-makers "
+                 f"earned their money. {len(items)} series with real "
+                 f"storylines:\n"]
+        for it in items:
+            tags = list(it.get("tags") or [])
+            heat = it.get("heat") or 0
+            emoji, _ = _emoji_for(tags, heat)
+            tagline = ", ".join(tags) if tags else "playoff hockey"
+            g1 = it.get("game1_fmt") or "TBD"
+            lines.append(f"{emoji} {it['t1']} vs {it['t2']} -- {tagline}. "
+                         f"Game 1: {g1}.")
+        lines.append("\nThe buildings will be loud. The hockey will be "
+                     "heavier. See you at puck drop.")
+        subject = (f"\U0001F5D3️ CIRCLE THE DATES: {len(items)} marquee "
+                   f"series in the {rnd}")
+        content = "\n".join(lines)
+
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=subject,
+        content=content,
+        category="Playoffs",
         priority=2,
         is_important=True,
     )

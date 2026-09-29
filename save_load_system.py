@@ -215,6 +215,10 @@ class GameSaveManager:
             'teams': [],  # teams is a list, not dict
             'standings': getattr(league, 'standings', {}),
             'schedule_generated': getattr(league, 'schedule_generated', False),
+            # Playoff seeding format (setup-only choice). Old saves default
+            # to 'divisional'.
+            'playoff_format': getattr(league, 'playoff_format',
+                                     'divisional'),
             # Legacy events: permanent outdoor-game memory (plain dicts).
             'outdoor_history': list(getattr(league, 'outdoor_history', []) or []),
             # All-Star rosters by season label (plain ID dicts). Missing
@@ -1133,6 +1137,7 @@ class GameSaveManager:
                 pass
             league.standings = league_data.get('standings', {})
             league.schedule_generated = league_data.get('schedule_generated', False)
+            league.playoff_format = league_data.get('playoff_format', 'divisional')
             league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
             league.all_star_rosters = {str(k): dict(v) for k, v in
                                        (league_data.get('all_star_rosters', None) or {}).items()}
@@ -1344,6 +1349,9 @@ class GameSaveManager:
                 'current_round': getattr(b, 'current_round', 'wild_card'),
                 'is_projection': bool(getattr(b, 'is_projection', False)),
                 'champion': getattr(champ, 'team_name', None),
+                # Series-id counter: later rounds must mint fresh ids
+                # after a restore, never reuse a completed round's.
+                'series_seq': int(getattr(b, '_series_seq', 0) or 0),
                 'eastern': [getattr(t, 'team_name', '')
                             for t in getattr(b, 'eastern_teams', None) or []],
                 'western': [getattr(t, 'team_name', '')
@@ -1360,7 +1368,26 @@ class GameSaveManager:
                      'winner': getattr(getattr(s, 'winner', None),
                                        'team_name', None),
                      'game_results': [dict(g) for g in
-                                      getattr(s, 'game_results', None) or []]}
+                                      getattr(s, 'game_results', None) or []],
+                     # Dynamic scheduling state (None-safe for old saves).
+                     'series_id': getattr(s, 'series_id', '') or '',
+                     'bracket_side': getattr(s, 'bracket_side', '') or '',
+                     'start_date': getattr(
+                         getattr(s, 'start_date', None), 'isoformat',
+                         lambda: None)(),
+                     'end_date': getattr(
+                         getattr(s, 'end_date', None), 'isoformat',
+                         lambda: None)(),
+                     'game_dates': [
+                         d.isoformat() for d in
+                         getattr(s, 'game_dates', None) or []
+                         if hasattr(d, 'isoformat')],
+                     # Hype state (None-safe for old saves).
+                     'rivalry_heat': float(getattr(s, 'rivalry_heat',
+                                                   0.0) or 0.0),
+                     'hype_tags': list(getattr(s, 'hype_tags', None)
+                                       or []),
+                     'marquee': bool(getattr(s, 'marquee', False))}
                     for rkey, slist in b.playoff_series.items()
                     for s in slist or []
                 ],
@@ -1379,6 +1406,22 @@ class GameSaveManager:
             b = PlayoffBracket(league)
             b.current_round = data.get('current_round', 'wild_card')
             b.is_projection = bool(data.get('is_projection', False))
+            # Restore the series-id counter so later rounds mint fresh
+            # ids. Old saves predate the field: recompute from the
+            # highest id already present so nothing is ever reused.
+            try:
+                _seq = int(data.get('series_seq', 0) or 0)
+            except (TypeError, ValueError):
+                _seq = 0
+            try:
+                for _sd in data.get('series', None) or []:
+                    _sid = str(_sd.get('series_id', '') or '')
+                    _tail = _sid.rsplit('-', 1)[-1]
+                    if _tail.isdigit():
+                        _seq = max(_seq, int(_tail))
+            except Exception:
+                pass
+            b._series_seq = _seq
             for name in data.get('eastern', None) or []:
                 if name in by_name:
                     b.eastern_teams.append(by_name[name])
@@ -1403,6 +1446,28 @@ class GameSaveManager:
                 s.winner = by_name.get(wname) if wname else None
                 s.game_results = [dict(g) for g in
                                   sd.get('game_results', None) or []]
+                # Dynamic scheduling state (absent on old saves: stays None).
+                try:
+                    s.series_id = sd.get('series_id', '') or ''
+                    s.bracket_side = sd.get('bracket_side', '') or ''
+                    _sd = sd.get('start_date')
+                    s.start_date = (date.fromisoformat(_sd)
+                                    if _sd else None)
+                    _ed = sd.get('end_date')
+                    s.end_date = (date.fromisoformat(_ed)
+                                  if _ed else None)
+                    s.game_dates = [date.fromisoformat(d)
+                                    for d in sd.get('game_dates', None) or []]
+                    # Hype state (absent on old saves: stays default).
+                    try:
+                        s.rivalry_heat = float(sd.get('rivalry_heat',
+                                                      0.0) or 0.0)
+                        s.hype_tags = list(sd.get('hype_tags', None) or [])
+                        s.marquee = bool(sd.get('marquee', False))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
                 rkey = sd.get('round', '')
                 if rkey in b.playoff_series:
                     b.playoff_series[rkey].append(s)

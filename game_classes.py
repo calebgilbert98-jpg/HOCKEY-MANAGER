@@ -3673,6 +3673,15 @@ class League:
     schedule: List[Tuple[date, Team, Team]] = field(default_factory=list)
     standings: Dict[str, Dict] = field(default_factory=dict)
     current_game_index: int = 0
+    # Playoff seeding format, chosen at game setup:
+    #   "divisional" = current NHL (top 3 per division + 2 wild cards per
+    #                  conference; fixed bracket, no reseeding)
+    #   "conference" = straight conference seeding (top 8 per conference
+    #                  by points; 1v8/2v7/3v6/4v5, reseeded each round)
+    # Setup-only: changing it mid-save would corrupt a live bracket.
+    # Old-save safe: read via getattr(league, 'playoff_format', 'divisional')
+    # -- pickled leagues predating this change have no such attribute.
+    playoff_format: str = "divisional"
     _game_manager: object = field(default=None, init=False, repr=False)  # Reference to game manager
     # Tentpole event state (persisted in saves): years the entry draft was
     # held, and (event, year) pairs the user was already prompted about.
@@ -4584,11 +4593,24 @@ class League:
                 print(f"⚠️ {team_name}: {count} games (target: 82)")
         
         print("✅ Fixed NHL scheduling - NO MORE MULTIPLE GAMES PER DAY!")
-        
-        # HARD GUARANTEE: No team ever plays 3+ consecutive days.
-        # This validation pass catches any violations from any code path
-        # and reschedules the middle game of each streak to a nearby open date.
-        nhl_games = self._enforce_no_three_in_a_row(nhl_games, nhl_teams)
+
+        # FUNDAMENTAL ENFORCER: single gate for all NHL structural rules
+        # (nhl_schedule_rules.py). Validates completeness, no 3-in-a-row,
+        # no doubleheaders, season window, daily load; reports soft rules
+        # (back-to-backs, home balance). Repairs hard violations by moving
+        # games -- never deletes, never raises, never blocks generation.
+        try:
+            import nhl_schedule_rules as _nsr
+            nhl_games, _unfixable = _nsr.enforce_schedule(
+                nhl_games, season_year=season_year)
+            if _unfixable:
+                print(f"🚨 Schedule enforcer: {len(_unfixable)} HARD "
+                      f"violation(s) unfixable -- logged above, schedule "
+                      f"kept playable.")
+        except Exception as _e:
+            print(f"⚠️ Schedule enforcer skipped ({_e}); "
+                  f"falling back to legacy 3-in-a-row pass.")
+            nhl_games = self._enforce_no_three_in_a_row(nhl_games, nhl_teams)
         
         # Add NHL games to main schedule
         self.schedule.extend(nhl_games)

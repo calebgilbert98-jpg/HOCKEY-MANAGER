@@ -78,8 +78,8 @@ check("projection: 8 R1 series", len(b.playoff_series["wild_card"]) == 8)
 check("projection: flagged", b.is_projection is True)
 east_s = b.playoff_series["wild_card"][:4]
 seeds = [(s.team1.standings_position, s.team2.standings_position) for s in east_s]
-check("projection: 1v8/2v7/3v6/4v5 seeds",
-      seeds == [(1, 8), (2, 7), (3, 6), (4, 5)], str(seeds))
+check("projection: NHL divisional seeds (1v8, 2v3, 6v7, 5v4)",
+      seeds == [(1, 8), (2, 3), (6, 7), (5, 4)], str(seeds))
 check("projection: top seed is points leader",
       east_s[0].team1.team_name == "Boston Bruins", east_s[0].team1.team_name)
 check("abbr map", team_abbr("Boston Bruins") == "BOS" and

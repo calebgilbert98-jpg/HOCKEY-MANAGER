@@ -42,13 +42,18 @@ def pregame_crowd(home_team: Any, away_team: Any, ledger: Any = None,
                   elimination_game: bool = False,
                   milestone_home: bool = False,
                   ceremony: bool = False,
-                  outdoor: bool = False) -> Dict[str, Any]:
+                  outdoor: bool = False,
+                  rivalry_heat: float = 0.0) -> Dict[str, Any]:
     """Compute the crowd state at puck drop.
 
     energy: 0-100 loudness/engagement.
     mood:   -100..+100 from the HOME team's perspective (+ = behind them).
     drivers: short human labels for presentation ("Playoff Game 5", ...).
     big_game: True when the night genuinely matters (drives hype headlines).
+
+    rivalry_heat: 0-100 bad blood between the clubs (reputation system).
+    Grudge games are louder before puck drop -- this is the atmosphere
+    half of the rivalry loop (the engine half reads heat for hits/fights).
     """
     drivers: List[str] = []
     energy = 38.0
@@ -74,6 +79,25 @@ def pregame_crowd(home_team: Any, away_team: Any, ledger: Any = None,
         energy += 6.0
         mood += 4.0
         drivers.append("History between these two")
+
+    # --- rivalry heat: the grudge-match boost --------------------------------
+    # The ledger path above reads narrative memory; this reads the rivalry
+    # system's intensity (playoff wars, declared hate, regional bad blood).
+    # They stack on energy but share one driver label.
+    try:
+        _rh = float(rivalry_heat or 0.0)
+    except Exception:
+        _rh = 0.0
+    if _rh >= 65.0:
+        energy += 10.0
+        mood += 6.0
+        if "Bad blood in this building" not in drivers:
+            drivers.append("Bad blood in this building")
+        big_game = True
+    elif _rh >= 35.0:
+        energy += 5.0
+        mood += 3.0
+        drivers.append("Heated rivalry")
 
     # --- playoff ramp ------------------------------------------------------
     if is_playoff:
