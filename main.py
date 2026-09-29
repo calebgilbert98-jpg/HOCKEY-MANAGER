@@ -10213,17 +10213,42 @@ class HockeyManagerGUI(tk.Tk):
                     player.stats.goals += 1
                     player.stats.shots += 1
                 
-                    # Assists: up to 2 teammates (NHL: ~70% get 2, ~20% get 1, ~10% unassisted)
+                    # Assists: up to 2 teammates, selected by the SHARED
+                    # attribute-weighted decision (mesh_system.assist_weight)
+                    # -- the same call both engines make. BUG-023: the old
+                    # filter checked .name != "G" but the enum member name is
+                    # "GOALIE" ("G" is the value), so goalies were never
+                    # excluded; and uniform random.sample bypassed the entire
+                    # multi-attribute assist rework for user-team games
+                    # (backup goalie at 8 assists in October S1).
                     team_roster = home_roster if team_name == home_team.team_name else away_roster
                     potential_assisters = [
                         p for p in team_roster.values()
-                        if p.id != player.id 
-                        and getattr(p, 'primary_position', None) 
-                        and p.primary_position.name != "G"
+                        if p.id != player.id
+                        and getattr(p, 'primary_position', None)
+                        and p.primary_position.name != "GOALIE"
                     ]
-                    num_assists = random.choices([2, 1, 0], weights=[0.7, 0.2, 0.1])[0]
+                    # League-tuned rate (~1.35 assists/goal, matching the
+                    # engine retune) instead of the old NHL-real 1.6 -- the
+                    # user's team must not inflate relative to the league.
+                    num_assists = random.choices([2, 1, 0], weights=[0.55, 0.25, 0.20])[0]
                     if potential_assisters and num_assists > 0:
-                        assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
+                        try:
+                            from mesh_system import assist_weight as _aw_ev
+                            _tm_ev = home_team if team_name == home_team.team_name else away_team
+                            _ws = [max(0.05, _aw_ev(p, player, _tm_ev))
+                                   for p in potential_assisters]
+                            assisters = []
+                            _pool = list(potential_assisters)
+                            _wp = list(_ws)
+                            for _ in range(min(num_assists, len(_pool))):
+                                _pick = random.choices(_pool, weights=_wp, k=1)[0]
+                                _i = _pool.index(_pick)
+                                assisters.append(_pick)
+                                del _pool[_i]
+                                del _wp[_i]
+                        except Exception:
+                            assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
                         for assister in assisters:
                             assister.stats.assists += 1
                 
