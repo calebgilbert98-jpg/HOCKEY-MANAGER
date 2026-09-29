@@ -7042,8 +7042,10 @@ class League:
         """
         try:
             from player_generator import PlayerGenerator
+            _sy = int(getattr(self, "season_year", 0) or 0) or None
             salary, years, two_way, ahl_salary = \
-                PlayerGenerator().determine_contract_info(player, "NHL_ROOKIE")
+                PlayerGenerator().determine_contract_info(
+                    player, "NHL_ROOKIE", season_year=_sy)
         except Exception:
             salary, years, two_way, ahl_salary = 925000, 3, True, 85000
         return self.finalize_elc_signing(team, player, salary, years,

@@ -265,8 +265,15 @@ class PlayerGenerator:
                     new_value = min(GameBalance.MAX_ATTRIBUTE, current_value + boost_amount)
                     setattr(player, attr, new_value)
     
-    def determine_contract_info(self, player: Player, skill_tier: str) -> Tuple[int, int, bool, int]:
+    def determine_contract_info(self, player: Player, skill_tier: str,
+                                season_year=None) -> Tuple[int, int, bool, int]:
         """Determine appropriate contract salary and length for a player.
+
+        season_year: the signing season for CBA money (league minimum /
+        ELC max). When None the current season is used. Callers that know
+        the league season (e.g. ELC auto-sign) should pass it -- the new
+        CBA minimum escalates by season, so a default-year floor can come
+        in under the signing season's floor and fail validation.
 
         Returns (nhl_salary, years, two_way, ahl_salary). Category logic is
         Caleb's original: ELC / bridge for the kids, superstar/premium by
@@ -321,8 +328,8 @@ class PlayerGenerator:
                 from salary_cap_system import league_minimum_salary as _lms
                 from salary_cap_system import elc_max_salary as _elcmax
                 _elc_years = [max(1, int(_entry_years))]
-                _elc_floor = int(_lms())
-                _elc_ceil = int(_elcmax(_elc_years[0]))
+                _elc_floor = int(_lms(season_year))
+                _elc_ceil = int(_elcmax(_elc_years[0], season_year))
                 contract_info = {
                     "min": _elc_floor,
                     "max": max(_elc_floor, _elc_ceil),
