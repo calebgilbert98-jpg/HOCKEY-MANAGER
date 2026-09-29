@@ -498,9 +498,13 @@ def _piecewise_tilt(x, points):
 # band so elite volume separates by mechanics; the absolute level is set
 # so 93+ earns clear separation without cartoon volume. Calibrated
 # 2026-09-29 alongside the grade-A curve. Continuous, never a wall.
+# Recalibrated 2026-09-29 (shot-volume pass): top end flattened (95:
+# 1.14->0.98) -- the grade-A system now carries elite separation, so the
+# volume gate doesn't need to. Elite volume still separates, but 10+
+# attempts/game outliers are reined in.
 SHOT_VOLUME_TALENT_POINTS = (
     (60, 0.55), (65, 0.62), (70, 0.70), (75, 0.78), (80, 0.84),
-    (85, 0.88), (88, 0.94), (90, 1.00), (92, 1.06), (95, 1.14),
+    (85, 0.88), (88, 0.90), (90, 0.93), (92, 0.96), (95, 0.98),
 )
 
 

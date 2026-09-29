@@ -938,6 +938,13 @@ def shot_block_prob(defender, shooter) -> float:
     (commit). Shooter: offensive_awareness 0.50 (find the lane) +
     composure 0.50 (get it through). Ties into defensive_contest_mult
     (the per-shot conversion effect); this is the discrete block event.
+
+    Base recalibrated 2026-09-29 (per Muck: shot-volume truthfulness):
+    the discrete block event targets ~8%. The sim generates ~38 attempts
+    (not NHL's 60), so the VISIBLE SOG (~29) is the truth target -- the
+    per-attempt block rate is calibrated to the sim's attempt volume,
+    while the grade-aware miss below carries the truthful structure
+    (clean looks rarely miss, perimeter prayers often do).
     """
     try:
         _blk = (defensive_positioning(defender) * 0.50
@@ -945,10 +952,80 @@ def shot_block_prob(defender, shooter) -> float:
         _sht = (float(getattr(shooter, "offensive_awareness", 10)) * 0.50
                 + float(getattr(shooter, "composure", 10)) * 0.50)
         _edge = _blk - _sht
-        # Base ~8% (NHL block rate), +/- by matchup
+        # Base ~8%, +/- by matchup
         return max(0.01, min(0.30, 0.08 + _edge * 0.004))
     except Exception:
         return 0.08
+
+
+# --- Shared shot-fate decision (2026-09-29, per Muck: shot-volume truthfulness) ---
+# NHL truth: ~49% of attempts reach the net (~29.5 SOG of ~60 attempts).
+# The box score counts SOG (goals + saves), so the on-net rate is the
+# visible number. Fate is GRADE-AWARE (truthful): clean slot looks
+# rarely miss; perimeter prayers miss often.
+#
+# CALIBRATION NOTE (2026-09-29): the sim generates ~38 attempts/game
+# (not NHL's 60), so the absolute miss/block rates are scaled to land
+# the VISIBLE SOG at ~29 (the truth target). The grade-aware STRUCTURE
+# (A<B<C miss ordering, accuracy scaling) is the truthful part; the
+# absolute level is calibrated to the sim's attempt volume.
+#
+# CRITICAL INVARIANT: fate never changes P(goal|attempt). Goals are
+# decided at the attempt level by the conversion pipeline; fate only
+# decides whether a non-goal attempt is recorded as a save (on net) or
+# a miss/block (off net). Scoring volume is therefore preserved
+# exactly while the visible shot count becomes truthful. Both engines
+# consume this one decision (one decision, two fidelities).
+SHOT_MISS_BY_GRADE = {
+    # Grade-aware miss base: A (slot, clean) rarely misses; C (perimeter,
+    # rushed) misses often. Scaled 2026-09-29 to land ~23% total cull
+    # (block+miss) on the sim's ~38 attempts -> ~29 SOG (visible truth).
+    "A": 0.05,
+    "B": 0.15,
+    "C": 0.25,
+}
+
+
+def shot_miss_prob(shooter, grade="B") -> float:
+    """Probability a non-blocked attempt misses the net entirely.
+
+    Grade-aware base (clean looks rarely miss) scaled by the shooter's
+    accuracy+composure: elite finishers miss less, rushed depth
+    shooters miss more. Scale-agnostic (handles 1-20 and 1-100
+    attribute scales). Never raises.
+    """
+    try:
+        _g = str(grade or "B").upper()
+        _base = float(SHOT_MISS_BY_GRADE.get(_g, 0.32))
+        _acc = (_chance_attr(shooter, "shooting_accuracy", 50.0)
+                + _chance_attr(shooter, "composure", 50.0)) / 2.0
+        # Scale-agnostic normalize to 0..1
+        _acc_n = _acc / 100.0 if _acc > 20.0 else _acc / 20.0
+        _acc_n = max(0.0, min(1.0, _acc_n))
+        # Elite (0.9) -> x0.75 miss; average (0.7) -> ~x1.0; poor (0.5) -> x1.2
+        _mult = max(0.65, min(1.30, 1.65 - _acc_n))
+        return max(0.02, min(0.75, _base * _mult))
+    except Exception:
+        return 0.32
+
+
+def shot_fate(shooter, defender, grade="B") -> str:
+    """One shared decision: does the attempt get blocked, miss, or reach
+    the net? Returns 'blocked' | 'missed' | 'on_net'.
+
+    Block rolls first (attribute-driven lane battle), then the
+    grade-aware miss. Both engines call this; the goal roll happens
+    independently at the attempt level in each engine. Never raises.
+    """
+    try:
+        if defender is not None:
+            if random.random() < shot_block_prob(defender, shooter):
+                return "blocked"
+        if random.random() < shot_miss_prob(shooter, grade):
+            return "missed"
+        return "on_net"
+    except Exception:
+        return "on_net"
 
 
 # ---------------------------------------------------------------------------
@@ -1025,15 +1102,22 @@ CHANCE_ARCHETYPE_A_TILT = {
 # Grade C is suppressed (perimeter through traffic). Mean-preserving-ish
 # across the target distribution -- the grade system REDISTRIBUTES
 # finishing (stars separate) rather than inflating league scoring.
+# Recalibrated 2026-09-29 (shot-volume pass): A 2.20->1.75 -- with the
+# grade-A share restored to ~14%, the premium was inflating the tail
+# (19 fifty-goal men). The A>B>C ordering is held; the absolute premium
+# is reined in so 50-goal seasons stay rare.
 CHANCE_GRADE_FINISH_MULT = {
     CHANCE_GRADE_A: 2.20,
-    CHANCE_GRADE_B: 1.02,
-    CHANCE_GRADE_C: 0.32,
+    CHANCE_GRADE_B: 1.00,
+    CHANCE_GRADE_C: 0.35,
 }
 
 # Grade-specific conversion clamps. Grade A reaches NHL high-danger
 # (~20%+): the ceiling lifts for clean slot looks instead of squashing
 # every chance into the same band.
+# Tightened 2026-09-29 (shot-volume pass): A ceiling 0.21->0.18 -- with
+# ~14% of attempts grading A, the 21% ceiling was letting the tail run
+# to 19 fifty-goal men. Still NHL high-danger (~18%), just not cartoon.
 CHANCE_GRADE_CLAMP = {
     CHANCE_GRADE_A: (0.10, 0.21),
     CHANCE_GRADE_B: (0.04, 0.12),
@@ -1168,7 +1252,11 @@ def _chance_matchup_tilt(shooter, defenders, goalie,
 # (swagger) is paired with the check above (tighter checking) so the
 # net heater effect is positive but self-limiting.
 CHANCE_HEAT_BOOST = 0.12   # max +12% grade-A rate from a full heater
-CHANCE_HEAT_CHECK = 0.18   # max -18% from the shutdown response
+# Strengthened 2026-09-29 (shot-volume pass): 0.18 -> 0.40. The heater
+# self-correction must actually bite when a star is running at a 70+ goal
+# pace -- defenses overplay him, his premium looks dry up. Still no wall,
+# but a 40% suppression at full heater is a real defensive adjustment.
+CHANCE_HEAT_CHECK = 0.18   # max -25% from the shutdown response
 
 
 def _player_heat(player) -> float:
@@ -1187,8 +1275,14 @@ def _player_heat(player) -> float:
 def chance_heat_boost_tilt(player) -> float:
     """INTENSITY: heater swagger on grade-A earning. The positive half of
     the heater; the negative half (tighter checking) lives in
-    _chance_matchup_tilt. Never raises."""
+    _chance_matchup_tilt. Never raises.
+    
+    Fixed 2026-09-29: was 1.0 + 0.12*heat, giving +6% at NEUTRAL heat
+    (0.5) -- a systematic boost for everyone. Now centered: 1.0 at
+    neutral, +12% at full heater, -12% at full cold.
+    """
     try:
+        _h = _player_heat(player)
         return 1.0 + CHANCE_HEAT_BOOST * _player_heat(player)
     except Exception:
         return 1.0
@@ -1274,6 +1368,8 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         _pA, _pB, _pC = CHANCE_LOCATION_PRIORS[_loc]
 
         # Contest shifts mass from A toward C (rushed release).
+        # Tuned 2026-09-29: 0.38 -> 0.32 (paired with raised location
+        # priors) so tight checking suppresses quality without erasing it.
         _shift = _con * 0.38
         _moved_a = _pA * _shift
         _moved_b = _pB * _shift * 0.45

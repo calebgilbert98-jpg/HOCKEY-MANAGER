@@ -1716,6 +1716,27 @@ class AdvancedGameSim:
         from mesh_system import recalibrated_shot_chance
         skill_diff = shooter_skill - goalie_skill
         shot_chance = recalibrated_shot_chance(skill_diff)
+        # Truthful-block compensation (2026-09-29, per Muck): the shared
+        # block decision now stops ~8% of attempts (was a flat 5% gate),
+        # and a blocked shot never reaches the goal roll. The "designed
+        # 9%" was P(goal|attempt) under the old 5% regime; to preserve it,
+        # the unblocked conversion scales by (1-0.05)/(1-0.08) ~= 1.03.
+        # Scoring volume is thus held constant while the block rate
+        # becomes attribute-driven and truthful in structure.
+        shot_chance *= 1.03
+        # Heater shutdown on finishing (2026-09-29, per Muck: the breakout/
+        # seize-the-moment engine must be self-limiting). The grade-A
+        # suppression alone didn't stop 100-goal outliers -- when a
+        # shooter is scorching (mesh_form high), defenses overplay him
+        # and his FINISHING dries up too. Up to -50% at full heater.
+        # No wall: a generational talent still scores, just not 105.
+        try:
+            from mesh_system import _player_heat as _ph
+            _ht = _ph(shooter)
+            if _ht > 0.60:
+                shot_chance *= 1.0 - 0.50 * (_ht - 0.60) / 0.40
+        except Exception:
+            pass
 
         # Defensive contest 2026-09-28 (shared decision): the two on-ice
         # defenders contest every shot -- blocks (shot_blocking), gap
@@ -1749,6 +1770,7 @@ class AdvancedGameSim:
                     goalie_skill = goalie_skill * _sp
                     skill_diff = shooter_skill - goalie_skill
                     shot_chance = recalibrated_shot_chance(skill_diff)
+                    shot_chance *= 1.03  # truthful-block compensation (see above)
                     shot_chance *= _contest  # re-apply contest on new base
         except Exception:
             pass
@@ -1955,8 +1977,35 @@ class AdvancedGameSim:
         # Last change: the home coach got his matchup this shift.
         shot_chance *= self._matchup_edge.get(puck_team_name, 1.0)
 
-        # Shot blocking check
-        shot_blocked = self._check_shot_blocking(opp_team_name, fatigue_factor)
+        # Shot fate (2026-09-29, per Muck: shot-volume truthfulness): the
+        # ONE shared block/miss/on-net decision from mesh_system.
+        # Grade-aware (clean looks rarely miss) and attribute-driven
+        # (the defender's lane vs the shooter's composure). The block
+        # rolls here (a blocked shot never reaches the goal roll); the
+        # miss rolls after a failed goal roll below. Fate never changes
+        # P(goal|attempt) -- the goal roll is independent; fate only
+        # decides whether a non-goal attempt is a save (on net) or a
+        # miss/block (off net), so the visible SOG becomes NHL-truthful
+        # (~29.5) while scoring volume is preserved exactly.
+        _fate_missed = False
+        try:
+            from mesh_system import shot_block_prob as _sbp
+            _def_team = (self.away_team if puck_team_name == self.home_team.team_name
+                         else self.home_team)
+            _d_onice = (self.on_ice.get(_def_team.team_name, {}) or {}).get("Defense", [])
+            _d_cands = [d for d in _d_onice if d]
+            _defender = random.choice(_d_cands) if _d_cands else None
+            _blocked_now = (_defender is not None
+                            and random.random() < _sbp(_defender, shooter))
+            if _blocked_now:
+                self.events.append({
+                    'time': self.time, 'period': self.period,
+                    'team': opp_team_name, 'player': _defender,
+                    'event': 'Shot Blocked'})
+        except Exception:
+            _blocked_now = False
+            _defender = None
+        shot_blocked = bool(_blocked_now)
         
         # Position shooter and determine result
         shot_start = (shooter.x, shooter.y)
@@ -2036,9 +2085,23 @@ class AdvancedGameSim:
                 self.pp_team = None
                 self.pk_team = None
                 self.pp_end_time = None
-        elif goalie and random.random() < 0.8:
-            shot_result = 'SAVE'
-            if goalie:
+        elif goalie:
+            # Shared grade-aware miss (mesh_system.shot_miss_prob): clean
+            # looks rarely miss, perimeter prayers often do. A miss is
+            # off-net (not a save); otherwise the goalie stops it.
+            # The old flat 0.8 save rate is gone.
+            _missed = False
+            try:
+                from mesh_system import shot_miss_prob as _smp
+                _miss_grade = str(getattr(self, "_last_chance_grade", "B") or "B")
+                _missed = random.random() < _smp(shooter, _miss_grade)
+            except Exception:
+                _missed = False
+            if _missed:
+                shot_result = 'MISS'
+            else:
+                shot_result = 'SAVE'
+            if goalie and not _missed:
                 self.stats[opp_team_name][goalie.id]['saves'] = self.stats[opp_team_name][goalie.id].get('saves', 0) + 1
             # Add shot/save event
             self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Shot'})
