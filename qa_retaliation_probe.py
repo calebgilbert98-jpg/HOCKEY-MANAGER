@@ -29,6 +29,14 @@ assert mgr.load_game(os.path.join(_pt.SAVES, "s2_deadline.hm")), "save load fail
 lg = gm.league
 home, away = lg.teams[0], lg.teams[1]
 
+def ovr(p):
+    v = getattr(p, "overall_rating", getattr(p, "overall", 60))
+    try:
+        return float(v() if callable(v) else v)
+    except Exception:
+        return 60.0
+
+
 def skaters(team):
     return [p for p in team.roster
             if getattr(getattr(p, "primary_position", None), "value", "") != "G"]
@@ -37,17 +45,17 @@ def skaters(team):
 # canonical: OPPONENT's 4th-line grinder injures YOUR star. So star on home,
 # grinder on away.
 hsk = skaters(home); ask = skaters(away)
-star = max(hsk, key=lambda p: getattr(p, "overall", 0))
-grinder = min(ask, key=lambda p: getattr(p, "overall", 99))
+star = max(hsk, key=lambda p: ovr(p))
+grinder = min(ask, key=lambda p: ovr(p))
 # Rig the read: grinder is a hot-head, star is a star.
 grinder.aggressiveness = 88; grinder.discipline = 30; grinder.controversy = 65
 grinder.determination = 75
-star.overall = max(getattr(star, "overall", 80), 90)
-print(f"staged: {grinder.full_name} ({away.team_name}, ovr {grinder.overall}) "
-      f"vs {star.full_name} ({home.team_name}, ovr {star.overall})", flush=True)
+star.overall_rating = lambda: max(ovr(star), 90)
+print(f"staged: {grinder.full_name} ({away.team_name}, ovr {ovr(grinder)}) "
+      f"vs {star.full_name} ({home.team_name}, ovr {ovr(star)})", flush=True)
 
 sim = GameSim(home, away)
-sim.period = 2; sim.clock = 600.0
+sim.period = 2; sim.clock = 600  # int: live sims keep int clock; _log_event formats :02d
 heat0 = sim._live_heat
 
 # --- S1: debt opens on a dirty injury-causing hit ---
@@ -63,30 +71,30 @@ check("S1 teams recorded", debt["offending_team"] is away and debt["victim_team"
 # --- S2: clean accidental injury opens no debt ---
 clean_hitter = min(hsk, key=lambda p: getattr(p, "aggressiveness", 99))
 clean_hitter.aggressiveness = 40; clean_hitter.discipline = 70; clean_hitter.controversy = 20
-plug = min(hsk, key=lambda p: getattr(p, "overall", 99))
-plug.overall = 68
+plug = min(hsk, key=lambda p: ovr(p))
+plug.overall_rating = lambda: 68
 d2 = phy.maybe_open_receipt(sim, clean_hitter, plug, HitType.BODY_CHECK, 1)
 check("S2 clean hit opens no debt", d2 is None,
       f"intent={phy.perceive_intent(sim, clean_hitter, plug, HitType.BODY_CHECK, 1):.2f}")
 
 # --- S3: missed call on a dirty hit is an intent accelerant ---
 sim._last_missed_dirty = None
-i_plain = phy.perceive_intent(sim, grinder, star, HitType.BOARDING, 2)
+i_plain = phy.perceive_intent(sim, grinder, plug, HitType.BODY_CHECK, 2)
 sim._last_missed_dirty = {"team": away, "player": grinder,
                           "elapsed": phy._elapsed(sim)}
-i_whiff = phy.perceive_intent(sim, grinder, star, HitType.BOARDING, 2)
+i_whiff = phy.perceive_intent(sim, grinder, plug, HitType.BODY_CHECK, 2)
 check("S3 missed call accelerates intent (+0.20)",
       abs((i_whiff - i_plain) - 0.20) < 1e-6, f"{i_plain:.2f} -> {i_whiff:.2f}")
 sim._last_missed_dirty = None
 
 # --- S4: enforcer trigger -> immediate gloves-off ---
 # Rig on-ice: away has an enforcer out; both sides dressed.
-enf = max(ask, key=lambda p: getattr(p, "aggressiveness", 0))
+enf = max(hsk, key=lambda p: getattr(p, "aggressiveness", 0))
 orig_arch = phy._archetype
 def fake_arch(p):
     return "Enforcer" if p is enf else orig_arch(p)
-onice = {home.team_name: [star, clean_hitter, plug],
-         away.team_name: [enf, grinder]}
+onice = {home.team_name: [star, clean_hitter, enf],   # enf skates for the retaliating team
+         away.team_name: [grinder, plug]}
 sim._get_on_ice = lambda t: list(onice.get(getattr(t, "team_name", ""), []))
 debt["due"] = 0.0
 n_fights_before = len(sim._fight_log)
@@ -99,8 +107,8 @@ check("S4 enforcer trigger answers the debt", debt.get("answered") is True,
 check("S4 retaliatory fight actually booked", len(sim._fight_log) == n_fights_before + 1,
       f"fights {n_fights_before} -> {len(sim._fight_log)}")
 fl = sim._fight_log[-1] if sim._fight_log else {}
-check("S4 fight involves the avenging team", fl.get("team_a") == home.team_name or
-      fl.get("team_b") == home.team_name, str({k: fl.get(k) for k in ("team_a", "team_b")}))
+check("S4 fight involves the avenging team", fl.get("a_team") == home.team_name or
+      fl.get("b_team") == home.team_name, str({k: fl.get(k) for k in ("a_team", "b_team")}))
 check("S4 accepted receipt cools heat (-2)",
       abs(sim._live_heat - (heat_before + 6.0 - 2.0 + 0.0)) < 3.0 or sim._live_heat < heat_before + 6.0,
       f"heat {heat_before:.1f} -> {sim._live_heat:.1f}")
@@ -149,8 +157,19 @@ for i in range(400):
                                     "intent": 0.9, "answered": False})
     if a:
         vias.add(via)
-check("S6 both coach and player policing paths exist", vias == {"coach", "player"} or len(vias) >= 1,
-      f"via values seen: {sorted(vias)}")
+check("S6 player-policing path exists", "player" in vias, f"via: {sorted(vias)}")
+import reputation_system as _rs
+with mock.patch.object(_rs, "coach_reprisal_tendency", return_value=0.9):
+    seen_coach = False
+    for i in range(200):
+        random.seed(2000 + i)
+        a, via = phy.receipt_gate(sim, {"offending_team": away, "victim_team": home,
+                                        "hitter": grinder, "victim": star,
+                                        "intent": 0.9, "answered": False})
+        if a and via == "coach":
+            seen_coach = True
+            break
+check("S6 coach-ordered path exists (Tortorella-type coach)", seen_coach)
 
 # --- S7: Scott Stevens long memory ---
 sim2 = GameSim(home, away)

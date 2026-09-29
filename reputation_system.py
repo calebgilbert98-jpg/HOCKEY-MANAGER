@@ -3720,13 +3720,16 @@ NHL_BRAWLS_PER_GAME = 0.0009
 
 def fight_probability(tension: float, is_playoff: bool = False,
                       ordered: bool = False,
-                      retaliation_mod: float = 1.0) -> float:
+                      retaliation_mod: float = 1.0,
+                      personnel_mult: float = 1.0) -> float:
     """Per-game probability of at least one fight.
 
     Scales with the tension meter: a calm night (~10) sits well below the
     league average, a boiling rivalry (~80+) fights at multiples of it.
     Playoff teams are more disciplined about sitting five; an ordered team
-    (coach sent them out) is much more likely to go."""
+    (coach sent them out) is much more likely to go. personnel_mult is the
+    roster-personality layer (W5): rats fight more than choirboys at the
+    same tension; 1.0 reproduces the original curve exactly."""
     try:
         # League average (~0.26) lands around tension 20; a calm night sits
         # below it, a boiling rivalry fights at multiples of it.
@@ -3735,7 +3738,8 @@ def fight_probability(tension: float, is_playoff: bool = False,
             p *= 0.75
         if ordered:
             p *= 2.2
-        return round(min(0.85, p * max(0.0, retaliation_mod)), 4)
+        return round(min(0.85, p * max(0.0, retaliation_mod)
+                         * max(0.0, personnel_mult)), 4)
     except Exception:
         return NHL_FIGHTS_PER_GAME
 
@@ -3868,6 +3872,11 @@ INCIDENT_WEIGHTS = {
     "bad_call": 8,            # a missed call / uncalled infraction -- we remember
     "coach_comments": 8,     # he ran his mouth in the media
     "brawl": 15,
+    "fight": 4,               # W5: fights are stored now -- common, but the
+                              # feud remembers each one (decayed like the rest)
+    "statement_goal": 6,      # W5: answering a dirty play on the scoresheet
+    "unanswered_receipt": 8,  # W5: a retaliation debt never paid -- the
+                             # rivalry remembers into the next meeting
 }
 
 
@@ -3951,6 +3960,33 @@ def record_game_incident(rivalries: list, team_a: Any, team_b: Any,
         return {"recorded": False, "reason": "error"}
 
 
+def feed_grudge(rivalries: list, team_a: Any, team_b: Any,
+                grudge: int = 2, career_cost: int = 0) -> bool:
+    """Deepen a team_team feud's grudge/career_cost floors (W5).
+
+    Fights and statement goals don't just wound the rematch meter -- they
+    make the offseason decay hold the feud longer (see decay_rivalries:
+    high grudge/career_cost slows the cool-down). Additive: never lowers,
+    never creates records on its own. Returns True when a record was fed.
+    """
+    try:
+        names = {getattr(team_a, "team_name", ""),
+                 getattr(team_b, "team_name", "")}
+        if len(names) != 2 or "" in names:
+            return False
+        for r in rivalries or []:
+            if r.get("kind") != "team_team":
+                continue
+            if {r.get("a_name"), r.get("b_name")} == names:
+                r["grudge"] = min(100, int(r.get("grudge") or 0) + grudge)
+                r["career_cost"] = min(
+                    100, int(r.get("career_cost") or 0) + career_cost)
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _incident_games_ago(inc: Dict[str, Any]) -> float:
     try:
         d = date.fromisoformat(inc.get("date", date.today().isoformat()))
@@ -3974,6 +4010,9 @@ INCIDENT_LABELS = {
     "controversial_hit": "Controversial hit",
     "coach_comments": "Coach ran his mouth",
     "brawl": "Brawl",
+    "fight": "Fight",
+    "statement_goal": "Statement goal",
+    "unanswered_receipt": "Unanswered receipt",
 }
 
 

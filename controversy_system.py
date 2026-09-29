@@ -477,7 +477,15 @@ def _serve_delay_of_game(sim: Any, team: Any, detail: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 def maybe_uncalled_incident(sim: Any) -> bool:
-    """One gated roll per period: a missed call with malicious undertones."""
+    """One gated roll per period: a missed call with malicious undertones.
+
+    W5: the "borderline hit" kind was retired from this invented roll --
+    uncalled dirty hits are now whiffs on REAL drawn infractions (see
+    physicality.apply_missed_call, fed by the per-game officiating crew),
+    which replaced the decoupled engine where they overlapped. The two
+    remaining kinds (crease crash, too-many-men) have no real-infraction
+    counterpart, so they stay.
+    """
     pnum = getattr(sim, "period", 1)
     key = f"_cz_uncalled_p{pnum}"
     if getattr(sim, key, False):
@@ -496,13 +504,11 @@ def maybe_uncalled_incident(sim: Any) -> bool:
     attacking_team = home if random.random() < 0.5 else away
     defending_team = away if attacking_team is home else home
     kind = random.choices(
-        ("run_goalie", "missed_tmm", "borderline_hit"),
-        weights=(0.40, 0.30, 0.30), k=1)[0]
+        ("run_goalie", "missed_tmm"),
+        weights=(0.55, 0.45), k=1)[0]
     if kind == "run_goalie":
         return _uncalled_run_goalie(sim, attacking_team, defending_team)
-    if kind == "missed_tmm":
-        return _uncalled_tmm(sim, attacking_team, defending_team)
-    return _uncalled_borderline_hit(sim, attacking_team, defending_team)
+    return _uncalled_tmm(sim, attacking_team, defending_team)
 
 
 def _uncalled_run_goalie(sim: Any, attacking_team: Any,
@@ -545,64 +551,6 @@ def _uncalled_tmm(sim: Any, attacking_team: Any, defending_team: Any) -> bool:
     coach = _head_coach(sim, defending_team)
     leadership_response(sim, defending_team, coach, 0.40,
                         "uncalled too many men")
-    return True
-
-
-def _uncalled_borderline_hit(sim: Any, hitting_team: Any,
-                             victim_team: Any) -> bool:
-    """A late/high hit on a notable player, uncalled. Feud fuel."""
-    hitter = pick_instigator(_on_ice_skaters(sim, hitting_team))
-    hname = getattr(hitter, "full_name", "A checker") if hitter else "A checker"
-    victims = _on_ice_skaters(sim, victim_team)
-    # Rats target stars; everyone else hits who's there.
-    def _rep(p):
-        try:
-            from reputation_system import league_perception
-            return league_perception(p)
-        except Exception:
-            return getattr(p, "overall_rating", 60)
-    target = None
-    if victims:
-        if hitter is not None and instigation_tendency(hitter) > 0.45:
-            weights = [0.3 + _rep(p) / 100.0 for p in victims]
-            target = random.choices(victims, weights=weights, k=1)[0]
-        else:
-            target = random.choice(victims)
-    tname = getattr(target, "full_name", "a skater") if target else "a skater"
-    htn, vtn = _team_name(hitting_team), _team_name(victim_team)
-    _log(sim, f"{hname} levels {tname} with a borderline hit -- NO CALL! "
-              f"The {vtn} want blood.",
-         team=vtn, kind_detail="borderline_hit")
-    _heat(sim, 6.0)
-    _rivalry_incident(sim, hitting_team, victim_team, "controversial_hit",
-                      f"{hname} ran {tname}, uncalled")
-    coach = _head_coach(sim, victim_team)
-    leadership_response(sim, victim_team, coach, 0.45,
-                        f"uncalled borderline hit on {tname}")
-    # DoPS record (additive): stash the dealt hitter/victim identity in the
-    # same d-dict shape the rolled path uses, so the post-game hook can run
-    # this live hit through _dops_suspension_review. The log line and the
-    # rivalry wound above are unchanged; nothing else reads this list and
-    # it is consumed exactly once by narrative_incidents.
-    try:
-        _hcon = float(getattr(hitter, "controversy",
-                              getattr(hitter, "base_controversy", 30)) or 30) \
-            if hitter is not None else 30.0
-    except Exception:
-        _hcon = 30.0
-    try:
-        _hits = getattr(sim, "_live_borderline_hits", None)
-        if not isinstance(_hits, list):
-            _hits = []
-            sim._live_borderline_hits = _hits
-        _hits.append({
-            "kind": "controversial_hit",
-            "hitter": hname, "hitter_team": htn,
-            "victim": tname, "victim_team": vtn,
-            "hitter_controversy": max(0.0, min(100.0, _hcon)),
-        })
-    except Exception:
-        pass
     return True
 
 

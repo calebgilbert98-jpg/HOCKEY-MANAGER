@@ -192,7 +192,7 @@ def choose_hit_type(hitter: Any, victim: Any, sim: Any = None) -> Any:
         spd = _attr(hitter, "speed")
         hot_head = (arch == "Enforcer") or (aggr >= 80 and disc <= 45)
         try:
-            star = float(getattr(victim, "overall", 0) or 0) >= 82
+            star = _overall(victim) >= 82
         except Exception:
             star = False
         smallish = _attr(victim, "strength", 75.0) < 72
@@ -764,6 +764,21 @@ def _receipts(sim: Any) -> List[Dict[str, Any]]:
     return debts
 
 
+def _overall(p: Any) -> float:
+    """Overall rating across Player attribute spellings (overall_rating is
+    the canonical one on game_classes.Player; 'overall' is the QA-fake
+    spelling)."""
+    try:
+        v = getattr(p, "overall_rating", None)
+        if v is None:
+            v = getattr(p, "overall", None)
+        if callable(v):
+            v = v()
+        return float(v) if v is not None else 60.0
+    except (TypeError, ValueError):
+        return 60.0
+
+
 def _hit_type_name(hit_type: Any) -> str:
     try:
         v = getattr(hit_type, "value", hit_type)
@@ -796,7 +811,7 @@ def perceive_intent(sim: Any, hitter: Any, victim: Any,
             score += 0.10
         if con >= 60:
             score += 0.10
-        if _attr(victim, "overall", 60.0) >= 85:
+        if _overall(victim) >= 85:
             score += 0.10  # stars draw targeted hits
         # Officiating link: a recent whiffed dirty call by the hitter's
         # team makes this one read intentional.

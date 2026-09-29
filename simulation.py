@@ -16,7 +16,41 @@ from player_archetypes import (
     ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
 )
 from player_traits import get_sim_bonus as _trait_bonus
-import physicality as _physicality  # W5: officiating, dirty hits, fighting, heat, statement goals
+try:
+    import physicality as _physicality  # W5: officiating, dirty hits, fighting, heat, statement goals, receipts
+except ImportError:
+    # Defensive fallback: if physicality.py is absent from the checkout,
+    # the engine runs WITHOUT the W5 physicality layer instead of
+    # crashing. Every _physicality call site below is try/except-guarded;
+    # the stub just supplies the module attributes they touch so the
+    # guards' fallback paths engage cleanly.
+    import types as _phy_types
+    _physicality = _phy_types.SimpleNamespace(
+        DIRTY_INFRACTIONS=frozenset(),
+        init_crew=lambda sim: 0.0,
+        crew_accuracy=lambda sim: 0.0,
+        is_missed_call=lambda sim, name: False,
+        apply_missed_call=lambda *a, **k: {"missed": False},
+        note_dirty_watch=lambda *a, **k: None,
+        decay_heat=lambda *a, **k: None,
+        tick_receipts=lambda *a, **k: None,
+        settle_receipts=lambda *a, **k: None,
+        maybe_open_receipt=lambda *a, **k: None,
+        mark_stevens=lambda *a, **k: None,
+        stevens_fight_mult=lambda sim: 1.0,
+        stevens_impact_bump=lambda sim, hitter, impact: impact,
+        choose_hit_type=lambda *a, **k: None,
+        pick_fight_instigator=lambda *a, **k: None,
+        pick_willing_combatant=lambda *a, **k: None,
+        fight_outcome=lambda a, b: (a, b, "decision"),
+        apply_fight_spark=lambda *a, **k: None,
+        fight_spark_mult=lambda sim, team: 1.0,
+        store_fight=lambda *a, **k: None,
+        rivalry_heat_between=lambda *a, **k: 0.0,
+        check_statement_goal=lambda *a, **k: None,
+        build_hit_context=lambda *a, **k: None,
+        set_last_hit_context=lambda *a, **k: None,
+    )
 
 class ShotType(Enum):
     WRIST_SHOT = "wrist_shot"
@@ -553,6 +587,9 @@ class GameSim:
         self._fight_spark = {}         # team_name -> {"until": elapsed, "mult": float}
         self._dirty_watch = {}         # victim team_name -> {...} (statement goals)
         self._fight_log = []           # per-game fight records (who/winner/when)
+        self._receipts = []            # W5 retaliation debts ("receipts")
+        self._stevens = {}             # W5 grudge marks by hitter id
+        self._last_missed_dirty = None  # W5 officiating link for intent reads
         try:
             _physicality.init_crew(self)
         except Exception:
@@ -2389,7 +2426,12 @@ class GameSim:
         except Exception:
             pass
 
-        # W5-CUT-FOR-COMMIT-A: settle_receipts block restored in commit (b).
+        # W5: unpaid retaliation debts feed the rivalry store's long-term
+        # memory before telemetry, so the story survives into the next game.
+        try:
+            _physicality.settle_receipts(self)
+        except Exception:
+            pass
         self._emit_telemetry()
 
         return winner, loser, (self.home_score, self.away_score), self.game_log, self.notable_events
@@ -2527,6 +2569,18 @@ class GameSim:
             self.clock -= time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
+            # W5: live heat decays with game time -- long calm stretches
+            # cool the room, so a chippy first period stops inflating fight
+            # odds all night. Spikes (fights, majors, missed calls, brawls)
+            # still land on top of the decay.
+            # W5 retaliation engine: due debts get gated (coach/player
+            # policing, enforcer trigger, escalation ladder); unanswered
+            # debts settle into rivalry memory at game end.
+            try:
+                _physicality.decay_heat(self, time_elapsed)
+                _physicality.tick_receipts(self)
+            except Exception:
+                pass
             # Tick-local log indices: used below to spread this tick's
             # elapsed game time across the events logged during the tick,
             # so sequential plays get distinct chronological timestamps.
@@ -5321,6 +5375,17 @@ class GameSim:
         expected_goal = min(0.95, expected_goal * self._situation_xg_factor(
             attacking_team))
 
+        # W5 bench spark: a won fight lifts the winner's bench for ~5 game
+        # minutes -- their finishing ticks up (+5%, +7% in heated/rivalry
+        # games). Own explicit channel, never inside momentum.py (which
+        # stays read-only by design); 1.0 when nothing is burning.
+        try:
+            expected_goal = min(0.95, expected_goal
+                                * _physicality.fight_spark_mult(
+                                    self, attacking_team))
+        except Exception:
+            pass
+
         # Tie-game late tightening (additive): protecting the point is real
         # hockey -- tied in the 3rd under 10:00 left, both teams trade
         # chances for structure. Same shared decision both engines call
@@ -6416,6 +6481,39 @@ class GameSim:
         else:
             name, penalty_length, detail = infraction
 
+        _fight_opponent = None  # personality-picked dance partner, Fighting only
+        # W5 officiating accuracy: dirty plays are usually penalized, but a
+        # whiffed call on a REAL infraction goes unwhistled and feeds the
+        # heat engine instead of the box. Fights are always called.
+        try:
+            if name in _physicality.DIRTY_INFRACTIONS:
+                _physicality.note_dirty_watch(self, player, team, name)
+            if _physicality.is_missed_call(self, name):
+                _physicality.apply_missed_call(self, player, team, name)
+                return "missed"
+        except Exception:
+            pass
+        # W5 personality-scaled fighting: when the draw says Fighting, the
+        # gloves come off for the willing -- not whoever happened to be
+        # nearest. The rat starts it, the enforcer answers it.
+        if name == "Fighting":
+            try:
+                _opp_team = (self.away_team if team is self.home_team
+                             else self.home_team)
+                _cands = [p for p in self._get_on_ice(team)
+                          if p.primary_position != PlayerPosition.GOALIE]
+                _inst = _physicality.pick_fight_instigator(
+                    _cands, heat=self._live_heat,
+                    rivalry=_physicality.rivalry_heat_between(
+                        self.rivalries, self.home_team, self.away_team))
+                if _inst is not None:
+                    player = _inst
+                _opp_cands = [p for p in self._get_on_ice(_opp_team)
+                              if p.primary_position != PlayerPosition.GOALIE]
+                _fight_opponent = _physicality.pick_willing_combatant(_opp_cands)
+            except Exception:
+                _fight_opponent = None
+
         if (name != "Fighting"
                 and getattr(self, "_delayed_penalty", None) is None
                 and getattr(self, "possession_team", None) is not None
@@ -6435,13 +6533,19 @@ class GameSim:
                            away_score=self.away_score)
             return
 
-        self._whistle_penalty(player, team, name, penalty_length, detail)
+        self._whistle_penalty(player, team, name, penalty_length, detail,
+                             opponent=_fight_opponent)
 
-    def _whistle_penalty(self, player, team, name, penalty_length, detail):
+    def _whistle_penalty(self, player, team, name, penalty_length, detail,
+                         opponent=None):
         """Book a penalty and blow the whistle immediately (faceoff in the
         offending team's defensive zone). Used for immediate calls and for
-        forcing a delayed call at a period boundary."""
-        self._book_penalty(player, team, name, penalty_length, detail)
+        forcing a delayed call at a period boundary.
+
+        opponent: for Fighting, the personality-picked dance partner (None
+        lets _book_fight_pair fall back to its own pick)."""
+        self._book_penalty(player, team, name, penalty_length, detail,
+                           opponent=opponent)
         # Whistle: play stops, faceoff in the offending team's defensive zone
         self._forced_faceoff_team = team
         self.possession_team = self._resolve_faceoff(reason="penalty",
@@ -6610,15 +6714,31 @@ class GameSim:
     def _fight_weight_mult(self):
         """Scale the Fighting draw weight so the sim's fight rate tracks the
         tension meter. Base sim: ~0.175 fights/game; target comes from the
-        NHL-grounded fight_probability()."""
+        NHL-grounded fight_probability(). W5: the roster-personality layer
+        (rats fight more than choirboys at the same tension) multiplies in
+        via personnel_mult -- 1.0 for a league-average room."""
         try:
             from reputation_system import fight_probability
             ordered = any(o.get("ordered") for o in
                           getattr(self, "_punishment_orders", {}).values())
+            _pm = 1.0
+            try:
+                _pm = _physicality.personnel_fight_mult(
+                    getattr(self.home_team, "roster", []),
+                    getattr(self.away_team, "roster", []))
+            except Exception:
+                pass
             target = fight_probability(self._live_tension(),
                                        is_playoff=self.is_playoff,
                                        ordered=ordered,
-                                       retaliation_mod=getattr(self, "_retaliation_mod", 1.0))
+                                       retaliation_mod=getattr(self, "_retaliation_mod", 1.0),
+                                       personnel_mult=_pm)
+            # W5 Scott Stevens long memory: grudges held within the game
+            # make the room chippier than the same tension otherwise would.
+            try:
+                target *= _physicality.stevens_fight_mult(self)
+            except Exception:
+                pass
             return max(0.25, min(4.0, target / 0.175))
         except Exception:
             return 1.0
@@ -6760,10 +6880,50 @@ class GameSim:
                 "FIGHT")
         else:
             self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
-        self._emit_pbp("fight", player=player, team=team.team_name)
+        # W5: fights have winners now, and winning matters. The winner's
+        # bench gets a short-term spark (explicit finishing lift, bigger in
+        # heated/rivalry games); the barn's intensity rises with the heat;
+        # and the fight is STORED -- rivalry record, game fight log, and a
+        # deeper grudge floor so the feud decays slower.
+        _winner, _method = player, "decision"
+        _winner_team = team
+        try:
+            _w, _l, _m = _physicality.fight_outcome(player, opponent)
+            _winner, _method = _w, _m
+            _wt = self._get_player_team(_winner)
+            if _wt is not None:
+                _winner_team = _wt
+        except Exception:
+            pass
+        try:
+            _rheat = _physicality.rivalry_heat_between(
+                self.rivalries, self.home_team, self.away_team)
+            _heated = _rheat >= 40.0 or self._live_tension() >= 65.0
+            _physicality.apply_fight_spark(self, _winner_team, heated=_heated)
+            _physicality.store_fight(self, player, team, opponent,
+                                     opposing_team, _winner, _method)
+            if opponent is not None:
+                _wname = getattr(_winner, "full_name", "?")
+                self._log_event(
+                    f"{_wname} takes the fight ({_method}) -- the "
+                    f"{_winner_team.team_name} bench is buzzing.", "FIGHT")
+        except Exception:
+            pass
+        try:
+            for _fp in (player, opponent):
+                if _fp is not None and getattr(_fp, "id", None) in self.game_stats:
+                    self.game_stats[_fp.id]['fights'] = \
+                        self.game_stats[_fp.id].get('fights', 0) + 1
+        except Exception:
+            pass
+        self._emit_pbp("fight", player=player, team=team.team_name,
+                       opponent=getattr(opponent, "full_name", None),
+                       winner=getattr(_winner, "full_name", None),
+                       method=_method,
+                       winner_team=getattr(_winner_team, "team_name", ""))
         try:
             from momentum import observe as _mom_observe4
-            _mom_observe4(self, "fight", team)
+            _mom_observe4(self, "fight", _winner_team)
         except Exception:
             pass
         self.fights_called += 1
@@ -6778,7 +6938,14 @@ class GameSim:
             self.home_penalties_called += 1
             self.home_pim_called += 5
         if not self._in_brawl:
-            self._live_heat = min(40.0, self._live_heat + 6.0)
+            # Heated/rivalry games: the same fight lands harder on the room.
+            _heat_add = 6.0
+            try:
+                if _heated:
+                    _heat_add = 8.0
+            except Exception:
+                pass
+            self._live_heat = min(40.0, self._live_heat + _heat_add)
             self._maybe_brawl("fight")
 
     def _book_misconduct(self, player, team):
@@ -6794,9 +6961,13 @@ class GameSim:
         else:
             self.away_pim_called += 10
 
-    def _book_penalty(self, player, team, name, penalty_length, detail):
+    def _book_penalty(self, player, team, name, penalty_length, detail,
+                      opponent=None):
         """Record a penalty (box time, PIM, PP/PK bookkeeping, PBP) without
-        stopping play. The whistle/faceoff is the caller's job."""
+        stopping play. The whistle/faceoff is the caller's job.
+
+        opponent: Fighting only -- the willing combatant picked by
+        personality (falls back to the old pick inside _book_fight_pair)."""
         opposing_team = self.away_team if team is self.home_team else self.home_team
         team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
         opp_penalties = self.away_penalties if team is self.home_team else self.home_penalties
@@ -6812,7 +6983,7 @@ class GameSim:
 
         if name == "Fighting":
             # Coincidental fighting majors: both combatants get 5, teams stay 5v5.
-            self._book_fight_pair(player, team)
+            self._book_fight_pair(player, team, opponent, None)
             self.penalties_called += 1  # second penalty of the pair
         else:
             player.stats.penalties_in_minutes += penalty_length
@@ -7077,6 +7248,15 @@ class GameSim:
         try:
             from momentum import observe as _mom_observe
             _mom_observe(self, "goal", scoring_team)
+        except Exception:
+            pass
+        # W5 statement goals: the victim's team answering a dirty play on
+        # the scoresheet. check_statement_goal applies the heat spike, the
+        # rivalry wound (+grudge floor), the headline spec and the log line,
+        # then clears the watch. A goal by the offending team first kills
+        # the watch quietly.
+        try:
+            _physicality.check_statement_goal(self, scoring_team, shooter)
         except Exception:
             pass
         try:
@@ -8816,10 +8996,28 @@ class GameSim:
         except Exception:
             hit_impact = 1
 
+        # W5 Scott Stevens long memory: grudge-holding hitters finish a
+        # little more punishingly (small capped chance to lift the tier).
+        # Additive: the shared impact classifier above is never retuned.
+        try:
+            hit_impact = _physicality.stevens_impact_bump(
+                self, hitting_player, hit_impact)
+        except Exception:
+            pass
         try:
             from momentum import observe as _mom_observe5
             if hit_successful and hit_impact == 2:
                 _mom_observe5(self, "big_hit", _hteam)
+        except Exception:
+            pass
+        # W5: expose the attempt's context for W4's injury code -- who, how
+        # dirty, how fast, where on the ice. Set before the result resolves
+        # so the circumstance is captured even when the hit injures.
+        try:
+            _physicality.set_last_hit_context(
+                self, _physicality.build_hit_context(
+                    hitting_player, target_player, hit_type, hit_impact,
+                    sim=self))
         except Exception:
             pass
         if hit_successful:
@@ -9053,6 +9251,21 @@ class GameSim:
             self._apply_hit_injury(target_player, hitting_player,
                                    hitting_team, target_team,
                                    hit_type, impact)
+            # W5 retaliation engine ("receipts"): a perceived-intent injury
+            # opens a debt owed by the offending team. Additive: the injury
+            # event itself is generated exactly as before.
+            try:
+                _physicality.maybe_open_receipt(self, hitting_player,
+                                                target_player, hit_type,
+                                                impact)
+            except Exception:
+                pass
+        # W5 Scott Stevens long memory: high-aggression/high-determination
+        # hitters hold grudges within a game on dirty or big-impact hits.
+        try:
+            _physicality.mark_stevens(self, hitting_player, hit_type, impact)
+        except Exception:
+            pass
 
     def _apply_hit_injury(self, victim, hitter, hitting_team, target_team,
                           hit_type, impact):
