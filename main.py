@@ -499,6 +499,10 @@ class GameManager:
                     break
             if not team_found:
                 print(f"WARNING: Could not find team '{selected_team_name}' in league teams!")
+            else:
+                # Item 7 follow-up: the human club's letters must be the
+                # user's choice, never inherited auto-repair.
+                self._claim_user_team_captaincy(self.user_team)
         else:
             debug_print(f"DEBUG: No team to set - selected_team_name={selected_team_name}, has league={hasattr(self, 'league') and self.league is not None}")
         
@@ -1456,6 +1460,13 @@ NHL League Office""",
                     changed = True
         except Exception:
             pass
+        if changed:
+            # Item 7 follow-up: stamp letters dealt by auto-repair so the
+            # human club can later be told apart from a human choice.
+            try:
+                team._captaincy_auto_assigned = True
+            except Exception:
+                pass
         return new_captain
 
     # --- Item 7: mandatory captaincy user-choice blocker -------------------
@@ -1529,6 +1540,12 @@ NHL League Office""",
                 p.captaincy = "C"
             elif name == a1 or name == a2:
                 p.captaincy = "A"
+        # A human just chose these letters: never mistake them for
+        # auto-repair later.
+        try:
+            team._captaincy_auto_assigned = False
+        except Exception:
+            pass
 
     def _opening_night_captaincy_check(self, team, user_team):
         """One club's opening-night captaincy step. Returns the new
@@ -1587,6 +1604,42 @@ NHL League Office""",
                 pass
         return ok
 
+    def _claim_user_team_captaincy(self, team) -> bool:
+        """Item 7 follow-up: whenever the human club is (re)determined, make
+        sure the user -- not auto-repair -- chose its letters.
+
+        New-game setup auto-repairs every club before the user's team is
+        known; without this, the user would silently inherit those letters
+        and never be asked. When the club's letters came from auto-repair
+        (stamped by _ensure_captaincy), strip them and arm the mandatory
+        picker. When the club simply has no valid 1C+2As (a broken save, a
+        scrambled post-fantasy-draft roster, a league that never ran the
+        setup pass), arm the picker too -- the human club is never
+        auto-repaired. A club that already wears a valid, human-chosen
+        1C+2As is left untouched. Returns True when the blocker was armed.
+        """
+        if team is None:
+            return False
+        try:
+            if getattr(team, "_captaincy_auto_assigned", False):
+                for p in (getattr(team, "roster", None) or []):
+                    try:
+                        p.captaincy = None
+                    except Exception:
+                        pass
+                try:
+                    team._captaincy_auto_assigned = False
+                except Exception:
+                    pass
+                self._captaincy_choice_pending = True
+                return True
+            if self._captaincy_needs_choice(team):
+                self._captaincy_choice_pending = True
+                return True
+        except Exception:
+            pass
+        return False
+
     def set_user_team(self, team_name):
         """Set the user's selected team"""
         # Find the team by name
@@ -1599,6 +1652,10 @@ NHL League Office""",
         if user_team:
             self.user_team = user_team
             print(f"User team set to: {team_name}")
+            # Item 7 follow-up: setup auto-repairs every club before the
+            # user's team is known -- reclaim the human club so the user
+            # picks its captains instead of inheriting auto-repair.
+            self._claim_user_team_captaincy(user_team)
             # Update team colors in UI if the UI is already set up
             if hasattr(self, 'modern_theme') and hasattr(self, 'style'):
                 self._update_team_colors()
@@ -2028,15 +2085,7 @@ class HockeyManagerGUI(tk.Tk):
         # Item 7: a captaincy choice deferred from headless new-game setup
         # (no display existed to ask) is raised here as a mandatory,
         # non-dismissible blocker before the user can continue.
-        try:
-            _gm7 = self.game_manager
-            if (getattr(_gm7, "_captaincy_choice_pending", False)
-                    and getattr(_gm7, "user_team", None) is not None
-                    and _gm7._captaincy_needs_choice(_gm7.user_team)):
-                self.after_idle(
-                    lambda: _gm7._require_captaincy_choice(_gm7.user_team))
-        except Exception:
-            pass
+        self.after_idle(self._raise_captaincy_blocker_if_pending)
         
         # Set application icon
         self._set_application_icon()
@@ -2112,6 +2161,7 @@ class HockeyManagerGUI(tk.Tk):
                     if team.team_name == selected_team_name:
                         user_team_found = team
                         self.game_manager.user_team = team
+                        self.game_manager._claim_user_team_captaincy(team)
                         debug_print(f"DEBUG: Found team from startup_settings (exact): {team.team_name}")
                         break
                 
@@ -2123,6 +2173,7 @@ class HockeyManagerGUI(tk.Tk):
                         if selected_lower in team_lower or team_lower in selected_lower:
                             user_team_found = team
                             self.game_manager.user_team = team
+                            self.game_manager._claim_user_team_captaincy(team)
                             debug_print(f"DEBUG: Found team from startup_settings (partial): {team.team_name}")
                             break
                 
@@ -2130,6 +2181,7 @@ class HockeyManagerGUI(tk.Tk):
                 if not user_team_found and self.league.teams:
                     user_team_found = self.league.teams[0]
                     self.game_manager.user_team = user_team_found
+                    self.game_manager._claim_user_team_captaincy(user_team_found)
                     debug_print(f"DEBUG: Team not found, defaulting to: {user_team_found.team_name}")
         
         if user_team_found:
@@ -2279,6 +2331,11 @@ class HockeyManagerGUI(tk.Tk):
                 self.game_manager.user_team = user_team
                 self.user_team = user_team
                 user_team.is_user_team = True
+                # Item 7 follow-up: the user names this club's captains --
+                # reclaim it from setup auto-repair and raise the picker.
+                # (This window runs after the __init__ pending check.)
+                self.game_manager._claim_user_team_captaincy(user_team)
+                self.after_idle(self._raise_captaincy_blocker_if_pending)
                 self.title(f"{user_team.team_name} - Puck Dynasty")
                 self._update_team_colors()
                 
@@ -2766,6 +2823,20 @@ class HockeyManagerGUI(tk.Tk):
             print(f"⚠️ Error loading UI icons: {e}")
             self.ui_icons = {}
 
+    def _raise_captaincy_blocker_if_pending(self):
+        """Item 7 follow-up: raise the mandatory, non-dismissible captains
+        picker when the game manager armed it. Safe to call from after_idle
+        at any point after the user team is known."""
+        try:
+            gm = getattr(self, "game_manager", None)
+            ut = getattr(gm, "user_team", None) if gm is not None else None
+            if (gm is not None and ut is not None
+                    and getattr(gm, "_captaincy_choice_pending", False)
+                    and gm._captaincy_needs_choice(ut)):
+                gm._require_captaincy_choice(ut)
+        except Exception:
+            pass
+
     def _select_team(self):
         team_names = sorted([t.team_name for t in self.league.teams])
         chosen_team_name = simpledialog.askstring("Team Selection", "Enter the name of the team you want to manage:", initialvalue=random.choice(team_names))
@@ -2774,6 +2845,8 @@ class HockeyManagerGUI(tk.Tk):
             if self.user_team:
                 self.user_team.is_user_team = True
                 self.game_manager.user_team = self.user_team
+                # Item 7 follow-up: human club letters are the user's choice.
+                self.game_manager._claim_user_team_captaincy(self.user_team)
                 self.title(f"{self.user_team.team_name} - Hockey Manager")
                 
                 # Generate initial welcome emails
@@ -5686,6 +5759,26 @@ class HockeyManagerGUI(tk.Tk):
             cap_blocker = self._cap_compliance_blocker()
             if cap_blocker:
                 blockers.append(cap_blocker)
+        except Exception:
+            pass
+        # Item 7 follow-up: the human club must wear exactly 1 C + 2 As --
+        # chosen by the user, never auto-repaired -- before the day can
+        # advance. The action opens the mandatory picker directly.
+        try:
+            if gm is not None and not getattr(gm, 'pending_fantasy_draft', False):
+                _ut = getattr(gm, 'user_team', None)
+                if _ut is not None and (
+                        getattr(gm, '_captaincy_choice_pending', False)
+                        or gm._captaincy_needs_choice(_ut)):
+                    blockers.append({
+                        'id': 'captaincy_choice',
+                        'title': 'Name your captains',
+                        'detail': ('NHL Rule 6.1: your club needs exactly one '
+                                   'captain (C) and two alternates (A) before '
+                                   'the season can continue.'),
+                        'action': ('Choose Captains',
+                                   lambda: gm._require_captaincy_choice(_ut)),
+                    })
         except Exception:
             pass
         if blockers:

@@ -3504,6 +3504,16 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         if hasattr(self.game_manager, 'pending_fantasy_draft'):
             self.game_manager.pending_fantasy_draft = False
 
+        # Item 7 follow-up: the draft scrambled every roster -- the human
+        # club's letters must be the user's choice, never leftovers.
+        try:
+            _gm = getattr(self, 'game_manager', None)
+            _ut = getattr(_gm, 'user_team', None) if _gm is not None else None
+            if _gm is not None and _ut is not None:
+                _gm._claim_user_team_captaincy(_ut)
+        except Exception:
+            pass
+
         # Blocker cleared: refresh the dashboard's smart Continue/Next Day label.
         try:
             dashboard = getattr(self.app, 'dashboard', None)

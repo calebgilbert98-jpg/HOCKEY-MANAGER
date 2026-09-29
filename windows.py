@@ -12588,7 +12588,11 @@ class SetCaptainsView(ctk.CTkFrame):
                 p.captaincy = 'C'
             elif p.full_name == alt1_name or p.full_name == alt2_name:
                 p.captaincy = 'A'
-        
+        # A human just chose: never mistake these letters for auto-repair.
+        try:
+            self.app.user_team._captaincy_auto_assigned = False
+        except Exception:
+            pass
         messagebox.showinfo("Captains Updated", "Team captaincy has been updated.")
         self.app.update_all_views()
         self.close_view()
