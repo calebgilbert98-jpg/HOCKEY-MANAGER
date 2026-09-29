@@ -224,6 +224,15 @@ class GameSaveManager:
             'lottery_results': {int(k): [dict(r) for r in v]
                                 for k, v in
                                 (getattr(league, 'lottery_results', None) or {}).items()},
+            # Cup recap idempotency: "season:champion" once the awarding
+            # story has hit the inbox. Missing key = old save -> unsent.
+            'cup_recap_sent': getattr(league, 'cup_recap_sent', None),
+            # Jersey ceremony schedule: absolute dates for the first
+            # season's real-life retirements. Missing = old save -> the
+            # real 2026-27 dates are used as fallback.
+            'ceremony_schedule': [dict(c) for c in
+                                  (getattr(league, 'ceremony_schedule', None)
+                                   or [])],
             'lottery_held_years': sorted(getattr(league, 'lottery_held_years', None) or []),
             'intl_held': {k: sorted(v) for k, v in
                           (getattr(league, 'intl_held', None) or {}).items()},
@@ -1112,6 +1121,10 @@ class GameSaveManager:
                                        (league_data.get('all_star_rosters', None) or {}).items()}
             league.rivalries = [dict(r) for r in
                                 (league_data.get('rivalries', None) or [])]
+            league.cup_recap_sent = league_data.get('cup_recap_sent', None)
+            league.ceremony_schedule = [dict(c) for c in
+                                        (league_data.get('ceremony_schedule', None)
+                                         or [])]
             # Immortality restores: retired-player snapshots (HOF ballot
             # arcs) and the milestone idempotency set. Absent in old
             # saves -> empty, same as a fresh league.

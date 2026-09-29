@@ -755,3 +755,296 @@ def era_argument_news(arg: Dict[str, Any]) -> str:
                 f"other says dominance is dominance. Settle it how you like.")
     except Exception:
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Scheduled real-life jersey retirements -- first season
+# ---------------------------------------------------------------------------
+# The three ceremonies announced for 2026-27, staged in the sim's FIRST
+# season on the real month/day so the rafters match reality and the
+# retirement pipeline proves itself live. Real names only: these legends are
+# history, not generated players, so the ceremony honors the man himself
+# regardless of who the sim generated.
+#
+# New games stamp absolute dates from their inaugural season_year onto
+# league.ceremony_schedule (persisted). Old saves without a schedule fall
+# back to the real 2026-27 dates; anything past-dated is retired quietly by
+# retire_overdue_ceremonies() instead of firing late.
+CEREMONY_TEMPLATES: List[Dict[str, Any]] = [
+    {"team": "Boston Bruins", "number": 37, "player": "Patrice Bergeron",
+     "month": 12, "day": 1, "offset": 0,
+     "note": "the Selke standard-bearer who captained Boston for 19 seasons"},
+    {"team": "Anaheim Ducks", "number": 15, "player": "Ryan Getzlaf",
+     "month": 1, "day": 30, "offset": 1,
+     "note": "the 2007 Cup-winning captain and franchise scoring king"},
+    {"team": "Los Angeles Kings", "number": 11, "player": "Anze Kopitar",
+     "month": 2, "day": 24, "offset": 1,
+     "note": "the two-time Cup champion who defined Kings hockey"},
+]
+
+# The real 2026-27 dates, used for old saves that predate the schedule.
+REAL_CEREMONY_DATES: List[Dict[str, Any]] = [
+    dict(t, date=f"{2026 + t['offset']}-{t['month']:02d}-{t['day']:02d}")
+    for t in CEREMONY_TEMPLATES
+]
+
+
+def ceremony_schedule_for(first_season_year: int) -> List[Dict[str, Any]]:
+    """Absolute-date ceremony schedule for a league whose first season is
+    ``first_season_year`` (e.g. 2026 -> 2026-27: Dec 1 2026, Jan 30 / Feb 24
+    2027)."""
+    try:
+        y = int(first_season_year)
+    except Exception:
+        y = 2026
+    return [dict(t, date=f"{y + t['offset']}-{t['month']:02d}-{t['day']:02d}")
+            for t in CEREMONY_TEMPLATES]
+
+
+def _ceremony_schedule(league: Any) -> List[Dict[str, Any]]:
+    sched = getattr(league, "ceremony_schedule", None)
+    if sched:
+        return [dict(c) for c in sched]
+    # Old save: the real dates are the truth.
+    return [dict(c) for c in REAL_CEREMONY_DATES]
+
+
+def _find_team_by_name(league: Any, name: str) -> Optional[Any]:
+    for t in getattr(league, "teams", None) or []:
+        if getattr(t, "team_name", "") == name:
+            return t
+    return None
+
+
+def ceremonies_due(league: Any, today: Any) -> List[Tuple[Any, Dict[str, Any]]]:
+    """(team, ceremony) pairs whose date is today and number not yet retired.
+
+    Idempotent: once the number is retired the ceremony never re-fires."""
+    out: List[Tuple[Any, Dict[str, Any]]] = []
+    try:
+        today_s = str(getattr(today, "isoformat", lambda: today)())
+    except Exception:
+        today_s = str(today)
+    for c in _ceremony_schedule(league):
+        if str(c.get("date")) != today_s:
+            continue
+        team = _find_team_by_name(league, c.get("team", ""))
+        if team is None:
+            continue
+        if is_number_retired(team, int(c.get("number", 0))):
+            continue
+        out.append((team, c))
+    return out
+
+
+def retire_overdue_ceremonies(league: Any, today: Any) -> List[str]:
+    """Old-save backfill: ceremonies whose date passed without firing get
+    their numbers retired quietly (one inbox note each). Idempotent -- a
+    retired number never re-fires."""
+    stories: List[str] = []
+    try:
+        today_s = str(getattr(today, "isoformat", lambda: today)())
+    except Exception:
+        today_s = str(today)
+    for c in _ceremony_schedule(league):
+        if str(c.get("date", "")) >= today_s:
+            continue
+        team = _find_team_by_name(league, c.get("team", ""))
+        if team is None:
+            continue
+        n = int(c.get("number", 0))
+        if is_number_retired(team, n):
+            continue
+        year = int(str(c.get("date", "2026"))[:4])
+        retire_number(team, {"number": n, "name": str(c.get("player", ""))},
+                      year)
+        stories.append(
+            f"\U0001f3d2 Previously retired: {team.team_name} No. {n} -- "
+            f"{c.get('player', '')} ({c.get('date', '')}).")
+    return stories
+
+
+def stage_ceremony(team: Any, ceremony: Dict[str, Any]) -> str:
+    """Retire the ceremony number and return the inbox story.
+
+    If a generated player currently wears the number, he is moved to a new
+    one first (preferring his own favorite) -- the rafters are sacred."""
+    n = int(ceremony.get("number", 0))
+    name = str(ceremony.get("player", ""))
+    year = int(str(ceremony.get("date", "2026"))[:4])
+    moved_note = ""
+    try:
+        incumbent = next(
+            (p for p in (getattr(team, "roster", None) or [])
+             if getattr(p, "jersey_number", None) == n), None)
+        if incumbent is not None:
+            # The number being retired can never be re-dealt to him.
+            saved = (getattr(incumbent, "preferred_number", 0),
+                     getattr(incumbent, "second_number", 0))
+            if saved[0] == n:
+                incumbent.preferred_number = 0
+            if saved[1] == n:
+                incumbent.second_number = 0
+            incumbent.jersey_number = None
+            assign_arrival_number(team, incumbent, year)
+            incumbent.preferred_number, incumbent.second_number = saved
+            if getattr(incumbent, "jersey_number", None) == n:
+                # Last resort: first free legal number that isn't n.
+                for cand in range(2, 99):
+                    if cand != n and number_selectable(
+                            team, cand, _is_goalie(incumbent)):
+                        incumbent.jersey_number = cand
+                        break
+            moved_note = (
+                f" {incumbent.first_name} {incumbent.last_name}, who wore "
+                f"No. {n}, switches to No. "
+                f"{getattr(incumbent, 'jersey_number', '?')} out of respect.")
+    except Exception:
+        pass
+    retire_number(team, {"number": n, "name": name}, year)
+    return (
+        f"\U0001f3d2 JERSEY RETIREMENT -- {team.team_name}: No. {n} rises to "
+        f"the rafters for {name}, {ceremony.get('note', 'a franchise icon')}."
+        f"{moved_note} No {team.team_name} player will wear No. {n} again.")
+
+
+# ---------------------------------------------------------------------------
+# Stanley Cup awarding recap
+# ---------------------------------------------------------------------------
+def _had_cup_before(p: Any) -> bool:
+    return any(isinstance(e, dict) and e.get("award") == "stanley_cup"
+               for e in (getattr(p, "career_accolades", None) or []))
+
+
+def _playoff_pts(p: Any) -> Tuple[int, int, int]:
+    ps = getattr(p, "playoff_stats", None)
+    g = int(getattr(ps, "goals", 0) or 0)
+    a = int(getattr(ps, "assists", 0) or 0)
+    gp = int(getattr(ps, "games_played", 0) or 0)
+    return g, a, gp
+
+
+def build_cup_recap(champ: Any, bracket: Any, league: Any) -> str:
+    """The Cup-night story: winners, Conn Smythe, the Cup's first two
+    carriers, the heroes, and the coach's victory interview."""
+    cname = getattr(champ, "team_name", "The champions")
+    roster = [p for p in (getattr(champ, "roster", None) or [])]
+
+    def _pn(p: Any) -> str:
+        return f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
+
+    # --- the Final, and the score ---
+    opp_name, score_txt = "the Final", ""
+    try:
+        for s in ((getattr(bracket, "playoff_series", None) or {})
+                  .get("stanley_cup_final", None) or []):
+            w = getattr(s, "winner", None)
+            if w is champ or getattr(w, "team_name", None) == cname:
+                t1, t2 = getattr(s, "team1", None), getattr(s, "team2", None)
+                champ_is_t1 = (t1 is champ
+                               or getattr(t1, "team_name", None) == cname)
+                cw = int(getattr(s, "team1_wins" if champ_is_t1 else "team2_wins", 0) or 0)
+                lw = int(getattr(s, "team2_wins" if champ_is_t1 else "team1_wins", 0) or 0)
+                opp = t2 if champ_is_t1 else t1
+                opp_name = getattr(opp, "team_name", "the opposition")
+                score_txt = f" {cw}-{lw}"
+                break
+    except Exception:
+        pass
+
+    # --- Conn Smythe ---
+    smythe = getattr(bracket, "conn_smythe_winner", None)
+    smythe_name = (getattr(bracket, "conn_smythe_name", None)
+                   or (_pn(smythe) if smythe is not None else ""))
+    smythe_bit = ""
+    if smythe is not None and smythe_name:
+        g, a, gp = _playoff_pts(smythe)
+        smythe_bit = (f" Conn Smythe winner {smythe_name} ({g}G-{a}A in "
+                      f"{gp} playoff games) was voted playoff MVP.")
+    elif smythe_name:
+        smythe_bit = f" Conn Smythe winner {smythe_name} was voted playoff MVP."
+
+    # --- the Cup's journey: captain first, then a veteran ---
+    caps = [p for p in roster if getattr(p, "captaincy", None) == "C"]
+    first = caps[0] if caps else None
+    if first is None:
+        first = smythe if smythe in roster else None
+    if first is None and roster:
+        sk = [p for p in roster if not _is_goalie(p)] or roster
+        first = max(sk, key=lambda p: int(getattr(p, "career_points", 0) or 0))
+    first_name = _pn(first) if first is not None else "the captain"
+    cands = [p for p in roster
+             if p is not first and not _is_goalie(p)]
+    first_timers = [p for p in cands if not _had_cup_before(p)]
+    pool = first_timers or cands
+    second = (max(pool, key=lambda p: (int(getattr(p, "career_games", 0) or 0),
+                                       int(getattr(p, "age", 0) or 0)))
+              if pool else None)
+    carry_bit = ""
+    if second is not None:
+        cg = int(getattr(second, "career_games", 0) or 0)
+        if not _had_cup_before(second):
+            why = (f"a veteran of {cg} NHL games, finally a champion"
+                   if cg else "finally a champion")
+        else:
+            why = (f"a veteran of {cg} NHL games" if cg else "a veteran")
+        carry_bit = (f" {_pn(first)} took the traditional first skate, then "
+                     f"handed it to {_pn(second)} -- {why}.")
+
+    # --- the heroes ---
+    named_ids = {id(first), id(second)}
+    if smythe is not None:
+        named_ids.add(id(smythe))
+    heroes = sorted((p for p in roster if not _is_goalie(p)
+                     and id(p) not in named_ids),
+                    key=lambda p: _playoff_pts(p)[0] + _playoff_pts(p)[1],
+                    reverse=True)[:3]
+    hero_bits = []
+    for h in heroes:
+        g, a, gp = _playoff_pts(h)
+        if g + a > 0:
+            hero_bits.append(f"{_pn(h)} ({g}G-{a}A, {gp} GP)")
+    hero_bit = (" Also starring: " + "; ".join(hero_bits) + "."
+                if hero_bits else "")
+
+    # --- the coach's victory interview ---
+    coach = getattr(champ, "head_coach", None)
+    if coach is None:
+        try:
+            import reputation_system as _rs
+            coach = _rs._head_coach_of(champ)
+        except Exception:
+            coach = None
+    coach_name = (f"{getattr(coach, 'first_name', '')} "
+                  f"{getattr(coach, 'last_name', '')}").strip()
+    try:
+        _sy = int(getattr(league, "season_year", 2026) or 2026)
+    except Exception:
+        _sy = 2026
+    _qrng = random.Random(f"cup-{cname}-{_sy}")
+    _who = coach_name or "the head coach"
+    quotes = [
+        (f"\"You dream about this as a kid on the outdoor rink. To do it "
+         f"with this group, in this room -- there's no feeling like it,\" "
+         f"{_who} said, the Cup gleaming behind him. \"They refused to "
+         f"lose.\""),
+        (f"\"Sixteen wins. That's all anyone remembers,\" {_who} said. "
+         f"\"{first_name} set the tone every single day since September, "
+         f"and when it got hard, this team got harder. I'm just lucky I "
+         f"get to stand behind their bench.\""),
+        (f"\"People will talk about the goals, but championships are won "
+         f"in the dirty areas,\" {_who} said. \"Every blocked shot, every "
+         f"backcheck -- that's what that trophy is. This group paid the "
+         f"price.\""),
+        (f"\"I've been around a long time and I've never seen a room like "
+         f"this one,\" {_who} said. \"They played for each other. You "
+         f"can't coach that. You just try not to get in the way.\""),
+    ]
+    quote = _qrng.choice(quotes)
+
+    story = (
+        f"\U0001f3c6 STANLEY CUP CHAMPIONS -- {cname}! They defeat "
+        f"{opp_name}{score_txt} to win the Cup.{smythe_bit}{carry_bit}"
+        f"{hero_bit}\n\n{quote}\n\nThe parade route will be announced "
+        f"tomorrow. {cname} -- champions.")
+    return story

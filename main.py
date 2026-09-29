@@ -690,6 +690,17 @@ NHL League Office""",
                     self._ensure_captaincy(team)
                 except Exception:
                     pass
+
+        # Real-life jersey retirement ceremonies, staged in the first
+        # season on the real month/day (Dec 1 / Jan 30 / Feb 24). Absolute
+        # dates anchored to the inaugural season_year, persisted on the
+        # league so the rafters match reality whenever the game is started.
+        try:
+            import immortality as _im_sched
+            self.league.ceremony_schedule = _im_sched.ceremony_schedule_for(
+                getattr(self.league, "season_year", 2026))
+        except Exception:
+            pass
         
         # Set draft prospects from database manager
         self.league.draft_prospects = self.database_manager.draft_eligibles
@@ -6212,6 +6223,32 @@ class HockeyManagerGUI(tk.Tk):
             # the day's career totals are final.
             self._milestone_postgame()
             self.current_date += timedelta(days=1)
+
+            # Real-life jersey retirement ceremonies: the rafters match
+            # reality, on the real month/day of the first season.
+            # Idempotent -- a retired number never re-fires. Old saves
+            # without a schedule get past-dated numbers retired quietly.
+            try:
+                import immortality as _im_cer
+                _league = getattr(self, "league", None)
+                for _ct, _cc in _im_cer.ceremonies_due(
+                        _league, self.current_date):
+                    _story = _im_cer.stage_ceremony(_ct, _cc)
+                    if _story:
+                        self.news_log.append({'date': self.current_date,
+                                              'story': _story})
+                for _note in _im_cer.retire_overdue_ceremonies(
+                        _league, self.current_date):
+                    self.news_log.append({'date': self.current_date,
+                                          'story': _note})
+            except Exception:
+                pass
+            # Stanley Cup awarding recap: fires once, the night the Cup is
+            # won (flag-guarded; save/load safe via the league key).
+            try:
+                self._maybe_send_cup_recap()
+            except Exception:
+                pass
 
             # All-Star weekend: rosters announced 5 days before the game
             # (fan vote captains + hockey-ops selection, every club
@@ -12542,6 +12579,11 @@ class HockeyManagerGUI(tk.Tk):
                         if not getattr(w, 'playoff_bracket', None):
                             w._generate_bracket()
                         w._simulate_all_playoffs()
+                        # Cup decided in bulk: send the awarding recap now.
+                        try:
+                            self._maybe_send_cup_recap()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 if self._playoffs_complete():
@@ -12586,6 +12628,31 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         return False
+
+    def _maybe_send_cup_recap(self) -> bool:
+        """Send the Stanley Cup awarding recap to the inbox, once.
+
+        Fires the night the bracket crowns a champion: winners, Conn Smythe,
+        the Cup's first two carriers, the heroes, and the coach's victory
+        interview. Flag-guarded on the league (save/load safe)."""
+        try:
+            league = getattr(self, "league", None)
+            bracket = getattr(league, "playoff_bracket", None)
+            champ = getattr(bracket, "stanley_cup_champion", None)
+            if champ is None or league is None:
+                return False
+            key = f"{getattr(league, 'season_year', '?')}:{getattr(champ, 'team_name', '?')}"
+            if getattr(league, "cup_recap_sent", None) == key:
+                return False
+            import immortality as _im_recap
+            story = _im_recap.build_cup_recap(champ, bracket, league)
+            if story:
+                self.news_log.append({'date': self.current_date,
+                                      'story': story})
+            league.cup_recap_sent = key
+            return True
+        except Exception:
+            return False
 
     def _show_season_summary(self):
         """Display end of season summary with stats and awards."""
@@ -13007,6 +13074,12 @@ class HockeyManagerGUI(tk.Tk):
 
     def _start_offseason(self):
         """Start the offseason phase."""
+        # Cup recap backstop: if the champion was decided outside the daily
+        # loop (bulk sims), the inbox still gets the awarding story. Once.
+        try:
+            self._maybe_send_cup_recap()
+        except Exception:
+            pass
         # Controversy cooldown + staff rep + Cup bonus. Reads standings before
         # league.end_of_season() wipes them.
         self._update_offseason_reputations()
