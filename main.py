@@ -1483,6 +1483,41 @@ NHL League Office""",
                                 if hasattr(self, 'news_log'):
                                     self.news_log.append({'date': self.current_date, 'story': f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available."})
 
+    def _process_suspension_service(self, teams_played=None):
+        """Tick down DoPS suspensions once per GAME PLAYED (not per day).
+
+        Mirrors _process_injury_recovery exactly: only players whose team
+        played today serve a game, and a suspension issued after today's
+        game (suspended_today) starts counting with the next one. At zero
+        the player is eligible again. Never raises.
+        """
+        try:
+            for team in self.league.teams:
+                if teams_played is not None and team.team_name not in teams_played:
+                    continue
+                for player in team.roster:
+                    try:
+                        remaining = getattr(player, 'suspension_games_remaining', 0) or 0
+                        if remaining <= 0:
+                            continue
+                        # Suspended after today's game? Service starts with
+                        # the next game they miss.
+                        if getattr(player, 'suspended_today', False):
+                            player.suspended_today = False
+                            continue
+                        player.suspension_games_remaining = remaining - 1
+                        if player.suspension_games_remaining <= 0:
+                            player.suspension_games_remaining = 0
+                            player.suspension_reason = ""
+                            # Notify if it's the user's team
+                            if hasattr(self, 'user_team') and team == self.user_team:
+                                if hasattr(self, 'news_log'):
+                                    self.news_log.append({'date': self.current_date, 'story': f"✅ {player.first_name} {player.last_name} has served his suspension and is eligible to return."})
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
     def _process_monthly_development(self):
         """Run monthly player development for all players league-wide.
         
@@ -6092,6 +6127,7 @@ class HockeyManagerGUI(tk.Tk):
                     pass
             teams_played.discard(None)
             self.game_manager._process_injury_recovery(teams_played or None)
+            self.game_manager._process_suspension_service(teams_played or None)
             
             self._set_continue_feedback(True, "Processing AI decisions...")
             # Process AI team decisions (trades, signings, etc.)
@@ -11459,9 +11495,12 @@ class HockeyManagerGUI(tk.Tk):
         total_strength = 0
         player_count = 0
 
-        # Injured players don't dress: use healthy skaters (fall back to full
-        # roster if the team is decimated)
-        skaters = [p for p in team.roster if not getattr(p, 'is_injured', False)]
+        # Injured or suspended players don't dress: use available skaters
+        # (fall back to full roster if the team is decimated)
+        skaters = [p for p in team.roster
+                   if not getattr(p, 'is_injured', False)
+                   and not (getattr(p, 'suspension_games_remaining', 0)
+                            or 0)]
         if len(skaters) < 14:
             skaters = list(team.roster)
 

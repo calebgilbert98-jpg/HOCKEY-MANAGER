@@ -461,6 +461,16 @@ class GameSim:
         self.home_team = home_team
         self.away_team = away_team
         self.is_playoff = is_playoff
+        # Suspended players can't dress: scrub them from both dressed
+        # lineups (best-available skater takes the slot). The quick and
+        # lightweight paths filter at selection time; the detailed sim
+        # reads team.lineup directly, so the lineup itself is cleaned.
+        try:
+            from narrative_incidents import _scrub_suspended_from_lineup
+            _scrub_suspended_from_lineup(home_team)
+            _scrub_suspended_from_lineup(away_team)
+        except Exception:
+            pass
         # Part B: bounded assist-pairs ledger (passer_id, scorer_id,
         # team_name) for the analytics_hub / advanced_stats_analytics
         # line-combination views. Attached to the analytics game record

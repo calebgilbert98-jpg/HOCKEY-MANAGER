@@ -507,6 +507,15 @@ class Player:
     last_injury: str = "None"
     injury_type: str = "None"
     games_remaining_injured: int = 0
+
+    # Discipline: DoPS suspensions. Served in TEAM GAMES (not days) --
+    # the countdown ticks once per game the player's team plays, mirroring
+    # injury recovery. Repeat-offender history lives on the existing
+    # controversy_history (event_type "suspension"). Old-save safe: read
+    # via getattr with these defaults.
+    suspension_games_remaining: int = 0
+    suspension_reason: str = ""
+    suspended_today: bool = False
     
     # Development attributes
     coachability: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))

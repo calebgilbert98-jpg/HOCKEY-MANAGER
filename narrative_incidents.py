@@ -597,6 +597,184 @@ def _find_player(team: Any, name: str):
     return None
 
 
+def _prior_suspensions(player: Any) -> int:
+    """Repeat-offender count from the existing controversy_history."""
+    try:
+        hist = getattr(player, "controversy_history", None) or []
+        return sum(1 for e in hist
+                   if isinstance(e, dict) and e.get("type") == "suspension")
+    except Exception:
+        return 0
+
+
+def _scrub_suspended_from_lineup(team: Any) -> int:
+    """Pull suspended skaters out of a team's dressed lineup.
+
+    Replaces each suspended player's nested-line slots with the best
+    available skater (not injured, not suspended, not already dressed)
+    from the same position group, then refreshes the flat keys via
+    flatten_lineup. Returns the number of slots fixed. Never raises --
+    a missing replacement leaves the slot rather than crashing.
+    """
+    fixed = 0
+    try:
+        from quick_sim import flatten_lineup
+        from game_classes import PlayerPosition as _PP
+        lineup = getattr(team, "lineup", None)
+        if not isinstance(lineup, dict):
+            return 0
+        roster = getattr(team, "roster", None) or []
+        dressed = set()
+        for _grp in ("Forwards", "Defense"):
+            for _line in (lineup.get(_grp) or []):
+                for _p in (_line or []):
+                    if _p is not None:
+                        dressed.add(id(_p))
+        _FWD = {_PP.LEFT_WING, _PP.CENTER, _PP.RIGHT_WING}
+        _DEF = {_PP.LEFT_DEFENSE, _PP.RIGHT_DEFENSE, _PP.DEFENSE}
+
+        def _pool(pos_group):
+            cands = [p for p in roster
+                     if getattr(p, "primary_position", None) in pos_group
+                     and not getattr(p, "is_injured", False)
+                     and not (getattr(p, "suspension_games_remaining", 0)
+                              or 0)
+                     and id(p) not in dressed]
+            try:
+                cands.sort(key=lambda p: p.overall_rating(), reverse=True)
+            except Exception:
+                pass
+            return cands
+
+        _fwd_pool, _def_pool = _pool(_FWD), _pool(_DEF)
+
+        def _swap(_line, _idx, _pool_list):
+            nonlocal fixed
+            try:
+                _p = _line[_idx] if _idx < len(_line) else None
+            except Exception:
+                _p = None
+            if _p is None or not (getattr(
+                    _p, "suspension_games_remaining", 0) or 0):
+                return
+            if _pool_list:
+                _rep = _pool_list.pop(0)
+                _line[_idx] = _rep
+                dressed.add(id(_rep))
+                fixed += 1
+
+        for _line in (lineup.get("Forwards") or []):
+            if isinstance(_line, list):
+                for _i in range(min(3, len(_line))):
+                    _swap(_line, _i, _fwd_pool)
+        for _pair in (lineup.get("Defense") or []):
+            if isinstance(_pair, list):
+                for _i in range(min(2, len(_pair))):
+                    _swap(_pair, _i, _def_pool)
+        if fixed:
+            try:
+                flatten_lineup(lineup)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return fixed
+
+
+def _dops_suspension_review(app: Any, d: dict, hitter_team: Any,
+                            victim_team: Any, game_date: Any,
+                            involved) -> dict:
+    """One DoPS review decision for a controversial hit.
+
+    Returns {"games": N} (N > 0 suspended) or {"games": 0}. Every input
+    is an original parameter: the hitter's dealt personality attributes
+    (discipline / aggressiveness / controversy), the victim's post-game
+    state (the engines own injuries -- never invented here), star status
+    on the native 100-point scale, and repeat-offender history from
+    controversy_history. On a suspension the player attributes are set
+    (served in team games, starting with the NEXT one), the history is
+    appended via record_controversy_event, a league headline goes out,
+    and the team's dressed lineup is scrubbed. Never raises.
+    """
+    try:
+        hitter_name = d.get("hitter", "") or ""
+        victim_name = d.get("victim", "") or ""
+        hitter = _find_player(hitter_team, hitter_name)
+        if hitter is None:
+            return {"games": 0}
+        victim = _find_player(victim_team, victim_name)
+        try:
+            _disc = float(getattr(hitter, "discipline", 50) or 50)
+        except Exception:
+            _disc = 50.0
+        try:
+            _aggr = float(getattr(hitter, "aggressiveness", 50) or 50)
+        except Exception:
+            _aggr = 50.0
+        try:
+            _contr = float(d.get("hitter_controversy", 30) or 30)
+        except Exception:
+            _contr = 30.0
+        _contr = max(0.0, min(100.0, _contr))
+        dirt = max(0.0, min(1.0,
+                            (_aggr + (100.0 - _disc) + _contr) / 300.0))
+        victim_injured = (bool(getattr(victim, "is_injured", False))
+                          if victim is not None else False)
+        try:
+            star_victim = bool(victim is not None
+                               and victim.overall_rating() >= 90)
+        except Exception:
+            star_victim = False
+        prior = _prior_suspensions(hitter)
+        p = (0.08 + 0.30 * dirt
+             + (0.12 if victim_injured else 0.0)
+             + (0.06 if star_victim else 0.0)
+             + 0.08 * min(prior, 2))
+        p = min(p, 0.85)
+        if random.random() >= p:
+            return {"games": 0}
+        games = 1
+        if victim_injured:
+            games += 1
+        if star_victim:
+            games += 1
+        if _disc < 30:
+            games += 1
+        games += 2 * min(prior, 3)
+        games = min(games, 10)
+        hitter.suspension_games_remaining = games
+        hitter.suspension_reason = f"Illegal hit on {victim_name}"
+        hitter.suspended_today = True
+        try:
+            from reputation_system import record_controversy_event
+            _gd = (str(game_date) if game_date is not None else None)
+            record_controversy_event(
+                hitter, "suspension", min(10, 3 + games),
+                f"Suspended {games} games for an illegal hit on "
+                f"{victim_name}", game_date=_gd)
+        except Exception:
+            pass
+        try:
+            import headlines as _hl
+            _hl.deliver_spec(app, {
+                "kind": "suspension",
+                "name": hitter_name,
+                "team": getattr(hitter_team, "team_name", ""),
+                "games": games,
+                "victim": victim_name,
+                "involved": involved,
+            })
+        except Exception:
+            pass
+        try:
+            _scrub_suspended_from_lineup(hitter_team)
+        except Exception:
+            pass
+        return {"games": games}
+    except Exception:
+        return {"games": 0}
+
+
 def apply_incident_consequences(app: Any, home: Any, away: Any,
                                 incidents: list, incident_details: list,
                                 brawl: bool, scores, game_date: Any,
@@ -666,54 +844,64 @@ def apply_incident_consequences(app: Any, home: Any, away: Any,
         hitter_team = home if _team_name(home) == hitter_team_name else away
         victim_team = away if hitter_team is home else home
         hitter, victim = d.get("hitter", "A hitter"), d.get("victim", "a victim")
-        # DoPS review: the wallet gets lighter, never the lineup -- there
-        # is no suspension mechanic, and a fine tells the story cleanly.
-        # Grounded in the original personality model: the hitter's
-        # controversy attribute (dealt at generation from discipline /
-        # composure / aggressiveness / teamwork) drives the fine chance --
-        # hotheads draw the league's eye. $5,000 is the NHL CBA maximum.
-        try:
-            _hc = float(d.get("hitter_controversy", 30) or 0)
-        except Exception:
-            _hc = 30.0
-        _hc = max(0.0, min(100.0, _hc))
-        fined = random.random() < 0.15 + 0.55 * (_hc / 100.0)
-        if fined and _hl is not None:
-            amount = 5000
+        # DoPS review: ONE decision, two possible punishments. A suspension
+        # keeps the player out of the lineup for team games served (the
+        # review scales off the original parameters -- the hitter's dealt
+        # personality attributes, the victim's state, and repeat-offender
+        # history). If no suspension, the wallet gets lighter instead --
+        # the existing fine path, untouched. $5,000 is the NHL CBA maximum.
+        _review = _dops_suspension_review(
+            app, d, hitter_team, victim_team, game_date, _involved())
+        suspended_games = int(_review.get("games", 0) or 0)
+        fined = False
+        if suspended_games <= 0:
+            # Grounded in the original personality model: the hitter's
+            # controversy attribute (dealt at generation from discipline /
+            # composure / aggressiveness / teamwork) drives the fine chance --
+            # hotheads draw the league's eye.
             try:
-                _hl.deliver_spec(app, {
-                    "kind": "media_fine", "name": hitter,
-                    "team": hitter_team_name, "amount": amount,
-                    "reason": f"the borderline hit on {victim}",
-                    "involved": _involved(),
-                })
-                lg = getattr(app, "league", None)
-                if lg is not None:
-                    mf = getattr(lg, "media_fines", None)
-                    if isinstance(mf, list):
-                        mf.append({"date": str(game_date), "name": hitter,
-                                   "team": hitter_team_name, "amount": amount,
-                                   "reason": "borderline hit"})
+                _hc = float(d.get("hitter_controversy", 30) or 0)
             except Exception:
-                pass
+                _hc = 30.0
+            _hc = max(0.0, min(100.0, _hc))
+            fined = random.random() < 0.15 + 0.55 * (_hc / 100.0)
+            if fined and _hl is not None:
+                amount = 5000
+                try:
+                    _hl.deliver_spec(app, {
+                        "kind": "media_fine", "name": hitter,
+                        "team": hitter_team_name, "amount": amount,
+                        "reason": f"the borderline hit on {victim}",
+                        "involved": _involved(),
+                    })
+                    lg = getattr(app, "league", None)
+                    if lg is not None:
+                        mf = getattr(lg, "media_fines", None)
+                        if isinstance(mf, list):
+                            mf.append({"date": str(game_date), "name": hitter,
+                                       "team": hitter_team_name, "amount": amount,
+                                       "reason": "borderline hit"})
+                except Exception:
+                    pass
         try:
             record_team_event(
                 victim_team, "controversial_hit",
                 f"Seething: {hitter} ({hitter_team_name}) caught {victim} "
-                f"with a borderline hit{' and was fined' if fined else ''} "
+                f"with a borderline hit"
+                f"{f' and was suspended {suspended_games} games' if suspended_games else (' and was fined' if fined else '')} "
                 f"-- the room wants payback.",
                 morale_delta=-1, tone="down")
             record_team_event(
                 hitter_team, "controversial_hit",
                 f"Rallying around {hitter} after the DoPS review -- "
-                f"{'fined' if fined else 'no supplemental discipline'}.",
+                f"{f'suspended {suspended_games} games' if suspended_games else ('fined' if fined else 'no supplemental discipline')}.",
                 morale_delta=1, tone="up")
         except Exception:
             pass
         drama.append({"kind": "controversial_hit", "live": False,
                       "hitter": hitter, "hitter_team": hitter_team_name,
                       "victim": victim, "victim_team": victim_team_name,
-                      "fined": fined})
+                      "fined": fined, "suspended": suspended_games})
 
     # -- Live-brawl press hook (GameSim did its own consequences) ---------
     # The live brawl already called record_game_incident(kind "brawl") in

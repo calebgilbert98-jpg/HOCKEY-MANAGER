@@ -64,11 +64,15 @@ def roll_game_injury(team):
 
 def best_lines(team):
     """Builds the best possible lineup for the given team based on player ratings and positions."""
-    # Injured players can't dress: filter them out (fall back to full group if empty)
+    # Injured or suspended players can't dress: filter them out (fall back
+    # to full group if empty)
 
     def _healthy(players):
-        healthy = [p for p in players if not getattr(p, 'is_injured', False)]
-        return healthy if healthy else players
+        eligible = [p for p in players
+                    if not getattr(p, 'is_injured', False)
+                    and not (getattr(p, 'suspension_games_remaining', 0)
+                             or 0)]
+        return eligible if eligible else players
     # Select top 13 forwards, 8 defensemen, 2 goalies by position and rating
     forwards = _healthy([p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_WING, PlayerPosition.CENTER, PlayerPosition.RIGHT_WING]])
     defensemen = _healthy([p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE, PlayerPosition.DEFENSE]])
@@ -328,6 +332,14 @@ class AdvancedGameSim:
 
         # Defensive: always ensure lineup dict has required keys
         def ensure_lineup(team):
+            # Suspended players can't dress: scrub them from a stored
+            # lineup before the sim reads it (fresh builds already filter
+            # via best_lines' _healthy).
+            try:
+                from narrative_incidents import _scrub_suspended_from_lineup
+                _scrub_suspended_from_lineup(team)
+            except Exception:
+                pass
             lineup = getattr(team, 'lineup', None)
             if not lineup or not isinstance(lineup, dict):
                 return best_lines(team)

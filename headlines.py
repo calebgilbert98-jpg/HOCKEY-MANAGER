@@ -52,6 +52,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "rivalry_declared": _rivalry_declared_headline,
         "controversial_call": _controversial_call_headline,
         "media_fine": _media_fine_headline,
+        "suspension": _suspension_headline,
         "media_beef": _media_beef_headline,
         "narrative_shutdown": _narrative_shutdown_headline,
         "grudge_callback": _grudge_callback_headline,
@@ -296,6 +297,32 @@ def _media_fine_headline(game_date, name="", team="", amount=0,
         ),
         category="League",
         priority=3,
+        is_important=True,
+    )
+
+
+def _suspension_headline(game_date, name="", team="", games=0,
+                         victim="", **kw):
+    from game_classes import EmailMessage
+    try:
+        _g = int(games)
+    except Exception:
+        _g = 0
+    _plural = "" if _g == 1 else "s"
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🚫 SUSPENDED: {name} ({team}) -- {_g} game{_plural}",
+        content=(
+            f"The league has suspended {name} {_g} game{_plural} for "
+            f"an illegal hit on {victim}.\n\n"
+            f"Department of Player Safety ruling: the hit was late and "
+            f"targeted the head. {name} is eligible to return once the "
+            f"games are served -- the {team} will have to fill the hole "
+            f"in the lineup. No further comment from the club."
+        ),
+        category="League",
+        priority=2,
         is_important=True,
     )
 
