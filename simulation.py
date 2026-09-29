@@ -772,6 +772,9 @@ class GameSim:
             # Physical play (Stage 4)
             'hits': 0,
             'hits_taken': 0,
+            # Chance grades (2026-09-28, per Muck): xG backbone
+            'grade_a_shots': 0, 'grade_b_shots': 0, 'grade_c_shots': 0,
+            'grade_a_goals': 0, 'grade_b_goals': 0, 'grade_c_goals': 0,
             'takeaways': 0,
             'giveaways': 0,
             'blocked_shots_by': 0,  # Shots blocked by this player
@@ -933,6 +936,9 @@ class GameSim:
                 # Stage 4 stats
                 'hits': 0,
                 'hits_against': 0,
+                # Chance grades (2026-09-28, per Muck): xG backbone
+                'grade_a_shots': 0, 'grade_b_shots': 0, 'grade_c_shots': 0,
+                'grade_a_goals': 0, 'grade_b_goals': 0, 'grade_c_goals': 0,
                 'takeaways': 0,
                 'giveaways': 0,
                 'turnovers_forced': 0,
@@ -1059,6 +1065,9 @@ class GameSim:
                 # Stage 4 stats
                 'hits': 0,
                 'hits_against': 0,
+                # Chance grades (2026-09-28, per Muck): xG backbone
+                'grade_a_shots': 0, 'grade_b_shots': 0, 'grade_c_shots': 0,
+                'grade_a_goals': 0, 'grade_b_goals': 0, 'grade_c_goals': 0,
                 'takeaways': 0,
                 'giveaways': 0,
                 'turnovers_forced': 0,
@@ -4248,7 +4257,13 @@ class GameSim:
         
         # Calculate distance from goal (affects shot quality)
         distance = self._calculate_shot_distance(shot_location)
-        
+
+        # Chance grading (2026-09-28, per Muck): grade at creation time via
+        # the shared layer. Blocked attempts are chances too -- grade them
+        # here with location info (shot type not yet known).
+        chance_grade = self._roll_chance_grade(
+            shot_location, None, shooter, attacking_team, defending_team)
+
         # Check for blocked shot first
         blocking_outcome = self._check_shot_blocking(shooter, defending_team, shot_location)
         if blocking_outcome['blocked']:
@@ -4256,8 +4271,10 @@ class GameSim:
             # Module 04: blocked attempts still count as shot attempts.
             self._analytics_record_shot(shooter, attacking_team,
                                         defending_team, shot_location,
-                                        distance, None, 0.0)
+                                        distance, None, 0.0,
+                                        grade=chance_grade)
             self._analytics_tag_shot("blocked")
+            self._record_chance_grade(shooter, chance_grade, False)
             return
         
         # Determine shot type based on player attributes and situation
@@ -4287,14 +4304,22 @@ class GameSim:
         shot_quality = self._calculate_shot_quality(
             shot_location, distance, shot_type, attacking_team, shooter,
             pressure_dist=pressure_dist, pressurer=pressurer)
-        
+
+        # Re-grade with full info (shot type + pressure now known) -- the
+        # shared A/B/C decision both engines use.
+        chance_grade = self._roll_chance_grade(
+            shot_location, shot_type, shooter, attacking_team,
+            defending_team, pressurer=pressurer,
+            pressure_dist=pressure_dist)
+
         # Check if shot misses the net
         if self._check_shot_miss(shooter, shot_quality, distance):
             self._handle_missed_shot(shooter, attacking_team, shot_location, shot_type)
+            self._record_chance_grade(shooter, chance_grade, False)
             return
-        
+
         # Shot is on goal - resolve against goalie
-        self._resolve_shot_on_goal(shooter, attacking_team, defending_team, shot_type, shot_location, shot_quality, distance)
+        self._resolve_shot_on_goal(shooter, attacking_team, defending_team, shot_type, shot_location, shot_quality, distance, grade=chance_grade)
 
     def _determine_shot_location(self, shooter, attacking_team):
         """Determine where the shot is taken from based on player position and game flow."""
@@ -4541,6 +4566,160 @@ class GameSim:
         else:
             return "low"
 
+    # -- Chance grading (2026-09-28, per Muck) ---------------------------
+    # Shared-layer grade roll (mesh_system.roll_chance_grade): grades the
+    # chance A/B/C at creation time. Same decision as quick-sim; this
+    # engine's fidelity maps the grade onto its high/medium/low xG
+    # quality strings. Never raises -- falls back to "B".
+    _GRADE_LOCATION_MAP = {
+        ShotLocation.CREASE: "crease",
+        ShotLocation.LOW_SLOT: "slot",
+        ShotLocation.HIGH_SLOT: "slot",
+        ShotLocation.LEFT_CIRCLE: "slot",
+        ShotLocation.RIGHT_CIRCLE: "slot",
+        ShotLocation.POINT: "point",
+        ShotLocation.LEFT_WING: "perimeter",
+        ShotLocation.RIGHT_WING: "perimeter",
+        ShotLocation.BEHIND_NET: "perimeter",
+    }
+
+    def _roll_chance_grade(self, shot_location, shot_type, shooter,
+                          attacking_team, defending_team,
+                          pressurer=None, pressure_dist=30.0):
+        """Roll the shared A/B/C chance grade for one shot attempt."""
+        _grade = "B"
+        try:
+            from mesh_system import roll_chance_grade as _rcg
+            # -- location ------------------------------------------------
+            if shot_type == ShotType.BREAKAWAY:
+                _loc = "breakaway"
+            elif shot_type in (ShotType.TIP_IN, ShotType.DEFLECTION):
+                _loc = "netfront"
+            elif shot_type == ShotType.WRAPAROUND:
+                _loc = "crease"
+            else:
+                _loc = self._GRADE_LOCATION_MAP.get(shot_location, "slot")
+            # -- contest from defender distance (ft) --------------------
+            try:
+                _pd = float(pressure_dist if pressure_dist is not None
+                            else 30.0)
+            except Exception:
+                _pd = 30.0
+            _contest = max(0.0, min(1.0, 1.0 - _pd / 50.0))
+            # Parity 2026-09-28: the old /20 scale parked typical shots
+            # (mean pressure ~23ft) at ~0.17 contest -- nearly "clean" --
+            # while quick-sim's attribute-based contest averages ~0.68.
+            # Same 0-1 meaning both engines: 50ft is open ice, 0ft is
+            # smothered; typical NHL pressure (~23ft) reads ~0.55.
+            # -- defending D pair ----------------------------------------
+            try:
+                _onice_d = self._on_ice_skaters(defending_team)
+            except Exception:
+                try:
+                    _onice_d = self._get_on_ice(defending_team)
+                except Exception:
+                    _onice_d = []
+            _defenders = [p for p in (_onice_d or [])
+                          if getattr(p, "primary_position", None)
+                          in DEFENSEMEN_POSITIONS]
+            # -- goalie ---------------------------------------------------
+            try:
+                _goalie = self._selected_goalie(defending_team)
+            except Exception:
+                _goalie = None
+            # -- D fatigue: shift clock when available --------------------
+            _d_fatigue = 50.0
+            try:
+                _sc = float(getattr(self, "shift_clock", 0) or 0)
+                if _sc > 0:
+                    _d_fatigue = max(0.0, min(100.0, 40.0 + _sc * 1.5))
+            except Exception:
+                pass
+            # -- team defensive weakness ----------------------------------
+            _team_d_weak = 1.0
+            try:
+                _ga = float(getattr(defending_team, "goals_against", 0) or 0)
+                _gp = float(getattr(defending_team, "games_played", 0) or 0)
+                if _gp > 5 and _ga > 0:
+                    _team_d_weak = max(0.85, min(1.30, (_ga / _gp) / 3.0))
+            except Exception:
+                pass
+            # -- gametime --------------------------------------------------
+            _rivalry_heat = 0.0
+            try:
+                import reputation_system as _rs2
+                _rh = _rs2.get_rivalry_heat(self.rivalries or [],
+                                             attacking_team, defending_team)
+                _rivalry_heat = float(_rh.get("heat", 0) or 0)
+            except Exception:
+                pass
+            try:
+                _morale = float(getattr(shooter, "morale", 70) or 70)
+            except Exception:
+                _morale = 70.0
+            try:
+                _sdiff = abs(float(getattr(self, "home_score", 0) or 0)
+                             - float(getattr(self, "away_score", 0) or 0))
+                _per = int(getattr(self, "period", 1) or 1)
+                _clk = float(getattr(self, "clock", 1200) or 1200)
+                _clutch = (_per >= 4) or (_per == 3 and _sdiff <= 1
+                                          and _clk < 300)
+            except Exception:
+                _clutch = False
+            try:
+                _is_home = attacking_team is self.home_team
+                _cm = (self._crowd_home_mult if _is_home
+                       else self._crowd_away_mult)
+                _crowd_edge = max(-1.0, min(1.0, (float(_cm) - 1.0) * 15.0))
+            except Exception:
+                _crowd_edge = 0.0
+            _grade = _rcg(
+                _loc, _contest, shooter,
+                defenders=_defenders, goalie=_goalie,
+                situation={
+                    "quick_release": shot_type == ShotType.ONE_TIMER,
+                    "screened_goalie": False,
+                    "won_spot": False,
+                    "rebound": shot_type == ShotType.REBOUND,
+                    "tip": shot_type in (ShotType.TIP_IN,
+                                         ShotType.DEFLECTION),
+                },
+                game_ctx={
+                    "rivalry_heat": _rivalry_heat,
+                    "morale": _morale,
+                    "clutch": _clutch,
+                    "crowd_edge": _crowd_edge,
+                    "is_playoff": bool(getattr(self, "is_playoff", False)),
+                    "d_fatigue": _d_fatigue,
+                    "team_d_weakness": _team_d_weak,
+                })
+        except Exception:
+            pass
+        return _grade
+
+    def _record_chance_grade(self, shooter, grade, scored):
+        """Per-player chance-grade analytics: grade_a/b/c_shots and
+        grade_a/b/c_goals in game_stats -- the xG backbone for the
+        analytics stack (same flat shape as quick-sim's stats dicts).
+        Never raises."""
+        try:
+            _g = str(grade or "B").upper()
+            if _g not in ("A", "B", "C"):
+                _g = "B"
+            _pid = getattr(shooter, "id", None)
+            if _pid is None:
+                return
+            if _pid not in self.game_stats:
+                return
+            _st = self.game_stats[_pid]
+            _sk = f'grade_{_g.lower()}_shots'
+            _st[_sk] = _st.get(_sk, 0) + 1
+            if scored:
+                _gk = f'grade_{_g.lower()}_goals'
+                _st[_gk] = _st.get(_gk, 0) + 1
+        except Exception:
+            pass
+
     def _check_shot_miss(self, shooter, quality, distance):
         """Check if shot misses the net entirely."""
         accuracy = (shooter.shooting_accuracy + shooter.composure) / 2
@@ -4721,26 +4900,9 @@ class GameSim:
                                                42.5 + random.uniform(-14, 14))
         self._apply_shot_outcome(_mout, attacking_team, _defending)
 
-    def _apply_archetype_matchup(self, quality, attacking_team, defending_team):
-        """
-        Archetype matchup effects on shot quality.
-
-        Compares the on-ice attacking skaters' archetypes against the
-        defending skaters' archetypes (e.g. Defensive Defenseman vs Sniper)
-        and returns an adjusted quality value.
-        """
-        try:
-            att = [p for p in self._get_on_ice(attacking_team)
-                   if p.primary_position != PlayerPosition.GOALIE]
-            dfn = [p for p in self._get_on_ice(defending_team)
-                   if p.primary_position != PlayerPosition.GOALIE]
-            if not att or not dfn:
-                return quality
-            mult = matchup_multiplier([get_archetype(p) for p in att],
-                                      [get_archetype(p) for p in dfn])
-            return quality * mult
-        except Exception:
-            return quality
+    # (Parity 2026-09-28: _apply_archetype_matchup removed -- it was dead
+    # code multiplying the quality STRING by a float, and archetype
+    # matchup already lives in the shared chance-grade roll.)
 
     # ShotLocation -> rink coords (for a team attacking in +x; mirrored
     # for the other way). The shooter skates to his spot before shooting,
@@ -4831,10 +4993,22 @@ class GameSim:
                 assists.append(random.choices(_cands, weights=_sw, k=1)[0])
         return assists
 
-    def _resolve_shot_on_goal(self, shooter, attacking_team, defending_team, shot_type, location, quality, distance):
+    def _resolve_shot_on_goal(self, shooter, attacking_team, defending_team, shot_type, location, quality, distance, grade="B"):
         """
         Stage 5: Enhanced shot resolution with advanced goaltending excellence.
         """
+        # Chance grade (2026-09-28, per Muck): the shared A/B/C grade IS the
+        # danger categorization -- one decision, two fidelities. Map onto
+        # this engine's high/medium/low xG quality strings.
+        try:
+            _g = str(grade or "B").upper()
+            if _g in ("A", "B", "C"):
+                quality = {"A": "high", "B": "medium", "C": "low"}[_g]
+        except Exception:
+            pass
+        grade = str(grade or "B").upper()
+        if grade not in ("A", "B", "C"):
+            grade = "B"
         goalie = self._selected_goalie(defending_team)
         
         # Handle passing play possibility -- Part B rework.
@@ -4910,24 +5084,27 @@ class GameSim:
                     self._log_event(f"Pass from {passer.full_name} to {shooter.full_name}...", "PASS")
         
         # Calculate expected goal value (xG)
-        # Archetype matchup effects: shutdown defenders smother snipers,
-        # power forwards feast on soft defensive pairs, etc.
-        quality = self._apply_archetype_matchup(
-            quality, attacking_team, defending_team)
+        # (Parity 2026-09-28: the old _apply_archetype_matchup call was
+        # dead code -- it multiplied the "high"/"medium"/"low" STRING by a
+        # float, which always raised and fell back to unchanged quality.
+        # Archetype matchup already lives in the shared chance-grade roll
+        # (mesh_system._chance_matchup_tilt), so there is no second
+        # matchup layer -- one decision, two fidelities.)
 
         # Goalie personality: a puck-handling turnover behind the net turns
         # this rush into a high-danger chance against the offending goalie.
-        # (Upgrades quality BEFORE xG is computed so the chance is real;
-        # quality is the "high"/"medium"/"low" string this engine uses.)
+        # (Upgrades the GRADE to A -- the shared hard gate says a rebound
+        # is grade A -- BEFORE xG is computed so the chance is real.)
         try:
             if self.goalie_turnovers_left.get(goalie.id, 0) > 0:
                 self.goalie_turnovers_left[goalie.id] -= 1
                 quality = "high"
+                grade = "A"
                 shot_type = ShotType.REBOUND
         except Exception:
             pass
 
-        expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance)
+        expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance, grade=grade)
 
         # Shooter talent (divergence #2): the shooter's attributes move
         # finishing -- the ONE shared shooter_skill_composite with the same
@@ -5076,7 +5253,10 @@ class GameSim:
         # Module 04: log the shot for the Analytics Hub (outcome tagged below).
         self._analytics_record_shot(shooter, attacking_team, defending_team,
                                     location, distance, shot_type,
-                                    expected_goal)
+                                    expected_goal, grade=grade)
+        # Chance-grade analytics (2026-09-28, per Muck): per-player
+        # grade_a/b/c_shots -- the xG backbone, same shape as quick-sim.
+        self._record_chance_grade(shooter, grade, False)
         
         # Apply shot skill bonus to save probability
         adjusted_save_prob = save_probability * (1.0 - (shot_skill_bonus / 200))  # Slight reduction for good passes
@@ -5153,6 +5333,7 @@ class GameSim:
                 # Record the goal
                 self._record_goaltender_stats(goalie, 'goal', save_type, expected_goal, quality)
                 self._analytics_tag_shot("goal")
+                self._record_chance_grade(shooter, grade, True)
             
                 # Handle assists -- Part B: the ONE shared decision.
                 assists = self._award_assists(shooter, attacking_team, passer)
@@ -6879,7 +7060,7 @@ class GameSim:
             return "-"
 
     def _analytics_record_shot(self, shooter, attacking_team, defending_team,
-                               location, distance, shot_type, xg):
+                               location, distance, shot_type, xg, grade=None):
         """Log one shot attempt for the Analytics Hub (module 04)."""
         try:
             shots, _ = self._analytics_logs()
@@ -6887,6 +7068,12 @@ class GameSim:
                 sx, sy = self._shot_spot_coords(location, attacking_team)
             except Exception:
                 sx, sy = 0.0, 0.0
+            try:
+                _gr = str(grade or "").upper()
+                if _gr not in ("A", "B", "C"):
+                    _gr = None
+            except Exception:
+                _gr = None
             shots.append({
                 "shooter_id": getattr(shooter, "id", None),
                 "shooter": getattr(shooter, "full_name",
@@ -6900,6 +7087,7 @@ class GameSim:
                 "distance": round(float(distance or 0), 1),
                 "shot_type": getattr(shot_type, "name", str(shot_type)),
                 "xg": round(float(xg or 0), 3),
+                "grade": _gr,
                 "outcome": "pending",
                 "line": self._analytics_line_of(shooter, attacking_team),
             })
@@ -8849,9 +9037,14 @@ class GameSim:
 
     # ===== STAGE 5: GOALTENDING EXCELLENCE =====
     
-    def _calculate_expected_goal_value(self, shot_location, shot_type, shot_quality, distance):
+    def _calculate_expected_goal_value(self, shot_location, shot_type, shot_quality, distance, grade="B"):
         """
         Stage 5: Calculate the expected goal value for a shot (xG calculation).
+
+        grade: the shared A/B/C chance grade. The grade's conversion
+        multiplier is the ONE shared decision (mesh_system.
+        chance_grade_finish_mult) -- the same mult quick-sim applies.
+        One decision, two fidelities; never a second copy here.
         """
         # Base xG values by shot location (calibrated to NHL ~9% avg conversion)
         base_xg = {
@@ -8878,12 +9071,16 @@ class GameSim:
             ShotType.REBOUND: 1.5
         }.get(shot_type, 1.0)
         
-        # Shot quality modifiers
-        quality_modifier = {
-            'high': 1.3,
-            'medium': 1.0,
-            'low': 0.7
-        }.get(shot_quality, 1.0)
+        # Chance-grade multiplier (2026-09-28, parity fix): the shared
+        # A/B/C finish mult -- NOT a local copy. Grade A carries the NHL
+        # high-danger premium; grade C is suppressed. Same decision
+        # quick-sim makes in _apply_chance_grade.
+        try:
+            from mesh_system import chance_grade_finish_mult as _cgfm
+            quality_modifier = _cgfm(grade)
+        except Exception:
+            quality_modifier = {'high': 1.3, 'medium': 1.0,
+                                'low': 0.7}.get(shot_quality, 1.0)
         
         # Distance modifier (closer = higher xG)
         distance_modifier = max(0.3, 1.2 - (distance / 50))

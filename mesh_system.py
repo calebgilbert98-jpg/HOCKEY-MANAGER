@@ -116,7 +116,14 @@ def effective_goalie_skill(goalie_skill: float) -> float:
 # league in goals. This is the shared decision (one decision, two
 # fidelities) -- both engines multiply it into the conversion formula.
 # Forwards return 1.0. Never raises.
-DEFENSE_POINT_SHOT_DISCOUNT = 0.20
+# Retune 2026-09-28: 0.20 -> 0.24. Measured D share 14.3% (target ~20-22%);
+# the discount was overcorrecting. Combined with the volume bump below,
+# targets ~20% D goals while keeping 0 D in the top-10.
+# Retune 2026-09-29 (acceptance): 0.24 -> 0.45 -> 0.55 -> 0.65. With the
+# chance-grade system live, D point shots grade out B/C (low conversion)
+# AND take the discount -- double-penalized to 12.2% share. Real NHL: D
+# take ~1/3 of shots at ~0.5x forward conversion -> ~20% of goals.
+DEFENSE_POINT_SHOT_DISCOUNT = 0.65
 
 
 def defense_point_shot_discount(shooter) -> float:
@@ -307,6 +314,49 @@ def shooter_finish_mult(shooter_skill: float, mean_skill: float = 65.3) -> float
         return min(1.25, max(0.80, 1.0 + _d * _talent_sens(_d)))
     except Exception:
         return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Positioning split (2026-09-28, per Muck): the old single `positioning`
+# is now offensive_positioning (getting open, net-front spot wins, shot
+# quality) and defensive_positioning (gap control, box-outs, blocks,
+# takeaways). Goalies keep the single `positioning` (crease) -- these
+# helpers return it for goalies. Old saves/players have only `positioning`:
+# both helpers fall back to it when the split attrs are absent or None.
+# ONE decision, two fidelities -- both engines must read positioning
+# through these, never getattr(player, "positioning") for a skater.
+# ---------------------------------------------------------------------------
+
+def offensive_positioning(player) -> float:
+    """Skater's offensive positioning (1-100). Never raises."""
+    try:
+        v = getattr(player, "offensive_positioning", None)
+        if v is None:
+            v = getattr(player, "positioning", 50)
+        return max(1.0, min(100.0, float(v)))
+    except Exception:
+        return 50.0
+
+
+def defensive_positioning(player) -> float:
+    """Skater's defensive positioning (1-100). Never raises."""
+    try:
+        v = getattr(player, "defensive_positioning", None)
+        if v is None:
+            v = getattr(player, "positioning", 50)
+        return max(1.0, min(100.0, float(v)))
+    except Exception:
+        return 50.0
+
+
+def is_goalie_position(player) -> bool:
+    """True if the player is a goalie (keeps single `positioning`)."""
+    try:
+        pos = getattr(player, "primary_position", None)
+        name = getattr(pos, "name", "") or str(pos)
+        return "GOALIE" in name
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +639,7 @@ def defensive_contest_mult(defenders) -> float:
                 continue
             _score = (float(getattr(d, "shot_blocking", 10)) * _w[0]
                       + float(getattr(d, "defensive_awareness", 10)) * _w[1]
-                      + float(getattr(d, "positioning", 10)) * _w[2]
+                      + defensive_positioning(d) * _w[2]
                       + float(getattr(d, "pokecheck", 10)) * _w[3])
             if _score > best:
                 best = _score
@@ -605,20 +655,22 @@ def defensive_contest_mult(defenders) -> float:
 def netfront_spot_win(attacker, defender) -> float:
     """Probability (0-1) the attacker wins the net-front spot.
 
-    Attack: off_the_puck (find the soft spot) 0.50 + strength 0.25 +
-    balance 0.25 (hold it). Defense: strength 0.35 (box out) +
-    defensive_awareness 0.35 (read) + positioning 0.30 (seal). A 10-point
-    edge is ~65/35; 20 points is ~80/20. Never raises.
+    Attack: off_the_puck 0.35 (find the soft spot) + offensive_positioning
+    0.35 (get open, seal the spot) + strength 0.15 + balance 0.15 (hold
+    it). Defense: strength 0.35 (box out) + defensive_awareness 0.35
+    (read) + defensive_positioning 0.30 (seal). A 10-point edge is ~65/35;
+    20 points is ~80/20. Never raises.
     """
     try:
-        _atk = (float(getattr(attacker, "off_the_puck", 10)) * 0.50
-                + float(getattr(attacker, "strength", 10)) * 0.25
-                + float(getattr(attacker, "balance", 10)) * 0.25)
+        _atk = (float(getattr(attacker, "off_the_puck", 10)) * 0.35
+                + offensive_positioning(attacker) * 0.35
+                + float(getattr(attacker, "strength", 10)) * 0.15
+                + float(getattr(attacker, "balance", 10)) * 0.15)
         _dfn = 50.0
         if defender is not None:
             _dfn = (float(getattr(defender, "strength", 10)) * 0.35
                     + float(getattr(defender, "defensive_awareness", 10)) * 0.35
-                    + float(getattr(defender, "positioning", 10)) * 0.30)
+                    + defensive_positioning(defender) * 0.30)
         _edge = _atk - _dfn
         # logistic-ish: 0 -> 0.50, +10 -> 0.65, +20 -> 0.80, -10 -> 0.35
         _p = 0.50 + _edge * 0.015
@@ -709,7 +761,10 @@ def netfront_finish_chance(finisher, goalie, goalie_skill: float) -> float:
 # flattening in shooter_choice_weight compresses archetype differences.
 # This shared multiplier on D shot-selection weight corrects the volume
 # to realistic levels. Shared decision (one decision, two fidelities).
-DEFENSE_SHOT_VOLUME_MULT = 0.40
+# Retune 2026-09-28: 0.40 -> 0.48. D goal share measured 14.3% (target
+# ~20-22%); slight volume restoration pairs with the discount softening
+# above. Still well below the 47.6% problem level.
+DEFENSE_SHOT_VOLUME_MULT = 0.48
 
 
 # ---------------------------------------------------------------------------
@@ -854,7 +909,7 @@ def shot_block_prob(defender, shooter) -> float:
     (the per-shot conversion effect); this is the discrete block event.
     """
     try:
-        _blk = (float(getattr(defender, "positioning", 10)) * 0.50
+        _blk = (defensive_positioning(defender) * 0.50
                 + float(getattr(defender, "shot_blocking", 10)) * 0.50)
         _sht = (float(getattr(shooter, "offensive_awareness", 10)) * 0.50
                 + float(getattr(shooter, "composure", 10)) * 0.50)
@@ -863,6 +918,310 @@ def shot_block_prob(defender, shooter) -> float:
         return max(0.01, min(0.30, 0.08 + _edge * 0.004))
     except Exception:
         return 0.08
+
+
+# ---------------------------------------------------------------------------
+# Chance grading (2026-09-28, per Muck): every scoring chance is graded
+# A/B/C at CREATION time in the shared layer -- the scoring analogue of the
+# hit tiers (tired/normal/big) in impact_system.
+#
+#   Grade A (high-danger): slot, clean look, won the spot / quick release.
+#     The shooter is FAVORED -- conversion premium (~NHL high-danger ~20%+).
+#   Grade C (low-danger): perimeter, heavily contested, bad angle.
+#     Defense + goalie are FAVORED -- conversion suppressed.
+#   Grade B (medium): everything in between, and the MOST COMMON grade.
+#     Decided by the full in-game factor stack (shooter composite vs
+#     defensive contest vs situational goalie, modulated by rivalry /
+#     morale / moment / atmosphere -- the existing conversion pipeline).
+#
+# WHO gets which grade is itself simulated (the key part):
+#   Archetype/talent: snipers and elite playmakers generate more grade-A
+#     looks; grinders get fewer. Offensive positioning, skating (separation)
+#     and awareness gate grade-A frequency.
+#   Matchup: grade-A rate scales against the opponent -- weak defensive
+#     teams, tired D pairs and bad goalie matchups give up more grade-A
+#     chances. A sniper vs a shutdown pair sees his grade-A share drop;
+#     vs a weak third pair it spikes (player_archetypes.MATCHUPS).
+#   Gametime: rivalry heat, morale, clutch/late-game moment and home-crowd
+#     atmosphere all feed the chance-generation roll, the same way they
+#     feed the rest of the on-ice engine. A heated rivalry game with a
+#     roaring crowd tilts toward MORE chances, not just harder hits.
+#
+# Analytics: both engines record the grade on every shot attempt
+# (grade_a/b/c_shots, grade_a/b/c_goals per player) -- the xG backbone
+# for the analytics stack. ONE decision, two fidelities.
+# ---------------------------------------------------------------------------
+
+CHANCE_GRADE_A = "A"
+CHANCE_GRADE_B = "B"
+CHANCE_GRADE_C = "C"
+CHANCE_GRADES = (CHANCE_GRADE_A, CHANCE_GRADE_B, CHANCE_GRADE_C)
+
+# Location priors: (pA, pB, pC) before contest/tilt. Tune to feel, not
+# gospel -- NHL-like targets are ~15-20% A, ~50-60% B, ~25-30% C overall.
+CHANCE_LOCATION_PRIORS = {
+    "breakaway": (0.85, 0.13, 0.02),
+    "crease":    (0.38, 0.50, 0.12),
+    "netfront":  (0.32, 0.52, 0.16),
+    "slot":      (0.22, 0.62, 0.16),
+    "point":     (0.06, 0.68, 0.26),
+    "perimeter": (0.03, 0.53, 0.44),
+}
+
+# Archetype grade-A generation tilt: who LIVES in the high-danger areas.
+# Snipers / playmakers / power forwards generate; grinders / enforcers /
+# stay-at-home D do not.
+CHANCE_ARCHETYPE_A_TILT = {
+    "Sniper": 1.20,
+    "Playmaker": 1.15,
+    "Power Forward": 1.18,
+    "Two-Way Forward": 1.00,
+    "Grinder": 0.70,
+    "Enforcer": 0.60,
+    "Offensive Defenseman": 1.08,
+    "Puck-Moving Defenseman": 0.95,
+    "Two-Way Defenseman": 0.90,
+    "Physical Defenseman": 0.70,
+    "Defensive Defenseman": 0.65,
+}
+
+# Conversion multipliers per grade, applied to the agreed conversion math.
+# Grade A carries the NHL high-danger premium (~20%+): the mult is sized
+# so a typical grade-A look (pre-grade ~0.09) converts around one in five.
+# Grade C is suppressed (perimeter through traffic). Mean-preserving-ish
+# across the target distribution -- the grade system REDISTRIBUTES
+# finishing (stars separate) rather than inflating league scoring.
+CHANCE_GRADE_FINISH_MULT = {
+    CHANCE_GRADE_A: 2.20,
+    CHANCE_GRADE_B: 1.02,
+    CHANCE_GRADE_C: 0.32,
+}
+
+# Grade-specific conversion clamps. Grade A reaches NHL high-danger
+# (~20%+): the ceiling lifts for clean slot looks instead of squashing
+# every chance into the same band.
+CHANCE_GRADE_CLAMP = {
+    CHANCE_GRADE_A: (0.10, 0.21),
+    CHANCE_GRADE_B: (0.04, 0.12),
+    CHANCE_GRADE_C: (0.015, 0.09),
+}
+
+
+def _chance_attr(p, name: str, default: float = 50.0) -> float:
+    try:
+        v = getattr(p, name, default)
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def chance_archetype_a_tilt(player) -> float:
+    """Grade-A generation tilt from the shooter's archetype. Never raises."""
+    try:
+        from player_archetypes import get_archetype as _ga
+        return float(CHANCE_ARCHETYPE_A_TILT.get(_ga(player), 1.0))
+    except Exception:
+        return 1.0
+
+
+def _chance_talent_tilt(player) -> float:
+    """Talent gate on grade-A frequency: offensive positioning (getting
+    open), skating (separation), offensive awareness (finding the soft
+    spot). Elite ~1.2x, fringe ~0.75x. Compressed 2026-09-29 (acceptance):
+    the 1.55x max was giving stars 2.5x+ grade-A volume and 30+ fifty-goal
+    men. Never raises."""
+    try:
+        _talent = (offensive_positioning(player) * 0.40
+                   + _chance_attr(player, "skating") * 0.30
+                   + _chance_attr(player, "offensive_awareness") * 0.30)
+        return max(0.75, min(1.20, 0.75 + (_talent / 100.0) * 0.45))
+    except Exception:
+        return 1.0
+
+
+def _chance_matchup_tilt(shooter, defenders, goalie,
+                         d_fatigue: float = 50.0,
+                         team_d_weakness: float = 1.0) -> float:
+    """Matchup tilt on grade-A rate. Shutdown pairs smother skill
+    (MATCHUPS matrix); tired D pairs, weak defensive teams and bad goalie
+    matchups give up more grade-A chances. Never raises."""
+    _tilt = 1.0
+    try:
+        from player_archetypes import (
+            get_archetype as _ga, matchup_multiplier as _mm)
+        _sarch = _ga(shooter)
+        _darchs = []
+        for _d in (defenders or []):
+            try:
+                if _d is not None:
+                    _darchs.append(_ga(_d))
+            except Exception:
+                pass
+        if _darchs:
+            _tilt *= _mm([_sarch], _darchs)
+    except Exception:
+        pass
+    try:
+        # Tired D pairs leak high-danger looks (fatigue 0-100 scale).
+        _f = max(0.0, min(100.0, float(d_fatigue or 50.0)))
+        if _f > 60.0:
+            _tilt *= 1.0 + min(0.25, (_f - 60.0) / 100.0 * 0.625)
+    except Exception:
+        pass
+    try:
+        _tilt *= max(0.80, min(1.30, float(team_d_weakness or 1.0)))
+    except Exception:
+        pass
+    try:
+        # Bad goalie matchup: shooters get cleaner looks against a
+        # struggling netminder (overall vs ~88 league starter par).
+        _govr = _chance_attr(goalie, "overall", 88.0)
+        try:
+            _govr = float(goalie.overall_rating())
+        except Exception:
+            pass
+        _tilt *= max(0.90, min(1.15, 1.0 + (88.0 - _govr) * 0.008))
+    except Exception:
+        pass
+    return max(0.70, min(1.45, _tilt))
+
+
+def _chance_gametime_tilt(rivalry_heat: float = 0.0, morale: float = 70.0,
+                          clutch: bool = False, crowd_edge: float = 0.0,
+                          is_playoff: bool = False) -> float:
+    """Gametime tilt on chance generation: heated rivalry + roaring crowd
+    = MORE chances (not just harder hits). Confident, clutch-time players
+    find the premium ice. Never raises."""
+    _tilt = 1.0
+    try:
+        _h = max(0.0, min(100.0, float(rivalry_heat or 0.0)))
+        _tilt *= 1.0 + (_h / 100.0) * 0.18
+    except Exception:
+        pass
+    try:
+        _m = max(1.0, min(100.0, float(morale if morale else 70.0)))
+        _tilt *= 0.92 + (_m / 100.0) * 0.16
+    except Exception:
+        pass
+    try:
+        if clutch:
+            _tilt *= 1.10
+        if is_playoff:
+            _tilt *= 1.05
+        _tilt *= 1.0 + max(-1.0, min(1.0, float(crowd_edge or 0.0))) * 0.05
+    except Exception:
+        pass
+    return max(0.85, min(1.35, _tilt))
+
+
+def roll_chance_grade(location: str = "slot", contest: float = 0.5,
+                      shooter=None, defenders=None, goalie=None,
+                      situation: dict = None,
+                      game_ctx: dict = None) -> str:
+    """Grade one scoring chance A/B/C at creation time. THE shared
+    decision -- both engines roll through here.
+
+    location: "breakaway" | "crease" | "netfront" | "slot" | "point" |
+        "perimeter".
+    contest: 0.0 (clean look) .. 1.0 (smothered) defensive pressure.
+    situation: dict with optional keys quick_release, screened_goalie,
+        won_spot, rebound, tip (bools).
+    game_ctx: dict with optional keys rivalry_heat (0-100), morale
+        (1-100), clutch (bool), crowd_edge (-1..1, + = behind shooter),
+        is_playoff (bool), d_fatigue (0-100), team_d_weakness (mult).
+
+    Hard gates (chance quality is honest): breakaways, rebounds and won
+    net-front spots are grade A; smothered perimeter/point shots are
+    grade C. Everything else rolls the simulated distribution. Never
+    raises -- falls back to "B".
+    """
+    try:
+        _loc = str(location or "slot").lower()
+        if _loc not in CHANCE_LOCATION_PRIORS:
+            _loc = "slot"
+        _con = max(0.0, min(1.0, float(contest if contest is not None
+                                       else 0.5)))
+        _sit = situation or {}
+        _qr = bool(_sit.get("quick_release", False))
+        _ws = bool(_sit.get("won_spot", False))
+        _rb = bool(_sit.get("rebound", False))
+        _tip = bool(_sit.get("tip", False))
+
+        # -- Hard gates ------------------------------------------------
+        if _loc == "breakaway" or _rb:
+            return CHANCE_GRADE_A
+        if _ws and _loc in ("crease", "netfront"):
+            return CHANCE_GRADE_A
+        if _tip and _ws:
+            return CHANCE_GRADE_A
+        if _loc == "perimeter" and _con >= 0.70:
+            return CHANCE_GRADE_C
+        if _loc == "point" and _con >= 0.80:
+            return CHANCE_GRADE_C
+        # Slot + clean + (quick release or won spot): the grade-A look.
+        if _loc == "slot" and _con <= 0.30 and (_qr or _ws):
+            return CHANCE_GRADE_A
+
+        # -- Simulated distribution ------------------------------------
+        _pA, _pB, _pC = CHANCE_LOCATION_PRIORS[_loc]
+
+        # Contest shifts mass from A toward C (rushed release).
+        _shift = _con * 0.38
+        _moved_a = _pA * _shift
+        _moved_b = _pB * _shift * 0.45
+        _pA -= _moved_a
+        _pB = _pB - _moved_b + _moved_a * 0.35
+        _pC += _moved_a * 0.65 + _moved_b
+
+        # Who gets the grade: archetype x talent x matchup x gametime.
+        _tilt = (chance_archetype_a_tilt(shooter)
+                 * _chance_talent_tilt(shooter))
+        _gc = game_ctx or {}
+        _tilt *= _chance_matchup_tilt(
+            shooter, defenders, goalie,
+            d_fatigue=_gc.get("d_fatigue", 50.0),
+            team_d_weakness=_gc.get("team_d_weakness", 1.0))
+        _tilt *= _chance_gametime_tilt(
+            rivalry_heat=_gc.get("rivalry_heat", 0.0),
+            morale=_gc.get("morale", _chance_attr(shooter, "morale", 70.0)),
+            clutch=bool(_gc.get("clutch", False)),
+            crowd_edge=_gc.get("crowd_edge", 0.0),
+            is_playoff=bool(_gc.get("is_playoff", False)))
+        _tilt = max(0.25, min(3.20, _tilt))
+
+        _pA = _pA * _tilt
+        _pC = _pC / max(0.40, _tilt ** 0.6)
+        _tot = _pA + _pB + _pC
+        if _tot <= 0:
+            return CHANCE_GRADE_B
+        _pA, _pB, _pC = _pA / _tot, _pB / _tot, _pC / _tot
+
+        _r = random.random()
+        if _r < _pA:
+            return CHANCE_GRADE_A
+        if _r < _pA + _pB:
+            return CHANCE_GRADE_B
+        return CHANCE_GRADE_C
+    except Exception:
+        return CHANCE_GRADE_B
+
+
+def chance_grade_finish_mult(grade: str) -> float:
+    """Conversion multiplier for a graded chance. Never raises."""
+    try:
+        return float(CHANCE_GRADE_FINISH_MULT.get(str(grade).upper(),
+                                                  1.0))
+    except Exception:
+        return 1.0
+
+
+def chance_grade_clamp(grade: str):
+    """(lo, hi) conversion clamp for a graded chance. Grade A reaches
+    NHL high-danger (~20%+). Never raises."""
+    try:
+        return CHANCE_GRADE_CLAMP.get(str(grade).upper(), (0.04, 0.16))
+    except Exception:
+        return (0.04, 0.16)
 
 
 # ---------------------------------------------------------------------------

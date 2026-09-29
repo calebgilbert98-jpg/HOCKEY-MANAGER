@@ -597,9 +597,18 @@ class AdvancedGameSim:
         return fw, df, goalie
 
     def _line_fatigue(self, team_name, line):
-        """Total accumulated fatigue of a line/pair (game-level, not shift)."""
-        return sum(self.stats[team_name].get(p.id, {}).get('fatigue', 0)
-                   for p in line if p)
+        """Mean accumulated fatigue of a line/pair (game-level, not shift).
+
+        Mean, not total: a short-handed unit (injury, 1-man 4th line from
+        a stored lineup) must not look artificially fresher than a full
+        line just because it has fewer skaters accumulating fatigue.
+        Empty lines are never selected.
+        """
+        members = [p for p in line if p]
+        if not members:
+            return float('inf')
+        return (sum(self.stats[team_name].get(p.id, {}).get('fatigue', 0)
+                    for p in members) / len(members))
 
     def _select_lines_idx(self, team_name):
         """Least-fatigued unit. Returns (fw, df, goalie, fw_idx, df_idx)."""
@@ -1421,6 +1430,19 @@ class AdvancedGameSim:
                     for _pp in _pool:
                         # Passing LEADS (0.55) + awareness/composure/vision
                         _w = _pas(_pp) * _relm4(_pp, shooter) * _lane * _open
+                        # Position role: forwards are the primary setup men
+                        # in the offensive zone; D distribute from the point
+                        # (secondary). Applied OUTSIDE the shared harmonic
+                        # gate -- the gate's attribute hierarchy is untouched.
+                        try:
+                            _pos = getattr(_pp, 'primary_position', None)
+                            _posn = getattr(_pos, 'name', '') or str(_pos)
+                            if 'DEFENSE' in _posn or 'DEFENCE' in _posn:
+                                _w *= 0.70
+                            elif 'GOALIE' not in _posn:
+                                _w *= 1.25
+                        except Exception:
+                            pass
                         try:
                             _w *= _mcf4(_pp, [shooter], team,
                                         is_playoff=_iso4)
@@ -1456,9 +1478,23 @@ class AdvancedGameSim:
                 try:
                     from mesh_system import assist_weight as _aw3
                     _iso3 = bool(getattr(self, "is_playoff", False))
-                    _w3 = [max(0.05, _aw3(p, shooter, team,
-                                          is_playoff=_iso3))
-                           for p in candidates]
+                    _w3 = []
+                    for p in candidates:
+                        _w = max(0.05, _aw3(p, shooter, team,
+                                            is_playoff=_iso3))
+                        # Secondary: D point involvement is real, but the
+                        # forwards drive the play. Gentle role tilt outside
+                        # the shared gate.
+                        try:
+                            _pos3 = getattr(p, 'primary_position', None)
+                            _pn3 = getattr(_pos3, 'name', '') or str(_pos3)
+                            if 'DEFENSE' in _pn3 or 'DEFENCE' in _pn3:
+                                _w *= 0.85
+                            elif 'GOALIE' not in _pn3:
+                                _w *= 1.10
+                        except Exception:
+                            pass
+                        _w3.append(_w)
                     second = random.choices(candidates, weights=_w3, k=1)[0]
                 except Exception:
                     second = random.choice(candidates)
@@ -1468,6 +1504,136 @@ class AdvancedGameSim:
                 if st is not None:
                     st['assists'] = st.get('assists', 0) + 1
         return assist_ids, assist_players
+
+    def _apply_chance_grade(self, shot_chance, shooter, goalie, shot_type,
+                            puck_team_name, opp_team_name, contest_mult,
+                            screened_now, shooters):
+        """Chance grading (2026-09-28, per Muck): grade the scoring chance
+        A/B/C at creation time via the shared mesh_system roll, then apply
+        the grade finish multiplier and grade-specific clamp. Replaces the
+        old flat [0.04, 0.16] clamp -- grade B keeps that band, grade A
+        reaches NHL high-danger (~20%+), grade C is suppressed.
+
+        The grade is stashed on self._last_chance_grade for the analytics
+        recording below (per-player grade_a/b/c_shots + _goals). Never
+        raises -- falls back to the flat clamp."""
+        _grade = "B"
+        try:
+            from game_classes import PlayerPosition as _PPg
+            from mesh_system import (roll_chance_grade as _rcg,
+                                     chance_grade_finish_mult as _cgfm,
+                                     chance_grade_clamp as _cgc)
+            # -- location from shot type / position --------------------
+            _spos = getattr(shooter, "primary_position", None)
+            _is_d = _spos in (_PPg.DEFENSE, _PPg.LEFT_DEFENSE,
+                              _PPg.RIGHT_DEFENSE)
+            if getattr(self, "_is_breakaway", False):
+                _loc = "breakaway"
+            elif shot_type in ("tip", "deflection"):
+                _loc = "netfront"
+            elif _is_d and shot_type == "slap shot":
+                _loc = "point"
+            else:
+                _loc = "slot"
+            # -- contest 0 (clean) .. 1 (smothered) from the mult -------
+            # Observed mult range is ~0.90-0.95 (never near 1.0); map
+            # relative to that band, not the theoretical 0.90-1.00.
+            try:
+                _contest01 = max(0.0, min(1.0,
+                                          (0.95 - float(contest_mult)) / 0.05))
+            except Exception:
+                _contest01 = 0.5
+            # -- defending D pair + their fatigue -----------------------
+            _def_team = (self.away_team
+                         if puck_team_name == self.home_team.team_name
+                         else self.home_team)
+            try:
+                _d_onice = (self.on_ice.get(_def_team.team_name, {})
+                            or {}).get("Defense", [])
+                _defenders = [d for d in _d_onice if d]
+            except Exception:
+                _defenders = []
+            try:
+                _dfats = [self.stats[_def_team.team_name].get(d.id, {})
+                          .get('fatigue', 0) for d in _defenders]
+                _d_fatigue = (sum(_dfats) / len(_dfats)) if _dfats else 50.0
+            except Exception:
+                _d_fatigue = 50.0
+            # -- team defensive weakness (GA/GP vs ~3.0 par) ------------
+            _team_d_weak = 1.0
+            try:
+                _ga = float(getattr(_def_team, "goals_against", 0) or 0)
+                _gp = float(getattr(_def_team, "games_played", 0) or 0)
+                if _gp > 5 and _ga > 0:
+                    _gpg = _ga / _gp
+                    _team_d_weak = max(0.85, min(1.30, _gpg / 3.0))
+            except Exception:
+                pass
+            # -- gametime: rivalry / morale / clutch / crowd ------------
+            _rivalry_heat = 0.0
+            try:
+                _lg = getattr(self, "league", None)
+                _rivs = getattr(_lg, "rivalries", None) if _lg else None
+                if _rivs:
+                    import reputation_system as _rs
+                    _shooting_team = (self.home_team
+                                      if puck_team_name ==
+                                      self.home_team.team_name
+                                      else self.away_team)
+                    _rh = _rs.get_rivalry_heat(_rivs, _shooting_team,
+                                               _def_team)
+                    _rivalry_heat = float(_rh.get("heat", 0) or 0)
+            except Exception:
+                pass
+            try:
+                _morale = float(getattr(shooter, "morale", 70) or 70)
+            except Exception:
+                _morale = 70.0
+            try:
+                _sdiff = abs(self.score.get(puck_team_name, 0)
+                             - self.score.get(opp_team_name, 0))
+                _per = int(getattr(self, "period", 1) or 1)
+                _t = float(getattr(self, "time", 0) or 0)
+                # clutch: OT, or 3rd period under 5:00 within a goal
+                _clutch = (_per >= 4) or (_per == 3 and _sdiff <= 1
+                                         and _t >= 3300)
+            except Exception:
+                _clutch = False
+            try:
+                _is_home = puck_team_name == self.home_team.team_name
+                _cm = (self._crowd_home_mult if _is_home
+                       else self._crowd_away_mult)
+                _crowd_edge = max(-1.0, min(1.0, (float(_cm) - 1.0) * 15.0))
+            except Exception:
+                _crowd_edge = 0.0
+            # -- roll ---------------------------------------------------
+            _grade = _rcg(
+                _loc, _contest01, shooter,
+                defenders=_defenders, goalie=goalie,
+                situation={
+                    "quick_release": shot_type == "one-timer",
+                    "screened_goalie": bool(screened_now),
+                    "won_spot": False,
+                    "rebound": False,
+                    "tip": shot_type in ("tip", "deflection"),
+                },
+                game_ctx={
+                    "rivalry_heat": _rivalry_heat,
+                    "morale": _morale,
+                    "clutch": _clutch,
+                    "crowd_edge": _crowd_edge,
+                    "is_playoff": bool(getattr(self, "is_playoff", False)),
+                    "d_fatigue": _d_fatigue,
+                    "team_d_weakness": _team_d_weak,
+                })
+            shot_chance = shot_chance * _cgfm(_grade)
+            _lo, _hi = _cgc(_grade)
+            shot_chance = max(_lo, min(_hi, shot_chance))
+        except Exception:
+            shot_chance = max(0.04, min(0.16, shot_chance))
+            _grade = "B"
+        self._last_chance_grade = _grade
+        return shot_chance
 
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
         """Enhanced shot resolution using multiple attributes"""
@@ -1570,11 +1736,13 @@ class AdvancedGameSim:
         # Net-front screen 2026-09-28 (shared decision): a set screen
         # degrades the GOALIE's sightline (goalie-side penalty), not a
         # shooter bonus. Consumed by this shot.
+        _screened_now = False
         try:
             from mesh_system import screen_goalie_mult as _sgm
             _screens = getattr(self, "_active_screens", {}) or {}
             _screener = _screens.pop(puck_team_name, None)
             if _screener is not None:
+                _screened_now = True
                 _sp = _sgm(_screener, goalie)
                 if _sp != 1.0:
                     # Goalie sees it late: effective skill drops
@@ -1767,7 +1935,9 @@ class AdvancedGameSim:
                                   1.0) / _txq.SHOT_LIFT
         except Exception:
             pass
-        shot_chance = max(0.04, min(0.16, shot_chance))
+        shot_chance = self._apply_chance_grade(
+            shot_chance, shooter, goalie, shot_type, puck_team_name,
+            opp_team_name, _contest, _screened_now, shooters)
 
         # Power-play finishing (divergence #1): the man advantage converts
         # better -- extra space, tired killers. Parity retune 2026-09-28
@@ -1879,6 +2049,22 @@ class AdvancedGameSim:
             
         # Update shot stats
         self.stats[puck_team_name][shooter.id]['shots'] = self.stats[puck_team_name][shooter.id].get('shots', 0) + 1
+        # Chance-grade analytics (2026-09-28, per Muck): record the grade
+        # on every shot attempt -- the xG backbone. grade_a/b/c_shots and
+        # grade_a/b/c_goals per player; expected goals falls out as
+        # sum(shots_g * league_avg_conversion_g).
+        try:
+            _ag = str(getattr(self, "_last_chance_grade", "B") or "B").upper()
+            if _ag not in ("A", "B", "C"):
+                _ag = "B"
+            _st = self.stats[puck_team_name][shooter.id]
+            _sk = f'grade_{_ag.lower()}_shots'
+            _st[_sk] = _st.get(_sk, 0) + 1
+            if shot_result == 'GOAL':
+                _gk = f'grade_{_ag.lower()}_goals'
+                _st[_gk] = _st.get(_gk, 0) + 1
+        except Exception:
+            pass
         
         # Log event
         self.event_log.append({
@@ -1889,7 +2075,8 @@ class AdvancedGameSim:
                 'shooter_id': shooter.id,
                 'shot_type': shot_type,
                 'puck_start_pos': shot_start,
-                'result': shot_result
+                'result': shot_result,
+                'chance_grade': str(getattr(self, "_last_chance_grade", "B") or "B").upper(),
             }
         })
         
@@ -2225,6 +2412,13 @@ class AdvancedGameSim:
             _defender = _d_onice[0] if _d_onice else None
             if random.random() >= _spot(deflector, _defender):
                 return  # boxed out -- no tip
+            # Grade analytics: the won spot makes this a grade-A attempt
+            # whether or not the tip converts.
+            try:
+                _ds = self.stats[puck_team_name][deflector.id]
+                _ds['grade_a_shots'] = _ds.get('grade_a_shots', 0) + 1
+            except Exception:
+                pass
             # Stage 2: the tip itself (screen bonus if a screen is active)
             _screens = getattr(self, "_active_screens", {}) or {}
             _screened = puck_team_name in _screens
@@ -2241,6 +2435,8 @@ class AdvancedGameSim:
                 try:
                     _nf = self.stats[puck_team_name][deflector.id]
                     _nf['netfront_goals'] = _nf.get('netfront_goals', 0) + 1
+                    # Grade-A goal (the attempt was recorded above).
+                    _nf['grade_a_goals'] = _nf.get('grade_a_goals', 0) + 1
                 except Exception:
                     pass
                 self.events.append({

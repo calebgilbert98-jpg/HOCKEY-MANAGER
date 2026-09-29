@@ -725,6 +725,14 @@ class Player:
     loose_puck: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     creativity: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     pressure_player: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))  # Performance under pressure
+    # Positioning split (2026-09-28, per Muck): the old single `positioning`
+    # is now two attributes. Offensive positioning = getting open, winning
+    # the net-front spot, shot quality. Defensive positioning = gap control,
+    # box-outs, blocks, takeaways. Goalies keep the single `positioning`
+    # (crease). None = unset (old save) -> engine falls back to `positioning`
+    # via mesh_system.offensive_positioning()/defensive_positioning().
+    offensive_positioning: Optional[int] = None
+    defensive_positioning: Optional[int] = None
     # Goalie-specific attributes
     reflexes: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
     positioning: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))
