@@ -182,7 +182,11 @@ def ai_select_prospect(team, available, team_board, needs, round_num,
             pos = "?"
         base = getattr(p, 'draft_ranking', 0) or 0
         if pos in (needs or [])[:2]:
-            base *= 1.08
+            # Need-boost decays by round: full 1.08x in round 1, fading to
+            # pure BPA by round 4. A flat boost beats the ±6% noise every
+            # round, so a persistent hole got drafted 7 straight times
+            # (playtest P-4: 13 of 14 Toronto picks were RW).
+            base *= 1.0 + 0.08 * max(0.0, (4 - round_num) / 3.0)
         if pos == 'G' and round_num <= 1:
             base *= 0.80  # goalies rarely go top-10
         # Franchise situation: contenders draft for readiness (higher

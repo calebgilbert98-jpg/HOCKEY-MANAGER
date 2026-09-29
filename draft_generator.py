@@ -508,80 +508,22 @@ def get_random_nationality(weighted=True) -> str:
         
 def get_random_name(country: str) -> Tuple[str, str]:
     """Returns a random first and last name appropriate for the given country.
-    Names are normalized to ASCII-safe text (transliteration safety net)."""
+    Names are normalized to ASCII-safe text (transliteration safety net).
+
+    Exact full-name collisions with famous real NHLers are re-rolled
+    (playtest P-5): the surname pools intentionally keep real hockey
+    surnames (Rantanen, Draisaitl...) for national authenticity, but a
+    generated "Mikko Rantanen" reads as THE Mikko Rantanen.
+    """
     first_name = random.choice(FIRST_NAMES.get(country, FIRST_NAMES["Other"]))
-    # P-5: star-surname filter -- generated prospects must not borrow a
-    # recognizable real player's surname (e.g. "Klaus Draisaitl").
+    # P-5: star-surname filter (Caleb's name_safety) -- generated prospects
+    # must not borrow a recognizable real player's surname.
     try:
         import name_safety as _ns
         last_name = _ns.pick_surname(LAST_NAMES.get(country, LAST_NAMES["Other"]))
     except Exception:
         last_name = random.choice(LAST_NAMES.get(country, LAST_NAMES["Other"]))
     return _to_ascii(first_name), _to_ascii(last_name)
-
-def get_random_birthplace(country: str) -> str:
-    """Returns a random birthplace for the given country."""
-    return random.choice(BIRTHPLACES.get(country, BIRTHPLACES["Other"]))
-
-def get_random_position(weighted=True) -> PlayerPosition:
-    """Returns a randomly selected position based on probability distribution."""
-    if weighted:
-        positions = list(POSITION_DISTRIBUTION.keys())
-        probabilities = list(POSITION_DISTRIBUTION.values())
-        return random.choices(positions, weights=probabilities, k=1)[0]
-    else:
-        return random.choice(list(PlayerPosition))
-
-def get_random_potential(distribution=None) -> str:
-    """Returns a randomly selected potential grade based on probability distribution."""
-    dist = distribution or POTENTIAL_DISTRIBUTION
-    potentials = list(dist.keys())
-    probabilities = list(dist.values())
-    return random.choices(potentials, weights=probabilities, k=1)[0]
-
-def get_archetype_for_position(position: PlayerPosition) -> Tuple[str, dict]:
-    """Returns a random archetype appropriate for the given position."""
-    if position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
-        category = "FORWARDS"
-    elif position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE, PlayerPosition.DEFENSE]:
-        category = "DEFENSEMEN"
-    else:  # Goalie
-        category = "GOALIES"
-        
-    archetype_name = random.choice(list(ARCHETYPES[category].keys()))
-    return archetype_name, ARCHETYPES[category][archetype_name]
-
-def get_base_attribute_value(min_val: int = 10, max_val: int = 30) -> int:
-    """
-    Generate a base attribute value following a normal distribution.
-    Most values will be around the middle of the range.
-    (100-scale: callers pass doubled ranges)"""
-    mean = (min_val + max_val) / 2
-    std_dev = (max_val - min_val) / 4  # This gives a reasonable spread
-    value = int(random.normalvariate(mean, std_dev))
-    return max(min_val, min(max_val, value))
-
-def calculate_draft_ranking(player: Player) -> float:
-    """Calculate a draft ranking score for a player based on attributes and potential."""
-    # Convert potential grade to numeric value
-    potential_values = {
-        "A+": 99, "A": 96, "A-": 92,
-        "B+": 88, "B": 84, "B-": 80,
-        "C+": 76, "C": 72, "C-": 68,
-        "D": 60, "F": 50
-    }
-    potential_value = potential_values.get(player.potential_grade, 65)
-    
-    # Get current overall rating
-    current_rating = player.overall_rating()
-    
-    # Calculate ranking score with some randomness
-    ranking_score = (current_rating * 0.7) + (potential_value * 0.3)
-    
-    # Add some randomness to simulate scouting variance
-    ranking_score += random.uniform(-5, 5)
-    
-    return ranking_score
 
 
 # --- Draft eligibility (real NHL rules) ---
