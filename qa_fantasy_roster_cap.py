@@ -103,6 +103,20 @@ def main():
     check("no goalies available: no crash", len(t4.roster) == 20,
           f"roster={len(t4.roster)}")
 
+    # 6. goalie ceiling: 6 goalies hoarded -> 3 stay, skaters backfilled
+    t5 = make_team("Hoarders")
+    mgr5 = FantasyDraftManager([t5], [])
+    t5.roster = ([make_player(i, 70, goalie=True) for i in range(6)] +
+                 [make_player(10 + i, 65) for i in range(14)])
+    t5.ahl_roster = [make_player(100 + i, 55) for i in range(6)]
+    mgr5.normalize_post_draft_rosters()
+    g5 = sum(1 for p in t5.roster
+             if p.primary_position == PlayerPosition.GOALIE)
+    s5 = sum(1 for p in t5.roster
+             if p.primary_position != PlayerPosition.GOALIE)
+    check("goalie ceiling demotes extras", g5 == 3, f"goalies={g5}")
+    check("skaters backfilled to 18", s5 >= 18, f"skaters={s5}")
+
     fails = [(n, d) for n, ok, d in res if not ok]
     for n, ok, d in res:
         print(f"{'PASS' if ok else 'FAIL'} {n} {d}")

@@ -444,10 +444,12 @@ class FantasyDraftManager:
 
     def normalize_post_draft_rosters(self) -> None:
         """Post-draft soundness pass (called by complete_draft and headless
-        flows): no NHL roster over 23, every club keeps >= 2 goalies so it
-        can dress a lineup. Excess skaters drop to the AHL; a short goalie
+        flows): no NHL roster over 23, every club keeps 2-3 goalies and can
+        dress 18 skaters. Excess skaters drop to the AHL; a short goalie
         corps promotes the best AHL netminder(s), demoting the worst
-        skater to stay at 23."""
+        skater to stay at 23. A club hoarding goalies (the draft AI
+        over-drafts them) demotes the extras and backfills skaters from
+        the AHL so the roster is playable."""
         def _ovr(p):
             try:
                 return p.overall_rating()
@@ -460,14 +462,24 @@ class FantasyDraftManager:
             except Exception:
                 return False
 
+        def _pos_key(p):
+            try:
+                return p.primary_position.name
+            except Exception:
+                return ""
+
         for team in self.teams:
             ros = [p for p in (getattr(team, "roster", None) or [])]
             ahl = getattr(team, "ahl_roster", None)
             if not isinstance(ahl, list):
                 ahl = team.ahl_roster = []
+            pro = getattr(team, "prospects", None)
+            if not isinstance(pro, list):
+                pro = team.prospects = []
             ros.sort(key=_ovr, reverse=True)
             while len(ros) > self.NHL_ROSTER_MAX:
                 ahl.append(ros.pop())
+            # goalie floor: need 2 on the NHL roster
             have_g = sum(1 for p in ros if _goalie(p))
             ahl_goalies = sorted([p for p in ahl if _goalie(p)],
                                  key=_ovr, reverse=True)
@@ -483,6 +495,62 @@ class FantasyDraftManager:
                         ahl.append(out)
                 ros.append(g)
                 have_g += 1
+            # last resort: no goalie in the AHL either -- bring up the best
+            # prospect netminder rather than skate with one goalie
+            if have_g < 2:
+                pro_goalies = sorted([p for p in pro if _goalie(p)],
+                                     key=_ovr, reverse=True)
+                while have_g < 2 and pro_goalies:
+                    g = pro_goalies.pop(0)
+                    pro.remove(g)
+                    ros.append(g)
+                    have_g += 1
+            # goalie ceiling: max 3 on the NHL roster; the extras bury in
+            # the AHL and the club backfills skaters to dress 18
+            ros_goalies = sorted([p for p in ros if _goalie(p)], key=_ovr)
+            while len(ros_goalies) > 3:
+                g = ros_goalies.pop(0)
+                ros.remove(g)
+                ahl.append(g)
+            # backfill skaters to 18, preferring positions of need
+            def _counts():
+                c = {"C": 0, "W": 0, "D": 0}
+                for p in ros:
+                    if _goalie(p):
+                        continue
+                    k = _pos_key(p)
+                    if k == "CENTER":
+                        c["C"] += 1
+                    elif k in ("LEFT_WING", "RIGHT_WING"):
+                        c["W"] += 1
+                    elif k in ("LEFT_DEFENSE", "RIGHT_DEFENSE", "DEFENSE"):
+                        c["D"] += 1
+                return c
+
+            def _need_rank(p):
+                c = _counts()
+                k = _pos_key(p)
+                if k == "CENTER":
+                    gap = max(0, 4 - c["C"])
+                elif k in ("LEFT_WING", "RIGHT_WING"):
+                    gap = max(0, 6 - c["W"])
+                elif k in ("LEFT_DEFENSE", "RIGHT_DEFENSE", "DEFENSE"):
+                    gap = max(0, 7 - c["D"])
+                else:
+                    gap = 0
+                return gap
+
+            skaters = [p for p in ros if not _goalie(p)]
+            while len(skaters) < 18 and len(ros) < self.NHL_ROSTER_MAX:
+                cands = sorted([p for p in ahl if not _goalie(p)],
+                               key=lambda p: (_need_rank(p), _ovr(p)),
+                               reverse=True)
+                if not cands:
+                    break
+                s = cands[0]
+                ahl.remove(s)
+                ros.append(s)
+                skaters.append(s)
             team.roster = ros
 
 class FantasyDraftView(tk.Frame):
