@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""playtest_campaign6.py -- 6-season playtest campaigns (2026-09-29 round).
+
+Usage: PLAYTEST_USER_TEAM="Washington Capitals" python3 playtest_campaign6.py A
+       PLAYTEST_USER_TEAM="Colorado Avalanche"  python3 playtest_campaign6.py B
+
+Writes per-season JSON + story logs to ~/workspace/playtest-6season/campaign_{A,B}/
+Adapted from the 7-season playtest_campaign.py:
+  - 6 seasons, user team from env (no Toronto hardcode)
+  - trade-deadline trigger fires on the DERIVED deadline date
+    (trade_deadline_date: last RS game - 40d), not the old month==3 check
+  - per-season deadline instrumentation (derived date, freeze-gate probe)
+  - awards extended: Norris/Selke via awards_race, top-5 goals/assists
+  - ottawa_watch: per-season Ottawa snapshot for the contention audit
+"""
+import sys, os, json, traceback
+from datetime import date, timedelta
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+USER_TEAM = os.environ.get("PLAYTEST_USER_TEAM", "Washington Capitals")
+
+from playtest_driver import (StoryLog, nhl_teams, get_team, ovr)
+import playtest_driver as _pd
+import playtest_mid as _pm
+import playtest_offseason as _po
+import playtest_fantasy as _pf
+
+# de-Toronto the harness modules (they read the module global at call time)
+for _m in (_pd, _pm, _po, _pf):
+    try:
+        _m.USER_TEAM_NAME = USER_TEAM
+    except Exception:
+        pass
+
+from playtest_season import SeasonDriver
+import playtest_mid      # noqa: F401 (monkey-patches)
+import playtest_offseason  # noqa: F401 (monkey-patches)
+import playtest_systems as psys
+from database_generator import generate_database, NHL_TEAMS, NHL_TEAM_INFO
+
+BASE = os.path.expanduser("~/workspace/playtest-6season")
+
+STRATEGIES_A = {1: "win-now", 2: "win-now", 3: "retool", 4: "win-now",
+                5: "retool", 6: "all-in"}
+STRATEGIES_B = {1: "win-now", 2: "retool", 3: "win-now", 4: "win-now",
+                5: "retool", 6: "all-in"}
+
+# chain the systems monthly probes into the driver's monthly hooks,
+# and move the trade-deadline trigger onto the DERIVED deadline date.
+_orig_monthly = SeasonDriver._monthly_hooks
+
+
+def _derived_dl(lg):
+    try:
+        from trade_deadline_manager import trade_deadline_date as _tdd
+        return _tdd(lg)
+    except Exception:
+        return None
+
+
+def _monthly_hooks_plus(self, month, ugp):
+    # suppress the old hardcoded month==3 trigger; we fire on the derived date
+    self._deadline_done = True
+    _orig_monthly(self, month, ugp)
+    try:
+        psys.monthly_systems(self, month)
+    except Exception as e:
+        self.story.bug(self.n, "systems monthly",
+                       f"{e}\n{traceback.format_exc()[-300:]}", False,
+                       "playtest_systems.py")
+    # derived-deadline trigger: first monthly tick on/after the derived day
+    try:
+        if not getattr(self, "_dl6_done", False):
+            dl = _derived_dl(self.lg)
+            if dl is not None and self.day >= dl:
+                self._dl6_done = True
+                self._trade_deadline()
+                # freeze-gate probe: deadline day open, day after frozen
+                try:
+                    import trade_engine as te
+                    f_dl, _ = te._trade_freeze_active(dl.isoformat(), self.lg)
+                    f_nx, _ = te._trade_freeze_active(
+                        (dl + timedelta(days=1)).isoformat(), self.lg)
+                    self.story.add(
+                        self.n, dl, "deadline_probe", ["trade_engine"],
+                        f"Deadline gate probe: day-of open={not f_dl}, "
+                        f"day-after frozen={f_nx}",
+                        "" if (not f_dl and f_nx) else "GATE MISMATCH")
+                    if f_dl or not f_nx:
+                        self.story.bug(
+                            self.n, "deadline gate",
+                            f"freeze gate wrong around derived deadline {dl}: "
+                            f"day-of frozen={f_dl}, day-after frozen={f_nx}",
+                            False, "trade_engine.py")
+                except Exception as e:
+                    self.story.bug(self.n, "deadline probe", f"{e}", False,
+                                   "trade_engine.py")
+    except Exception as e:
+        self.story.bug(self.n, "derived deadline trigger", f"{e}", False,
+                       "playtest_campaign6.py")
+
+
+SeasonDriver._monthly_hooks = _monthly_hooks_plus
+
+
+def _tm_of(lg, p):
+    for t in nhl_teams(lg):
+        if p in t.roster:
+            return t.team_name
+    return "?"
+
+
+def season_summary(lg, user, champ):
+    st = lg.standings[user.team_name]
+    standings = sorted(
+        ((t.team_name, lg.standings[t.team_name]["W"],
+          lg.standings[t.team_name]["L"], lg.standings[t.team_name]["OTL"],
+          lg.standings[t.team_name]["Points"]) for t in nhl_teams(lg)),
+        key=lambda r: r[4], reverse=True)
+    skaters = [p for t in nhl_teams(lg) for p in t.roster
+               if p.primary_position.name != "GOALIE"]
+    leaders = sorted(((p.full_name, _tm_of(lg, p), p.stats.goals,
+                       p.stats.assists, p.stats.goals + p.stats.assists)
+                      for p in skaters if p.stats.games_played > 0),
+                     key=lambda r: r[4], reverse=True)
+    goals5 = sorted(leaders, key=lambda r: r[2], reverse=True)[:5]
+    assists5 = sorted(leaders, key=lambda r: r[3], reverse=True)[:5]
+    tor = sorted(((p.full_name, p.stats.goals, p.stats.assists,
+                   p.stats.goals + p.stats.assists)
+                  for p in user.roster
+                  if p.primary_position.name != "GOALIE"),
+                 key=lambda r: r[3], reverse=True)
+    # awards by the game's own logic
+    norris = selke = None
+    try:
+        import awards_race as ar
+        nr = ar.norris_race(skaters)
+        if nr:
+            w = nr[0]["player"]
+            norris = (w.full_name, _tm_of(lg, w), nr[0]["points"])
+        sr = ar.selke_race(skaters)
+        if sr:
+            w = sr[0]["player"]
+            selke = (w.full_name, _tm_of(lg, w), sr[0]["points"])
+    except Exception:
+        pass
+    # ottawa watch: contention audit snapshot
+    ottawa = None
+    try:
+        ott = get_team(lg, "Ottawa Senators")
+        ost = lg.standings["Ottawa Senators"]
+        orank = next(i for i, r in enumerate(standings, 1)
+                     if r[0] == "Ottawa Senators")
+        topsk = sorted(
+            (p for p in ott.roster if p.primary_position.name != "GOALIE"),
+            key=lambda p: ovr(p), reverse=True)[:6]
+        topg = sorted(
+            (p for p in ott.roster if p.primary_position.name == "GOALIE"),
+            key=lambda p: ovr(p), reverse=True)[:2]
+        ottawa = {
+            "record": f"{ost['W']}-{ost['L']}-{ost['OTL']}",
+            "points": ost["Points"], "rank": orank,
+            "top_skaters": [(p.full_name, ovr(p), p.stats.goals,
+                             p.stats.assists) for p in topsk],
+            "top_goalies": [(g.full_name, ovr(g)) for g in topg],
+            "cap_space": getattr(ott, "cap_space", None),
+            "roster_size": len(ott.roster),
+        }
+    except Exception:
+        pass
+    return {
+        "user_record": f"{st['W']}-{st['L']}-{st['OTL']}",
+        "user_points": st["Points"],
+        "league_rank": next(i for i, r in enumerate(standings, 1)
+                            if r[0] == user.team_name),
+        "champion": champ.team_name if champ is not None else None,
+        "standings_top10": standings[:10],
+        "scoring_top10": leaders[:10],
+        "goals_top5": goals5,
+        "assists_top5": assists5,
+        "norris": norris,
+        "selke": selke,
+        "user_scoring": tor[:12],
+        "ottawa_watch": ottawa,
+        "trades": [],
+    }
+
+def save_load_roundtrip(lg, user, day, path, story, n, continue_from=False):
+    """Save via GameSaveManager, load into a fresh manager, verify."""
+    from save_load_system import GameSaveManager
+    from types import SimpleNamespace
+    try:
+        stub = SimpleNamespace(league=lg, current_date=day, user_team=user)
+        sm = GameSaveManager(stub)
+        ok_save = sm.save_game(path)
+        stub2 = SimpleNamespace(league=None, current_date=None,
+                                        user_team=None)
+        ok_load = GameSaveManager(stub2).load_game(path)
+        lg2 = stub2.league
+        ok = bool(ok_save and ok_load and lg2 is not None
+                  and len([t for t in lg2.teams
+                           if getattr(t, "league_name", "") ==
+                           "National Hockey League"]) == 32)
+        detail = f"save={ok_save} load={ok_load}"
+        if ok and continue_from:
+            user2 = get_team(lg2, USER_TEAM)
+            ok = user2 is not None and len(user2.roster) > 0
+            detail += f" continue-ok={ok}"
+        story.add(n, "9999", "saveload", ["save_load_system"],
+                  f"Save/load round trip: {'OK' if ok else 'FAILED'} ({detail})",
+                  "CONTINUED FROM LOADED GAME" if (ok and continue_from) else "")
+        return (lg2, user2) if (ok and continue_from) else (None, None)
+    except Exception as e:
+        story.bug(n, "save/load",
+                  f"{e}\n{traceback.format_exc()[-300:]}", False,
+                  "save_load_system.py")
+        return None, None
+
+
+def run_campaign(tag, seasons=6):
+    fantasy = (tag == "A")
+    cdir = os.path.join(BASE, f"campaign_{tag}")
+    os.makedirs(cdir, exist_ok=True)
+    strategies = STRATEGIES_A if fantasy else STRATEGIES_B
+    story = StoryLog()
+
+    if fantasy:
+        import playtest_fantasy as pf
+        print(f"Campaign {tag}: running fantasy draft "
+              f"(user team: {USER_TEAM})...", flush=True)
+        d = pf.run_fantasy_draft(seed=20260929)
+        lg, user = d["lg"], d["user"]
+        rep = d["report"]
+        with open(os.path.join(cdir, "fantasy_draft_audit.json"), "w") as f:
+            json.dump(rep, f, indent=1, default=str)
+        story.add(0, "2026-09-01", "fantasy_draft", ["fantasy_draft"],
+                  f"Fantasy draft complete: audit "
+                  f"{'PASSED' if rep['ok'] else 'FAILED'} "
+                  f"({len(rep['issues'])} issues)",
+                  f"{USER_TEAM} roster: {len(user.roster)} players, "
+                  f"avg ovr {sum(ovr(p) for p in user.roster)/max(len(user.roster),1):.1f}")
+        for team, what, detail in rep["issues"]:
+            story.bug(0, "fantasy draft audit", f"[{team}] {what} {detail}",
+                      False, "fantasy_draft.py")
+    else:
+        print(f"Campaign {tag}: generating standard database "
+              f"(user team: {USER_TEAM})...", flush=True)
+        lg = generate_database("Small")
+        lg.initialize_standings()
+        lg.initialize_all_draft_picks()
+        user = get_team(lg, USER_TEAM)
+
+    # seed rivalries for the user team: two same-division opponents
+    try:
+        from reputation_system import declare_rivalry
+        div = NHL_TEAM_INFO[USER_TEAM]["division"]
+        rivals = [t for t in NHL_TEAMS
+                  if NHL_TEAM_INFO[t]["division"] == div and t != USER_TEAM][:2]
+        for rname in rivals:
+            rteam = get_team(lg, rname)
+            if rteam:
+                declare_rivalry(lg, user, rteam, declared_by="user")
+        story.add(1, "2026-09-20", "rivalry",
+                  ["rivalry_engine", "reputation_system"],
+                  f"{USER_TEAM} declares {rivals[0]} and {rivals[1]} blood rivals"
+                  if len(rivals) == 2 else f"{USER_TEAM} declares a blood rival",
+                  "Circle those dates on the calendar.")
+    except Exception as e:
+        story.bug(1, "rivalry seeding", f"{e}", False, "reputation_system.py")
+    print(f"User team: {user.team_name} ({len(user.roster)} players)", flush=True)
+
+    for n in range(1, seasons + 1):
+        strategy = strategies[n]
+        print(f"\n===== CAMPAIGN {tag} SEASON {n} ({strategy}) "
+              f"year={lg.season_year} =====", flush=True)
+        drv = SeasonDriver(lg, n, strategy, story)
+        try:
+            drv.preseason()
+            psys.preseason_systems(drv)
+            lg.generate_schedule(lg.season_year)
+            # log the derived trade deadline for this season
+            dl = _derived_dl(lg)
+            if dl is not None:
+                story.add(n, dl, "deadline_derived", ["trade_deadline_manager"],
+                          f"Derived trade deadline: {dl.isoformat()} "
+                          f"(40d before last RS game)", "")
+            drv.regular_season()
+            drv._awards()
+            champ = drv._playoffs()
+            drv._champ = champ
+            summ = season_summary(lg, user, champ)
+            summ["trades"] = drv.trades_made
+            summ["strategy"] = strategy
+            summ["year"] = lg.season_year
+            summ["user_team"] = USER_TEAM
+            summ["derived_deadline"] = dl.isoformat() if dl else None
+            drv._offseason()
+            psys.offseason_systems(drv)
+            # save/load every season; season 4 continues from the loaded game
+            sp = os.path.join(cdir, f"save_s{n}.dat")
+            lg2, user2 = save_load_roundtrip(
+                lg, user, drv.day, sp, story, n, continue_from=(n == 4))
+            if lg2 is not None:
+                lg, user = lg2, user2
+                print(f"  [season {n}] continuing campaign from loaded game",
+                      flush=True)
+            with open(os.path.join(cdir, f"season{n}.json"), "w") as f:
+                json.dump({"summary": summ,
+                           "events": [e for e in story.events if e["season"] == n],
+                           "bugs": [b for b in story.bugs if b["season"] == n]},
+                          f, indent=1, default=str)
+            print(f"Season {n}: {summ['user_record']} "
+                  f"({summ['user_points']} pts, rank {summ['league_rank']}), "
+                  f"champ={summ['champion']}", flush=True)
+        except Exception as e:
+            story.bug(n, "season driver",
+                      f"UNHANDLED: {e}\n{traceback.format_exc()[-800:]}",
+                      False, "")
+            print(f"SEASON {n} CRASHED: {e}", flush=True)
+            traceback.print_exc()
+
+    story.dump(os.path.join(cdir, "story_all.json"))
+    # campaign summary markdown
+    with open(os.path.join(cdir, "CAMPAIGN.md"), "w") as f:
+        f.write(f"# Campaign {tag} ({'fantasy-draft' if fantasy else 'standard'} league)\n\n")
+        f.write(f"User team: {USER_TEAM}\n\n")
+        for n in range(1, seasons + 1):
+            p = os.path.join(cdir, f"season{n}.json")
+            if not os.path.exists(p):
+                continue
+            d = json.load(open(p))
+            sm = d["summary"]
+            f.write(f"## Season {n} ({sm['year']}-{sm['year']+1}, {sm['strategy']})\n")
+            f.write(f"{USER_TEAM}: {sm['user_record']} ({sm['user_points']} pts, "
+                    f"rank {sm['league_rank']}/32). Champion: {sm['champion']}\n")
+            f.write(f"Derived deadline: {sm.get('derived_deadline')}\n")
+            f.write(f"Trades: {sm['trades']}\n\n")
+        f.write(f"## Bugs ({len(story.bugs)})\n")
+        for b in story.bugs:
+            f.write(f"- S{b['season']} [{b['where']}] {b['what'][:160]} "
+                    f"(fixed={b['fixed']}) {b.get('file_line','')}\n")
+    print(f"\nDone. Logs in {cdir}")
+
+
+if __name__ == "__main__":
+    tag = sys.argv[1] if len(sys.argv) > 1 else "A"
+    seasons = int(sys.argv[2]) if len(sys.argv) > 2 else 6
+    run_campaign(tag, seasons)
