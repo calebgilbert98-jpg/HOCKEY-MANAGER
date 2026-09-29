@@ -488,6 +488,16 @@ def shooter_choice_weight(player) -> float:
         from player_traits import get_sim_bonus as _bonus
         _t = get_tendency(player, "shoot")
         _w = max(0.05, float(_t)) * float(_bonus(player, "shot_frequency_mult"))
+        # Defenseman volume adjustment (shared decision, mesh_system):
+        # D take 47.6% of shots, should be ~33%. Correct the volume.
+        try:
+            from game_classes import PlayerPosition as _PP
+            from mesh_system import DEFENSE_SHOT_VOLUME_MULT as _dvm
+            _pos = getattr(player, "primary_position", None)
+            if _pos in (_PP.DEFENSE, _PP.LEFT_DEFENSE, _PP.RIGHT_DEFENSE):
+                _w *= _dvm
+        except Exception:
+            pass
         return max(0.05, _w) ** 0.5
     except Exception:
         return 1.0

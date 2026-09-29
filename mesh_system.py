@@ -62,7 +62,7 @@ _BREAKOUT_MORALE_BUMP = 8    # coach trust made tangible (morale floor lift)
 # adjusted differential averages -26.7 (starters + danger/shot-type
 # adjustments), not -14.8. Re-measure if rosters or adjustments change.
 SKILL_DIFF_BASELINE = -26.7
-SHOT_BASE_CHANCE = 0.09
+SHOT_BASE_CHANCE = 0.12
 # Talent sensitivity: piecewise -- flat middle, gentle top (parity retune
 # 2026-09-28, per Muck: "flat league, fat tails"). The middle of the league
 # converts on a gentle slope (SENS_MID) so depth and systems contend; above
@@ -78,7 +78,7 @@ SHOT_BASE_CHANCE = 0.09
 # 0.006-0.008) still left the best teams at 78-80% and the Art Ross at
 # 114-137; the 0.16 clamp preserves genuine 50-goal headroom at the top.)
 SHOT_TALENT_SENS_MID = 0.003
-SHOT_TALENT_SENS_TOP = 0.004
+SHOT_TALENT_SENS_TOP = 0.006
 # Back-compat alias for single-sensitivity import sites.
 SHOT_SKILL_SENSITIVITY = SHOT_TALENT_SENS_MID
 
@@ -106,6 +106,52 @@ def effective_goalie_skill(goalie_skill: float) -> float:
         return GOALIE_PARITY_MEAN + (float(goalie_skill) - GOALIE_PARITY_MEAN) * GOALIE_PARITY_K
     except Exception:
         return GOALIE_PARITY_MEAN
+
+
+# Defenseman point-shot conversion discount (superstar tune 2026-09-28).
+# Real NHL: D take ~1/3 of shots but score only ~20% of goals -- a point
+# slapshot through traffic converts at roughly half the rate of a forward's
+# slot wrister at equal skill. The sim had no distance discount: D point
+# shots ran through the same ~9%-base conversion as forwards, so D led the
+# league in goals. This is the shared decision (one decision, two
+# fidelities) -- both engines multiply it into the conversion formula.
+# Forwards return 1.0. Never raises.
+DEFENSE_POINT_SHOT_DISCOUNT = 0.20
+
+
+def defense_point_shot_discount(shooter) -> float:
+    """Conversion multiplier for defenseman point shots. 1.0 for forwards."""
+    try:
+        from game_classes import PlayerPosition
+        _pos = getattr(shooter, "primary_position", None)
+        if _pos in (PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                    PlayerPosition.RIGHT_DEFENSE):
+            return DEFENSE_POINT_SHOT_DISCOUNT
+    except Exception:
+        pass
+    return 1.0
+
+
+# Sniper archetype finishing tilt (superstar tune 2026-09-28, per Muck).
+# Within elite-forward scoring, pure snipers get a modest edge over other
+# forward archetypes -- 5-10% range, not a transformation. A 95-ovr sniper
+# hits ~50; a 95-ovr playmaker still scores ~35-45 but makes his money on
+# assists. Shared decision (one decision, two fidelities). Never raises.
+ARCHETYPE_FINISH_TILT = {
+    "Sniper": 1.08,
+    "Power Forward": 1.03,
+    "Playmaker": 0.97,
+    "Two-Way Forward": 1.00,
+}
+
+
+def archetype_finish_tilt(shooter) -> float:
+    """Small finishing multiplier by forward archetype. 1.0 default."""
+    try:
+        from player_archetypes import get_archetype
+        return float(ARCHETYPE_FINISH_TILT.get(get_archetype(shooter), 1.0))
+    except Exception:
+        return 1.0
 
 
 def _clamp01(x):
@@ -393,12 +439,13 @@ def relationship_mult(a, b) -> float:
 def assist_weight(candidate, scorer, team=None, is_playoff=False) -> float:
     """Assist-credit weight for `candidate` on `scorer`'s goal.
 
-    Playmaking attributes dominate; relationship closeness x line
+    Secondary-assist model (2026-09-28, per Muck): passing LEADS (0.60) +
+    awareness, less pressure-weighted. Relationship closeness x line
     chemistry (mesh_chance_factor) combine into one capped x0.85-1.3
     dynamics amplifier. Never raises.
     """
     try:
-        _pm = max(5.0, playmaking_score(candidate))
+        _pm = max(5.0, secondary_assist_score(candidate))
         try:
             _chem = mesh_chance_factor(candidate, [scorer], team,
                                        is_playoff=is_playoff)
@@ -507,3 +554,365 @@ def record_performance(player, goals: int, assists: int, team=None,
     except Exception:
         pass
     return note
+
+
+# ---------------------------------------------------------------------------
+# Defensive contest + net-front battle (superstar mechanics 2026-09-28, per
+# Muck). A goal is three things: get open (skating) + IQ (awareness) +
+# finish (shooting) -- but defenders are not bystanders. The two on-ice D
+# contest every shot (blocks, sticks, gap), and the net front is a real
+# sub-model (win the spot -> screen -> tip -> finish), each stage gating
+# the next. Shared layer: one decision, two fidelities. Additive; the
+# synergy gate is untouched. Never raises.
+# ---------------------------------------------------------------------------
+
+# Defensive contest: how much the on-ice defenders reduce conversion.
+# NHL reality: ~15-20 shots blocked per game league-wide, but per-shot the
+# effect is modest -- an elite shot-blocker takes ~5-8% off, an average
+# defender ~2-3%. The best defender's contest matters most (max, not sum).
+_DEF_CONTEST_WEIGHTS = (0.35, 0.30, 0.20, 0.15)  # blk, daw, pos, poke
+
+
+def defensive_contest_mult(defenders) -> float:
+    """Multiplier on shot conversion from on-ice defensive pressure.
+
+    1.0 = no contest. Each defender's contest score blends shot_blocking
+    (blocks), defensive_awareness (gap), positioning (angles), pokecheck
+    (sticks); the best defender's contest dominates. Returns 0.90-1.00.
+    defenders: iterable of Player (usually the 2 on-ice D). Never raises.
+    """
+    try:
+        _w = _DEF_CONTEST_WEIGHTS
+        best = 0.0
+        for d in (defenders or []):
+            if d is None:
+                continue
+            _score = (float(getattr(d, "shot_blocking", 10)) * _w[0]
+                      + float(getattr(d, "defensive_awareness", 10)) * _w[1]
+                      + float(getattr(d, "positioning", 10)) * _w[2]
+                      + float(getattr(d, "pokecheck", 10)) * _w[3])
+            if _score > best:
+                best = _score
+        if best <= 0:
+            return 1.0
+        # 50 (average) -> ~0.975; 85 (elite) -> ~0.93; 20 (poor) -> ~0.995
+        _mult = 1.0 - max(0.0, min(0.10, (best - 30.0) * 0.002))
+        return max(0.90, min(1.0, _mult))
+    except Exception:
+        return 1.0
+
+
+def netfront_spot_win(attacker, defender) -> float:
+    """Probability (0-1) the attacker wins the net-front spot.
+
+    Attack: off_the_puck (find the soft spot) 0.50 + strength 0.25 +
+    balance 0.25 (hold it). Defense: strength 0.35 (box out) +
+    defensive_awareness 0.35 (read) + positioning 0.30 (seal). A 10-point
+    edge is ~65/35; 20 points is ~80/20. Never raises.
+    """
+    try:
+        _atk = (float(getattr(attacker, "off_the_puck", 10)) * 0.50
+                + float(getattr(attacker, "strength", 10)) * 0.25
+                + float(getattr(attacker, "balance", 10)) * 0.25)
+        _dfn = 50.0
+        if defender is not None:
+            _dfn = (float(getattr(defender, "strength", 10)) * 0.35
+                    + float(getattr(defender, "defensive_awareness", 10)) * 0.35
+                    + float(getattr(defender, "positioning", 10)) * 0.30)
+        _edge = _atk - _dfn
+        # logistic-ish: 0 -> 0.50, +10 -> 0.65, +20 -> 0.80, -10 -> 0.35
+        _p = 0.50 + _edge * 0.015
+        return max(0.05, min(0.95, _p))
+    except Exception:
+        return 0.50
+
+
+def screen_goalie_mult(screener, goalie) -> float:
+    """Goalie-skill multiplier from a net-front screen. <1.0 = screened.
+
+    screen_shots (the screener's craft) vs the goalie's positioning (fight
+    through) and anticipation (read the release). An elite screener (85)
+    on an average goalie takes ~12% off; a poor screen does almost
+    nothing. Applied on the goalie side, not as a shooter bonus -- the
+    puck doesn't get harder to stop, the goalie sees it late. Never raises.
+    """
+    try:
+        _screen = float(getattr(screener, "screen_shots", 10))
+        _gresist = 50.0
+        if goalie is not None:
+            _gresist = (float(getattr(goalie, "positioning", 10)) * 0.60
+                        + float(getattr(goalie, "anticipation", 10)) * 0.40
+                        if hasattr(goalie, "anticipation") else
+                        float(getattr(goalie, "positioning", 10)))
+        _edge = _screen - _gresist
+        # +20 edge -> 0.88; 0 -> 1.0; -20 -> 1.0 (no benefit for bad screen)
+        _mult = 1.0 - max(0.0, min(0.15, _edge * 0.006))
+        return max(0.85, min(1.0, _mult))
+    except Exception:
+        return 1.0
+
+
+def tip_goal_chance(tipper, goalie, goalie_skill: float, screened: bool = False) -> float:
+    """Goal probability on a deflection/tip, replacing the flat 25%.
+
+    Tipper: deflections (hand-eye) 0.60 + off_the_puck 0.25 (be there) +
+    balance 0.15 (stay upright through contact). Goalie: reflexes 0.70 +
+    positioning 0.30, with the shot-type 'tip' penalty (-4) baked in.
+    A screened goalie is easier to beat. Calibrated so an average tip is
+    ~12-15%, an elite tip ~22-25%. Never raises.
+    """
+    try:
+        _tip = (float(getattr(tipper, "deflections", 10)) * 0.60
+                + float(getattr(tipper, "off_the_puck", 10)) * 0.25
+                + float(getattr(tipper, "balance", 10)) * 0.15)
+        _gsave = 50.0
+        if goalie is not None:
+            _gsave = (float(getattr(goalie, "reflexes", 10)) * 0.70
+                      + float(getattr(goalie, "positioning", 10)) * 0.30)
+        # tip penalty: harder to react (-4 ~ -4% absolute)
+        _diff = _tip - _gsave - 4.0
+        _p = 0.14 + _diff * 0.004
+        if screened:
+            _p *= 1.25
+        return max(0.02, min(0.40, _p))
+    except Exception:
+        return 0.14
+
+
+def netfront_finish_chance(finisher, goalie, goalie_skill: float) -> float:
+    """Goal probability on a net-front rebound/loose puck.
+
+    Finisher: loose_puck 0.40 (win the scramble) + shooting in tight
+    (wristshot/backhand blend) 0.40 + composure 0.20 (finish under
+    pressure). Rebounds are high-danger: base ~22%. Never raises.
+    """
+    try:
+        _tight = (float(getattr(finisher, "wristshot", 10))
+                  + float(getattr(finisher, "backhand", 10))) / 2.0
+        _fin = (float(getattr(finisher, "loose_puck", 10)) * 0.40
+                + _tight * 0.40
+                + float(getattr(finisher, "composure", 10)) * 0.20)
+        _gsave = 50.0
+        if goalie is not None:
+            _gsave = (float(getattr(goalie, "reflexes", 10)) * 0.50
+                      + float(getattr(goalie, "positioning", 10)) * 0.30
+                      + float(getattr(goalie, "rebound_control", 10)) * 0.20)
+        _diff = _fin - _gsave
+        _p = 0.22 + _diff * 0.005
+        return max(0.05, min(0.55, _p))
+    except Exception:
+        return 0.22
+
+
+# Defenseman shot-volume adjustment (superstar mechanics 2026-09-28).
+# Measured: D take 47.6% of shots (should be ~33%, real NHL). The sqrt
+# flattening in shooter_choice_weight compresses archetype differences.
+# This shared multiplier on D shot-selection weight corrects the volume
+# to realistic levels. Shared decision (one decision, two fidelities).
+DEFENSE_SHOT_VOLUME_MULT = 0.40
+
+
+# ---------------------------------------------------------------------------
+# Assist model (2026-09-28, per Muck): passing is the LEAD attribute.
+# A primary assist is not just passing: the passer's passing (lead) +
+# offensive_awareness (picking the lane) + composure (under pressure) vs the
+# defender's lane contest (pokecheck + defensive_awareness), AND the
+# recipient's off_the_puck (getting open -- a great pass to a covered man
+# dies). Secondary = the play-starter: passing (lead) + awareness, less
+# pressure-weighted. A 95-passing playmaker with average awareness is still
+# elite; the reverse is not true. Shared layer (one decision, two
+# fidelities). Never raises.
+# ---------------------------------------------------------------------------
+
+# Primary assist composite weights: passing LEADS (0.55), awareness 0.20,
+# composure 0.15, vision 0.10. Harmonic (synergy gate pattern).
+_PRIMARY_ASSIST_WEIGHTS = (0.55, 0.20, 0.15, 0.10)
+# Secondary assist: passing LEADS (0.60), awareness 0.25, vision 0.15.
+# Less pressure-weighted (no composure).
+_SECONDARY_ASSIST_WEIGHTS = (0.60, 0.25, 0.15)
+
+
+def primary_assist_score(passer) -> float:
+    """Passer rating for primary assists (1-100). Passing leads."""
+    try:
+        _w = _PRIMARY_ASSIST_WEIGHTS
+        return harmonic_bundle([
+            (_w[0], getattr(passer, "passing", 10)),
+            (_w[1], getattr(passer, "offensive_awareness", 10)),
+            (_w[2], getattr(passer, "composure", 10)),
+            (_w[3], getattr(passer, "vision", 10)),
+        ])
+    except Exception:
+        return 30.0
+
+
+def secondary_assist_score(passer) -> float:
+    """Passer rating for secondary assists (1-100). Passing leads."""
+    try:
+        _w = _SECONDARY_ASSIST_WEIGHTS
+        return harmonic_bundle([
+            (_w[0], getattr(passer, "passing", 10)),
+            (_w[1], getattr(passer, "offensive_awareness", 10)),
+            (_w[2], getattr(passer, "vision", 10)),
+        ])
+    except Exception:
+        return 30.0
+
+
+def pass_lane_contest_mult(defenders) -> float:
+    """Multiplier on assist probability from defenders contesting the lane.
+
+    1.0 = no contest. Uses pokecheck (sticks in lanes) + defensive_awareness
+    (read the pass). Best defender contests. Returns 0.85-1.00.
+    """
+    try:
+        best = 0.0
+        for d in (defenders or []):
+            if d is None:
+                continue
+            _score = (float(getattr(d, "pokecheck", 10)) * 0.50
+                      + float(getattr(d, "defensive_awareness", 10)) * 0.50)
+            if _score > best:
+                best = _score
+        if best <= 0:
+            return 1.0
+        # 50 -> 0.97; 85 -> 0.90; 20 -> 1.00
+        return max(0.85, min(1.0, 1.0 - max(0.0, (best - 30.0) * 0.002)))
+    except Exception:
+        return 1.0
+
+
+def recipient_openness_mult(recipient) -> float:
+    """Multiplier for the pass recipient getting open (0.85-1.15).
+
+    off_the_puck: 50 -> 1.00; 85 -> 1.12; 20 -> 0.88. A great pass to a
+    covered man dies; a great pass to an open man is an assist.
+    """
+    try:
+        _otp = float(getattr(recipient, "off_the_puck", 10))
+        return max(0.85, min(1.15, 1.0 + (_otp - 50.0) * 0.004))
+    except Exception:
+        return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Defensive plays (2026-09-28, per Muck): no single-attribute decisions.
+# Takeaway = defender's stickwork + awareness + gap vs carrier's control +
+# strength (both sides' attributes). Hits = physicality + strength + balance
+# vs target's balance/strength (the enforcer big-hit RATE in impact_system.py
+# is Muck's standing 33.9% -- DO NOT TOUCH, this is only who wins the puck).
+# Blocked shots = positioning + shot-blocking, ties into defensive_contest.
+# Shared layer (one decision, two fidelities). Never raises.
+# ---------------------------------------------------------------------------
+
+def takeaway_prob(defender, carrier) -> float:
+    """Probability defender takes the puck (0-1).
+
+    Defender: pokecheck 0.40 (sticks) + defensive_awareness 0.35 (read) +
+    skating 0.25 (gap control). Carrier: puck_handling-ish (stickhandling)
+    0.40 + deking 0.30 + strength 0.30 (protect). Even matchup ~50%.
+    """
+    try:
+        _def = (float(getattr(defender, "pokecheck", 10)) * 0.40
+                + float(getattr(defender, "defensive_awareness", 10)) * 0.35
+                + float(getattr(defender, "skating", 10)) * 0.25)
+        _car = (float(getattr(carrier, "stickhandling", 10)) * 0.40
+                + float(getattr(carrier, "deking", 10)) * 0.30
+                + float(getattr(carrier, "strength", 10)) * 0.30)
+        _edge = _def - _car
+        return max(0.05, min(0.95, 0.50 + _edge * 0.015))
+    except Exception:
+        return 0.50
+
+
+def hit_puck_win_prob(hitter, target) -> float:
+    """Probability the hitter wins the puck on contact (0-1).
+
+    Hitter: strength 0.40 + balance 0.30 (drive through) + aggressiveness
+    0.30 (commit). Target: balance 0.50 (stay up) + strength 0.50 (absorb).
+    This is NOT the big-hit rate (impact_system.py, Muck's 33.9% FLAG) --
+    only who comes up with the puck.
+    """
+    try:
+        _hit = (float(getattr(hitter, "strength", 10)) * 0.40
+                + float(getattr(hitter, "balance", 10)) * 0.30
+                + float(getattr(hitter, "aggressiveness", 10)) * 0.30)
+        _tgt = (float(getattr(target, "balance", 10)) * 0.50
+                + float(getattr(target, "strength", 10)) * 0.50)
+        _edge = _hit - _tgt
+        return max(0.05, min(0.95, 0.50 + _edge * 0.015))
+    except Exception:
+        return 0.50
+
+
+def shot_block_prob(defender, shooter) -> float:
+    """Probability defender blocks the shot attempt (0-1).
+
+    Defender: positioning 0.50 (be in the lane) + shot_blocking 0.50
+    (commit). Shooter: offensive_awareness 0.50 (find the lane) +
+    composure 0.50 (get it through). Ties into defensive_contest_mult
+    (the per-shot conversion effect); this is the discrete block event.
+    """
+    try:
+        _blk = (float(getattr(defender, "positioning", 10)) * 0.50
+                + float(getattr(defender, "shot_blocking", 10)) * 0.50)
+        _sht = (float(getattr(shooter, "offensive_awareness", 10)) * 0.50
+                + float(getattr(shooter, "composure", 10)) * 0.50)
+        _edge = _blk - _sht
+        # Base ~8% (NHL block rate), +/- by matchup
+        return max(0.01, min(0.30, 0.08 + _edge * 0.004))
+    except Exception:
+        return 0.08
+
+
+# ---------------------------------------------------------------------------
+# Situational goalie model (2026-09-28, per Muck): no single-attribute saves.
+# Base composite goes multi-attribute; situation shifts the weights.
+# Screened: positioning + composure (fight through traffic). Tips: reflexes.
+# Breakaways: reflexes + composure. Point shots: positioning + rebound
+# control. Rebound control feeds net-front chances (juicy rebounds = more
+# loose-puck finishes). Shared layer (one decision, two fidelities).
+# ---------------------------------------------------------------------------
+
+# Situation weight profiles: (positioning, reflexes, glove, rebound, composure)
+_GOALIE_SITUATION_WEIGHTS = {
+    "clean":      (0.30, 0.25, 0.15, 0.15, 0.15),
+    "screened":   (0.40, 0.15, 0.10, 0.10, 0.25),  # fight through traffic
+    "tip":        (0.15, 0.45, 0.15, 0.10, 0.15),  # reaction
+    "breakaway":  (0.20, 0.35, 0.15, 0.05, 0.25),  # reflexes + nerve
+    "point":      (0.35, 0.20, 0.15, 0.20, 0.10),  # angles + control
+}
+
+
+def situational_goalie_skill(goalie, situation: str = "clean") -> float:
+    """Goalie skill (1-100) weighted for the situation.
+
+    Attributes: positioning (angles), reflexes, glove_hand+stick_side/2
+    (glove/blocker), rebound_control, composure. Situation shifts weights
+    per _GOALIE_SITUATION_WEIGHTS. Never raises.
+    """
+    try:
+        _w = _GOALIE_SITUATION_WEIGHTS.get(situation, _GOALIE_SITUATION_WEIGHTS["clean"])
+        _glove = (float(getattr(goalie, "glove_hand", 10))
+                  + float(getattr(goalie, "stick_side", 10))) / 2.0
+        return (float(getattr(goalie, "positioning", 10)) * _w[0]
+                + float(getattr(goalie, "reflexes", 10)) * _w[1]
+                + _glove * _w[2]
+                + float(getattr(goalie, "rebound_control", 10)) * _w[3]
+                + float(getattr(goalie, "composure", 10)) * _w[4])
+    except Exception:
+        return 67.5
+
+
+def rebound_chance(goalie) -> float:
+    """Probability a save produces a live rebound (0-1).
+
+    Poor rebound_control = juicy rebounds = more net-front finishes.
+    Elite (85): ~12%; average (50): ~25%; poor (20): ~38%.
+    Feeds netfront_finish_chance via the sim's rebound events.
+    """
+    try:
+        _rc = float(getattr(goalie, "rebound_control", 10))
+        return max(0.05, min(0.50, 0.45 - _rc * 0.004))
+    except Exception:
+        return 0.25

@@ -5088,6 +5088,34 @@ class GameSim:
             goal_prob = (1.0 - adjusted_save_prob) * mult
             adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
 
+        # Superstar tune 2026-09-28 (shared decisions, one decision two
+        # fidelities): D point-shot conversion discount + sniper archetype
+        # finishing tilt -- the same multipliers quick-sim applies.
+        try:
+            from mesh_system import (defense_point_shot_discount as _dpsd,
+                                     archetype_finish_tilt as _aft)
+            _tilt = _dpsd(shooter) * _aft(shooter)
+            if _tilt != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _tilt
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # Defensive contest 2026-09-28 (shared decision, one decision two
+        # fidelities): on-ice defenders contest via blocks/gap/angles/sticks.
+        try:
+            from mesh_system import defensive_contest_mult as _dcm
+            from game_classes import PlayerPosition as _PP
+            _dskaters = [p for p in self._get_on_ice(defending_team)
+                         if getattr(p, "primary_position", None) in
+                         (_PP.DEFENSE, _PP.LEFT_DEFENSE, _PP.RIGHT_DEFENSE)]
+            _contest = _dcm(_dskaters)
+            if _contest != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _contest
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
         # -- Impact scaling (additive): apply the classified tier on top
         # of the existing math, exactly like the scoring-level preference
         # above. Big shots beat goalies cleaner; tired ones are easier.

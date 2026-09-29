@@ -1404,13 +1404,23 @@ class AdvancedGameSim:
             if _pool and random.random() < 0.45:
                 _passer = None
                 try:
-                    from mesh_system import (playmaking_score as _pms2,
+                    from mesh_system import (primary_assist_score as _pas,
                                              relationship_mult as _relm4,
-                                             mesh_chance_factor as _mcf4)
+                                             mesh_chance_factor as _mcf4,
+                                             pass_lane_contest_mult as _plcm,
+                                             recipient_openness_mult as _rom)
                     _iso4 = bool(getattr(self, "is_playoff", False))
+                    # Defender lane contest (shared): sticks/awareness
+                    _def_team4 = (self.away_team if team_name == self.home_team.team_name
+                                  else self.home_team)
+                    _d_onice4 = [d for d in (self.on_ice.get(_def_team4.team_name, {}) or {}).get("Defense", []) if d]
+                    _lane = _plcm(_d_onice4)
+                    # Recipient openness (shared): off_the_puck
+                    _open = _rom(shooter)
                     _pw = []
                     for _pp in _pool:
-                        _w = _pms2(_pp) * _relm4(_pp, shooter)
+                        # Passing LEADS (0.55) + awareness/composure/vision
+                        _w = _pas(_pp) * _relm4(_pp, shooter) * _lane * _open
                         try:
                             _w *= _mcf4(_pp, [shooter], team,
                                         is_playoff=_iso4)
@@ -1495,8 +1505,30 @@ class AdvancedGameSim:
         from mesh_system import shooter_skill_composite as _ssc
         shooter_skill = _ssc(shooter, shooting_base)
 
+        # Situational goalie (2026-09-28, per Muck): the situation
+        # re-weights the goalie composite (screened -> positioning+composure,
+        # tip -> reflexes, breakaway -> reflexes+composure, point -> 
+        # positioning+rebound control).
+        _situation = "clean"
+        try:
+            _screens0 = getattr(self, "_active_screens", {}) or {}
+            if puck_team_name in _screens0:
+                _situation = "screened"
+            elif shot_type in ("tip", "deflection"):
+                _situation = "tip"
+            elif getattr(self, "_is_breakaway", False):
+                _situation = "breakaway"
+            else:
+                from game_classes import PlayerPosition as _PP2
+                _spos = getattr(shooter, "primary_position", None)
+                if (_spos in (_PP2.DEFENSE, _PP2.LEFT_DEFENSE, _PP2.RIGHT_DEFENSE)
+                        and shot_type == "slap shot"):
+                    _situation = "point"
+        except Exception:
+            pass
+
         # Enhanced goalie attributes
-        goalie_skill = self._calculate_goalie_save_skill(goalie, shot_type) if goalie else 8
+        goalie_skill = self._calculate_goalie_save_skill(goalie, shot_type, situation=_situation) if goalie else 8
         # Goaltending parity (mesh_system.effective_goalie_skill): compress
         # the raw 1-100 composite toward the measured starter mean (92.6)
         # before the differential -- a 98 goalie deciding games outright is
@@ -1518,6 +1550,51 @@ class AdvancedGameSim:
         from mesh_system import recalibrated_shot_chance
         skill_diff = shooter_skill - goalie_skill
         shot_chance = recalibrated_shot_chance(skill_diff)
+
+        # Defensive contest 2026-09-28 (shared decision): the two on-ice
+        # defenders contest every shot -- blocks (shot_blocking), gap
+        # (defensive_awareness), angles (positioning), sticks (pokecheck).
+        # Modest per-shot effect (NHL block rates are real but not dominant).
+        _contest = 1.0
+        try:
+            from mesh_system import defensive_contest_mult as _dcm
+            _def_team = (self.away_team if puck_team_name == self.home_team.team_name
+                         else self.home_team)
+            _d_onice = (self.on_ice.get(_def_team.team_name, {}) or {}).get("Defense", [])
+            _contest = _dcm([d for d in _d_onice if d])
+            if _contest != 1.0:
+                shot_chance *= _contest
+        except Exception:
+            pass
+
+        # Net-front screen 2026-09-28 (shared decision): a set screen
+        # degrades the GOALIE's sightline (goalie-side penalty), not a
+        # shooter bonus. Consumed by this shot.
+        try:
+            from mesh_system import screen_goalie_mult as _sgm
+            _screens = getattr(self, "_active_screens", {}) or {}
+            _screener = _screens.pop(puck_team_name, None)
+            if _screener is not None:
+                _sp = _sgm(_screener, goalie)
+                if _sp != 1.0:
+                    # Goalie sees it late: effective skill drops
+                    goalie_skill = goalie_skill * _sp
+                    skill_diff = shooter_skill - goalie_skill
+                    shot_chance = recalibrated_shot_chance(skill_diff)
+                    shot_chance *= _contest  # re-apply contest on new base
+        except Exception:
+            pass
+
+        # Superstar tune 2026-09-28 (shared decisions): D point-shot
+        # conversion discount (point shots through traffic convert at
+        # ~55% of forward rate) and sniper archetype finishing tilt
+        # (5-10% edge for pure snipers). Both engines apply these.
+        try:
+            from mesh_system import (defense_point_shot_discount as _dpsd,
+                                     archetype_finish_tilt as _aft)
+            shot_chance *= _dpsd(shooter) * _aft(shooter)
+        except Exception:
+            pass
 
         # Parity engine on CONVERSION (divergence #8, unified channel):
         # GameSim applies pregame_multiplier on shot quality; this engine
@@ -1828,17 +1905,29 @@ class AdvancedGameSim:
                 }
             })
     
-    def _calculate_goalie_save_skill(self, goalie, shot_type, danger_level=None, distance=None):
+    def _calculate_goalie_save_skill(self, goalie, shot_type, danger_level=None, distance=None, situation=None):
         """Enhanced goalie skill calculation with coordinate-based danger awareness.
 
         The base is the ONE shared composite (divergence #5) -- the same
-        .40/.25/.20/.10/.05 weighting GameSim now uses.
+        .40/.25/.20/.10/.05 weighting GameSim now uses. Situational model
+        (2026-09-28, per Muck): when `situation` is given ('screened',
+        'tip', 'breakaway', 'point', 'clean'), the shared
+        situational_goalie_skill re-weights (screened leans positioning+
+        composure, tips lean reflexes, etc.).
         """
         if not goalie:
             return 8.0
 
-        from mesh_system import goalie_skill_composite as _gsc
-        base_skill = _gsc(goalie)
+        if situation:
+            try:
+                from mesh_system import situational_goalie_skill as _sgs
+                base_skill = _sgs(goalie, situation)
+            except Exception:
+                from mesh_system import goalie_skill_composite as _gsc
+                base_skill = _gsc(goalie)
+        else:
+            from mesh_system import goalie_skill_composite as _gsc
+            base_skill = _gsc(goalie)
         
         # Danger level adjustments for coordinate-based analysis
         if danger_level:
@@ -2083,31 +2172,84 @@ class AdvancedGameSim:
         })
     
     def _resolve_screen_event(self, screener, shooters, puck_team_name):
-        """Resolve screening attempt"""
-        screen_skill = getattr(screener, 'screen_shots', 10)
-        if screen_skill > 13:
-            self.events.append({
-                'time': self.time, 'period': self.period, 
-                'team': puck_team_name, 'player': screener, 
-                'event': 'Screen Set'
-            })
+        """Resolve screening attempt -- net-front battle, stage 1+2.
+
+        The screener must WIN the spot (off_the_puck + strength/balance vs
+        the defender's box-out) before the screen counts. A won screen
+        degrades the goalie's sightline (goalie-side penalty via the shared
+        screen_goalie_mult) on the next shot, not a shooter bonus. The
+        screen is consumed by the next shot from that team.
+        """
+        try:
+            from mesh_system import (netfront_spot_win as _spot,
+                                     screen_goalie_mult as _sgm)
+            # Find the defending team's on-ice D to battle for the spot
+            _def_team = (self.away_team if puck_team_name == self.home_team.team_name
+                         else self.home_team)
+            _d_onice = [d for d in (self.on_ice.get(_def_team.team_name, {}) or {}).get("Defense", []) if d]
+            _defender = _d_onice[0] if _d_onice else None
+            if random.random() < _spot(screener, _defender):
+                # Won the spot -- screen is set. Goalie penalty computed
+                # at shot time (needs the goalie), stored for next shot.
+                if not hasattr(self, "_active_screens"):
+                    self._active_screens = {}
+                self._active_screens[puck_team_name] = screener
+                self.events.append({
+                    'time': self.time, 'period': self.period,
+                    'team': puck_team_name, 'player': screener,
+                    'event': 'Screen Set'
+                })
+            # Lost the battle: no screen, no event (play continues)
+        except Exception:
+            pass
     
     def _resolve_deflection_event(self, deflector, shooters, goalie, puck_team_name, opp_team_name):
-        """Resolve deflection attempt"""
-        deflection_skill = getattr(deflector, 'deflections', 10)
-        if deflection_skill > 14 and random.random() < 0.3:
-            # Successful deflection increases goal chance
-            goalie_skill = self._calculate_goalie_save_skill(goalie, "deflection") if goalie else 8
-            goal_chance = 0.25 + (deflection_skill - goalie_skill) * 0.01
-            
+        """Resolve deflection attempt -- net-front battle, stages 1+3.
+
+        Staged (shared decisions): (1) WIN THE SPOT -- the tipper must beat
+        the defender's box-out (netfront_spot_win); can't tip what you
+        didn't get to. (2) TIP -- deflections/hand-eye vs goalie reaction
+        (tip_goal_chance), with the screen bonus if a screen is active.
+        Replaces the old flat-25% vs goalie. Harmonic-style gating: a
+        missing piece hurts.
+        """
+        try:
+            from mesh_system import (netfront_spot_win as _spot,
+                                     tip_goal_chance as _tip,
+                                     defense_point_shot_discount as _dpsd,
+                                     archetype_finish_tilt as _aft)
+            # Stage 1: win the spot vs the on-ice defender's box-out
+            _def_team = (self.away_team if puck_team_name == self.home_team.team_name
+                         else self.home_team)
+            _d_onice = [d for d in (self.on_ice.get(_def_team.team_name, {}) or {}).get("Defense", []) if d]
+            _defender = _d_onice[0] if _d_onice else None
+            if random.random() >= _spot(deflector, _defender):
+                return  # boxed out -- no tip
+            # Stage 2: the tip itself (screen bonus if a screen is active)
+            _screens = getattr(self, "_active_screens", {}) or {}
+            _screened = puck_team_name in _screens
+            _gskill = self._calculate_goalie_save_skill(goalie, "deflection") if goalie else 8
+            goal_chance = _tip(deflector, goalie, _gskill, screened=_screened)
+            # D discount + sniper tilt still apply (a D deflecting his own
+            # point shot doesn't get forward conversion)
+            goal_chance *= _dpsd(deflector) * _aft(deflector)
+
             if random.random() < goal_chance:
                 self.score[puck_team_name] += 1
                 self.stats[puck_team_name][deflector.id]['goals'] = self.stats[puck_team_name][deflector.id].get('goals', 0) + 1
+                # Net-front goals are a tracked category (QA: netfront_goals)
+                try:
+                    _nf = self.stats[puck_team_name][deflector.id]
+                    _nf['netfront_goals'] = _nf.get('netfront_goals', 0) + 1
+                except Exception:
+                    pass
                 self.events.append({
-                    'time': self.time, 'period': self.period, 
-                    'team': puck_team_name, 'player': deflector, 
+                    'time': self.time, 'period': self.period,
+                    'team': puck_team_name, 'player': deflector,
                     'event': 'Deflection Goal'
                 })
+        except Exception:
+            pass
     
     def _check_for_penalty(self, players, puck_team_name, opp_team_name, fatigue_factor):
         """Penalty checking tuned to NHL rates (~3-4 penalties per team per game).
