@@ -229,8 +229,12 @@ try:
                     _cg[_g] += _st.get(f'grade_{_g}_goals', 0)
         return _cs, _cg
 
-    _qs_c, _qs_g = _collect(_AdvGS, n=12, seed=999)
-    _gs_c, _gs_g = _collect(GameSim, n=12, seed=999)
+    # n=20 (raised 2026-09-29): per-grade conversion is a small-sample
+    # estimate and the strict A>B>C ordering flickered at n=12 when two
+    # grades landed within ~1pp. More games shrinks the noise; the
+    # assertion itself (ordering holds in both engines) is unchanged.
+    _qs_c, _qs_g = _collect(_AdvGS, n=20, seed=999)
+    _gs_c, _gs_g = _collect(GameSim, n=20, seed=999)
     _qt, _gt = sum(_qs_c.values()), sum(_gs_c.values())
     print(f"    quick-sim dist: " +
           ", ".join(f"{g.upper()}={_qs_c[g]/_qt:.1%}" for g in 'abc'))

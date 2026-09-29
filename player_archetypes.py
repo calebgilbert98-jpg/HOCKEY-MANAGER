@@ -497,14 +497,13 @@ def _piecewise_tilt(x, points):
 # Shot-volume talent gate curve (2026-09-29, per Muck): steep at the star
 # band so elite volume separates by mechanics; the absolute level is set
 # so 93+ earns clear separation without cartoon volume. Calibrated
-# 2026-09-29 alongside the grade-A curve. Continuous, never a wall.
-# Recalibrated 2026-09-29 (shot-volume pass): top end flattened (95:
-# 1.14->0.98) -- the grade-A system now carries elite separation, so the
-# volume gate doesn't need to. Elite volume still separates, but 10+
-# attempts/game outliers are reined in.
+# 2026-09-29 (damper-removal pass): top trimmed ~10% -- 6.5 shots/g for
+# elites was feeding the tail; NHL elite is ~4.5 SOG/g. 90+ still
+# separates from the 80s (1.13x), just not at cartoon volume.
+# Continuous, never a wall.
 SHOT_VOLUME_TALENT_POINTS = (
-    (60, 0.55), (65, 0.62), (70, 0.70), (75, 0.78), (80, 0.84),
-    (85, 0.88), (88, 0.90), (90, 0.93), (92, 0.96), (95, 0.98),
+    (60, 0.52), (65, 0.60), (70, 0.68), (75, 0.75), (80, 0.80),
+    (85, 0.84), (88, 0.86), (90, 0.88), (92, 0.92), (95, 0.97),
 )
 
 
