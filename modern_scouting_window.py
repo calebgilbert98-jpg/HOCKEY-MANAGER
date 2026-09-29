@@ -130,7 +130,7 @@ class ModernScoutingView(ctk.CTkFrame):
             self.app.tree_maps = {}
         
         required_maps = ['players_tree', 'scouts_tree', 'assignments_tree', 'reports_tree', 'draft_tree',
-                         'targets_tree', 'suggestions_tree']
+                         'targets_tree']
         for map_name in required_maps:
             if map_name not in self.app.tree_maps:
                 self.app.tree_maps[map_name] = {}
@@ -521,7 +521,7 @@ class ModernScoutingView(ctk.CTkFrame):
         except Exception:
             return None
 
-    def _targets_section(self, parent, title, pady):
+    def _targets_section(self, parent, title, pady, columns=None, widths=None):
         """Build one targets section: full-width tree on top, button row
         below. Returns (tree, button_frame)."""
         frame = tk.LabelFrame(parent, text=title,
@@ -533,11 +533,13 @@ class ModernScoutingView(ctk.CTkFrame):
         list_wrap = tk.Frame(frame, bg=self.app.CONTENT_BG)
         list_wrap.pack(fill='both', expand=True)
 
-        columns = ['Player', 'Pos', 'Age', 'Ovr', 'Team',
-                   'Added by', 'Date', 'Note']
-        widths = [160, 60, 50, 60, 150, 130, 110, 480]
+        if columns is None:
+            columns = ['Player', 'Pos', 'Age', 'Ovr', 'Team',
+                       'Source', 'Note']
+        if widths is None:
+            widths = [170, 60, 50, 60, 150, 140, 420]
         tree = ttk.Treeview(list_wrap, columns=columns, show='headings',
-                            height=8)
+                            height=14)
         for col, width in zip(columns, widths):
             tree.heading(col, text=col)
             tree.column(col, width=width, minwidth=40)
@@ -553,13 +555,18 @@ class ModernScoutingView(ctk.CTkFrame):
         return tree, btn_frame
 
     def _create_targets_tab(self):
-        """Create the Targets tab: your targets + scout recommendations."""
+        """Create the Targets tab: the ONE unified trade-targets surface.
+
+        Scout suggestions and user targets share this single list (backed
+        by ShortlistManager 'Trade Targets' via trade_market) -- there is
+        no second tab and no import step. Scout rows carry the scout's name
+        and confidence band; the truth behind a tip is never shown.
+        """
         tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Targets")
 
-        # --- Your targets ---
         self.targets_tree, t_btn = self._targets_section(
-            tab_frame, "Your targets", pady=(10, 5))
+            tab_frame, "Trade targets (unified)", pady=(10, 10))
 
         add_btn = tk.Button(t_btn, text="Add target",
                             bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
@@ -571,39 +578,18 @@ class ModernScoutingView(ctk.CTkFrame):
                                command=self._targets_remove)
         remove_btn.pack(side='left', padx=(0, 10))
 
-        import_btn = tk.Button(t_btn, text="Import from Shortlist",
-                               bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
-                               command=self._targets_import_shortlist)
-        import_btn.pack(side='left')
-
-        # --- Scout recommendations ---
-        self.suggestions_tree, s_btn = self._targets_section(
-            tab_frame, "Scout recommendations", pady=(5, 10))
-
-        refresh_btn = tk.Button(s_btn, text="Refresh suggestions",
-                                bg=self.app.ACCENT_COLOR,
-                                fg=self.app.HEADER_COLOR,
+        refresh_btn = tk.Button(t_btn, text="Refresh suggestions",
+                                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                                 command=self._targets_refresh_suggestions)
-        refresh_btn.pack(side='left', padx=(0, 10))
-
-        promote_btn = tk.Button(s_btn, text="Promote",
-                                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
-                                command=self._targets_promote)
-        promote_btn.pack(side='left', padx=(0, 10))
-
-        dismiss_btn = tk.Button(s_btn, text="Dismiss",
-                                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
-                                command=self._targets_dismiss)
-        dismiss_btn.pack(side='left')
+        refresh_btn.pack(side='left')
 
     def _populate_targets(self):
-        """Populate both target lists from trade_market.get_shortlist."""
-        for tree in (getattr(self, 'targets_tree', None),
-                     getattr(self, 'suggestions_tree', None)):
-            if tree is None:
-                continue
-            for item in tree.get_children():
-                tree.delete(item)
+        """Populate the unified targets list from trade_market."""
+        tree = getattr(self, 'targets_tree', None)
+        if tree is None:
+            return
+        for item in tree.get_children():
+            tree.delete(item)
         try:
             import trade_market
         except Exception:
@@ -613,24 +599,38 @@ class ModernScoutingView(ctk.CTkFrame):
         if user_team is None or league is None:
             return
         try:
-            entries = trade_market.get_shortlist(user_team)
+            entries = trade_market.get_unified_targets()
         except Exception:
             entries = []
         maps = getattr(self.app, 'tree_maps', None) or {}
         maps.setdefault('targets_tree', {}).clear()
-        maps.setdefault('suggestions_tree', {}).clear()
         if not hasattr(self.app, 'tree_maps'):
             self.app.tree_maps = maps
         for e in entries or []:
             pid = e.get('player_id')
-            note = e.get('note', '') or ''
-            suggested = note.startswith('SUGGESTED:')
+            notes = e.get('notes', '') or ''
+            player, team = None, None
             try:
                 player, team = trade_market.resolve_player(league, pid)
             except Exception:
-                player, team = None, None
+                pass
+            if player is None:
+                try:
+                    player, team = trade_market.resolve_player(
+                        league, int(pid))
+                except Exception:
+                    pass
+            if player is None:
+                player = self._find_nhl_player_by_name(
+                    league, e.get('player_name', ''))
             if player is None:
                 continue  # left the NHL since being added
+            if team is None:
+                try:
+                    _p, team = trade_market.resolve_player(
+                        league, getattr(player, 'id', None))
+                except Exception:
+                    team = None
             try:
                 pos = (player.primary_position.value
                        if hasattr(player.primary_position, 'value')
@@ -642,20 +642,29 @@ class ModernScoutingView(ctk.CTkFrame):
             except Exception:
                 ovr = '?'
             team_name = getattr(team, 'team_name', '—') if team else '—'
+            try:
+                kind, who = trade_market._target_source(notes)
+            except Exception:
+                kind, who = 'user', 'You'
+            source = f"Scout: {who}" if kind == 'scout' else who
+            # Display note: strip the machine prefixes, keep the meaning
+            # (incl. the scout's confidence band).
+            disp = notes
+            if kind == 'scout' and ':' in notes:
+                disp = notes.split(':', 1)[1].strip()
+            elif notes.startswith('[') and ']' in notes:
+                disp = notes.partition(']')[2].strip()
             values = (
-                getattr(player, 'full_name', '?'),
+                e.get('player_name') or getattr(player, 'full_name', '?'),
                 pos,
                 getattr(player, 'age', '?'),
                 ovr,
                 team_name,
-                e.get('added_by', 'user'),
-                e.get('date', ''),
-                (note[len('SUGGESTED:'):].strip() if suggested else note),
+                source,
+                disp,
             )
-            target = (self.suggestions_tree if suggested
-                      else self.targets_tree)
-            item = target.insert('', 'end', values=values)
-            maps['suggestions_tree' if suggested else 'targets_tree'][item] = player
+            item = tree.insert('', 'end', values=values)
+            maps['targets_tree'][item] = player
 
     def _targets_add(self):
         """Add-target dialog: pick any NHL player into the shortlist."""
@@ -801,56 +810,6 @@ class ModernScoutingView(ctk.CTkFrame):
             pass
         return None
 
-    def _targets_import_shortlist(self):
-        """Pull ShortlistManager 'Trade Targets' entries into the scouting
-        shortlist (ids converted str->int with fallback)."""
-        try:
-            import trade_market
-        except Exception:
-            return
-        user_team = self._targets_user_team()
-        league = self._targets_league()
-        if user_team is None or league is None:
-            messagebox.showwarning("No Data", "No league data available.")
-            return
-        try:
-            from shortlist_system import ShortlistManager
-            entries = ShortlistManager().get_entries_by_category("Trade Targets")
-        except Exception as e:
-            messagebox.showerror("Import from Shortlist",
-                                 f"Could not read the Shortlist:\n{e}")
-            return
-        imported, skipped = 0, 0
-        for entry in entries or []:
-            raw = getattr(entry, 'player_id', None)
-            pid = raw
-            try:
-                pid = int(raw)
-            except (TypeError, ValueError):
-                pass
-            try:
-                player, _team = trade_market.resolve_player(league, pid)
-            except Exception:
-                player = None
-            if player is None:
-                player = self._find_nhl_player_by_name(
-                    league, getattr(entry, 'player_name', ''))
-            if player is None:
-                skipped += 1
-                continue
-            note = getattr(entry, 'notes', '') or ''
-            if trade_market.add_to_shortlist(
-                    user_team, player, added_by="user",
-                    note=(note or "Imported from Shortlist")[:120]):
-                imported += 1
-            else:
-                skipped += 1
-        self._populate_targets()
-        msg = f"Imported {imported} target(s) from the Shortlist."
-        if skipped:
-            msg += f" {skipped} skipped (already listed or not found)."
-        messagebox.showinfo("Import from Shortlist", msg)
-
     def _targets_refresh_suggestions(self):
         """Ask the user's scouts for new value tips (JPA-scaled inside
         trade_market)."""
@@ -872,57 +831,6 @@ class ModernScoutingView(ctk.CTkFrame):
             messagebox.showinfo("Scout suggestions",
                                 "No new suggestions (your scouts found no new "
                                 "value, or you have no scouts on staff).")
-
-    def _targets_promote(self):
-        """Promote selected suggestion(s) to real targets (strips the
-        SUGGESTED: prefix)."""
-        try:
-            import trade_market
-        except Exception:
-            return
-        user_team = self._targets_user_team()
-        if user_team is None:
-            return
-        selection = self.suggestions_tree.selection()
-        if not selection:
-            messagebox.showwarning("No Selection",
-                                   "Please select a suggestion to promote.")
-            return
-        shortlist = trade_market.get_shortlist(user_team)
-        for iid in selection:
-            player = self.app.tree_maps.get('suggestions_tree', {}).get(iid)
-            if player is None:
-                continue
-            entry = next((e for e in shortlist
-                          if e.get('player_id') == player.id), None)
-            raw_note = (entry or {}).get('note', '') or ''
-            if raw_note.startswith('SUGGESTED:'):
-                raw_note = raw_note[len('SUGGESTED:'):].strip()
-            trade_market.remove_from_shortlist(user_team, player.id)
-            trade_market.add_to_shortlist(user_team, player, added_by="user",
-                                          note=raw_note[:120])
-        self._populate_targets()
-
-    def _targets_dismiss(self):
-        """Dismiss selected suggestion(s) without promoting."""
-        try:
-            import trade_market
-        except Exception:
-            return
-        user_team = self._targets_user_team()
-        if user_team is None:
-            return
-        selection = self.suggestions_tree.selection()
-        if not selection:
-            messagebox.showwarning("No Selection",
-                                   "Please select a suggestion to dismiss.")
-            return
-        for iid in selection:
-            player = self.app.tree_maps.get('suggestions_tree', {}).get(iid)
-            if player is None:
-                continue
-            trade_market.remove_from_shortlist(user_team, player.id)
-        self._populate_targets()
 
     def _load_initial_data(self):
         """Initial data load after the interface is built."""

@@ -114,6 +114,18 @@ def salary_total(team):
                for p in team.roster)
 
 
+def clear_shortlist_store():
+    """The unified shortlist persists to saves/shortlist.json -- reset it
+    between tests so they can't pollute each other."""
+    import os
+    p = os.path.join("saves", "shortlist.json")
+    try:
+        if os.path.exists(p):
+            os.remove(p)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------- tests
 
 def t_market_init_and_clear():
@@ -128,6 +140,7 @@ def t_market_init_and_clear():
 
 def t_json_safe():
     """Market + blocks + shortlist dicts must survive save/load (JSON types)."""
+    clear_shortlist_store()
     league = build_league()
     app = build_app(league, date(2026, 12, 1))
     market = tm.get_market(league)
@@ -138,12 +151,283 @@ def t_json_safe():
     try:
         json.dumps(tm.get_market(league))
         json.dumps(tm.get_trade_blocks(league))
-        json.dumps(team.scout_shortlist)
+        json.dumps(getattr(team, "scout_shortlist", []))
+        json.dumps(tm.get_unified_targets())
         ok = True
     except TypeError as e:
         ok = False
         print("   json error:", e)
     check("market/blocks/shortlist are JSON-serializable", ok)
+
+
+def t_heat_monotone():
+    """Deadline heat rises monotonically toward the deadline; guardrails
+    scale with it (no flat ramp mode)."""
+    league = build_league()
+    app = build_app(league, date(2026, 10, 1))
+    days = [90, 60, 45, 30, 21, 14, 7, 1, 0]
+    heats = []
+    with patch.object(tm, "_days_to_deadline",
+                      side_effect=lambda a, l, t: days[len(heats)]):
+        for _ in days:
+            heats.append(tm.deadline_heat(app, league, date(2026, 10, 1)))
+    mono = all(b >= a for a, b in zip(heats, heats[1:]))
+    check("heat monotone non-decreasing toward deadline", mono,
+          str([round(h, 2) for h in heats]))
+    check("heat ~0 far out", heats[0] < 0.05, f"{heats[0]}")
+    check("heat hits 1.0 at deadline", heats[-1] == 1.0, f"{heats[-1]}")
+    params = [tm._heat_params(h) for h in heats]
+    check("listing caps rise with heat",
+          all(b["max_team"] >= a["max_team"] and b["league_cap"] >= a["league_cap"]
+              for a, b in zip(params, params[1:])))
+    check("bidding window shortens with heat",
+          all(b["window"] <= a["window"] for a, b in zip(params, params[1:])))
+    check("escalation multiplier rises with heat",
+          all(b["esc_mult"] >= a["esc_mult"] for a, b in zip(params, params[1:])))
+    check("rumor cap rises with heat",
+          all(b["rumor_cap"] >= a["rumor_cap"] for a, b in zip(params, params[1:])))
+    check("decay multiplier rises with heat",
+          all(b["decay_mult"] >= a["decay_mult"] for a, b in zip(params, params[1:])))
+
+
+def t_heat_beats():
+    """'Decision time' stories fire once per threshold as heat rises."""
+    league = build_league()
+    news = []
+    app = build_app(league, date(2027, 2, 1))
+    app.add_news = lambda s, category="Trade Market": news.append(s)
+    market = tm.get_market(league)
+    tm._heat_beat_stories(app, league, market, 0.4, app.current_date)
+    check("no beat below first threshold", len(news) == 0, str(news))
+    tm._heat_beat_stories(app, league, market, 0.6, app.current_date)
+    check("first beat fires", len(news) == 1, str(news))
+    check("first beat names decision time", "ecision time" in news[0], news[0])
+    tm._heat_beat_stories(app, league, market, 0.6, app.current_date)
+    check("beat not re-fired", len(news) == 1)
+    tm._heat_beat_stories(app, league, market, 0.8, app.current_date)
+    tm._heat_beat_stories(app, league, market, 0.95, app.current_date)
+    check("all three beats fire once each", len(news) == 3, str(news))
+
+
+def t_stance_flip_block():
+    """A buyer->seller stance flip refreshes the block and posts news."""
+    import trade_storylines as tsl
+    league = build_league()
+    news = []
+    app = build_app(league, date(2026, 12, 15))
+    app.add_news = lambda s, category="Trade Market": news.append(s)
+    market = tm.get_market(league)
+    team = league.teams[3]  # Buyer1
+    with patch.object(tsl, "stance", return_value="buyer"):
+        tm.note_situation_change(app, league, market, app.current_date)
+    check("stance recorded", market.get("prev_stance", {}).get(team.team_name) == "buyer")
+    n0 = len(news)
+    with patch.object(tsl, "stance", return_value="seller"):
+        tm.note_situation_change(app, league, market, app.current_date)
+    check("flip to seller recorded",
+          market.get("prev_stance", {}).get(team.team_name) == "seller")
+    flip_news = [s for s in news[n0:] if "ecision time" in s and "selling" in s]
+    check("stance-flip posts 'decision time' selling news", len(flip_news) >= 1,
+          str(news[n0:n0 + 3]))
+    blocks = tm.get_trade_blocks(league)
+    check("block refreshed on flip", team.team_name in blocks)
+
+
+def t_injury_block():
+    """A long-term injury to a key player refreshes the block + rumor."""
+    league = build_league()
+    news = []
+    app = build_app(league, date(2026, 12, 15))
+    app.add_news = lambda s, category="Trade Market": news.append(s)
+    market = tm.get_market(league)
+    team = league.teams[0]  # Seller0
+    key = tm._key_players(team)[0]
+    key.is_injured = True
+    key.games_remaining_injured = 25
+    tm.note_situation_change(app, league, market, app.current_date)
+    check("injury flagged once", key.id in market.get("injury_flags", []),
+          str(market.get("injury_flags")))
+    rumor = [s for s in news if "shopping for help" in s]
+    check("injury posts shopping-for-help rumor", len(rumor) >= 1,
+          str(news[:3]))
+    # Short-term injuries don't move the block.
+    news.clear()
+    key2 = tm._key_players(team)[1]
+    key2.is_injured = True
+    key2.games_remaining_injured = 5
+    tm.note_situation_change(app, league, market, app.current_date)
+    check("short-term injury ignored", key2.id not in market.get("injury_flags", []))
+
+
+def t_user_block_offer():
+    """A user-block player draws a real AI bid delivered as a negotiation
+    offer (never auto-sold)."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 1))
+    user_team = app.user_team  # Buyer0
+    piece = mk_player("Block", "Bait", PlayerPosition.LEFT_WING, 27, 78,
+                      3_500_000)
+    user_team.roster.append(piece)
+    user_team.trade_block = [piece]
+    market = tm.get_market(league)
+    calls = []
+    with patch("trade_negotiation.incoming_offer",
+               side_effect=lambda a, pt, pkg, player_wanted=None:
+               calls.append((pt.team_name, len(pkg)))) as _m:
+        tm.process_market(app, league, app.current_date)
+    listings = [l for l in market["listings"]
+                if l.get("player_id") == piece.id and l["status"] == "open"]
+    check("user block becomes a market listing",
+          len(listings) == 1 and listings[0].get("source") == "user_block",
+          str([(l.get("source"), l["status"]) for l in listings]))
+    offered = listings[0].get("user_offer") if listings else None
+    check("AI bid recorded on the listing", offered is not None,
+          str(offered))
+    check("incoming_offer called for the user",
+          len(calls) >= 1, str(calls))
+    check("piece NOT auto-traded", piece in user_team.roster)
+    # Throttle: a second day doesn't spam another offer.
+    calls.clear()
+    with patch("trade_negotiation.incoming_offer",
+               side_effect=lambda a, pt, pkg, player_wanted=None:
+               calls.append(pt.team_name)):
+        tm.process_market(app, league, app.current_date + timedelta(days=1))
+    check("offer throttled (one per week per listing)", len(calls) == 0,
+          str(calls))
+
+
+def t_headliner_package():
+    """Superstar pieces need packages: light offers fail the overlay,
+    real packages pass."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 1))
+    seller = league.teams[0]
+    # NOTE: Player init randomizes a few attrs outside the fixture's pinned
+    # set, so overall_rating() carries noise -- fixtures sit well clear of
+    # the 85/83 headliner bar.
+    star = mk_player("Quinn", "Hugheslike", PlayerPosition.DEFENSE, 25, 94,
+                     9_000_000, yrs=4)
+    seller.roster.append(star)
+    check("fixture is a headliner", tm._is_headliner(star))
+    bidder = league.teams[3]
+    # Light offer: one good roster player -- rejected.
+    light = [mk_player("Good", "Player", PlayerPosition.CENTER, 28, 82,
+                       5_000_000, yrs=3)]
+    ok, why = tm._headliner_package_ok(app, league, star, seller, bidder,
+                                       light)
+    check("light offer on headliner rejected", ok is False, why)
+    # Real package: young roster player + 1st + prospect -- accepted.
+    young = mk_player("Young", "Gun", PlayerPosition.LEFT_WING, 22, 80,
+                      3_000_000, yrs=3)
+    pros = mk_player("Top", "Prospect", PlayerPosition.CENTER, 20, 74,
+                     925_000, yrs=3, grade="A")
+    first = mk_pick(bidder.team_name, 2027, 1)
+    ok2, why2 = tm._headliner_package_ok(app, league, star, seller, bidder,
+                                         [young, pros, first])
+    check("headliner package accepted", ok2 is True, why2)
+    # Rental discount: pending-UFA headliner, prospect/young + early pick.
+    rental = mk_player("Rent", "Alstar", PlayerPosition.RIGHT_WING, 30, 90,
+                       8_000_000, yrs=1)
+    check("rental fixture is a headliner", tm._is_headliner(rental))
+    second = mk_pick(bidder.team_name, 2027, 2)
+    ok3, why3 = tm._headliner_package_ok(app, league, rental, seller,
+                                         bidder, [pros, second])
+    check("rental package accepted (2 assets + early pick)", ok3 is True, why3)
+    # Non-headliner: overlay stays out of the way.
+    mid = mk_player("Mid", "Sixer", PlayerPosition.CENTER, 28, 70,
+                    4_000_000, yrs=2)
+    check("non-headliner fixture below the bar",
+          tm._is_headliner(mid) is False, f"ovr={mid.overall_rating()}")
+    ok4, _w4 = tm._headliner_package_ok(app, league, mid, seller, bidder,
+                                        light)
+    check("non-headliner unaffected", ok4 is True)
+
+
+def t_headliner_exception():
+    """The Hall<->Larsson 1-for-1 exception: young + controllable +
+    at the seller's clear #1 need."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 1))
+    seller = league.teams[0]
+    hall = mk_player("Taylor", "Halllike", PlayerPosition.LEFT_WING, 24, 90,
+                     6_000_000, yrs=4)
+    seller.roster.append(hall)
+    check("hall fixture is a headliner", tm._is_headliner(hall))
+    bidder = league.teams[3]
+    larsson = mk_player("Adam", "Larssonlike", PlayerPosition.DEFENSE, 23, 86,
+                        4_166_666, yrs=5)
+    with patch.object(te, "team_needs", return_value=["RD"]):
+        ok, why = tm._headliner_package_ok(app, league, hall, seller,
+                                           bidder, [larsson])
+    check("young/controllable/at-need 1-for-1 accepted", ok is True, why)
+    # Same shape but NOT at a positional need -> still needs a package.
+    with patch.object(te, "team_needs", return_value=["C"]):
+        ok2, why2 = tm._headliner_package_ok(app, league, hall, seller,
+                                             bidder, [larsson])
+    check("1-for-1 off-need rejected", ok2 is False, why2)
+
+
+def t_headliner_holdout():
+    """An accepted-but-light bid on a headliner becomes a holdout counter,
+    not an execution."""
+    league = build_league()
+    app = build_app(league, date(2027, 1, 10))
+    market = tm.get_market(league)
+    seller = league.teams[0]
+    star = mk_player("Quinn", "Hugheslike", PlayerPosition.DEFENSE, 25, 94,
+                     9_000_000, yrs=4)
+    seller.roster.append(star)
+    listing = tm.list_piece(app, league, seller, star, source="seller_list",
+                            today=app.current_date)
+    check("headliner listed", listing is not None)
+    if not listing:
+        return
+    light = [mk_player("Good", "Player", PlayerPosition.CENTER, 28, 82,
+                       5_000_000, yrs=3)]
+    buyer = league.teams[3]
+    resp = SimpleNamespace(decision="accept", want_added=[], will_add=[])
+    with patch.object(te, "ai_consider_trade", return_value=resp), \
+         patch.object(tm, "build_bid", return_value=list(light)):
+        tm._evaluate_round(app, league, market, listing, app.current_date,
+                           False)
+    check("light accept converted to holdout, not traded",
+          listing["status"] == "open" and "holding out" in listing.get("note", ""),
+          f"status={listing['status']} note={listing.get('note')}")
+
+
+def t_unified_shortlist():
+    """Legacy store migrates once into the ONE unified surface; no dupes."""
+    clear_shortlist_store()
+    league = build_league()
+    app = build_app(league, date(2026, 12, 1))
+    market = tm.get_market(league)
+    team = app.user_team
+    p1, p2 = team.roster[0], team.roster[1]
+    team.scout_shortlist = [
+        {"player_id": p1.id, "added_by": "user", "date": "2026-11-01",
+         "note": "need scoring"},
+        {"player_id": p2.id, "added_by": "Old Scout", "date": "2026-11-02",
+         "note": "SUGGESTED: fast skater"},
+    ]
+    moved = tm.migrate_shortlist_once(app, league, team, market)
+    check("legacy entries migrated", moved == 2, f"moved={moved}")
+    check("legacy store retired", team.scout_shortlist == [])
+    uni = tm.get_unified_targets()
+    check("unified surface holds both entries", len(uni) == 2,
+          str([(t["player_name"], t["notes"][:40]) for t in uni]))
+    check("no duplicate player ids", len({t["player_id"] for t in uni}) == 2)
+    moved2 = tm.migrate_shortlist_once(app, league, team, market)
+    check("migration never re-runs", moved2 == 0)
+    check("re-adding migrated player rejected",
+          tm.add_target(p1) is False)
+    # Scout suggestion lands on the same surface with attribution.
+    p3 = team.roster[2]
+    check("scout add works", tm.add_target(p3, source="New Scout",
+                                           note="(High confidence): wheels") is True)
+    uni2 = tm.get_unified_targets()
+    kinds = {tm._target_source(t["notes"])[0] for t in uni2}
+    check("user + scout entries coexist on one surface",
+          kinds == {"user", "scout"}, str(kinds))
 
 
 def t_trade_request_autolist():
@@ -351,6 +635,7 @@ def t_trade_blocks_real():
 
 
 def t_shortlist_crud():
+    clear_shortlist_store()
     league = build_league()
     team = league.teams[2]
     p = team.roster[0]
@@ -375,6 +660,7 @@ def t_scout_suggestions_jpa():
 
 
 def t_scout_suggestions_flow():
+    clear_shortlist_store()
     league = build_league()
     app = build_app(league, date(2027, 1, 5))
     elite = SimpleNamespace(role="Pro Scout", first_name="Elite",
@@ -393,9 +679,20 @@ def t_scout_suggestions_flow():
            if e.get("added_by") not in ("user",)]
     check("suggestions attributed to scouts (when any)",
           all(e.get("added_by") for e in sug))
+    # Unified surface: suggestions carry the scout's confidence band in
+    # the notes, never the truth flag.
+    uni = tm.get_unified_targets()
+    sug_notes = [t["notes"] for t in uni
+                 if t["notes"].startswith("SUGGESTED by ")]
+    check("suggestion notes carry scout name + confidence band",
+          all("confidence" in n for n in sug_notes) if sug_notes else True,
+          str(sug_notes[:2]))
+    check("one unified surface: no duplicate player ids",
+          len({t["player_id"] for t in uni}) == len(uni))
 
 
 def t_nudges_bounded():
+    clear_shortlist_store()
     league = build_league()
     app = build_app(league, date(2026, 12, 1))
     tm.refresh_trade_blocks(app, league)
@@ -413,10 +710,11 @@ def t_nudges_bounded():
     tm.add_to_shortlist(user_team, p, note="want him")
     tm.check_shortlist_nudges(app, league, today=app.current_date)
     m = tm.get_market(league)
-    check("nudge stamped once", m["shortlist_nudges"].get(p.id) == "2026-12-01")
+    check("nudge stamped once",
+          m["shortlist_nudges"].get(str(p.id)) == "2026-12-01")
     tm.check_shortlist_nudges(app, league, today=app.current_date)
     check("nudge not re-fired same day",
-          m["shortlist_nudges"].get(p.id) == "2026-12-01")
+          m["shortlist_nudges"].get(str(p.id)) == "2026-12-01")
 
 
 def t_no_cap_illegal_after_sim():
@@ -485,6 +783,10 @@ def main():
         t_scout_suggestions_jpa, t_scout_suggestions_flow, t_nudges_bounded,
         t_no_cap_illegal_after_sim, t_need_fit_positional,
         t_seller_eligible_bubble,
+        # Refinement pass (2026-09-29): heat, engagement, headliners, unified.
+        t_heat_monotone, t_heat_beats, t_stance_flip_block, t_injury_block,
+        t_user_block_offer, t_headliner_package, t_headliner_exception,
+        t_headliner_holdout, t_unified_shortlist,
     ]
     for t in tests:
         print(f"\n--- {t.__name__} ---")
@@ -495,6 +797,7 @@ def main():
             print(f"FAIL: {t.__name__} raised {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc(limit=3)
+    clear_shortlist_store()  # don't leave saves/shortlist.json dirty
     print(f"\n==== {len(PASS)} passed, {len(FAIL)} failed ====")
     if FAIL:
         print("FAILED:", FAIL)

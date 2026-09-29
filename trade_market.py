@@ -66,6 +66,35 @@ MAX_AI_BLOCK_SIZE = 5
 MAX_BID_ASSETS = 3                 # sanity cap on offer size
 TRADE_REQUEST_MONTHLY_CAP = 2      # mirrors headlines.py cap for agitators
 
+# Deadline heat (refinement 2026-09-29): trading runs all season, and a
+# continuous heat curve -- not a flat 21-day mode -- accelerates listing
+# volume, escalation, ask decay, and rumor intensity as the deadline nears.
+# Heat scales guardrails only; volume stays situation-driven, never quota'd.
+HEAT_WINDOW_DAYS = 90
+HEAT_BEATS = (0.5, 0.75, 0.9)
+
+# Headliner overlay (refinement 2026-09-29): superstar pieces cost packages.
+# Modeled on real deals (see the design doc): Eichel'21
+# (Tuch + Krebs + 1st + 2nd), Karlsson'18 (Norris + Tierney + DeMelo + 1st +
+# 2nd + more), Tkachuk'22 (Huberdeau + Weegar + prospect + 1st), Stone'19
+# (rental: Brannstrom + Lindberg + 2nd). The 1-for-1 exception
+# (Hall<->Larsson, Jones<->Johansen): young-controllable for
+# young-controllable at a clear positional need. trade_engine.py is NEVER
+# touched -- this is a market-layer overlay only.
+HEADLINER_OVR = 85
+HEADLINER_YOUNG_OVR = 83
+HEADLINER_YOUNG_AGE = 26
+HEADLINER_MIN_ASSETS = 3
+HEADLINER_EXCEPTION_AGE = 27
+HEADLINER_EXCEPTION_YEARS = 3
+HEADLINER_EXCEPTION_OVR_GAP = 6
+
+# Block engagement (refinement 2026-09-29): blocks refresh on stance flips,
+# new trade requests, and long-term injuries to key players -- never stale.
+INJURY_LONG_TERM_GAMES = 20
+# Offers to the user on their block players: one per listing per week.
+USER_OFFER_THROTTLE_DAYS = 7
+
 NHL = "National Hockey League"
 
 
@@ -226,19 +255,96 @@ def _resolve_asset(league, team, ref):
 
 
 def _in_ramp(app, league, today):
-    """True when today is inside the deadline ramp."""
+    """Legacy boolean: now heat >= 0.5 (~the last month), kept for callers."""
+    return deadline_heat(app, league, today) >= 0.5
+
+
+def _days_to_deadline(app, league, today):
+    """Days until the trade deadline, or None if unknown."""
     try:
         import trade_deadline_manager as tdm
         ddl = tdm.trade_deadline_date(league)
         if ddl is None:
-            return False
+            return None
         if not isinstance(ddl, date):
             ddl = _parse(ddl)
         if ddl is None:
-            return False
-        return (ddl - today).days <= RAMP_DAYS and (ddl - today).days >= 0
+            return None
+        return (ddl - today).days
     except Exception:
-        return False
+        return None
+
+
+def deadline_heat(app, league, today):
+    """Continuous deadline heat: 0.0 far out .. 1.0 on deadline day.
+
+    Curved (x^1.5) so the market simmers early and spikes late -- a real
+    deadline arc, not a flat ramp mode. Trading runs all season until the
+    deadline; the deadline is the conscious decision point for roster
+    direction, and heat rising toward it is how the game says so."""
+    d = _days_to_deadline(app, league, today)
+    if d is None:
+        return 0.0
+    if d <= 0:
+        return 1.0
+    base = 1.0 - min(1.0, d / HEAT_WINDOW_DAYS)
+    return round(base ** 1.5, 3)
+
+
+def _heat_params(heat):
+    """Guardrail scaling from heat. No quotas -- volume stays
+    situation-driven; heat only moves the ceilings and the tempo."""
+    return {
+        "max_team": 2 + int(heat * 2.99),       # 2 -> 4 listings per team
+        "league_cap": 12 + int(heat * 16.99),   # 12 -> 28 open listings
+        "window": max(2, 7 - int(heat * 5.99)), # 7 -> 2 day bidding window
+        "rumor_cap": 3 + int(heat * 3.99),      # 3 -> 6 rumors/day
+        "esc_mult": 0.7 + 0.8 * heat,           # escalation gate: 0.7x -> 1.5x
+        "decay_mult": 1.0 + 2.0 * heat,         # ask decay: 1x -> 3x
+        "throttle": max(2, int(7 * (1.0 - heat) + 1)),  # auto-list days: 7 -> 2
+    }
+
+
+def _heat_beat_stories(app, league, market, heat, today):
+    """League-wide 'decision time' beats as heat crosses thresholds upward.
+    One story per threshold per season; reset with the market each season."""
+    try:
+        fired = set(market.setdefault("heat_beats", []))
+        import trade_storylines as tsl
+        user_name = getattr(getattr(app, "user_team", None), "team_name", "")
+        for beat in HEAT_BEATS:
+            if heat < beat or beat in fired:
+                continue
+            fired.add(beat)
+            sellers, buyers = [], []
+            for team in _nhl_teams(league):
+                tname = getattr(team, "team_name", "")
+                if tname == user_name:
+                    continue
+                try:
+                    st = tsl.stance(app, tname)
+                except Exception:
+                    continue
+                city = getattr(team, "city", None) or tname
+                if st == "seller":
+                    sellers.append(city)
+                elif st == "buyer":
+                    buyers.append(city)
+            sc = ", ".join(sellers[:4]) or "no one yet"
+            if beat == HEAT_BEATS[0]:
+                story = (f"Decision time in {sc}: the deadline is a month out "
+                         f"and the sellers are making their calls.")
+            elif beat == HEAT_BEATS[1]:
+                bc = ", ".join(buyers[:4]) or "the contenders"
+                story = (f"Two weeks to the deadline -- {len(sellers)} teams "
+                         f"listening, phones heating up. {bc} are loading up.")
+            else:
+                story = (f"Deadline week: bold moves expected as decision time "
+                         f"arrives in {sc}.")
+            _news(app, story)
+        market["heat_beats"] = sorted(fired)
+    except Exception:
+        pass
 
 
 def _deadline_passed(app, league, today):
@@ -254,15 +360,16 @@ def _deadline_passed(app, league, today):
         return False
 
 
-def _news(app, story, rumor=False):
+def _news(app, story, rumor=False, rumor_cap=None):
     """Add a news story, honoring the rumor flood cap. Never raises."""
     try:
         if rumor:
             league = getattr(app, "league", None)
             market = get_market(league)
             today_s = _iso(_today(app))
+            cap = rumor_cap if rumor_cap is not None else RUMOR_CAP_PER_DAY
             log = market.get("rumor_log", [])
-            if sum(1 for d in log if d == today_s) >= RUMOR_CAP_PER_DAY:
+            if sum(1 for d in log if d == today_s) >= cap:
                 return False
             log.append(today_s)
             market["rumor_log"] = log[-30:]
@@ -315,7 +422,8 @@ def _on_cooldown(market, team_name, today):
         return False
 
 
-def list_piece(app, league, seller, player, source="seller_list", today=None):
+def list_piece(app, league, seller, player, source="seller_list", today=None,
+               params=None):
     """List a player's piece on the market. Returns the listing or None.
 
     Validates caps/cooldowns; never raises; never touches the trade engine
@@ -327,7 +435,9 @@ def list_piece(app, league, seller, player, source="seller_list", today=None):
         today = today or _today(app)
         sname = getattr(seller, "team_name", "")
         pid = player.id
-        ramp = _in_ramp(app, league, today)
+        heat = deadline_heat(app, league, today)
+        ramp = heat >= 0.5
+        params = params or _heat_params(heat)
         # One listing per player.
         if _active_listings(market, player_id=pid):
             return None
@@ -336,15 +446,15 @@ def list_piece(app, league, seller, player, source="seller_list", today=None):
         if rc is not None and today <= rc:
             return None
         # Per-team caps (trade requests always get a slot -- a player who
-        # asked out must be shopped).
-        if source != "trade_request":
+        # asked out must be shopped; user block listings always get a slot
+        # too, so AI GMs can bid on them).
+        if source not in ("trade_request", "user_block"):
             if _on_cooldown(market, sname, today):
                 return None
-            cap = MAX_ACTIVE_LISTINGS_RAMP if ramp else MAX_ACTIVE_LISTINGS_BASELINE
+            cap = params.get("max_team", MAX_ACTIVE_LISTINGS_RAMP)
             if len(_active_listings(market, team_name=sname)) >= cap:
                 return None
-        league_cap = (MAX_OPEN_LISTINGS_LEAGUE_RAMP if ramp
-                      else MAX_OPEN_LISTINGS_LEAGUE_BASELINE)
+        league_cap = params.get("league_cap", MAX_OPEN_LISTINGS_LEAGUE_RAMP)
         if len(_active_listings(market)) >= league_cap:
             return None
         # Ask = read-only valuation at listing time.
@@ -352,7 +462,7 @@ def list_piece(app, league, seller, player, source="seller_list", today=None):
             ask = int(te.player_trade_value(player))
         except Exception:
             return None
-        window = BIDDING_WINDOW_RAMP_DAYS if ramp else BIDDING_WINDOW_BASELINE_DAYS
+        window = params.get("window", BIDDING_WINDOW_BASELINE_DAYS)
         market["seq"] = int(market.get("seq", 0) or 0) + 1
         listing = {
             "id": f"TM-{today.year}-{market['seq']:03d}",
@@ -371,11 +481,17 @@ def list_piece(app, league, seller, player, source="seller_list", today=None):
         market["listings"].append(listing)
         label = _player_label(player)
         if source == "trade_request":
-            _news(app, f"RUMOR: {sname} is shopping {label} after his trade request.", rumor=True)
+            _news(app, f"RUMOR: {sname} is shopping {label} after his trade request.", rumor=True,
+                  rumor_cap=params.get("rumor_cap"))
         elif source == "agitator":
-            _news(app, f"RUMOR: {sname} listening on {label} -- star wants a contender.", rumor=True)
+            _news(app, f"RUMOR: {sname} listening on {label} -- star wants a contender.", rumor=True,
+                  rumor_cap=params.get("rumor_cap"))
+        elif source == "user_block":
+            _news(app, f"RUMOR: {sname} has put {label} on the block -- GMs are calling.", rumor=True,
+                  rumor_cap=params.get("rumor_cap"))
         else:
-            _news(app, f"RUMOR: {sname} fielding calls on {label}.", rumor=True)
+            _news(app, f"RUMOR: {sname} fielding calls on {label}.", rumor=True,
+                  rumor_cap=params.get("rumor_cap"))
         return listing
     except Exception:
         return None
@@ -430,11 +546,14 @@ def _pick_pieces(team, count):
         return []
 
 
-def _auto_list(app, league, market, today, ramp):
+def _auto_list(app, league, market, today, ramp, params=None, heat=0.0):
     """Sellers (and soft-sell bubble teams) list pieces. Trade requests
-    always get shopped. Never raises."""
+    always get shopped. Heat drives the cadence: weekly baseline throttle
+    tightens toward daily as the deadline nears. Never raises."""
     try:
         import trade_storylines as tsl
+        params = params or _heat_params(heat)
+        throttle = params.get("throttle", 7)
         user_name = getattr(getattr(app, "user_team", None), "team_name", "")
         for team in _nhl_teams(league):
             tname = getattr(team, "team_name", "")
@@ -445,7 +564,8 @@ def _auto_list(app, league, market, today, ramp):
                 for p in (getattr(team, "roster", None) or []):
                     if getattr(p, "transfer_requested", False):
                         list_piece(app, league, team, p,
-                                   source="trade_request", today=today)
+                                   source="trade_request", today=today,
+                                   params=params)
             except Exception:
                 pass
             # 2) Situation-driven seller listings.
@@ -456,26 +576,26 @@ def _auto_list(app, league, market, today, ramp):
             if not _seller_eligible(app, team, stance, ramp):
                 continue
             have = len(_active_listings(market, team_name=tname))
-            cap = MAX_ACTIVE_LISTINGS_RAMP if ramp else MAX_ACTIVE_LISTINGS_BASELINE
+            cap = params.get("max_team", MAX_ACTIVE_LISTINGS_RAMP)
             want = cap - have
             if want <= 0:
                 continue
-            # Baseline: list at most 1 new piece per team per week (throttle).
-            if not ramp:
-                try:
-                    listed_days = [_parse(li.get("listed_day", "")) or today
-                                   for li in market.get("listings", [])
-                                   if li.get("seller") == tname]
-                    if listed_days and (today - max(listed_days)).days < 7:
-                        continue
-                except Exception:
-                    pass
-                want = min(want, 1)
+            # Heat-driven throttle: at heat 0 list at most 1 new piece per
+            # team per week; near the deadline, up to 2 every 2 days.
+            try:
+                listed_days = [_parse(li.get("listed_day", "")) or today
+                               for li in market.get("listings", [])
+                               if li.get("seller") == tname]
+                if listed_days and (today - max(listed_days)).days < throttle:
+                    continue
+            except Exception:
+                pass
+            want = min(want, 2 if ramp else 1)
             for piece in _pick_pieces(team, want):
                 list_piece(app, league, team, piece,
                            source=("soft_sell" if stance == "bubble"
                                    else "seller_list"),
-                           today=today)
+                           today=today, params=params)
     except Exception:
         pass
 
@@ -596,6 +716,204 @@ def _find_bidders(app, league, listing, today, ramp):
         return []
 
 
+# ---------------------------------------------------------------------------
+# Headliner overlay (refinement 2026-09-29): superstar pieces cost packages.
+# trade_engine.py / player_trade_value() are NEVER touched -- this is a
+# market-layer overlay only.
+# ---------------------------------------------------------------------------
+def _is_headliner(player):
+    """A Quinn Hughes-caliber piece: 85+ overall, or 83+ at age <= 26."""
+    try:
+        ovr = player.overall_rating()
+        age = getattr(player, "age", 99)
+        return ovr >= HEADLINER_OVR or (age <= HEADLINER_YOUNG_AGE
+                                       and ovr >= HEADLINER_YOUNG_OVR)
+    except Exception:
+        return False
+
+
+def _need_hit(need0, asset):
+    """Does the asset fill the seller's #1 positional need? A generic
+    defenseman (code 'D') fills an LD/RD need -- handedness isn't modeled
+    for plain DEFENSE players. Never raises."""
+    try:
+        if need0 is None:
+            return False
+        code = _pos_code(asset)
+        if code == need0:
+            return True
+        return code == "D" and need0 in ("LD", "RD")
+    except Exception:
+        return False
+
+
+def _headliner_package_ok(app, league, player, seller, bidder, assets):
+    """(ok, reason). A headliner normally costs a package: 3+ assets with
+    a young roster player and a 1st (or blue-chip prospect). The rare
+    1-for-1 'hockey trade' exception (Hall<->Larsson, Jones<->Johansen):
+    young-controllable for young-controllable at the seller's clear #1
+    positional need. Rentals get the Stone'19 shape: 2+ assets with a top
+    prospect/young roster piece and an early pick. Never raises."""
+    try:
+        import trade_engine as te
+        from game_classes import DraftPick
+        if not _is_headliner(player):
+            return True, "not a headliner"
+        live = [a for a in assets if a is not None]
+        try:
+            piece_ovr = player.overall_rating()
+        except Exception:
+            piece_ovr = 0
+        try:
+            piece_yrs = getattr(getattr(player, "contract", None),
+                                "years_remaining", 99) or 99
+        except Exception:
+            piece_yrs = 99
+
+        def _is_pick(a):
+            return isinstance(a, DraftPick)
+
+        def _grade(a):
+            return str(getattr(a, "potential_grade", "") or "").upper()
+
+        # --- 1-for-1 exception: young + controllable + at the seller's #1
+        # --- positional need (Hall 24 for Larsson 23, Edmonton's RHD hole).
+        if len(live) == 1 and not _is_pick(live[0]):
+            a = live[0]
+            try:
+                ovr = a.overall_rating()
+            except Exception:
+                ovr = 0
+            try:
+                yrs = getattr(getattr(a, "contract", None),
+                              "years_remaining", 0) or 0
+            except Exception:
+                yrs = 0
+            try:
+                need0 = (te.team_needs(seller) or [None])[0]
+            except Exception:
+                need0 = None
+            if (getattr(a, "age", 99) <= HEADLINER_EXCEPTION_AGE
+                    and yrs >= HEADLINER_EXCEPTION_YEARS
+                    and abs(ovr - piece_ovr) <= HEADLINER_EXCEPTION_OVR_GAP
+                    and _need_hit(need0, a)):
+                return True, "one-for-one exception"
+        prospects = [a for a in live if not _is_pick(a)
+                     and getattr(a, "age", 99) <= 23
+                     and _grade(a) in ("A+", "A", "A-", "B+", "B")]
+        young_roster = [a for a in live if not _is_pick(a)
+                        and getattr(a, "age", 99) <= HEADLINER_YOUNG_AGE]
+        firsts = [a for a in live if _is_pick(a)
+                  and getattr(a, "round", 99) == 1]
+        picks12 = [a for a in live if _is_pick(a)
+                   and getattr(a, "round", 99) <= 2]
+        # --- rental discount: pending UFA headliner (Stone'19). ---
+        if piece_yrs == 1:
+            if len(live) >= 2 and (prospects or young_roster) and picks12:
+                return True, "rental package"
+            return False, "rental headliner needs prospect/young roster + early pick"
+        # --- the standard package (Eichel'21, Karlsson'18, Tkachuk'22). ---
+        bluechip = any(getattr(a, "age", 99) <= 22 for a in prospects)
+        if (len(live) >= HEADLINER_MIN_ASSETS and young_roster
+                and (firsts or bluechip)):
+            return True, "headliner package"
+        return False, "headliner price: package with young roster player + 1st/top prospect"
+    except Exception:
+        return True, "check failed open"
+
+
+def _shape_headliner_bid(app, league, bidder, player, seller, chosen, cands,
+                         target):
+    """Shape a headliner bid into a real package: a young roster player and
+    a 1st (or blue-chip prospect) lead the offer. Swaps in from the
+    candidate pool when needed; respects MAX_BID_ASSETS and the cap; never
+    raises; returns the (possibly unchanged) chosen list."""
+    try:
+        import trade_engine as te
+        from game_classes import DraftPick
+        have_ids = {getattr(a, "id", None) for a in chosen}
+
+        def _add(asset):
+            try:
+                if asset is None or getattr(asset, "id", None) in have_ids:
+                    return
+                if len(chosen) < MAX_BID_ASSETS:
+                    try:
+                        if not te._cap_ok_after(bidder, chosen + [asset],
+                                                [player]):
+                            return
+                    except Exception:
+                        pass
+                    chosen.append(asset)
+                    have_ids.add(getattr(asset, "id", None))
+                    return
+                # Swap out the lowest-value asset that isn't a 1st.
+                drop_i, drop_v = -1, None
+                for i, a in enumerate(chosen):
+                    if (isinstance(a, DraftPick)
+                            and getattr(a, "round", 99) == 1):
+                        continue
+                    try:
+                        v = te.asset_value(a)
+                    except Exception:
+                        v = 0
+                    if drop_v is None or v < drop_v:
+                        drop_v, drop_i = v, i
+                if drop_i < 0:
+                    return
+                trial = [a for i, a in enumerate(chosen) if i != drop_i]
+                trial.append(asset)
+                try:
+                    if not te._cap_ok_after(bidder, trial, [player]):
+                        return
+                except Exception:
+                    pass
+                have_ids.discard(getattr(chosen[drop_i], "id", None))
+                chosen[drop_i] = asset
+                have_ids.add(getattr(asset, "id", None))
+            except Exception:
+                pass
+
+        def _best(pred):
+            best, bestv = None, -1
+            for _kind, a in cands:
+                if getattr(a, "id", None) in have_ids:
+                    continue
+                if not pred(a):
+                    continue
+                try:
+                    if te.trade_vetoes(bidder, seller, [a]):
+                        continue
+                except Exception:
+                    pass
+                try:
+                    v = te.player_trade_value(a)
+                except Exception:
+                    v = 0
+                if v > bestv:
+                    best, bestv = a, v
+            return best
+
+        if not any((not isinstance(a, DraftPick))
+                   and getattr(a, "age", 99) <= HEADLINER_YOUNG_AGE
+                   for a in chosen):
+            _add(_best(lambda a: (not isinstance(a, DraftPick))
+                       and getattr(a, "age", 99) <= HEADLINER_YOUNG_AGE))
+        if not any(isinstance(a, DraftPick)
+                   and getattr(a, "round", 99) == 1 for a in chosen):
+            first = _best(lambda a: isinstance(a, DraftPick)
+                          and getattr(a, "round", 99) == 1)
+            if first is None:
+                first = _best(lambda a: (not isinstance(a, DraftPick))
+                              and getattr(a, "age", 99) <= 22
+                              and str(getattr(a, "potential_grade", "")
+                                      ).upper() in ("A+", "A", "A-", "B+", "B"))
+            _add(first)
+        return chosen
+    except Exception:
+        return chosen
+
+
 def build_bid(app, league, bidder, player, seller, ask_points):
     """Build one opening offer sized to ask x eagerness. Returns a list of
     live asset objects (owned by bidder) or []. Never raises. Read-only
@@ -675,6 +993,10 @@ def build_bid(app, league, bidder, player, seller, ask_points):
             total += _av((_kind, asset))
             if total >= target:
                 break
+        # Headliner pieces get package-shaped offers (see overlay above).
+        if _is_headliner(player):
+            chosen = _shape_headliner_bid(app, league, bidder, player, seller,
+                                          chosen, cands, target)
         return chosen
     except Exception:
         return []
@@ -683,12 +1005,19 @@ def build_bid(app, league, bidder, player, seller, ask_points):
 # ---------------------------------------------------------------------------
 # Bidding rounds
 # ---------------------------------------------------------------------------
-def _evaluate_round(app, league, market, listing, today, ramp, tick=False):
+def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
+                    params=None, heat=0.0):
     """Run one bidding round on a listing. Returns True if the listing
-    closed (traded/expired/pulled). Never raises."""
+    closed (traded/expired/pulled). Never raises.
+
+    User-sale listings (source user_block): AI bids are routed to the user
+    through the existing negotiation path -- never auto-executed. The
+    headliner overlay holds AI sellers out for a real package.
+    """
     try:
         import trade_engine as te
         import trade_storylines as tsl
+        params = params or _heat_params(heat)
         idx = _player_index(league)
         player, seller = idx.get(listing.get("player_id"), (None, None))
         if player is None or seller is None:
@@ -696,16 +1025,21 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False):
             listing["note"] = "piece unavailable"
             return True
         sname = listing.get("seller", "")
-        # Ask decays in the final 5 days of the ramp (seller desperation).
+        user_name = getattr(getattr(app, "user_team", None), "team_name", "")
+        user_sale = (sname == user_name)
+        # Ask decays near the listing's close: the window and the rate both
+        # scale with heat (seller desperation rises toward the deadline).
         ask = float(listing.get("ask_points", 0) or 0)
         try:
             close_day = _parse(listing.get("bidding_close", ""))
-            if ramp and close_day is not None:
+            if close_day is not None:
                 left = (close_day - today).days
-                if 0 <= left <= 5:
+                decay_window = 2 + int(heat * 8)
+                if 0 <= left <= decay_window:
                     listed = _parse(listing.get("listed_day", "")) or today
                     age_days = max(0, (today - listed).days)
-                    ask = ask * max(0.85, 1.0 - ASK_DECAY_PER_DAY * age_days)
+                    rate = ASK_DECAY_PER_DAY * params.get("decay_mult", 1.0)
+                    ask = ask * max(0.85, 1.0 - rate * age_days)
         except Exception:
             pass
         bidders = _find_bidders(app, league, listing, today, ramp)
@@ -716,7 +1050,8 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False):
         if len(bidders) >= MIN_BIDDERS_FOR_WAR_RUMOR and listing.get("rounds", 0) == 0:
             names = ", ".join(getattr(b, "team_name", "?") for b in bidders[:4])
             _news(app, f"BIDDING WAR: {names} are in on {_player_label(player)} "
-                       f"({sname} listening).", rumor=True)
+                       f"({sname} listening).", rumor=True,
+                  rumor_cap=params.get("rumor_cap"))
         try:
             seller_ctx = tsl.situational_context(app, seller)
         except Exception:
@@ -724,6 +1059,7 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False):
         patience = max(0.4, 1.0 - 0.15 * int(listing.get("rounds", 0) or 0))
         accepted = []  # (bidder, assets, resp)
         counters = []  # (bidder, assets, resp)
+        user_bids = []  # (bidder, assets) for user-sale listings
         for bidder in bidders:
             bname = getattr(bidder, "team_name", "")
             try:
@@ -732,10 +1068,16 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False):
                 assets = None
                 if listing.get("rounds", 0) > 0:
                     assets = _escalate_bid(app, league, listing, bidder,
-                                           player, seller, ask)
+                                           player, seller, ask,
+                                           esc_mult=params.get("esc_mult", 1.0))
                 if assets is None:
                     assets = build_bid(app, league, bidder, player, seller, ask)
                 if not assets:
+                    continue
+                # User sale: no engine evaluation here -- the best bid goes
+                # to the user as a real negotiation offer.
+                if user_sale:
+                    user_bids.append((bidder, list(assets)))
                     continue
                 # Clause waiver stamp for the piece (mirrors deadline path).
                 waived = False
@@ -760,7 +1102,17 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False):
                         user_team=seller, patience=patience)
                 decision = getattr(resp, "decision", "reject")
                 if decision == "accept":
-                    accepted.append((bidder, list(assets), resp))
+                    # Headliner overlay: the seller holds out for a package
+                    # instead of accepting a light offer.
+                    ok, why = _headliner_package_ok(app, league, player,
+                                                    seller, bidder,
+                                                    list(assets))
+                    if ok:
+                        accepted.append((bidder, list(assets), resp))
+                    else:
+                        counters.append((bidder, list(assets), resp))
+                        _stash_counter(listing, bname, resp, today)
+                        listing["note"] = f"holding out for a package ({why})"
                 elif decision == "counter":
                     counters.append((bidder, list(assets), resp))
                     # Stash the counter terms for next round's escalation.
@@ -772,6 +1124,22 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False):
                     _clear_waiver(player)
             except Exception:
                 continue
+        if user_sale:
+            # Best AI bid becomes a real offer in the user's negotiation box.
+            if user_bids:
+                def _uv(t):
+                    try:
+                        return sum(te.asset_value(a) for a in t[1])
+                    except Exception:
+                        return 0
+                user_bids.sort(key=_uv, reverse=True)
+                top_bidder, top_assets = user_bids[0]
+                _deliver_user_offer(app, league, market, listing, top_bidder,
+                                    top_assets, today)
+                listing["note"] = "offer(s) sent to you"
+            listing["rounds"] = int(listing.get("rounds", 0) or 0) + 1
+            listing["last_round_day"] = _iso(today)
+            return False
         # Winner: highest asset value among accepted; ties -> earliest bid.
         if accepted:
             def _bidval(t):
@@ -788,7 +1156,8 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False):
             # counters rather than killing the listing.
         # No winner: keep counters alive for the next round; everyone else
         # may re-enter once with a sweetened offer (same escalation gate).
-        if counters:
+        # A headliner holdout keeps its note (don't overwrite with a count).
+        if counters and "holding out" not in listing.get("note", ""):
             listing["note"] = f"{len(counters)} counter(s) in play"
         # Loser consolation: bidders who neither accepted nor countered get
         # priority on the seller's next listing (one round).
@@ -851,10 +1220,12 @@ def _has_consolation(market, seller_name, bidder_name, today):
         return False
 
 
-def _escalate_bid(app, league, listing, bidder, player, seller, ask):
+def _escalate_bid(app, league, listing, bidder, player, seller, ask,
+                  esc_mult=1.0):
     """Answer the seller's last counter: add the wanted asset if owned and
     cap-clean, else sweeten with the next-best asset. Gated by
-    ESCALATION_BASE x boldness x desperation. Returns assets or None."""
+    ESCALATION_BASE x esc_mult (heat) x boldness x desperation.
+    Returns assets or None."""
     try:
         import trade_engine as te
         import trade_storylines as tsl
@@ -876,7 +1247,7 @@ def _escalate_bid(app, league, listing, bidder, player, seller, ask):
         desperation = max(0.5, min(1.5, 1.0 / max(0.5, greed)))
         boldness = 0.5 + _gm_boldness(app, bidder)  # 0.5..1.5
         import random
-        if random.random() > ESCALATION_BASE * boldness * desperation:
+        if random.random() > ESCALATION_BASE * esc_mult * boldness * desperation:
             return None  # GM walks from the counter
         base = build_bid(app, league, bidder, player, seller, ask)
         if not base:
@@ -1024,12 +1395,18 @@ def _close_expired(app, league, market, listing, today):
                 continue
         if best is not None:
             bidder, assets = best
-            if _execute_market_deal(app, league, listing, player, seller,
-                                    bidder, assets, today):
+            # Headliner overlay: no capitulation for scraps -- the seller
+            # would rather hold the superstar than take a light package.
+            ok, why = _headliner_package_ok(app, league, player, seller,
+                                            bidder, assets)
+            if ok and _execute_market_deal(app, league, listing, player, seller,
+                                           bidder, assets, today):
                 return
+            if not ok:
+                listing["note"] = f"held the headliner ({why})"
         # Expire: no relist for a while; rumor notes the hold.
         listing["status"] = "expired"
-        listing["note"] = "no deal"
+        listing["note"] = listing.get("note") or "no deal"
         try:
             market["relist_cooldown"][listing.get("player_id")] = \
                 _iso(today + timedelta(days=RELIST_COOLDOWN_DAYS))
@@ -1167,6 +1544,178 @@ def ambition_agitation_tick(app):
 # ---------------------------------------------------------------------------
 # Trade blocks (league-wide board data)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Block engagement (refinement 2026-09-29)
+# ---------------------------------------------------------------------------
+def _deliver_user_offer(app, league, market, listing, bidder, assets, today):
+    """Route the best AI bid on the user's block player to the user through
+    the existing negotiation path (trade_negotiation.incoming_offer --
+    inbox, never a popup). Throttled: one offer per listing per
+    USER_OFFER_THROTTLE_DAYS. The offer is also recorded on the listing so
+    headless tests can assert engagement. Never raises."""
+    try:
+        lid = listing.get("id", "")
+        last = _parse((market.get("user_offer_log", {}) or {}).get(lid, ""))
+        if last is not None and (today - last).days < USER_OFFER_THROTTLE_DAYS:
+            return False
+        idx = _player_index(league)
+        player, _seller = idx.get(listing.get("player_id"), (None, None))
+        if player is None:
+            return False
+        bname = getattr(bidder, "team_name", "?")
+        try:
+            import trade_negotiation as tneg
+            tneg.incoming_offer(app, bidder, list(assets), player_wanted=player)
+        except Exception as e:
+            print(f"user offer deliver failed (non-fatal): {e}")
+        try:
+            market.setdefault("user_offer_log", {})[lid] = _iso(today)
+            listing["user_offer"] = {"team": bname, "day": _iso(today),
+                                     "assets": [_asset_ref(a) for a in assets]}
+            listing["note"] = f"offer sent to you by {bname}"
+        except Exception:
+            pass
+        _news(app, f"RUMOR: {bname} has made an offer for "
+                    f"{_player_label(player)} (your block).", rumor=True)
+        return True
+    except Exception:
+        return False
+
+
+def _sync_user_block(app, league, market, today, params):
+    """Mirror the user's manual trade block into market listings so AI GMs
+    can bid on them (source user_block -- always a slot, never auto-sold).
+    Pull listings for players removed from the block. Never raises."""
+    try:
+        user_team = getattr(app, "user_team", None)
+        if user_team is None:
+            return
+        uname = getattr(user_team, "team_name", "")
+        block_ids = set()
+        for src in (getattr(user_team, "trade_block", None) or [],
+                    getattr(app, "trade_block", None) or []):
+            for entry in src:
+                try:
+                    pid = entry.id if hasattr(entry, "id") else None
+                    if pid is None and isinstance(entry, dict):
+                        pid = entry.get("player_id")
+                    if pid is not None:
+                        block_ids.add(pid)
+                except Exception:
+                    continue
+        for pid in block_ids:
+            if _active_listings(market, player_id=pid):
+                continue
+            player, pteam = resolve_player(league, pid)
+            if (player is None or pteam is None
+                    or getattr(pteam, "team_name", "") != uname):
+                continue
+            list_piece(app, league, user_team, player, source="user_block",
+                       today=today, params=params)
+        # Pull listings whose player left the block.
+        for li in _active_listings(market, team_name=uname):
+            if (li.get("source") == "user_block"
+                    and li.get("player_id") not in block_ids):
+                li["status"] = "pulled"
+                li["note"] = "removed from your block"
+    except Exception:
+        pass
+
+
+def _key_players(team):
+    """The players whose long-term injury moves a GM's block: top-6 skaters
+    by trade value plus the top goalie. Never raises."""
+    try:
+        import trade_engine as te
+        roster = list(getattr(team, "roster", None) or [])
+        skaters, goalies = [], []
+        for p in roster:
+            try:
+                (goalies if _pos_code(p) == "G" else skaters).append(p)
+            except Exception:
+                skaters.append(p)
+        def _val(p):
+            try:
+                return te.player_trade_value(p)
+            except Exception:
+                return 0
+        skaters.sort(key=_val, reverse=True)
+        goalies.sort(key=_val, reverse=True)
+        return skaters[:6] + goalies[:1]
+    except Exception:
+        return []
+
+
+def note_situation_change(app, league, market, today):
+    """Event-driven trade-block refresh: stance flips (incl. buyer->seller),
+    new trade requests, and long-term injuries to key players. Blocks never
+    go stale. Called daily from process_market. Never raises."""
+    try:
+        import trade_engine as te
+        import trade_storylines as tsl
+        user_name = getattr(getattr(app, "user_team", None), "team_name", "")
+        # 1) Stance flips.
+        prev = market.setdefault("prev_stance", {})
+        for team in _nhl_teams(league):
+            tname = getattr(team, "team_name", "")
+            if tname == user_name:
+                continue
+            try:
+                stance = tsl.stance(app, tname)
+            except Exception:
+                continue
+            old = prev.get(tname)
+            prev[tname] = stance
+            if old is not None and old != stance:
+                refresh_trade_blocks(app, league)
+                city = getattr(team, "city", None) or tname
+                if stance == "seller":
+                    _news(app, f"Decision time in {city}: the "
+                               f"{tname} are selling -- block updated.")
+                elif stance == "buyer" and old == "seller":
+                    _news(app, f"{tname} flip from sellers to buyers -- off "
+                               f"the block, hunting.")
+        # 2) New trade requests (they're auto-listed; the block follows).
+        known = set(market.setdefault("known_requests", []))
+        fresh = False
+        for team in _nhl_teams(league):
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    if (getattr(p, "transfer_requested", False)
+                            and p.id not in known):
+                        known.add(p.id)
+                        fresh = True
+                except Exception:
+                    continue
+        if fresh:
+            market["known_requests"] = sorted(known)[-200:]
+            refresh_trade_blocks(app, league)
+        # 3) Long-term injuries to key players.
+        flags = set(market.setdefault("injury_flags", []))
+        hit = False
+        for team in _nhl_teams(league):
+            tname = getattr(team, "team_name", "")
+            for p in _key_players(team):
+                try:
+                    if (getattr(p, "is_injured", False)
+                            and getattr(p, "games_remaining_injured", 0)
+                            >= INJURY_LONG_TERM_GAMES
+                            and p.id not in flags):
+                        flags.add(p.id)
+                        hit = True
+                        if tname != user_name:
+                            _news(app, f"RUMOR: {tname} shopping for help "
+                                       f"after the {_player_label(p)} injury.",
+                                  rumor=True)
+                except Exception:
+                    continue
+        if hit:
+            market["injury_flags"] = sorted(flags)[-200:]
+            refresh_trade_blocks(app, league)
+    except Exception:
+        pass
+
+
 def refresh_trade_blocks(app, league):
     """Regenerate AI trade blocks from listings + stance. Mirrors the user's
     manual block. Never raises."""
@@ -1247,65 +1796,232 @@ def block_availability_note(app, league, player_id):
 
 
 # ---------------------------------------------------------------------------
-# Scouting shortlist
 # ---------------------------------------------------------------------------
-def get_shortlist(user_team):
-    """[{player_id, added_by, date, note}]. Never raises."""
+# Unified shortlist (refinement 2026-09-29): ONE surface.
+#
+# ShortlistManager's "Trade Targets" category is the canonical store.
+# The legacy team.scout_shortlist store is migrated once (never duplicated)
+# and retired. Scout suggestions, user targets, and market/block nudges all
+# read and write the same list -- there is no import step and no second tab.
+# ---------------------------------------------------------------------------
+_SHORTLIST_CATEGORY = "Trade Targets"
+_SUGGEST_PREFIX = "SUGGESTED by "
+
+
+def _shortlist_mgr():
+    """The canonical shortlist store. None if unavailable. Never raises."""
     try:
-        sl = getattr(user_team, "scout_shortlist", None)
-        if not isinstance(sl, list):
-            sl = []
-            user_team.scout_shortlist = sl
-        return sl
+        from shortlist_system import ShortlistManager
+        return ShortlistManager()
     except Exception:
-        return []
+        return None
+
+
+def get_unified_targets():
+    """Every entry on the ONE unified surface, as dicts
+    {player_id, player_name, notes, priority, date_added}. Never raises."""
+    out = []
+    try:
+        mgr = _shortlist_mgr()
+        if mgr is None:
+            return []
+        for e in (mgr.get_entries_by_category(_SHORTLIST_CATEGORY) or []):
+            try:
+                out.append({
+                    "player_id": getattr(e, "player_id", ""),
+                    "player_name": getattr(e, "player_name", ""),
+                    "notes": getattr(e, "notes", "") or "",
+                    "priority": getattr(e, "priority", 2),
+                    "date_added": str(getattr(e, "date_added", "") or ""),
+                })
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _add_raw_target(pid_str, name, notes, priority=2):
+    """Low-level add with exact notes. Returns True on a new add. Never raises."""
+    try:
+        mgr = _shortlist_mgr()
+        if mgr is None or pid_str in (None, ""):
+            return False
+        _enforce_target_cap()
+        return bool(mgr.add_player(str(pid_str), str(name or "?"),
+                                   _SHORTLIST_CATEGORY,
+                                   notes=(notes or "")[:200],
+                                   priority=priority))
+    except Exception:
+        return False
+
+
+def _enforce_target_cap():
+    """Keep the unified surface at SHORTLIST_MAX: oldest user-added entries
+    rotate out first, then oldest suggestions. Never raises."""
+    try:
+        mgr = _shortlist_mgr()
+        if mgr is None:
+            return
+        entries = mgr.get_entries_by_category(_SHORTLIST_CATEGORY) or []
+        while len(entries) >= SHORTLIST_MAX:
+            def _is_suggest(e):
+                return str(getattr(e, "notes", "") or "").startswith(_SUGGEST_PREFIX)
+            cands = [e for e in entries if not _is_suggest(e)] or entries
+            cands.sort(key=lambda e: str(getattr(e, "date_added", "") or ""))
+            victim = cands[0]
+            try:
+                mgr.remove_player(getattr(victim, "player_id", ""),
+                                  _SHORTLIST_CATEGORY)
+            except Exception:
+                break
+            entries = mgr.get_entries_by_category(_SHORTLIST_CATEGORY) or []
+    except Exception:
+        pass
+
+
+def add_target(player, source="user", note="", priority=2):
+    """Add a target to the unified surface. source: "user" or a scout's
+    name (stored as a SUGGESTED-by note with the scout's confidence band).
+    Returns True on a new add. Never raises."""
+    try:
+        if player is None:
+            return False
+        pid = getattr(player, "id", None)
+        name = getattr(player, "full_name", None) or getattr(player, "name", "?")
+        if pid is None:
+            return False
+        if source == "user":
+            notes = (note or "").strip()
+        else:
+            notes = f"{_SUGGEST_PREFIX}{source}: {(note or '').strip()}".strip()
+        return _add_raw_target(pid, name, notes, priority)
+    except Exception:
+        return False
+
+
+def remove_target(player_id):
+    """Remove from the unified surface. Never raises."""
+    try:
+        mgr = _shortlist_mgr()
+        if mgr is None:
+            return False
+        return bool(mgr.remove_player(str(player_id), _SHORTLIST_CATEGORY))
+    except Exception:
+        return False
+
+
+def _target_source(notes):
+    """(kind, display) for a unified entry's notes: ('scout', name),
+    ('user', tag), or ('user', 'You'). Never raises."""
+    try:
+        n = (notes or "").strip()
+        if n.startswith(_SUGGEST_PREFIX):
+            rest = n[len(_SUGGEST_PREFIX):]
+            scout, _, _rest = rest.partition(":")
+            return "scout", (scout.strip() or "Scout")
+        if n.startswith("[") and "]" in n:
+            tag = n[1:].partition("]")[0].strip()
+            return "user", (tag or "You")
+    except Exception:
+        pass
+    return "user", "You"
+
+
+def migrate_shortlist_once(app, league, user_team, market):
+    """One-time migration: legacy team.scout_shortlist entries move into the
+    unified ShortlistManager surface. Never duplicates; the legacy list is
+    retired afterwards. Returns the number moved. Never raises."""
+    try:
+        if market.get("shortlist_migrated"):
+            return 0
+        moved = 0
+        legacy = getattr(user_team, "scout_shortlist", None) or []
+        for e in legacy:
+            try:
+                if not isinstance(e, dict):
+                    continue
+                pid = e.get("player_id")
+                if pid is None:
+                    continue
+                player, _team = resolve_player(league, pid)
+                name = (player.full_name if player is not None else str(pid))
+                added_by = e.get("added_by", "user") or "user"
+                note = (e.get("note", "") or "").strip()
+                if added_by == "user":
+                    notes = note
+                else:
+                    # Old scout format: added_by=<scout>, note="SUGGESTED: ...".
+                    if note.upper().startswith("SUGGESTED:"):
+                        note = note[len("SUGGESTED:"):].strip()
+                    notes = f"{_SUGGEST_PREFIX}{added_by}: {note}".strip()
+                if _add_raw_target(pid, name, notes):
+                    moved += 1
+            except Exception:
+                continue
+        try:
+            user_team.scout_shortlist = []  # legacy store retired
+        except Exception:
+            pass
+        market["shortlist_migrated"] = True
+        return moved
+    except Exception:
+        return 0
+
+
+# --- Legacy shims: same names/shapes as before, now backed by the unified
+# --- surface so older callers keep working.
+def get_shortlist(user_team):
+    """[{player_id, added_by, date, note}]. Backed by the unified surface.
+    Never raises."""
+    out = []
+    for t in get_unified_targets():
+        try:
+            pid = t.get("player_id")
+            try:
+                pid = int(pid)
+            except (TypeError, ValueError):
+                pass
+            notes = t.get("notes", "") or ""
+            kind, who = _target_source(notes)
+            if kind == "scout":
+                note = notes.split(":", 1)[1].strip() if ":" in notes else ""
+                added_by = who
+            elif notes.startswith("[") and "]" in notes:
+                note = notes.partition("]")[2].strip()
+                added_by = who if who != "You" else "user"
+            else:
+                note, added_by = notes, "user"
+            out.append({"player_id": pid, "added_by": added_by,
+                        "date": str(t.get("date_added", ""))[:10],
+                        "note": note})
+        except Exception:
+            continue
+    return out
 
 
 def add_to_shortlist(user_team, player, added_by="user", note="", today=None):
     """Add a player to the shortlist. Returns True if added. Never raises."""
     try:
-        sl = get_shortlist(user_team)
-        pid = player.id
-        for e in sl:
-            if e.get("player_id") == pid:
-                return False
-        if len(sl) >= SHORTLIST_MAX:
-            # Oldest user-added drops with the cap; scout suggestions rotate.
-            for i, e in enumerate(sl):
-                if e.get("added_by") == "user":
-                    del sl[i]
-                    break
-            else:
-                sl.pop(0)
-        sl.append({"player_id": pid, "added_by": added_by,
-                   "date": _iso(today) if today is not None
-                   else date.today().isoformat(),
-                   "note": note or ""})
-        return True
+        if added_by == "user":
+            return add_target(player, source="user", note=note or "")
+        return _add_raw_target(getattr(player, "id", ""),
+                               getattr(player, "full_name", "?"),
+                               f"[{added_by}] {(note or '').strip()}".strip())
     except Exception:
         return False
 
 
 def remove_from_shortlist(user_team, player_id):
     """Never raises."""
-    try:
-        sl = get_shortlist(user_team)
-        for i, e in enumerate(sl):
-            if e.get("player_id") == player_id:
-                del sl[i]
-                return True
-    except Exception:
-        pass
-    return False
+    return remove_target(player_id)
 
 
 def refresh_scout_suggestions(app, league):
-    """Ask each user scout for value tips (JPA-scaled correctness) and
-    stage them as suggestions on the shortlist. Never raises.
-
-    Suggestions are entries with added_by=<scout name> and note starting
-    with 'SUGGESTED:'. The user promotes or dismisses them in the UI.
-    """
+    """Ask each user scout for value tips (JPA-scaled correctness) and stage
+    them on the unified surface as SUGGESTED-by entries carrying the scout's
+    name and confidence band (High/Medium/Low -- the truth is never shown).
+    Dedupes by player id. Never raises. Returns the number of new tips."""
     try:
         import analytics_scouting as asc
         user_team = getattr(app, "user_team", None)
@@ -1334,11 +2050,9 @@ def refresh_scout_suggestions(app, league):
                 players.extend(list(getattr(t, "roster", None) or []))
         except Exception:
             pass
-        sl = get_shortlist(user_team)
-        have = {e.get("player_id") for e in sl}
-        added = 0
         import random
         rng = random.Random()
+        added = 0
         for scout in scouts[:4]:  # cap: 4 scouts contribute
             try:
                 tips = asc.scout_value_tips(scout, players, teams,
@@ -1355,18 +2069,17 @@ def refresh_scout_suggestions(app, league):
                     p = tip.get("player") if isinstance(tip, dict) else None
                     if p is None:
                         continue
-                    if p.id in have or len(sl) >= SHORTLIST_MAX:
-                        continue
                     reason = ""
+                    conf = ""
                     try:
                         reason = tip.get("reason", "") or ""
+                        conf = tip.get("confidence", "") or ""
                     except Exception:
                         pass
-                    sl.append({"player_id": p.id, "added_by": sname,
-                               "date": _iso(_today(app)),
-                               "note": f"SUGGESTED: {reason}"[:120]})
-                    have.add(p.id)
-                    added += 1
+                    note = f"({conf} confidence): {reason}".strip() if conf \
+                        else reason
+                    if add_target(p, source=sname, note=note[:140]):
+                        added += 1
                 except Exception:
                     continue
         return added
@@ -1375,16 +2088,13 @@ def refresh_scout_suggestions(app, league):
 
 
 def check_shortlist_nudges(app, league, market=None, today=None):
-    """Nudge the user when a shortlisted player hits the market or a trade
-    block. Bounded: one nudge per player per 14 days. Never raises."""
+    """Nudge the user when a unified-surface target hits the market or a
+    trade block. Bounded: one nudge per player per 14 days. Never raises."""
     try:
         market = market or get_market(league)
         today = today or _today(app)
-        user_team = getattr(app, "user_team", None)
-        if user_team is None:
-            return
-        sl = get_shortlist(user_team)
-        if not sl:
+        targets = get_unified_targets()
+        if not targets:
             return
         nudged = market.get("shortlist_nudges", {})
         # Collect market + block player ids.
@@ -1394,28 +2104,36 @@ def check_shortlist_nudges(app, league, market=None, today=None):
         for tname, ids in blocks.items():
             for pid in (ids or []):
                 on_blocks.setdefault(pid, tname)
-        for e in sl:
+        for t in targets:
             try:
-                pid = e.get("player_id")
-                if pid is None:
-                    continue
-                last = _parse(nudged.get(pid, ""))
-                if last is not None and (today - last).days < SHORTLIST_NUDGE_COOLDOWN_DAYS:
+                pid_raw = t.get("player_id")
+                pid = pid_raw
+                try:
+                    pid = int(pid_raw)
+                except (TypeError, ValueError):
+                    pass
+                nkey = str(pid_raw)
+                last = _parse(nudged.get(nkey, ""))
+                if (last is not None
+                        and (today - last).days < SHORTLIST_NUDGE_COOLDOWN_DAYS):
                     continue
                 player, pteam = resolve_player(league, pid)
                 if player is None:
+                    player, _t2 = resolve_player(league, pid_raw)
+                if player is None:
                     continue
-                who = e.get("added_by", "user")
-                whotxt = f"your target" if who == "user" else f"{who}'s target"
-                if pid in on_market:
+                kind, who = _target_source(t.get("notes", ""))
+                whotxt = (f"{who}'s suggestion" if kind == "scout"
+                          else "your target")
+                if pid in on_market or pid_raw in on_market:
                     tname = pteam.team_name if pteam else "?"
                     _news(app, f"SHORTLIST: {whotxt} {_player_label(player)} "
                                f"just hit the market ({tname} listening).")
-                    nudged[pid] = _iso(today)
-                elif pid in on_blocks:
+                    nudged[nkey] = _iso(today)
+                elif pid in on_blocks or pid_raw in on_blocks:
                     _news(app, f"SHORTLIST: {whotxt} {_player_label(player)} "
-                               f"is on {on_blocks[pid]}'s trade block.")
-                    nudged[pid] = _iso(today)
+                               f"is on {on_blocks.get(pid, on_blocks.get(pid_raw))}'s trade block.")
+                    nudged[nkey] = _iso(today)
             except Exception:
                 continue
         market["shortlist_nudges"] = nudged
@@ -1427,14 +2145,30 @@ def check_shortlist_nudges(app, league, market=None, today=None):
 # Daily driver + deadline tick
 # ---------------------------------------------------------------------------
 def process_market(app, league, today=None):
-    """Daily market driver. Year-round: baseline listing/bidding most of the
-    season, ramp cadence in the final 21 days, trade-request shopping always
-    on. Cheap no-op when nothing is listed. Never raises."""
+    """Daily market driver. Year-round: trading runs the whole regular
+    season until the deadline; a continuous heat curve (not a flat ramp)
+    accelerates listing volume, escalation, ask decay, and rumor intensity
+    as the deadline nears. Trade-request shopping always on. Cheap no-op
+    when nothing is listed. Never raises."""
     try:
         today = today or _today(app)
         market = get_market(league)
-        ramp = _in_ramp(app, league, today)
-        _auto_list(app, league, market, today, ramp)
+        heat = deadline_heat(app, league, today)
+        ramp = heat >= 0.5
+        params = _heat_params(heat)
+        _heat_beat_stories(app, league, market, heat, today)
+        # Event-driven engagement: stance flips, new requests, key injuries.
+        note_situation_change(app, league, market, today)
+        # One-time shortlist migration (legacy store -> unified surface).
+        try:
+            user_team = getattr(app, "user_team", None)
+            if user_team is not None:
+                migrate_shortlist_once(app, league, user_team, market)
+        except Exception:
+            pass
+        # The user's manual block becomes listings AI GMs bid on.
+        _sync_user_block(app, league, market, today, params)
+        _auto_list(app, league, market, today, ramp, params=params, heat=heat)
         # One bidding round per listing per day (deadline day uses ticks).
         if not _is_deadline_day(app, league, today):
             for listing in list(_active_listings(market)):
@@ -1446,7 +2180,8 @@ def process_market(app, league, today=None):
                     if close is not None and today > close:
                         _close_expired(app, league, market, listing, today)
                         continue
-                    _evaluate_round(app, league, market, listing, today, ramp)
+                    _evaluate_round(app, league, market, listing, today, ramp,
+                                    params=params, heat=heat)
                 except Exception:
                     continue
         _resolve_trade_requests(app, league, market, today, ramp)
@@ -1481,6 +2216,8 @@ def process_deadline_tick(app, league, mgr=None):
     try:
         today = _today(app)
         market = get_market(league)
+        heat = deadline_heat(app, league, today)
+        params = _heat_params(heat)
         for listing in list(_active_listings(market)):
             try:
                 close = _parse(listing.get("bidding_close", ""))
@@ -1488,7 +2225,7 @@ def process_deadline_tick(app, league, mgr=None):
                     _close_expired(app, league, market, listing, today)
                     continue
                 _evaluate_round(app, league, market, listing, today,
-                                ramp=True, tick=True)
+                                ramp=True, tick=True, params=params, heat=1.0)
             except Exception:
                 continue
         _resolve_trade_requests(app, league, market, today, ramp=True)
