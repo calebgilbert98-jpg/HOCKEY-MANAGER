@@ -53,12 +53,34 @@ def _star_race_bonus(score: float, p: Any) -> float:
     return score * STAR_RACE_SCORE_PCT * w
 
 
+def _stat(p: Any, *names: str) -> Any:
+    """Season-stat read honoring the sim's real write path.
+
+    The live sim writes season totals to ``p.stats.*`` (main.py,
+    quick_sim fold); the flat Player attributes (``p.goals`` etc.) are
+    only ever written by the never-called ``Player.add_game_stats``.
+    Read ``p.stats`` first, fall back to the flat attribute so QA fakes
+    and old saves that hand-set flat attrs keep working. Pure read-path
+    fix: no weights, thresholds, or formulas change.
+    """
+    stats = getattr(p, "stats", None)
+    for n in names:
+        if stats is not None:
+            v = getattr(stats, n, None)
+            if v:
+                return v
+        v = getattr(p, n, None)
+        if v:
+            return v
+    return 0
+
+
 def _gp(p) -> int:
-    return getattr(p, "games_played", 0) or 0
+    return _stat(p, "games_played") or 0
 
 
 def _pts(p) -> int:
-    return (getattr(p, "goals", 0) or 0) + (getattr(p, "assists", 0) or 0)
+    return (_stat(p, "goals") or 0) + (_stat(p, "assists") or 0)
 
 
 def _pos_value(p) -> str:
@@ -77,7 +99,8 @@ def _is_goalie(p) -> bool:
 
 def _is_defenseman(p) -> bool:
     pos = _pos_value(p)
-    return pos in ("D", "DEFENSE", "DEFENSEMAN", "DEFENCE", "DEFENCEMAN")
+    return pos in ("D", "LD", "RD", "DEFENSE", "DEFENSEMAN", "DEFENCE",
+                   "DEFENCEMAN")
 
 
 def _is_rookie(p) -> bool:
@@ -173,13 +196,13 @@ def calder_eligible(p, season_year: int = None) -> Tuple[bool, str]:
 
 
 def _sv_pct(p) -> float:
-    sa = getattr(p, "shots_against", 0) or 0
-    sv = getattr(p, "saves", 0) or 0
+    sa = _stat(p, "shots_against") or 0
+    sv = _stat(p, "saves") or 0
     return (sv / sa) if sa > 0 else 0.0
 
 
 def _gaa(p) -> float:
-    ga = (getattr(p, "shots_against", 0) or 0) - (getattr(p, "saves", 0) or 0)
+    ga = (_stat(p, "shots_against") or 0) - (_stat(p, "saves") or 0)
     mins = getattr(p, "minutes_played", 0) or 0
     return (ga * 60 / mins) if mins > 0 else 99.0
 
@@ -232,7 +255,7 @@ def hart_race(players: List[Any], team_pct: Dict[str, float],
         if _is_goalie(p) or _gp(p) < min_gp:
             continue
         pts = _pts(p)
-        goals = getattr(p, "goals", 0) or 0
+        goals = _stat(p, "goals") or 0
         try:
             pid = int(getattr(p, "id", -1) or -1)
         except Exception:
@@ -262,8 +285,8 @@ def art_ross_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
         score = _pts(p)
         score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
         out.append({"player": p, "score": score, "points": _pts(p),
-                    "goals": getattr(p, "goals", 0) or 0,
-                    "assists": getattr(p, "assists", 0) or 0})
+                    "goals": _stat(p, "goals") or 0,
+                    "assists": _stat(p, "assists") or 0})
     out.sort(key=lambda r: (r["score"], r["goals"]), reverse=True)
     return out
 
@@ -274,10 +297,10 @@ def rocket_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
     for p in players:
         if _is_goalie(p) or _gp(p) < min_gp:
             continue
-        score = getattr(p, "goals", 0) or 0
+        score = _stat(p, "goals") or 0
         score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
         out.append({"player": p, "score": score,
-                    "goals": getattr(p, "goals", 0) or 0,
+                    "goals": _stat(p, "goals") or 0,
                     "points": _pts(p)})
     out.sort(key=lambda r: (r["score"], r["points"]), reverse=True)
     return out
@@ -295,13 +318,13 @@ def norris_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
             continue
         pts = _pts(p)
         defense = (getattr(p, "defensive_awareness", 50) or 50)
-        pm = getattr(p, "plus_minus", 0) or 0
-        hits = getattr(p, "hits", 0) or 0
-        blocks = getattr(p, "blocked_shots", 0) or 0
+        pm = _stat(p, "plus_minus") or 0
+        hits = _stat(p, "hits") or 0
+        blocks = _stat(p, "blocked_shots") or 0
         score = pts * 2.0 + defense * 0.15 + pm * 0.3 + (hits + blocks) * 0.02
         score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
         out.append({"player": p, "score": score, "points": pts,
-                    "goals": getattr(p, "goals", 0) or 0,
+                    "goals": _stat(p, "goals") or 0,
                     "plus_minus": pm})
     out.sort(key=lambda r: r["score"], reverse=True)
     return out
@@ -320,8 +343,8 @@ def selke_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
             continue
         defense = getattr(p, "defensive_awareness", 50) or 50
         fo = getattr(p, "faceoffs", 50) or 50
-        takeaways = getattr(p, "takeaways", 0) or 0
-        pm = getattr(p, "plus_minus", 0) or 0
+        takeaways = _stat(p, "takeaways") or 0
+        pm = _stat(p, "plus_minus") or 0
         pts = _pts(p)
         score = (defense * 1.2 + fo * 0.5 + takeaways * 0.4
                  + pm * 0.8 + pts * 0.25)
@@ -344,7 +367,7 @@ def byng_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
         if _is_goalie(p) or _gp(p) < min_gp:
             continue
         pts = _pts(p)
-        pim = getattr(p, "penalty_minutes", 0) or getattr(p, "penalties_in_minutes", 0) or 0
+        pim = (_stat(p, "penalty_minutes", "penalties_in_minutes") or 0)
         if pts < 20:
             continue
         score = pts / (1.0 + pim / 12.0)
@@ -370,14 +393,14 @@ def calder_race(players: List[Any], min_gp: int = 10,
         if _is_goalie(p):
             # Rare but possible: rank goalies by SV% + wins
             sv = _sv_pct(p)
-            w = getattr(p, "wins", 0) or 0
+            w = _stat(p, "wins") or 0
             score = sv * 100 + w * 0.8
             score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
             out.append({"player": p, "score": score, "points": None,
                         "sv_pct": sv, "wins": w, "goalie": True})
         else:
             pts = _pts(p)
-            goals = getattr(p, "goals", 0) or 0
+            goals = _stat(p, "goals") or 0
             score = pts + 0.3 * goals
             score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
             out.append({"player": p, "score": score, "points": pts,
@@ -412,8 +435,8 @@ def vezina_race(goalies: List[Any], min_gp: int = 15) -> List[Dict[str, Any]]:
             continue
         sv = _sv_pct(p)
         gaa = _gaa(p)
-        w = getattr(p, "wins", 0) or 0
-        so = getattr(p, "shutouts", 0) or 0
+        w = _stat(p, "wins") or 0
+        so = _stat(p, "shutouts") or 0
         try:
             gsax = am.goalie_advanced(p).gsax if has_am else 0.0
         except Exception:
@@ -507,8 +530,8 @@ def rookie_skaters(players: List[Any], min_gp: int = 10,
         if not eligible or _is_goalie(p) or _gp(p) < min_gp:
             continue
         out.append({"player": p, "points": _pts(p),
-                    "goals": getattr(p, "goals", 0) or 0,
-                    "assists": getattr(p, "assists", 0) or 0,
+                    "goals": _stat(p, "goals") or 0,
+                    "assists": _stat(p, "assists") or 0,
                     "gp": _gp(p)})
     out.sort(key=lambda r: (r["points"], r["goals"]), reverse=True)
     return out
@@ -523,8 +546,8 @@ def rookie_goalies(players: List[Any], min_gp: int = 5,
         if not eligible or not _is_goalie(p) or _gp(p) < min_gp:
             continue
         out.append({"player": p, "sv_pct": _sv_pct(p), "gaa": _gaa(p),
-                    "wins": getattr(p, "wins", 0) or 0,
-                    "shutouts": getattr(p, "shutouts", 0) or 0,
+                    "wins": _stat(p, "wins") or 0,
+                    "shutouts": _stat(p, "shutouts") or 0,
                     "gp": _gp(p)})
     out.sort(key=lambda r: (r["sv_pct"], r["wins"]), reverse=True)
     return out

@@ -24,13 +24,18 @@ import playtest_driver as _pd
 import playtest_mid as _pm
 import playtest_offseason as _po
 import playtest_fantasy as _pf
+import playtest_season as _pse
 
-# de-Toronto the harness modules (they read the module global at call time)
-for _m in (_pd, _pm, _po, _pf):
+# de-Toronto the harness modules (they read the module global at call time).
+# NOTE: playtest_season binds USER_TEAM_NAME via `from playtest_driver import`
+# at its own import time, so it must be patched explicitly too — otherwise
+# SeasonDriver.user silently resolves to Toronto for the whole campaign.
+for _m in (_pd, _pm, _po, _pf, _pse):
     try:
         _m.USER_TEAM_NAME = USER_TEAM
     except Exception:
         pass
+assert _pse.USER_TEAM_NAME == USER_TEAM, "de-Toronto routing failed"
 
 from playtest_season import SeasonDriver
 import playtest_mid      # noqa: F401 (monkey-patches)

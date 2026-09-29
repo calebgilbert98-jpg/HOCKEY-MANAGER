@@ -244,8 +244,8 @@ def _record_first_star_moment(player: Any, star: Dict[str, Any],
             player.career_moments = moments = []
         except Exception:
             return
-    if any(isinstance(m, dict) and m.get("date") == dstr
-           and m.get("kind") == "first_star" for m in moments):
+    if dstr and any(isinstance(m, dict) and m.get("date") == dstr
+                   and m.get("kind") == "first_star" for m in moments):
         return
     detail = f"{star.get('line', '')} vs {opp} ({score_str})".strip()
     moments.append({
