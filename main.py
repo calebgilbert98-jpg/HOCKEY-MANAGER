@@ -649,6 +649,11 @@ NHL League Office""",
         
         # Initialize the comprehensive database system
         self.database_manager = initialize_game_database(self.league.teams)
+
+        # P-5 is handled at creation time by name_safety (star-surname
+        # filter in the name generators) -- no post-hoc scrub: there is no
+        # real/fictional flag, so a scrub could not tell a generated
+        # "Mikko Rantanen" from the real one.
         
         # Initialize media system
         self.media_system = MediaSystem(self)

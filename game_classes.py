@@ -6767,6 +6767,10 @@ class League:
         except Exception:
             pass
 
+        # P-2: final-table banking lives in Caleb's final_table_snapshot
+        # (bank_final_table, just above) -- one snapshot, one source of
+        # truth for award logic, the coaching carousel, and waivers.
+
         self.initialize_standings()
         # Team-level records must reset too (initialize_standings only
         # zeroes the standings dict; without this team.wins/losses

@@ -6765,9 +6765,28 @@ class DraftView(ctk.CTkFrame):
             priority = None
         round_num = self.draft_order[self.current_pick][0]
         overall = self.current_pick + 1
+        # Dynamic need pivot: (position, round) this club already drafted
+        # tonight, mirroring the headless conductor.
+        _tname = getattr(team_on_clock, 'team_name', None)
+        _drafted = []
+        try:
+            for _ptn, _po, _pp in (getattr(self, 'picks_made', None) or []):
+                if _ptn != _tname:
+                    continue
+                try:
+                    _ppos = _pp.primary_position.value
+                except Exception:
+                    _ppos = "?"
+                try:
+                    _prnd = self.draft_order[_po - 1][0]
+                except Exception:
+                    _prnd = 7
+                _drafted.append((_ppos, _prnd))
+        except Exception:
+            _drafted = []
         selected, reach, steal = self.dn.ai_select_prospect(
             team_on_clock, available, board, needs, round_num, priority,
-            self._draft_rng, overall=overall)
+            self._draft_rng, overall=overall, drafted=_drafted)
         if selected is None:
             self.end_draft()
             return (False, False)

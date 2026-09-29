@@ -138,7 +138,7 @@ def stable_draft_seed(draft_year, salt="") -> int:
 
 
 def ai_select_prospect(team, available, team_board, needs, round_num,
-                       priority, rng, overall=1):
+                       priority, rng, overall=1, drafted=None):
     """The canonical AI pick selection. Shared by the war room's
     _do_ai_pick and the headless conductor -- one implementation, so the
     sim and the interactive draft can't diverge.
@@ -148,7 +148,9 @@ def ai_select_prospect(team, available, team_board, needs, round_num,
     board (or None -> consensus fallback). needs: positional needs list.
     round_num: 1-7. priority: franchise priority ('rebuild' etc, or None).
     rng: random.Random (never the global module in new code). overall: the
-    pick's overall number, used for steal detection.
+    pick's overall number, used for steal detection. drafted: optional
+    list of (position_value, round_num) tuples this team already picked
+    in this draft -- drives the dynamic need pivot (None -> no pivot).
 
     Returns (selected, reach, steal). selected is None when available is
     empty.
@@ -186,7 +188,21 @@ def ai_select_prospect(team, available, team_board, needs, round_num,
             # pure BPA by round 4. A flat boost beats the ±6% noise every
             # round, so a persistent hole got drafted 7 straight times
             # (playtest P-4: 13 of 14 Toronto picks were RW).
-            base *= 1.0 + 0.08 * max(0.0, (4 - round_num) / 3.0)
+            _decay = 1.0 + 0.08 * max(0.0, (4 - round_num) / 3.0)
+            # Dynamic pivot: a need filled earlier in THIS draft stops
+            # pulling. First pick at the position keeps full boost; a
+            # second keeps half (2-3 of a kind isn't insane -- wingers move
+            # around the lineup); beyond that it's pure BPA. A round-1/2
+            # pick counts double: one solid early pick fills the need.
+            _filled = 0
+            for _dp_pos, _dp_round in (drafted or []):
+                if _dp_pos == pos:
+                    try:
+                        _filled += 2 if int(_dp_round) <= 2 else 1
+                    except (TypeError, ValueError):
+                        _filled += 1
+            _pivot = 1.0 if _filled <= 0 else (0.5 if _filled == 1 else 0.0)
+            base *= 1.0 + (_decay - 1.0) * _pivot
         if pos == 'G' and round_num <= 1:
             base *= 0.80  # goalies rarely go top-10
         # Franchise situation: contenders draft for readiness (higher
@@ -360,6 +376,16 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None):
     pool = sorted(prospects,
                   key=lambda p: getattr(p, 'draft_ranking', 0), reverse=True)
     picks_made = []
+    # Dynamic need pivot: track (position, round) per team as the draft
+    # unfolds, so a need filled early stops pulling later picks.
+    _drafted_by_team = {}
+
+    def _pos_of(player):
+        try:
+            return player.primary_position.value
+        except Exception:
+            return "?"
+
     for overall, round_num, team, _dp in slots:
         if not pool:
             break
@@ -375,7 +401,8 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None):
                 needs = []
         selected, _reach, _steal = ai_select_prospect(
             team, avail, boards.get(tname), needs, round_num,
-            _priority_of(team), rng, overall=overall)
+            _priority_of(team), rng, overall=overall,
+            drafted=_drafted_by_team.get(tname))
         if selected is None:
             continue
         # --- state mutation (mirrors DraftView.execute_pick, minus UI) ---
@@ -396,6 +423,8 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None):
         except ValueError:
             pass
         picks_made.append((tname, overall, selected))
+        _drafted_by_team.setdefault(tname, []).append(
+            (_pos_of(selected), round_num))
 
     if not picks_made:
         return []

@@ -740,8 +740,14 @@ class StatsStandingsView(ctk.CTkFrame):
                            "division_finals": "Conf. Final",
                            "conference_finals": "Conf. Final",
                            "stanley_cup_final": "Cup Final"}
+            _seen_series = set()
             for key in round_order:
                 for s in series_map.get(key, None) or []:
+                    # 'conference_finals' is a compat alias holding the same
+                    # series objects as 'division_finals' -- count each once.
+                    if id(s) in _seen_series:
+                        continue
+                    _seen_series.add(id(s))
                     t1, t2 = getattr(s, "team1", None), getattr(s, "team2", None)
                     for t, is_t1 in ((t1, True), (t2, False)):
                         if t is None:

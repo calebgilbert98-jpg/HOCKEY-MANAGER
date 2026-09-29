@@ -395,10 +395,15 @@ class PlayoffBracket:
         if len(eastern_winners) >= 2:
             series = PlayoffSeries("Division Finals", eastern_winners[0], eastern_winners[1])
             self.playoff_series['division_finals'].append(series)
+            # The legacy 'conference_finals' key stays populated as an alias
+            # so readers (save/load, standings window) see the real series
+            # instead of an eternally empty list (playtest P-1).
+            self.playoff_series['conference_finals'].append(series)
         
         if len(western_winners) >= 2:
             series = PlayoffSeries("Division Finals", western_winners[0], western_winners[1])
             self.playoff_series['division_finals'].append(series)
+            self.playoff_series['conference_finals'].append(series)
     
     def _create_conference_finals(self, winners: List[Team]):
         """Create the Stanley Cup Final from the two conference champions."""
